@@ -8,26 +8,18 @@
 //! Number::toString. Every expected string below was produced by Node v22.2.0
 //! evaluating the same expression (`String(expr)`).
 //!
-//! No mocks: real source is parsed, lowered IR0->IR3, and executed on a real
-//! `QuickJsLane`; the completion value's string form is compared.
+//! No mocks: real source runs through the public `HybridRouter::eval` path
+//! (parse -> IR0->IR3 lowering -> baseline interpreter, with the standard
+//! builtin grants that `Array.from` needs); the completion value's display
+//! projection is compared.
 
-use frankenengine_engine::baseline_interpreter::QuickJsLane;
-use frankenengine_engine::ir_contract::Ir0Module;
-use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
-use frankenengine_engine::parser_api_stability::parse_script;
+use frankenengine_engine::HybridRouter;
 
 fn eval_to_string(source: &str) -> String {
-    let tree = parse_script(source).expect("source should parse");
-    let ir0 = Ir0Module::from_syntax_tree(tree, "number_semantics_bd_9vouw_2.js");
-    let context = LoweringContext::new("num-trace", "num-decision", "num-policy");
-    let module = lower_ir0_to_ir3(&ir0, &context)
-        .expect("source should lower")
-        .ir3;
-    QuickJsLane::new()
-        .execute(&module, "num-trace")
-        .expect("source should execute")
+    HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|err| panic!("`{source}` should evaluate: {err:?}"))
         .value
-        .to_string()
 }
 
 fn check(name: &str, source: &str, node: &str) {

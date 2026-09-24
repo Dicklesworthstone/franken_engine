@@ -12584,6 +12584,13 @@ fn lower_expression_to_ir1_inner(
                     name,
                 )?;
                 ops.push(Ir1Op::LoadBinding { binding_id });
+            } else if let Some(capability) = global_function_value_capability(name) {
+                // bd-9vouw.17: `parseInt` & co. read as values materialize
+                // through a declared pure factory hostcall.
+                ops.push(Ir1Op::HostCall {
+                    capability,
+                    arg_count: 0,
+                });
             } else {
                 // An unresolvable ECMAScript Reference is not a synthetic lexical
                 // binding. Resolve it dynamically so a global created by an
@@ -15343,6 +15350,18 @@ fn lower_expression_to_ir1_inner(
             ) {
                 ops.push(Ir1Op::HostCall {
                     capability: capability.to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            // bd-9vouw.17: other unshadowed slot-0 statics read as values
+            // (`Object.keys`, `JSON.stringify`) materialize through a declared
+            // pure factory hostcall.
+            if let Some(capability) =
+                static_member_value_capability(object, property, *computed, binding_lookup)
+            {
+                ops.push(Ir1Op::HostCall {
+                    capability,
                     arg_count: 0,
                 });
                 return Ok(());
@@ -25013,7 +25032,53 @@ fn global_function_call_capability(
     if is_lexically_shadowed(binding_lookup, name) {
         return None;
     }
-    match name.as_str() {
+    global_function_capability(name.as_str())
+}
+
+/// bd-9vouw.17: prefix of the pure factory hostcall that materializes a static
+/// builtin read as a value (`const keys = Object.keys`, `arr.map(parseInt)`).
+/// Lowering emits it instead of a bare member/name read, so the module's
+/// declared authority footprint names the Builtin-class authority the value
+/// will exercise exactly as a direct call would; the runtime call of the value
+/// then passes the ordinary hostcall capability gate.
+pub(crate) const STATIC_VALUE_CAPABILITY_PREFIX: &str = "builtin:static-value:";
+
+/// Bare global functions that read as first-class values.
+pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 4] =
+    ["parseInt", "parseFloat", "isNaN", "isFinite"];
+
+fn static_member_value_capability(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<String> {
+    let Expression::Identifier(global) = object else {
+        return None;
+    };
+    if is_lexically_shadowed(binding_lookup, global) {
+        return None;
+    }
+    let property_name = match computed {
+        false => well_formed_static_name(property)?,
+        true => well_formed_string_literal(property)?,
+    };
+    slot0_static_member_capability(global, property_name)
+        .map(|tag| format!("{STATIC_VALUE_CAPABILITY_PREFIX}{tag}"))
+}
+
+fn global_function_value_capability(name: &str) -> Option<String> {
+    if !GLOBAL_FUNCTION_VALUE_NAMES.contains(&name) {
+        return None;
+    }
+    global_function_capability(name).map(|tag| format!("{STATIC_VALUE_CAPABILITY_PREFIX}{tag}"))
+}
+
+/// Bare global functions dispatched as slot-0 `builtin:*` hostcalls. Shared by
+/// call-site interception above and by the runtime's first-class global
+/// function values (bd-9vouw.17).
+pub(crate) fn global_function_capability(name: &str) -> Option<&'static str> {
+    match name {
         "parseInt" => Some("builtin:parseInt"),
         "parseFloat" => Some("builtin:parseFloat"),
         "isNaN" => Some("builtin:isNaN"),
@@ -25105,7 +25170,17 @@ fn object_json_builtin_call_capability(
         false => well_formed_static_name(property)?,
         true => well_formed_string_literal(property)?,
     };
-    match (global.as_str(), property_name) {
+    slot0_static_member_capability(global.as_str(), property_name)
+}
+
+/// The slot-0 static builtin table: `(global, member)` -> the `builtin:*`
+/// hostcall whose handler reads its arguments from slot 0 with no receiver
+/// placeholder. Shared by call-site interception above and by the runtime's
+/// first-class standard-constructor values (bd-9vouw.17), so a static read as
+/// a value (`const keys = Object.keys`) dispatches exactly the hostcall a
+/// direct call would.
+pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Option<&'static str> {
+    match (global, member) {
         ("Object", "keys") => Some("builtin:ObjectKeys"),
         ("Object", "values") => Some("builtin:ObjectValues"),
         ("Object", "entries") => Some("builtin:ObjectEntries"),
@@ -26902,6 +26977,8 @@ fn hostcall_exception_is_operand_derived(
                 | FlowValueShape::CallableContainer
                 | FlowValueShape::OwnKeyArray)),
         "builtin:ArrayIsArrayFunction" => inputs.is_empty(),
+        // bd-9vouw.17: materializes an engine-owned builtin function value.
+        _ if capability.starts_with(STATIC_VALUE_CAPABILITY_PREFIX) => inputs.is_empty(),
         _ if capability.starts_with("builtin:instanceof:") => true,
         "builtin:QuerystringParse" => !inputs.is_empty()
             && inputs

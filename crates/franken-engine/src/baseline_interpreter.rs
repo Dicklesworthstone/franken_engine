@@ -3079,6 +3079,21 @@ pub enum BuiltinFunctionKind {
     /// [`Self::DateConstructor`]. Append only: builtin discriminants
     /// participate in deterministic register hashing.
     PromiseConstructor,
+    /// bd-9vouw.17: a standard ECMAScript constructor bound as a first-class
+    /// global value (`Object`, `Array`, `Number`, `TypeError`, ...). The
+    /// canonical constructor name travels in `module_specifier`, so two
+    /// references are structurally equal (`TypeError === TypeError`). Append
+    /// only: builtin discriminants participate in deterministic register
+    /// hashing.
+    StandardConstructor,
+    /// bd-9vouw.17: a pure slot-0 static builtin read as a value
+    /// (`const keys = Object.keys`, `JSON.stringify` through the `JSON`
+    /// object). The `builtin:*` hostcall tag travels in `module_specifier` and
+    /// is re-validated against the shared slot-0 table on every call.
+    StaticHostcall,
+    /// `Error.prototype.toString`, reached through the error prototypes'
+    /// chain (bd-9vouw.17). Append only.
+    ErrorPrototypeToString,
 }
 
 impl BuiltinFunctionKind {
@@ -3096,6 +3111,7 @@ impl BuiltinFunctionKind {
                 | Self::DateConstructor
                 | Self::EventEmitterConstructor
                 | Self::PromiseConstructor
+                | Self::StandardConstructor
         )
     }
 }
@@ -3197,6 +3213,26 @@ impl BuiltinFunction {
 
     fn symbol_to_string() -> Self {
         Self::new_kind(BuiltinFunctionKind::SymbolPrototypeToString)
+    }
+
+    /// bd-9vouw.17: first-class standard constructor value (`TypeError`, ...).
+    fn standard_constructor(name: &'static str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StandardConstructor,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(name),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    /// bd-9vouw.17: first-class pure static builtin (`Object.keys`, ...).
+    fn static_hostcall(tag: &'static str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StaticHostcall,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(tag),
+            iterator_handle: None,
+            bound_object: None,
+        }
     }
 
     fn string_iterator() -> Self {
@@ -4704,8 +4740,110 @@ impl BuiltinFunction {
             BuiltinFunctionKind::EventEmitterConstructor => "EventEmitter",
             BuiltinFunctionKind::FunctionPrototypeCall => "call",
             BuiltinFunctionKind::FunctionPrototypeApply => "apply",
+            BuiltinFunctionKind::StandardConstructor => {
+                canonical_builtin_prototype_name(&self.module_specifier).unwrap_or("Function")
+            }
+            BuiltinFunctionKind::StaticHostcall => {
+                static_hostcall_name(&self.module_specifier).unwrap_or("anonymous")
+            }
+            BuiltinFunctionKind::ErrorPrototypeToString => "toString",
         }
     }
+}
+
+/// bd-9vouw.17: standard constructors bound as first-class global values.
+/// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
+/// which is also the prototype engine-created instances use, so `instanceof`,
+/// `x.constructor === X` and `class E extends X` agree with the instances.
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 15] = [
+    "Object",
+    "Array",
+    "Number",
+    "String",
+    "Boolean",
+    "BigInt",
+    "Map",
+    "Set",
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "EvalError",
+    "URIError",
+];
+
+/// bd-9vouw.17: bare global functions bound as first-class values (the same
+/// list the lowering declares factory hostcalls for).
+const GLOBAL_FUNCTION_VALUES: [&str; 4] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
+
+/// Name of a first-class static builtin, or `None` if `tag` is not one the
+/// shared lowering tables can produce. `None` is also the dispatch guard: a
+/// `StaticHostcall` value whose tag does not resolve here is never executed.
+fn static_hostcall_name(tag: &str) -> Option<&'static str> {
+    slot0_static_member_name(tag).or_else(|| {
+        GLOBAL_FUNCTION_VALUES
+            .iter()
+            .copied()
+            .find(|name| crate::lowering_pipeline::global_function_capability(name) == Some(tag))
+    })
+}
+
+/// The `'static` spelling of a first-class static builtin tag, or `None` if
+/// the shared lowering tables cannot produce it.
+fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
+    SLOT0_STATIC_GLOBALS
+        .iter()
+        .flat_map(|global| {
+            SLOT0_STATIC_MEMBERS.iter().filter_map(move |member| {
+                crate::lowering_pipeline::slot0_static_member_capability(global, member)
+            })
+        })
+        .chain(
+            GLOBAL_FUNCTION_VALUES
+                .iter()
+                .filter_map(|name| crate::lowering_pipeline::global_function_capability(name)),
+        )
+        .find(|candidate| *candidate == tag)
+}
+
+const SLOT0_STATIC_GLOBALS: [&str; 6] = ["Object", "JSON", "Array", "String", "Symbol", "Proxy"];
+const SLOT0_STATIC_MEMBERS: [&str; 25] = [
+    "keys",
+    "values",
+    "entries",
+    "assign",
+    "freeze",
+    "isFrozen",
+    "create",
+    "getPrototypeOf",
+    "setPrototypeOf",
+    "defineProperty",
+    "getOwnPropertyNames",
+    "getOwnPropertySymbols",
+    "getOwnPropertyDescriptor",
+    "fromEntries",
+    "parse",
+    "stringify",
+    "isArray",
+    "from",
+    "of",
+    "fromCharCode",
+    "fromCodePoint",
+    "raw",
+    "for",
+    "keyFor",
+    "revocable",
+];
+
+/// Member name for a slot-0 static hostcall tag, for `Function.prototype.name`
+/// style display. Only tags the shared lowering table can produce resolve.
+fn slot0_static_member_name(tag: &str) -> Option<&'static str> {
+    SLOT0_STATIC_GLOBALS.iter().find_map(|global| {
+        SLOT0_STATIC_MEMBERS.iter().copied().find(|member| {
+            crate::lowering_pipeline::slot0_static_member_capability(global, member) == Some(tag)
+        })
+    })
 }
 
 impl Value {
@@ -29498,6 +29636,23 @@ impl InterpreterCore {
                 })?;
 
             match iterable_value {
+                // `[...map]` / `[...set]`: collections iterate their entries
+                // (Map: `[key, value]` pairs, Set: values) in insertion order.
+                Value::Object(iterable_id)
+                    if self
+                        .collection_storage_id(iterable_id, "Map", "__entries")
+                        .is_some()
+                        || self
+                            .collection_storage_id(iterable_id, "Set", "__values")
+                            .is_some() =>
+                {
+                    let values = self
+                        .collection_iteration_values(iterable_id)?
+                        .unwrap_or_default();
+                    for value in values {
+                        self.append_spread_array_element(array_id, &mut next_index, value)?;
+                    }
+                }
                 Value::Object(iterable_id) => {
                     // GetMethod happens exactly once, including an inherited
                     // accessor or Proxy trap. An array's own @@iterator may
@@ -29610,6 +29765,18 @@ impl InterpreterCore {
                 Value::Iterator(handle) => {
                     while let Some(value) =
                         self.advance_for_of_iterator(Some(module), Value::Iterator(handle))?
+                    {
+                        self.append_spread_array_element(array_id, &mut next_index, value)?;
+                    }
+                }
+                // `[...g()]`: a generator object is its own iterator; drive it
+                // through the same protocol `for (x of g())` uses (bd-9vouw.3).
+                generator @ Value::Generator(_) => {
+                    let init = self.prepare_for_of_state(Some(module), &generator)?;
+                    let iterator =
+                        self.init_iterator_from_state(generator, init, IterationKind::ArraySpread)?;
+                    while let Some(value) =
+                        self.advance_for_of_iterator(Some(module), iterator.clone())?
                     {
                         self.append_spread_array_element(array_id, &mut next_index, value)?;
                     }
@@ -31567,6 +31734,36 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::timer_global(kind)),
             )?;
         }
+        // bd-9vouw.17: standard constructors, the bare global functions and
+        // `JSON` as first-class values. Direct calls (`new TypeError(m)`,
+        // `parseInt(s)`, `JSON.stringify(v)`) stay intercepted at lowering;
+        // these bindings make bare references work: `typeof TypeError`,
+        // `assert.throws(TypeError, f)`, `[1, 2].map(String)`, `new Array(n)`.
+        for name in STANDARD_CONSTRUCTOR_GLOBALS {
+            self.inject_runtime_global_binding(
+                name,
+                Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)),
+            )?;
+        }
+        for name in GLOBAL_FUNCTION_VALUES {
+            let tag = crate::lowering_pipeline::global_function_capability(name)
+                .expect("GLOBAL_FUNCTION_VALUES names are all in the shared lowering table");
+            self.inject_runtime_global_binding(
+                name,
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+            )?;
+        }
+        let json = self.alloc_object_with_properties(&[
+            (
+                "parse",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonParse")),
+            ),
+            (
+                "stringify",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonStringify")),
+            ),
+        ])?;
+        self.inject_runtime_global_binding("JSON", Value::Object(json))?;
 
         Ok(())
     }
@@ -35709,6 +35906,13 @@ impl InterpreterCore {
             BuiltinFunctionKind::PromiseConstructor => self.construct_promise(module, args),
             BuiltinFunctionKind::EventEmitterConstructor => {
                 self.dispatch_builtin_hostcall("builtin:EventEmitter", args, Some(module))
+            }
+            BuiltinFunctionKind::StandardConstructor => {
+                self.call_standard_constructor(module, builtin, args)
+            }
+            BuiltinFunctionKind::StaticHostcall => self.call_static_hostcall(module, builtin, args),
+            BuiltinFunctionKind::ErrorPrototypeToString => {
+                self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::DateNow => {
                 self.dispatch_builtin_hostcall("builtin:DateNow", args, Some(module))
@@ -43365,6 +43569,11 @@ impl InterpreterCore {
                                     Value::BuiltinFunction(builtin),
                                     0,
                                 )?
+                            } else if builtin.kind == BuiltinFunctionKind::StandardConstructor {
+                                match property_key.as_str() {
+                                    Some(key) => self.standard_constructor_property(&builtin, key)?,
+                                    None => Value::Undefined,
+                                }
                             } else {
                                 property_key
                                     .as_str()
@@ -43654,6 +43863,18 @@ impl InterpreterCore {
                         // bd-9vouw.17: functions are objects; other own
                         // properties (`F.x = 1`, `Test262Error.thrower = ...`)
                         // live on the function's backing object.
+                        ref function @ (Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_))
+                            if matches!(property_key.as_str(), Some("name" | "length")) =>
+                        {
+                            // A function's own `name` and `length` are
+                            // non-writable: a sloppy-mode assignment is a
+                            // silent no-op (ES2020 9.2.4 / 9.2.8).
+                            let _ = function;
+                        }
                         ref function @ (Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)
@@ -46779,6 +47000,12 @@ impl InterpreterCore {
             return Ok(RuntimeForOfInit::from_timers_interval(delay_ms, value));
         }
 
+        if let Value::Object(object_id) = iterable
+            && let Some(values) = self.collection_iteration_values(*object_id)?
+        {
+            return Ok(RuntimeForOfInit::from_values(values));
+        }
+
         if let Some(module) = module
             && let Some(init) = self.prepare_custom_for_of_state(module, iterable)?
         {
@@ -48740,6 +48967,22 @@ impl InterpreterCore {
         if let Some(value) = self.url_object_property_value(object_id, key_text)? {
             return Ok(value);
         }
+        // bd-9vouw.17: `constructor` of the canonical builtin prototypes is
+        // virtual (never an own, enumerable property of the shared
+        // prototypes), so `thrown.constructor === TypeError` and
+        // `[].constructor === Array` hold without changing enumeration.
+        if key_text == "constructor"
+            && let Some(constructor) = self.standard_constructor_for_chain(object_id)
+        {
+            return Ok(constructor);
+        }
+        // `Error.prototype.toString` for error objects (own/inherited data
+        // properties walked above still win, e.g. a user `toString`).
+        if key_text == "toString" && self.chain_has_error_prototype(object_id) {
+            return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ErrorPrototypeToString,
+            )));
+        }
 
         // Array exotic objects expose their prototype methods (e.g. `push`)
         // even though we do not allocate a shared `Array.prototype` object.
@@ -49504,6 +49747,69 @@ impl InterpreterCore {
             Value::Object(id) => format!("o:{}", id.0),
             _ => "other".to_string(),
         }
+    }
+
+    /// Invert [`Self::collection_key_repr`] for iteration. Every key kind the
+    /// repr encodes losslessly comes back exactly; keys stored as `"other"`
+    /// (functions, Symbols) are not recoverable from this storage model and
+    /// iterate as `undefined`.
+    fn collection_key_from_repr(repr: &str) -> Value {
+        if let Some(text) = repr.strip_prefix("s:") {
+            return Value::str(text);
+        }
+        if let Some(number) = repr.strip_prefix("n:") {
+            return match number.parse::<i64>() {
+                Ok(int) => Value::Int(int),
+                Err(_) => js_number_to_value(number.parse::<f64>().unwrap_or(f64::NAN)),
+            };
+        }
+        if let Some(id) = repr.strip_prefix("o:").and_then(|id| id.parse::<u32>().ok()) {
+            return Value::Object(ObjectId(id));
+        }
+        match repr {
+            "b:true" => Value::Bool(true),
+            "b:false" => Value::Bool(false),
+            "null" => Value::Null,
+            _ => Value::Undefined,
+        }
+    }
+
+    /// Iteration snapshot of a Map (`[key, value]` pairs) or a Set (values),
+    /// in insertion order, or `None` for any other object. Backs `for...of`,
+    /// array spread and `Array.from` over collections, which previously failed
+    /// with "expected callable Symbol.iterator method".
+    fn collection_iteration_values(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<Option<Vec<Value>>, InterpreterError> {
+        if let Some(values_id) = self.collection_storage_id(object_id, "Set", "__values") {
+            let values = self
+                .heap
+                .get(values_id.0 as usize)
+                .map(|storage| storage.properties.values().cloned().collect())
+                .unwrap_or_default();
+            return Ok(Some(values));
+        }
+        let Some(entries_id) = self.collection_storage_id(object_id, "Map", "__entries") else {
+            return Ok(None);
+        };
+        let entries: Vec<(String, Value)> = self
+            .heap
+            .get(entries_id.0 as usize)
+            .map(|storage| {
+                storage
+                    .properties
+                    .iter()
+                    .map(|(repr, value)| (repr.to_string(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut pairs = Vec::with_capacity(entries.len());
+        for (repr, value) in entries {
+            let pair = self.alloc_array_from_values(&[Self::collection_key_from_repr(&repr), value])?;
+            pairs.push(Value::Object(pair));
+        }
+        Ok(Some(pairs))
     }
 
     /// Internal storage object id (`__entries` for Map / `__values` for Set),
@@ -57548,7 +57854,7 @@ impl InterpreterCore {
         match value {
             Value::Str(s) => s.to_string(),
             Value::Int(n) => n.to_string(),
-            Value::Float(f) => f.inner().to_string(),
+            Value::Float(f) => f.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Null => "null".to_string(),
             Value::Undefined => "undefined".to_string(),
@@ -66937,6 +67243,24 @@ impl InterpreterCore {
             return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
         }
 
+        // bd-9vouw.17: declared factory for a static builtin read as a value.
+        if let Some(inner) =
+            cap.strip_prefix(crate::lowering_pipeline::STATIC_VALUE_CAPABILITY_PREFIX)
+        {
+            if args.count != 0 {
+                return Err(InterpreterError::TypeError {
+                    expected: "zero static-value factory arguments".to_string(),
+                    got: format!("{} argument(s)", args.count),
+                });
+            }
+            let tag =
+                canonical_static_hostcall_tag(inner).ok_or_else(|| InterpreterError::TypeError {
+                    expected: "known static builtin".to_string(),
+                    got: inner.to_string(),
+                })?;
+            return Ok(Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)));
+        }
+
         if let Some(name) = builtin_instanceof_capability_name(cap) {
             if args.count != 1 {
                 return Err(InterpreterError::TypeError {
@@ -67488,7 +67812,7 @@ impl InterpreterCore {
                         Value::Null => "null".to_string(),
                         Value::Undefined => ",".to_string(), // Default separator
                         Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
+                        Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
                         _ => ",".to_string(),
                     }
@@ -67517,7 +67841,7 @@ impl InterpreterCore {
                                         let str_val = match element {
                                             Value::Str(s) => s.to_string(),
                                             Value::Int(n) => n.to_string(),
-                                            Value::Float(f) => f.inner().to_string(),
+                                            Value::Float(f) => f.to_string(),
                                             Value::Bool(b) => b.to_string(),
                                             Value::Null => "null".to_string(),
                                             Value::Undefined => "".to_string(), // undefined becomes empty string in join
@@ -68165,7 +68489,7 @@ impl InterpreterCore {
                 let string_val = match string_arg {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -68273,7 +68597,7 @@ impl InterpreterCore {
                 let string_val = match string_arg {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -69307,7 +69631,7 @@ impl InterpreterCore {
                 let this_str = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -69381,7 +69705,7 @@ impl InterpreterCore {
                 let this_str = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -69406,7 +69730,7 @@ impl InterpreterCore {
                     match pad_val {
                         Value::Str(s) => s.to_string(),
                         Value::Int(i) => i.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
+                        Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => " ".to_string(),
@@ -69578,7 +69902,7 @@ impl InterpreterCore {
                 let this_str = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -69603,7 +69927,7 @@ impl InterpreterCore {
                     match pad_val {
                         Value::Str(s) => s.to_string(),
                         Value::Int(i) => i.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
+                        Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => " ".to_string(),
@@ -69836,7 +70160,7 @@ impl InterpreterCore {
                 let this_str = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -70979,7 +71303,7 @@ impl InterpreterCore {
                         // Try to convert to string
                         match this_val {
                             Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
+                            Value::Float(f) => f.to_string(),
                             Value::Bool(b) => b.to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
@@ -71086,7 +71410,7 @@ impl InterpreterCore {
                         // Try to convert to string
                         match this_val {
                             Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
+                            Value::Float(f) => f.to_string(),
                             Value::Bool(b) => b.to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
@@ -71099,7 +71423,7 @@ impl InterpreterCore {
                     match self.read_reg(args.start + 1)? {
                         Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
+                        Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => "undefined".to_string(),
@@ -71668,7 +71992,7 @@ impl InterpreterCore {
                         // Try to convert to string
                         match this_val {
                             Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
+                            Value::Float(f) => f.to_string(),
                             Value::Bool(b) => b.to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
@@ -71872,7 +72196,7 @@ impl InterpreterCore {
                 let mut result = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -71885,7 +72209,7 @@ impl InterpreterCore {
                     let arg_str = match arg_val {
                         Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
+                        Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => "undefined".to_string(),
@@ -72020,7 +72344,7 @@ impl InterpreterCore {
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -72031,7 +72355,7 @@ impl InterpreterCore {
                 let search_str = match search_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -72042,7 +72366,7 @@ impl InterpreterCore {
                 let replace_str = match replace_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -72148,7 +72472,7 @@ impl InterpreterCore {
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -72255,7 +72579,7 @@ impl InterpreterCore {
                 let well_formed = match this_val {
                     Value::Str(s) => s.as_utf8_projection().to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -72658,7 +72982,7 @@ impl InterpreterCore {
                     let a_str = match a {
                         Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
+                        Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => "undefined".to_string(),
@@ -72667,7 +72991,7 @@ impl InterpreterCore {
                     let b_str = match b {
                         Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
+                        Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => "undefined".to_string(),
@@ -72836,7 +73160,7 @@ impl InterpreterCore {
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -72943,7 +73267,7 @@ impl InterpreterCore {
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -73199,7 +73523,7 @@ impl InterpreterCore {
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -73210,7 +73534,7 @@ impl InterpreterCore {
                     match self.read_reg(args.start + 1)? {
                         Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
+                        Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => "undefined".to_string(),
@@ -73292,7 +73616,7 @@ impl InterpreterCore {
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -73378,7 +73702,7 @@ impl InterpreterCore {
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
+                    Value::Float(f) => f.to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
@@ -74253,10 +74577,12 @@ impl InterpreterCore {
         };
 
         for value in values {
-            let value_str = if weak_values_only {
-                Self::weakmap_object_key(value)
+            // A Set stores the member itself (as `add` does) so iteration can
+            // yield it; a WeakSet is not iterable and keeps a presence marker.
+            let (value_str, stored) = if weak_values_only {
+                (Self::weakmap_object_key(value), Value::Bool(true))
             } else {
-                Some(Self::collection_storage_key(&value))
+                (Some(Self::collection_storage_key(&value)), value)
             };
             let Some(value_str) = value_str else {
                 continue;
@@ -74272,7 +74598,7 @@ impl InterpreterCore {
                 .map(|v| !v.properties.contains_key(&value_str))
                 .unwrap_or(false);
             if will_insert {
-                let new_bytes = Self::estimate_property_entry_bytes(&value_str, &Value::Bool(true));
+                let new_bytes = Self::estimate_property_entry_bytes(&value_str, &stored);
                 self.apply_memory_component_delta(0, new_bytes)?;
             }
             let mut inserted = false;
@@ -74280,7 +74606,7 @@ impl InterpreterCore {
             self.mutate_heap(|heap| {
                 if let Some(values_obj) = heap.get_mut(values_index) {
                     if !values_obj.properties.contains_key(&value_str) {
-                        values_obj.properties.insert(value_str, Value::Bool(true));
+                        values_obj.properties.insert(value_str, stored);
                         inserted = true;
                     }
                 }
@@ -75108,22 +75434,9 @@ impl InterpreterCore {
             Value::Bool(b) => b.to_string(),
             Value::Int(n) => n.to_string(),
             Value::BigInt(n) => n.to_string(),
-            Value::Float(f) => {
-                let v = f.inner();
-                if v.is_nan() {
-                    "NaN".to_string()
-                } else if v.is_infinite() {
-                    if v.is_sign_negative() {
-                        "-Infinity".to_string()
-                    } else {
-                        "Infinity".to_string()
-                    }
-                } else if v == 0.0 && v.is_sign_negative() {
-                    "0".to_string() // JS prints -0 as "0"
-                } else {
-                    format!("{v}")
-                }
-            }
+            // ECMAScript Number::toString (NaN, Infinity, -0 -> "0", exponent
+            // form outside [1e-6, 1e21)); see `Float64`'s Display.
+            Value::Float(f) => f.to_string(),
             Value::Str(s) => s.to_string(),
             Value::Object(id) => {
                 // Error instances stringify as `<name>: <message>`; other
@@ -80229,7 +80542,7 @@ impl InterpreterCore {
             Ok(match msg_val {
                 Value::Str(s) => s.to_string(),
                 Value::Int(i) => i.to_string(),
-                Value::Float(f) => f.inner().to_string(),
+                Value::Float(f) => f.to_string(),
                 Value::Bool(b) => b.to_string(),
                 Value::Null => "null".to_string(),
                 Value::Undefined => "undefined".to_string(),
@@ -80349,7 +80662,21 @@ impl InterpreterCore {
                 self.ensure_function_prototype(module, func_idx)?,
             ))
         } else {
-            Ok(Value::Undefined)
+            Ok(Self::function_name_or_length(module, func_idx, key).unwrap_or(Value::Undefined))
+        }
+    }
+
+    /// bd-9vouw.17: `name` and `length` of an ordinary function, from its IR3
+    /// descriptor. `length` counts the parameters before a rest parameter;
+    /// an anonymous function (no descriptor name) reads `""`.
+    fn function_name_or_length(module: &Ir3Module, func_idx: u32, key: &str) -> Option<Value> {
+        let desc = module.function_table.get(func_idx as usize)?;
+        match key {
+            "name" => Some(Value::str(desc.name.as_deref().unwrap_or(""))),
+            "length" => Some(Value::Int(i64::from(
+                desc.rest_param_index.unwrap_or(desc.arity),
+            ))),
+            _ => None,
         }
     }
 
@@ -80384,7 +80711,8 @@ impl InterpreterCore {
                 self.ensure_closure_prototype(module, closure_id)?,
             ))
         } else {
-            Ok(Value::Undefined)
+            let func_idx = self.closure_function_index(closure_id)?;
+            Ok(Self::function_name_or_length(module, func_idx, key).unwrap_or(Value::Undefined))
         }
     }
 
@@ -80485,6 +80813,307 @@ impl InterpreterCore {
         let backing = self.alloc_object_with_prototype(None)?;
         self.mutate_function_prototypes(|entries| entries.insert(key, backing));
         Ok(Some(backing))
+    }
+
+    fn standard_constructor_name(builtin: &BuiltinFunction) -> Result<&'static str, InterpreterError> {
+        STANDARD_CONSTRUCTOR_GLOBALS
+            .iter()
+            .copied()
+            .find(|name| *name == &*builtin.module_specifier)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "standard constructor".to_string(),
+                got: builtin.module_specifier.to_string(),
+            })
+    }
+
+    /// bd-9vouw.17: members of a first-class standard constructor value.
+    fn standard_constructor_property(
+        &mut self,
+        builtin: &BuiltinFunction,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        let name = Self::standard_constructor_name(builtin)?;
+        Ok(match key {
+            "prototype" => Value::Object(self.ensure_builtin_prototype(name)?),
+            "name" => Value::str(name),
+            "length" => Value::Int(i64::from(!matches!(name, "Map" | "Set"))),
+            _ => {
+                if let Some(value) = Self::function_prototype_property(key) {
+                    value
+                } else if let Some(tag) =
+                    crate::lowering_pipeline::slot0_static_member_capability(name, key)
+                {
+                    Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag))
+                } else if name == "Number" {
+                    Self::number_constructor_constant(key).unwrap_or(Value::Undefined)
+                } else {
+                    Value::Undefined
+                }
+            }
+        })
+    }
+
+    fn number_constructor_constant(key: &str) -> Option<Value> {
+        Some(match key {
+            "MAX_SAFE_INTEGER" => Value::Int(MAX_SAFE_INTEGER),
+            "MIN_SAFE_INTEGER" => Value::Int(MIN_SAFE_INTEGER),
+            "EPSILON" => Value::Float(Float64::new(f64::EPSILON)),
+            "MAX_VALUE" => Value::Float(Float64::new(f64::MAX)),
+            "MIN_VALUE" => Value::Float(Float64::new(f64::from_bits(1))),
+            "POSITIVE_INFINITY" => Value::Float(Float64::new(f64::INFINITY)),
+            "NEGATIVE_INFINITY" => Value::Float(Float64::new(f64::NEG_INFINITY)),
+            "NaN" => Value::Float(Float64::new(f64::NAN)),
+            _ => return None,
+        })
+    }
+
+    /// bd-9vouw.17: `[[Call]]` / `[[Construct]]` of a first-class standard
+    /// constructor. Each name routes to the implementation its direct call
+    /// already uses; `new` and plain calls share one path, as for every
+    /// builtin constructor here (so `new Number(1)` yields the primitive, the
+    /// same documented gap as `builtin:String`: boxed primitives are deferred).
+    fn call_standard_constructor(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let name = Self::standard_constructor_name(builtin)?;
+        match name {
+            "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
+            | "EvalError" | "URIError" => self.construct_error_object(name, args),
+            "Number" => self.dispatch_builtin_hostcall("builtin:Number", args, Some(module)),
+            "String" => self.dispatch_builtin_hostcall("builtin:String", args, Some(module)),
+            "Boolean" => self.dispatch_builtin_hostcall("builtin:Boolean", args, Some(module)),
+            "Map" => self.dispatch_builtin_hostcall("builtin:Map", args, Some(module)),
+            "Set" => self.dispatch_builtin_hostcall("builtin:Set", args, Some(module)),
+            "Array" => {
+                let values = self.call_arguments(args)?;
+                if let [length @ (Value::Int(_) | Value::Float(_))] = values.as_slice() {
+                    // `Array(n)`: an empty array whose length is n (holes),
+                    // through the ordinary length-assignment semantics
+                    // (RangeError for a non-uint32 length).
+                    let length = length.clone();
+                    let array = self.alloc_array_from_values(&[])?;
+                    self.set_object_property(array, "length".to_string(), length)?;
+                    Ok(Value::Object(array))
+                } else {
+                    Ok(Value::Object(self.alloc_array_from_values(&values)?))
+                }
+            }
+            "Object" => {
+                let value = self.call_arguments(args)?.into_iter().next();
+                match value {
+                    None | Some(Value::Undefined | Value::Null) => {
+                        Ok(Value::Object(self.alloc_object_with_prototype(None)?))
+                    }
+                    Some(value) if value.is_object_like() => Ok(value),
+                    Some(value) => Err(InterpreterError::TypeError {
+                        expected: "object argument (boxing primitives through Object() is not supported yet)"
+                            .to_string(),
+                        got: value.type_name().to_string(),
+                    }),
+                }
+            }
+            "BigInt" => {
+                let value = self.call_arguments(args)?.into_iter().next();
+                self.bigint_from_value(value.unwrap_or(Value::Undefined))
+            }
+            _ => Err(InterpreterError::TypeError {
+                expected: "callable standard constructor".to_string(),
+                got: name.to_string(),
+            }),
+        }
+    }
+
+    /// Throw a genuine JS error of class `name` (a canonical builtin error
+    /// constructor) carrying `message`, catchable by guest `try`/`catch`.
+    fn throw_js_error(&mut self, name: &'static str, message: String) -> InterpreterError {
+        let thrown = (|| {
+            let prototype = self.ensure_builtin_prototype(name)?;
+            let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+            self.initialize_error_like_object(error_id, name, message)?;
+            Ok::<Value, InterpreterError>(Value::Object(error_id))
+        })();
+        let thrown = match thrown {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: self.uncaught_exception_description(&thrown),
+        }
+    }
+
+    /// `BigInt(value)` for the primitive inputs the engine represents.
+    fn bigint_from_value(&mut self, value: Value) -> Result<Value, InterpreterError> {
+        let digits = match value {
+            Value::BigInt(digits) => return Ok(Value::BigInt(digits)),
+            Value::Int(n) => n.to_string(),
+            Value::Bool(b) => i64::from(b).to_string(),
+            Value::Float(f) if f.inner().is_finite() && f.inner().fract() == 0.0 => {
+                format!("{:.0}", f.inner())
+            }
+            Value::Float(f) => {
+                return Err(self.throw_js_error(
+                    "RangeError",
+                    format!(
+                        "The number {f} cannot be converted to a BigInt because it is not an integer"
+                    ),
+                ));
+            }
+            Value::Str(s) => {
+                let text = s.to_string();
+                let trimmed = text.trim();
+                let (sign, body) = match trimmed.strip_prefix('-') {
+                    Some(rest) => ("-", rest),
+                    None => ("", trimmed.strip_prefix('+').unwrap_or(trimmed)),
+                };
+                if body.is_empty() {
+                    "0".to_string()
+                } else if body.bytes().all(|b| b.is_ascii_digit()) {
+                    let canonical = body.trim_start_matches('0');
+                    if canonical.is_empty() {
+                        "0".to_string()
+                    } else {
+                        format!("{sign}{canonical}")
+                    }
+                } else {
+                    return Err(
+                        self.throw_js_error("SyntaxError", format!("Cannot convert {text} to a BigInt"))
+                    );
+                }
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "value convertible to BigInt".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        Ok(Value::BigInt(Arc::from(digits.as_str())))
+    }
+
+    /// bd-9vouw.17: call a first-class pure static builtin. The tag is
+    /// re-validated against the shared lowering tables and passes the same
+    /// hostcall capability gate as a direct call, so a value can never reach
+    /// a hostcall that direct-call interception would not.
+    fn call_static_hostcall(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let tag: &str = &builtin.module_specifier;
+        if static_hostcall_name(tag).is_none() {
+            return Err(InterpreterError::TypeError {
+                expected: "known static builtin".to_string(),
+                got: tag.to_string(),
+            });
+        }
+        let tag = tag.to_string();
+        let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
+        check_hostcall_capability_gate(self, &tag, instruction_index)?;
+        self.dispatch_builtin_hostcall(&tag, args, Some(module))
+    }
+
+    /// Whether `object_id`'s prototype chain passes through a canonical
+    /// builtin error prototype (`Error` or one of the six native errors).
+    fn chain_has_error_prototype(&self, object_id: ObjectId) -> bool {
+        const ERROR_PROTOTYPES: [&str; 7] = [
+            "Error",
+            "TypeError",
+            "RangeError",
+            "ReferenceError",
+            "SyntaxError",
+            "EvalError",
+            "URIError",
+        ];
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                return false;
+            }
+            if self
+                .builtin_prototypes
+                .iter()
+                .any(|(name, prototype)| *prototype == id && ERROR_PROTOTYPES.contains(&name.as_str()))
+            {
+                return true;
+            }
+            current = self.heap.get(id.0 as usize).and_then(|object| object.prototype);
+            depth += 1;
+        }
+        false
+    }
+
+    /// ES2020 20.5.3.4 Error.prototype.toString.
+    fn error_prototype_to_string(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        let Value::Object(object_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: "object receiver for Error.prototype.toString".to_string(),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let name = self.proxy_aware_get_property(Some(module), object_id, "name", receiver.clone(), 0)?;
+        let message =
+            self.proxy_aware_get_property(Some(module), object_id, "message", receiver.clone(), 0)?;
+        let name = match name {
+            Value::Undefined => "Error".to_string(),
+            other => self.value_to_string(&other),
+        };
+        let message = match message {
+            Value::Undefined => String::new(),
+            other => self.value_to_string(&other),
+        };
+        let text = if name.is_empty() {
+            message
+        } else if message.is_empty() {
+            name
+        } else {
+            format!("{name}: {message}")
+        };
+        self.check_string_limit(text.len())?;
+        Ok(Value::str(text))
+    }
+
+    /// bd-9vouw.17: virtual, non-enumerable `constructor` of the canonical
+    /// builtin prototypes (and of arrays, which carry no prototype object).
+    fn standard_constructor_for_chain(&self, object_id: ObjectId) -> Option<Value> {
+        let constructor =
+            |name: &'static str| Value::BuiltinFunction(BuiltinFunction::standard_constructor(name));
+        if self.heap.get(object_id.0 as usize)?.is_array {
+            return Some(constructor("Array"));
+        }
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                break;
+            }
+            if let Some(name) = self
+                .builtin_prototypes
+                .iter()
+                .find(|(_, prototype)| **prototype == id)
+                .and_then(|(name, _)| {
+                    STANDARD_CONSTRUCTOR_GLOBALS
+                        .iter()
+                        .copied()
+                        .find(|candidate| *candidate == name.as_str())
+                })
+            {
+                return Some(constructor(name));
+            }
+            current = self.heap.get(id.0 as usize).and_then(|object| object.prototype);
+            depth += 1;
+        }
+        None
     }
 
     /// Write `set_val` to `property_key` on an ordinary-property backing

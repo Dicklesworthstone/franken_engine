@@ -105,6 +105,7 @@ impl InterpreterCore {
                     {
                         self.reflect_admit_mutation_label(receiver_object)?;
                     }
+                    let receiver = self.reflect_data_property_receiver(target, &key, receiver)?;
                     Value::Bool(self.proxy_aware_set_runtime_property(
                         module, target, &key, value, receiver, 0,
                     )?)
@@ -162,6 +163,65 @@ impl InterpreterCore {
         self.json_release_temporary(key_bytes);
         self.json_release_temporary(scratch);
         outcome
+    }
+
+    /// The ordinary data-property write path stores through an ObjectId, while
+    /// getters, setters and Proxy traps must observe the original callable.
+    /// Normalize a backed builtin receiver only after a private, bounded walk
+    /// proves that this Set cannot invoke an accessor or cross a Proxy boundary.
+    /// The canonical setter still decides writability, extensibility and labels.
+    fn reflect_data_property_receiver(
+        &mut self,
+        target: ObjectId,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        let Value::BuiltinFunction(builtin) = &receiver else {
+            return Ok(receiver);
+        };
+        let Some(backing) = Self::builtin_function_property_object(builtin) else {
+            return Ok(receiver);
+        };
+        let mut current = target;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            self.json_charge_work()?;
+            // Inspect private records without GetMethod or a revocation check.
+            // The actual Set operation retains its validation and trap order.
+            if self.proxy_record(current)?.is_some() {
+                return Ok(receiver);
+            }
+            let object = self
+                .heap
+                .get(current.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: current.0 })?;
+            // Inspect borrowed descriptors: a preflight must not clone a
+            // potentially large data value or allocate accessor carriers.
+            let own_accessor = match key {
+                RuntimePropertyKey::String(key) => object
+                    .properties
+                    .get_exact(key)
+                    .map(|value| matches!(value, Value::Accessor { .. })),
+                RuntimePropertyKey::Symbol(symbol) => object
+                    .properties
+                    .baseline_symbol_property(core_symbol_id(*symbol))
+                    .map(|property| match property {
+                        BaselineSymbolProperty::Data(value) => {
+                            matches!(value, Value::Accessor { .. })
+                        }
+                        BaselineSymbolProperty::Accessor { .. } => true,
+                    }),
+            };
+            match own_accessor {
+                Some(true) => return Ok(receiver),
+                Some(false) => return Ok(Value::Object(backing)),
+                None => match object.prototype {
+                    Some(prototype) => current = prototype,
+                    None => return Ok(Value::Object(backing)),
+                },
+            }
+        }
+        // Leave cycle/depth refusal to the canonical Set implementation.
+        Ok(receiver)
     }
 
     /// Save selected callback/getter labels before nested invocation replaces
@@ -764,6 +824,88 @@ mod constructor_property_tests {
             try { Reflect.get(Promise, 'value'); } catch (error) { caught = error === failure; }
             caught && Reflect.has(Promise, 'value') &&
                 Reflect.get(Date, 'now') === Date.now;
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_data_writes_preserve_identity_and_live_storage() {
+        assert_native_true(
+            r#"
+            const first = Reflect.set(Date, 'extra', 17);
+            const second = Reflect.set(Date, 'extra', 23);
+            first && second && Reflect.get(Date, 'extra') === 23 &&
+                Reflect.has(Date, 'extra') && typeof Date === 'function' &&
+                Reflect.deleteProperty(Date, 'extra') && !Reflect.has(Date, 'extra');
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_non_extensibility_allows_only_existing_data_writes() {
+        assert_native_true(
+            r#"
+            const stored = Reflect.set(Date, 'extra', 17);
+            Object.preventExtensions(Date);
+            stored && Reflect.set(Date, 'extra', 23) &&
+                Reflect.get(Date, 'extra') === 23 &&
+                !Reflect.set(Date, 'newKey', 7) && !Reflect.has(Date, 'newKey') &&
+                !Reflect.isExtensible(Date);
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_symbol_data_writes_keep_exact_key_identity() {
+        assert_native_true(
+            r#"
+            const first = Symbol('key');
+            const second = Symbol('key');
+            const stored = Reflect.set(Promise, first, 31);
+            stored && Reflect.get(Promise, first) === 31 &&
+                !Reflect.has(Promise, second) && Reflect.get(Promise, second) === undefined &&
+                Reflect.deleteProperty(Promise, first) && !Reflect.has(Promise, first);
+            "#,
+        );
+    }
+
+    #[test]
+    fn ordinary_target_can_write_to_a_distinct_constructor_receiver() {
+        assert_native_true(
+            r#"
+            const target = { value: 1 };
+            const stored = Reflect.set(target, 'value', 41, Promise);
+            stored && target.value === 1 && Reflect.get(Promise, 'value') === 41 &&
+                Reflect.get(Date, 'value') === undefined && typeof Promise === 'function' &&
+                !Reflect.set(target, 'value', 2, 0) && target.value === 1;
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_data_writes_respect_frozen_inherited_properties() {
+        assert_native_true(
+            r#"
+            const parent = Object.freeze({ value: 17 });
+            Object.setPrototypeOf(Date, parent);
+            !Reflect.set(Date, 'value', 23) && Reflect.get(Date, 'value') === 17 &&
+                Reflect.deleteProperty(Date, 'value') && parent.value === 17;
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_proxy_prototype_traps_observe_the_callable_receiver() {
+        assert_native_true(
+            r#"
+            let seen;
+            let received;
+            const parent = new Proxy({}, {
+                set(target, key, value, receiver) { seen = receiver; received = value; return true; }
+            });
+            Object.setPrototypeOf(Date, parent);
+            Reflect.set(Date, 'extra', 29) && seen === Date && received === 29 &&
+                !Reflect.has(Date, 'extra') && typeof Date === 'function';
             "#,
         );
     }

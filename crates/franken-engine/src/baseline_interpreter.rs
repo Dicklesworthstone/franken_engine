@@ -3113,6 +3113,22 @@ pub enum BuiltinFunctionKind {
     /// the bound arguments; it is never exposed as property storage.
     /// Append only.
     BoundFunction,
+    /// `Map.prototype.forEach` / `Set.prototype.forEach` (bd-9vouw.33).
+    /// Append only.
+    MapForEach,
+    SetForEach,
+    /// `Map.prototype.keys/values/entries`, `Set.prototype.values/entries`
+    /// (bd-9vouw.33). Append only.
+    MapKeys,
+    MapValues,
+    MapEntries,
+    SetValues,
+    SetEntries,
+    /// `String.prototype.concat`. Append only.
+    StringPrototypeConcat,
+    /// `Number.prototype.toPrecision` / `toExponential`. Append only.
+    NumberToPrecision,
+    NumberToExponential,
 }
 
 impl BuiltinFunctionKind {
@@ -4761,6 +4777,13 @@ impl BuiltinFunction {
             BuiltinFunctionKind::FunctionPrototypeApply => "apply",
             BuiltinFunctionKind::FunctionPrototypeBind => "bind",
             BuiltinFunctionKind::BoundFunction => "bound",
+            BuiltinFunctionKind::MapForEach | BuiltinFunctionKind::SetForEach => "forEach",
+            BuiltinFunctionKind::MapKeys => "keys",
+            BuiltinFunctionKind::MapValues | BuiltinFunctionKind::SetValues => "values",
+            BuiltinFunctionKind::MapEntries | BuiltinFunctionKind::SetEntries => "entries",
+            BuiltinFunctionKind::StringPrototypeConcat => "concat",
+            BuiltinFunctionKind::NumberToPrecision => "toPrecision",
+            BuiltinFunctionKind::NumberToExponential => "toExponential",
             BuiltinFunctionKind::StandardConstructor => {
                 canonical_builtin_prototype_name(&self.module_specifier).unwrap_or("Function")
             }
@@ -10483,6 +10506,9 @@ pub struct InterpreterCore {
     seed_epoch: u64,
     /// Pending lazy seeds to materialize on next write.
     pending_lazy_seeds: Vec<std::rc::Weak<ExecutionSeedShared>>,
+    /// `arguments` object staged by call setup for the callee's entry marker
+    /// (bd-9vouw.25): (call-stack depth of the callee frame, object, label).
+    pending_arguments_object: Option<(usize, Value, Label)>,
     /// Drop-aware ownership charged for every live execution-seed snapshot.
     execution_seed_reservation_ledger: std::rc::Rc<ExecutionSeedReservationLedger>,
     /// Current instruction pointer.
@@ -11431,6 +11457,7 @@ impl InterpreterCore {
             builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
             seed_epoch: 0,
             pending_lazy_seeds: Vec::new(),
+            pending_arguments_object: None,
             execution_seed_reservation_ledger: std::rc::Rc::new(
                 ExecutionSeedReservationLedger::default(),
             ),
@@ -34419,6 +34446,70 @@ impl InterpreterCore {
                 args,
             ),
             BuiltinFunctionKind::BoundFunction => self.invoke_bound_function(module, builtin, args),
+            BuiltinFunctionKind::MapForEach | BuiltinFunctionKind::SetForEach => self
+                .collection_for_each(
+                    module,
+                    builtin.kind == BuiltinFunctionKind::MapForEach,
+                    receiver.unwrap_or(Value::Undefined),
+                    args,
+                ),
+            BuiltinFunctionKind::MapKeys
+            | BuiltinFunctionKind::MapValues
+            | BuiltinFunctionKind::MapEntries
+            | BuiltinFunctionKind::SetValues
+            | BuiltinFunctionKind::SetEntries => {
+                self.collection_iterator(builtin.kind, receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::StringPrototypeConcat => {
+                // ES2020 21.1.3.4: RequireObjectCoercible(this), then append
+                // ToString of every argument.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                if matches!(receiver, Value::Undefined | Value::Null) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object-coercible String.prototype.concat receiver"
+                            .to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                let mut text = self.value_to_string(&receiver);
+                for index in 0..args.count {
+                    let argument = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    text.push_str(&self.value_to_string(&argument));
+                    self.check_string_limit(text.len())?;
+                }
+                Ok(Value::str(text))
+            }
+            BuiltinFunctionKind::NumberToPrecision | BuiltinFunctionKind::NumberToExponential => {
+                let exponential = builtin.kind == BuiltinFunctionKind::NumberToExponential;
+                let number = Self::number_receiver_to_f64(&receiver.unwrap_or(Value::Undefined));
+                let argument = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                // toPrecision(undefined) is ToString(x); toExponential(undefined)
+                // uses as many digits as needed to represent x uniquely.
+                let digits = (!matches!(argument, Value::Undefined))
+                    .then(|| Self::value_as_integer(&argument));
+                if !number.is_finite() || (digits.is_none() && !exponential) {
+                    return Ok(Value::str(self.value_to_string(&js_number_to_value(number))));
+                }
+                let (low, high) = if exponential { (0, 100) } else { (1, 100) };
+                if let Some(digits) = digits
+                    && !(low..=high).contains(&digits)
+                {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "{}() argument must be between {low} and {high}",
+                            if exponential { "toExponential" } else { "toPrecision" }
+                        ),
+                    });
+                }
+                let significant = digits.map(|digits| {
+                    usize::try_from(digits).unwrap_or(0) + usize::from(exponential)
+                });
+                Ok(Value::str(Self::format_number_significant(
+                    number,
+                    significant,
+                    exponential,
+                )))
+            }
             BuiltinFunctionKind::Require => {
                 check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
                 let args_label = self.join_arg_range_label(args)?;
@@ -40155,6 +40246,7 @@ impl InterpreterCore {
         }
         self.apply_rest_param(&mut argument_values, function.rest_param_index, args)?;
         self.apply_rest_param_labels(&mut argument_labels, function.rest_param_index, args)?;
+        self.stage_arguments_object(module, function, args)?;
         self.run_pre_call_hook(module, &active_callee, function_index, &argument_values)?;
 
         let scope_depth = self.scope_chain.depth();
@@ -42649,6 +42741,7 @@ impl InterpreterCore {
                         }
                         self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
                         self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
+                        self.stage_arguments_object(module, func, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
                         let captured_env_bytes = captured_env
@@ -42904,6 +42997,7 @@ impl InterpreterCore {
                                 func.rest_param_index,
                                 args,
                             )?;
+                            self.stage_arguments_object(module, func, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -43203,6 +43297,7 @@ impl InterpreterCore {
                         self.mark_inline_callback_started();
                         self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
                         self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
+                        self.stage_arguments_object(module, func, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
                         let captured_env_bytes = captured_env
@@ -43418,6 +43513,7 @@ impl InterpreterCore {
                     self.mark_inline_callback_started();
                     self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
                     self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
+                    self.stage_arguments_object(module, func, args)?;
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -45003,6 +45099,7 @@ impl InterpreterCore {
                                 func.rest_param_index,
                                 args,
                             )?;
+                            self.stage_arguments_object(module, func, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -48724,8 +48821,17 @@ impl InterpreterCore {
             "charAt" => Value::BuiltinFunction(BuiltinFunction::string_char_at()),
             "charCodeAt" => Value::BuiltinFunction(BuiltinFunction::string_char_code_at()),
             "at" => Value::BuiltinFunction(BuiltinFunction::string_at()),
-            "toUpperCase" => Value::BuiltinFunction(BuiltinFunction::string_to_upper_case()),
-            "toLowerCase" => Value::BuiltinFunction(BuiltinFunction::string_to_lower_case()),
+            // Locale-sensitive case mapping uses the root locale, as Node's
+            // default `en-US` does for everything but a few special casings.
+            "toUpperCase" | "toLocaleUpperCase" => {
+                Value::BuiltinFunction(BuiltinFunction::string_to_upper_case())
+            }
+            "toLowerCase" | "toLocaleLowerCase" => {
+                Value::BuiltinFunction(BuiltinFunction::string_to_lower_case())
+            }
+            "concat" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StringPrototypeConcat,
+            )),
             "trim" => Value::BuiltinFunction(BuiltinFunction::string_trim()),
             "trimStart" => Value::BuiltinFunction(BuiltinFunction::string_trim_start()),
             "trimEnd" => Value::BuiltinFunction(BuiltinFunction::string_trim_end()),
@@ -48948,6 +49054,12 @@ impl InterpreterCore {
     fn number_property_value(key: &str) -> Value {
         match key {
             "toFixed" => Value::BuiltinFunction(BuiltinFunction::number_to_fixed()),
+            "toPrecision" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NumberToPrecision,
+            )),
+            "toExponential" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::NumberToExponential,
+            )),
             "toString" => Value::BuiltinFunction(BuiltinFunction::number_to_string()),
             "valueOf" => Value::BuiltinFunction(BuiltinFunction::number_value_of()),
             _ => Value::Undefined,
@@ -49617,6 +49729,15 @@ impl InterpreterCore {
             ("Set", "delete") => Some(BuiltinFunction::set_delete()),
             ("Map", "clear") => Some(BuiltinFunction::map_clear()),
             ("Set", "clear") => Some(BuiltinFunction::set_clear()),
+            ("Map", "forEach") => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::MapForEach)),
+            ("Set", "forEach") => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::SetForEach)),
+            ("Map", "keys") => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::MapKeys)),
+            ("Map", "values") => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::MapValues)),
+            ("Map", "entries") => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::MapEntries)),
+            ("Set", "values" | "keys") => {
+                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::SetValues))
+            }
+            ("Set", "entries") => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::SetEntries)),
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
             ("URLSearchParams", "get") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::UrlSearchParamsGet,
@@ -58264,6 +58385,230 @@ impl InterpreterCore {
 
     /// One invocation path for property-resolved and intrinsic call/apply.
     /// `args` starts at thisArg; the target itself is never an argument.
+    /// ES2020 23.1.3.5 Map.prototype.forEach / 23.2.3.6 Set.prototype.forEach
+    /// over the entries present when iteration starts (entries added or
+    /// deleted by the callback are not observed, unlike the spec's live
+    /// iteration).
+    fn collection_for_each(
+        &mut self,
+        module: &Ir3Module,
+        is_map: bool,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (tag, storage) = if is_map {
+            ("Map", "__entries")
+        } else {
+            ("Set", "__values")
+        };
+        let collection_id = match &receiver {
+            Value::Object(id) if self.collection_storage_id(*id, tag, storage).is_some() => *id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("{tag} receiver for forEach"),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: format!("callable {tag}.prototype.forEach callback"),
+                got: callback.type_name().to_string(),
+            });
+        }
+        let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let items = self
+            .collection_iteration_values(collection_id)?
+            .unwrap_or_default();
+        let mut label = self.join_arg_range_label(args)?;
+        if let Some(collection_label) = self.object_mutation_labels.get(&collection_id) {
+            label = label.join(collection_label);
+        }
+        for item in items {
+            let (value, key) = if is_map {
+                let Value::Object(pair) = item else {
+                    continue;
+                };
+                let pair = self
+                    .heap
+                    .get(pair.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: pair.0 })?;
+                let field = |index: &str| {
+                    pair.properties
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(Value::Undefined)
+                };
+                (field("1"), field("0"))
+            } else {
+                (item.clone(), item)
+            };
+            self.preflight_inline_method_call_with_argument_label(
+                Some(module),
+                &callback,
+                3,
+                Some(&label),
+            )?;
+            self.invoke_inline_method_call_with_argument_label_preflighted(
+                Some(module),
+                callback.clone(),
+                this_arg.clone(),
+                vec![value, key, receiver.clone()],
+                Some(label.clone()),
+            )?;
+        }
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(Value::Undefined)
+    }
+
+    /// `Map.prototype.keys/values/entries` and `Set.prototype.values/entries`:
+    /// an iterator over the entries present at the call (not a live view).
+    fn collection_iterator(
+        &mut self,
+        kind: BuiltinFunctionKind,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        let is_map = matches!(
+            kind,
+            BuiltinFunctionKind::MapKeys
+                | BuiltinFunctionKind::MapValues
+                | BuiltinFunctionKind::MapEntries
+        );
+        let (tag, storage) = if is_map {
+            ("Map", "__entries")
+        } else {
+            ("Set", "__values")
+        };
+        let collection_id = match &receiver {
+            Value::Object(id) if self.collection_storage_id(*id, tag, storage).is_some() => *id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("{tag} receiver"),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let items = self
+            .collection_iteration_values(collection_id)?
+            .unwrap_or_default();
+        let mut projected = Vec::with_capacity(items.len());
+        for item in items {
+            let value = match kind {
+                BuiltinFunctionKind::MapKeys | BuiltinFunctionKind::MapValues => {
+                    let Value::Object(pair) = item else {
+                        continue;
+                    };
+                    let index = if kind == BuiltinFunctionKind::MapKeys {
+                        "0"
+                    } else {
+                        "1"
+                    };
+                    self.heap
+                        .get(pair.0 as usize)
+                        .and_then(|pair| pair.properties.get(index).cloned())
+                        .unwrap_or(Value::Undefined)
+                }
+                BuiltinFunctionKind::SetEntries => {
+                    Value::Object(self.alloc_array_from_values(&[item.clone(), item])?)
+                }
+                _ => item,
+            };
+            projected.push(value);
+        }
+        let array = self.alloc_array_from_values(&projected)?;
+        if let Some(collection_label) = self.object_mutation_labels.get(&collection_id).cloned() {
+            self.join_object_mutation_label(array, &collection_label)?;
+            self.replace_pending_hostcall_result_label(Some(collection_label))?;
+        }
+        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+    }
+
+    /// Number.prototype.toPrecision (ES2020 20.1.3.5) and toExponential
+    /// (20.1.3.2) for a finite `number`. `significant` counts significant
+    /// digits (`None`: as many as needed to round-trip, toExponential only).
+    /// Rounding is round-half-up on the exact decimal value of the double,
+    /// as the spec's "pick the larger n" tie rule requires.
+    fn format_number_significant(
+        number: f64,
+        significant: Option<usize>,
+        exponential: bool,
+    ) -> String {
+        let sign = if number < 0.0 { "-" } else { "" };
+        let magnitude = number.abs();
+        let (digits, exponent) = if magnitude == 0.0 {
+            let count = significant.unwrap_or(1).max(1);
+            ("0".repeat(count), 0i32)
+        } else {
+            match significant {
+                None => {
+                    let shortest = format!("{magnitude:e}");
+                    let (mantissa, exponent) =
+                        shortest.split_once('e').unwrap_or((shortest.as_str(), "0"));
+                    (
+                        mantissa.replace('.', ""),
+                        exponent.parse::<i32>().unwrap_or(0),
+                    )
+                }
+                Some(count) => {
+                    // The exact expansion of any finite double has at most
+                    // 767 significant digits.
+                    let exact = format!("{magnitude:.800e}");
+                    let (mantissa, exponent) =
+                        exact.split_once('e').unwrap_or((exact.as_str(), "0"));
+                    let mut exponent = exponent.parse::<i32>().unwrap_or(0);
+                    let all: Vec<u8> = mantissa.bytes().filter(|byte| *byte != b'.').collect();
+                    let mut kept: Vec<u8> = all[..count.min(all.len())].to_vec();
+                    while kept.len() < count {
+                        kept.push(b'0');
+                    }
+                    if all.get(count).is_some_and(|digit| *digit >= b'5') {
+                        let mut index = kept.len();
+                        loop {
+                            if index == 0 {
+                                kept.insert(0, b'1');
+                                kept.pop();
+                                exponent += 1;
+                                break;
+                            }
+                            index -= 1;
+                            if kept[index] == b'9' {
+                                kept[index] = b'0';
+                            } else {
+                                kept[index] += 1;
+                                break;
+                            }
+                        }
+                    }
+                    (String::from_utf8(kept).unwrap_or_default(), exponent)
+                }
+            }
+        };
+        let precision = i32::try_from(digits.len()).unwrap_or(i32::MAX);
+        if exponential || exponent < -6 || exponent >= precision {
+            let (first, rest) = digits.split_at(1);
+            let fraction = if rest.is_empty() {
+                String::new()
+            } else {
+                format!(".{rest}")
+            };
+            let exponent_sign = if exponent >= 0 { '+' } else { '-' };
+            return format!("{sign}{first}{fraction}e{exponent_sign}{}", exponent.abs());
+        }
+        if exponent >= 0 {
+            let split = usize::try_from(exponent).unwrap_or(0) + 1;
+            let (integer, fraction) = digits.split_at(split.min(digits.len()));
+            if fraction.is_empty() {
+                format!("{sign}{integer}")
+            } else {
+                format!("{sign}{integer}.{fraction}")
+            }
+        } else {
+            let zeros = usize::try_from(-exponent - 1).unwrap_or(0);
+            format!("{sign}0.{}{digits}", "0".repeat(zeros))
+        }
+    }
+
     /// ES2020 19.2.3.2 Function.prototype.bind. The bound function's private
     /// state object holds the target, the bound `this` and the bound
     /// arguments; its mutation label carries every input's label, and every
@@ -68171,6 +68516,18 @@ impl InterpreterCore {
                     });
                 }
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::PropertyKey)
+            }
+            "builtin:ArgumentsObject" => {
+                // bd-9vouw.25: the object staged by call setup for this frame.
+                // A body entered without staging (a generator resumed by
+                // `next()`) sees an empty arguments object.
+                match self.pending_arguments_object.take() {
+                    Some((depth, value, label)) if depth == self.call_stack.len() => {
+                        self.replace_pending_hostcall_result_label(Some(label))?;
+                        Ok(value)
+                    }
+                    _ => Ok(Value::Object(self.alloc_arguments_object(&[])?)),
+                }
             }
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are
@@ -81474,6 +81831,70 @@ impl InterpreterCore {
     /// Array of ALL trailing args (`args[rest_idx..args.count]`). Called after
     /// the per-call fixed-arity collection; the existing param-destructure path
     /// then binds the rest name to that array register. Empty rest => `[]`.
+    /// bd-9vouw.25: when `function`'s entry instruction is the `arguments`
+    /// marker, build the unmapped arguments object from the caller's full
+    /// argument registers (`args`, still in the caller's frame) and stage it
+    /// for the callee frame about to be pushed.
+    fn stage_arguments_object(
+        &mut self,
+        module: &Ir3Module,
+        function: &crate::ir_contract::Ir3FunctionDesc,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let uses_arguments = matches!(
+            module.instructions.get(function.entry as usize),
+            Some(Ir3Instruction::HostCall { capability, .. })
+                if capability.0 == crate::lowering_pipeline::ARGUMENTS_OBJECT_CAPABILITY
+        );
+        if !uses_arguments {
+            return Ok(());
+        }
+        let mut values = Vec::with_capacity(args.count as usize);
+        let mut label = Label::Public;
+        for offset in 0..args.count {
+            let register =
+                args.start
+                    .checked_add(offset)
+                    .ok_or(InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    })?;
+            values.push(self.read_reg(register)?);
+            label = label.join(self.get_register_label(register)?);
+        }
+        let object = self.alloc_arguments_object(&values)?;
+        self.pending_arguments_object = Some((
+            self.call_stack.len().saturating_add(1),
+            Value::Object(object),
+            label,
+        ));
+        Ok(())
+    }
+
+    /// An unmapped arguments object (ES2020 9.4.4.6): indexed elements plus a
+    /// non-enumerable `length`.
+    fn alloc_arguments_object(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
+        let object = self.alloc_object_with_prototype(None)?;
+        for (index, value) in values.iter().enumerate() {
+            self.set_object_property(object, index.to_string(), value.clone())?;
+        }
+        self.set_object_property(
+            object,
+            "length".to_string(),
+            Value::Int(i64::try_from(values.len()).unwrap_or(i64::MAX)),
+        )?;
+        self.set_own_property_attributes(
+            object,
+            &RuntimePropertyKey::String(JsString::from("length")),
+            PropertyAttributes {
+                writable: true,
+                enumerable: false,
+                configurable: true,
+            },
+        )?;
+        Ok(object)
+    }
+
     fn apply_rest_param(
         &mut self,
         arg_vals: &mut Vec<Value>,

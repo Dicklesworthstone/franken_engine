@@ -9199,7 +9199,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             local_lexical_bindings: fn_local_lexical_bindings,
             is_generator: fn_is_generator,
             is_async: fn_is_async,
-            is_arrow: _fn_is_arrow,
+            is_arrow: fn_is_arrow,
             rest_param_index: fn_rest_param_index,
         } = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
@@ -9242,6 +9242,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             fn_reg = fn_reg.max(i as Reg + 1);
         }
 
+        // `arguments` (bd-9vouw.25): the marker must be the instruction at
+        // `entry`, where call setup recognizes it and stages the caller's
+        // full argument list; the marker then yields that object.
+        let arguments_register = (!fn_is_arrow
+            && function_reads_arguments(&fn_runtime_global_loads, body_ops))
+        .then(|| {
+            let register = fn_reg;
+            fn_reg = fn_reg.saturating_add(1);
+            register
+        });
+        if let Some(register) = arguments_register {
+            ir3.instructions.push(Ir3Instruction::HostCall {
+                capability: CapabilityTag(ARGUMENTS_OBJECT_CAPABILITY.to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: register,
+            });
+        }
+
         // When this function has free variables, put parameters on the
         // scope chain so LoadScoped can find them alongside captured
         // outer bindings.
@@ -9258,6 +9276,22 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     src: i as Reg,
                 });
             }
+        }
+        // `arguments` is a var of the function's own scope (pushed above
+        // for functions with free variables, otherwise here).
+        if let Some(register) = arguments_register {
+            if free_vars.is_empty() {
+                ir3.instructions.push(Ir3Instruction::PushScope);
+            }
+            let pool_idx = push_constant_optimized(&mut constant_pool, "arguments");
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index: pool_idx,
+                kind: 0,
+            });
+            ir3.instructions.push(Ir3Instruction::InitBinding {
+                name_pool_index: pool_idx,
+                src: register,
+            });
         }
 
         // Free-var binding-ids are threaded EXACTLY from the emission site
@@ -11644,9 +11678,14 @@ fn rewrite_unresolved_function_body_loads(
     // `LoadScoped`. These ids are excluded from the ReferenceError rewrite below
     // — including the `typeof` arm — so `typeof performance` resolves the
     // injected object ("object") rather than yielding "undefined" (bd-ylpdp).
+    // `arguments` (bd-9vouw.25) resolves the same way: a non-arrow function
+    // that reads it declares it on entry, and an arrow reads its enclosing
+    // function's through the captured scope chain.
     let runtime_global_loads: Vec<(String, BindingId)> = unresolved_by_id
         .iter()
-        .filter(|(_, name)| PREDECLARED_RUNTIME_GLOBALS.contains(&name.as_str()))
+        .filter(|(_, name)| {
+            PREDECLARED_RUNTIME_GLOBALS.contains(&name.as_str()) || name.as_str() == "arguments"
+        })
         .map(|(binding_id, name)| (name.clone(), *binding_id))
         .collect();
     let runtime_global_ids: BTreeSet<BindingId> =
@@ -17282,6 +17321,31 @@ fn lower_expression_to_ir1_inner(
         }
     }
     Ok(())
+}
+
+/// Internal intrinsic yielding a function's unmapped `arguments` object
+/// (bd-9vouw.25). It is emitted only as the first instruction of a function.
+pub(crate) const ARGUMENTS_OBJECT_CAPABILITY: &str = "builtin:ArgumentsObject";
+
+/// Whether a function body reads `arguments`, directly or through nested
+/// arrow functions (which have no `arguments` of their own).
+fn function_reads_arguments(
+    runtime_global_loads: &[(String, BindingId)],
+    body_ops: &[Ir1Op],
+) -> bool {
+    runtime_global_loads
+        .iter()
+        .any(|(name, _)| name == "arguments")
+        || body_ops.iter().any(|op| match op {
+            Ir1Op::LoadName { name, .. } => name == "arguments",
+            Ir1Op::CreateFunction {
+                is_arrow: true,
+                runtime_global_loads,
+                body_ops,
+                ..
+            } => function_reads_arguments(runtime_global_loads, body_ops),
+            _ => false,
+        })
 }
 
 /// Internal intrinsic that clears `enumerable` on a class's own members.

@@ -277,7 +277,7 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             || matches!(tag, "builtin:RequireObjectCoercible" | "builtin:ObjectRest" | "builtin:ToPropertyKey"
                 | "builtin:DestructureIteratorInit" | "builtin:DestructureIteratorNext"
                 | "builtin:DestructureIteratorElide" | "builtin:DestructureIteratorDone"
-                | "builtin:ClassMembersNonEnumerable") =>
+                | "builtin:ClassMembersNonEnumerable" | "builtin:ArgumentsObject") =>
         (
             None,
             HostcallResultContract::JoinInputs,

@@ -45903,21 +45903,28 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
         match (&a, &b) {
-            // Int + Int: stay in integer domain
-            (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(*y))),
+            // Int + Int: stay in integer domain if within safe integer range, else promote to float
+            (Value::Int(x), Value::Int(y)) => {
+                if let Some(sum) = x.checked_add(*y) {
+                    if sum >= MIN_SAFE_INTEGER && sum <= MAX_SAFE_INTEGER {
+                        return Ok(Value::Int(sum));
+                    }
+                }
+                Ok(js_number_to_value(*x as f64 + *y as f64))
+            }
             (Value::BigInt(x), Value::BigInt(y)) => {
                 Ok(Value::BigInt(Arc::from(Self::add_bigint_decimal(x, y))))
             }
             // Float + Float: float arithmetic
             (Value::Float(x), Value::Float(y)) => {
-                Ok(Value::Float(Float64::new(x.inner() + y.inner())))
+                Ok(js_number_to_value(x.inner() + y.inner()))
             }
             // Int + Float or Float + Int: promote to float
             (Value::Int(x), Value::Float(y)) => {
-                Ok(Value::Float(Float64::new(*x as f64 + y.inner())))
+                Ok(js_number_to_value(*x as f64 + y.inner()))
             }
             (Value::Float(x), Value::Int(y)) => {
-                Ok(Value::Float(Float64::new(x.inner() + *y as f64)))
+                Ok(js_number_to_value(x.inner() + *y as f64))
             }
             // String concatenation. `JsString::concat` joins exact UTF-16
             // code units, so a trailing high surrogate heals against a
@@ -45973,17 +45980,7 @@ impl InterpreterCore {
                     got: format!("{} + {}", a.type_name(), b.type_name()),
                 })?;
                 let result = x + y;
-                // If result is a whole number and fits in i64, return Int
-                if result.fract() == 0.0
-                    && !result.is_nan()
-                    && !result.is_infinite()
-                    && result >= i64::MIN as f64
-                    && result <= i64::MAX as f64
-                {
-                    Ok(Value::Int(result as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(result)))
-                }
+                Ok(js_number_to_value(result))
             }
         }
     }
@@ -45992,19 +45989,36 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // Fast path: Int op Int stays in integer domain
+        // Fast path: Int op Int stays in integer domain if safe and not producing -0.0
         if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
-            let result = match op {
-                "sub" => x.wrapping_sub(*y),
-                "mul" => x.wrapping_mul(*y),
+            match op {
+                "sub" => {
+                    if let Some(diff) = x.checked_sub(*y) {
+                        if diff >= MIN_SAFE_INTEGER && diff <= MAX_SAFE_INTEGER {
+                            return Ok(Value::Int(diff));
+                        }
+                    }
+                    return Ok(js_number_to_value(*x as f64 - *y as f64));
+                }
+                "mul" => {
+                    // Check for -0.0: 0 * negative or negative * 0 produces -0.0 in JS
+                    if (*x == 0 && *y < 0) || (*y == 0 && *x < 0) {
+                        return Ok(Value::Float(Float64::new(-0.0)));
+                    }
+                    if let Some(prod) = x.checked_mul(*y) {
+                        if prod >= MIN_SAFE_INTEGER && prod <= MAX_SAFE_INTEGER {
+                            return Ok(Value::Int(prod));
+                        }
+                    }
+                    return Ok(js_number_to_value(*x as f64 * *y as f64));
+                }
                 _ => {
                     return Err(InterpreterError::TypeError {
                         expected: "sub or mul".to_string(),
                         got: op.to_string(),
                     });
                 }
-            };
-            return Ok(Value::Int(result));
+            }
         }
 
         // Float path: use float arithmetic
@@ -46027,17 +46041,7 @@ impl InterpreterCore {
             }
         };
 
-        // Return Int if result is a whole number in i64 range
-        if result.fract() == 0.0
-            && !result.is_nan()
-            && !result.is_infinite()
-            && result >= i64::MIN as f64
-            && result <= i64::MAX as f64
-        {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(Float64::new(result)))
-        }
+        Ok(js_number_to_value(result))
     }
 
     fn eval_div(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
@@ -46052,33 +46056,29 @@ impl InterpreterCore {
             got: format!("{} / {}", a.type_name(), b.type_name()),
         })?;
 
-        // JS division semantics: x/0 = Infinity (or -Infinity), 0/0 = NaN
+        // JS division semantics: x/0 = Infinity (or -Infinity), 0/0 = NaN, 0 / -5 = -0.0
         let result = x / y;
-
-        // Return Int if result is a whole number in i64 range
-        if result.fract() == 0.0
-            && !result.is_nan()
-            && !result.is_infinite()
-            && result >= i64::MIN as f64
-            && result <= i64::MAX as f64
-        {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(Float64::new(result)))
-        }
+        Ok(js_number_to_value(result))
     }
 
     fn eval_mod(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
 
-        // Fast path: Int % Int stays in integer domain
+        // Fast path: Int % Int stays in integer domain if non-zero divisor, safe, and not producing -0.0
         if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
             if *y == 0 {
                 // JS: x % 0 = NaN
                 return Ok(Value::Float(Float64::new(f64::NAN)));
             }
-            return Ok(Value::Int(x.checked_rem(*y).unwrap_or(0)));
+            if let Some(rem) = x.checked_rem(*y) {
+                // In JS: if x < 0 and rem == 0, the result is -0.0 (e.g. -5 % 5 === -0)
+                if *x < 0 && rem == 0 {
+                    return Ok(Value::Float(Float64::new(-0.0)));
+                }
+                return Ok(Value::Int(rem));
+            }
+            return Ok(js_number_to_value(*x as f64 % *y as f64));
         }
 
         let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
@@ -46092,18 +46092,7 @@ impl InterpreterCore {
 
         // JS modulo semantics: x % 0 = NaN
         let result = x % y;
-
-        // Return Int if result is a whole number in i64 range
-        if result.fract() == 0.0
-            && !result.is_nan()
-            && !result.is_infinite()
-            && result >= i64::MIN as f64
-            && result <= i64::MAX as f64
-        {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(Float64::new(result)))
-        }
+        Ok(js_number_to_value(result))
     }
 
     fn eval_exp(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
@@ -46120,24 +46109,19 @@ impl InterpreterCore {
 
         // JS exponentiation uses float power
         let result = x.powf(y);
-
-        // Return Int if result is a whole number in i64 range
-        if result.fract() == 0.0
-            && !result.is_nan()
-            && !result.is_infinite()
-            && result >= i64::MIN as f64
-            && result <= i64::MAX as f64
-        {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(Float64::new(result)))
-        }
+        Ok(js_number_to_value(result))
     }
 
     fn eval_unary_plus(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
         match &value {
-            Value::Int(n) => Ok(Value::Int(*n)),
+            Value::Int(n) => {
+                if *n >= MIN_SAFE_INTEGER && *n <= MAX_SAFE_INTEGER {
+                    Ok(Value::Int(*n))
+                } else {
+                    Ok(Value::Float(Float64::new(*n as f64)))
+                }
+            }
             Value::Float(f) => Ok(Value::Float(*f)),
             _ => {
                 let number =
@@ -46145,17 +46129,7 @@ impl InterpreterCore {
                         expected: "number-coercible primitive".to_string(),
                         got: value.type_name().to_string(),
                     })?;
-                // Return Int if whole number in i64 range
-                if number.fract() == 0.0
-                    && !number.is_nan()
-                    && !number.is_infinite()
-                    && number >= i64::MIN as f64
-                    && number <= i64::MAX as f64
-                {
-                    Ok(Value::Int(number as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(number)))
-                }
+                Ok(js_number_to_value(number))
             }
         }
     }
@@ -46164,30 +46138,25 @@ impl InterpreterCore {
         let value = self.read_reg(src)?;
         match &value {
             Value::Int(0) => Ok(Value::Float(Float64::new(-0.0))),
-            Value::Int(n) => Ok(n
-                .checked_neg()
-                .map(Value::Int)
-                .unwrap_or_else(|| Value::Float(Float64::new(-(*n as f64))))),
-            Value::Float(f) => Ok(Value::Float(Float64::new(-f.inner()))),
+            Value::Int(n) => {
+                if let Some(negated) = n.checked_neg() {
+                    if negated >= MIN_SAFE_INTEGER && negated <= MAX_SAFE_INTEGER {
+                        return Ok(Value::Int(negated));
+                    }
+                }
+                Ok(Value::Float(Float64::new(-(*n as f64))))
+            }
+            Value::Float(f) => {
+                let inner = f.inner();
+                Ok(Value::Float(Float64::new(-inner)))
+            }
             _ => {
                 let number =
                     Self::coerce_to_float(&value).ok_or_else(|| InterpreterError::TypeError {
                         expected: "number-coercible primitive".to_string(),
                         got: value.type_name().to_string(),
                     })?;
-                // Return Int if whole number in i64 range
-                let negated = -number;
-                if negated.fract() == 0.0
-                    && !(negated == 0.0 && negated.is_sign_negative())
-                    && !negated.is_nan()
-                    && !negated.is_infinite()
-                    && negated >= i64::MIN as f64
-                    && negated <= i64::MAX as f64
-                {
-                    Ok(Value::Int(negated as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(negated)))
-                }
+                Ok(js_number_to_value(-number))
             }
         }
     }

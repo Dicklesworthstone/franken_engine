@@ -1,0 +1,154 @@
+//! bd-9vouw.5: standing differential probe corpus vs Node on the default
+//! `frankenctl run` path.
+//!
+//! Why this exists: an IFC over-taint regression made `console.log(Math.max(1, 2))`
+//! unrunnable for about four weeks while every engine test stayed green, and
+//! the only end-to-end smoke ran `const answer = 40 + 2;`. This test runs 50
+//! small ES2015-2020 programs through the real CLI and compares their console
+//! output byte-for-byte with Node v22.2.0 (recorded in
+//! `fixtures/js_probe_corpus_v1.json`).
+//!
+//! The ledger below is a two-way ratchet:
+//! - `Pass` cases must match Node exactly;
+//! - `KnownFailure` cases must still fail and name the bead that owns the fix.
+//!   When a fix lands the case starts passing, and this test fails until the
+//!   case is moved to `Pass` — so the ledger cannot silently go stale;
+//! - `DeniedByDesign` cases must be refused by the ambient-authority membrane.
+//!
+//! Retire this test once the BRIDGE-12 Test262 harness runs on every push and
+//! covers these constructs.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Expect {
+    Pass,
+    KnownFailure(&'static str),
+    DeniedByDesign,
+}
+
+/// Case id -> expectation. Every corpus case must appear exactly once.
+const LEDGER: &[(&str, Expect)] = &[];
+
+#[derive(Debug)]
+enum Observed {
+    Output(String),
+    Failed(String),
+}
+
+fn corpus() -> Vec<(String, String, String)> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/js_probe_corpus_v1.json");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read corpus")).expect("corpus json");
+    assert_eq!(doc["oracle"]["version"].as_str(), Some("v22.2.0"));
+    doc["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|case| {
+            (
+                case["id"].as_str().expect("id").to_string(),
+                case["source"].as_str().expect("source").to_string(),
+                case["node_output"].as_str().expect("node_output").to_string(),
+            )
+        })
+        .collect()
+}
+
+fn run_case(dir: &PathBuf, id: &str, source: &str) -> Observed {
+    let input = dir.join(format!("{id}.js"));
+    let report = dir.join(format!("{id}.run.json"));
+    fs::write(&input, source).expect("write case");
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            input.to_str().expect("utf8"),
+            "--extension-id",
+            "probe-corpus",
+            "--instruction-budget",
+            "10000000",
+            "--out",
+            report.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("frankenctl should execute");
+    if !output.status.success() {
+        return Observed::Failed(String::from_utf8_lossy(&output.stderr).into_owned());
+    }
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report).expect("read report")).expect("report json");
+    let text = report["console_output"]
+        .as_array()
+        .expect("console_output")
+        .iter()
+        .map(|entry| entry["message"].as_str().unwrap_or_default().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Observed::Output(text)
+}
+
+#[test]
+fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("fe_probe_corpus_{}_{nonce}", std::process::id()));
+    fs::create_dir_all(&dir).expect("temp dir");
+
+    let ledger: BTreeMap<&str, Expect> = LEDGER.iter().copied().collect();
+    assert_eq!(ledger.len(), LEDGER.len(), "duplicate ledger entries");
+
+    let mut problems = Vec::new();
+    let mut table = Vec::new();
+    let cases = corpus();
+    for (id, source, node_output) in &cases {
+        let observed = run_case(&dir, id, source);
+        let matches = matches!(&observed, Observed::Output(text) if text == node_output);
+        let denied = matches!(&observed, Observed::Failed(stderr) if stderr.contains("ambient authority violation"));
+        let verdict = if matches {
+            "PASS"
+        } else if denied {
+            "DENIED"
+        } else {
+            "FAIL"
+        };
+        let detail = match &observed {
+            Observed::Output(text) => format!("output={text:?}"),
+            Observed::Failed(stderr) => {
+                let line = stderr.lines().find(|line| line.contains("failed for")).unwrap_or(stderr);
+                format!("error={}", line.chars().take(200).collect::<String>())
+            }
+        };
+        table.push(format!("{verdict:6} {id:32} node={node_output:?} {detail}"));
+        match ledger.get(id.as_str()) {
+            None => problems.push(format!("{id}: missing from LEDGER (observed {verdict})")),
+            Some(Expect::Pass) if !matches => {
+                problems.push(format!("{id}: expected Node output {node_output:?}, {detail}"));
+            }
+            Some(Expect::KnownFailure(bead)) if matches => problems.push(format!(
+                "{id}: now matches Node — move it to Pass (fixed under {bead})"
+            )),
+            Some(Expect::KnownFailure(_)) if denied => problems.push(format!(
+                "{id}: listed as KnownFailure but refused by the ambient-authority membrane"
+            )),
+            Some(Expect::DeniedByDesign) if !denied => {
+                problems.push(format!("{id}: expected an ambient-authority refusal, {detail}"));
+            }
+            _ => {}
+        }
+    }
+    for id in ledger.keys() {
+        if !cases.iter().any(|(case_id, _, _)| case_id == id) {
+            problems.push(format!("{id}: in LEDGER but not in the corpus"));
+        }
+    }
+    let passing = table.iter().filter(|row| row.starts_with("PASS")).count();
+    eprintln!("probe corpus: {passing}/{} match Node\n{}", cases.len(), table.join("\n"));
+    assert!(problems.is_empty(), "probe corpus ledger violations:\n{}", problems.join("\n"));
+}

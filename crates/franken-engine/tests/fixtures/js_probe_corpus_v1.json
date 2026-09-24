@@ -1,0 +1,262 @@
+{
+  "schema_version": "franken-engine.js-probe-corpus.v1",
+  "bead": "bd-9vouw.5",
+  "oracle": {
+    "runtime": "node",
+    "version": "v22.2.0",
+    "mode": "CommonJS script (sloppy)",
+    "command": "node <case>.js"
+  },
+  "cases": [
+    {
+      "id": "01_closure",
+      "source": "function mk(){let c=0;return ()=>++c;} const f=mk(); f(); f(); console.log(f());",
+      "node_output": "3"
+    },
+    {
+      "id": "02_class_super",
+      "source": "class A{constructor(x){this.x=x} get dbl(){return this.x*2} static s(){return 'S'}} class B extends A{constructor(){super(21)} m(){return super.dbl}} console.log(new B().m(), A.s(), new B() instanceof A);",
+      "node_output": "42 S true"
+    },
+    {
+      "id": "03_destructure_spread",
+      "source": "const {a, b:[c,...d], ...rest} = {a:1, b:[2,3,4], e:5, f:6}; console.log(a, c, JSON.stringify(d), JSON.stringify(rest), Math.max(...[3,9,2]));",
+      "node_output": "1 2 [3,4] {\"e\":5,\"f\":6} 9"
+    },
+    {
+      "id": "04_generators",
+      "source": "function* g(){ const x = yield 1; yield x*2; return 7;} const it=g(); console.log(JSON.stringify([it.next(), it.next(5), it.next(), it.next()]));",
+      "node_output": "[{\"value\":1,\"done\":false},{\"value\":10,\"done\":false},{\"value\":7,\"done\":true},{\"done\":true}]"
+    },
+    {
+      "id": "05_async_order",
+      "source": "const log=[]; setTimeout(()=>{log.push('timeout'); console.log(log.join(','))},0); Promise.resolve().then(()=>log.push('p1')).then(()=>log.push('p2')); (async()=>{log.push('a0'); await null; log.push('a1');})(); log.push('sync');",
+      "node_output": "a0,sync,p1,a1,p2,timeout"
+    },
+    {
+      "id": "06_map_set",
+      "source": "const m=new Map([[1,'a'],[2,'b']]); m.set(3,'c'); m.delete(1); const s=new Set([1,2,2,3]); console.log(JSON.stringify([...m]), s.size, [...s].join('|'));",
+      "node_output": "[[2,\"b\"],[3,\"c\"]] 3 1|2|3"
+    },
+    {
+      "id": "07_json",
+      "source": "const o=JSON.parse('{\"a\":[1,2,{\"b\":null}],\"c\":\"x\\\\u0041\"}'); console.log(JSON.stringify(o, null, 1).length, JSON.stringify({u:undefined, f(){}, n:NaN, d:new Date(0)}));",
+      "node_output": "57 {\"n\":null,\"d\":\"1970-01-01T00:00:00.000Z\"}"
+    },
+    {
+      "id": "08_regexp_named_lookbehind",
+      "source": "const m='2020-12-31'.match(/(?<y>\\d{4})-(?<m>\\d{2})-(?<d>\\d{2})/); console.log(m.groups.y, m.groups.d, 'price $42'.match(/(?<=\\$)\\d+/)[0], /\\u{1F600}/u.test('\\u{1F600}'));",
+      "node_output": "2020 31 42 true"
+    },
+    {
+      "id": "09_regexp_replace",
+      "source": "console.log('aaa bbb'.replace(/(\\w)(\\w*)/g, (m,a,b)=>a.toUpperCase()+b), 'x-y-z'.split(/-/).length, /a.c/s.test('a\\nc'));",
+      "node_output": "Aaa Bbb 3 true"
+    },
+    {
+      "id": "10_proxy_reflect",
+      "source": "const p=new Proxy({}, {get:(t,k)=>k==='x'?42:Reflect.get(t,k), has:()=>true}); console.log(p.x, 'zzz' in p, Reflect.ownKeys({b:1,a:2,1:3}).join(','));",
+      "node_output": "42 true 1,b,a"
+    },
+    {
+      "id": "11_symbol_iter",
+      "source": "const it={[Symbol.iterator](){let i=0;return {next:()=>({value:i,done:i++>=3})}}}; console.log([...it].join(','), typeof Symbol('d'), Symbol.for('k')===Symbol.for('k'));",
+      "node_output": "0,1,2 symbol true"
+    },
+    {
+      "id": "12_typed_arrays",
+      "source": "const b=new ArrayBuffer(8); const dv=new DataView(b); dv.setFloat64(0, Math.PI); const u=new Uint8Array(b); console.log(u[0], new Int16Array([70000])[0], new Float32Array([1.1])[0]);",
+      "node_output": "64 4464 1.100000023841858"
+    },
+    {
+      "id": "13_bigint",
+      "source": "console.log((2n**64n).toString(), (-7n/2n).toString(), typeof 1n, BigInt.asUintN(8, 257n).toString());",
+      "node_output": "18446744073709551616 -3 bigint 1"
+    },
+    {
+      "id": "14_labels_switch",
+      "source": "let out=[]; outer: for(let i=0;i<3;i++){ for(let j=0;j<3;j++){ if(j==1) continue outer; if(i==2) break outer; out.push(i+''+j);} } switch(2){case 1: out.push('one'); case 2: out.push('two'); case 3: out.push('three'); break; default: out.push('d');} console.log(out.join(','));",
+      "node_output": "00,10,two,three"
+    },
+    {
+      "id": "15_try_finally",
+      "source": "function f(){ try { return 'try' } finally { console.log('finally-runs') } } console.log(f()); try { null.x } catch(e) { console.log(e instanceof TypeError, e.constructor.name) }",
+      "node_output": "finally-runs\ntry\ntrue TypeError"
+    },
+    {
+      "id": "16_defineProperty",
+      "source": "const o={}; Object.defineProperty(o,'x',{value:1, writable:false, enumerable:false}); o.x=2; console.log(o.x, Object.keys(o).length, JSON.stringify(Object.getOwnPropertyDescriptor(o,'x')));",
+      "node_output": "1 0 {\"value\":1,\"writable\":false,\"enumerable\":false,\"configurable\":false}"
+    },
+    {
+      "id": "17_array_methods",
+      "source": "const a=[5,1,4,2,3]; console.log(a.slice().sort((x,y)=>x-y).join(), a.map(x=>x*2).filter(x=>x>4).reduce((s,x)=>s+x,0), a.findIndex(x=>x==4), [1,[2,[3,[4]]]].flat(Infinity).join(), Array.from({length:3},(_, i)=>i*i).join());",
+      "node_output": "1,2,3,4,5 24 2 1,2,3,4 0,1,4"
+    },
+    {
+      "id": "18_string_methods",
+      "source": "console.log('abc'.padStart(6,'*'), ' x '.trim()+'|', 'a-b-c'.split('-').reverse().join(''), 'Hello'.codePointAt(1), String.raw`a\\nb`, '\\u00df'.toUpperCase(), 'abc'.localeCompare('abd'));",
+      "node_output": "***abc x| cba 101 a\\nb SS -1"
+    },
+    {
+      "id": "19_optional_nullish",
+      "source": "const o={a:{b:0}}; console.log(o?.a?.b, o?.x?.y, o.a.b ?? 'dflt', null ?? 'n', o.f?.());",
+      "node_output": "0 undefined 0 n undefined"
+    },
+    {
+      "id": "20_tagged_template",
+      "source": "function t(s,...v){return s.raw.join('|')+'#'+v.join(',')} console.log(t`a${1}b${2}c`);",
+      "node_output": "a|b|c#1,2"
+    },
+    {
+      "id": "21_sloppy_with_args",
+      "source": "function f(a){ arguments[0]=99; return a } var o={q:7}; with(o){ var r=q } console.log(f(1), r);",
+      "node_output": "99 7"
+    },
+    {
+      "id": "22_eval_function",
+      "source": "console.log(eval('1+2'), new Function('a','b','return a*b')(6,7));",
+      "node_output": "3 42"
+    },
+    {
+      "id": "23_number_format",
+      "source": "console.log((0.1+0.2).toFixed(2), (255).toString(16), 1e21+'', (123.456).toPrecision(4), Number('0x1f'), parseInt('08'), (-0).toString(), Object.is(-0, 0), 1/0);",
+      "node_output": "0.30 ff 1e+21 123.5 31 8 0 false Infinity"
+    },
+    {
+      "id": "24_date",
+      "source": "const d=new Date(Date.UTC(2020,1,29,12,0,0)); console.log(d.toISOString(), d.getUTCDay(), Date.parse('2020-01-01T00:00:00Z'));",
+      "node_output": "2020-02-29T12:00:00.000Z 6 1577836800000"
+    },
+    {
+      "id": "25_getter_setter_proto",
+      "source": "const proto={get g(){return this.v*10}}; const o=Object.create(proto); o.v=4; console.log(o.g, Object.getPrototypeOf(o)===proto, o.hasOwnProperty('g'));",
+      "node_output": "40 true false"
+    },
+    {
+      "id": "26_error_types",
+      "source": "for (const src of ['undefinedVar', 'let x=1; x()', '[].reduce((a,b)=>a)', 'new Array(-1)']) { try { eval(src) } catch(e) { console.log(e.name) } }",
+      "node_output": "ReferenceError\nTypeError\nTypeError\nRangeError"
+    },
+    {
+      "id": "27_weakmap_holes",
+      "source": "const wm=new WeakMap(); const k={}; wm.set(k,1); const h=[1,,3]; console.log(wm.get(k), 1 in h, h.length, Object.keys(h).join());",
+      "node_output": "1 false 3 0,2"
+    },
+    {
+      "id": "28_sort_stability",
+      "source": "const a=[{k:1,v:'a'},{k:0,v:'b'},{k:1,v:'c'},{k:0,v:'d'}]; console.log(a.sort((x,y)=>x.k-y.k).map(x=>x.v).join(''));",
+      "node_output": "bdac"
+    },
+    {
+      "id": "29_promise_all_race",
+      "source": "Promise.all([1, Promise.resolve(2), new Promise(r=>setTimeout(()=>r(3),1))]).then(v=>console.log('all', v.join())); Promise.allSettled([Promise.reject(new Error('x')), 1]).then(r=>console.log('settled', r.map(x=>x.status).join()));",
+      "node_output": "settled rejected,fulfilled\nall 1,2,3"
+    },
+    {
+      "id": "30_async_iter",
+      "source": "(async()=>{ async function* g(){ yield 1; yield 2 } let s=0; for await (const x of g()) s+=x; console.log('sum', s) })();",
+      "node_output": "sum 3"
+    },
+    {
+      "id": "31_object_entries_order",
+      "source": "console.log(JSON.stringify(Object.entries({b:1, 2:'x', a:2, 1:'y'})));",
+      "node_output": "[[\"1\",\"y\"],[\"2\",\"x\"],[\"b\",1],[\"a\",2]]"
+    },
+    {
+      "id": "32_instanceof_hasinstance",
+      "source": "class Even{ static [Symbol.hasInstance](n){ return n%2===0 } } console.log(2 instanceof Even, 3 instanceof Even);",
+      "node_output": "true false"
+    },
+    {
+      "id": "33_class_private_post2020",
+      "source": "class C { #x=1; inc(){ return ++this.#x } } console.log(new C().inc());",
+      "node_output": "2"
+    },
+    {
+      "id": "34_string_unicode",
+      "source": "console.log('\\u{1F600}'.length, [...'\\u{1F600}'].length, 'e\\u0301'.normalize('NFC').length, encodeURIComponent('\\u00e9&'));",
+      "node_output": "2 1 1 %C3%A9%26"
+    },
+    {
+      "id": "35_math",
+      "source": "console.log(Math.hypot(3,4), Math.trunc(-4.7), Math.sign(-3), Math.cbrt(27), Math.clz32(1), Math.fround(5.5), Math.imul(3,4));",
+      "node_output": "5 -4 -1 3 31 5.5 12"
+    },
+    {
+      "id": "36_closures_in_loops",
+      "source": "const fs=[]; for (let i=0;i<3;i++) fs.push(()=>i); var gs=[]; for (var j=0;j<3;j++) gs.push(()=>j); console.log(fs.map(f=>f()).join(), gs.map(g=>g()).join());",
+      "node_output": "0,1,2 3,3,3"
+    },
+    {
+      "id": "37_function_props",
+      "source": "function foo(a,b){} console.log(foo.length, foo.name, typeof foo.prototype, (()=>1).prototype);",
+      "node_output": "2 foo object undefined"
+    },
+    {
+      "id": "38_json_reviver",
+      "source": "console.log(JSON.stringify(JSON.parse('[1,2,{\"a\":3}]', (k,v)=> typeof v==='number'? v*10 : v)));",
+      "node_output": "[10,20,{\"a\":30}]"
+    },
+    {
+      "id": "39_destructure_default",
+      "source": "const [x=5, y=x*2] = []; const {p: {q = 'dq'} = {}} = {}; console.log(x, y, q);",
+      "node_output": "5 10 dq"
+    },
+    {
+      "id": "40_exceptions_across_calls",
+      "source": "function a(){ b() } function b(){ throw new RangeError('deep') } try { a() } catch(e) { console.log(e.message, e instanceof RangeError, e instanceof Error, String(e)) }",
+      "node_output": "deep true true RangeError: deep"
+    },
+    {
+      "id": "41_int_overflow",
+      "source": "console.log(9007199254740992 + 1, 2**53 + 1, 4294967296 * 4294967296, 9223372036854775807 + 1, (2**31)|0, 3000000000 * 3);",
+      "node_output": "9007199254740992 9007199254740992 18446744073709552000 9223372036854776000 -2147483648 9000000000"
+    },
+    {
+      "id": "42_int_overflow_loop",
+      "source": "let x = 1; for (let i = 0; i < 70; i++) x = x * 2; console.log(x, x === 2**70);",
+      "node_output": "1.1805916207174113e+21 true"
+    },
+    {
+      "id": "43_arguments_object",
+      "source": "function f(){ return arguments.length + ':' + Array.prototype.slice.call(arguments).join('-') } console.log(f(1,2,3));",
+      "node_output": "3:1-2-3"
+    },
+    {
+      "id": "44_regexp_backref_lookahead",
+      "source": "console.log(/(a)\\1/.test('aa'), /x(?=y)/.test('xy'), 'aBc'.replace(/b/i, '_'), /^\\p{Lu}$/u.test('A'));",
+      "node_output": "true true a_c true"
+    },
+    {
+      "id": "45_date_methods",
+      "source": "const d = new Date(0); console.log(d.getUTCFullYear(), d.getTime(), typeof Date.UTC, typeof d.toISOString);",
+      "node_output": "1970 0 function function"
+    },
+    {
+      "id": "46_catch_message",
+      "source": "try { throw new Error('boom') } catch (e) { console.log(e.message) }",
+      "node_output": "boom"
+    },
+    {
+      "id": "47_number_to_string",
+      "source": "console.log(String(0.1), String(1e-7), String(123456789012345680000), (1234.5678).toFixed(1), Number.MAX_SAFE_INTEGER);",
+      "node_output": "0.1 1e-7 123456789012345680000 1234.6 9007199254740991"
+    },
+    {
+      "id": "48_ambient_process",
+      "source": "let r; try { r = typeof process === 'undefined' ? 'no-process' : Object.keys(process.env).length } catch (e) { r = 'threw:' + e.name } console.log(r);",
+      "node_output": "76"
+    },
+    {
+      "id": "49_ambient_require_fs",
+      "source": "let r; try { r = typeof require === 'function' ? typeof require('fs').readFileSync : 'no-require' } catch (e) { r = 'threw:' + e.name } console.log(r);",
+      "node_output": "function"
+    },
+    {
+      "id": "50_getter_label_join",
+      "source": "const o = { get v(){ return 40 } }; const a = [1,2]; console.log(o.v + a.length);",
+      "node_output": "42"
+    }
+  ]
+}

@@ -25771,6 +25771,21 @@ enum FlowValueShape {
 }
 
 impl FlowValueShape {
+    /// Whether a value of this shape, passed as an argument, can make the
+    /// callee run guest code: a callback, or coercion / accessor hooks on a
+    /// guest-reachable object. Only primitives and engine-owned closed
+    /// results are known to be inert.
+    fn argument_cannot_run_guest_code(self) -> bool {
+        matches!(
+            self,
+            Self::Primitive
+                | Self::OwnKeyArray
+                | Self::ClosedResult
+                | Self::BufferObject
+                | Self::ConstantsObject
+        )
+    }
+
     fn is_closed(self) -> bool {
         matches!(
             self,
@@ -27486,6 +27501,13 @@ fn simulate_ir2_flow_labels(
                         | FlowValueShape::EventEmitterFluentMethod
                         | FlowValueShape::EventEmitterEmitMethod
                 );
+                // bd-zk58q: an argument that can run guest code (a callback,
+                // or coercion hooks) can throw or return a value that no
+                // operand label covers. `Buffer.from('x').map(() => { throw
+                // secret })` reached its catch as Internal and printed.
+                let arguments_are_inert = inputs
+                    .iter()
+                    .all(|argument| argument.shape.argument_cannot_run_guest_code());
                 inputs.push(callee);
                 inputs.push(receiver);
                 // Primitive receivers (`str.startsWith`, `str.endsWith`) and
@@ -27494,9 +27516,14 @@ fn simulate_ir2_flow_labels(
                 // over the receiver's own label. Failing them high made
                 // nested TLS callbacks a TopSecret -> Internal console
                 // denial after nested-body IFC walking (bd-jux2l / bd-wyazf).
+                // That shortcut holds only while no argument can run guest
+                // code; otherwise the call fails high, bounded by the lowering
+                // unit's label ceiling (bd-9vouw.1), so programs without a
+                // sensitive source are unaffected.
                 let finite_engine_method = callee_is_summarized
-                    || receiver_shape == FlowValueShape::Primitive
-                    || receiver_shape.is_closed();
+                    || ((receiver_shape == FlowValueShape::Primitive
+                        || receiver_shape.is_closed())
+                        && arguments_are_inert);
                 // Payload-less EventEmitter.emit stays fail-high (engine Error).
                 // The payload-throw path is handled via
                 // `operation_exception_is_event_emitter_error` above.
@@ -35585,11 +35612,12 @@ mod tests {
 
     #[test]
     fn callback_capable_buffer_method_catch_stays_top_secret_bd_x10yn() {
-        let tree = crate::parser_api_stability::parse_script(
-            "try { Buffer.from('x').map(value => { throw 'secret-token'; }); } \
-             catch (error) { console.log(error); }",
-        )
-        .expect("parse callback-capable Buffer source");
+        let source = format!(
+            "{OPAQUE_CEILING_SOURCE}try {{ Buffer.from('x').map(value => {{ throw 'secret-token'; }}); }} \
+             catch (error) {{ console.log(error); }}"
+        );
+        let tree = crate::parser_api_stability::parse_script(&source)
+            .expect("parse callback-capable Buffer source");
         let ir0 = Ir0Module::from_syntax_tree(tree, "buffer_callback_catch_bd_x10yn.js");
         let ir1 = lower_ir0_to_ir1(&ir0)
             .expect("lower callback-capable Buffer source")

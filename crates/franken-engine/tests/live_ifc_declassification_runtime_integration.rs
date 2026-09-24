@@ -71,8 +71,13 @@ fn generate_complete_ifc_artifacts(test_name: &str) -> LoadedIfcRuntimeArtifacts
         );
     }
 
-    generate_ifc_proof_artifacts(&results, &policy, &output_dir)
-        .expect("Should generate IFC proof artifacts");
+    generate_ifc_proof_artifacts(
+        &results,
+        &policy,
+        &signing_key.verification_key(),
+        &output_dir,
+    )
+    .expect("Should generate IFC proof artifacts");
 
     let manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(output_dir.join("manifest.json")).unwrap())
@@ -318,8 +323,13 @@ fn test_allowed_declassification_scenario() {
 
     // Generate proof artifacts and verify they exist
     let results = vec![result];
-    generate_ifc_proof_artifacts(&results, &policy, &output_dir)
-        .expect("Should generate proof artifacts");
+    generate_ifc_proof_artifacts(
+        &results,
+        &policy,
+        &signing_key.verification_key(),
+        &output_dir,
+    )
+    .expect("Should generate proof artifacts");
 
     // Verify proof artifacts exist
     let manifest_path = output_dir.join("manifest.json");
@@ -437,8 +447,13 @@ fn test_complete_ifc_demonstration() {
     assert_eq!(results.len(), 2);
 
     // Generate combined proof artifacts
-    generate_ifc_proof_artifacts(&results, &policy, &output_dir)
-        .expect("Should generate proof artifacts");
+    generate_ifc_proof_artifacts(
+        &results,
+        &policy,
+        &signing_key.verification_key(),
+        &output_dir,
+    )
+    .expect("Should generate proof artifacts");
 
     // Verify combined results
     let report_path = output_dir.join("report.json");
@@ -451,6 +466,12 @@ fn test_complete_ifc_demonstration() {
     assert_eq!(report["declassifications_approved"], 1); // Only the allowed one
     assert_eq!(report["flows_completed_successfully"], 1); // Only the allowed one
     assert_eq!(report["receipts_generated"], 1); // Only the allowed one
+
+    // bd-9vouw.20: the written artifacts re-verify from disk alone (the
+    // approved flow's receipt signature checks under the published key).
+    let verdict = verify_ifc_proof_artifacts(&output_dir).expect("artifacts should re-verify");
+    assert_eq!(verdict.approved_with_verified_receipt, 1);
+    assert_eq!(verdict.denied_without_flow, 1);
 
     // Verify events structure
     let events_path = output_dir.join("events.jsonl");
@@ -655,6 +676,7 @@ fn test_flow_verification_result_serde() {
             summary: "test loss assessment".to_string(),
         },
         pipeline_events: Vec::new(),
+        receipt: None,
     };
 
     // Test serialization/deserialization
@@ -730,8 +752,13 @@ fn test_proof_artifact_json_schema_compliance() {
         .expect("Should execute scenario");
 
     let results = vec![result];
-    generate_ifc_proof_artifacts(&results, &policy, &output_dir)
-        .expect("Should generate artifacts");
+    generate_ifc_proof_artifacts(
+        &results,
+        &policy,
+        &signing_key.verification_key(),
+        &output_dir,
+    )
+    .expect("Should generate artifacts");
 
     // Test JSON schema compliance for key artifacts
     let manifest_path = output_dir.join("manifest.json");
@@ -786,4 +813,75 @@ fn test_proof_artifact_json_schema_compliance() {
     assert_eq!(report["scenarios"].as_array().unwrap().len(), 1);
 
     cleanup_temp_dir(&output_dir);
+}
+
+/// bd-9vouw.20: example scripts never fabricate evidence, and a demo directory
+/// whose checked-in files carry placeholder values says so in its README.
+#[test]
+fn examples_do_not_fabricate_evidence_and_label_placeholder_fixtures() {
+    fn files_under(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("examples dir should be readable") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                files_under(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    fn has_placeholder_value(text: &str) -> bool {
+        if text.to_ascii_lowercase().contains("deadbeef") {
+            return true;
+        }
+        text.match_indices("hash\": \"").any(|(at, needle)| {
+            let rest = &text[at + needle.len()..];
+            let value = rest.split('"').next().unwrap_or_default();
+            // Typed hashes carry a scheme prefix (`sha256:`, `content:`).
+            let value = value
+                .split_once(':')
+                .filter(|(scheme, _)| scheme.chars().all(|c| c.is_ascii_alphanumeric()))
+                .map_or(value, |(_, digest)| digest);
+            !value.is_empty() && !value.chars().all(|c| c.is_ascii_hexdigit())
+        })
+    }
+
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut files = Vec::new();
+    files_under(&examples, &mut files);
+    assert!(
+        files.len() > 20,
+        "expected the examples tree, found {} files",
+        files.len()
+    );
+
+    let mut violations = Vec::new();
+    for file in &files {
+        let Ok(text) = fs::read_to_string(file) else {
+            continue;
+        };
+        let relative = file.strip_prefix(&examples).expect("under examples");
+        let is_script = file.extension().is_some_and(|ext| ext == "sh");
+        if is_script && text.contains("openssl rand") {
+            violations.push(format!(
+                "{}: script uses `openssl rand`",
+                relative.display()
+            ));
+        }
+        let mut components = relative.components();
+        let (Some(demo), Some(_)) = (components.next(), components.next()) else {
+            continue; // top-level example sources are compiled code, not fixtures
+        };
+        if !is_script && has_placeholder_value(&text) {
+            let readme = examples.join(demo).join("README.md");
+            let labeled = fs::read_to_string(&readme)
+                .is_ok_and(|readme| readme.contains("Fixture shape check"));
+            if !labeled {
+                violations.push(format!(
+                    "{}: placeholder hash/signature in a demo whose README lacks the fixture label",
+                    relative.display()
+                ));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "{violations:#?}");
 }

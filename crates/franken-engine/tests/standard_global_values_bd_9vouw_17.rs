@@ -20,7 +20,11 @@ fn eval_to_string(source: &str) -> String {
 }
 
 fn check(source: &str, node: &str) {
-    assert_eq!(eval_to_string(source), node, "`{source}` must match Node v22.2.0");
+    assert_eq!(
+        eval_to_string(source),
+        node,
+        "`{source}` must match Node v22.2.0"
+    );
 }
 
 #[test]
@@ -55,7 +59,10 @@ fn error_constructors_are_identities_shared_with_thrown_errors() {
 #[test]
 fn constructors_work_when_passed_as_values() {
     check("const E = TypeError; new E('m').message;", "m");
-    check("const E = RangeError; E('m') instanceof RangeError;", "true");
+    check(
+        "const E = RangeError; E('m') instanceof RangeError;",
+        "true",
+    );
     check(
         "function throws(C, f) { try { f(); } catch (e) { return e.constructor === C; } return false; } \
          throws(TypeError, function () { null.x; });",
@@ -65,7 +72,10 @@ fn constructors_work_when_passed_as_values() {
 
 #[test]
 fn constructor_is_not_an_enumerable_prototype_property() {
-    check("Object.keys(TypeError.prototype).indexOf('constructor');", "-1");
+    check(
+        "Object.keys(TypeError.prototype).indexOf('constructor');",
+        "-1",
+    );
 }
 
 #[test]
@@ -85,7 +95,10 @@ fn number_constructor_members() {
 
 #[test]
 fn static_builtins_are_callable_values() {
-    check("const keys = Object.keys; keys({ a: 1, b: 2 }).join();", "a,b");
+    check(
+        "const keys = Object.keys; keys({ a: 1, b: 2 }).join();",
+        "a,b",
+    );
     check("const J = JSON; J.stringify({ a: 1 });", "{\"a\":1}");
     check("const p = parseInt; p('42px');", "42");
     check("parseInt === parseInt;", "true");
@@ -109,13 +122,42 @@ fn bigint_constructor_value() {
 fn error_objects_stringify_through_error_prototype_to_string() {
     check("String(new RangeError('deep'));", "RangeError: deep");
     check("'' + new TypeError('x');", "TypeError: x");
-    check("let r; try { null.x; } catch (e) { r = String(e).split(':')[0]; } r;", "TypeError");
+    check(
+        "let r; try { null.x; } catch (e) { r = String(e).split(':')[0]; } r;",
+        "TypeError",
+    );
     check("String(new Error(''));", "Error");
     // A user-defined toString on the instance still wins.
     check(
         "const e = new Error('m'); e.toString = function () { return 'custom'; }; String(e);",
         "custom",
     );
+}
+
+#[test]
+fn builtin_prototypes_expose_their_methods() {
+    check(
+        "typeof Array.prototype.every + ',' + typeof String.prototype.slice + ',' + typeof Number.prototype.toFixed;",
+        "function,function,function",
+    );
+    // Test262's dominant shape: a prototype method applied to an array-like.
+    check(
+        "Array.prototype.map.call({length: 2, 0: 'a', 1: 'b'}, x => x + x).join();",
+        "aa,bb",
+    );
+    check(
+        "Array.prototype.every.call({length: 2, 0: 2, 1: 4}, x => x % 2 === 0);",
+        "true",
+    );
+    check("String.prototype.slice.call('hello', 1, 3);", "el");
+    check("Number.prototype.toFixed.call(2.5, 0);", "3");
+    check(
+        "const o = Object.create(Array.prototype); typeof o.push;",
+        "function",
+    );
+    // Still virtual: not enumerable, and unknown names stay undefined.
+    check("Object.keys(Array.prototype).length;", "0");
+    check("typeof Array.prototype.missing;", "undefined");
 }
 
 #[test]

@@ -38697,11 +38697,38 @@ impl InterpreterCore {
             Value::Bool(b) => b.to_string(),
             Value::Undefined => "undefined".to_string(),
             Value::Null => "null".to_string(),
-            Value::Object(id) => self
-                .error_object_to_string(*id)
-                .unwrap_or_else(|| "[object]".to_string()),
+            Value::Object(id) => self.error_object_to_string(*id).unwrap_or_else(|| {
+                // Non-Error throwables (Test262's `Test262Error`, plain
+                // `{ message }` objects) still carry a message; surface it so
+                // the failure is diagnosable.
+                match self.chain_data_property(*id, "message") {
+                    Some(Value::Str(message)) if !message.is_empty() => {
+                        format!("[object]: {message}")
+                    }
+                    _ => "[object]".to_string(),
+                }
+            }),
             _ => "[object]".to_string(),
         }
+    }
+
+    /// First own-or-inherited plain data property `key` of `object_id`
+    /// (no accessor or proxy invocation).
+    fn chain_data_property(&self, object_id: ObjectId, key: &str) -> Option<&Value> {
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                return None;
+            }
+            let object = self.heap.get(id.0 as usize)?;
+            if let Some(value) = object.properties.get(key) {
+                return Some(value);
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+        None
     }
 
     fn restore_scope_chain_for_frame(&mut self, frame: &CallFrame) {
@@ -43456,9 +43483,20 @@ impl InterpreterCore {
                         {
                             self.function_own_property_object(module, &obj_val)?
                                 .filter(|backing| {
-                                    self.heap.get(backing.0 as usize).is_some_and(|object| {
-                                        object.contains_own_runtime_property(&property_key)
-                                    })
+                                    // Own `name`/`length` are the function's
+                                    // (never inherited from a parent class);
+                                    // other keys may be statics inherited
+                                    // from the parent constructor (bd-9vouw.24).
+                                    if matches!(property_key.as_str(), Some("name" | "length")) {
+                                        self.heap.get(backing.0 as usize).is_some_and(|object| {
+                                            object.contains_own_runtime_property(&property_key)
+                                        })
+                                    } else {
+                                        self.chain_contains_runtime_property(
+                                            *backing,
+                                            &property_key,
+                                        )
+                                    }
                                 })
                         }
                         _ => None,
@@ -43473,20 +43511,25 @@ impl InterpreterCore {
                             obj_val.clone(),
                             0,
                         )?
-                    } else { match obj_val {
-                        Value::Object(oid) => {
-                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
-                            if property_key.as_str() == Some("__proto__") {
-                                // `__proto__` reads the internal prototype link
-                                // (set by class `extends` and `o.__proto__ = p`),
-                                // not a data property (bd-ppfds).
-                                self.heap
-                                    .get(oid.0 as usize)
-                                    .and_then(|o| o.prototype)
-                                    .map(Value::Object)
-                                    .unwrap_or(Value::Null)
-                            } else if ordinary_own_property_fast_path {
-                                let value = self
+                    } else {
+                        match obj_val {
+                            Value::Object(oid) => {
+                                self.run_pre_runtime_property_access_hook(
+                                    module,
+                                    oid,
+                                    &property_key,
+                                )?;
+                                if property_key.as_str() == Some("__proto__") {
+                                    // `__proto__` reads the internal prototype link
+                                    // (set by class `extends` and `o.__proto__ = p`),
+                                    // not a data property (bd-ppfds).
+                                    self.heap
+                                        .get(oid.0 as usize)
+                                        .and_then(|o| o.prototype)
+                                        .map(Value::Object)
+                                        .unwrap_or(Value::Null)
+                                } else if ordinary_own_property_fast_path {
+                                    let value = self
                                     .heap
                                     .get(oid.0 as usize)
                                     .and_then(|object| {
@@ -43495,162 +43538,183 @@ impl InterpreterCore {
                                     .expect(
                                         "ordinary own-property fast-path eligibility was checked",
                                     );
-                                self.capture_property_resolution_found(&property_key, oid, 0);
-                                self.resolve_accessor_get(Some(module), value, Value::Object(oid))?
-                            } else {
-                                self.proxy_aware_get_runtime_property(
-                                    Some(module),
-                                    oid,
-                                    &property_key,
-                                    Value::Object(oid),
-                                    0,
-                                )?
-                            }
-                        }
-                        Value::Iterator(iterator_handle) => {
-                            self.iterator_runtime_property_value(iterator_handle, &property_key)
-                        }
-                        Value::Str(s) => {
-                            if matches!(
-                                &property_key,
-                                RuntimePropertyKey::Symbol(symbol)
-                                    if *symbol == WellKnownSymbol::Iterator.id()
-                            ) {
-                                Value::BuiltinFunction(BuiltinFunction::string_iterator())
-                            } else {
-                                property_key.as_str().map_or(Value::Undefined, |key| {
-                                    Self::string_property_value(&s, key)
-                                })
-                            }
-                        }
-                        Value::Int(_) | Value::Float(_) => property_key.as_str().map_or(
-                            Value::Undefined,
-                            // Member access on a number primitive resolves
-                            // Number.prototype methods, else undefined (bd-i08nh).
-                            Self::number_property_value,
-                        ),
-                        // Functions are objects: reading `fn.prototype` returns the
-                        // function's prototype object (where class instance methods
-                        // live), matching what `Construct` links instances to so
-                        // `new C().m()` resolves up the chain (bd-62un6).
-                        Value::Closure(closure_id) => {
-                            if let Some(key) = property_key.as_str() {
-                                let owner_module = self
-                                    .foreign_closure_module(&Value::Closure(closure_id), module)?;
-                                self.closure_property_value(
-                                    owner_module.as_deref().unwrap_or(module),
-                                    closure_id,
-                                    key,
-                                )?
-                            } else {
-                                Value::Undefined
-                            }
-                        }
-                        Value::Function(idx) => {
-                            if let Some(key) = property_key.as_str() {
-                                self.function_property_value(module, idx, key)?
-                            } else {
-                                Value::Undefined
-                            }
-                        }
-                        Value::BuiltinFunction(builtin) => {
-                            if let Some(property_object) =
-                                Self::builtin_function_property_object(&builtin)
-                            {
-                                self.run_pre_runtime_property_access_hook(
-                                    module,
-                                    property_object,
-                                    &property_key,
-                                )?;
-                                self.proxy_aware_get_runtime_property(
-                                    Some(module),
-                                    property_object,
-                                    &property_key,
-                                    Value::BuiltinFunction(builtin),
-                                    0,
-                                )?
-                            } else if builtin.kind == BuiltinFunctionKind::StandardConstructor {
-                                match property_key.as_str() {
-                                    Some(key) => self.standard_constructor_property(&builtin, key)?,
-                                    None => Value::Undefined,
+                                    self.capture_property_resolution_found(&property_key, oid, 0);
+                                    self.resolve_accessor_get(
+                                        Some(module),
+                                        value,
+                                        Value::Object(oid),
+                                    )?
+                                } else {
+                                    self.proxy_aware_get_runtime_property(
+                                        Some(module),
+                                        oid,
+                                        &property_key,
+                                        Value::Object(oid),
+                                        0,
+                                    )?
                                 }
-                            } else {
-                                property_key
-                                    .as_str()
-                                    .and_then(Self::function_prototype_property)
-                                    .unwrap_or(Value::Undefined)
                             }
-                        }
-                        Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_) => property_key
-                            .as_str()
-                            .and_then(Self::function_prototype_property)
-                            .unwrap_or(Value::Undefined),
-                        Value::Generator(_) => match property_key {
-                            RuntimePropertyKey::String(ref key) => match key.as_str() {
-                                Some("next") => Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                    BuiltinFunctionKind::GeneratorNext,
-                                )),
-                                Some("return") => Value::BuiltinFunction(
-                                    BuiltinFunction::new_kind(BuiltinFunctionKind::GeneratorReturn),
-                                ),
-                                Some("throw") => Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                    BuiltinFunctionKind::GeneratorThrow,
-                                )),
+                            Value::Iterator(iterator_handle) => {
+                                self.iterator_runtime_property_value(iterator_handle, &property_key)
+                            }
+                            Value::Str(s) => {
+                                if matches!(
+                                    &property_key,
+                                    RuntimePropertyKey::Symbol(symbol)
+                                        if *symbol == WellKnownSymbol::Iterator.id()
+                                ) {
+                                    Value::BuiltinFunction(BuiltinFunction::string_iterator())
+                                } else {
+                                    property_key.as_str().map_or(Value::Undefined, |key| {
+                                        Self::string_property_value(&s, key)
+                                    })
+                                }
+                            }
+                            Value::Int(_) | Value::Float(_) => property_key.as_str().map_or(
+                                Value::Undefined,
+                                // Member access on a number primitive resolves
+                                // Number.prototype methods, else undefined (bd-i08nh).
+                                Self::number_property_value,
+                            ),
+                            // Functions are objects: reading `fn.prototype` returns the
+                            // function's prototype object (where class instance methods
+                            // live), matching what `Construct` links instances to so
+                            // `new C().m()` resolves up the chain (bd-62un6).
+                            Value::Closure(closure_id) => {
+                                if let Some(key) = property_key.as_str() {
+                                    let owner_module = self.foreign_closure_module(
+                                        &Value::Closure(closure_id),
+                                        module,
+                                    )?;
+                                    self.closure_property_value(
+                                        owner_module.as_deref().unwrap_or(module),
+                                        closure_id,
+                                        key,
+                                    )?
+                                } else {
+                                    Value::Undefined
+                                }
+                            }
+                            Value::Function(idx) => {
+                                if let Some(key) = property_key.as_str() {
+                                    self.function_property_value(module, idx, key)?
+                                } else {
+                                    Value::Undefined
+                                }
+                            }
+                            Value::BuiltinFunction(builtin) => {
+                                if let Some(property_object) =
+                                    Self::builtin_function_property_object(&builtin)
+                                {
+                                    self.run_pre_runtime_property_access_hook(
+                                        module,
+                                        property_object,
+                                        &property_key,
+                                    )?;
+                                    self.proxy_aware_get_runtime_property(
+                                        Some(module),
+                                        property_object,
+                                        &property_key,
+                                        Value::BuiltinFunction(builtin),
+                                        0,
+                                    )?
+                                } else if builtin.kind == BuiltinFunctionKind::StandardConstructor {
+                                    match property_key.as_str() {
+                                        Some(key) => {
+                                            self.standard_constructor_property(&builtin, key)?
+                                        }
+                                        None => Value::Undefined,
+                                    }
+                                } else {
+                                    property_key
+                                        .as_str()
+                                        .and_then(Self::function_prototype_property)
+                                        .unwrap_or(Value::Undefined)
+                                }
+                            }
+                            Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_) => property_key
+                                .as_str()
+                                .and_then(Self::function_prototype_property)
+                                .unwrap_or(Value::Undefined),
+                            Value::Generator(_) => match property_key {
+                                RuntimePropertyKey::String(ref key) => match key.as_str() {
+                                    Some("next") => {
+                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                            BuiltinFunctionKind::GeneratorNext,
+                                        ))
+                                    }
+                                    Some("return") => {
+                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                            BuiltinFunctionKind::GeneratorReturn,
+                                        ))
+                                    }
+                                    Some("throw") => {
+                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                            BuiltinFunctionKind::GeneratorThrow,
+                                        ))
+                                    }
+                                    _ => Value::Undefined,
+                                },
+                                RuntimePropertyKey::Symbol(symbol)
+                                    if symbol == WellKnownSymbol::Iterator.id() =>
+                                {
+                                    Value::BuiltinFunction(
+                                        BuiltinFunction::generator_iterator_self(),
+                                    )
+                                }
                                 _ => Value::Undefined,
                             },
-                            RuntimePropertyKey::Symbol(symbol)
-                                if symbol == WellKnownSymbol::Iterator.id() =>
-                            {
-                                Value::BuiltinFunction(BuiltinFunction::generator_iterator_self())
-                            }
-                            _ => Value::Undefined,
-                        },
-                        Value::AsyncGeneratorObject(_) => match property_key {
-                            RuntimePropertyKey::String(ref key) => match key.as_str() {
-                                Some("next") => Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                    BuiltinFunctionKind::AsyncGeneratorNext,
-                                )),
-                                Some("return") => {
+                            Value::AsyncGeneratorObject(_) => match property_key {
+                                RuntimePropertyKey::String(ref key) => match key.as_str() {
+                                    Some("next") => {
+                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                            BuiltinFunctionKind::AsyncGeneratorNext,
+                                        ))
+                                    }
+                                    Some("return") => {
+                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                            BuiltinFunctionKind::AsyncGeneratorReturn,
+                                        ))
+                                    }
+                                    Some("throw") => {
+                                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                            BuiltinFunctionKind::AsyncGeneratorThrow,
+                                        ))
+                                    }
+                                    _ => Value::Undefined,
+                                },
+                                RuntimePropertyKey::Symbol(symbol)
+                                    if symbol == WellKnownSymbol::AsyncIterator.id() =>
+                                {
                                     Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                        BuiltinFunctionKind::AsyncGeneratorReturn,
+                                        BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
                                     ))
                                 }
-                                Some("throw") => Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                    BuiltinFunctionKind::AsyncGeneratorThrow,
-                                )),
                                 _ => Value::Undefined,
                             },
-                            RuntimePropertyKey::Symbol(symbol)
-                                if symbol == WellKnownSymbol::AsyncIterator.id() =>
-                            {
-                                Value::BuiltinFunction(BuiltinFunction::new_kind(
-                                    BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
-                                ))
+                            Value::Promise(_) => property_key
+                                .as_str()
+                                .map_or(Value::Undefined, Self::promise_property_value),
+                            Value::Symbol(symbol) => match property_key.as_str() {
+                                Some("description") => self
+                                    .symbol_description(symbol)
+                                    .map(Value::Str)
+                                    .unwrap_or(Value::Undefined),
+                                Some("toString") => {
+                                    Value::BuiltinFunction(BuiltinFunction::symbol_to_string())
+                                }
+                                _ => Value::Undefined,
+                            },
+                            other => {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "object".to_string(),
+                                    got: other.type_name().to_string(),
+                                });
                             }
-                            _ => Value::Undefined,
-                        },
-                        Value::Promise(_) => property_key
-                            .as_str()
-                            .map_or(Value::Undefined, Self::promise_property_value),
-                        Value::Symbol(symbol) => match property_key.as_str() {
-                            Some("description") => self
-                                .symbol_description(symbol)
-                                .map(Value::Str)
-                                .unwrap_or(Value::Undefined),
-                            Some("toString") => {
-                                Value::BuiltinFunction(BuiltinFunction::symbol_to_string())
-                            }
-                            _ => Value::Undefined,
-                        },
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: other.type_name().to_string(),
-                            });
                         }
-                    } };
+                    };
                     if let Value::Closure(closure_id) = &prop
                         && let Some(method) = self.closure_method_metadata.get(closure_id)
                     {
@@ -43923,6 +43987,14 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
+                            let definition_label = self.get_register_label(obj)?.clone();
+                            self.register_accessor_home_object(
+                                &func_val,
+                                oid,
+                                &property_key,
+                                kind,
+                                definition_label,
+                            )?;
                             self.define_accessor_property(oid, property_key, func_val, kind)?;
                         }
                         // bd-9vouw.17: class `static get x()` / `static set x()`.
@@ -48428,8 +48500,16 @@ impl InterpreterCore {
                     Value::Str(JsString::from_code_units(&[unit]))
                 });
         }
-        match key {
-            "length" => Value::Int(i64::try_from(receiver.utf16_len()).unwrap_or(i64::MAX)),
+        if key == "length" {
+            return Value::Int(i64::try_from(receiver.utf16_len()).unwrap_or(i64::MAX));
+        }
+        Self::string_prototype_method(key).unwrap_or(Value::Undefined)
+    }
+
+    /// `String.prototype` methods; receiver-independent (the receiver is
+    /// supplied at call time).
+    fn string_prototype_method(key: &str) -> Option<Value> {
+        let method = match key {
             "charAt" => Value::BuiltinFunction(BuiltinFunction::string_char_at()),
             "charCodeAt" => Value::BuiltinFunction(BuiltinFunction::string_char_code_at()),
             "at" => Value::BuiltinFunction(BuiltinFunction::string_at()),
@@ -48462,8 +48542,9 @@ impl InterpreterCore {
             "toString" => Value::BuiltinFunction(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StringToString,
             )),
-            _ => Value::Undefined,
-        }
+            _ => return None,
+        };
+        Some(method)
     }
 
     fn regexp_source_flags_from_value(&self, value: &Value) -> Option<(String, String)> {
@@ -48993,6 +49074,13 @@ impl InterpreterCore {
             .unwrap_or(false);
         if root_is_array && let Some(builtin) = Self::array_prototype_method(key_text) {
             return Ok(Value::BuiltinFunction(builtin));
+        }
+        // bd-9vouw.17: the canonical `Array.prototype`, `String.prototype`
+        // and `Number.prototype` objects (and objects inheriting from them)
+        // expose the builtin methods as values, so
+        // `Array.prototype.every.call(arrayLike, f)` works.
+        if let Some(method) = self.builtin_prototype_method_for_chain(object_id, key_text) {
+            return Ok(method);
         }
 
         // Map/Set exotic objects expose their prototype methods via member
@@ -49760,7 +49848,10 @@ impl InterpreterCore {
                 Err(_) => js_number_to_value(number.parse::<f64>().unwrap_or(f64::NAN)),
             };
         }
-        if let Some(id) = repr.strip_prefix("o:").and_then(|id| id.parse::<u32>().ok()) {
+        if let Some(id) = repr
+            .strip_prefix("o:")
+            .and_then(|id| id.parse::<u32>().ok())
+        {
             return Value::Object(ObjectId(id));
         }
         match repr {
@@ -49803,7 +49894,8 @@ impl InterpreterCore {
             .unwrap_or_default();
         let mut pairs = Vec::with_capacity(entries.len());
         for (repr, value) in entries {
-            let pair = self.alloc_array_from_values(&[Self::collection_key_from_repr(&repr), value])?;
+            let pair =
+                self.alloc_array_from_values(&[Self::collection_key_from_repr(&repr), value])?;
             pairs.push(Value::Object(pair));
         }
         Ok(Some(pairs))
@@ -60752,6 +60844,38 @@ impl InterpreterCore {
         }
     }
 
+    /// Give an accessor closure its [[HomeObject]] so `super.x` in a class or
+    /// object-literal getter/setter resolves, and its spec name (`get x` /
+    /// `set x`). Non-closures and already-registered closures are left as is.
+    fn register_accessor_home_object(
+        &mut self,
+        function: &Value,
+        home_object: ObjectId,
+        key: &RuntimePropertyKey,
+        kind: AccessorKind,
+        definition_label: Label,
+    ) -> Result<(), InterpreterError> {
+        let Value::Closure(closure_id) = function else {
+            return Ok(());
+        };
+        if self.closure_method_metadata.contains_key(closure_id) {
+            return Ok(());
+        }
+        let prefix = match kind {
+            AccessorKind::Get => "get ",
+            AccessorKind::Set => "set ",
+        };
+        let metadata = ClosureMethodMetadata {
+            home_object,
+            name: JsString::from(prefix).concat(&self.inferred_method_name(key)),
+            definition_label,
+        };
+        let metadata_bytes = Self::estimate_closure_method_metadata_entry_bytes(&metadata);
+        self.apply_memory_component_delta(0, metadata_bytes)?;
+        self.closure_method_metadata.insert(*closure_id, metadata);
+        Ok(())
+    }
+
     /// Install an ordinary data property and its private per-closure method
     /// identity as one budgeted operation. Reserving the metadata first makes
     /// a later property-allocation refusal rollback without publishing either
@@ -67250,12 +67374,18 @@ impl InterpreterCore {
                     got: format!("{} argument(s)", args.count),
                 });
             }
-            let tag =
-                canonical_static_hostcall_tag(inner).ok_or_else(|| InterpreterError::TypeError {
+            if cap == crate::lowering_pipeline::JSON_VALUE_CAPABILITY {
+                return self.load_runtime_name("JSON", false);
+            }
+            let tag = canonical_static_hostcall_tag(inner).ok_or_else(|| {
+                InterpreterError::TypeError {
                     expected: "known static builtin".to_string(),
                     got: inner.to_string(),
-                })?;
-            return Ok(Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)));
+                }
+            })?;
+            return Ok(Value::BuiltinFunction(BuiltinFunction::static_hostcall(
+                tag,
+            )));
         }
 
         if let Some(name) = builtin_instanceof_capability_name(cap) {
@@ -80403,14 +80533,73 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.derived_constructor_parent = Some(parent);
+        projected.derived_constructor_parent = Some(parent.clone());
         projected.derived_constructor_parent_label = Some(parent_label);
         projected.is_derived_constructor = true;
         projected.is_default_derived_constructor = default_constructor;
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
+        // bd-9vouw.24: [[GetPrototypeOf]] of a derived class constructor is its
+        // parent, so the child's own-property object inherits from the
+        // parent's: inherited statics resolve, and `super.s()` in a static
+        // method (whose [[HomeObject]] is that object) finds the parent's.
+        if let Some(child_backing) =
+            self.ensure_function_own_property_object(module, constructor)?
+            && let Some(parent_backing) =
+                self.ensure_function_own_property_object(module, &parent)?
+            && child_backing != parent_backing
+            && !self.chain_contains_object(parent_backing, child_backing)
+        {
+            let child_index = child_backing.0 as usize;
+            self.mutate_heap(|heap| heap[child_index].prototype = Some(parent_backing));
+        }
         Ok(())
+    }
+
+    /// Whether `needle` is `object_id` or on its prototype chain.
+    fn chain_contains_object(&self, object_id: ObjectId, needle: ObjectId) -> bool {
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        while let Some(id) = current {
+            if id == needle {
+                return true;
+            }
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                return false;
+            }
+            current = self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.prototype);
+            depth += 1;
+        }
+        false
+    }
+
+    /// Whether `key` is an own property of `object_id` or of an object on its
+    /// prototype chain (no accessor or proxy invocation).
+    fn chain_contains_runtime_property(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> bool {
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                return false;
+            }
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                return false;
+            };
+            if object.contains_own_runtime_property(key) {
+                return true;
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+        false
     }
 
     fn ensure_builtin_prototype(&mut self, name: &str) -> Result<ObjectId, InterpreterError> {
@@ -80781,7 +80970,10 @@ impl InterpreterCore {
         digest.update(b"FrankenEngine.FunctionOwnPropertyObject.v1");
         digest.update([kind]);
         digest.update(base_owner.as_bytes());
-        Ok(Some((ContentHash::from_bytes(digest.finalize().into()), id)))
+        Ok(Some((
+            ContentHash::from_bytes(digest.finalize().into()),
+            id,
+        )))
     }
 
     /// Existing own-property backing object for a user function, if any.
@@ -80812,7 +81004,9 @@ impl InterpreterCore {
         Ok(Some(backing))
     }
 
-    fn standard_constructor_name(builtin: &BuiltinFunction) -> Result<&'static str, InterpreterError> {
+    fn standard_constructor_name(
+        builtin: &BuiltinFunction,
+    ) -> Result<&'static str, InterpreterError> {
         STANDARD_CONSTRUCTOR_GLOBALS
             .iter()
             .copied()
@@ -80977,9 +81171,10 @@ impl InterpreterCore {
                         format!("{sign}{canonical}")
                     }
                 } else {
-                    return Err(
-                        self.throw_js_error("SyntaxError", format!("Cannot convert {text} to a BigInt"))
-                    );
+                    return Err(self.throw_js_error(
+                        "SyntaxError",
+                        format!("Cannot convert {text} to a BigInt"),
+                    ));
                 }
             }
             other => {
@@ -81033,14 +81228,15 @@ impl InterpreterCore {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
                 return false;
             }
-            if self
-                .builtin_prototypes
-                .iter()
-                .any(|(name, prototype)| *prototype == id && ERROR_PROTOTYPES.contains(&name.as_str()))
-            {
+            if self.builtin_prototypes.iter().any(|(name, prototype)| {
+                *prototype == id && ERROR_PROTOTYPES.contains(&name.as_str())
+            }) {
                 return true;
             }
-            current = self.heap.get(id.0 as usize).and_then(|object| object.prototype);
+            current = self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.prototype);
             depth += 1;
         }
         false
@@ -81058,7 +81254,8 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         };
-        let name = self.proxy_aware_get_property(Some(module), object_id, "name", receiver.clone(), 0)?;
+        let name =
+            self.proxy_aware_get_property(Some(module), object_id, "name", receiver.clone(), 0)?;
         let message =
             self.proxy_aware_get_property(Some(module), object_id, "message", receiver.clone(), 0)?;
         let name = match name {
@@ -81080,11 +81277,50 @@ impl InterpreterCore {
         Ok(Value::str(text))
     }
 
+    /// bd-9vouw.17: a builtin method named `key` on the first canonical
+    /// `Array`/`String`/`Number` prototype in `object_id`'s chain.
+    fn builtin_prototype_method_for_chain(&self, object_id: ObjectId, key: &str) -> Option<Value> {
+        let array_method = Self::array_prototype_method(key).map(Value::BuiltinFunction);
+        let string_method = Self::string_prototype_method(key);
+        let number_method = match Self::number_property_value(key) {
+            Value::Undefined => None,
+            method => Some(method),
+        };
+        if array_method.is_none() && string_method.is_none() && number_method.is_none() {
+            return None;
+        }
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                return None;
+            }
+            let name = self
+                .builtin_prototypes
+                .iter()
+                .find(|(_, prototype)| **prototype == id)
+                .map(|(name, _)| name.as_str());
+            match name {
+                Some("Array") => return array_method,
+                Some("String") => return string_method,
+                Some("Number") => return number_method,
+                _ => {}
+            }
+            current = self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.prototype);
+            depth += 1;
+        }
+        None
+    }
+
     /// bd-9vouw.17: virtual, non-enumerable `constructor` of the canonical
     /// builtin prototypes (and of arrays, which carry no prototype object).
     fn standard_constructor_for_chain(&self, object_id: ObjectId) -> Option<Value> {
-        let constructor =
-            |name: &'static str| Value::BuiltinFunction(BuiltinFunction::standard_constructor(name));
+        let constructor = |name: &'static str| {
+            Value::BuiltinFunction(BuiltinFunction::standard_constructor(name))
+        };
         if self.heap.get(object_id.0 as usize)?.is_array {
             return Some(constructor("Array"));
         }
@@ -81107,7 +81343,10 @@ impl InterpreterCore {
             {
                 return Some(constructor(name));
             }
-            current = self.heap.get(id.0 as usize).and_then(|object| object.prototype);
+            current = self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.prototype);
             depth += 1;
         }
         None
@@ -107574,7 +107813,11 @@ mod async_runtime_tests_current {
             // bd-9vouw.18: a property read is folded into the deterministic
             // witness, so that is the replay content the handoff must move.
             assert!(
-                drained_result.nondeterminism_trace.deterministic_witness.event_count > 0,
+                drained_result
+                    .nondeterminism_trace
+                    .deterministic_witness
+                    .event_count
+                    > 0,
                 "the property read must reach the moved trace's witness for {termination}"
             );
             drained_result

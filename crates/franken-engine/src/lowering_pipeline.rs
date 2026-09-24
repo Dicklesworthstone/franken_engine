@@ -6783,15 +6783,15 @@ fn lower_statement_to_ir1_with_flow(
                         kind: AccessorKind::Set,
                     }),
                     _ => {
-                        // SetProperty pops value (top), then object (next).
-                        // Stack is now: [target_obj, method_fn]
-                        ops.push(Ir1Op::SetProperty { key: property_key });
+                        // Stack is now: [target_obj, method_fn]. DefineMethod
+                        // (not SetProperty) records the method's [[HomeObject]]
+                        // so `super.m()` in its body resolves (bd-9vouw.24).
+                        ops.push(Ir1Op::DefineMethod { key: property_key });
                     }
                 }
-                // Discard (not Pop): SetProperty leaves the method value on the
-                // stack while DefineAccessor leaves the target object; in both
-                // cases this discards the method definition completion without
-                // clobbering the constructor binding (bd-62un6).
+                // Discard (not Pop): DefineMethod and DefineAccessor leave the
+                // target object; this discards the method definition completion
+                // without clobbering the constructor binding (bd-62un6).
                 ops.push(Ir1Op::Discard);
             }
         }
@@ -7939,6 +7939,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 // cleanup (e.g. class-method attachment) from clobbering r0,
                 // which aliases the first top-level binding (bd-62un6).
                 let _ = pop_lowering_value(&mut value_stack)?;
+                // Declarations end in a Discard rather than a Pop; either one
+                // emptying the stack ends a statement (bd-9vouw.23).
+                if value_stack.is_empty() {
+                    register_high_water = register_high_water.max(register_cursor);
+                    register_cursor = statement_register_floor.max(pinned_register_high);
+                }
             }
             Ir1Op::Nop | Ir1Op::Pop => {
                 let register = pop_lowering_value(&mut value_stack)?;
@@ -9731,7 +9737,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     // `Discard` is always a pure discard, here and at module
                     // scope (bd-62un6).
                     let _ = pop_lowering_value(&mut fn_value_stack)?;
-                    if matches!(ir2_op.inner, Ir1Op::Pop) && fn_value_stack.is_empty() {
+                    if fn_value_stack.is_empty() {
                         fn_register_high_water = fn_register_high_water.max(fn_reg);
                         fn_reg = fn_statement_register_floor.max(fn_pinned_register_high);
                     }
@@ -17148,12 +17154,12 @@ fn lower_expression_to_ir1_inner(
                         key: property_key,
                         kind: AccessorKind::Set,
                     }),
-                    _ => ops.push(Ir1Op::SetProperty { key: property_key }),
+                    // DefineMethod records [[HomeObject]] for `super` (bd-9vouw.24).
+                    _ => ops.push(Ir1Op::DefineMethod { key: property_key }),
                 }
-                // Discard (not Pop): SetProperty leaves the method value on the
-                // stack while DefineAccessor leaves the target object; in both
-                // cases this discards the method definition completion without
-                // clobbering the constructor binding (bd-62un6).
+                // Discard (not Pop): DefineMethod and DefineAccessor leave the
+                // target object; this discards the method definition completion
+                // without clobbering the constructor binding (bd-62un6).
                 ops.push(Ir1Op::Discard);
             }
 

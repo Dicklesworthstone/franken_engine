@@ -1555,6 +1555,15 @@ impl From<ContainmentPhaseError> for PendingPostCellFailure {
 // OrchestratorError
 // ---------------------------------------------------------------------------
 
+/// `ir3_schedule_cost` is optional evidence metadata (already absent for any
+/// program with a loop). Its tropical cost graph holds an n x n adjacency
+/// matrix, so above this many instructions the estimate is skipped rather than
+/// costing O(n^2) time and memory on every run, or failing the whole run past
+/// the matrix dimension limit: straight-line scripts of ~1,400 statements were
+/// rejected with "ir3 schedule cost graph: matrix dimension 4682 exceeds limit
+/// 4096" (bd-9vouw.23).
+const IR3_SCHEDULE_COST_MAX_INSTRUCTIONS: usize = 512;
+
 /// Errors produced by the orchestrator pipeline.
 #[derive(Debug)]
 pub enum OrchestratorError {
@@ -4603,7 +4612,7 @@ impl ExecutionOrchestrator {
         ir3: &Ir3Module,
     ) -> Result<Option<TropicalWeight>, OrchestratorError> {
         let n = ir3.instructions.len();
-        if n == 0 {
+        if n == 0 || n > IR3_SCHEDULE_COST_MAX_INSTRUCTIONS {
             return Ok(None);
         }
 
@@ -9570,6 +9579,35 @@ mod tests {
         assert!(
             cost.is_none(),
             "cyclic control flow should disable optional schedule-cost metadata"
+        );
+    }
+
+    #[test]
+    fn estimate_ir3_schedule_cost_skips_oversized_programs_as_absent_metadata() {
+        let mut ir3 = crate::ir_contract::Ir3Module::new(
+            ContentHash::compute(b"straight-line-ir3"),
+            "straight-line-ir3",
+        );
+        ir3.instructions = (0..=IR3_SCHEDULE_COST_MAX_INSTRUCTIONS)
+            .map(|value| crate::ir_contract::Ir3Instruction::LoadInt {
+                dst: 1,
+                value: value as i64,
+            })
+            .collect();
+        let cost = ExecutionOrchestrator::estimate_ir3_schedule_cost(&ir3)
+            .expect("an oversized program is valid execution input");
+        assert!(
+            cost.is_none(),
+            "oversized programs omit schedule-cost metadata"
+        );
+
+        ir3.instructions
+            .truncate(IR3_SCHEDULE_COST_MAX_INSTRUCTIONS);
+        let cost = ExecutionOrchestrator::estimate_ir3_schedule_cost(&ir3)
+            .expect("a program at the bound is still estimated");
+        assert!(
+            cost.is_some(),
+            "programs at the bound keep schedule-cost metadata"
         );
     }
 

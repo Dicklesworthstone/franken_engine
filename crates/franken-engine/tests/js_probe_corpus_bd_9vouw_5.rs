@@ -13,7 +13,9 @@
 //! - `KnownFailure` cases must still fail and name the bead that owns the fix.
 //!   When a fix lands the case starts passing, and this test fails until the
 //!   case is moved to `Pass` — so the ledger cannot silently go stale;
-//! - `DeniedByDesign` cases must be refused by the ambient-authority membrane.
+//! - `DeniedByDesign` cases must be refused by the ambient-authority membrane;
+//! - `OutOfScope` cases exercise syntax beyond the ES2020 target and must still
+//!   fail; if one starts passing it moves to `Pass`.
 //!
 //! Retire this test once the BRIDGE-12 Test262 harness runs on every push and
 //! covers these constructs.
@@ -27,12 +29,111 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Expect {
     Pass,
+    /// Names the bead that owns the fix.
     KnownFailure(&'static str),
     DeniedByDesign,
+    /// Names the construct and why it is outside the ES2020 target.
+    OutOfScope(&'static str),
 }
 
+// Owning beads for the known failures (BRIDGE semantic leaves, plus the two
+// focused bugs filed from this corpus's first real run on 2026-09-23).
+const CLASSES: &str = "bd-performance-conformance-bridge-tu32j.15.12";
+const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
+const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
+const ARGUMENTS: &str = "bd-performance-conformance-bridge-tu32j.14.5";
+const FUNCTION_BUILTINS: &str = "bd-performance-conformance-bridge-tu32j.16.2";
+const DATE_JSON: &str = "bd-performance-conformance-bridge-tu32j.16.5";
+const COLLECTIONS: &str = "bd-performance-conformance-bridge-tu32j.16.6";
+const TYPED_ARRAYS: &str = "bd-performance-conformance-bridge-tu32j.16.7";
+const ERRORS_AND_URI: &str = "bd-performance-conformance-bridge-tu32j.16.11";
+const SYMBOLS: &str = "bd-performance-conformance-bridge-tu32j.16.17";
+const NUMBER: &str = "bd-performance-conformance-bridge-tu32j.16.18";
+const BIGINT: &str = "bd-performance-conformance-bridge-tu32j.16.19";
+const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
+const REGEXP_STRING_METHODS: &str = "bd-performance-conformance-bridge-tu32j.17.3";
+const ASYNC_FUNCTION_EXPRESSIONS: &str = "bd-xbv99";
+const PROMISE_CONSTRUCTOR: &str = "bd-auy04";
+
 /// Case id -> expectation. Every corpus case must appear exactly once.
-const LEDGER: &[(&str, Expect)] = &[];
+/// Filled from the observed verdicts of the first run (2026-09-23): 20 match
+/// Node, 4 are refused by design, 26 fail.
+const LEDGER: &[(&str, Expect)] = &[
+    ("01_closure", Expect::Pass),
+    ("02_class_super", Expect::KnownFailure(CLASSES)),
+    ("03_destructure_spread", Expect::Pass),
+    ("04_generators", Expect::Pass),
+    (
+        "05_async_order",
+        Expect::KnownFailure(ASYNC_FUNCTION_EXPRESSIONS),
+    ),
+    ("06_map_set", Expect::KnownFailure(COLLECTIONS)),
+    ("07_json", Expect::KnownFailure(DATE_JSON)),
+    (
+        "08_regexp_named_lookbehind",
+        Expect::KnownFailure(REGEXP_GRAMMAR),
+    ),
+    (
+        "09_regexp_replace",
+        Expect::KnownFailure(REGEXP_STRING_METHODS),
+    ),
+    ("10_proxy_reflect", Expect::Pass),
+    ("11_symbol_iter", Expect::Pass),
+    ("12_typed_arrays", Expect::KnownFailure(TYPED_ARRAYS)),
+    ("13_bigint", Expect::KnownFailure(BIGINT)),
+    ("14_labels_switch", Expect::Pass),
+    ("15_try_finally", Expect::KnownFailure(ERRORS_AND_URI)),
+    ("16_defineProperty", Expect::KnownFailure(DESCRIPTORS)),
+    ("17_array_methods", Expect::Pass),
+    ("18_string_methods", Expect::Pass),
+    ("19_optional_nullish", Expect::Pass),
+    ("20_tagged_template", Expect::Pass),
+    ("21_sloppy_with_args", Expect::KnownFailure(SLOPPY_MODE)),
+    ("22_eval_function", Expect::DeniedByDesign),
+    ("23_number_format", Expect::KnownFailure(NUMBER)),
+    ("24_date", Expect::KnownFailure(DATE_JSON)),
+    ("25_getter_setter_proto", Expect::Pass),
+    ("26_error_types", Expect::DeniedByDesign),
+    ("27_weakmap_holes", Expect::KnownFailure(COLLECTIONS)),
+    ("28_sort_stability", Expect::Pass),
+    (
+        "29_promise_all_race",
+        Expect::KnownFailure(PROMISE_CONSTRUCTOR),
+    ),
+    (
+        "30_async_iter",
+        Expect::KnownFailure(ASYNC_FUNCTION_EXPRESSIONS),
+    ),
+    ("31_object_entries_order", Expect::Pass),
+    ("32_instanceof_hasinstance", Expect::KnownFailure(SYMBOLS)),
+    (
+        "33_class_private_post2020",
+        Expect::OutOfScope("ES2022 class private fields; the target is ES2020"),
+    ),
+    ("34_string_unicode", Expect::KnownFailure(ERRORS_AND_URI)),
+    ("35_math", Expect::Pass),
+    ("36_closures_in_loops", Expect::Pass),
+    ("37_function_props", Expect::KnownFailure(FUNCTION_BUILTINS)),
+    ("38_json_reviver", Expect::Pass),
+    ("39_destructure_default", Expect::Pass),
+    (
+        "40_exceptions_across_calls",
+        Expect::KnownFailure(ERRORS_AND_URI),
+    ),
+    ("41_int_overflow", Expect::Pass),
+    ("42_int_overflow_loop", Expect::KnownFailure(NUMBER)),
+    ("43_arguments_object", Expect::KnownFailure(ARGUMENTS)),
+    (
+        "44_regexp_backref_lookahead",
+        Expect::KnownFailure(REGEXP_GRAMMAR),
+    ),
+    ("45_date_methods", Expect::KnownFailure(DATE_JSON)),
+    ("46_catch_message", Expect::Pass),
+    ("47_number_to_string", Expect::KnownFailure(NUMBER)),
+    ("48_ambient_process", Expect::DeniedByDesign),
+    ("49_ambient_require_fs", Expect::DeniedByDesign),
+    ("50_getter_label_join", Expect::Pass),
+];
 
 #[derive(Debug)]
 enum Observed {
@@ -145,6 +246,9 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
             )),
             Some(Expect::KnownFailure(_)) if denied => problems.push(format!(
                 "{id}: listed as KnownFailure but refused by the ambient-authority membrane"
+            )),
+            Some(Expect::OutOfScope(reason)) if matches => problems.push(format!(
+                "{id}: now matches Node — move it to Pass ({reason})"
             )),
             Some(Expect::DeniedByDesign) if !denied => {
                 problems.push(format!(

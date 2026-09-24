@@ -17,6 +17,7 @@ use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
 };
 use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
+use frankenengine_extension_host::host_io::HostIoExceptionProvenance;
 
 fn lower(name: &str, source: &str) -> Result<(), LoweringPipelineError> {
     lower_with_goal(name, source, ParseGoal::Script)
@@ -102,6 +103,18 @@ const BENIGN: &[(&str, &str, &str)] = &[
         "try { throw new Error('boom') } catch (e) { console.log(e.message) }",
         "boom",
     ),
+    // Nested bodies are checked in isolation; their parameters and captures
+    // start at the program bound, which is Internal here.
+    (
+        "parameter_to_nested_console",
+        "function show(x){ console.log('v:' + x) } show(5);",
+        "v:5",
+    ),
+    (
+        "captured_binding_in_nested_console",
+        "let n = 1; [1, 2].forEach((x) => { n += x }); function report(){ console.log(n) } report();",
+        "4",
+    ),
 ];
 
 #[test]
@@ -145,6 +158,94 @@ fn secret_literal_still_cannot_reach_console_through_unsummarized_calls_bd_9vouw
         "console.log('secret-token');",
         Label::Secret,
     );
+}
+
+#[test]
+fn secret_entering_a_nested_body_cannot_reach_its_sinks_bd_9vouw_1() {
+    // Function bodies are flow-checked in isolation. A value that enters a
+    // body as an argument or captured binding starts at the whole-program
+    // bound, so a secret-holding program cannot print it from inside a callee.
+    // The first three shapes leaked before bd-9vouw.1 too (unknown bindings
+    // defaulted to Internal); the method/builtin shapes leaked only after the
+    // first ceiling fix (b32c1e573) clamped nested bodies to their own ops.
+    for (name, source) in [
+        (
+            "captured_secret_in_declared_function",
+            "const t = 'secret-token'; function g(){ console.log(t) } g();",
+        ),
+        (
+            "captured_secret_through_local_copy",
+            "const t = 'secret-token'; const g = () => { const u = t; console.log(u) }; g();",
+        ),
+        (
+            "secret_parameter",
+            "function g(t){ console.log(t) } g('secret-token');",
+        ),
+        (
+            "method_on_captured_secret",
+            "const t = 'secret-token'; function g(){ console.log(t.toUpperCase()) } g();",
+        ),
+        (
+            "builtin_over_captured_secret",
+            "const t = 'secret-token'; function g(){ console.log(String(t)) } g();",
+        ),
+        (
+            "method_on_secret_parameter",
+            "function g(x){ console.log(x.slice(0)) } g('secret-token');",
+        ),
+        (
+            "secret_returned_by_inner_closure",
+            "function g(x){ const h = () => x; console.log(h()) } g('secret-token');",
+        ),
+        (
+            "captured_secret_read_before_local_reassignment",
+            "let t = 'secret-token'; function g(){ console.log(t); t = 'x' } g();",
+        ),
+    ] {
+        assert_denied(name, source, Label::Secret);
+    }
+}
+
+#[test]
+fn nested_bodies_use_the_authenticated_host_io_provenance_bd_9vouw_1() {
+    // A network callback reading a captured server handle. With a
+    // provider-internal exception contract nothing in the program exceeds
+    // Internal; an unknown provider may put host state into exceptions, so
+    // the same program keeps failing high. Nested bodies used to be annotated
+    // as Unknown regardless of the installed provider.
+    let source = "const http = require('http'); \
+        const srv = http.createServer((req, res) => { res.end('ok') }); \
+        srv.listen(0, '127.0.0.1', () => { \
+          http.get({ host: '127.0.0.1', port: srv.address().port, path: '/' }, \
+            (res) => { console.log(res.statusCode) }) });";
+    let lower_under = |provenance| {
+        let tree = CanonicalEs2020Parser
+            .parse(source, ParseGoal::Script)
+            .expect("parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "nested_http_callback.js");
+        let context = LoweringContext::new(
+            "trace-bd-9vouw-1",
+            "decision-bd-9vouw-1",
+            "policy-bd-9vouw-1",
+        )
+        .with_host_io_exception_provenance(provenance);
+        lower_ir0_to_ir3(&ir0, &context).map(|_| ())
+    };
+
+    if let Err(error) = lower_under(HostIoExceptionProvenance::ProviderInternal) {
+        panic!("provider-internal provenance must admit the callback: {error}");
+    }
+    match lower_under(HostIoExceptionProvenance::Unknown) {
+        Err(LoweringPipelineError::UnauthorizedFlow {
+            source_label,
+            sink_clearance,
+            ..
+        }) => {
+            assert_eq!(source_label, Label::TopSecret);
+            assert_eq!(sink_clearance, Label::Internal);
+        }
+        other => panic!("unknown provenance must keep failing high, got {other:?}"),
+    }
 }
 
 #[test]

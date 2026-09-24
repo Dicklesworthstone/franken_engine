@@ -41,7 +41,8 @@ enum Observed {
 }
 
 fn corpus() -> Vec<(String, String, String)> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/js_probe_corpus_v1.json");
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/js_probe_corpus_v1.json");
     let doc: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read corpus")).expect("corpus json");
     assert_eq!(doc["oracle"]["version"].as_str(), Some("v22.2.0"));
@@ -53,7 +54,10 @@ fn corpus() -> Vec<(String, String, String)> {
             (
                 case["id"].as_str().expect("id").to_string(),
                 case["source"].as_str().expect("source").to_string(),
-                case["node_output"].as_str().expect("node_output").to_string(),
+                case["node_output"]
+                    .as_str()
+                    .expect("node_output")
+                    .to_string(),
             )
         })
         .collect()
@@ -121,7 +125,10 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
         let detail = match &observed {
             Observed::Output(text) => format!("output={text:?}"),
             Observed::Failed(stderr) => {
-                let line = stderr.lines().find(|line| line.contains("failed for")).unwrap_or(stderr);
+                let line = stderr
+                    .lines()
+                    .find(|line| line.contains("failed for"))
+                    .unwrap_or(stderr);
                 format!("error={}", line.chars().take(200).collect::<String>())
             }
         };
@@ -129,7 +136,9 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
         match ledger.get(id.as_str()) {
             None => problems.push(format!("{id}: missing from LEDGER (observed {verdict})")),
             Some(Expect::Pass) if !matches => {
-                problems.push(format!("{id}: expected Node output {node_output:?}, {detail}"));
+                problems.push(format!(
+                    "{id}: expected Node output {node_output:?}, {detail}"
+                ));
             }
             Some(Expect::KnownFailure(bead)) if matches => problems.push(format!(
                 "{id}: now matches Node — move it to Pass (fixed under {bead})"
@@ -138,7 +147,9 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
                 "{id}: listed as KnownFailure but refused by the ambient-authority membrane"
             )),
             Some(Expect::DeniedByDesign) if !denied => {
-                problems.push(format!("{id}: expected an ambient-authority refusal, {detail}"));
+                problems.push(format!(
+                    "{id}: expected an ambient-authority refusal, {detail}"
+                ));
             }
             _ => {}
         }
@@ -149,6 +160,14 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
         }
     }
     let passing = table.iter().filter(|row| row.starts_with("PASS")).count();
-    eprintln!("probe corpus: {passing}/{} match Node\n{}", cases.len(), table.join("\n"));
-    assert!(problems.is_empty(), "probe corpus ledger violations:\n{}", problems.join("\n"));
+    eprintln!(
+        "probe corpus: {passing}/{} match Node\n{}",
+        cases.len(),
+        table.join("\n")
+    );
+    assert!(
+        problems.is_empty(),
+        "probe corpus ledger violations:\n{}",
+        problems.join("\n")
+    );
 }

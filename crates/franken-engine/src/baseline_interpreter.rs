@@ -45916,16 +45916,10 @@ impl InterpreterCore {
                 Ok(Value::BigInt(Arc::from(Self::add_bigint_decimal(x, y))))
             }
             // Float + Float: float arithmetic
-            (Value::Float(x), Value::Float(y)) => {
-                Ok(js_number_to_value(x.inner() + y.inner()))
-            }
+            (Value::Float(x), Value::Float(y)) => Ok(js_number_to_value(x.inner() + y.inner())),
             // Int + Float or Float + Int: promote to float
-            (Value::Int(x), Value::Float(y)) => {
-                Ok(js_number_to_value(*x as f64 + y.inner()))
-            }
-            (Value::Float(x), Value::Int(y)) => {
-                Ok(js_number_to_value(x.inner() + *y as f64))
-            }
+            (Value::Int(x), Value::Float(y)) => Ok(js_number_to_value(*x as f64 + y.inner())),
+            (Value::Float(x), Value::Int(y)) => Ok(js_number_to_value(x.inner() + *y as f64)),
             // String concatenation. `JsString::concat` joins exact UTF-16
             // code units, so a trailing high surrogate heals against a
             // leading low surrogate into the supplementary code point

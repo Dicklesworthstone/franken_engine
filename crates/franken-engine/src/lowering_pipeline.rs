@@ -28746,9 +28746,7 @@ fn accumulate_ir1_flow_label_ceiling(
             }
             return;
         }
-        Ir1Op::LoadLiteral { .. } => {
-            infer_data_label_for_op(op, &BTreeMap::new(), Label::Public)
-        }
+        Ir1Op::LoadLiteral { .. } => infer_data_label_for_op(op, &BTreeMap::new(), Label::Public),
         Ir1Op::ImportModule { .. } => Label::TopSecret,
         Ir1Op::HostCall { capability, .. } => {
             hostcall_flow_label_ceiling(capability, host_io_exception_provenance)

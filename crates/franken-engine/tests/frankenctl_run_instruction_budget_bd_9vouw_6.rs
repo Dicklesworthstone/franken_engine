@@ -57,7 +57,11 @@ fn run_with_instruction_budget_executes_loop_and_replays_strictly_bd_9vouw_6() {
         "--out",
         utf8(&report),
     ]);
-    assert!(output.status.success(), "run failed: {}", stderr_of(&output));
+    assert!(
+        output.status.success(),
+        "run failed: {}",
+        stderr_of(&output)
+    );
 
     let report_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&report).expect("read report")).expect("report json");
@@ -67,7 +71,11 @@ fn run_with_instruction_budget_executes_loop_and_replays_strictly_bd_9vouw_6() {
         .iter()
         .filter_map(|entry| entry["message"].as_str())
         .collect();
-    assert_eq!(messages, vec!["499999500000"], "sum of 0..1e6 must match Node");
+    assert_eq!(
+        messages,
+        vec!["499999500000"],
+        "sum of 0..1e6 must match Node"
+    );
     assert_eq!(
         report_json["replay_input"]["instruction_budget"].as_u64(),
         Some(50_000_000),
@@ -105,7 +113,10 @@ fn default_budget_still_fails_closed_and_omits_replay_field_bd_9vouw_6() {
         "--extension-id",
         "budget-ext",
     ]);
-    assert!(!output.status.success(), "default budget must not run a 1M-iteration loop");
+    assert!(
+        !output.status.success(),
+        "default budget must not run a 1M-iteration loop"
+    );
     assert!(
         stderr_of(&output).contains("instruction budget exhausted"),
         "expected typed budget exhaustion, got: {}",
@@ -126,11 +137,17 @@ fn default_budget_still_fails_closed_and_omits_replay_field_bd_9vouw_6() {
         "--out",
         utf8(&report),
     ]);
-    assert!(output.status.success(), "small run failed: {}", stderr_of(&output));
+    assert!(
+        output.status.success(),
+        "small run failed: {}",
+        stderr_of(&output)
+    );
     let report_json: serde_json::Value =
         serde_json::from_slice(&fs::read(&report).expect("read report")).expect("report json");
     assert!(
-        report_json["replay_input"].get("instruction_budget").is_none(),
+        report_json["replay_input"]
+            .get("instruction_budget")
+            .is_none(),
         "default runs must not grow a new report field"
     );
 }
@@ -143,7 +160,10 @@ fn instruction_budget_flag_is_validated_bd_9vouw_6() {
 
     for (value, needle) in [
         ("0", "--instruction-budget must be at least 1"),
-        ("10000000001", "--instruction-budget must be at most 10000000000"),
+        (
+            "10000000001",
+            "--instruction-budget must be at most 10000000000",
+        ),
         ("not-a-number", "--instruction-budget"),
     ] {
         let output = frankenctl(&[
@@ -167,9 +187,16 @@ fn instruction_budget_flag_is_validated_bd_9vouw_6() {
 #[test]
 fn help_oracle_topic_is_routed_bd_9vouw_6() {
     let output = frankenctl(&["help", "oracle"]);
-    assert!(output.status.success(), "help oracle failed: {}", stderr_of(&output));
+    assert!(
+        output.status.success(),
+        "help oracle failed: {}",
+        stderr_of(&output)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("oracle run"), "help oracle must describe oracle run: {stdout}");
+    assert!(
+        stdout.contains("oracle run"),
+        "help oracle must describe oracle run: {stdout}"
+    );
 
     let run_help = frankenctl(&["help", "run"]);
     assert!(run_help.status.success());

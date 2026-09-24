@@ -22,16 +22,16 @@ fn lower(name: &str, source: &str) -> Result<(), LoweringPipelineError> {
     lower_with_goal(name, source, ParseGoal::Script)
 }
 
-fn lower_with_goal(
-    name: &str,
-    source: &str,
-    goal: ParseGoal,
-) -> Result<(), LoweringPipelineError> {
+fn lower_with_goal(name: &str, source: &str, goal: ParseGoal) -> Result<(), LoweringPipelineError> {
     let tree = CanonicalEs2020Parser
         .parse(source, goal)
         .unwrap_or_else(|error| panic!("{name}: parse failed: {error}"));
     let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}.js"));
-    let context = LoweringContext::new("trace-bd-9vouw-1", "decision-bd-9vouw-1", "policy-bd-9vouw-1");
+    let context = LoweringContext::new(
+        "trace-bd-9vouw-1",
+        "decision-bd-9vouw-1",
+        "policy-bd-9vouw-1",
+    );
     lower_ir0_to_ir3(&ir0, &context).map(|_| ())
 }
 
@@ -58,15 +58,25 @@ fn assert_denied(name: &str, source: &str, expected_source: Label) {
             assert_eq!(source_label, expected_source, "{name}: source label");
             assert_eq!(sink_clearance, Label::Internal, "{name}: sink clearance");
         }
-        other => panic!("{name}: expected UnauthorizedFlow {expected_source:?} -> Internal, got {other:?}"),
+        other => panic!(
+            "{name}: expected UnauthorizedFlow {expected_source:?} -> Internal, got {other:?}"
+        ),
     }
 }
 
 /// Benign programs: no literal, hostcall, or module load introduces anything
 /// above Internal, so an unsummarized call cannot produce TopSecret data.
 const BENIGN: &[(&str, &str, &str)] = &[
-    ("builtin_method_on_global", "console.log(Math.max(1, 2));", "2"),
-    ("array_sort_join", "console.log([3,1,2].sort().join(','));", "1,2,3"),
+    (
+        "builtin_method_on_global",
+        "console.log(Math.max(1, 2));",
+        "2",
+    ),
+    (
+        "array_sort_join",
+        "console.log([3,1,2].sort().join(','));",
+        "1,2,3",
+    ),
     (
         "closure_capture",
         "function mk(){ let c = 0; return () => ++c } const h = mk(); h(); console.log(h());",
@@ -100,7 +110,11 @@ fn benign_programs_lower_and_match_node_output_bd_9vouw_1() {
         if let Err(error) = lower(name, source) {
             panic!("{name}: benign program refused at lowering: {error}");
         }
-        assert_eq!(eval_console(name, source), *expected, "{name}: console output");
+        assert_eq!(
+            eval_console(name, source),
+            *expected,
+            "{name}: console output"
+        );
     }
 }
 

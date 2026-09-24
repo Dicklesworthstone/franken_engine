@@ -5,9 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::capability::RuntimeCapability;
 use crate::engine_object_id::{
-    EngineObjectId, ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId,
-    VersionedEngineObjectId, VersionedIdError, derive_versioned_id, derive_versioned_schema_id,
-    verify_versioned_id,
+    ObjectDomain, ObjectIdDerivationVersion, PersistedEngineObjectId, VersionedIdError,
+    derive_versioned_id, derive_versioned_schema_id, verify_versioned_id,
 };
 
 use super::{TrustZone, TrustZoneClass};
@@ -451,6 +450,7 @@ impl From<VersionedIdError> for TrustZonePersistenceError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine_object_id::{EngineObjectId, VersionedEngineObjectId};
 
     fn capabilities(values: &[RuntimeCapability]) -> BTreeSet<RuntimeCapability> {
         values.iter().copied().collect()

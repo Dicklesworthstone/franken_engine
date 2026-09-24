@@ -77,7 +77,7 @@ impl WasmWorkPool {
         }
         self.balance
             .remaining
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 remaining.checked_sub(units)
             })
             .map(|_| ())

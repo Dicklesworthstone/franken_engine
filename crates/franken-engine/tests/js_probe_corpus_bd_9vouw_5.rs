@@ -38,7 +38,6 @@ enum Expect {
 
 // Owning beads for the known failures (BRIDGE semantic leaves, plus the two
 // focused bugs filed from this corpus's first real run on 2026-09-23).
-const CLASSES: &str = "bd-performance-conformance-bridge-tu32j.15.12";
 const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
 const ARGUMENTS: &str = "bd-performance-conformance-bridge-tu32j.14.5";
@@ -58,10 +57,11 @@ const ASYNC_FUNCTION_EXPRESSIONS: &str = "bd-xbv99";
 /// Node, 4 are refused by design, 26 fail. 29_promise_all_race moved to Pass
 /// with bd-auy04 (`new Promise`); on 2026-09-24 06, 15, 37, 40, 42 and 47
 /// started matching Node (standard globals and Map/Set iteration, bd-9vouw.17;
-/// number formatting, bd-9vouw.2; large integer literals, bd-6vl81).
+/// number formatting, bd-9vouw.2; large integer literals, bd-6vl81), and 02
+/// with `super` in classes (bd-9vouw.24).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
-    ("02_class_super", Expect::KnownFailure(CLASSES)),
+    ("02_class_super", Expect::Pass),
     ("03_destructure_spread", Expect::Pass),
     ("04_generators", Expect::Pass),
     (

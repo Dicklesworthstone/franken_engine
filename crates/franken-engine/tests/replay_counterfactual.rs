@@ -807,11 +807,14 @@ fn golden_store_verify_detects_digest_mismatch() {
 // how real execution produces an outcome is now visible.
 // =========================================================================
 
-/// Baseline program: three successful prototype-chain property reads. Each
-/// `config.<key>` read drives the interpreter through `prototype_chain_get`,
-/// which captures a `PropertyResolution` event keyed by the property name.
+/// Baseline program: a clock read (`performance.now()`, recorded as a
+/// `TimerRead` event) plus three successful prototype-chain property reads.
+/// Property resolutions are a pure function of the program, so since
+/// bd-9vouw.18 they are folded into `deterministic_witness` rather than
+/// recorded as individual events.
 const BASELINE_SOURCE: &str = r#"
 var config = { mode: 1, level: 2, name: 3 };
+var t = performance.now();
 var a = config.mode;
 var b = config.level;
 var c = config.name;
@@ -819,11 +822,12 @@ a;
 "#;
 
 /// Counterfactual program: a behavioural change. It reads a *different* set of
-/// properties — one of which is absent — so the interpreter captures a
-/// genuinely different `PropertyResolution` trace, differing in both content
-/// (`property_not_found` vs `property_found`, different keys) and in length.
+/// properties — one of which is absent — so the interpreter folds a genuinely
+/// different resolution history (`property_not_found` vs `property_found`,
+/// different keys, different count) into its deterministic witness.
 const COUNTERFACTUAL_SOURCE: &str = r#"
 var config = { mode: 1, level: 2, name: 3 };
+var t = performance.now();
 var a = config.mode;
 var b = config.threshold;
 a;
@@ -859,6 +863,12 @@ fn strict_round_trips_cleanly(recorded: &NondeterminismTrace, live: &Nondetermin
             return false;
         }
     }
+    if engine
+        .verify_deterministic_witness(&live.deterministic_witness)
+        .is_err()
+    {
+        return false;
+    }
     engine.is_complete() && engine.divergence_count() == 0
 }
 
@@ -886,13 +896,18 @@ fn real_execution_exposes_a_replayable_trace() {
         trace
             .events
             .iter()
-            .any(|e| e.source == NondeterminismSource::PropertyResolution),
-        "property reads must capture PropertyResolution events; sources seen: {:?}",
+            .any(|e| e.source == NondeterminismSource::TimerRead),
+        "the clock read must be recorded as a TimerRead event; sources seen: {:?}",
         trace
             .events
             .iter()
             .map(|e| e.source.as_str())
             .collect::<Vec<_>>()
+    );
+    assert!(
+        trace.deterministic_witness.event_count >= 3,
+        "the three property reads must be folded into the deterministic witness; got {}",
+        trace.deterministic_witness.event_count
     );
 }
 
@@ -925,9 +940,16 @@ fn real_counterfactual_produces_a_detectable_divergence() {
     // Teeth #1: a real behavioural change yields a genuinely different trace.
     // Under the fixture simulation this would require hand-editing
     // step.metadata; here it falls out of real execution.
+    // Both programs read the clock at the same point, so the recorded events
+    // agree; the behavioural change lives in the folded resolution history.
     assert_ne!(
-        baseline.nondeterminism_trace.events, counterfactual.nondeterminism_trace.events,
+        baseline.nondeterminism_trace, counterfactual.nondeterminism_trace,
         "a counterfactual program must capture a different real trace"
+    );
+    assert_ne!(
+        baseline.nondeterminism_trace.deterministic_witness,
+        counterfactual.nondeterminism_trace.deterministic_witness,
+        "reading a different (and absent) property must change the deterministic witness"
     );
 
     // Teeth #2: the real ReplayEngine detects the divergence. The Strict
@@ -960,6 +982,12 @@ fn real_counterfactual_produces_a_detectable_divergence() {
             errored = true;
             break;
         }
+    }
+    if !errored {
+        // BestEffort records (rather than rejects) a witness mismatch.
+        engine
+            .verify_deterministic_witness(&counterfactual.nondeterminism_trace.deterministic_witness)
+            .expect("best-effort witness verification records instead of failing");
     }
     assert!(
         errored || engine.divergence_count() > 0 || !engine.is_complete(),

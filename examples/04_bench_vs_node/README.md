@@ -13,7 +13,10 @@ mkdir -p "$bench_dir"
 
 /usr/bin/time -p -o "$bench_dir/frankenengine.time" \
   cargo run --quiet -p frankenengine-engine --bin frankenctl -- \
-  run examples/04_bench_vs_node/workload.js \
+  run --input examples/04_bench_vs_node/workload.js \
+  --extension-id example-04 --out "$bench_dir/frankenengine.json" \
+  > /dev/null
+jq -r '.console_output[].message' "$bench_dir/frankenengine.json" \
   > "$bench_dir/frankenengine.txt"
 
 if command -v node >/dev/null 2>&1; then
@@ -29,7 +32,9 @@ diff -u "$bench_dir/frankenengine.txt" "$bench_dir/node.txt"
 
 ## What The Output Means
 
-Successful runs print `499500` into `frankenengine.txt`. If Node is installed,
+`frankenctl run` writes a JSON run report (to `--out` and to stdout); the `jq`
+step extracts its `console_output` messages, so a successful run leaves `499500`
+in `frankenengine.txt`. If Node is installed,
 `node.txt` should print the same value and `diff -u` should produce no output.
 If Node is not installed, `node.txt` will contain a skip marker instead.
 

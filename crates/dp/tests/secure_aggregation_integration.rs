@@ -4,9 +4,9 @@
 //! sees only the sum, not individual contributions.
 
 use dp::{
+    AggregationConfig, SecureAggregationSession,
     participant::{Participant, ParticipantId, ParticipantStatus},
     protocol::{AggregationProtocol, AggregationRound, MaskedContribution, SecurityParameters},
-    AggregationConfig, SecureAggregationSession,
 };
 use rand::thread_rng;
 
@@ -241,9 +241,11 @@ fn protocol_enforces_security_constraints() {
         ),
     ];
 
-    assert!(protocol
-        .validate_contributions(&valid_contributions)
-        .is_ok());
+    assert!(
+        protocol
+            .validate_contributions(&valid_contributions)
+            .is_ok()
+    );
 
     // Test invalid dimension
     let invalid_dimension = vec![MaskedContribution::new(
@@ -440,9 +442,11 @@ fn secret_shares_maintain_cryptographic_properties() {
 
     for share in charlie_shares {
         if share.recipient == alice.id {
-            assert!(alice
-                .receive_secret_share(charlie.id.clone(), share)
-                .is_ok());
+            assert!(
+                alice
+                    .receive_secret_share(charlie.id.clone(), share)
+                    .is_ok()
+            );
             break;
         }
     }

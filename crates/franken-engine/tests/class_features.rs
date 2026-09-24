@@ -566,37 +566,41 @@ mod class_runtime_execution_tests {
 
     // -- Boundary: current fail-closed behavior (real engine, no mocks; bd-a7kpw) --
 
-    /// `super` expressions are rejected fail-closed by the parser today.
-    /// (The AST `Expression::Super` lowers fine, but the source parser never emits it.)
+    /// `super.m()` in a class method resolves against the parent prototype
+    /// (bd-9vouw.24). This source used to be pinned as a parser rejection.
     #[test]
-    fn super_expression_fails_closed_at_parser() {
-        let err = run_err(concat!(
+    fn super_method_call_in_class_method_executes() {
+        let result = run_ok(concat!(
             "class Parent { testMethod() { return 1; } }\n",
             "class Child extends Parent {\n",
-            "  testMethod() { return super.testMethod(); }\n",
+            "  testMethod() { return super.testMethod() + 1; }\n",
             "}\n",
-            "new Child();\n",
+            "new Child().testMethod();\n",
         ));
+        assert_eq!(result.value, Value::Int(2));
+    }
+
+    /// `super` outside a method has no [[HomeObject]]: an early SyntaxError in
+    /// Node, and a fail-closed parser rejection here.
+    #[test]
+    fn super_outside_a_method_fails_closed_at_parser() {
+        let err = run_err("function f() { return super.x; }\nf();\n");
         assert!(
             err.starts_with("parse:") && err.contains("super expressions are not supported"),
-            "super source must be rejected fail-closed by the parser, got: {err}"
+            "super outside a method must be rejected fail-closed by the parser, got: {err}"
         );
     }
 
-    /// Static-method access on a class constructor fails closed: statics lower onto
-    /// the constructor function, but the interpreter does not treat function values
-    /// as property-bearing objects, so the access raises a `TypeError` rather than
-    /// silently mis-resolving. Pinned until bd-a7kpw lands.
+    /// Static methods install on the constructor's own properties (bd-9vouw.17:
+    /// functions are property-bearing objects), so `C.s()` executes. This test
+    /// previously pinned a fail-closed TypeError for the same source.
     #[test]
-    fn static_method_access_fails_closed() {
-        let err = run_err(concat!(
+    fn static_method_access_executes() {
+        let result = run_ok(concat!(
             "class TestClass { static staticMethod() { return \"static called\"; } }\n",
-            "TestClass.staticMethod;\n",
+            "TestClass.staticMethod();\n",
         ));
-        assert!(
-            err.starts_with("execute:") && err.contains("TypeError") && err.contains("function"),
-            "static access on a class constructor must fail closed today, got: {err}"
-        );
+        assert_eq!(result.value, Value::str("static called"));
     }
 
     /// Prototype/instance method dispatch executes end-to-end (bd-62un6).

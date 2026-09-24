@@ -617,8 +617,11 @@ fn lane_reason_serde() {
 // Arithmetic edge cases
 // ===========================================================================
 
+// bd-9vouw.2: IR3 arithmetic has ECMAScript Number semantics. An integer
+// result outside i64 is a Number (f64), never a two's-complement wrap: in JS
+// `9223372036854775807 + 1` is 9223372036854775808.
 #[test]
-fn add_wrapping_overflow() {
+fn add_overflow_produces_a_number() {
     let m = test_module(vec![
         Ir3Instruction::LoadInt {
             dst: 1,
@@ -633,11 +636,11 @@ fn add_wrapping_overflow() {
         Ir3Instruction::Halt,
     ]);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.value, Value::Int(i64::MIN)); // wrapping
+    assert_eq!(result.value, Value::Float(Float64::new(i64::MAX as f64 + 1.0)));
 }
 
 #[test]
-fn sub_wrapping_underflow() {
+fn sub_underflow_produces_a_number() {
     let m = test_module(vec![
         Ir3Instruction::LoadInt {
             dst: 1,
@@ -652,11 +655,11 @@ fn sub_wrapping_underflow() {
         Ir3Instruction::Halt,
     ]);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.value, Value::Int(i64::MAX)); // wrapping
+    assert_eq!(result.value, Value::Float(Float64::new(i64::MIN as f64 - 1.0)));
 }
 
 #[test]
-fn mul_wrapping_overflow() {
+fn mul_overflow_produces_a_number() {
     let m = test_module(vec![
         Ir3Instruction::LoadInt {
             dst: 1,
@@ -671,7 +674,7 @@ fn mul_wrapping_overflow() {
         Ir3Instruction::Halt,
     ]);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.value, Value::Int(i64::MAX.wrapping_mul(2)));
+    assert_eq!(result.value, Value::Float(Float64::new(i64::MAX as f64 * 2.0)));
 }
 
 #[test]

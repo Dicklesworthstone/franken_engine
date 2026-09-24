@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+echo "NOTE: fixture shape check - runs no engine code; hashes/signatures here are placeholders (bd-9vouw.20)"
+
 echo "FrankenEngine Proof-Carrying Optimization Verification"
 echo "======================================================="
 

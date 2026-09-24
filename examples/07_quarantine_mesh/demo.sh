@@ -15,7 +15,8 @@ if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
 fi
 
 log_path="$(mktemp "${TMPDIR:-/tmp}/quarantine-mesh-demo.XXXXXX.log")"
-trap 'rm -f "$log_path"' EXIT
+json_path="$(mktemp "${TMPDIR:-/tmp}/quarantine-mesh-demo.XXXXXX.json")"
+trap 'rm -f "$log_path" "$json_path"' EXIT
 
 set +e
 remote_env=(
@@ -27,13 +28,29 @@ if [[ -n "$CARGO_TARGET_DIR" ]]; then
 fi
 "$RCH_BIN" exec -- env \
   "${remote_env[@]}" \
-  cargo run --quiet -p frankenengine-engine --bin franken-quarantine-mesh-demo 2>&1 | tee "$log_path"
-status=${PIPESTATUS[0]}
+  cargo run --quiet -p frankenengine-engine --bin franken-quarantine-mesh-demo > "$json_path" 2> "$log_path"
+status=$?
 set -e
+cat "$log_path" >&2
 
-if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$log_path"; then
+if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$log_path" "$json_path"; then
   echo "rch reported local fallback; refusing local execution" >&2
   exit 125
 fi
+if [[ "$status" -ne 0 ]]; then
+  exit "$status"
+fi
 
-exit "$status"
+cat "$json_path"
+
+# The property this demo claims (bd-9vouw.20): every instance applied the
+# revocation and checkpointed a quarantine decision within the bounded SLO.
+if ! jq -e '
+  (.instances | length) == 3
+  and all(.instances[]; .target_revoked and .resolved_action == "quarantine" and .within_bounded_slo)
+  and .fleet_convergence.within_bounded_slo
+' "$json_path" > /dev/null; then
+  echo "FAIL: quarantine did not converge on every instance within the bounded SLO" >&2
+  exit 1
+fi
+echo "verified: 3/3 instances revoked and checkpointed quarantine within the bounded SLO" >&2

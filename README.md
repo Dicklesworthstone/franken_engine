@@ -811,7 +811,7 @@ The runtime is attacked in CI, not only defended in production. The adversarial 
 |---|---|---|
 | **Red-team attacker harness** | `tests/red_team_execution_harness.rs` + `tests/red_team_scenarios/` (`bd-28otw`, commit `39ded447`) | Drives real adversarial workloads instead of hardcoded baseline assumptions. The harness loads scenarios from the corpus directory and dispatches them through the engine. |
 | **Compromise-rate metric gate** | `red_team_compromise_rate_metric_gate.rs` + `compromise_rate_disruptive_floor_metric_gate.rs` (`bd-1vwza`) | TARGETED via `FE-CLAIM-011`: FrankenEngine probes execute, but the published runner hardcodes Node/Bun outcomes and does not produce comparable reference-runtime receipts. |
-| **Red/Blue coevolution** | `adversarial_coevolution_harness.rs`, demo `examples/19_red_blue_coevolution` | Co-evolves attack and defense populations; the live demo records how often the defender outpaces the attacker. |
+| **Red/Blue coevolution** | `adversarial_coevolution_harness.rs`, demo `examples/19_red_blue_coevolution` | Co-evolves attack and defense populations; its demo directory is a fixture shape check (it runs no engine code; its signatures are placeholders). |
 | **Adversarial campaign** | `adversarial_campaign.rs` (~208 KB) | Long-running campaigns against the runtime under controlled fault-injection. |
 | **Adversarial supremacy synthesis** | `adversarial_supremacy_synthesis.rs` | Generates the worst-case witness inputs the rest of the harness will replay. |
 | **Counterexample synthesizer** | `counterexample_synthesizer.rs` | Targeted property-falsification for invariant tests. |
@@ -1599,23 +1599,23 @@ setup: [`docs/dueling_wizards/FRANKEN_LSP_EDITOR_SETUP.md`](./docs/dueling_wizar
 
 ## Impossible-By-Default Capabilities
 
-The thirteen "impossible-by-default" capabilities from [`docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md`](./docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md) §3.2 each have a shipped demo directory. The full table lives in [`examples/README.md`](./examples/README.md); the runnable mapping is below.
+The thirteen "impossible-by-default" capabilities from [`docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md`](./docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md) §3.2 each have a shipped demo directory; rows marked *fixture* only validate the shape of checked-in JSON (placeholder hashes/signatures) and run no engine code, so they are not live evidence. The full table lives in [`examples/README.md`](./examples/README.md); the runnable mapping is below.
 
 | # | Capability | Demo | Command |
 |---|---|---|---|
 | 1 | Signed decision receipts | `02_signed_decision_receipt` | `./examples/02_signed_decision_receipt/verify.sh` |
 | 2 | Deterministic replay | `05_replay_demo` | `./examples/05_replay_demo/verify.sh` |
-| 3 | Signed checkpoints | `20_signed_checkpoints` | `./examples/20_signed_checkpoints/verify.sh` |
+| 3 | Signed checkpoints | `20_signed_checkpoints` | `./examples/20_signed_checkpoints/verify.sh` *(fixture: runs no engine code)* |
 | 4 | Quarantine mesh | `07_quarantine_mesh` | `./examples/07_quarantine_mesh/demo.sh` |
-| 5 | Proof-carrying adaptive optimization | `15_proof_carrying_optimization` | `./examples/15_proof_carrying_optimization/verify.sh` |
+| 5 | Proof-carrying adaptive optimization | `15_proof_carrying_optimization` | `./examples/15_proof_carrying_optimization/verify.sh` *(fixture: runs no engine code)* |
 | 6 | Capability-typed rejection boundary | `06_capability_typed` | `./examples/06_capability_typed/verify.sh` |
 | 7 | Deterministic resource-exhaustion semantics | `13_resource_budget_demo` | `./examples/13_resource_budget_demo/verify.sh` |
-| 8 | Revocation-first execution gates | `14_revocation_first_gate` | `./examples/14_revocation_first_gate/verify.sh` |
-| 9 | Distributed anti-entropy trust reconciliation | `09_anti_entropy_trust_reconciliation` | `./examples/09_anti_entropy_trust_reconciliation/verify.sh` |
-| 10 | Red/blue coevolution | `19_red_blue_coevolution` | `./examples/19_red_blue_coevolution/verify.sh` |
-| 11 | Self-replacement lineage | `16_self_replacement_lineage` | `./examples/16_self_replacement_lineage/verify.sh` |
-| 12 | Information-flow confinement | `17_information_flow_confinement` | `./examples/17_information_flow_confinement/verify.sh` |
-| 13 | Security-proof-guided specialization | `18_proof_guided_specialization` | `./examples/18_proof_guided_specialization/verify.sh` |
+| 8 | Revocation-first execution gates | `14_revocation_first_gate` | `./examples/14_revocation_first_gate/verify.sh` *(fixture: runs no engine code; live: `cargo test -p frankenengine-engine --test live_revocation_first_gate_example`)* |
+| 9 | Distributed anti-entropy trust reconciliation | `09_anti_entropy_trust_reconciliation` | `./examples/09_anti_entropy_trust_reconciliation/verify.sh` *(fixture: runs no engine code)* |
+| 10 | Red/blue coevolution | `19_red_blue_coevolution` | `./examples/19_red_blue_coevolution/verify.sh` *(fixture: runs no engine code)* |
+| 11 | Self-replacement lineage | `16_self_replacement_lineage` | `./examples/16_self_replacement_lineage/verify.sh` *(fixture: runs no engine code; live: `cargo run -p frankenengine-engine --example self_replacement_lineage_replay`)* |
+| 12 | Information-flow confinement | `17_information_flow_confinement` | `./examples/17_information_flow_confinement/verify.sh` *(fixture: runs no engine code; live: `./examples/22_live_ifc_declassification/verify.sh`)* |
+| 13 | Security-proof-guided specialization | `18_proof_guided_specialization` | `./examples/18_proof_guided_specialization/verify.sh` *(fixture: runs no engine code)* |
 
 Additional examples cover the live runtime surfaces:
 
@@ -1943,7 +1943,7 @@ The certified optimizer was paused for a substantial window during the `franken-
 
 ### Demo
 
-`examples/15_proof_carrying_optimization` exercises the proof-carrying adaptive optimization path end-to-end. The rewrite ships with its cost-model proof and the demo verifies the proof before applying.
+`examples/15_proof_carrying_optimization` is a fixture shape check: its `verify.sh` validates the JSON shape of checked-in before/after/proof fixtures (whose hashes are placeholders) and runs no engine code. It does not exercise the optimization path.
 
 ---
 

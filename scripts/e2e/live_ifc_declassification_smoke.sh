@@ -36,7 +36,7 @@ fi
 run_cargo_step() {
     local log_path="$1"
     shift
-    timeout 120 rch exec -- env \
+    timeout "${IFC_SMOKE_CARGO_TIMEOUT_SECS:-1800}" rch exec -- env \
         "RUSTC_WRAPPER=${rustc_wrapper}" \
         "CARGO_TARGET_DIR=${target_dir}" \
         "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
@@ -144,7 +144,7 @@ echo "🔧 Performing compilation check..."
 
 # Try to compile the live example
 compile_output="$output_dir/compile_check.log"
-if run_cargo_step "$compile_output" check --example live_ifc_declassification_example --no-default-features; then
+if run_cargo_step "$compile_output" check -p frankenengine-engine --example live_ifc_declassification_example --no-default-features; then
     echo "✅ Live example compiles successfully"
 
     # If compilation succeeds, try to run integration tests
@@ -153,12 +153,13 @@ if run_cargo_step "$compile_output" check --example live_ifc_declassification_ex
     if run_cargo_step "$test_output" test -p frankenengine-engine --test live_ifc_declassification_runtime_integration --no-default-features; then
         echo "✅ Integration tests pass"
     else
-        echo "⚠️ Integration tests have issues (see $test_output)"
+        echo "❌ Integration tests failed (see $test_output)"
+        exit 1
     fi
 
 else
-    echo "⚠️ Live example has compilation issues (see $compile_output)"
-    echo "   This is expected during development - the implementation demonstrates the conversion"
+    echo "❌ Live example does not compile (see $compile_output)"
+    exit 1
 fi
 
 # Generate demonstration summary

@@ -1,5 +1,7 @@
 # Red/Blue Coevolution: Impossible-by-Default in Incumbent Runtimes
 
+> **Fixture shape check — runs no engine code.** `verify.sh` validates the JSON shape of the checked-in fixtures in this directory; their hashes and signatures are placeholders, not outputs of a live run, so a passing check is not evidence that the capability works.
+
 ## Overview
 
 This demo showcases FrankenEngine's continuous autonomous red/blue co-evolution capability - 

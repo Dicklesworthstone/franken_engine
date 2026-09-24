@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Live IFC/declassification source-to-sink example with signed receipts
-# Generates comprehensive proof artifacts for bd-dpfvh
+# Live IFC/declassification example (bd-dpfvh; evidence rules bd-9vouw.20).
+#
+# Runs examples/live_ifc_declassification_example.rs, which drives the real
+# FlowPolicy flow check and DeclassificationPipeline, publishes every receipt
+# the pipeline signs (Ed25519) together with the run's verification key, and
+# re-verifies the written artifacts from disk before it reports success. This
+# script fails when the example fails, when the example's verdict line is
+# missing, or when the artifacts visible locally do not show an approved flow
+# under a verifiable signed receipt and a denied flow. It writes no evidence of
+# its own.
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
@@ -14,46 +22,46 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${repo_root}/artifacts/live_ifc_declassification_example/${timestamp}"
 live_artifacts_dir="${artifact_dir}/live"
 
-example_id="bd-dpfvh-ifc-declassification"
-component="live_ifc_declassification_example"
-schema_version="franken-engine.ifc-declassification-example.v1"
-
 mkdir -p "${artifact_dir}" "${live_artifacts_dir}"
 cd "${repo_root}"
 
-echo "Live IFC/declassification source-to-sink example"
-echo "================================================"
-echo ""
+fail() {
+    echo "FAIL: $*" >&2
+    exit 1
+}
 
-# Compute source data hash for receipt linkage
-source_file="${script_dir}/source_confidential.txt"
-source_hash="$(sha256sum "${source_file}" | cut -d' ' -f1)"
-
-echo "Source data hash: ${source_hash}"
+echo "Live IFC/declassification example"
+echo "================================="
 echo "Artifact directory: ${artifact_dir}"
 echo ""
 
-# Run live IFC declassification example through FrankenEngine runtime
-echo "Running live IFC declassification scenarios through FrankenEngine runtime..."
-
 ifc_stdout="${artifact_dir}/live_ifc_stdout.log"
 ifc_stderr="${artifact_dir}/live_ifc_stderr.log"
-ifc_exit_code=0
 
 if ! command -v "${RCH_BIN}" >/dev/null 2>&1; then
     echo "Required rch binary not found: ${RCH_BIN}" >&2
     exit 2
 fi
 
+example_cmd=(
+    "${RCH_BIN}" exec -- env
+    "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}"
+    "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
+    "CARGO_TARGET_DIR=${target_dir}"
+    "IFC_DECLASSIFICATION_OUTPUT_DIR=${live_artifacts_dir}"
+    cargo run -p frankenengine-engine --example live_ifc_declassification_example --no-default-features
+)
+
+echo "Running: ${example_cmd[*]}"
 set +e
-"${RCH_BIN}" exec -- env \
-    "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}" \
-    "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
-    "CARGO_TARGET_DIR=${target_dir}" \
-    "IFC_DECLASSIFICATION_OUTPUT_DIR=${live_artifacts_dir}" \
-    cargo run --example live_ifc_declassification_example --no-default-features > "${ifc_stdout}" 2> "${ifc_stderr}"
+"${example_cmd[@]}" > "${ifc_stdout}" 2> "${ifc_stderr}"
 ifc_exit_code=$?
 set -e
+
+{
+    echo "command: ${example_cmd[*]}"
+    echo "exit_code: ${ifc_exit_code}"
+} > "${artifact_dir}/command_transcript.log"
 
 if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "${ifc_stdout}" "${ifc_stderr}"; then
     cat "${ifc_stderr}" >&2
@@ -61,343 +69,70 @@ if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local
     exit 125
 fi
 
-if [[ $ifc_exit_code -eq 0 ]]; then
-    echo "✓ Live IFC declassification example completed successfully"
-
-    # Copy artifacts from live example output to expected directory
-    if [[ -d "${live_artifacts_dir}" ]]; then
-        echo "Copying live example artifacts..."
-        cp "${live_artifacts_dir}"/*.json "${artifact_dir}/" 2>/dev/null || true
-        cp "${live_artifacts_dir}"/*.jsonl "${artifact_dir}/" 2>/dev/null || true
-        cp "${live_artifacts_dir}"/*.txt "${artifact_dir}/" 2>/dev/null || true
-        cp "${live_artifacts_dir}"/*.md "${artifact_dir}/" 2>/dev/null || true
-    fi
-
-    # Parse the output to extract scenario results
-    if grep -q "Live IFC declassification example completed successfully" "${ifc_stdout}"; then
-        echo "✓ Both IFC flow scenarios completed: allowed and denied flows verified"
-    else
-        echo "❌ IFC flow scenarios did not complete as expected"
-        ifc_exit_code=1
-    fi
-
-    # Verify proof artifacts were generated
-    if [[ -f "${artifact_dir}/manifest.json" && -f "${artifact_dir}/report.json" ]]; then
-        echo "✓ Live proof artifacts generated successfully"
-    else
-        echo "❌ Expected proof artifacts not found"
-        ifc_exit_code=1
-    fi
-else
-    echo "❌ Live IFC declassification example failed (exit code: ${ifc_exit_code})"
+if [[ ${ifc_exit_code} -ne 0 ]]; then
+    tail -n 40 "${ifc_stderr}" >&2
+    echo "FAIL: live IFC example exited ${ifc_exit_code}" >&2
+    exit "${ifc_exit_code}"
 fi
 
-# Generate Policy Input
-echo "Generating policy input artifact..."
-policy_input="${artifact_dir}/flow_policy_input.json"
-cat > "${policy_input}" <<EOF
-{
-  "schema_version": "${schema_version}",
-  "example_id": "${example_id}",
-  "component": "${component}",
-  "flow_policy": {
-    "version": "1.0.0",
-    "allowed_routes": [
-      {
-        "route_id": "confidential_to_public_with_approval",
-        "source_label": "confidential",
-        "sink_label": "public",
-        "requires_declassification": true,
-        "authorization_required": "security_review_board",
-        "conditions": ["manual_review", "pii_scrubbing"]
-      }
-    ],
-    "prohibited_flows": [
-      {
-        "source_label": "confidential",
-        "sink_label": "public",
-        "without_declassification": true,
-        "reason": "confidential_data_requires_authorization"
-      }
-    ]
-  },
-  "test_scenarios": {
-    "denied_flow": {
-      "source_label": "confidential",
-      "sink_label": "public",
-      "declassification_applied": false,
-      "expected_result": "denied"
-    },
-    "allowed_flow": {
-      "source_label": "confidential",
-      "sink_label": "public",
-      "declassification_applied": true,
-      "expected_result": "allowed"
-    }
-  },
-  "source_data_hash": "${source_hash}",
-  "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
+# 1. The example's own disk re-verification verdict (printed only when every
+#    receipt verified and both an approved and a denied flow were observed).
+verdict_json="$(sed -n 's/^IFC_DEMO_VERDICT //p' "${ifc_stdout}" | tail -n 1)"
+[[ -n "${verdict_json}" ]] || fail "example printed no IFC_DEMO_VERDICT line"
+jq -e '
+  .approved_with_verified_receipt >= 1
+  and .denied_without_flow >= 1
+  and (.verification_key_hex | test("^[0-9a-f]{64}$"))
+' <<<"${verdict_json}" > /dev/null || fail "verdict does not show an approved and a denied flow: ${verdict_json}"
+echo "✓ Example re-verified its artifacts: ${verdict_json}"
 
-# Generate Flow Labels artifact
-echo "Generating flow labels artifact..."
-flow_labels="${artifact_dir}/flow_labels.json"
-cat > "${flow_labels}" <<EOF
-{
-  "schema_version": "${schema_version}",
-  "example_id": "${example_id}",
-  "label_lattice": {
-    "public": { "level": 0, "description": "Publicly releasable information" },
-    "internal": { "level": 1, "description": "Internal use only" },
-    "confidential": { "level": 2, "description": "Restricted access required" },
-    "secret": { "level": 3, "description": "Sensitive security information" },
-    "top_secret": { "level": 4, "description": "Highest classification level" }
-  },
-  "flow_analysis": {
-    "source_label": "confidential",
-    "sink_clearance": "public",
-    "flow_legal_without_declassification": false,
-    "flow_legal_with_declassification": true,
-    "required_declassification_authority": "security_review_board"
-  },
-  "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
+# 2. When the artifacts are visible here (they stay on the worker when rch runs
+#    the example remotely), check them directly as well.
+report="${live_artifacts_dir}/report.json"
+receipts="${live_artifacts_dir}/declassification_receipts.json"
+key_file="${live_artifacts_dir}/verification_key.json"
+if [[ -f "${report}" && -f "${receipts}" && -f "${key_file}" ]]; then
+    jq -e '
+      ([.scenarios[] | select(.declassification_approved)] | length) >= 1
+      and ([.scenarios[] | select(.declassification_approved | not)] | length) >= 1
+      and all(.scenarios[] | select(.declassification_approved);
+              .flow_completed and .receipt_generated
+              and (.receipt_hash | type == "string" and test("^[0-9a-f]{64}$")))
+      and all(.scenarios[] | select(.declassification_approved | not); .flow_completed | not)
+    ' "${report}" > /dev/null || fail "report.json does not show an approved flow with a receipt and a denied flow"
+    echo "✓ report.json: approved flow carries a receipt hash; denied flow did not complete"
 
-# Generate Declassification Decision
-echo "Generating declassification decision artifact..."
-declassification_decision="${artifact_dir}/declassification_decision.json"
-cat > "${declassification_decision}" <<EOF
-{
-  "schema_version": "${schema_version}",
-  "example_id": "${example_id}",
-  "request_id": "declassify_${timestamp}",
-  "decision_id": "bd-dpfvh-decision-001",
-  "source_label": "confidential",
-  "sink_clearance": "public",
-  "requested_route_id": "confidential_to_public_with_approval",
-  "decision": "approved",
-  "decision_basis": {
-    "policy_evaluation": "route_approved",
-    "conditions_met": ["manual_review", "pii_scrubbing"],
-    "loss_assessment": {
-      "expected_loss_milli": 0,
-      "data_sensitivity_bps": 500,
-      "sink_exposure_bps": 1000
-    }
-  },
-  "authorized_by": "security_review_board@franken.internal",
-  "justification": "Performance metrics approved for public incident communication after review and PII scrubbing",
-  "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
+    # Independent Ed25519 check (PyNaCl, not the engine's verifier) of each
+    # published signature over its published preimage; the example has
+    # already bound each preimage to its receipt's fields.
+    if python3 -c 'import nacl.signing' > /dev/null 2>&1; then
+        python3 - "${receipts}" "${key_file}" <<'PY' || fail "independent Ed25519 check rejected a receipt"
+import json
+import sys
 
-# Generate Signed Receipt
-echo "Generating signed declassification receipt..."
-signed_receipt="${artifact_dir}/signed_declassification_receipt.json"
-cat > "${signed_receipt}" <<EOF
-{
-  "schema_version": "${schema_version}",
-  "receipt_type": "declassification",
-  "data_hash": "${source_hash}",
-  "label_before": "confidential",
-  "label_after": "public",
-  "flow_id": "flow_${timestamp}",
-  "decision_id": "bd-dpfvh-decision-001",
-  "authorized_by": "security_review_board@franken.internal",
-  "justification": "Performance metrics approved for public incident communication after review and PII scrubbing",
-  "policy_route_id": "confidential_to_public_with_approval",
-  "conditions_verified": ["manual_review", "pii_scrubbing"],
-  "signing_key_id": "franken-ifc-signer-001",
-  "signature_hex": "$(openssl rand -hex 32)",
-  "replay_linkage": {
-    "trace_id": "trace_${timestamp}",
-    "request_hash": "$(echo "declassify_${timestamp}" | sha256sum | cut -d' ' -f1)",
-    "policy_version_hash": "$(echo "1.0.0" | sha256sum | cut -d' ' -f1)"
-  },
-  "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
+from nacl.exceptions import BadSignatureError
+from nacl.signing import VerifyKey
 
-# Generate Provenance Trace
-echo "Generating provenance trace artifact..."
-provenance_trace="${artifact_dir}/provenance_trace.json"
-cat > "${provenance_trace}" <<EOF
-{
-  "schema_version": "${schema_version}",
-  "example_id": "${example_id}",
-  "trace_id": "trace_${timestamp}",
-  "flow_events": [
-    {
-      "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-      "event_type": "source_read",
-      "source_location": "file://${script_dir}/source_confidential.txt",
-      "source_label": "confidential",
-      "data_hash": "${source_hash}",
-      "extension_id": "ifc_example_reader"
-    },
-    {
-      "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-      "event_type": "flow_attempt",
-      "source_label": "confidential",
-      "sink_clearance": "public",
-      "flow_legal": false,
-      "declassification_required": true
-    },
-    {
-      "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-      "event_type": "declassification_request",
-      "request_id": "declassify_${timestamp}",
-      "route_id": "confidential_to_public_with_approval",
-      "requester_extension": "ifc_example_writer"
-    },
-    {
-      "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-      "event_type": "declassification_decision",
-      "decision_id": "bd-dpfvh-decision-001",
-      "decision": "approved",
-      "receipt_generated": true
-    },
-    {
-      "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-      "event_type": "sink_write",
-      "sink_location": "stdout://public",
-      "sink_clearance": "public",
-      "flow_authorized": true,
-      "receipt_hash": "$(echo "${timestamp}" | sha256sum | cut -d' ' -f1)"
-    }
-  ],
-  "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-
-# Generate Verifier Report
-echo "Generating verifier report..."
-verifier_report="${artifact_dir}/verifier_report.json"
-cat > "${verifier_report}" <<EOF
-{
-  "schema_version": "${schema_version}",
-  "example_id": "${example_id}",
-  "component": "${component}",
-  "overall_result": "pass",
-  "test_results": {
-    "flow_denied_without_declassification": {
-      "expected": "denied",
-      "actual": "demonstrated",
-      "result": "pass",
-      "evidence": "Flow from confidential to public blocked without declassification"
-    },
-    "flow_allowed_with_declassification": {
-      "expected": "allowed",
-      "actual": "demonstrated",
-      "result": "pass",
-      "evidence": "Flow from confidential to public permitted with signed receipt"
-    },
-    "declassification_receipt_generated": {
-      "expected": "signed_receipt",
-      "actual": "signed_receipt",
-      "result": "pass",
-      "evidence": "Declassification receipt includes signature and provenance linkage"
-    },
-    "provenance_trace_complete": {
-      "expected": "complete_trace",
-      "actual": "complete_trace",
-      "result": "pass",
-      "evidence": "Full source-to-sink trace captured with timestamps"
-    }
-  },
-  "security_properties_verified": [
-    "confidential_data_requires_declassification",
-    "declassification_generates_signed_receipt",
-    "provenance_trace_immutable",
-    "policy_evaluation_deterministic",
-    "replay_linkage_preserved"
-  ],
-  "evidence_files": [
-    "flow_policy_input.json",
-    "flow_labels.json",
-    "declassification_decision.json",
-    "signed_declassification_receipt.json",
-    "provenance_trace.json",
-    "manifest.json",
-    "report.json",
-    "events.jsonl",
-    "commands.txt",
-    "live_ifc_stdout.log",
-    "live_ifc_stderr.log"
-  ],
-  "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-
-# Generate Command Transcript
-echo "Generating command transcript..."
-command_transcript="${artifact_dir}/command_transcript.log"
-cat > "${command_transcript}" <<EOF
-# Live IFC/Declassification Source-to-Sink Example - Command Transcript
-# Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-## Source Data
-file: ${script_dir}/source_confidential.txt
-hash: ${source_hash}
-label: confidential
-
-## Live IFC Example
-command: ${RCH_BIN} exec -- env RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN} CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} CARGO_TARGET_DIR=${target_dir} IFC_DECLASSIFICATION_OUTPUT_DIR=${live_artifacts_dir} cargo run --example live_ifc_declassification_example --no-default-features
-exit_code: ${ifc_exit_code}
-stdout_lines: $(wc -l < "${ifc_stdout}")
-stderr_lines: $(wc -l < "${ifc_stderr}")
-expected: allowed and denied live IFC scenarios complete with manifest/report artifacts
-
-## Verification Results
-✓ IFC flow policy discrimination verified
-✓ Declassification decision pipeline demonstrated
-✓ Signed declassification receipt generated
-✓ Complete source-to-sink provenance trace captured
-✓ Replay linkage preserved for deterministic replay
-
-## Security Properties
-- Confidential data cannot flow to public sink without declassification
-- Declassification requires authorized approval route
-- All declassifications generate signed receipts with provenance
-- Flow decisions are deterministic and replay-verifiable
-EOF
-
-# Validate receipt structure (like the original example)
-if jq -e '
-  .data_hash == "'"${source_hash}"'"
-  and .label_before == "confidential"
-  and .label_after == "public"
-  and (.authorized_by | type == "string" and length > 0)
-  and (.justification | type == "string" and length > 0)
-  and (.signature_hex | test("^[0-9a-f]{64}$"))
-  and .replay_linkage
-' "${signed_receipt}" > /dev/null; then
-    echo "✓ Declassification receipt structure validated"
+with open(sys.argv[1]) as handle:
+    receipts = json.load(handle)
+with open(sys.argv[2]) as handle:
+    key = VerifyKey(bytes.fromhex(json.load(handle)["verification_key_hex"]))
+if not receipts:
+    sys.exit("no receipts were published")
+for published in receipts:
+    try:
+        key.verify(bytes.fromhex(published["preimage_hex"]), bytes.fromhex(published["signature_hex"]))
+    except BadSignatureError:
+        sys.exit(f"{published['scenario_id']}: signature rejected")
+print(f"✓ PyNaCl verified {len(receipts)} receipt signature(s) under the run's key")
+PY
+    else
+        echo "SKIP: PyNaCl is not installed; the independent Ed25519 cross-check did not run"
+    fi
 else
-    echo "❌ Declassification receipt validation failed"
-    exit 1
+    echo "NOTE: ${live_artifacts_dir} is not populated locally (remote run); only the example's own verdict was checked"
 fi
 
 echo ""
-echo "✅ Live IFC/declassification example completed successfully"
-echo ""
-echo "📁 Artifact directory: ${artifact_dir}"
-echo "📄 Generated files:"
-find "${artifact_dir}" -type f -exec basename {} \; | sort
-
-# Compute overall artifact hash
-artifact_bundle_hash="$(find "${artifact_dir}" -type f -print0 | sort -z | xargs -0 cat | sha256sum | cut -d' ' -f1)"
-echo ""
-echo "🔒 Artifact bundle hash: ${artifact_bundle_hash}"
-
-echo ""
-echo "🔐 IFC Security Properties Demonstrated:"
-echo "   ✓ Source-to-sink flow with classification labels"
-echo "   ✓ Flow denied without proper declassification"
-echo "   ✓ Flow allowed with signed declassification receipt"
-echo "   ✓ Complete provenance trace with replay linkage"
-echo "   ✓ Policy-based declassification decision pipeline"
-
-exit 0
+echo "✅ Live IFC/declassification example verified"
+echo "📁 ${artifact_dir}"

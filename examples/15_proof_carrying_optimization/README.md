@@ -1,5 +1,7 @@
 # Proof-Carrying Adaptive Optimization with Translation Validation
 
+> **Fixture shape check — runs no engine code.** `verify.sh` validates the JSON shape of the checked-in fixtures in this directory; their hashes and signatures are placeholders, not outputs of a live run, so a passing check is not evidence that the capability works.
+
 **Impossible-by-Default Security Property #5**
 
 This example demonstrates FrankenEngine's proof-carrying optimization system with translation validation (TV) receipts and automatic rollback - a capability that is fundamentally impossible in incumbent JavaScript runtimes.

@@ -1,5 +1,7 @@
 # Information Flow Confinement
 
+> **Fixture shape check — runs no engine code.** `verify.sh` validates the JSON shape of the checked-in fixtures in this directory; their hashes and signatures are placeholders, not outputs of a live run, so a passing check is not evidence that the capability works. Live coverage: `./examples/22_live_ifc_declassification/verify.sh` (IFC policy, declassification pipeline, signed receipts).
+
 This example is a static fixture for FrankenEngine's impossible-by-default
 information-flow confinement model: sensitive data starts as
 `Confidential`, and any downgrade to `Public` requires an explicit

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "NOTE: fixture shape check - runs no engine code; hashes/signatures here are placeholders (bd-9vouw.20)"
+
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 sample_path="${script_dir}/sample_checkpoint.json"
 replay_path="${script_dir}/replay_checkpoint.json"

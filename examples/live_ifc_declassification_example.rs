@@ -20,11 +20,12 @@ use frankenengine_engine::declassification_pipeline::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::{
-    DeclassificationDecision, DeclassificationRoute, FlowCheckResult, FlowPolicy,
-    FlowPolicyEnforcement, IfcSchemaVersion, Label,
+    DeclassificationDecision, DeclassificationReceipt, DeclassificationRoute, FlowCheckResult,
+    FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion, Label,
 };
 use frankenengine_engine::signature_preimage::{
-    Signature, SigningKey, generate_keypair, generate_keypair_from_seed,
+    Signature, SignaturePreimage, SigningKey, VerificationKey, generate_keypair,
+    generate_keypair_from_seed,
 };
 
 // Example constants
@@ -179,6 +180,10 @@ pub struct FlowVerificationResult {
     pub policy_flow_check: FlowCheckResult,
     pub loss_assessment: LossAssessment,
     pub pipeline_events: Vec<PipelineEvent>,
+    /// The signed receipt the pipeline returned; published separately in
+    /// `declassification_receipts.json`, bound to `receipt_hash`.
+    #[serde(skip)]
+    pub receipt: Option<DeclassificationReceipt>,
 }
 
 impl ClassifiedDataSource {
@@ -352,6 +357,7 @@ pub fn execute_ifc_flow_scenario(
         policy_flow_check,
         loss_assessment,
         pipeline_events: Vec::new(),
+        receipt: None,
     };
 
     result.flow_attempted = true;
@@ -394,6 +400,7 @@ pub fn execute_ifc_flow_scenario(
                     println!("  Declassification decision: {:?}", receipt.decision);
                     println!("     Receipt ID: {}", receipt.receipt_id);
                     println!("     Authorized by: {}", receipt.authorized_by);
+                    result.receipt = Some(receipt);
                 }
                 Err(PipelineError::NoMatchingRoute { .. }) => {
                     result.error_reason = Some("No matching declassification route".to_string());
@@ -428,9 +435,37 @@ pub fn execute_ifc_flow_scenario(
 pub fn generate_ifc_proof_artifacts(
     results: &[FlowVerificationResult],
     policy: &FlowPolicy,
+    verification_key: &VerificationKey,
     output_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(output_dir)?;
+
+    // The signing key is fresh per run, so the run publishes its verification
+    // key; every receipt it emits is published with the exact preimage its
+    // Ed25519 signature covers, so a verifier outside this crate can check the
+    // signature and `verify_ifc_proof_artifacts` can bind that preimage back to
+    // the receipt fields.
+    fs::write(
+        output_dir.join("verification_key.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "verification_key_hex": verification_key.to_hex(),
+        }))?,
+    )?;
+    let published_receipts = results
+        .iter()
+        .filter_map(|result| {
+            result.receipt.as_ref().map(|receipt| PublishedReceipt {
+                scenario_id: result.scenario_id.clone(),
+                preimage_hex: hex::encode(receipt.preimage_bytes()),
+                signature_hex: hex::encode(receipt.signature.to_bytes()),
+                receipt: receipt.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        output_dir.join("declassification_receipts.json"),
+        serde_json::to_string_pretty(&published_receipts)?,
+    )?;
 
     // Generate manifest.json
     let manifest = serde_json::json!({
@@ -615,6 +650,136 @@ pub fn generate_ifc_proof_artifacts(
     Ok(())
 }
 
+/// A receipt as published in `declassification_receipts.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishedReceipt {
+    pub scenario_id: String,
+    /// Hex of the exact bytes the Ed25519 signature covers.
+    pub preimage_hex: String,
+    pub signature_hex: String,
+    pub receipt: DeclassificationReceipt,
+}
+
+/// What `verify_ifc_proof_artifacts` established from the files alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArtifactVerdict {
+    pub scenarios: usize,
+    pub approved_with_verified_receipt: usize,
+    pub denied_without_flow: usize,
+    pub verification_key_hex: String,
+}
+
+/// Re-verify a run's proof artifacts using nothing but the files in `dir`.
+///
+/// Fails unless: every approved scenario completed its flow under an `Allow`
+/// receipt whose content hash is the one `report.json` records, whose published
+/// preimage is the receipt's own canonical preimage, and whose Ed25519
+/// signature verifies under the run's published key (which must also be the
+/// receipt's `authorized_by`); every other scenario's flow did not complete and
+/// carries no `Allow` receipt; and at least one scenario of each kind exists.
+pub fn verify_ifc_proof_artifacts(dir: &Path) -> Result<ArtifactVerdict, String> {
+    let read_json = |name: &str| -> Result<serde_json::Value, String> {
+        let text = fs::read_to_string(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
+        serde_json::from_str(&text).map_err(|e| format!("{name}: {e}"))
+    };
+
+    let key_doc = read_json("verification_key.json")?;
+    let key_hex = key_doc["verification_key_hex"]
+        .as_str()
+        .ok_or("verification_key.json: missing verification_key_hex")?;
+    let key_bytes: [u8; 32] = hex::decode(key_hex)
+        .map_err(|e| format!("verification_key.json: {e}"))?
+        .try_into()
+        .map_err(|_| "verification_key.json: key must be 32 bytes".to_string())?;
+    let verification_key = VerificationKey::from_bytes(key_bytes)
+        .map_err(|e| format!("verification_key.json: {e}"))?;
+
+    let report = read_json("report.json")?;
+    let scenarios: Vec<FlowVerificationResult> =
+        serde_json::from_value(report["scenarios"].clone())
+            .map_err(|e| format!("report.json scenarios: {e}"))?;
+    let receipts: Vec<PublishedReceipt> =
+        serde_json::from_value(read_json("declassification_receipts.json")?)
+            .map_err(|e| format!("declassification_receipts.json: {e}"))?;
+
+    for published in &receipts {
+        let id = &published.scenario_id;
+        let receipt = &published.receipt;
+        if !scenarios.iter().any(|s| &s.scenario_id == id) {
+            return Err(format!("receipt for unknown scenario {id}"));
+        }
+        if published.preimage_hex != hex::encode(receipt.preimage_bytes()) {
+            return Err(format!(
+                "{id}: published preimage is not the receipt's preimage"
+            ));
+        }
+        if published.signature_hex != hex::encode(receipt.signature.to_bytes()) {
+            return Err(format!(
+                "{id}: published signature is not the receipt's signature"
+            ));
+        }
+        if receipt.authorized_by != verification_key {
+            return Err(format!(
+                "{id}: receipt signer is not the run's published key"
+            ));
+        }
+        receipt
+            .verify(&verification_key)
+            .map_err(|e| format!("{id}: receipt signature does not verify: {e}"))?;
+    }
+
+    let mut approved = 0;
+    let mut denied = 0;
+    for scenario in &scenarios {
+        let id = &scenario.scenario_id;
+        let allow_receipt = receipts.iter().find(|published| {
+            &published.scenario_id == id
+                && published.receipt.decision == DeclassificationDecision::Allow
+        });
+        if scenario.declassification_approved {
+            let published =
+                allow_receipt.ok_or(format!("{id}: approved without an Allow receipt"))?;
+            if !scenario.flow_completed || !scenario.receipt_generated {
+                return Err(format!("{id}: approved but flow/receipt not recorded"));
+            }
+            let recorded = scenario.receipt_hash.as_deref().unwrap_or_default();
+            if recorded != published.receipt.content_hash().to_hex() {
+                return Err(format!(
+                    "{id}: report receipt_hash does not match the receipt"
+                ));
+            }
+            approved += 1;
+        } else {
+            if scenario.flow_completed {
+                return Err(format!(
+                    "{id}: flow completed without an approved declassification"
+                ));
+            }
+            if allow_receipt.is_some() {
+                return Err(format!(
+                    "{id}: Allow receipt for a scenario reported as denied"
+                ));
+            }
+            denied += 1;
+        }
+    }
+    if approved == 0 || denied == 0 {
+        return Err(format!(
+            "expected both an approved and a denied flow, got {approved} approved / {denied} denied"
+        ));
+    }
+    if report["declassifications_approved"].as_u64() != Some(approved as u64) {
+        return Err("report.json declassifications_approved disagrees with its scenarios".into());
+    }
+
+    Ok(ArtifactVerdict {
+        scenarios: scenarios.len(),
+        approved_with_verified_receipt: approved,
+        denied_without_flow: denied,
+        verification_key_hex: verification_key.to_hex(),
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
@@ -780,6 +945,7 @@ mod tests {
                 &FlowCheckResult::Denied,
             ),
             pipeline_events: Vec::new(),
+            receipt: None,
         };
 
         assert_eq!(result.bead_id, EXAMPLE_BEAD_ID);
@@ -800,10 +966,100 @@ mod tests {
             .verify(&key2.verification_key())
             .expect("rotated key should sign policy");
     }
+
+    fn write_live_run(dir: &Path) {
+        let key = create_signing_key();
+        let policy = create_flow_policy(&key);
+        let results = [
+            IfcFlowScenario::allowed_declassification_scenario(&policy, &key),
+            IfcFlowScenario::denied_flow_scenario(&policy, &key),
+        ]
+        .iter()
+        .map(|scenario| execute_ifc_flow_scenario(scenario, &policy, &key).expect("scenario runs"))
+        .collect::<Vec<_>>();
+        generate_ifc_proof_artifacts(&results, &policy, &key.verification_key(), dir)
+            .expect("artifacts write");
+    }
+
+    fn edit_json(path: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        edit(&mut value);
+        fs::write(path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn live_run_artifacts_reverify_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        write_live_run(dir.path());
+        let verdict = verify_ifc_proof_artifacts(dir.path()).expect("live artifacts verify");
+        assert_eq!(verdict.scenarios, 2);
+        assert_eq!(verdict.approved_with_verified_receipt, 1);
+        assert_eq!(verdict.denied_without_flow, 1);
+    }
+
+    #[test]
+    fn tampered_artifacts_fail_verification() {
+        // One flipped signature bit.
+        let dir = tempfile::tempdir().unwrap();
+        write_live_run(dir.path());
+        edit_json(&dir.path().join("declassification_receipts.json"), |v| {
+            let lower = &mut v[0]["receipt"]["signature"]["lower"][0];
+            *lower = serde_json::json!(lower.as_u64().unwrap() ^ 1);
+            let hex = v[0]["signature_hex"].as_str().unwrap().to_string();
+            let first = u8::from_str_radix(&hex[..2], 16).unwrap() ^ 1;
+            v[0]["signature_hex"] = serde_json::json!(format!("{first:02x}{}", &hex[2..]));
+        });
+        let err = verify_ifc_proof_artifacts(dir.path()).unwrap_err();
+        assert!(err.contains("does not verify"), "{err}");
+
+        // The denied flow reported as completed.
+        let dir = tempfile::tempdir().unwrap();
+        write_live_run(dir.path());
+        edit_json(&dir.path().join("report.json"), |v| {
+            v["scenarios"][1]["flow_completed"] = serde_json::json!(true);
+        });
+        let err = verify_ifc_proof_artifacts(dir.path()).unwrap_err();
+        assert!(
+            err.contains("without an approved declassification"),
+            "{err}"
+        );
+
+        // A different run's key published in place of the signer's.
+        let dir = tempfile::tempdir().unwrap();
+        write_live_run(dir.path());
+        edit_json(&dir.path().join("verification_key.json"), |v| {
+            v["verification_key_hex"] =
+                serde_json::json!(create_signing_key().verification_key().to_hex());
+        });
+        let err = verify_ifc_proof_artifacts(dir.path()).unwrap_err();
+        assert!(err.contains("not the run's published key"), "{err}");
+
+        // A receipt field rewritten after signing.
+        let dir = tempfile::tempdir().unwrap();
+        write_live_run(dir.path());
+        edit_json(&dir.path().join("declassification_receipts.json"), |v| {
+            v[0]["receipt"]["replay_linkage"] = serde_json::json!("forged-linkage");
+        });
+        let err = verify_ifc_proof_artifacts(dir.path()).unwrap_err();
+        assert!(err.contains("published preimage"), "{err}");
+    }
 }
 
 #[allow(dead_code)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `verify <dir>`: re-check a previous run's artifacts from disk alone
+    // (third-party re-verification and tamper drills).
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("verify") {
+        let dir = args
+            .get(2)
+            .ok_or("usage: live_ifc_declassification_example verify <dir>")?;
+        let verdict = verify_ifc_proof_artifacts(Path::new(dir))?;
+        println!("IFC_DEMO_VERDICT {}", serde_json::to_string(&verdict)?);
+        return Ok(());
+    }
+
     println!("FrankenEngine Live IFC/Declassification Example");
     println!("===============================================");
     println!();
@@ -848,7 +1104,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&output_dir)?;
 
     println!("Generating proof artifacts...");
-    generate_ifc_proof_artifacts(&results, &policy, &output_dir)?;
+    generate_ifc_proof_artifacts(
+        &results,
+        &policy,
+        &signing_key.verification_key(),
+        &output_dir,
+    )?;
+
+    // Nothing below is claimed unless the written artifacts re-verify.
+    let verdict = verify_ifc_proof_artifacts(&output_dir)?;
+    println!("IFC_DEMO_VERDICT {}", serde_json::to_string(&verdict)?);
 
     println!("✅ Live IFC declassification example completed successfully");
     println!();

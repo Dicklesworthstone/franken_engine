@@ -31,4 +31,4 @@ FrankenEngine exposes those semantics directly:
 
 - `revocation_chain.rs` gives a signed, append-only revocation history with verifiable head advancement.
 - `fleet_immune_protocol.rs` gives deterministic evidence, intent, heartbeat, and checkpoint messages for bounded fleet convergence.
-- The sample log shows both the local revocation timestamps and the eventual quorum checkpoint timestamps, so operators can measure whether containment stayed inside the promised SLO.
+- The sample log shows both the local revocation timestamps and the eventual quorum checkpoint timestamps. In this demo those timestamps come from a fixed delivery-delay schedule (`DELIVERY_DELAY_NS` in `crates/franken-engine/src/bin/franken_quarantine_mesh_demo.rs`), not wall-clock measurement: `demo.sh` fails unless all three instances revoke the target and checkpoint `quarantine` within the SLO under that schedule, which tests the protocol's decision logic, not network latency.

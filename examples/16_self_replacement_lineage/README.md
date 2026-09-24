@@ -1,5 +1,7 @@
 # Self-Replacement Lineage
 
+> **Fixture shape check — runs no engine code.** `verify.sh` validates the JSON shape of the checked-in fixtures in this directory; their hashes and signatures are placeholders, not outputs of a live run, so a passing check is not evidence that the capability works. Live coverage: `cargo run -p frankenengine-engine --example self_replacement_lineage_replay`.
+
 This example is a static demo of impossible-by-default capability #11.
 It shows one delegated parser implementation being promoted to a native one.
 The point is not the hash values themselves.

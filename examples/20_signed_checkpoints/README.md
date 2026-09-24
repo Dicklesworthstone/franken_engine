@@ -1,5 +1,7 @@
 # Signed Checkpoints
 
+> **Fixture shape check — runs no engine code.** `verify.sh` validates the JSON shape of the checked-in fixtures in this directory; their hashes and signatures are placeholders, not outputs of a live run, so a passing check is not evidence that the capability works.
+
 This example is a static demo of impossible-by-default capability #3: signed policy checkpoints with rollback resistance, freshness evidence, and replay-stable artifacts.
 
 ## Files

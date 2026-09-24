@@ -1,5 +1,7 @@
 # Revocation-First Execution Gates with Degraded-Mode Policy Proofs
 
+> **Fixture shape check — runs no engine code.** `verify.sh` validates the JSON shape of the checked-in fixtures in this directory; their hashes and signatures are placeholders, not outputs of a live run, so a passing check is not evidence that the capability works. Live coverage: `cargo test -p frankenengine-engine --test live_revocation_first_gate_example`.
+
 **Impossible-by-Default Security Property #8**
 
 This example demonstrates FrankenEngine's revocation-first execution gates - a security capability that is impossible to achieve safely in incumbent JavaScript runtimes.

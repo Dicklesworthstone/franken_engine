@@ -12,10 +12,13 @@ Provides concrete evidence of FrankenEngine's IFC/declassification system:
 
 ## Files
 
-- [`source_confidential.txt`](./source_confidential.txt) - Confidential source data (API performance metrics)
-- [`denied_flow.js`](./denied_flow.js) - Attempts confidential→public flow without declassification (should be denied)
-- [`allowed_flow.js`](./allowed_flow.js) - Performs confidential→public flow with proper declassification (should succeed)
-- [`verify.sh`](./verify.sh) - Comprehensive verification script that captures both flows with full evidence
+- [`verify.sh`](./verify.sh) - runs the live example below and fails unless its artifacts re-verify
+- [`../live_ifc_declassification_example.rs`](../live_ifc_declassification_example.rs) - the live example: real `FlowPolicy` flow checks, the real `DeclassificationPipeline`, Ed25519-signed receipts, and a disk-only re-verifier (`verify <dir>` mode)
+- [`source_confidential.txt`](./source_confidential.txt), [`denied_flow.js`](./denied_flow.js), [`allowed_flow.js`](./allowed_flow.js) - illustrative inputs only: nothing executes them, and the example's sources are built in Rust (`ClassifiedDataSource`)
+
+## What this does and does not exercise
+
+It exercises the IFC library surfaces directly: policy signing, `FlowPolicy::is_flow_allowed`, the declassification pipeline's route and loss checks, and receipt signing. It does **not** run JavaScript through the parser/lowering/interpreter path, so it says nothing about label propagation inside guest code (that is covered by the IFC tests under `crates/franken-engine/tests/`).
 
 ## Fixture Boundary
 
@@ -58,85 +61,34 @@ Information may only flow **downward** in the lattice, and downward flows across
 From the repository root:
 
 ```bash
-# Run the complete verification
 ./examples/22_live_ifc_declassification/verify.sh
 ```
 
-This will:
-1. Test denied flow (confidential→public without declassification)
-2. Test allowed flow (confidential→public with declassification receipt)
-3. Generate comprehensive proof artifacts
+The example runs two scenarios: confidential API metrics to a public incident report (a declassification route exists, so it is approved and a signed receipt is issued) and internal debug data to public logs (no route, so it is denied). It writes its artifacts, re-reads them from disk and verifies them. Only then does it print an `IFC_DEMO_VERDICT {...}` line. `verify.sh` then:
 
-## Expected Output
+1. exits with the example's own exit status if the example fails;
+2. requires the verdict line to show at least one approved flow under a verified receipt and at least one denied flow;
+3. when the artifacts are visible locally, checks `report.json` directly and re-verifies every published Ed25519 signature with PyNaCl, an implementation independent of the engine's (skipped, and reported as skipped, when PyNaCl is not installed).
 
-```
-Live IFC/declassification source-to-sink example
-================================================
+To re-verify a previous run's artifacts without re-running it:
 
-Source data hash: 79b452c58da1b4a85212b9cf01cb9bcf2db1ce9358b1cabbbab91a31069cf1c8
-Artifact directory: artifacts/live_ifc_declassification_example/20260501T123456Z
-
-Testing denied flow (confidential->public without declassification)...
-✓ Denied flow test completed (exit code: 0)
-Testing allowed flow (confidential->public with declassification)...
-✓ Allowed flow test completed (exit code: 0)
-Generating policy input artifact...
-Generating flow labels artifact...
-Generating declassification decision artifact...
-Generating signed declassification receipt...
-Generating provenance trace artifact...
-Generating verifier report...
-Generating command transcript...
-✓ Declassification receipt structure validated
-
-✅ Live IFC/declassification example completed successfully
-
-📁 Artifact directory: artifacts/live_ifc_declassification_example/20260501T123456Z
-📄 Generated files:
-allowed_flow_stderr.log
-allowed_flow_stdout.log
-command_transcript.log
-declassification_decision.json
-denied_flow_stderr.log
-denied_flow_stdout.log
-flow_labels.json
-flow_policy_input.json
-provenance_trace.json
-signed_declassification_receipt.json
-verifier_report.json
-
-🔒 Artifact bundle hash: sha256:abc123...
-
-🔐 IFC Security Properties Demonstrated:
-   ✓ Source-to-sink flow with classification labels
-   ✓ Flow denied without proper declassification
-   ✓ Flow allowed with signed declassification receipt
-   ✓ Complete provenance trace with replay linkage
-   ✓ Policy-based declassification decision pipeline
+```bash
+cargo run -p frankenengine-engine --example live_ifc_declassification_example -- verify <artifact-dir>/live
 ```
 
-## Proof Artifacts Generated
+A flipped signature bit, a receipt field rewritten after signing, a denied flow reported as completed, or a substituted verification key each make that command fail. These are the tamper cases in the example's own unit tests.
 
-1. **Flow Policy Input** - IFC policy with allowed routes and prohibited flows
-2. **Flow Labels** - Label lattice definition and flow analysis
-3. **Declassification Decision** - Policy evaluation and loss assessment result
-4. **Signed Declassification Receipt** - Cryptographic proof of authorized downgrade
-5. **Provenance Trace** - Complete source-to-sink event timeline with replay linkage
-6. **Verifier Report** - Test results and security property verification
-7. **Command Transcript** - Complete execution log with all commands
+## Artifacts (all written by the example)
 
-## Security Properties Verified
+- `report.json` / `report.md` - per-scenario flow-check result, loss assessment, pipeline events, approval, receipt hash
+- `declassification_receipts.json` - each issued receipt, the exact preimage its signature covers, and the signature
+- `verification_key.json` - the run's Ed25519 verification key (the signing key is fresh per run)
+- `manifest.json`, `events.jsonl`, `commands.txt`
 
-- ✅ **Flow control**: Confidential data blocked from public output without declassification
-- ✅ **Policy enforcement**: Only approved declassification routes permitted  
-- ✅ **Signed receipts**: All declassifications generate cryptographic proof
-- ✅ **Provenance tracking**: Complete source-to-sink trace with immutable linkage
-- ✅ **Replay determinism**: All decisions reproducible with identical inputs
+`verify.sh` adds only `live_ifc_stdout.log`, `live_ifc_stderr.log` and `command_transcript.log` (the command it ran and its exit code).
 
 ## IFC vs Traditional Systems
 
 **Node.js/Bun**: No runtime-native information flow control. Applications must implement label tracking and declassification manually.
 
-**FrankenEngine**: Information flow control is a first-class runtime feature with automatic label propagation, policy evaluation, and signed declassification receipts.
-
-This demonstrates IFC/declassification source-to-sink flows on the shipped parser/lowering/runtime CLI path per the bd-dpfvh requirements.
+**FrankenEngine**: Information flow control is a first-class runtime feature with policy evaluation and signed declassification receipts; this example shows the policy/pipeline/receipt half of that, not in-guest label propagation.

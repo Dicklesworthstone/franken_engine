@@ -17,17 +17,17 @@ from PLAN section 3.2 to the shipped example directories in this repository.
 |---|------------|----------------|---------|
 | 1 | Receipts | `02_signed_decision_receipt` | `./examples/02_signed_decision_receipt/verify.sh` |
 | 2 | Replay | `05_replay_demo` | `./examples/05_replay_demo/verify.sh` |
-| 3 | Checkpoints | `20_signed_checkpoints` | `./examples/20_signed_checkpoints/verify.sh` |
+| 3 | Checkpoints | `20_signed_checkpoints` | `./examples/20_signed_checkpoints/verify.sh` *(fixture: runs no engine code)* |
 | 4 | Quarantine | `07_quarantine_mesh` | `./examples/07_quarantine_mesh/demo.sh` |
-| 5 | Proof-carrying adaptive optimization | `15_proof_carrying_optimization` | `./examples/15_proof_carrying_optimization/verify.sh` |
+| 5 | Proof-carrying adaptive optimization | `15_proof_carrying_optimization` | `./examples/15_proof_carrying_optimization/verify.sh` *(fixture: runs no engine code)* |
 | 6 | Capability-typed rejection boundary | `06_capability_typed` | `./examples/06_capability_typed/verify.sh` |
 | 7 | Deterministic resource exhaustion semantics | `13_resource_budget_demo` | `./examples/13_resource_budget_demo/verify.sh` |
-| 8 | Revocation-first execution gates | `14_revocation_first_gate` | `./examples/14_revocation_first_gate/verify.sh` |
-| 9 | Distributed anti-entropy trust reconciliation | `09_anti_entropy_trust_reconciliation` | `./examples/09_anti_entropy_trust_reconciliation/verify.sh` |
-| 10 | Red/Blue coevolution | `19_red_blue_coevolution` | `./examples/19_red_blue_coevolution/verify.sh` |
-| 11 | Self-replacement lineage | `16_self_replacement_lineage` | `./examples/16_self_replacement_lineage/verify.sh` |
-| 12 | Information-flow confinement | `17_information_flow_confinement` | `./examples/17_information_flow_confinement/verify.sh` |
-| 13 | Security-proof-guided specialization | `18_proof_guided_specialization` | `./examples/18_proof_guided_specialization/verify.sh` |
+| 8 | Revocation-first execution gates | `14_revocation_first_gate` | `./examples/14_revocation_first_gate/verify.sh` *(fixture: runs no engine code)* |
+| 9 | Distributed anti-entropy trust reconciliation | `09_anti_entropy_trust_reconciliation` | `./examples/09_anti_entropy_trust_reconciliation/verify.sh` *(fixture: runs no engine code)* |
+| 10 | Red/Blue coevolution | `19_red_blue_coevolution` | `./examples/19_red_blue_coevolution/verify.sh` *(fixture: runs no engine code)* |
+| 11 | Self-replacement lineage | `16_self_replacement_lineage` | `./examples/16_self_replacement_lineage/verify.sh` *(fixture: runs no engine code)* |
+| 12 | Information-flow confinement | `17_information_flow_confinement` | `./examples/17_information_flow_confinement/verify.sh` *(fixture: runs no engine code)* |
+| 13 | Security-proof-guided specialization | `18_proof_guided_specialization` | `./examples/18_proof_guided_specialization/verify.sh` *(fixture: runs no engine code)* |
 
 ## Additional Examples
 

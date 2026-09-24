@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+echo "NOTE: fixture shape check - runs no engine code; hashes/signatures here are placeholders (bd-9vouw.20)"
+
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 report_path="${script_dir}/sample_reconciliation_report.json"
 repair_path="${script_dir}/repair_artifact.json"

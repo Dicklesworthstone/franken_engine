@@ -25390,6 +25390,7 @@ fn number_static_builtin_call_capability(
     };
     match property_name {
         "isInteger" => Some("builtin:NumberIsInteger"),
+        "isSafeInteger" => Some("builtin:NumberIsSafeInteger"),
         "isFinite" => Some("builtin:NumberIsFinite"),
         "isNaN" => Some("builtin:NumberIsNaN"),
         "parseInt" => Some("builtin:NumberParseInt"),

@@ -72185,6 +72185,22 @@ impl InterpreterCore {
 
                 Ok(Value::Bool(is_integer))
             }
+            "builtin:NumberIsSafeInteger" => {
+                // ES2020 20.1.2.5: an integral Number with |n| <= 2^53 - 1.
+                const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
+                let is_safe = match (args.count > 0)
+                    .then(|| self.read_reg(args.start))
+                    .transpose()?
+                {
+                    Some(Value::Int(n)) => (n as f64).abs() <= MAX_SAFE,
+                    Some(Value::Float(f)) => {
+                        let n = f.inner();
+                        n.is_finite() && n.fract() == 0.0 && n.abs() <= MAX_SAFE
+                    }
+                    _ => false,
+                };
+                Ok(Value::Bool(is_safe))
+            }
 
             "builtin:NumberParseFloat" => {
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::ParseFloat)

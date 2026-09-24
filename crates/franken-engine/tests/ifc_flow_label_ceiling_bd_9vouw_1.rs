@@ -207,6 +207,49 @@ fn secret_entering_a_nested_body_cannot_reach_its_sinks_bd_9vouw_1() {
 }
 
 #[test]
+fn callbacks_handed_to_engine_methods_cannot_launder_secrets_bd_zk58q() {
+    // A method on a primitive or engine-closed receiver used to be treated as
+    // a finite operation over its operand labels even when an argument was a
+    // guest callback, so a secret thrown (or returned) by the callback left
+    // the call labeled Internal. Such calls now fail high, bounded by the
+    // program ceiling.
+    assert_denied(
+        "secret_thrown_from_buffer_map_callback",
+        "try { Buffer.from('x').map(v => { throw 'secret-token' }) } catch (e) { console.log(e) }",
+        Label::Secret,
+    );
+    assert_denied(
+        "secret_returned_through_replace_callback",
+        "console.log('abc'.replace(/a/, () => 'secret-token'));",
+        Label::Secret,
+    );
+}
+
+#[test]
+fn benign_callbacks_handed_to_engine_methods_still_lower_bd_zk58q() {
+    // Without a sensitive source the program ceiling is Internal, so failing
+    // these calls high costs nothing.
+    for (name, source) in [
+        (
+            "buffer_map_callback",
+            "console.log(Buffer.from('ab').map(x => x + 1).toString());",
+        ),
+        (
+            "replace_callback",
+            "console.log('abc'.replace(/a/, () => 'z'));",
+        ),
+        (
+            "caught_error_from_buffer_map_callback",
+            "try { Buffer.from('x').map(v => { throw new Error('boom') }) } catch (e) { console.log(e.message) }",
+        ),
+    ] {
+        if let Err(error) = lower(name, source) {
+            panic!("{name}: benign callback program refused at lowering: {error}");
+        }
+    }
+}
+
+#[test]
 fn nested_bodies_use_the_authenticated_host_io_provenance_bd_9vouw_1() {
     // A network callback reading a captured server handle. With a
     // provider-internal exception contract nothing in the program exceeds

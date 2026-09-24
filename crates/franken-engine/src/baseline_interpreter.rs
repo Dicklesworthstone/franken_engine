@@ -3132,6 +3132,11 @@ pub enum BuiltinFunctionKind {
     /// A `Date.prototype` getter/setter/formatter; the method name travels in
     /// `module_specifier` (one of [`DATE_PROTOTYPE_METHODS`]). Append only.
     DatePrototypeMethod,
+    /// `RegExp.prototype.exec` (ES2020 21.2.5.2). Append only.
+    RegExpPrototypeExec,
+    /// `WeakMap.prototype.get/set/has/delete`; the method name travels in
+    /// `module_specifier`. Append only.
+    WeakMapMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4787,6 +4792,12 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringPrototypeConcat => "concat",
             BuiltinFunctionKind::NumberToPrecision => "toPrecision",
             BuiltinFunctionKind::NumberToExponential => "toExponential",
+            BuiltinFunctionKind::RegExpPrototypeExec => "exec",
+            BuiltinFunctionKind::WeakMapMethod => ["get", "set", "has", "delete"]
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("weakMapMethod"),
             BuiltinFunctionKind::DatePrototypeMethod => DATE_PROTOTYPE_METHODS
                 .iter()
                 .copied()
@@ -34663,6 +34674,19 @@ impl InterpreterCore {
                 }
                 Ok(Value::str(text))
             }
+            BuiltinFunctionKind::RegExpPrototypeExec => {
+                let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.regexp_prototype_exec(receiver.unwrap_or(Value::Undefined), &input)
+            }
+            BuiltinFunctionKind::WeakMapMethod => {
+                let method = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.weakmap_method(&method, receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::DatePrototypeMethod => {
                 let method = builtin
                     .module_specifier
@@ -49279,10 +49303,9 @@ impl InterpreterCore {
                 return Ok(Value::Object(result_id));
             }
 
-            if let Some(matched) = regex.find(input) {
-                return self.alloc_match_result_array(matched.as_str(), matched.start(), input);
-            }
-            return Ok(Value::Null);
+            return Ok(self
+                .regexp_exec_at(&regex, input, 0, false)?
+                .map_or(Value::Null, |(result, _)| result));
         }
 
         let needle = self.value_to_string(pattern);
@@ -50443,6 +50466,15 @@ impl InterpreterCore {
                 BuiltinFunctionKind::EmitterRawListeners,
             )),
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
+            ("RegExp", "exec") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::RegExpPrototypeExec,
+            )),
+            ("WeakMap", method @ ("get" | "set" | "has" | "delete")) => Some(BuiltinFunction {
+                kind: BuiltinFunctionKind::WeakMapMethod,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                iterator_handle: None,
+                bound_object: None,
+            }),
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
             ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
             ("DataView", "getInt32") => Some(BuiltinFunction::data_view_get_int32()),
@@ -59181,6 +59213,215 @@ impl InterpreterCore {
         };
         self.set_object_property(date_id, "__timestamp".to_string(), stored.clone())?;
         Ok(stored)
+    }
+
+    /// The UTF-8 byte offset of UTF-16 index `index` in `text`; an index
+    /// inside a surrogate pair rounds up to the next character.
+    fn utf16_index_to_byte_offset(text: &str, index: usize) -> usize {
+        let mut units = 0usize;
+        for (offset, ch) in text.char_indices() {
+            if units >= index {
+                return offset;
+            }
+            units += ch.len_utf16();
+        }
+        text.len()
+    }
+
+    /// RegExpBuiltinExec's result (ES2020 21.2.5.2.2) for the first match at
+    /// or after byte offset `start` (exactly at `start` when `sticky`): the
+    /// match array with every capture, `index` (UTF-16), `input` and
+    /// `groups`, plus the match's end byte offset.
+    fn regexp_exec_at(
+        &mut self,
+        regex: &Regex,
+        input: &str,
+        start: usize,
+        sticky: bool,
+    ) -> Result<Option<(Value, usize)>, InterpreterError> {
+        let Some(captures) = regex.captures_at(input, start) else {
+            return Ok(None);
+        };
+        let Some(whole) = captures.get(0) else {
+            return Ok(None);
+        };
+        if sticky && whole.start() != start {
+            return Ok(None);
+        }
+        let mut values = Vec::with_capacity(captures.len());
+        values.push(Value::str(whole.as_str()));
+        values.extend(
+            captures
+                .iter()
+                .skip(1)
+                .map(|group| group.map_or(Value::Undefined, |group| Value::str(group.as_str()))),
+        );
+        let result = self.alloc_array_from_values(&values)?;
+        let index = input[..whole.start()].encode_utf16().count();
+        self.set_object_property(
+            result,
+            "index".to_string(),
+            Value::Int(i64::try_from(index).unwrap_or(i64::MAX)),
+        )?;
+        self.set_object_property(result, "input".to_string(), Value::str(input))?;
+        let named: Vec<(String, Value)> = regex
+            .capture_names()
+            .enumerate()
+            .filter_map(|(slot, name)| {
+                name.map(|name| {
+                    let value = captures
+                        .get(slot)
+                        .map_or(Value::Undefined, |group| Value::str(group.as_str()));
+                    (name.to_string(), value)
+                })
+            })
+            .collect();
+        let groups = if named.is_empty() {
+            Value::Undefined
+        } else {
+            let groups = self.alloc_object_with_prototype(None)?;
+            for (name, value) in named {
+                self.set_object_property(groups, name, value)?;
+            }
+            Value::Object(groups)
+        };
+        self.set_object_property(result, "groups".to_string(), groups)?;
+        Ok(Some((Value::Object(result), whole.end())))
+    }
+
+    /// ES2020 21.2.5.2 RegExp.prototype.exec: a global or sticky RegExp
+    /// starts at and updates `lastIndex` (UTF-16); others search from 0.
+    fn regexp_prototype_exec(
+        &mut self,
+        receiver: Value,
+        input: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let Some((source, flags)) = self.regexp_source_flags_from_value(&receiver) else {
+            return Err(InterpreterError::TypeError {
+                expected: "RegExp receiver for RegExp.prototype.exec".to_string(),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let Value::Object(regexp_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: "RegExp receiver for RegExp.prototype.exec".to_string(),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let text = self.value_to_string(input);
+        let regex = Self::compile_regexp_pattern(&source, &flags)?;
+        let sticky = flags.contains('y');
+        let tracks_last_index = sticky || flags.contains('g');
+        let last_index = if tracks_last_index {
+            let value = self
+                .heap
+                .get(regexp_id.0 as usize)
+                .and_then(|object| object.properties.get("lastIndex").cloned())
+                .unwrap_or(Value::Int(0));
+            let number = Self::coerce_to_float(&value).unwrap_or(0.0);
+            if number.is_finite() && number > 0.0 {
+                number.trunc() as usize
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let length = text.encode_utf16().count();
+        let found = if last_index > length {
+            None
+        } else {
+            let start = Self::utf16_index_to_byte_offset(&text, last_index);
+            self.regexp_exec_at(&regex, &text, start, sticky)?
+        };
+        match found {
+            None => {
+                if tracks_last_index {
+                    self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
+                }
+                Ok(Value::Null)
+            }
+            Some((result, end)) => {
+                if tracks_last_index {
+                    let end_index = text[..end].encode_utf16().count();
+                    self.set_object_property(
+                        regexp_id,
+                        "lastIndex".to_string(),
+                        Value::Int(i64::try_from(end_index).unwrap_or(i64::MAX)),
+                    )?;
+                }
+                Ok(result)
+            }
+        }
+    }
+
+    /// `WeakMap.prototype.get/set/has/delete` over the WeakMap side storage
+    /// (object keys only; entries are charged like the constructor's seeding).
+    fn weakmap_method(
+        &mut self,
+        method: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let weakmap_id = self.validate_weakmap_receiver(receiver.clone())?;
+        let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let key_id = match key {
+            Value::Object(id) => Some(id.0),
+            _ => None,
+        };
+        let Some(storage) = self.weakmap_storage.get(&weakmap_id) else {
+            return Err(InterpreterError::TypeError {
+                expected: "live WeakMap storage".to_string(),
+                got: "missing storage".to_string(),
+            });
+        };
+        let entry_bytes = |value: &Value| {
+            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                .saturating_mul(2)
+                .saturating_add(Self::estimate_value_bytes(value))
+        };
+        match method {
+            "get" => Ok(key_id
+                .and_then(|key| storage.get(key).cloned())
+                .unwrap_or(Value::Undefined)),
+            "has" => Ok(Value::Bool(key_id.is_some_and(|key| storage.has(key)))),
+            "delete" => {
+                let Some(key) = key_id else {
+                    return Ok(Value::Bool(false));
+                };
+                let released = storage.get(key).map(entry_bytes).unwrap_or(0);
+                let storage = self
+                    .weakmap_storage
+                    .get_mut(&weakmap_id)
+                    .expect("WeakMap storage was checked above");
+                let deleted = storage.delete(key);
+                if deleted {
+                    self.estimated_memory_bytes =
+                        self.estimated_memory_bytes.saturating_sub(released);
+                }
+                Ok(Value::Bool(deleted))
+            }
+            "set" => {
+                let Some(key) = key_id else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object WeakMap key".to_string(),
+                        got: key.type_name().to_string(),
+                    });
+                };
+                let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let previous = storage.get(key).map(entry_bytes).unwrap_or(0);
+                self.apply_memory_component_delta(previous, entry_bytes(&value))?;
+                self.weakmap_storage
+                    .get_mut(&weakmap_id)
+                    .expect("WeakMap storage was checked above")
+                    .set(key, value);
+                Ok(receiver)
+            }
+            _ => Err(InterpreterError::TypeError {
+                expected: "WeakMap method".to_string(),
+                got: method.to_string(),
+            }),
+        }
     }
 
     /// Number.prototype.toPrecision (ES2020 20.1.3.5) and toExponential
@@ -73190,6 +73431,7 @@ impl InterpreterCore {
                 self.set_object_property(regexp_id, "__type".to_string(), Value::str("RegExp"))?;
                 self.set_object_property(regexp_id, "source".to_string(), Value::str(pattern))?;
                 self.set_object_property(regexp_id, "flags".to_string(), Value::str(flags))?;
+                self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
 
                 Ok(Value::Object(regexp_id))
             }

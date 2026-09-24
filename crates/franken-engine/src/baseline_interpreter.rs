@@ -136472,10 +136472,20 @@ mod memory_accounting_tests {
 mod object_copy_runtime_regression {
     use super::*;
 
+    /// Same grants as the shared `test_interpreter` fixture: object
+    /// allocation needs HeapAllocate, execution needs VmDispatch.
+    fn copy_config() -> InterpreterConfig {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities.extend([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        config
+    }
+
     #[test]
     fn copy_preserves_stored_property_labels() {
-        let mut core =
-            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "copy-property-label");
+        let mut core = InterpreterCore::new(copy_config(), "copy-property-label");
         let source = core.alloc_object_with_prototype(None).unwrap();
         let target = core.alloc_object_with_prototype(None).unwrap();
         let key = RuntimePropertyKey::String("secret".into());
@@ -136501,10 +136511,7 @@ mod object_copy_runtime_regression {
 
     #[test]
     fn excluded_property_is_not_copied_or_read() {
-        let mut core = InterpreterCore::new(
-            InterpreterConfig::quickjs_defaults(),
-            "copy-excluded-accessor",
-        );
+        let mut core = InterpreterCore::new(copy_config(), "copy-excluded-accessor");
         let source = core.alloc_object_with_prototype(None).unwrap();
         let target = core.alloc_object_with_prototype(None).unwrap();
         let key = RuntimePropertyKey::String("excluded".into());
@@ -136532,7 +136539,7 @@ mod object_copy_runtime_regression {
 
     #[test]
     fn native_copy_charges_work_and_stops_at_budget() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = copy_config();
         config.instruction_budget = 1;
         let mut core = InterpreterCore::new(config, "copy-instruction-budget");
         let target = core.alloc_object_with_prototype(None).unwrap();

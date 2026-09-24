@@ -29440,6 +29440,24 @@ mod tests {
         SourceSpan::new(0, 1, 1, 1, 1, 2)
     }
 
+    // bd-9vouw.1: every flow annotation is clamped to the lowering unit's
+    // label ceiling (`ir2_flow_label_ceiling`). A fixture with no sensitive
+    // source is bounded at Internal, which hides the simulator's own fail-high
+    // rules that several tests pin. These opaque sources keep the ceiling at
+    // TopSecret so those rules stay observable with unchanged assertions. They
+    // run before, and outside, every protected region or flow under test.
+
+    /// Source prefix: an unsummarized dynamic hostcall.
+    const OPAQUE_CEILING_SOURCE: &str = "hostcall('fixture.opaque'); ";
+
+    /// IR1 prefix: an opaque module load (code outside this IR).
+    fn push_opaque_ceiling_source(ops: &mut Vec<Ir1Op>) {
+        ops.push(Ir1Op::ImportModule {
+            specifier: "./fixture_opaque.js".into(),
+        });
+        ops.push(Ir1Op::Pop);
+    }
+
     fn script_ir0() -> Ir0Module {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
@@ -30452,6 +30470,7 @@ mod tests {
         for (name, protected_ops, expected_label, expected_declassification) in cases {
             let mut ir1 =
                 Ir1Module::new(ContentHash::compute(name.as_bytes()), format!("{name}.js"));
+            push_opaque_ceiling_source(&mut ir1.ops);
             ir1.ops.push(Ir1Op::BeginTry {
                 catch_label: 41,
                 finally_label: None,
@@ -30643,7 +30662,14 @@ mod tests {
         ];
 
         for (name, source, expected_label, expected_declassification) in cases {
-            let tree = crate::parser_api_stability::parse_script(source)
+            // Fail-high cases pin the simulator's rule under a TopSecret
+            // ceiling; precision cases keep their plain source.
+            let source = if expected_label == Label::TopSecret {
+                format!("{OPAQUE_CEILING_SOURCE}{source}")
+            } else {
+                source.to_string()
+            };
+            let tree = crate::parser_api_stability::parse_script(&source)
                 .unwrap_or_else(|error| panic!("parse {name}: {error}"));
             let ir0 = Ir0Module::from_syntax_tree(tree, format!("{name}_bd_bscab.js"));
             let ir1 = lower_ir0_to_ir1(&ir0)
@@ -30745,11 +30771,13 @@ mod tests {
             "provider authentication must not erase the direct write-content label"
         );
 
-        let callback = "const fs = require('fs'); try { fs.readFile('missing', () => {}); } catch (error) { console.log(error); }";
+        let callback = format!(
+            "{OPAQUE_CEILING_SOURCE}const fs = require('fs'); try {{ fs.readFile('missing', () => {{}}); }} catch (error) {{ console.log(error); }}"
+        );
         assert_eq!(
             catch_console_flow(
                 "guest_callback",
-                callback,
+                &callback,
                 HostIoExceptionProvenance::ProviderInternal,
             ),
             (Label::TopSecret, true),
@@ -31278,6 +31306,7 @@ mod tests {
     /// data label of that catch-side StoreBinding.
     fn pafik_pipeline_catch_label(sink_callback: Ir1Op, pipeline_stage_is_stream: bool) -> Label {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"bd-pafik"), "bd_pafik.js");
+        push_opaque_ceiling_source(&mut ir1.ops);
         ir1.ops.push(Ir1Op::LoadLiteral {
             value: Ir1Literal::String("write".into()),
         });
@@ -34699,6 +34728,7 @@ mod tests {
             ContentHash::compute(b"object-keys-unknown-bd-n8eta"),
             "object_keys_unknown_bd_n8eta.js",
         );
+        push_opaque_ceiling_source(&mut unknown_object.ops);
         unknown_object.ops.extend([
             Ir1Op::LoadBinding { binding_id: 404 },
             Ir1Op::HostCall {
@@ -34799,8 +34829,10 @@ mod tests {
         // Post-store aggregates stay fail-closed: a SetProperty may invoke a
         // guest setter, which voids closed-shape proofs, so keys().join over
         // the mutated binding keeps the TopSecret→Internal contract.
-        let stored_source = "const o = {}; o.a = 1; console.log(Object.keys(o).join('|'));";
-        let stored_tree = crate::parser_api_stability::parse_script(stored_source)
+        let stored_source = format!(
+            "{OPAQUE_CEILING_SOURCE}const o = {{}}; o.a = 1; console.log(Object.keys(o).join('|'));"
+        );
+        let stored_tree = crate::parser_api_stability::parse_script(&stored_source)
             .expect("stored aggregate source parses");
         let stored_ir0 =
             Ir0Module::from_syntax_tree(stored_tree, "stored_aggregate_bd_lmchj.js".to_string());
@@ -34911,16 +34943,20 @@ mod tests {
         // FreshAggregate is guest-mutable (Object.defineProperty can attach
         // accessors), so it is deliberately excluded from the finite-read
         // brand list: the try/catch read stays fail-closed.
-        let tree = crate::parser_api_stability::parse_script(
-            "const o = {a: 1};\n\
-             try {\n\
+        // Without an opaque source this exact program has nothing above
+        // Internal and is admitted (bd-9vouw.1); the fail-high rule is pinned
+        // under a TopSecret ceiling.
+        let source = format!(
+            "{OPAQUE_CEILING_SOURCE}const o = {{a: 1}};\n\
+             try {{\n\
                const v = o.a;\n\
                console.log(v);\n\
-             } catch (err) {\n\
+             }} catch (err) {{\n\
                console.log('e:' + err.message);\n\
-             }\n",
-        )
-        .expect("fresh aggregate probe parses");
+             }}\n"
+        );
+        let tree = crate::parser_api_stability::parse_script(&source)
+            .expect("fresh aggregate probe parses");
         let ir0 = Ir0Module::from_syntax_tree(tree, "fresh_aggregate_bd_kx70h.js".to_string());
         let ir1 = lower_ir0_to_ir1(&ir0)
             .unwrap_or_else(|error| panic!("fresh aggregate probe lowers to IR1: {error}"))
@@ -35324,6 +35360,7 @@ mod tests {
                 ContentHash::compute(case_name.as_bytes()),
                 format!("buffer_object_flow_{case_name}_bd_nx5cb.js"),
             );
+            push_opaque_ceiling_source(&mut ir1.ops);
             ir1.ops.push(Ir1Op::BeginTry {
                 catch_label: 81,
                 finally_label: None,

@@ -31,9 +31,11 @@
   allowlist or DNS-rebinding check and trusts callers to have authorized the
   endpoint. franken_node wraps it in `SsrfGatedHostIo` and `FlowGatedHostIo`
   before installing it; `frankenctl agent-sandbox` installs `SandboxedHostIo`
-  directly. **An extension holding the network capability under
-  `frankenctl agent-sandbox` therefore has unrestricted egress**, bounded only
-  by the capability tag and the static IFC pass.
+  directly when its manifest declares a host I/O root. A network-egress grant
+  there requires the manifest flag `acknowledge_unfiltered_network: true`
+  (`agent_sandbox.rs`), and once acknowledged the egress is **unfiltered**: no
+  destination policy applies, only the capability tag and the static IFC
+  pass.
 - Work-scope revocation is supervisor-driven (embedders call the kill switch).
   Neither the guardplane nor `ContainmentExecutor` can trigger it, and a
   revocation produces typed cancellations and effect-journal entries, not
@@ -47,9 +49,10 @@
 2. **Destination policy fails closed in the engine.** `SandboxedHostIo` no
    longer performs network effects without an explicit destination policy
    supplied at construction. Embedders without franken_node (agent-sandbox,
-   `frankenctl`) get deny-all-network by default and opt in per destination;
-   franken_node keeps supplying its SSRF policy. The mechanism/policy split
-   stays, but the unsafe default goes away.
+   `frankenctl`) replace the all-or-nothing `acknowledge_unfiltered_network`
+   switch with per-destination opt-in; franken_node keeps supplying its SSRF
+   policy. The mechanism/policy split stays, but "unfiltered" stops being the
+   only way to grant egress outside franken_node.
 3. **One containment path.** Guardplane decisions (from `bd-9vouw.7`) can
    trigger work-scope revocation, and every revocation or denial writes an
    evidence-ledger receipt linked to the trace, decision and policy ids, so the
@@ -69,7 +72,8 @@
 
 ## Consequences
 
-- `frankenctl agent-sandbox` runs that need egress must name destinations.
+- `frankenctl agent-sandbox` runs that need egress name destinations instead
+  of acknowledging unfiltered network.
 - Guardplane in-flight containment (`bd-9vouw.7`) becomes a prerequisite for
   item 3, and runtime IFC egress checks (`bd-9vouw.8`) apply to these effects.
 

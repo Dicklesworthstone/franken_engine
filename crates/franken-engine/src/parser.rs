@@ -4716,10 +4716,25 @@ fn parse_primary_expression(
         return parse_new_expression(rest.trim(), span, context, recursion_depth);
     }
 
-    // Function expression: `function(a, b) { ... }` or `function name(a, b) { ... }`
+    // Async function expression: `async function (...) {...}` (bd-xbv99). No
+    // LineTerminator may separate `async` from `function`. Without this arm
+    // the expression fell through to `Expression::Raw`, lowered to a string,
+    // and faulted at call time with "expected function, got string".
+    if let Some(after_async) = expression.strip_prefix("async")
+        && after_async.starts_with([' ', '\t'])
+        && let Some(rest) = after_async
+            .trim_start_matches([' ', '\t'])
+            .strip_prefix("function")
+            .filter(|r| r.starts_with(['(', '*', ' ', '\t']))
+    {
+        return parse_async_function_expression(rest, span, context, recursion_depth);
+    }
+
+    // Function expression: `function(a, b) { ... }`, `function name(a, b) { ... }`,
+    // or a generator `function* (...) { ... }`.
     if let Some(rest) = expression
         .strip_prefix("function")
-        .filter(|r| r.starts_with('(') || r.starts_with(' ') || r.starts_with('\t'))
+        .filter(|r| r.starts_with(['(', '*', ' ', '\t']))
     {
         return parse_function_expression(rest, span, context, recursion_depth);
     }
@@ -4934,20 +4949,25 @@ fn try_parse_arrow_function(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> Option<ParseResult<Expression>> {
-    let (is_async, rest) = if let Some(after_async) = expr.strip_prefix("async") {
-        let trimmed = after_async.trim_start();
-        let starts_with_identifier =
-            matches!(trimmed.chars().next(), Some(ch) if is_identifier_start(ch));
-        // `async(` could be a call, so require whitespace before `(`.
-        if after_async.starts_with(|c: char| c.is_ascii_whitespace())
-            && (trimmed.starts_with('(') || starts_with_identifier)
-        {
-            (true, trimmed)
-        } else {
-            return None;
+    // Mirrors the franken-core twin (bd-xbv99). `async(...)` is a call unless
+    // its parenthesized list is followed by `=>`, which the `(params) => body`
+    // arm below requires; an identifier parameter needs separating whitespace.
+    // No LineTerminator may follow `async` in an arrow head. A leading
+    // `async` that does not open an async arrow is an ordinary identifier
+    // (`async => 1`, `asyncValue => 1`), so fall back instead of bailing out.
+    let (is_async, rest) = match expr.strip_prefix("async") {
+        Some(after_async) if !after_async.starts_with(is_identifier_continue) => {
+            let trimmed = after_async.trim_start_matches([' ', '\t']);
+            let consumed_whitespace = trimmed.len() < after_async.len();
+            let starts_with_identifier =
+                matches!(trimmed.chars().next(), Some(ch) if is_identifier_start(ch));
+            if trimmed.starts_with('(') || (consumed_whitespace && starts_with_identifier) {
+                (true, trimmed)
+            } else {
+                (false, expr)
+            }
         }
-    } else {
-        (false, expr)
+        _ => (false, expr),
     };
 
     if rest.starts_with('(') {
@@ -10262,7 +10282,16 @@ fn parse_function_expression(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
-    parse_function_expression_with_super(rest, span, context, recursion_depth, false)
+    parse_function_expression_with_super(rest, span, context, recursion_depth, false, false)
+}
+
+fn parse_async_function_expression(
+    rest: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Expression> {
+    parse_function_expression_with_super(rest, span, context, recursion_depth, false, true)
 }
 
 fn parse_object_method_function_expression(
@@ -10271,7 +10300,7 @@ fn parse_object_method_function_expression(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
-    parse_function_expression_with_super(rest, span, context, recursion_depth, true)
+    parse_function_expression_with_super(rest, span, context, recursion_depth, true, false)
 }
 
 fn parse_function_expression_with_super(
@@ -10280,6 +10309,7 @@ fn parse_function_expression_with_super(
     context: &mut ParseExecutionContext<'_>,
     _recursion_depth: u64,
     super_property_allowed: bool,
+    is_async: bool,
 ) -> ParseResult<Expression> {
     let rest = rest.trim_start();
     let is_generator = rest.starts_with('*');
@@ -10330,7 +10360,7 @@ fn parse_function_expression_with_super(
     let goal = ParseGoal::Script;
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
-    let parsed = with_await_context(false, context, |context| {
+    let parsed = with_await_context(is_async, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
             let body = parse_body_statements(body_src, goal, span, context)?;
@@ -10347,7 +10377,7 @@ fn parse_function_expression_with_super(
             body: body_stmts,
             span: span.clone(),
         },
-        is_async: false,
+        is_async,
         is_generator,
     })
 }

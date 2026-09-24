@@ -82995,7 +82995,7 @@ mod active_builtin_regressions {
                 (
                     "value",
                     Value::Accessor {
-                        get: Some(Box::new(Value::Function(1))),
+                        get: Some(Arc::new(Value::Function(1))),
                         set: None,
                     },
                 ),
@@ -110819,18 +110819,16 @@ mod function_prototype_call_apply_tests_current {
             .expect("retained async-generator owner");
         assert_eq!(core.async_generators.len(), 2);
         for generator in &core.async_generators {
-            assert!(Arc::ptr_eq(&generator.owner_module, retained_owner));
+            // The owner program now lives on the canonical generator
+            // activation each async generator points at.
+            let activation = &core.generators[generator.generator_id as usize];
+            assert!(Arc::ptr_eq(&activation.owner_module, retained_owner));
             assert_eq!(generator.phase, AsyncGeneratorPhase::SuspendedStart);
         }
 
-        let error = core
-            .async_generator_next(&caller, 0, Value::Undefined)
-            .expect_err("unsupported body execution must still fail closed");
-        assert!(matches!(
-            error,
-            InterpreterError::TypeError { expected, .. }
-                if expected == "implemented async generator body execution"
-        ));
+        // The original fail-closed check on body execution is gone: async
+        // generator bodies execute since 5afd288a6, covered by
+        // async_generator_next_executes_suspended_body.
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -136216,7 +136214,8 @@ mod object_copy_runtime_regression {
 
     #[test]
     fn copy_preserves_stored_property_labels() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "copy-property-label");
+        let mut core =
+            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "copy-property-label");
         let source = core.alloc_object_with_prototype(None).unwrap();
         let target = core.alloc_object_with_prototype(None).unwrap();
         let key = RuntimePropertyKey::String("secret".into());
@@ -136242,7 +136241,10 @@ mod object_copy_runtime_regression {
 
     #[test]
     fn excluded_property_is_not_copied_or_read() {
-        let mut core = InterpreterCore::new(InterpreterConfig::default(), "copy-excluded-accessor");
+        let mut core = InterpreterCore::new(
+            InterpreterConfig::quickjs_defaults(),
+            "copy-excluded-accessor",
+        );
         let source = core.alloc_object_with_prototype(None).unwrap();
         let target = core.alloc_object_with_prototype(None).unwrap();
         let key = RuntimePropertyKey::String("excluded".into());
@@ -136270,7 +136272,7 @@ mod object_copy_runtime_regression {
 
     #[test]
     fn native_copy_charges_work_and_stops_at_budget() {
-        let mut config = InterpreterConfig::default();
+        let mut config = InterpreterConfig::quickjs_defaults();
         config.instruction_budget = 1;
         let mut core = InterpreterCore::new(config, "copy-instruction-budget");
         let target = core.alloc_object_with_prototype(None).unwrap();

@@ -644,7 +644,10 @@ pub fn lower_ir0_to_ir3(
         }
     };
 
-    let ir3_result = match lower_ir2_to_ir3(&ir2_result.module) {
+    let ir3_result = match lower_ir2_to_ir3_with_host_io_exception_provenance(
+        &ir2_result.module,
+        context.host_io_exception_provenance,
+    ) {
         Ok(result) => {
             events.push(success_event(context, "ir2_to_ir3_lowered"));
             result
@@ -7205,7 +7208,17 @@ fn ensure_lowering_values(stack: &[Reg], needed: usize) -> Result<(), LoweringPi
 pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
+    lower_ir2_to_ir3_with_host_io_exception_provenance(ir2, HostIoExceptionProvenance::Unknown)
+}
+
+fn lower_ir2_to_ir3_with_host_io_exception_provenance(
+    ir2: &Ir2Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
+    // Nested function bodies are re-annotated below for their runtime flow
+    // guards; they share the whole lowering unit's bound (bd-9vouw.1).
+    let program_label_ceiling = ir2_flow_label_ceiling(&ir2.ops, host_io_exception_provenance);
     verify_ir2_derived_constructor_schema(ir2).map_err(lowering_error_from_ir_error)?;
     verify_ir2_object_method_schema(ir2).map_err(lowering_error_from_ir_error)?;
     enum PendingJump {
@@ -9282,8 +9295,11 @@ pub fn lower_ir2_to_ir3(
         // inference as the module-level pass so nested HostCalls get the
         // `ifc.check_flow` seam (bd-wyazf). classify_ir1_op alone leaves body
         // HostCalls un-inferred and they would skip the runtime guard.
-        let annotated_body_ops =
-            annotate_nested_body_ops(body_ops, HostIoExceptionProvenance::Unknown)?;
+        let annotated_body_ops = annotate_nested_body_ops(
+            body_ops,
+            host_io_exception_provenance,
+            &program_label_ceiling,
+        )?;
         for ir2_op in &annotated_body_ops {
             // We handle a core subset of ops that appear in function bodies.
             match &ir2_op.inner {
@@ -10813,8 +10829,17 @@ fn build_ir2_flow_proof_artifact(
         runtime_checkpoints: Vec::new(),
     };
 
+    // Nested bodies are checked under the same authenticated host-I/O
+    // provenance and whole-program bound as the top-level pass.
+    let program_label_ceiling =
+        ir2_flow_label_ceiling(&ir2.ops, context.host_io_exception_provenance);
     let mut nested_body_ops = Vec::new();
-    collect_annotated_nested_function_bodies(&ir2.ops, &mut nested_body_ops)?;
+    collect_annotated_nested_function_bodies(
+        &ir2.ops,
+        context.host_io_exception_provenance,
+        &program_label_ceiling,
+        &mut nested_body_ops,
+    )?;
     for (op_index, op) in ir2.ops.iter().chain(nested_body_ops.iter()).enumerate() {
         let Some(flow) = op.flow.as_ref() else {
             continue;
@@ -28806,10 +28831,25 @@ fn infer_ir2_flow_annotations(
     ir2: &mut Ir2Module,
     host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Result<FlowInferenceMetrics, LoweringPipelineError> {
-    const MAX_FLOW_INFERENCE_PASSES: usize = 16;
     let flow_label_ceiling = ir2_flow_label_ceiling(&ir2.ops, host_io_exception_provenance);
+    infer_ir2_flow_annotations_bounded(
+        ir2,
+        host_io_exception_provenance,
+        &flow_label_ceiling,
+        BTreeMap::new(),
+    )
+}
 
-    let mut binding_labels = BTreeMap::<BindingId, Label>::new();
+/// Flow-annotate `ir2` with every annotation clamped to `flow_label_ceiling`,
+/// starting from `binding_labels` for bindings whose values enter from outside
+/// `ir2.ops` (see [`annotate_nested_body_ops`]).
+fn infer_ir2_flow_annotations_bounded(
+    ir2: &mut Ir2Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    flow_label_ceiling: &Label,
+    mut binding_labels: BTreeMap<BindingId, Label>,
+) -> Result<FlowInferenceMetrics, LoweringPipelineError> {
+    const MAX_FLOW_INFERENCE_PASSES: usize = 16;
     let catch_region_events = ir2_catch_region_events(&ir2.ops)?;
     let mut converged = false;
     // A reverse binding-dependency chain can otherwise force one complete IR2
@@ -28863,7 +28903,7 @@ fn infer_ir2_flow_annotations(
         // No operation can hold information above what the program is able
         // to introduce (see `ir2_flow_label_ceiling`); fail-high defaults stop
         // at that bound instead of at `TopSecret`.
-        let inferred_data_label = simulated_data_label.meet(&flow_label_ceiling);
+        let inferred_data_label = simulated_data_label.meet(flow_label_ceiling);
         if let Some(ending) = catch_region_ends.get(&op_index) {
             for catch_label in ending {
                 if active_catch_regions.pop().as_ref() != Some(catch_label) {
@@ -29113,9 +29153,18 @@ fn sink_clearance_from_capability(capability: &str) -> Label {
 /// `CreateFunction` body (bd-wyazf). Top-level IR1→IR2 only classifies the
 /// function *value* op; body HostCalls otherwise reach IR3 without
 /// `infer_ir2_flow_annotations` and skip the `ifc.check_flow` seam.
+///
+/// A body is annotated in isolation, but its parameters and captured
+/// bindings carry values computed by the enclosing program. They therefore
+/// start at `program_label_ceiling` (the bound for the whole lowering unit, see
+/// [`ir2_flow_label_ceiling`]), and every annotation is clamped to that same
+/// bound rather than to a ceiling derived from the body's own operations
+/// (bd-9vouw.1): a body-local bound let a secret passed in as an argument or
+/// captured from the outer scope be clamped below its label.
 fn annotate_nested_body_ops(
     body_ops: &[Ir1Op],
     host_io_exception_provenance: HostIoExceptionProvenance,
+    program_label_ceiling: &Label,
 ) -> Result<Vec<Ir2Op>, LoweringPipelineError> {
     let mut ir2 = Ir2Module::new(
         ContentHash::compute(b"nested-function-body"),
@@ -29131,8 +29180,57 @@ fn annotate_nested_body_ops(
             span: None,
         });
     }
-    infer_ir2_flow_annotations(&mut ir2, host_io_exception_provenance)?;
+    let external_bindings = nested_body_external_binding_reads(body_ops)
+        .into_iter()
+        .map(|binding_id| (binding_id, program_label_ceiling.clone()))
+        .collect();
+    infer_ir2_flow_annotations_bounded(
+        &mut ir2,
+        host_io_exception_provenance,
+        program_label_ceiling,
+        external_bindings,
+    )?;
     Ok(ir2.ops)
+}
+
+/// Bindings a nested function body reads (directly, through inner function
+/// bodies, or as inner-function captures) without declaring them itself:
+/// parameters, captured outer bindings, and hoisted `var`s.
+fn nested_body_external_binding_reads(body_ops: &[Ir1Op]) -> BTreeSet<BindingId> {
+    fn collect_reads(ops: &[Ir1Op], reads: &mut BTreeSet<BindingId>) {
+        for op in ops {
+            match op {
+                Ir1Op::LoadBinding { binding_id }
+                | Ir1Op::AssignOp { binding_id, .. }
+                | Ir1Op::CreatePerIterationBinding { binding_id, .. } => {
+                    reads.insert(*binding_id);
+                }
+                Ir1Op::DeclareFunction {
+                    free_var_ids,
+                    body_ops,
+                    ..
+                }
+                | Ir1Op::CreateFunction {
+                    free_var_ids,
+                    body_ops,
+                    ..
+                } => {
+                    reads.extend(free_var_ids.iter().copied());
+                    collect_reads(body_ops, reads);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut reads = BTreeSet::new();
+    collect_reads(body_ops, &mut reads);
+    for op in body_ops {
+        if let Ir1Op::InitializeBinding { binding_id } = op {
+            reads.remove(binding_id);
+        }
+    }
+    reads
 }
 
 fn nested_function_body_ops(op: &Ir1Op) -> Option<&[Ir1Op]> {
@@ -29146,14 +29244,25 @@ fn nested_function_body_ops(op: &Ir1Op) -> Option<&[Ir1Op]> {
 
 fn collect_annotated_nested_function_bodies(
     ops: &[Ir2Op],
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    program_label_ceiling: &Label,
     out: &mut Vec<Ir2Op>,
 ) -> Result<(), LoweringPipelineError> {
     for op in ops {
         let Some(body_ops) = nested_function_body_ops(&op.inner) else {
             continue;
         };
-        let annotated = annotate_nested_body_ops(body_ops, HostIoExceptionProvenance::Unknown)?;
-        collect_annotated_nested_function_bodies(&annotated, out)?;
+        let annotated = annotate_nested_body_ops(
+            body_ops,
+            host_io_exception_provenance,
+            program_label_ceiling,
+        )?;
+        collect_annotated_nested_function_bodies(
+            &annotated,
+            host_io_exception_provenance,
+            program_label_ceiling,
+            out,
+        )?;
         out.extend(annotated);
     }
     Ok(())
@@ -30194,6 +30303,7 @@ mod tests {
             let annotated = annotate_nested_body_ops(
                 nested_function_body_ops(&ir2.ops[0].inner).expect("nested body"),
                 HostIoExceptionProvenance::Unknown,
+                &ir2_flow_label_ceiling(&ir2.ops, HostIoExceptionProvenance::Unknown),
             )
             .expect("nested body flow");
             let flow = annotated

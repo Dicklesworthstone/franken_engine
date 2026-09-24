@@ -53,11 +53,11 @@ const BIGINT: &str = "bd-performance-conformance-bridge-tu32j.16.19";
 const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 const REGEXP_STRING_METHODS: &str = "bd-performance-conformance-bridge-tu32j.17.3";
 const ASYNC_FUNCTION_EXPRESSIONS: &str = "bd-xbv99";
-const PROMISE_CONSTRUCTOR: &str = "bd-auy04";
 
 /// Case id -> expectation. Every corpus case must appear exactly once.
 /// Filled from the observed verdicts of the first run (2026-09-23): 20 match
-/// Node, 4 are refused by design, 26 fail.
+/// Node, 4 are refused by design, 26 fail. 29_promise_all_race moved to Pass
+/// with bd-auy04 (`new Promise`).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::KnownFailure(CLASSES)),
@@ -96,10 +96,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("26_error_types", Expect::DeniedByDesign),
     ("27_weakmap_holes", Expect::KnownFailure(COLLECTIONS)),
     ("28_sort_stability", Expect::Pass),
-    (
-        "29_promise_all_race",
-        Expect::KnownFailure(PROMISE_CONSTRUCTOR),
-    ),
+    ("29_promise_all_race", Expect::Pass),
     (
         "30_async_iter",
         Expect::KnownFailure(ASYNC_FUNCTION_EXPRESSIONS),

@@ -3074,20 +3074,28 @@ pub enum BuiltinFunctionKind {
     AsyncGeneratorReturn,
     AsyncGeneratorThrow,
     AsyncGeneratorIteratorSelf,
+    /// The writable global `Promise` constructor (bd-auy04). Its statics
+    /// (`resolve`, `all`, ...) live on the bound property object, as for
+    /// [`Self::DateConstructor`]. Append only: builtin discriminants
+    /// participate in deterministic register hashing.
+    PromiseConstructor,
 }
 
 impl BuiltinFunctionKind {
     /// Whether this first-class builtin implements ECMAScript `[[Construct]]`.
     ///
     /// Most builtins exposed by this interpreter are callable methods. The
-    /// `Function`, the materialized writable `Date` global, and the authenticated
-    /// EventEmitter reference are constructible builtin values; other globals lower to
-    /// dedicated hostcalls instead of passing through [`Value::BuiltinFunction`]
-    /// (bd-zyndq, bd-1piai).
+    /// `Function`, the materialized writable `Date` and `Promise` globals, and
+    /// the authenticated EventEmitter reference are constructible builtin
+    /// values; other globals lower to dedicated hostcalls instead of passing
+    /// through [`Value::BuiltinFunction`] (bd-zyndq, bd-1piai, bd-auy04).
     const fn is_constructible(self) -> bool {
         matches!(
             self,
-            Self::FunctionConstructor | Self::DateConstructor | Self::EventEmitterConstructor
+            Self::FunctionConstructor
+                | Self::DateConstructor
+                | Self::EventEmitterConstructor
+                | Self::PromiseConstructor
         )
     }
 }
@@ -3216,6 +3224,15 @@ impl BuiltinFunction {
     fn date_constructor(property_object: ObjectId) -> Self {
         Self {
             kind: BuiltinFunctionKind::DateConstructor,
+            module_specifier: BuiltinModuleSpecifier::default(),
+            iterator_handle: None,
+            bound_object: Some(property_object.0),
+        }
+    }
+
+    fn promise_constructor(property_object: ObjectId) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseConstructor,
             module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: Some(property_object.0),
@@ -4650,6 +4667,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::CryptoGetAuthTag => "getAuthTag",
             BuiltinFunctionKind::CryptoSetAuthTag => "setAuthTag",
             BuiltinFunctionKind::DateConstructor => "Date",
+            BuiltinFunctionKind::PromiseConstructor => "Promise",
             BuiltinFunctionKind::DateNow => "now",
             BuiltinFunctionKind::MathAbs => "abs",
             BuiltinFunctionKind::MathCeil => "ceil",
@@ -31063,8 +31081,10 @@ impl InterpreterCore {
         ])?))
     }
 
+    /// The global `Promise`: a constructible builtin (bd-auy04) whose statics
+    /// live on its bound property object, like `Date`.
     fn alloc_promise_global(&mut self) -> Result<Value, InterpreterError> {
-        Ok(Value::Object(self.alloc_object_with_properties(&[
+        let properties = self.alloc_object_with_properties(&[
             (
                 "resolve",
                 Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
@@ -31089,7 +31109,10 @@ impl InterpreterCore {
                 "any",
                 Value::BuiltinFunction(BuiltinFunction::promise_any()),
             ),
-        ])?))
+        ])?;
+        Ok(Value::BuiltinFunction(
+            BuiltinFunction::promise_constructor(properties),
+        ))
     }
 
     fn alloc_math_global(&mut self) -> Result<Value, InterpreterError> {
@@ -32983,6 +33006,7 @@ impl InterpreterCore {
             | BuiltinFunctionKind::PromiseRace
             | BuiltinFunctionKind::PromiseAllSettled
             | BuiltinFunctionKind::PromiseAny
+            | BuiltinFunctionKind::PromiseConstructor
             | BuiltinFunctionKind::DateConstructor
             | BuiltinFunctionKind::DateNow
             | BuiltinFunctionKind::MathAbs
@@ -35682,6 +35706,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::DateConstructor => {
                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))
             }
+            BuiltinFunctionKind::PromiseConstructor => self.construct_promise(module, args),
             BuiltinFunctionKind::EventEmitterConstructor => {
                 self.dispatch_builtin_hostcall("builtin:EventEmitter", args, Some(module))
             }
@@ -42024,6 +42049,15 @@ impl InterpreterCore {
                     let callee_val = self.read_reg(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = callee_val {
+                        // `Promise(...)` without `new` throws (ES2020 25.6.3.1
+                        // step 1, bd-auy04); only [[Construct]] reaches
+                        // `construct_promise`.
+                        if builtin.kind == BuiltinFunctionKind::PromiseConstructor {
+                            return Err(InterpreterError::TypeError {
+                                expected: "new Promise(executor)".to_string(),
+                                got: "Promise constructor called without new".to_string(),
+                            });
+                        }
                         return Ok(DispatchOutcome::BuiltinCall {
                             builtin,
                             args,
@@ -52658,6 +52692,70 @@ impl InterpreterCore {
             self.reject_promise(promise, Self::value_to_js_value(&argument), label)?;
         }
         Ok(Value::Undefined)
+    }
+
+    /// `new Promise(executor)` (ES2020 25.6.3.1, bd-auy04): create a pending
+    /// promise, call `executor(resolve, reject)` synchronously with its
+    /// one-shot resolving functions, and reject the promise when the executor
+    /// throws. Only guest-catchable errors become rejections; engine faults
+    /// and resource limits (budget, memory, containment) keep propagating.
+    fn construct_promise(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let executor = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        if !executor.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "Promise resolver function".to_string(),
+                got: executor.type_name().to_string(),
+            });
+        }
+        let executor_label = self.join_arg_range_label(args)?;
+        let promise = self.create_promise()?;
+        let resolve = self.make_promise_capability(BuiltinFunctionKind::PromiseResolve, promise);
+        let reject = self.make_promise_capability(BuiltinFunctionKind::PromiseReject, promise);
+        if let Err(error) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            executor,
+            Value::Undefined,
+            vec![resolve, reject],
+            Some(executor_label.clone()),
+        ) {
+            // The rejection reason is the thrown value itself (an explicit
+            // `throw`, taken from the isolated run's pending slot so the slot
+            // never stays armed) or the JS error object for a catchable native
+            // fault.
+            let (reason, reason_label) = match &error {
+                InterpreterError::UncaughtException { .. } => {
+                    match self.take_pending_exception_slot() {
+                        Some((thrown, thrown_label)) => (
+                            Self::value_to_js_value(&thrown),
+                            thrown_label.join(&executor_label),
+                        ),
+                        None => (
+                            Self::promise_rejection_from_error(&error),
+                            executor_label.clone(),
+                        ),
+                    }
+                }
+                native if Self::js_catchable_error_name(native).is_some() => {
+                    let thrown = self.native_error_to_thrown_value(native)?;
+                    (Self::value_to_js_value(&thrown), executor_label.clone())
+                }
+                _ => return Err(error),
+            };
+            // A resolving function already called by the executor wins: a
+            // later throw is inert (ES `alreadyResolved`).
+            if !self.promise_is_settled(promise) {
+                self.reject_promise(promise, reason, reason_label)?;
+            }
+        }
+        Ok(Value::Promise(promise.0))
     }
 
     fn promise_rejection_from_error(error: &InterpreterError) -> crate::object_model::JsValue {
@@ -80308,7 +80406,9 @@ impl InterpreterCore {
     fn builtin_function_property_object(builtin: &BuiltinFunction) -> Option<ObjectId> {
         matches!(
             builtin.kind,
-            BuiltinFunctionKind::DateConstructor | BuiltinFunctionKind::EmitterOnceWrapper
+            BuiltinFunctionKind::DateConstructor
+                | BuiltinFunctionKind::PromiseConstructor
+                | BuiltinFunctionKind::EmitterOnceWrapper
         )
         .then_some(builtin.bound_object)
         .flatten()

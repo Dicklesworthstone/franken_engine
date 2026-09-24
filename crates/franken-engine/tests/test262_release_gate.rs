@@ -203,7 +203,18 @@ fn zero_silent_failures_block_unwaived_test() {
 fn active_waiver_allows_failures_without_blocking() {
     let profile = load_profile();
     let pins = load_pins();
-    let waivers = load_waivers();
+    // bd-9vouw.4: the checked-in waiver file no longer carries a
+    // not_yet_implemented waiver (forbidden by the release policy), so this
+    // test declares its own host-inapplicability waiver.
+    let mut waivers = load_waivers();
+    waivers.waivers.push(Test262Waiver {
+        test_id: "language/expressions/optional-chaining/short-circuiting.js".to_string(),
+        reason_code: Test262WaiverReason::HostHookMissing,
+        es2020_clause: "13.3.1".to_string(),
+        tracking_bead: "bd-9vouw.4".to_string(),
+        expiry_date: "2030-12-31".to_string(),
+        reviewer: "runtime-conformance".to_string(),
+    });
 
     let run = runner("2026-02-22", false)
         .run(
@@ -238,12 +249,22 @@ fn active_waiver_allows_failures_without_blocking() {
 }
 
 #[test]
-fn expired_waiver_is_not_applied() {
+fn expired_waiver_fails_the_release_gate() {
+    // bd-9vouw.4 / plan §18.1: an expired waiver must fail the gate instead
+    // of silently lapsing, so stale entries cannot accumulate.
     let profile = load_profile();
     let pins = load_pins();
-    let waivers = load_waivers();
+    let mut waivers = load_waivers();
+    waivers.waivers.push(Test262Waiver {
+        test_id: "built-ins/Promise/allSettled/reject-late.js".to_string(),
+        reason_code: Test262WaiverReason::HostHookMissing,
+        es2020_clause: "27.2.4".to_string(),
+        tracking_bead: "bd-11p".to_string(),
+        expiry_date: "2024-01-01".to_string(),
+        reviewer: "runtime-conformance".to_string(),
+    });
 
-    let run = runner("2026-02-22", false)
+    let error = runner("2026-02-22", false)
         .run(
             &pins,
             &profile,
@@ -251,16 +272,53 @@ fn expired_waiver_is_not_applied() {
             &[observed_from_execution(
                 "built-ins/Promise/allSettled/reject-late.js",
                 "27.2.4",
-                "Promise.allSettled([Promise.reject('error')]);", // Real Promise.allSettled usage
+                "Promise.allSettled([Promise.reject('error')]);",
                 Test262ObservedOutcome::Fail,
             )],
             None,
         )
-        .expect("gate run");
+        .expect_err("an expired waiver must fail the release gate");
+    assert!(
+        error.to_string().contains("expired on 2024-01-01"),
+        "unexpected error: {error}"
+    );
+}
 
-    assert!(run.blocked);
-    assert_eq!(run.summary.failed, 1);
-    assert_eq!(run.summary.waived, 0);
+#[test]
+fn non_host_waiver_reasons_fail_the_release_gate() {
+    // bd-9vouw.4 / plan §18.1: unimplemented or intentionally divergent
+    // semantics are failures, never waivers.
+    for reason in [
+        Test262WaiverReason::NotYetImplemented,
+        Test262WaiverReason::IntentionalDivergence,
+    ] {
+        let mut waivers = load_waivers();
+        waivers.waivers.push(Test262Waiver {
+            test_id: "language/expressions/optional-chaining/short-circuiting.js".to_string(),
+            reason_code: reason,
+            es2020_clause: "13.3.1".to_string(),
+            tracking_bead: "bd-9vouw.4".to_string(),
+            expiry_date: "2030-12-31".to_string(),
+            reviewer: "runtime-conformance".to_string(),
+        });
+        let error = runner("2026-02-22", false)
+            .run(
+                &load_pins(),
+                &load_profile(),
+                &waivers,
+                &[observed(
+                    "language/expressions/optional-chaining/short-circuiting.js",
+                    "13.3.1",
+                    Test262ObservedOutcome::Fail,
+                )],
+                None,
+            )
+            .expect_err("a non-host waiver reason must fail the release gate");
+        assert!(
+            error.to_string().contains("does not accept"),
+            "{reason:?}: unexpected error: {error}"
+        );
+    }
 }
 
 #[test]
@@ -1443,7 +1501,7 @@ fn waived_timeout_does_not_block() {
     let mut waivers = load_waivers();
     waivers.waivers.push(Test262Waiver {
         test_id: "language/statements/timeout-waived.js".to_string(),
-        reason_code: Test262WaiverReason::NotYetImplemented,
+        reason_code: Test262WaiverReason::HarnessGap,
         es2020_clause: "13.7".to_string(),
         tracking_bead: "bd-wt".to_string(),
         expiry_date: "2030-12-31".to_string(),

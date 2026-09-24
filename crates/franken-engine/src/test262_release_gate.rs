@@ -276,6 +276,33 @@ impl Test262WaiverSet {
         Ok(())
     }
 
+    /// Release policy for waivers (plan §18.1, bd-9vouw.4): a waiver may only
+    /// cover a demonstrated host/harness inapplicability. `not_yet_implemented`
+    /// and `intentional_divergence` are semantic failures, not waivers, and an
+    /// expired waiver must fail the gate instead of silently lapsing, so the
+    /// waiver file cannot accumulate stale entries.
+    pub fn validate_release_policy(&self, run_date: &str) -> Result<(), Test262GateError> {
+        for waiver in &self.waivers {
+            if matches!(
+                waiver.reason_code,
+                Test262WaiverReason::NotYetImplemented | Test262WaiverReason::IntentionalDivergence
+            ) {
+                return Err(Test262GateError::InvalidConfig(format!(
+                    "waiver `{}` uses reason {:?}, which the ES2020 release gate does not accept; \
+                     unimplemented or divergent semantics are failures",
+                    waiver.test_id, waiver.reason_code
+                )));
+            }
+            if waiver.expiry_date.as_str() < run_date {
+                return Err(Test262GateError::InvalidConfig(format!(
+                    "waiver `{}` expired on {} (run date {run_date}); remove or renew it",
+                    waiver.test_id, waiver.expiry_date
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn find_active(&self, test_id: &str, run_date: &str) -> Option<&Test262Waiver> {
         self.waivers
             .iter()
@@ -844,6 +871,7 @@ impl Test262GateRunner {
         pins.validate()?;
         profile.validate()?;
         waivers.validate()?;
+        waivers.validate_release_policy(self.config.run_date.as_str())?;
 
         let pin_hash = sha256_hex(&canonical_json_bytes(pins)?);
         let profile_hash = sha256_hex(&canonical_json_bytes(profile)?);
@@ -2634,7 +2662,7 @@ reason_code = "harness_gap"
         let mut ws = valid_waiver_set();
         ws.waivers.push(Test262Waiver {
             test_id: "test/language/timeout-1".to_string(),
-            reason_code: Test262WaiverReason::NotYetImplemented,
+            reason_code: Test262WaiverReason::HarnessGap,
             es2020_clause: "§15.1".to_string(),
             tracking_bead: "bd-100".to_string(),
             expiry_date: "2030-01-01".to_string(),

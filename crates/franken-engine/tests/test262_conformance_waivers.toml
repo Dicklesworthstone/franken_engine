@@ -1,17 +1,9 @@
 schema_version = "franken-engine.test262-waiver.v1"
 
-[[waiver]]
-test_id = "language/expressions/optional-chaining/short-circuiting.js"
-reason_code = "not_yet_implemented"
-es2020_clause = "13.3.1"
-tracking_bead = "bd-11p"
-expiry_date = "2030-12-31"
-reviewer = "runtime-conformance"
-
-[[waiver]]
-test_id = "built-ins/Promise/allSettled/reject-late.js"
-reason_code = "host_hook_missing"
-es2020_clause = "27.2.4"
-tracking_bead = "bd-11p"
-expiry_date = "2024-01-01"
-reviewer = "runtime-conformance"
+# No active waivers. Plan §18.1 / bd-9vouw.4: a waiver may cover only a
+# demonstrated host or harness inapplicability with an owner, a clause, an
+# expiry, and review. `not_yet_implemented` and `intentional_divergence` are
+# failures, and expired waivers fail the release gate. The two previous
+# entries (optional-chaining short-circuiting as not_yet_implemented, and a
+# Promise.allSettled host_hook_missing waiver that expired 2024-01-01) were
+# removed on 2026-09-22 for those reasons; both tests now count as failures.

@@ -1870,9 +1870,10 @@ impl fmt::Display for Float64 {
         } else if self.is_negative_zero() {
             write!(f, "0")
         } else {
-            // Format like JavaScript: no trailing zeros, but show decimal for floats
-            let s = format!("{}", self.0);
-            write!(f, "{s}")
+            // ECMAScript Number::toString (shortest round-trip digits, exponent
+            // form outside [1e-6, 1e21)); Rust's `{}` prints 2**70 as
+            // 1180591620717411300000 and 1e-7 as 0.0000001 (bd-9vouw.2).
+            f.write_str(ryu_js::Buffer::new().format(self.0))
         }
     }
 }
@@ -1928,6 +1929,39 @@ pub fn js_number_to_value(value: f64) -> Value {
         Value::Int(value as i64)
     } else {
         Value::Float(Float64::new(value))
+    }
+}
+
+/// `x + y` for two Numbers held as `Value::Int` (always safe integers), with
+/// Number semantics: exact while the result is a safe integer, otherwise the
+/// IEEE-754 double result (bd-9vouw.2). Never wraps.
+#[inline(always)]
+pub fn js_int_add(x: i64, y: i64) -> Value {
+    match x.checked_add(y) {
+        Some(sum) if (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&sum) => Value::Int(sum),
+        _ => js_number_to_value(x as f64 + y as f64),
+    }
+}
+
+/// `x - y` with Number semantics; see [`js_int_add`].
+#[inline(always)]
+pub fn js_int_sub(x: i64, y: i64) -> Value {
+    match x.checked_sub(y) {
+        Some(diff) if (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&diff) => Value::Int(diff),
+        _ => js_number_to_value(x as f64 - y as f64),
+    }
+}
+
+/// `x * y` with Number semantics, including `-0` for a zero product with a
+/// negative factor; see [`js_int_add`].
+#[inline(always)]
+pub fn js_int_mul(x: i64, y: i64) -> Value {
+    if (x == 0 && y < 0) || (y == 0 && x < 0) {
+        return Value::Float(Float64::new(-0.0));
+    }
+    match x.checked_mul(y) {
+        Some(prod) if (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&prod) => Value::Int(prod),
+        _ => js_number_to_value(x as f64 * y as f64),
     }
 }
 
@@ -43170,7 +43204,38 @@ impl InterpreterCore {
                         };
                     }
 
-                    let prop = match obj_val {
+                    // bd-9vouw.17: an own property stored on a user function's
+                    // backing object (`F.x`, class statics) wins over the
+                    // synthesized function members below. `prototype` keeps
+                    // its dedicated path.
+                    let function_backing = match &obj_val {
+                        Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_)
+                            if property_key.as_str() != Some("prototype") =>
+                        {
+                            self.function_own_property_object(module, &obj_val)?
+                                .filter(|backing| {
+                                    self.heap.get(backing.0 as usize).is_some_and(|object| {
+                                        object.contains_own_runtime_property(&property_key)
+                                    })
+                                })
+                        }
+                        _ => None,
+                    };
+
+                    let prop = if let Some(backing) = function_backing {
+                        self.run_pre_runtime_property_access_hook(module, backing, &property_key)?;
+                        self.proxy_aware_get_runtime_property(
+                            Some(module),
+                            backing,
+                            &property_key,
+                            obj_val.clone(),
+                            0,
+                        )?
+                    } else { match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
                             if property_key.as_str() == Some("__proto__") {
@@ -43342,7 +43407,7 @@ impl InterpreterCore {
                                 got: other.type_name().to_string(),
                             });
                         }
-                    };
+                    } };
                     if let Value::Closure(closure_id) = &prop
                         && let Some(method) = self.closure_method_metadata.get(closure_id)
                     {
@@ -43370,7 +43435,9 @@ impl InterpreterCore {
                     // bd-ojvo1: join the value provenance recorded on the
                     // resolved property owner. This covers own/inherited exact
                     // string and Symbol keys while respecting shadowing.
-                    if let Some(owner) = object_id {
+                    // bd-9vouw.17: a function's backing object is the owner of
+                    // its own properties, so their stored labels join too.
+                    if let Some(owner) = object_id.or(function_backing) {
                         let stored_label = self.runtime_property_label(owner, &property_key);
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
@@ -43542,58 +43609,37 @@ impl InterpreterCore {
                                     got: builtin.display_name().to_string(),
                                 });
                             };
-                            self.run_pre_runtime_property_access_hook(
+                            self.set_backing_object_property(
                                 module,
                                 property_object,
                                 &property_key,
-                            )?;
-                            let value_label = self.get_register_label(val)?.clone();
-                            let previous_label = self
-                                .own_stored_runtime_property_label(property_object, &property_key);
-                            self.set_own_runtime_property_label(
-                                property_object,
-                                &property_key,
-                                &value_label,
-                            )?;
-                            let set_result = self.proxy_aware_set_runtime_property(
-                                Some(module),
-                                property_object,
-                                &property_key,
+                                val,
                                 set_val,
-                                Value::Object(property_object),
-                                0,
-                            );
-                            let committed = match set_result {
-                                Ok(committed) => committed,
-                                Err(error) => {
-                                    self.set_own_runtime_property_label(
-                                        property_object,
-                                        &property_key,
-                                        &previous_label,
-                                    )?;
-                                    return Err(error);
-                                }
-                            };
-                            if !committed {
-                                self.set_own_runtime_property_label(
-                                    property_object,
-                                    &property_key,
-                                    &previous_label,
-                                )?;
-                                return Err(InterpreterError::TypeError {
-                                    expected: "successful builtin property write".to_string(),
-                                    got: "falsy set result".to_string(),
-                                });
-                            }
-                            if !self.heap[property_object.0 as usize]
-                                .contains_own_runtime_property(&property_key)
-                            {
-                                self.set_own_runtime_property_label(
-                                    property_object,
-                                    &property_key,
-                                    &previous_label,
-                                )?;
-                            }
+                            )?;
+                        }
+                        // bd-9vouw.17: functions are objects; other own
+                        // properties (`F.x = 1`, `Test262Error.thrower = ...`)
+                        // live on the function's backing object.
+                        ref function @ (Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_)) => {
+                            let property_object = self
+                                .ensure_function_own_property_object(module, function)?
+                                .expect("user function values always have a backing-object key");
+                            let mutation_label = self
+                                .get_register_label(obj)?
+                                .join(self.get_register_label(key)?)
+                                .join(self.get_register_label(val)?);
+                            self.join_object_mutation_label(property_object, &mutation_label)?;
+                            self.set_backing_object_property(
+                                module,
+                                property_object,
+                                &property_key,
+                                val,
+                                set_val,
+                            )?;
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -43626,6 +43672,22 @@ impl InterpreterCore {
                         Value::Object(oid) => {
                             self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
                             self.define_accessor_property(oid, property_key, func_val, kind)?;
+                        }
+                        // bd-9vouw.17: class `static get x()` / `static set x()`.
+                        ref function @ (Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_)) => {
+                            let backing = self
+                                .ensure_function_own_property_object(module, function)?
+                                .expect("user function values always have a backing-object key");
+                            self.run_pre_runtime_property_access_hook(
+                                module,
+                                backing,
+                                &property_key,
+                            )?;
+                            self.define_accessor_property(backing, property_key, func_val, kind)?;
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -43664,6 +43726,28 @@ impl InterpreterCore {
                             )?;
                             self.define_method_property(
                                 object_id,
+                                property_key,
+                                func_val,
+                                definition_label,
+                            )?;
+                        }
+                        // bd-9vouw.17: class `static` methods install onto the
+                        // constructor function's own properties.
+                        ref function @ (Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_)) => {
+                            let backing = self
+                                .ensure_function_own_property_object(module, function)?
+                                .expect("user function values always have a backing-object key");
+                            self.run_pre_runtime_property_access_hook(
+                                module,
+                                backing,
+                                &property_key,
+                            )?;
+                            self.define_method_property(
+                                backing,
                                 property_key,
                                 func_val,
                                 definition_label,
@@ -45900,14 +45984,7 @@ impl InterpreterCore {
         let b = self.read_reg(rhs)?;
         match (&a, &b) {
             // Int + Int: stay in integer domain if within safe integer range, else promote to float
-            (Value::Int(x), Value::Int(y)) => {
-                if let Some(sum) = x.checked_add(*y) {
-                    if sum >= MIN_SAFE_INTEGER && sum <= MAX_SAFE_INTEGER {
-                        return Ok(Value::Int(sum));
-                    }
-                }
-                Ok(js_number_to_value(*x as f64 + *y as f64))
-            }
+            (Value::Int(x), Value::Int(y)) => Ok(js_int_add(*x, *y)),
             (Value::BigInt(x), Value::BigInt(y)) => {
                 Ok(Value::BigInt(Arc::from(Self::add_bigint_decimal(x, y))))
             }
@@ -45982,26 +46059,8 @@ impl InterpreterCore {
         // Fast path: Int op Int stays in integer domain if safe and not producing -0.0
         if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
             match op {
-                "sub" => {
-                    if let Some(diff) = x.checked_sub(*y) {
-                        if diff >= MIN_SAFE_INTEGER && diff <= MAX_SAFE_INTEGER {
-                            return Ok(Value::Int(diff));
-                        }
-                    }
-                    return Ok(js_number_to_value(*x as f64 - *y as f64));
-                }
-                "mul" => {
-                    // Check for -0.0: 0 * negative or negative * 0 produces -0.0 in JS
-                    if (*x == 0 && *y < 0) || (*y == 0 && *x < 0) {
-                        return Ok(Value::Float(Float64::new(-0.0)));
-                    }
-                    if let Some(prod) = x.checked_mul(*y) {
-                        if prod >= MIN_SAFE_INTEGER && prod <= MAX_SAFE_INTEGER {
-                            return Ok(Value::Int(prod));
-                        }
-                    }
-                    return Ok(js_number_to_value(*x as f64 * *y as f64));
-                }
+                "sub" => return Ok(js_int_sub(*x, *y)),
+                "mul" => return Ok(js_int_mul(*x, *y)),
                 _ => {
                     return Err(InterpreterError::TypeError {
                         expected: "sub or mul".to_string(),
@@ -59575,9 +59634,9 @@ impl InterpreterCore {
 
     fn eval_add_values(&self, left: &Value, right: &Value) -> Result<Value, InterpreterError> {
         match (left, right) {
-            (Value::Int(left_int), Value::Int(right_int)) => {
-                Ok(Value::Int(left_int.wrapping_add(*right_int)))
-            }
+            // bd-9vouw.2: the callback mini-lanes (reduce, Array.from) share
+            // the main evaluator's Number semantics instead of wrapping i64.
+            (Value::Int(left_int), Value::Int(right_int)) => Ok(js_int_add(*left_int, *right_int)),
             (Value::BigInt(left_bigint), Value::BigInt(right_bigint)) => {
                 self.check_temporary_memory_budget(Self::bigint_add_construction_peak_bytes(
                     left_bigint,
@@ -59588,15 +59647,15 @@ impl InterpreterCore {
                     right_bigint,
                 ))))
             }
-            (Value::Float(left_float), Value::Float(right_float)) => Ok(Value::Float(
-                Float64::new(left_float.inner() + right_float.inner()),
-            )),
-            (Value::Int(left_int), Value::Float(right_float)) => Ok(Value::Float(Float64::new(
-                *left_int as f64 + right_float.inner(),
-            ))),
-            (Value::Float(left_float), Value::Int(right_int)) => Ok(Value::Float(Float64::new(
-                left_float.inner() + *right_int as f64,
-            ))),
+            (Value::Float(left_float), Value::Float(right_float)) => {
+                Ok(js_number_to_value(left_float.inner() + right_float.inner()))
+            }
+            (Value::Int(left_int), Value::Float(right_float)) => {
+                Ok(js_number_to_value(*left_int as f64 + right_float.inner()))
+            }
+            (Value::Float(left_float), Value::Int(right_int)) => {
+                Ok(js_number_to_value(left_float.inner() + *right_int as f64))
+            }
             (Value::Str(left_string), Value::Str(right_string)) => {
                 self.check_string_limit(left_string.len().saturating_add(right_string.len()))?;
                 // Exact-code-unit concat heals split surrogate pairs (bd-neika).
@@ -59644,16 +59703,14 @@ impl InterpreterCore {
         operator: &str,
     ) -> Result<Value, InterpreterError> {
         if let (Value::Int(left_int), Value::Int(right_int)) = (left, right) {
-            return Ok(Value::Int(match operator {
-                "sub" => left_int.wrapping_sub(*right_int),
-                "mul" => left_int.wrapping_mul(*right_int),
-                _ => {
-                    return Err(InterpreterError::TypeError {
-                        expected: "sub or mul".to_string(),
-                        got: operator.to_string(),
-                    });
-                }
-            }));
+            return match operator {
+                "sub" => Ok(js_int_sub(*left_int, *right_int)),
+                "mul" => Ok(js_int_mul(*left_int, *right_int)),
+                _ => Err(InterpreterError::TypeError {
+                    expected: "sub or mul".to_string(),
+                    got: operator.to_string(),
+                }),
+            };
         }
         let left_number =
             Self::coerce_to_float(left).ok_or_else(|| InterpreterError::TypeError {
@@ -59693,16 +59750,9 @@ impl InterpreterCore {
     }
 
     fn number_value(value: f64) -> Result<Value, InterpreterError> {
-        if value.fract() == 0.0
-            && !value.is_nan()
-            && !value.is_infinite()
-            && value >= i64::MIN as f64
-            && value <= i64::MAX as f64
-        {
-            Ok(Value::Int(value as i64))
-        } else {
-            Ok(Value::Float(Float64::new(value)))
-        }
+        // bd-9vouw.2: preserve -0 and keep Value::Int to the safe-integer
+        // range, exactly like the main evaluator.
+        Ok(js_number_to_value(value))
     }
 
     fn add_bigint_decimal(lhs: &str, rhs: &str) -> String {
@@ -80263,6 +80313,126 @@ impl InterpreterCore {
         .then_some(builtin.bound_object)
         .flatten()
         .map(ObjectId)
+    }
+
+    /// bd-9vouw.17: key of the ordinary-property backing object that holds a
+    /// user function's own properties (`F.x = 1`, class `static` members).
+    ///
+    /// Functions are objects, but user function values carry no property
+    /// storage of their own. Their backing objects live in
+    /// `function_prototypes` under an owner id that is domain-separated from
+    /// every prototype owner (distinct SHA-256 tag plus a per-kind byte), so
+    /// they share that map's seed snapshot/restore and memory accounting and
+    /// can never collide with a prototype entry. Closure-backed values
+    /// (closures, generator and async functions) are keyed per closure
+    /// instance, matching how their prototypes are keyed.
+    fn function_own_property_key(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+    ) -> Result<Option<(ContentHash, u32)>, InterpreterError> {
+        let (kind, base_owner, id) = match function {
+            Value::Function(index) => (0u8, Self::function_prototype_owner_id(module), *index),
+            Value::Closure(id)
+            | Value::GeneratorFunction(id)
+            | Value::AsyncFunction(id)
+            | Value::AsyncGeneratorFunction(id) => {
+                let kind = match function {
+                    Value::Closure(_) => 1u8,
+                    Value::GeneratorFunction(_) => 2,
+                    Value::AsyncFunction(_) => 3,
+                    _ => 4,
+                };
+                let owner_module = self.foreign_closure_module(function, module)?;
+                (
+                    kind,
+                    Self::closure_prototype_owner_id(owner_module.as_deref().unwrap_or(module)),
+                    *id,
+                )
+            }
+            _ => return Ok(None),
+        };
+        let mut digest = Sha256::new();
+        digest.update(b"FrankenEngine.FunctionOwnPropertyObject.v1");
+        digest.update([kind]);
+        digest.update(base_owner.as_bytes());
+        Ok(Some((ContentHash::from_bytes(digest.finalize().into()), id)))
+    }
+
+    /// Existing own-property backing object for a user function, if any.
+    fn function_own_property_object(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        Ok(self
+            .function_own_property_key(module, function)?
+            .and_then(|key| self.function_prototypes.get(&key).copied()))
+    }
+
+    /// Backing object for a user function, created on first write.
+    fn ensure_function_own_property_object(
+        &mut self,
+        module: &Ir3Module,
+        function: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let Some(key) = self.function_own_property_key(module, function)? else {
+            return Ok(None);
+        };
+        if let Some(existing) = self.function_prototypes.get(&key) {
+            return Ok(Some(*existing));
+        }
+        let backing = self.alloc_object_with_prototype(None)?;
+        self.mutate_function_prototypes(|entries| entries.insert(key, backing));
+        Ok(Some(backing))
+    }
+
+    /// Write `set_val` to `property_key` on an ordinary-property backing
+    /// object (builtin or user function), carrying the value register's label
+    /// exactly like a plain object write and restoring the prior label if the
+    /// write does not commit an own property.
+    fn set_backing_object_property(
+        &mut self,
+        module: &Ir3Module,
+        property_object: ObjectId,
+        property_key: &RuntimePropertyKey,
+        val: u32,
+        set_val: Value,
+    ) -> Result<(), InterpreterError> {
+        self.run_pre_runtime_property_access_hook(module, property_object, property_key)?;
+        let value_label = self.get_register_label(val)?.clone();
+        let previous_label = self.own_stored_runtime_property_label(property_object, property_key);
+        self.set_own_runtime_property_label(property_object, property_key, &value_label)?;
+        let set_result = self.proxy_aware_set_runtime_property(
+            Some(module),
+            property_object,
+            property_key,
+            set_val,
+            Value::Object(property_object),
+            0,
+        );
+        let committed = match set_result {
+            Ok(committed) => committed,
+            Err(error) => {
+                self.set_own_runtime_property_label(
+                    property_object,
+                    property_key,
+                    &previous_label,
+                )?;
+                return Err(error);
+            }
+        };
+        if !committed {
+            self.set_own_runtime_property_label(property_object, property_key, &previous_label)?;
+            return Err(InterpreterError::TypeError {
+                expected: "successful builtin property write".to_string(),
+                got: "falsy set result".to_string(),
+            });
+        }
+        if !self.heap[property_object.0 as usize].contains_own_runtime_property(property_key) {
+            self.set_own_runtime_property_label(property_object, property_key, &previous_label)?;
+        }
+        Ok(())
     }
 
     /// Resolve the function index backing a closure handle, erroring if the

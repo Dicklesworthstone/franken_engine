@@ -56,12 +56,15 @@ command -v python3 >/dev/null 2>&1 || refuse "python3 required"
 [[ -x "$RUNNER_BIN" ]] || refuse "runner binary not found/executable: $RUNNER_BIN (build: cargo build --release -p frankenengine-engine --bin franken_test262_runner)"
 [[ -d "$SUITE_PATH/test" ]] || refuse "no tc39/test262 checkout at $SUITE_PATH (expected a 'test/' directory)"
 
-# Verify the checkout is at the pinned commit (the same the harness enforces).
-PINNED_COMMIT="$(python3 -c "import re,sys; print(next((re.search(r'\"?([0-9a-f]{40})\"?', l).group(1) for l in open('$PINS') if l.strip().startswith('test262_commit')), ''))" 2>/dev/null || true)"
-ACTUAL_COMMIT="$(git -C "$SUITE_PATH" rev-parse HEAD 2>/dev/null || echo "")"
-if [[ -n "$PINNED_COMMIT" && "$ACTUAL_COMMIT" != "$PINNED_COMMIT" ]]; then
-    refuse "checkout at $SUITE_PATH is $ACTUAL_COMMIT, expected pinned $PINNED_COMMIT (run: git -C $SUITE_PATH fetch --depth 1 origin $PINNED_COMMIT && git -C $SUITE_PATH checkout $PINNED_COMMIT)"
-fi
+# Resolve a tree at the pinned commit (the same pin the harness enforces). A
+# shared checkout that has moved past the pin is never checked out in place; a
+# detached worktree of the pin is used instead.
+# shellcheck source=lib/test262_pinned_tree.sh
+source "$SCRIPT_DIR/lib/test262_pinned_tree.sh"
+PINNED_COMMIT="$(test262_pinned_commit "$PINS")"
+[[ -n "$PINNED_COMMIT" ]] || refuse "no test262_commit pin in $PINS"
+SUITE_PATH="$(test262_pinned_tree "$SUITE_PATH" "$PINS")" || refuse "cannot resolve a test262 tree at pinned $PINNED_COMMIT"
+[[ -d "$SUITE_PATH/test" ]] || refuse "pinned tree $SUITE_PATH has no 'test/' directory"
 
 mkdir -p "$RUN_ROOT"
 RUN_LOG="$RUN_ROOT/runner.log"

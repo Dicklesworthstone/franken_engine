@@ -106675,15 +106675,22 @@ mod async_runtime_tests_current {
                 retained_core_trace, retained_result.nondeterminism_trace,
                 "the public retention policy must leave the complete trace in the core for {termination}"
             );
+            // bd-9vouw.18: a property read is folded into the deterministic
+            // witness, so that is the replay content the handoff must move.
             assert!(
-                !drained_result.nondeterminism_trace.events.is_empty(),
-                "the property read must produce a nonempty trace for {termination}"
+                drained_result.nondeterminism_trace.deterministic_witness.event_count > 0,
+                "the property read must reach the moved trace's witness for {termination}"
             );
             drained_result
                 .nondeterminism_trace
                 .validate_for_replay()
                 .expect("the moved trace must remain finalised and replay-valid");
             assert!(drained_core_trace.events.is_empty());
+            assert_eq!(
+                drained_core_trace.deterministic_witness,
+                crate::deterministic_replay::DeterministicEventWitness::default(),
+                "draining must leave a fresh witness in the core for {termination}"
+            );
             assert!(!drained_core_trace.is_finalised());
             assert!(drained_core_trace.session_id.is_empty());
         }

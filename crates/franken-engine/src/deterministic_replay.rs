@@ -4834,4 +4834,120 @@ mod tests {
         let b = length_prefixed_hash_hex(&["a", "bc"]);
         assert_ne!(a, b, "field boundaries must be part of the hash");
     }
+
+    // -- bd-9vouw.18: deterministic event witness -------------------------
+
+    fn witness_of(folds: &[(NondeterminismSource, &[u8])]) -> DeterministicEventWitness {
+        let mut trace = NondeterminismTrace::new("w");
+        for (source, value) in folds {
+            trace.witness_deterministic(source.clone(), value);
+        }
+        trace.deterministic_witness
+    }
+
+    #[test]
+    fn witness_folds_without_recording_events_bd_9vouw_18() {
+        let mut trace = NondeterminismTrace::new("w");
+        for _ in 0..10_000 {
+            trace.witness_deterministic(NondeterminismSource::PropertyResolution, b"k");
+        }
+        assert!(trace.events.is_empty(), "folded decisions must not become events");
+        assert_eq!(trace.next_sequence, 0);
+        assert_eq!(trace.deterministic_witness.event_count, 10_000);
+        trace.finalise(1);
+        trace
+            .validate_for_replay()
+            .expect("a trace with only folded decisions is replay-valid");
+    }
+
+    #[test]
+    fn witness_is_order_source_and_boundary_sensitive_bd_9vouw_18() {
+        let pr = NondeterminismSource::PropertyResolution;
+        let ac = NondeterminismSource::ArrayCacheInvalidation;
+        let base = witness_of(&[(pr.clone(), b"a"), (pr.clone(), b"b")]);
+        assert_eq!(base, witness_of(&[(pr.clone(), b"a"), (pr.clone(), b"b")]));
+        assert_ne!(
+            base,
+            witness_of(&[(pr.clone(), b"b"), (pr.clone(), b"a")]),
+            "order matters"
+        );
+        assert_ne!(
+            base,
+            witness_of(&[(pr.clone(), b"a"), (ac.clone(), b"b")]),
+            "source matters"
+        );
+        assert_ne!(
+            witness_of(&[(pr.clone(), b"ab"), (pr.clone(), b"c")]),
+            witness_of(&[(pr.clone(), b"a"), (pr.clone(), b"bc")]),
+            "value boundaries are length-prefixed"
+        );
+        assert_ne!(
+            witness_of(&[(pr.clone(), b"")]),
+            DeterministicEventWitness::default(),
+            "folding an empty value is still an observable fold"
+        );
+    }
+
+    #[test]
+    fn legacy_trace_without_witness_deserializes_with_default_bd_9vouw_18() {
+        let mut trace = NondeterminismTrace::new("legacy");
+        trace.capture(NondeterminismSource::TimerRead, vec![7], 1, "clk");
+        trace.finalise(2);
+        let mut json = serde_json::to_value(&trace).expect("serializes");
+        json.as_object_mut()
+            .expect("trace is an object")
+            .remove("deterministic_witness");
+        let back: NondeterminismTrace = serde_json::from_value(json).expect("legacy JSON reads");
+        assert_eq!(back, trace);
+    }
+
+    #[test]
+    fn trace_id_binds_witness_only_when_decisions_were_folded_bd_9vouw_18() {
+        let mut plain = NondeterminismTrace::new("id");
+        plain.capture(NondeterminismSource::TimerRead, vec![1], 1, "clk");
+        plain.finalise(2);
+        let mut unfolded = plain.clone();
+        unfolded.deterministic_witness = DeterministicEventWitness::default();
+        assert_eq!(plain.derive_id(), unfolded.derive_id());
+
+        let mut folded = plain.clone();
+        folded.witness_deterministic(NondeterminismSource::PropertyResolution, b"k");
+        assert_ne!(plain.derive_id(), folded.derive_id());
+        let mut other = plain.clone();
+        other.witness_deterministic(NondeterminismSource::PropertyResolution, b"j");
+        assert_ne!(folded.derive_id(), other.derive_id());
+    }
+
+    #[test]
+    fn replay_engine_verifies_witness_bd_9vouw_18() {
+        let mut recorded = NondeterminismTrace::new("rw");
+        recorded.witness_deterministic(NondeterminismSource::PropertyResolution, b"found:x");
+        recorded.finalise(1);
+
+        let mut strict = ReplayEngine::new(recorded.clone(), ReplayMode::Strict);
+        strict
+            .verify_deterministic_witness(&recorded.deterministic_witness)
+            .expect("identical witness verifies");
+        assert_eq!(strict.divergence_count(), 0);
+
+        let mut live = NondeterminismTrace::new("rw");
+        live.witness_deterministic(NondeterminismSource::PropertyResolution, b"found:y");
+        let err = strict
+            .verify_deterministic_witness(&live.deterministic_witness)
+            .expect_err("strict replay rejects a different resolution history");
+        assert_eq!(
+            err,
+            ReplayError::DeterministicWitnessMismatch {
+                expected_count: 1,
+                actual_count: 1
+            }
+        );
+        assert_eq!(strict.critical_divergences(), 1);
+
+        let mut best_effort = ReplayEngine::new(recorded, ReplayMode::BestEffort);
+        best_effort
+            .verify_deterministic_witness(&live.deterministic_witness)
+            .expect("best effort records instead of failing");
+        assert_eq!(best_effort.critical_divergences(), 1);
+    }
 }

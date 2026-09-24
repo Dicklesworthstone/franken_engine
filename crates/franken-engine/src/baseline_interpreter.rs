@@ -81117,6 +81117,12 @@ impl InterpreterCore {
         if let Some(metadata) = self.closure_method_metadata.get(&closure_id) {
             return Ok(match key {
                 "name" => Value::Str(metadata.name.clone()),
+                // Class methods are DefineMethod closures too (bd-9vouw.24);
+                // their `length` is the parameter count like any function.
+                "length" => {
+                    let func_idx = self.closure_function_index(closure_id)?;
+                    Self::function_name_or_length(module, func_idx, key).unwrap_or(Value::Undefined)
+                }
                 "prototype" => Value::Undefined,
                 _ => Value::Undefined,
             });
@@ -81261,6 +81267,10 @@ impl InterpreterCore {
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
             }),
+            "BYTES_PER_ELEMENT" if TypedArrayKind::from_type_name(name).is_some() => {
+                let kind = TypedArrayKind::from_type_name(name).expect("guarded above");
+                Value::Int(i64::try_from(kind.element_size()).unwrap_or(i64::MAX))
+            }
             _ => {
                 if let Some(value) = Self::function_prototype_property(key) {
                     value

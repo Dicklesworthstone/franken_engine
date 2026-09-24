@@ -692,7 +692,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
     let mut seen_bindings = BTreeMap::<String, BindingKind>::new();
     let mut default_export_count = 0u32;
 
-    for statement in &ir0.tree.body {
+    for statement in hoisted_statement_order(&ir0.tree.body) {
         match statement {
             Statement::Import(import) => {
                 for binding_name in import.clause.binding_names() {
@@ -1194,7 +1194,7 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
     // stamp `Ir2Op::span`.
     let mut op_spans: Vec<Ir1OpSpanEntry> = Vec::new();
 
-    for statement in &ir0.tree.body {
+    for statement in hoisted_statement_order(&ir0.tree.body) {
         match statement {
             Statement::Import(import) => {
                 let specifier = import.source.clone();
@@ -6291,7 +6291,7 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_binding_index,
             );
             merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
-            for stmt in &func.body.body {
+            for stmt in hoisted_statement_order(&func.body.body) {
                 lower_statement_to_ir1(
                     stmt,
                     &mut body_ops,
@@ -6454,7 +6454,7 @@ fn lower_statement_to_ir1_with_flow(
             );
             merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
             if let Some(ctor) = constructor {
-                for stmt in &ctor.body.body {
+                for stmt in hoisted_statement_order(&ctor.body.body) {
                     lower_statement_to_ir1(
                         stmt,
                         &mut body_ops,
@@ -6692,7 +6692,7 @@ fn lower_statement_to_ir1_with_flow(
                     &mut m_binding_index,
                 );
                 merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup);
-                for stmt in &method.body.body {
+                for stmt in hoisted_statement_order(&method.body.body) {
                     lower_statement_to_ir1(
                         stmt,
                         &mut m_body_ops,
@@ -7470,7 +7470,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         .iter()
         .filter(|scope| scope.parent.is_none())
         .flat_map(|scope| scope.bindings.iter())
-        .filter(|binding| matches!(binding.kind, BindingKind::Let | BindingKind::Const))
+        .filter(|binding| {
+            matches!(
+                binding.kind,
+                BindingKind::Let | BindingKind::Const | BindingKind::Var
+            )
+        })
         .map(|binding| binding.binding_id)
         .filter(|id| !scoped_runtime_binding_ids.contains(id))
         .collect::<BTreeSet<_>>()
@@ -7514,6 +7519,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         .map(|id| {
             let kind = match binding_kind_by_id.get(id) {
                 Some(BindingKind::Const) => 2,
+                // A spilled `var` is hoisted: declared initialized to
+                // undefined, never in a temporal dead zone (bd-9vouw.23).
+                Some(BindingKind::Var) => 0,
                 _ => 1,
             };
             let name = runtime_scope_binding_name(*id, &runtime_scope_binding_names_by_id);
@@ -7698,7 +7706,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     value_stack.push(dst);
                 } else {
                     let source_reg = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(&mut register_cursor, &mut pinned_register_high)
+                        alloc_pinned_register(
+                            &mut register_cursor,
+                            &mut pinned_register_high,
+                            &mut register_high_water,
+                        )
                     });
                     let dst = alloc_register(&mut register_cursor);
                     ir3.instructions.push(Ir3Instruction::Move {
@@ -7722,7 +7734,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 value_stack.push(dst);
             }
             Ir1Op::ResolveNameStatus { name, status_id } => {
-                let dst = alloc_pinned_register(&mut register_cursor, &mut pinned_register_high);
+                let dst = alloc_pinned_register(
+                    &mut register_cursor,
+                    &mut pinned_register_high,
+                    &mut register_high_water,
+                );
                 let name_pool_index = push_constant_optimized(&mut constant_pool, name);
                 name_status_registers.insert(*status_id, dst);
                 ir3.instructions.push(Ir3Instruction::ResolveNameStatus {
@@ -7752,7 +7768,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     value_stack.push(src);
                 } else {
                     let dst = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(&mut register_cursor, &mut pinned_register_high)
+                        alloc_pinned_register(
+                            &mut register_cursor,
+                            &mut pinned_register_high,
+                            &mut register_high_water,
+                        )
                     });
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     value_stack.push(dst);
@@ -7783,7 +7803,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     value_stack.push(src);
                 } else {
                     let dst = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(&mut register_cursor, &mut pinned_register_high)
+                        alloc_pinned_register(
+                            &mut register_cursor,
+                            &mut pinned_register_high,
+                            &mut register_high_water,
+                        )
                     });
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     value_stack.push(dst);
@@ -8136,7 +8160,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     continue;
                 }
                 let dst = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                    alloc_pinned_register(&mut register_cursor, &mut pinned_register_high)
+                    alloc_pinned_register(
+                        &mut register_cursor,
+                        &mut pinned_register_high,
+                        &mut register_high_water,
+                    )
                 });
                 let src = pop_lowering_value(&mut value_stack)?;
                 match operator {
@@ -8580,7 +8608,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 rest_param_index,
             } => {
                 let dst = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                    alloc_pinned_register(&mut register_cursor, &mut pinned_register_high)
+                    alloc_pinned_register(
+                        &mut register_cursor,
+                        &mut pinned_register_high,
+                        &mut register_high_water,
+                    )
                 });
                 let temp_free_vars: Vec<&String> = free_vars
                     .iter()
@@ -9438,7 +9470,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         fn_value_stack.push(dst);
                     } else {
                         let src = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
-                            alloc_pinned_register(&mut fn_reg, &mut fn_pinned_register_high)
+                            alloc_pinned_register(
+                                &mut fn_reg,
+                                &mut fn_pinned_register_high,
+                                &mut fn_register_high_water,
+                            )
                         });
                         let dst = alloc_register(&mut fn_reg);
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
@@ -9459,7 +9495,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::ResolveNameStatus { name, status_id } => {
-                    let dst = alloc_pinned_register(&mut fn_reg, &mut fn_pinned_register_high);
+                    let dst = alloc_pinned_register(
+                        &mut fn_reg,
+                        &mut fn_pinned_register_high,
+                        &mut fn_register_high_water,
+                    );
                     let name_pool_index = push_constant_optimized(&mut constant_pool, name);
                     fn_name_status_registers.insert(*status_id, dst);
                     ir3.instructions.push(Ir3Instruction::ResolveNameStatus {
@@ -9507,7 +9547,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         continue;
                     }
                     let dst = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(&mut fn_reg, &mut fn_pinned_register_high)
+                        alloc_pinned_register(
+                            &mut fn_reg,
+                            &mut fn_pinned_register_high,
+                            &mut fn_register_high_water,
+                        )
                     });
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     fn_value_stack.push(dst);
@@ -9551,7 +9595,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         continue;
                     }
                     let dst = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(&mut fn_reg, &mut fn_pinned_register_high)
+                        alloc_pinned_register(
+                            &mut fn_reg,
+                            &mut fn_pinned_register_high,
+                            &mut fn_register_high_water,
+                        )
                     });
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
@@ -9819,7 +9867,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         continue;
                     }
                     let dst = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(&mut fn_reg, &mut fn_pinned_register_high)
+                        alloc_pinned_register(
+                            &mut fn_reg,
+                            &mut fn_pinned_register_high,
+                            &mut fn_register_high_water,
+                        )
                     });
                     if *operator == AssignmentOperator::Assign {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
@@ -10067,7 +10119,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         );
                     }
                     let dst = *fn_binding_regs.entry(*inner_bid).or_insert_with(|| {
-                        alloc_pinned_register(&mut fn_reg, &mut fn_pinned_register_high)
+                        alloc_pinned_register(
+                            &mut fn_reg,
+                            &mut fn_pinned_register_high,
+                            &mut fn_register_high_water,
+                        )
                     });
                     let available_capture_names: BTreeSet<&str> = fv_id_to_name
                         .values()
@@ -16255,7 +16311,7 @@ fn lower_expression_to_ir1_inner(
                 &mut body_binding_index,
             );
             merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
-            for stmt in &body.body {
+            for stmt in hoisted_statement_order(&body.body) {
                 lower_statement_to_ir1(
                     stmt,
                     &mut body_ops,
@@ -16815,7 +16871,7 @@ fn lower_expression_to_ir1_inner(
             );
             merge_parameter_prologue_state(&parameter_prologue, &mut body_lookup);
             if let Some(ctor) = constructor {
-                for stmt in &ctor.body.body {
+                for stmt in hoisted_statement_order(&ctor.body.body) {
                     lower_statement_to_ir1(
                         stmt,
                         &mut body_ops,
@@ -17064,7 +17120,7 @@ fn lower_expression_to_ir1_inner(
                     &mut m_binding_index,
                 );
                 merge_parameter_prologue_state(&parameter_prologue, &mut m_lookup);
-                for stmt in &method.body.body {
+                for stmt in hoisted_statement_order(&method.body.body) {
                     lower_statement_to_ir1(
                         stmt,
                         &mut m_body_ops,
@@ -29591,14 +29647,27 @@ fn push_constant_optimized(constant_pool: &mut ConstantPool, value: impl Into<Js
     constant_pool.push(value)
 }
 
+/// ES2020 9.2.10 FunctionDeclarationInstantiation / 15.1.11
+/// GlobalDeclarationInstantiation: a scope's function declarations are
+/// instantiated before any of its statements run, so they lower first (in
+/// source order), then every other statement in source order (bd-9vouw.43).
+fn hoisted_statement_order(body: &[Statement]) -> impl Iterator<Item = &Statement> {
+    let is_function_declaration =
+        |statement: &&Statement| matches!(statement, Statement::FunctionDeclaration(_));
+    body.iter().filter(is_function_declaration).chain(
+        body.iter()
+            .filter(move |statement| !is_function_declaration(statement)),
+    )
+}
+
 fn alloc_register(cursor: &mut Reg) -> Reg {
     let register = *cursor;
     *cursor = cursor.checked_add(1).unwrap_or(u32::MAX);
     register
 }
 
-/// bd-9vouw.23: root-scope lexical bindings kept in frame registers; the rest
-/// of a larger body's `let`/`const` bindings live in the runtime scope. Leaves
+/// bd-9vouw.23: root-scope `let`/`const`/`var` bindings kept in frame
+/// registers; the rest of a larger body's live in the runtime scope. Leaves
 /// half of the 256-register QuickJS-lane frame for `var`/function bindings and
 /// statement temporaries.
 const MAX_REGISTER_RESIDENT_ROOT_LEXICALS: usize = 128;
@@ -29606,9 +29675,15 @@ const MAX_REGISTER_RESIDENT_ROOT_LEXICALS: usize = 128;
 /// bd-9vouw.23: allocate a register that must outlive the current statement
 /// (a binding or a name-status slot) and raise the floor below which
 /// statement-boundary reuse never rewinds the cursor.
-fn alloc_pinned_register(cursor: &mut Reg, pinned_high: &mut Reg) -> Reg {
-    let register = alloc_register(cursor);
-    *pinned_high = (*pinned_high).max(register.saturating_add(1));
+fn alloc_pinned_register(cursor: &mut Reg, pinned_high: &mut Reg, high_water: &mut Reg) -> Reg {
+    // Never hand a pinned slot a register that held a rewound statement
+    // temporary: a binding read before its first write (a hoisted `var`, a
+    // use before a function declaration) must observe the frame's initial
+    // `undefined`, not a leftover temporary.
+    let register = (*cursor).max(*high_water);
+    *cursor = register.saturating_add(1);
+    *pinned_high = (*pinned_high).max(*cursor);
+    *high_water = (*high_water).max(*cursor);
     register
 }
 

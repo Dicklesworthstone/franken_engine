@@ -176,11 +176,14 @@ fn large_destructuring_frames_work_in_functions_and_prepared_reexecution() {
 
 #[test]
 fn automatically_sized_registers_cannot_bypass_the_memory_budget() {
-    let mut pattern = "value = 7".to_string();
-    for _ in 0..12 {
-        pattern = format!("[{pattern}] = []");
-    }
-    let source = format!("let [{pattern}] = []; value;");
+    // A frame is wide when many values are live at once: all 300 elements of
+    // this array literal are. (The depth-12 nested default used here before
+    // stopped needing a wide frame once lowering reused statement temporaries,
+    // bd-9vouw.23; see `nested_defaults_fit_the_budget_after_register_reuse`.)
+    let elements: Vec<String> = std::iter::once("7".to_string())
+        .chain((1..300).map(|i| i.to_string()))
+        .collect();
+    let source = format!("let [value] = [{}]; value;", elements.join(", "));
     let prepared = HybridRouter::prepare_eval(&source).expect("prepare wide frame");
     let budget = frankenengine_engine::EngineMemoryBudget {
         max_heap_objects: 100_000,
@@ -206,4 +209,24 @@ fn automatically_sized_registers_cannot_bypass_the_memory_budget() {
             .value,
         "7"
     );
+}
+
+#[test]
+fn nested_defaults_fit_the_budget_after_register_reuse() {
+    // bd-9vouw.23: statement temporaries are reused, so the depth-12 nested
+    // default no longer needs a frame wider than the default lane and runs
+    // inside the same 1 MiB budget that a genuinely wide frame exceeds.
+    let mut pattern = "value = 7".to_string();
+    for _ in 0..12 {
+        pattern = format!("[{pattern}] = []");
+    }
+    let source = format!("let [{pattern}] = []; value;");
+    let budget = frankenengine_engine::EngineMemoryBudget {
+        max_heap_objects: 100_000,
+        max_total_memory_bytes: 1024 * 1024,
+    };
+    let outcome = HybridRouter::default()
+        .eval_with_budgets(&source, None, Some(budget))
+        .expect("narrow frame fits the budget");
+    assert_eq!(outcome.value, "7");
 }

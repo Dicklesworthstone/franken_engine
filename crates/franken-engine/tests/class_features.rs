@@ -128,17 +128,19 @@ fn class_declaration_lowers_constructor_static_and_prototype_methods() {
         } if name == "TestClass" && param_names == &vec!["value".to_string()]
     )));
 
-    let set_properties: Vec<&str> = ops
+    // Methods install through DefineMethod (not SetProperty) so each records
+    // its [[HomeObject]] for `super` (bd-9vouw.24).
+    let defined_methods: Vec<&str> = ops
         .iter()
         .filter_map(|op| match op {
-            Ir1Op::SetProperty {
+            Ir1Op::DefineMethod {
                 key: Ir1PropertyKey::Static(name),
             } => name.as_str(),
             _ => None,
         })
         .collect();
-    assert!(set_properties.contains(&"staticMethod"));
-    assert!(set_properties.contains(&"instanceMethod"));
+    assert!(defined_methods.contains(&"staticMethod"));
+    assert!(defined_methods.contains(&"instanceMethod"));
 
     let prototype_gets = ops
         .iter()
@@ -231,7 +233,7 @@ fn class_expression_lowers_without_leaking_name_to_outer_scope() {
     )));
     assert!(result.module.ops.iter().any(|op| matches!(
         op,
-        Ir1Op::SetProperty {
+        Ir1Op::DefineMethod {
             key: Ir1PropertyKey::Static(name)
         } if name == "render"
     )));

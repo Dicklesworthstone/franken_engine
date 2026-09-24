@@ -6085,6 +6085,22 @@ fn is_decimal_exponent_sign(bytes: &[u8], index: usize) -> bool {
 }
 
 /// Match a binary operator at byte position `i`. Returns (operator, byte_length).
+/// Whether the `*` at `star` directly follows the keyword `function` (only
+/// spaces or tabs in between). A preceding identifier character or `.` means
+/// `function` is part of a longer name or a property (`obj.function * 2`).
+fn star_follows_function_keyword(bytes: &[u8], star: usize) -> bool {
+    let mut end = star;
+    while end > 0 && matches!(bytes[end - 1], b' ' | b'\t') {
+        end -= 1;
+    }
+    end >= 8
+        && &bytes[end - 8..end] == b"function"
+        && (end == 8 || {
+            let before = bytes[end - 9];
+            before != b'.' && !is_identifier_continue(before as char)
+        })
+}
+
 fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, usize)> {
     let remaining = bytes.len() - i;
 
@@ -6151,6 +6167,11 @@ fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, u
             b'*' => {
                 // Avoid matching ** (already handled above).
                 if remaining >= 2 && bytes[i + 1] == b'*' {
+                    return None;
+                }
+                // `function*` / `function *`: the generator marker of a
+                // function expression, not multiplication (bd-xbv99).
+                if star_follows_function_keyword(bytes, i) {
                     return None;
                 }
                 Some(BinaryOperator::Multiply)
@@ -7749,13 +7770,66 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
         trimmed
     };
 
-    // Must contain a decimal point or exponent to be a float
+    // Without a decimal point or exponent this is an integer spelling; only
+    // one that `i64` cannot represent is a float literal here.
     if !digits_ref.contains('.') && !digits_ref.contains('e') && !digits_ref.contains('E') {
-        return None;
+        if parse_i64_numeric_literal(digits_ref).is_some() {
+            return None;
+        }
+        return parse_large_integer_literal(digits_ref);
     }
 
     // Try to parse as f64
     digits_ref.parse::<f64>().ok()
+}
+
+/// An integer literal too large for `i64` (bd-6vl81): decimal digits or a
+/// `0x` / `0o` / `0b` radix form, rounded to the nearest Number as ECMAScript
+/// numeric literals are. It used to fall through to `Expression::Raw` and
+/// evaluate as a *string* (`typeof 123456789012345680000 === "string"`).
+/// Legacy octal (`0777`) and anything else malformed stay unrecognized.
+fn parse_large_integer_literal(digits: &str) -> Option<f64> {
+    let (negative, body) = match digits.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, digits),
+    };
+    let radix_digits =
+        |prefixes: [&str; 2]| prefixes.iter().find_map(|prefix| body.strip_prefix(prefix));
+    let value = if let Some(hex) = radix_digits(["0x", "0X"]) {
+        radix_integer_to_f64(hex, 16)?
+    } else if let Some(octal) = radix_digits(["0o", "0O"]) {
+        radix_integer_to_f64(octal, 8)?
+    } else if let Some(binary) = radix_digits(["0b", "0B"]) {
+        radix_integer_to_f64(binary, 2)?
+    } else if !body.is_empty()
+        && body.bytes().all(|byte| byte.is_ascii_digit())
+        && !(body.len() > 1 && body.starts_with('0'))
+    {
+        // Rust's decimal parser rounds to nearest, ties to even.
+        body.parse::<f64>().ok()?
+    } else {
+        return None;
+    };
+    Some(if negative { -value } else { value })
+}
+
+/// Correctly rounded value of a radix integer: exact in `u128`, then one
+/// round-to-nearest conversion. Longer spellings saturate to infinity like
+/// any Number beyond `f64::MAX`.
+fn radix_integer_to_f64(digits: &str, radix: u32) -> Option<f64> {
+    if digits.is_empty() {
+        return None;
+    }
+    let mut exact: Option<u128> = Some(0);
+    let mut approximate = 0.0_f64;
+    for ch in digits.chars() {
+        let digit = ch.to_digit(radix)?;
+        exact = exact
+            .and_then(|value| value.checked_mul(u128::from(radix)))
+            .and_then(|value| value.checked_add(u128::from(digit)));
+        approximate = approximate * f64::from(radix) + f64::from(digit);
+    }
+    Some(exact.map_or(approximate, |value| value as f64))
 }
 
 fn push_char_utf16(units: &mut Vec<u16>, value: char) {
@@ -14805,6 +14879,46 @@ mod tests {
         // Pure integers should be handled by parse_i64_numeric_literal
         assert!(parse_f64_numeric_literal("42").is_none());
         assert!(parse_f64_numeric_literal("0xFF").is_none());
+    }
+
+    #[test]
+    fn integer_literals_beyond_i64_are_numbers_bd_6vl81() {
+        // These used to fall through to Expression::Raw and evaluate as
+        // strings. Expected values are Node's (v22.2.0) Number results.
+        assert_eq!(
+            parse_f64_numeric_literal("123456789012345680000"),
+            Some(123_456_789_012_345_680_000.0)
+        );
+        assert_eq!(
+            parse_f64_numeric_literal("9223372036854775808"),
+            Some(9_223_372_036_854_775_808.0)
+        );
+        assert_eq!(
+            parse_f64_numeric_literal("-9223372036854775809"),
+            Some(-9_223_372_036_854_775_808.0)
+        );
+        assert_eq!(
+            parse_f64_numeric_literal("0xFFFFFFFFFFFFFFFFF"),
+            Some(295_147_905_179_352_830_000.0)
+        );
+        assert_eq!(
+            parse_f64_numeric_literal("0b1"),
+            None,
+            "an i64-representable radix literal stays an integer"
+        );
+        assert_eq!(
+            parse_f64_numeric_literal("1_000_000_000_000_000_000_000"),
+            Some(1e21)
+        );
+        assert!(parse_f64_numeric_literal("0xZZ").is_none());
+
+        let tree = CanonicalEs2020Parser
+            .parse("const n = 123456789012345680000;", ParseGoal::Script)
+            .expect("large integer literal parses");
+        assert!(
+            !format!("{:?}", tree.canonical_value()).contains("\"raw\""),
+            "a large integer literal must not become Expression::Raw"
+        );
     }
 
     #[test]

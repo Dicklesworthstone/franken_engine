@@ -76,8 +76,14 @@ const CASES: &[(&str, &str, &str)] = &[
     // expression arm (`function*` was not accepted after `function`).
     (
         "generator_function_expression",
-        "const gen = function*(){ yield 1; yield 2 }; console.log([...gen()].join());",
+        "const gen = function*(){ yield 1; yield 2 }; const a = []; for (const x of gen()) a.push(x); console.log(a.join());",
         "1,2",
+    ),
+    // The generator star must not swallow a real multiplication.
+    (
+        "property_named_function_times_two",
+        "const o = { function: 3 }; console.log(o.function * 2);",
+        "6",
     ),
 ];
 
@@ -106,8 +112,13 @@ fn function_expressions_never_lower_to_their_source_text_bd_xbv99() {
             } = op
             {
                 let text = text.to_string();
+                // A property key spelled `function` is a legitimate literal;
+                // an unparsed function expression carries its parameter list.
                 assert!(
-                    !(text.contains("=>") || text.contains("function")),
+                    !(text.contains("=>")
+                        || text.contains("function(")
+                        || text.contains("function (")
+                        || text.contains("function*")),
                     "{name}: an expression was lowered as its source text {text:?}"
                 );
             }

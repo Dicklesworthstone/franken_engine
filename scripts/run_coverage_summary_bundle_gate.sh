@@ -114,6 +114,10 @@ case "$mode" in
     [[ -x "$bin" ]] || bin="target/debug/franken_coverage_frontier"
     [[ -x "$bin" ]] || { log "no franken_coverage_frontier binary built; run: cargo build --release -p frankenengine-engine --bin franken_coverage_frontier"; exit 2; }
     [[ -d "$corpus" ]] || { log "test262 corpus not found at $corpus (set TEST262_CORPUS)"; exit 2; }
+    # shellcheck source=lib/test262_pinned_tree.sh
+    source "$(dirname "${BASH_SOURCE[0]}")/lib/test262_pinned_tree.sh"
+    corpus="$(test262_pinned_tree "$corpus" crates/franken-engine/tests/test262_conformance_pins.toml)" \
+      || { log "cannot resolve a test262 tree at the pinned commit"; exit 2; }
     tmp="$(mktemp -d)"
     log "running real Test262 coverage over $corpus (this takes ~10-15 min)…"
     "$bin" --run-suite "$corpus" --coverage-summary --out "$tmp/coverage_summary.json" >/dev/null \

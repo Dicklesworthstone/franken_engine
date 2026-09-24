@@ -536,47 +536,6 @@ pub const SANDBOXED_HOST_IO_RANDOM_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
 /// whole-operation deadline including DNS.
 pub const SANDBOXED_HOST_IO_NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A real, sandboxed [`HostIoProvider`] that performs genuine filesystem reads
-/// and writes confined to a single canonicalized root directory.
-///
-/// Unlike [`DenyAllHostIo`], this provider *executes* the requested effect: the
-/// bytes returned by an `FsRead` are real file contents and an `FsWrite` really
-/// hits the disk. It is the engine-side "effect producer" for the proof-carrying
-/// host-effect pipeline (bd-f5b04.2.6) — installing it via
-/// [`crate::host_io::HostIoProvider`] on the engine's full-caps handler is what
-/// makes `dispatches_real_hostcalls()` report `true`. Every operation is:
-///
-/// * **Capability-checked** — the request's [`HostIoRequest::required_capability`]
-///   must be present in `granted`, else [`HostIoError::CapabilityMissing`]
-///   (fail-closed; no I/O is attempted).
-/// * **Path-confined** — guest paths are interpreted relative to `root`, with a
-///   leading slash denoting the guest's virtual root rather than the host root.
-///   Empty paths, NUL bytes, backslashes, host prefixes, and traversal (`..`) are
-///   rejected lexically. Mutations are rooted at a held directory descriptor
-///   and use descriptor-relative, no-follow operations, so a concurrent
-///   pathname or symlink swap cannot redirect them outside the sandbox.
-///   Read-only operations separately canonicalize and re-check paths.
-/// * **Bounded** — reads and writes above `max_bytes` fail closed, defending
-///   against parser-bomb / OOM inputs (including a file that grows between
-///   `stat` and `read`).
-///
-/// Network effects (`NetworkSend` / `NetworkRecv`) are also **performed for
-/// real** here: a `NetworkSend` opens a TCP connection to the endpoint and
-/// writes the payload; a `NetworkRecv` connects and reads a bounded response.
-/// Each is capability-checked, byte-bounded against `max_bytes`, and time-bounded
-/// by [`SANDBOXED_HOST_IO_NETWORK_TIMEOUT`] so a slow/unreachable peer fails
-/// closed instead of hanging.
-///
-/// SECURITY INVARIANT — the provider is the network *mechanism*, not the network
-/// *policy*. It deliberately performs **no** SSRF / egress-allowlist / DNS-rebind
-/// check: endpoint authorization is the product layer's responsibility
-/// (`franken_node` `security::ssrf_policy` / `network_guard`) and MUST gate the
-/// endpoint *before* a `NetworkSend` / `NetworkRecv` request is ever issued to
-/// this provider. Duplicating a weaker check here would invite drift; the engine
-/// trusts that a request which reaches it has already been authorized. (Today no
-/// guest JS path lowers to a network hostcall — `create_effect_from_hostcall_tag`
-/// has no network arm — so this mechanism stays dormant until that lowering and
-/// the product-layer SSRF gate land together.)
 #[cfg(unix)]
 #[derive(Debug)]
 struct MutationTarget {
@@ -698,6 +657,50 @@ impl SandboxFdTable {
     }
 }
 
+/// A real, sandboxed [`HostIoProvider`] that performs genuine filesystem reads
+/// and writes confined to a single canonicalized root directory.
+///
+/// Unlike [`DenyAllHostIo`], this provider *executes* the requested effect: the
+/// bytes returned by an `FsRead` are real file contents and an `FsWrite` really
+/// hits the disk. It is the engine-side "effect producer" for the proof-carrying
+/// host-effect pipeline (bd-f5b04.2.6) — installing it via
+/// [`crate::host_io::HostIoProvider`] on the engine's full-caps handler is what
+/// makes `dispatches_real_hostcalls()` report `true`. Every operation is:
+///
+/// * **Capability-checked** — the request's [`HostIoRequest::required_capability`]
+///   must be present in `granted`, else [`HostIoError::CapabilityMissing`]
+///   (fail-closed; no I/O is attempted).
+/// * **Path-confined** — guest paths are interpreted relative to `root`, with a
+///   leading slash denoting the guest's virtual root rather than the host root.
+///   Empty paths, NUL bytes, backslashes, host prefixes, and traversal (`..`) are
+///   rejected lexically. Mutations are rooted at a held directory descriptor
+///   and use descriptor-relative, no-follow operations, so a concurrent
+///   pathname or symlink swap cannot redirect them outside the sandbox.
+///   Read-only operations separately canonicalize and re-check paths.
+/// * **Bounded** — reads and writes above `max_bytes` fail closed, defending
+///   against parser-bomb / OOM inputs (including a file that grows between
+///   `stat` and `read`).
+///
+/// Network effects (`NetworkSend` / `NetworkRecv`) are also **performed for
+/// real** here: a `NetworkSend` opens a TCP connection to the endpoint and
+/// writes the payload; a `NetworkRecv` connects and reads a bounded response.
+/// Each is capability-checked, byte-bounded against `max_bytes`, and time-bounded
+/// by [`SANDBOXED_HOST_IO_NETWORK_TIMEOUT`] so a slow/unreachable peer fails
+/// closed instead of hanging.
+///
+/// SECURITY INVARIANT — the provider is the network *mechanism*, not the network
+/// *policy*. It deliberately performs **no** SSRF / egress-allowlist / DNS-rebind
+/// check: endpoint authorization is the product layer's responsibility
+/// (`franken_node` `security::ssrf_policy` / `network_guard`) and MUST gate the
+/// endpoint *before* a `NetworkSend` / `NetworkRecv` request is ever issued to
+/// this provider. Duplicating a weaker check here would invite drift; the engine
+/// trusts that a request which reaches it has already been authorized. Guest JS
+/// does reach this mechanism: `http.get` / `fetch` lower to the engine's
+/// `net:request` hostcall and `ClientRequest.end()` issues the same
+/// `NetworkRequest`, so an embedder that installs this provider without a
+/// destination-policy gate in front of it (franken_node installs
+/// `SsrfGatedHostIo`) grants unrestricted egress to any extension holding the
+/// network capability (ADR-0015, bd-9vouw.14).
 #[derive(Debug, Clone)]
 pub struct SandboxedHostIo {
     root: PathBuf,

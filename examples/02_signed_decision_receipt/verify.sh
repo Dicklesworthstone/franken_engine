@@ -71,11 +71,16 @@ duration_ms=$((end_ms - start_ms))
 validation_exit=0
 if [[ "${cargo_exit}" -eq 0 ]]; then
   set +e
+  # The demo replays a fixed event sequence (three normal file reads, then
+  # network egress and a crypto op), so the verdict is determined: the
+  # posterior shifts to malicious and the guardplane suspends (bd-9vouw.20).
+  # Accepting any of the six possible decisions made this check vacuous.
   jq -e '
   . as $receipt
-  | (["allow", "challenge", "sandbox", "suspend", "terminate", "quarantine"] | index($receipt.decision) != null)
+  | ($receipt.decision == "suspend")
+  and ($receipt.rationale | test("shifted the posterior to malicious and triggered suspend"))
   and ($receipt.signature_hex | test("^[0-9a-f]{64}$"))
-  and ($receipt.posterior_after_millionths | type == "number" and . >= 0 and . <= 1000000)
+  and ($receipt.posterior_after_millionths | type == "number" and . > 500000 and . <= 1000000)
   ' "${receipt_path}" >/dev/null
   validation_exit=$?
   set -e

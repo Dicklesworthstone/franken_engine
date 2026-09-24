@@ -16,6 +16,19 @@ pub(super) enum ObjectIntegrityOperation {
 }
 
 impl InterpreterCore {
+    /// Use the same private property object as ordinary builtin member access.
+    /// A callable value is not a primitive, but accepting it must not invent
+    /// a second object whose prototype/extensibility diverges from its storage.
+    pub(super) fn reflection_target_object(
+        &self,
+        target: &Value,
+    ) -> Result<ObjectId, InterpreterError> {
+        self.iterator_carrier_backing_id(target, "object target")?
+            .ok_or_else(|| {
+                Self::integrity_type_error("object with property storage", target.type_name())
+            })
+    }
+
     pub(super) fn object_integrity_builtin(
         &mut self,
         module: Option<&Ir3Module>,
@@ -53,10 +66,10 @@ impl InterpreterCore {
             self.json_observe_reachable_value(&target)?;
             self.json_observe_reachable_value(&proposed)?;
             let target_id = match &target {
-                Value::Object(id) => Some(*id),
-                value if reflect || value.is_callable() => {
+                value if value.is_object_like() => Some(self.reflection_target_object(value)?),
+                value if reflect => {
                     return Err(Self::integrity_type_error(
-                        "heap object target",
+                        "object target",
                         value.type_name(),
                     ));
                 }
@@ -376,5 +389,126 @@ impl InterpreterCore {
             ));
         }
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::ParseGoal;
+    use crate::capability::RuntimeCapability;
+    use crate::ir_contract::Ir0Module;
+    use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    fn assert_native_true(source: &str) {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "constructor-integrity.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("constructor integrity source must parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "constructor-integrity.js"),
+            &LoweringContext::new("integrity-trace", "integrity-decision", "integrity-policy"),
+        )
+        .expect("constructor integrity source must lower")
+        .ir3;
+        for mut config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "constructor-integrity");
+            let result = core
+                .execute(&module)
+                .expect("constructor integrity must execute");
+            assert_eq!(result.value, Value::Bool(true), "{source}");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "constructor reflection must release all temporary charges"
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_prototype_changes_preserve_callable_identity() {
+        assert_native_true(
+            r#"
+            const original = Object.getPrototypeOf(Date);
+            const same = original === Reflect.getPrototypeOf(Date);
+            const parent = { inherited: 17 };
+            const changed = Object.setPrototypeOf(Date, parent) === Date;
+            const observed = Object.getPrototypeOf(Date) === parent &&
+                Reflect.getPrototypeOf(Date) === parent;
+            const restored = Reflect.setPrototypeOf(Date, original);
+            same && changed && observed && restored &&
+                Object.getPrototypeOf(Date) === original && typeof Date === 'function';
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_extensibility_uses_persistent_property_storage() {
+        assert_native_true(
+            r#"
+            const before = Object.isExtensible(Date) && Reflect.isExtensible(Date);
+            const prototype = Object.getPrototypeOf(Date);
+            const identity = Object.preventExtensions(Date) === Date;
+            const closed = !Object.isExtensible(Date) && !Reflect.isExtensible(Date);
+            const unchanged = Reflect.setPrototypeOf(Date, prototype);
+            const rejected = !Reflect.setPrototypeOf(Date, {});
+            let threw = false;
+            try { Object.setPrototypeOf(Date, {}); }
+            catch (error) { threw = error.name === 'TypeError'; }
+            before && identity && closed && unchanged && rejected && threw &&
+                Reflect.preventExtensions(Date) && typeof Date.now === 'function';
+            "#,
+        );
+    }
+
+    #[test]
+    fn promise_constructor_integrity_does_not_replace_the_callable() {
+        assert_native_true(
+            r#"
+            const extensible = Reflect.isExtensible(Promise);
+            const original = Reflect.getPrototypeOf(Promise);
+            const parent = {};
+            const changed = Reflect.setPrototypeOf(Promise, parent);
+            const observed = Object.getPrototypeOf(Promise) === parent;
+            const restored = Reflect.setPrototypeOf(Promise, original);
+            const identity = Object.preventExtensions(Promise) === Promise;
+            extensible && changed && observed && restored && identity &&
+                !Reflect.isExtensible(Promise) && typeof Promise === 'function' &&
+                typeof Promise.resolve === 'function';
+            "#,
+        );
+    }
+
+    #[test]
+    fn primitive_object_and_reflect_contracts_remain_distinct() {
+        assert_native_true(
+            r#"
+            let rejected = 0;
+            try { Reflect.getPrototypeOf(1); } catch (e) { rejected += e.name === 'TypeError'; }
+            try { Reflect.setPrototypeOf(1, null); } catch (e) { rejected += e.name === 'TypeError'; }
+            try { Reflect.isExtensible(1); } catch (e) { rejected += e.name === 'TypeError'; }
+            try { Reflect.preventExtensions(1); } catch (e) { rejected += e.name === 'TypeError'; }
+            rejected === 4 && Object.preventExtensions(1) === 1 &&
+                Object.setPrototypeOf(1, null) === 1 && !Object.isExtensible(1) &&
+                Object.getPrototypeOf(1) === Number.prototype;
+            "#,
+        );
     }
 }

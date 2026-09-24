@@ -2288,7 +2288,7 @@ fn merge_logical_lines_requires_continuation(
 /// Strings, template literals, and regex literals are left intact. This mirrors
 /// the string/regex/comment state machine in `merge_logical_lines` so the
 /// regex-vs-division heuristic and comment boundaries are detected identically.
-fn strip_comments_to_whitespace(text: &str) -> String {
+pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_quote: Option<char> = None;
     let mut in_block_comment = false;

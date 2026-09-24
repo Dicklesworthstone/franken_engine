@@ -812,14 +812,25 @@ fn source_label_has_typescript_extension(source_label: &str) -> bool {
 }
 
 fn source_looks_typescript(source: &str) -> bool {
-    if source_contains_type_only_import_export_syntax(source)
-        || source.contains(" as const")
-        || source.contains("!:")
+    // Comments never make a file TypeScript: a Test262 header reading
+    // "... identified as constructors ..." used to classify plain JavaScript
+    // as TS, and TS normalization then mangled a `? 'null' : typeof value`
+    // ternary into a parse failure (bd-9vouw.28).
+    let code = crate::parser::strip_comments_to_whitespace(source);
+    if source_contains_type_only_import_export_syntax(&code)
+        || contains_as_const_assertion(&code)
+        || code.contains("!:")
     {
         return true;
     }
 
-    source.lines().any(line_looks_like_typescript_construct)
+    code.lines().any(line_looks_like_typescript_construct)
+}
+
+/// ` as const` followed by a token boundary (not ` as constructors`).
+fn contains_as_const_assertion(code: &str) -> bool {
+    code.match_indices(" as const")
+        .any(|(index, needle)| has_token_boundary_after(code, index + needle.len()))
 }
 
 fn line_looks_like_typescript_construct(line: &str) -> bool {

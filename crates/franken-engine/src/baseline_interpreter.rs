@@ -3137,6 +3137,9 @@ pub enum BuiltinFunctionKind {
     /// `WeakMap.prototype.get/set/has/delete`; the method name travels in
     /// `module_specifier`. Append only.
     WeakMapMethod,
+    /// `Date.UTC` / `Date.parse` (ES2020 20.4.3). Append only.
+    DateUtc,
+    DateParse,
 }
 
 impl BuiltinFunctionKind {
@@ -4793,6 +4796,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberToPrecision => "toPrecision",
             BuiltinFunctionKind::NumberToExponential => "toExponential",
             BuiltinFunctionKind::RegExpPrototypeExec => "exec",
+            BuiltinFunctionKind::DateUtc => "UTC",
+            BuiltinFunctionKind::DateParse => "parse",
             BuiltinFunctionKind::WeakMapMethod => ["get", "set", "has", "delete"]
                 .iter()
                 .copied()
@@ -31836,10 +31841,20 @@ impl InterpreterCore {
     }
 
     fn alloc_date_global(&mut self) -> Result<Value, InterpreterError> {
-        let properties = self.alloc_object_with_properties(&[(
-            "now",
-            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateNow)),
-        )])?;
+        let properties = self.alloc_object_with_properties(&[
+            (
+                "now",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateNow)),
+            ),
+            (
+                "UTC",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateUtc)),
+            ),
+            (
+                "parse",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateParse)),
+            ),
+        ])?;
         Ok(Value::BuiltinFunction(BuiltinFunction::date_constructor(
             properties,
         )))
@@ -34673,6 +34688,30 @@ impl InterpreterCore {
                     self.check_string_limit(text.len())?;
                 }
                 Ok(Value::str(text))
+            }
+            BuiltinFunctionKind::DateUtc => {
+                // Date.UTC(year[, month[, date[, hours[, minutes[, seconds[, ms]]]]]])
+                // (ES2020 20.4.3.4); a two-digit year maps to 19xx.
+                let mut parts = Vec::with_capacity(7);
+                for index in 0..args.count.min(7) {
+                    let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    parts.push(Self::coerce_to_float(&value).unwrap_or(f64::NAN));
+                }
+                let part = |index: usize, fallback: f64| parts.get(index).copied().unwrap_or(fallback);
+                let mut year = part(0, f64::NAN);
+                if year.is_finite() && (0.0..=99.0).contains(&year.trunc()) {
+                    year = 1900.0 + year.trunc();
+                }
+                let time = date_math::time_clip(date_math::make_date(
+                    date_math::make_day(year, part(1, 0.0), part(2, 1.0)),
+                    date_math::make_time(part(3, 0.0), part(4, 0.0), part(5, 0.0), part(6, 0.0)),
+                ));
+                Ok(js_number_to_value(time))
+            }
+            BuiltinFunctionKind::DateParse => {
+                let text = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let text = self.value_to_string(&text);
+                Ok(js_number_to_value(Self::parse_date_string(&text)))
             }
             BuiltinFunctionKind::RegExpPrototypeExec => {
                 let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
@@ -59213,6 +59252,139 @@ impl InterpreterCore {
         };
         self.set_object_property(date_id, "__timestamp".to_string(), stored.clone())?;
         Ok(stored)
+    }
+
+    /// Date.parse (ES2020 20.4.3.2) for the date-time string format
+    /// (20.4.1.15): `YYYY[-MM[-DD]][THH:mm[:ss[.sss]]][Z|±HH:mm]` with
+    /// extended `±YYYYYY` years, plus the `toUTCString` form
+    /// `Www, DD Mmm YYYY HH:mm:ss GMT`. Date-only forms are UTC; date-time
+    /// forms without an offset are local time, which is UTC here. Anything
+    /// else is NaN.
+    fn parse_date_string(text: &str) -> f64 {
+        use date_math::{make_date, make_day, make_time, time_clip};
+        let text = text.trim();
+        let digits = |slice: &str, count: usize| -> Option<f64> {
+            (slice.len() == count && slice.bytes().all(|byte| byte.is_ascii_digit()))
+                .then(|| slice.parse::<f64>().ok())
+                .flatten()
+        };
+        // `Thu, 01 Jan 1970 00:00:00 GMT`
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if words.len() == 6 && words[5] == "GMT" && words[0].ends_with(',') {
+            let day = digits(words[1], 2).or_else(|| digits(words[1], 1));
+            let month = MONTHS.iter().position(|name| *name == words[2]);
+            let year = words[3].parse::<f64>().ok();
+            let clock: Vec<&str> = words[4].split(':').collect();
+            if let (Some(day), Some(month), Some(year), [h, m, sec]) =
+                (day, month, year, clock.as_slice())
+                && let (Some(h), Some(m), Some(sec)) = (digits(h, 2), digits(m, 2), digits(sec, 2))
+            {
+                return time_clip(make_date(
+                    make_day(year, month as f64, day),
+                    make_time(h, m, sec, 0.0),
+                ));
+            }
+            return f64::NAN;
+        }
+        let (date_part, time_part) = match text.split_once('T') {
+            Some((date, time)) => (date, Some(time)),
+            None => (text, None),
+        };
+        let (year, rest) = if let Some(extended) = date_part.strip_prefix(['+', '-']) {
+            let Some(year) = extended.get(..6).and_then(|year| digits(year, 6)) else {
+                return f64::NAN;
+            };
+            let year = if date_part.starts_with('-') {
+                if year == 0.0 {
+                    return f64::NAN;
+                }
+                -year
+            } else {
+                year
+            };
+            (year, &extended[6..])
+        } else {
+            let Some(year) = date_part.get(..4).and_then(|year| digits(year, 4)) else {
+                return f64::NAN;
+            };
+            (year, &date_part[4..])
+        };
+        let mut fields = rest.split('-').skip(1);
+        let month = match rest {
+            "" => 1.0,
+            _ => match fields.next().and_then(|month| digits(month, 2)) {
+                Some(month) if (1.0..=12.0).contains(&month) => month,
+                _ => return f64::NAN,
+            },
+        };
+        let day = match fields.next() {
+            None => 1.0,
+            Some(day) => match digits(day, 2) {
+                Some(day) if (1.0..=31.0).contains(&day) => day,
+                _ => return f64::NAN,
+            },
+        };
+        if fields.next().is_some() {
+            return f64::NAN;
+        }
+        let mut offset_minutes = 0.0;
+        let (mut hours, mut minutes, mut seconds, mut millis) = (0.0, 0.0, 0.0, 0.0);
+        if let Some(time) = time_part {
+            let (clock, offset) = if let Some(clock) = time.strip_suffix('Z') {
+                (clock, None)
+            } else if let Some(index) = time.rfind(['+', '-']) {
+                (&time[..index], Some(&time[index..]))
+            } else {
+                (time, None)
+            };
+            if let Some(offset) = offset {
+                let sign = if offset.starts_with('-') { -1.0 } else { 1.0 };
+                let Some((oh, om)) = offset[1..].split_once(':') else {
+                    return f64::NAN;
+                };
+                let (Some(oh), Some(om)) = (digits(oh, 2), digits(om, 2)) else {
+                    return f64::NAN;
+                };
+                offset_minutes = sign * (oh * 60.0 + om);
+            }
+            let (clock, fraction) = match clock.split_once('.') {
+                Some((clock, fraction)) => (clock, Some(fraction)),
+                None => (clock, None),
+            };
+            let pieces: Vec<&str> = clock.split(':').collect();
+            let parsed: Option<Vec<f64>> = pieces.iter().map(|piece| digits(piece, 2)).collect();
+            let Some(parsed) = parsed else {
+                return f64::NAN;
+            };
+            match parsed.as_slice() {
+                [h, m] => {
+                    (hours, minutes) = (*h, *m);
+                }
+                [h, m, sec] => {
+                    (hours, minutes, seconds) = (*h, *m, *sec);
+                }
+                _ => return f64::NAN,
+            }
+            if let Some(fraction) = fraction {
+                if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return f64::NAN;
+                }
+                let padded = format!("{fraction:0<3}");
+                millis = padded[..3].parse::<f64>().unwrap_or(0.0);
+            }
+            if hours > 24.0 || minutes > 59.0 || seconds > 59.0 {
+                return f64::NAN;
+            }
+        }
+        time_clip(
+            make_date(
+                make_day(year, month - 1.0, day),
+                make_time(hours, minutes, seconds, millis),
+            ) - offset_minutes * 60_000.0,
+        )
     }
 
     /// The UTF-8 byte offset of UTF-16 index `index` in `text`; an index

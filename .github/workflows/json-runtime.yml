@@ -102,7 +102,7 @@ jobs:
           retention-days: 7
   array-from-integration:
     if: contains(github.event.head_commit.message, '[array-from-integration]')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 35
     permissions:
       contents: write
@@ -132,15 +132,7 @@ jobs:
           ]
           parent = pathlib.Path(paths[0])
           (root / 'original-baseline.rs').write_bytes(parent.read_bytes())
-          chunks = [
-              '1f46195db2788173a49109f147aef4f3d2fe6506',
-              '5f68aa8d321ab3ae6cae2532b0e6bccc4bf6ff3f',
-              '6da615e9678342f60410054214d3ae9e6e779142',
-              'f136adeea40434f2c128cc41f2d23081003e9aea',
-              '9ef0882fde21d6bfe10263c0f1ad3298df2378f5',
-          ]
-          payload = bytearray()
-          for sha in chunks:
+          def blob(sha):
               request = urllib.request.Request(
                   f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/git/blobs/{sha}',
                   headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
@@ -149,8 +141,18 @@ jobs:
                   data = base64.b64decode(json.load(response)['content'])
               actual = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
               assert actual == sha, (actual, sha)
-              payload.extend(data)
+              return data
+          chunks = [
+              '1f46195db2788173a49109f147aef4f3d2fe6506',
+              '5f68aa8d321ab3ae6cae2532b0e6bccc4bf6ff3f',
+              '6da615e9678342f60410054214d3ae9e6e779142',
+              'f136adeea40434f2c128cc41f2d23081003e9aea',
+              '9ef0882fde21d6bfe10263c0f1ad3298df2378f5',
+          ]
+          payload = b''.join(blob(sha) for sha in chunks)
           assert hashlib.sha1(f'blob {len(payload)}\0'.encode() + payload).hexdigest() == 'acb2684db41e53a5d026bf46b79e737513f60429'
+          migration = root / 'unit-regression-migration.patch'
+          migration.write_bytes(blob('96bd615441a7c3049b6dfff1c19e581686e4f558'))
           patches = json.loads(gzip.decompress(payload))
           for stage, name in enumerate(sorted(patches), 1):
               patch = root / name
@@ -159,6 +161,10 @@ jobs:
               assert set(touched) <= set(paths), touched
               subprocess.run(['git', 'apply', '--check', str(patch)], check=True)
               subprocess.run(['git', 'apply', str(patch)], check=True)
+              if stage == 1:
+                  subprocess.run(['git', 'apply', '--check', str(migration)], check=True)
+                  subprocess.run(['git', 'apply', str(migration)], check=True)
+              assert 'invoke_simple_array_from_callback' not in parent.read_text()
               for path in paths:
                   dest = root / f'stage{stage}' / path
                   dest.parent.mkdir(parents=True, exist_ok=True)
@@ -176,13 +182,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          import base64, hashlib, json, os, pathlib, subprocess, textwrap, urllib.request
           root = pathlib.Path('array-from-validation')
           paths = json.loads((root / 'paths.json').read_text())
           output = {'base': (root / 'revision.txt').read_text().strip(), 'stages': {}}
           for stage in (1, 2):
               subprocess.run(['rustfmt', '--edition', '2024', '--config', 'skip_children=true',
                               *(str(root / f'stage{stage}' / p) for p in paths[1:])], check=True)
+              parent = root / f'stage{stage}' / paths[0]
+              text = parent.read_text()
+              start = text.index('    fn callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td()')
+              end = text.index('\n    #[test]', start)
+              body = textwrap.dedent(text[start:end]).rstrip()
+              formatted = subprocess.run(['rustfmt', '--edition', '2024', '--emit', 'stdout'], input=body, text=True, capture_output=True, check=True).stdout
+              text = text[:start] + textwrap.indent(formatted.rstrip(), '    ') + '\n' + text[end:]
+              parent.write_text(text)
               entries = {}
               for path in paths:
                   data = (root / f'stage{stage}' / path).read_bytes()
@@ -201,6 +215,12 @@ jobs:
           (root / 'source-blobs.json').write_text(json.dumps(output, indent=2))
           print(json.dumps(output, indent=2), flush=True)
           PY
+      - name: Retain prepared source identities before compilation
+        uses: actions/upload-artifact@v4
+        with:
+          name: array-from-sources
+          path: array-from-validation/
+          retention-days: 7
       - name: Select existing native runtime dependency closure
         run: |
           python3 - <<'PY'
@@ -231,10 +251,47 @@ jobs:
           PY
           set -o pipefail
           cargo test --locked -p frankenengine-engine --no-default-features --test array_from_execution -- --nocapture 2>&1 | tee array-from-validation/stage2-tests.log
+      - name: Reexecute migrated private unit assertions without unrelated test modules
+        if: always()
+        run: |
+          test -f array-from-validation/source-blobs.json
+          python3 - <<'PY'
+          import hashlib, pathlib
+          root = pathlib.Path('array-from-validation')
+          parent = pathlib.Path('crates/franken-engine/src/baseline_interpreter.rs')
+          text = parent.read_text()
+          tests = text.split('\nmod tests {\n', 1)[1]
+          names = ['test_module', 'test_module_with_functions', 'test_quickjs_config', 'quickjs_test_core', 'bigint_callback_fixture', 'bigint_callback_peak', 'callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td']
+          bodies = []
+          for name in names:
+              start = tests.index('    fn ' + name + '(')
+              opening = tests.index('{', start)
+              depth = 1
+              end = opening + 1
+              while depth:
+                  if tests[end] == '{': depth += 1
+                  if tests[end] == '}': depth -= 1
+                  end += 1
+              bodies.append(tests[start:end])
+          body = '\n\n'.join(bodies)
+          probe = 'use super::*;\nuse crate::ir_contract::{Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion};\n' + body + '\n\npub fn run() { callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td(); }\n'
+          (root / 'private-unit-bodies.rs').write_text(body)
+          print('Exact selected unit-body SHA256:', hashlib.sha256(body.encode()).hexdigest())
+          pathlib.Path('crates/franken-engine/src/baseline_interpreter/array_from_private_probe.rs').write_text(probe)
+          parent.write_text(text + '\npub mod array_from_private_probe;\n')
+          example = pathlib.Path('crates/franken-engine/examples/array_from_private_probe.rs')
+          example.parent.mkdir(parents=True, exist_ok=True)
+          example.write_text('fn main() { frankenengine_engine::baseline_interpreter::array_from_private_probe::run(); println!("Migrated BigInt unit assertions passed"); }\n')
+          with pathlib.Path('crates/franken-engine/Cargo.toml').open('a') as file:
+              file.write('\n[[example]]\nname = "array_from_private_probe"\npath = "examples/array_from_private_probe.rs"\n')
+          PY
+          set -o pipefail
+          cargo run --locked -p frankenengine-engine --no-default-features --example array_from_private_probe 2>&1 | tee array-from-validation/private-unit.log
       - name: Check Array.from source formatting and strict lint
         if: always()
         run: |
           test -f array-from-validation/source-blobs.json
+          cp array-from-validation/stage2/crates/franken-engine/src/baseline_interpreter.rs crates/franken-engine/src/baseline_interpreter.rs
           rustfmt --edition 2024 --check --config skip_children=true crates/franken-engine/src/baseline_interpreter/array_from.rs crates/franken-engine/tests/array_from_execution.rs
           set -o pipefail
           cargo clippy --locked -p frankenengine-engine --no-default-features --test array_from_execution -- -D warnings 2>&1 | tee array-from-validation/clippy.log

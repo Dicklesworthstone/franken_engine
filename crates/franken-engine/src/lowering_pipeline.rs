@@ -7558,6 +7558,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     // `alloc_pinned_register`), values still on the stack (no rewind happens
     // while it is non-empty, e.g. inside for-in/of bodies), and anything
     // allocated before the statement began (below the floor).
+    //
+    // Root-scope bindings get their registers up front, below every
+    // temporary: allocated lazily, each declaration's binding landed just
+    // above its own initializer temporary and pinned it, so a run of `let`s
+    // cost two registers apiece and never reused one.
+    for binding in ir2
+        .scopes
+        .iter()
+        .filter(|scope| scope.parent.is_none())
+        .flat_map(|scope| scope.bindings.iter())
+    {
+        if !scoped_runtime_binding_ids.contains(&binding.binding_id) {
+            binding_registers
+                .entry(binding.binding_id)
+                .or_insert_with(|| alloc_register(&mut register_cursor));
+        }
+    }
     let mut statement_register_floor: Reg = register_cursor;
     let mut pinned_register_high: Reg = register_cursor;
     let mut register_high_water: Reg = register_cursor;
@@ -17420,6 +17437,12 @@ fn typed_array_constructor_capability(
         "Uint8Array" => Some("builtin:Uint8Array"),
         "Int32Array" => Some("builtin:Int32Array"),
         "Uint32Array" => Some("builtin:Uint32Array"),
+        "Int8Array" => Some("builtin:Int8Array"),
+        "Uint8ClampedArray" => Some("builtin:Uint8ClampedArray"),
+        "Int16Array" => Some("builtin:Int16Array"),
+        "Uint16Array" => Some("builtin:Uint16Array"),
+        "Float32Array" => Some("builtin:Float32Array"),
+        "Float64Array" => Some("builtin:Float64Array"),
         _ => None,
     }
 }
@@ -17450,6 +17473,12 @@ fn known_constructor_typeof_name(name: &str) -> bool {
             | "Uint8Array"
             | "Int32Array"
             | "Uint32Array"
+            | "Int8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Float32Array"
+            | "Float64Array"
             | "DataView"
     )
 }
@@ -25285,6 +25314,7 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         ("Object", "getPrototypeOf") => Some("builtin:ObjectGetPrototypeOf"),
         ("Object", "setPrototypeOf") => Some("builtin:ObjectSetPrototypeOf"),
         ("Object", "defineProperty") => Some("builtin:ObjectDefineProperty"),
+        ("Object", "defineProperties") => Some("builtin:ObjectDefineProperties"),
         ("Object", "getOwnPropertyNames") => Some("builtin:ObjectGetOwnPropertyNames"),
         ("Object", "getOwnPropertySymbols") => Some("builtin:ObjectGetOwnPropertySymbols"),
         ("Object", "getOwnPropertyDescriptor") => Some("builtin:ObjectGetOwnPropertyDescriptor"),
@@ -27131,6 +27161,12 @@ fn hostcall_exception_is_operand_derived(
         | "builtin:Uint8Array"
         | "builtin:Int32Array"
         | "builtin:Uint32Array"
+        | "builtin:Int8Array"
+        | "builtin:Uint8ClampedArray"
+        | "builtin:Int16Array"
+        | "builtin:Uint16Array"
+        | "builtin:Float32Array"
+        | "builtin:Float64Array"
         | "builtin:DataView" => inputs.iter().all(|value| value.shape.is_closed()),
         // Unshadowed native Error-family constructors are finite engine
         // implementations for primitive arguments: stringifying a primitive
@@ -28726,6 +28762,12 @@ fn simulate_ir2_flow_labels(
                             | "builtin:Uint8Array"
                             | "builtin:Int32Array"
                             | "builtin:Uint32Array"
+                            | "builtin:Int8Array"
+                            | "builtin:Uint8ClampedArray"
+                            | "builtin:Int16Array"
+                            | "builtin:Uint16Array"
+                            | "builtin:Float32Array"
+                            | "builtin:Float64Array"
                             | "builtin:DataView"
                     )
                 {

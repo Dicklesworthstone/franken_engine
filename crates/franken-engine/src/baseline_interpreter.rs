@@ -795,6 +795,17 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "EvalError" => Some("EvalError"),
         "URIError" => Some("URIError"),
         "EventEmitter" => Some("EventEmitter"),
+        "ArrayBuffer" => Some("ArrayBuffer"),
+        "DataView" => Some("DataView"),
+        "Int8Array" => Some("Int8Array"),
+        "Uint8Array" => Some("Uint8Array"),
+        "Uint8ClampedArray" => Some("Uint8ClampedArray"),
+        "Int16Array" => Some("Int16Array"),
+        "Uint16Array" => Some("Uint16Array"),
+        "Int32Array" => Some("Int32Array"),
+        "Uint32Array" => Some("Uint32Array"),
+        "Float32Array" => Some("Float32Array"),
+        "Float64Array" => Some("Float64Array"),
         _ => None,
     }
 }
@@ -4755,7 +4766,7 @@ impl BuiltinFunction {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 15] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 26] = [
     "Object",
     "Array",
     "Number",
@@ -4771,6 +4782,20 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 15] = [
     "SyntaxError",
     "EvalError",
     "URIError",
+    // Binary data constructors: direct `new Uint8Array(...)` stays intercepted
+    // at lowering; these bindings make the constructors usable as values
+    // (Test262's testTypedArray.js lists all nine at load).
+    "ArrayBuffer",
+    "DataView",
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float32Array",
+    "Float64Array",
 ];
 
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
@@ -5054,6 +5079,12 @@ pub enum TypedArrayKind {
     Uint8,
     Int32,
     Uint32,
+    Int8,
+    Uint8Clamped,
+    Int16,
+    Uint16,
+    Float32,
+    Float64,
 }
 
 impl TypedArrayKind {
@@ -5062,6 +5093,12 @@ impl TypedArrayKind {
             "builtin:Uint8Array" => Some(Self::Uint8),
             "builtin:Int32Array" => Some(Self::Int32),
             "builtin:Uint32Array" => Some(Self::Uint32),
+            "builtin:Int8Array" => Some(Self::Int8),
+            "builtin:Uint8ClampedArray" => Some(Self::Uint8Clamped),
+            "builtin:Int16Array" => Some(Self::Int16),
+            "builtin:Uint16Array" => Some(Self::Uint16),
+            "builtin:Float32Array" => Some(Self::Float32),
+            "builtin:Float64Array" => Some(Self::Float64),
             _ => None,
         }
     }
@@ -5071,6 +5108,12 @@ impl TypedArrayKind {
             "Uint8Array" => Some(Self::Uint8),
             "Int32Array" => Some(Self::Int32),
             "Uint32Array" => Some(Self::Uint32),
+            "Int8Array" => Some(Self::Int8),
+            "Uint8ClampedArray" => Some(Self::Uint8Clamped),
+            "Int16Array" => Some(Self::Int16),
+            "Uint16Array" => Some(Self::Uint16),
+            "Float32Array" => Some(Self::Float32),
+            "Float64Array" => Some(Self::Float64),
             _ => None,
         }
     }
@@ -5080,13 +5123,21 @@ impl TypedArrayKind {
             Self::Uint8 => "Uint8Array",
             Self::Int32 => "Int32Array",
             Self::Uint32 => "Uint32Array",
+            Self::Int8 => "Int8Array",
+            Self::Uint8Clamped => "Uint8ClampedArray",
+            Self::Int16 => "Int16Array",
+            Self::Uint16 => "Uint16Array",
+            Self::Float32 => "Float32Array",
+            Self::Float64 => "Float64Array",
         }
     }
 
     fn element_size(self) -> usize {
         match self {
-            Self::Uint8 => 1,
-            Self::Int32 | Self::Uint32 => 4,
+            Self::Uint8 | Self::Int8 | Self::Uint8Clamped => 1,
+            Self::Int16 | Self::Uint16 => 2,
+            Self::Int32 | Self::Uint32 | Self::Float32 => 4,
+            Self::Float64 => 8,
         }
     }
 }
@@ -54690,6 +54741,40 @@ impl InterpreterCore {
         Self::typed_array_unsigned_mod(value, 1u64 << 32) as u32
     }
 
+    /// ES2020 7.1.4 ToNumber for a typed-array element store (primitives only;
+    /// anything else stores NaN).
+    fn typed_array_number(value: &Value) -> f64 {
+        match value {
+            Value::Int(n) => *n as f64,
+            Value::Bool(true) => 1.0,
+            Value::Bool(false) | Value::Null => 0.0,
+            Value::Undefined => f64::NAN,
+            _ => Self::coerce_to_float(value).unwrap_or(f64::NAN),
+        }
+    }
+
+    /// ES2020 7.1.12 ToUint8Clamp: clamp to [0, 255], ties to even.
+    fn typed_array_u8_clamped_value(value: &Value) -> u8 {
+        let number = Self::typed_array_number(value);
+        if number.is_nan() || number <= 0.0 {
+            return 0;
+        }
+        if number >= 255.0 {
+            return 255;
+        }
+        let floor = number.floor();
+        let rounded = if number - floor > 0.5 {
+            floor + 1.0
+        } else if number - floor < 0.5 {
+            floor
+        } else if floor % 2.0 == 0.0 {
+            floor
+        } else {
+            floor + 1.0
+        };
+        rounded as u8
+    }
+
     fn read_typed_array_element_bytes(
         view: &TypedArrayView,
         bytes: &[u8],
@@ -54715,6 +54800,24 @@ impl InterpreterCore {
                 let mut raw = [0u8; 4];
                 raw.copy_from_slice(slot);
                 Ok(Value::Int(i64::from(u32::from_le_bytes(raw))))
+            }
+            TypedArrayKind::Int8 => Ok(Value::Int(i64::from(slot[0] as i8))),
+            TypedArrayKind::Uint8Clamped => Ok(Value::Int(i64::from(slot[0]))),
+            TypedArrayKind::Int16 => Ok(Value::Int(i64::from(i16::from_le_bytes([
+                slot[0], slot[1],
+            ])))),
+            TypedArrayKind::Uint16 => Ok(Value::Int(i64::from(u16::from_le_bytes([
+                slot[0], slot[1],
+            ])))),
+            TypedArrayKind::Float32 => {
+                let mut raw = [0u8; 4];
+                raw.copy_from_slice(slot);
+                Ok(js_number_to_value(f64::from(f32::from_le_bytes(raw))))
+            }
+            TypedArrayKind::Float64 => {
+                let mut raw = [0u8; 8];
+                raw.copy_from_slice(slot);
+                Ok(js_number_to_value(f64::from_le_bytes(raw)))
             }
         }
     }
@@ -54744,6 +54847,23 @@ impl InterpreterCore {
             }
             TypedArrayKind::Uint32 => {
                 slot.copy_from_slice(&Self::typed_array_u32_value(value).to_le_bytes());
+            }
+            TypedArrayKind::Int8 => {
+                slot[0] = Self::typed_array_unsigned_mod(value, 1 << 8) as u8;
+            }
+            TypedArrayKind::Uint8Clamped => {
+                slot[0] = Self::typed_array_u8_clamped_value(value);
+            }
+            TypedArrayKind::Int16 | TypedArrayKind::Uint16 => {
+                let bits = Self::typed_array_unsigned_mod(value, 1 << 16) as u16;
+                slot.copy_from_slice(&bits.to_le_bytes());
+            }
+            TypedArrayKind::Float32 => {
+                let number = Self::typed_array_number(value) as f32;
+                slot.copy_from_slice(&number.to_le_bytes());
+            }
+            TypedArrayKind::Float64 => {
+                slot.copy_from_slice(&Self::typed_array_number(value).to_le_bytes());
             }
         }
         Ok(())
@@ -60873,6 +60993,90 @@ impl InterpreterCore {
         let metadata_bytes = Self::estimate_closure_method_metadata_entry_bytes(&metadata);
         self.apply_memory_component_delta(0, metadata_bytes)?;
         self.closure_method_metadata.insert(*closure_id, metadata);
+        Ok(())
+    }
+
+    /// Argument `index` of a builtin call, or `undefined` when absent.
+    fn arg_or_undefined(&self, args: RegRange, index: u32) -> Result<Value, InterpreterError> {
+        if index < args.count {
+            self.read_reg(args.start + index)
+        } else {
+            Ok(Value::Undefined)
+        }
+    }
+
+    /// ES2020 6.2.5.5 ToPropertyDescriptor, narrowed to this heap's property
+    /// model (plain values and `Value::Accessor`; attributes are not modeled).
+    fn property_value_from_descriptor(
+        &mut self,
+        descriptor_val: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let effective_value = match descriptor_val.clone() {
+            Value::Object(desc_id) => {
+                let descriptor = self
+                    .heap
+                    .get(desc_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: desc_id.0 })?;
+                let has_get = descriptor.properties.contains_key("get");
+                let has_set = descriptor.properties.contains_key("set");
+                let has_value = descriptor.properties.contains_key("value");
+                let get = descriptor.properties.get("get").cloned();
+                let set = descriptor.properties.get("set").cloned();
+                let value = descriptor.properties.get("value").cloned();
+                if has_get || has_set {
+                    if has_value {
+                        return Err(InterpreterError::TypeError {
+                            expected: "either data or accessor property descriptor".to_string(),
+                            got: "descriptor mixes value with get/set".to_string(),
+                        });
+                    }
+                    let endpoint =
+                        |name: &str,
+                         value: Option<Value>|
+                         -> Result<Option<Arc<Value>>, InterpreterError> {
+                            match value.unwrap_or(Value::Undefined) {
+                                Value::Undefined => Ok(None),
+                                callable if callable.is_callable() => Ok(Some(Arc::new(callable))),
+                                other => Err(InterpreterError::TypeError {
+                                    expected: format!("callable or undefined descriptor.{name}"),
+                                    got: other.type_name().to_string(),
+                                }),
+                            }
+                        };
+                    Value::Accessor {
+                        get: endpoint("get", get)?,
+                        set: endpoint("set", set)?,
+                    }
+                } else {
+                    value.unwrap_or(Value::Undefined)
+                }
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object property descriptor".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        Ok(effective_value)
+    }
+
+    /// Install an own property from a validated descriptor value, keeping
+    /// array length metadata in step with an indexed definition.
+    fn define_own_property_value(
+        &mut self,
+        obj_id: ObjectId,
+        prop_name: RuntimePropertyKey,
+        effective_value: Value,
+    ) -> Result<(), InterpreterError> {
+        let array_index = prop_name.as_str().and_then(Self::canonical_array_index_key);
+        self.set_object_runtime_property(obj_id, prop_name, effective_value)?;
+        if let Some(index) = array_index {
+            // Defining an own array index grows length just like an indexed
+            // assignment, including accessor descriptors. Do not invoke the
+            // getter while maintaining array metadata.
+            self.maintain_array_index_assignment(obj_id, index)?;
+        }
         Ok(())
     }
 
@@ -69294,7 +69498,15 @@ impl InterpreterCore {
                 let buffer_id = self.alloc_array_buffer_object(byte_length)?;
                 Ok(Value::Object(buffer_id))
             }
-            "builtin:Uint8Array" | "builtin:Int32Array" | "builtin:Uint32Array" => {
+            "builtin:Uint8Array"
+            | "builtin:Int32Array"
+            | "builtin:Uint32Array"
+            | "builtin:Int8Array"
+            | "builtin:Uint8ClampedArray"
+            | "builtin:Int16Array"
+            | "builtin:Uint16Array"
+            | "builtin:Float32Array"
+            | "builtin:Float64Array" => {
                 let kind = TypedArrayKind::from_builtin_capability(cap).expect(
                     "typed-array constructor branch must use a known typed-array capability",
                 );
@@ -70546,77 +70758,78 @@ impl InterpreterCore {
                 }
             }
             "builtin:ObjectDefineProperty" => {
-                // Object.defineProperty(obj, prop, descriptor) implementation (simplified)
-                if args.count < 3 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start)?;
-                let obj_id = match obj_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't have properties defined
+                // Object.defineProperty(O, P, Attributes), ES2020 19.1.2.4:
+                // TypeError unless O and Attributes are objects.
+                let obj_val = self.arg_or_undefined(args, 0)?;
+                let Value::Object(obj_id) = obj_val else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object target for Object.defineProperty".to_string(),
+                        got: obj_val.type_name().to_string(),
+                    });
                 };
-
-                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_val = self.arg_or_undefined(args, 1)?;
                 let prop_name = self.executable_property_key_from_value(&prop_val);
-
-                let descriptor_val = self.read_reg(args.start + 2)?;
-                let effective_value = match descriptor_val {
-                    Value::Object(desc_id) => {
-                        let descriptor = self
-                            .heap
-                            .get(desc_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound { id: desc_id.0 })?;
-                        let has_get = descriptor.properties.contains_key("get");
-                        let has_set = descriptor.properties.contains_key("set");
-                        let has_value = descriptor.properties.contains_key("value");
-                        let get = descriptor.properties.get("get").cloned();
-                        let set = descriptor.properties.get("set").cloned();
-                        let value = descriptor.properties.get("value").cloned();
-                        if has_get || has_set {
-                            if has_value {
-                                return Err(InterpreterError::TypeError {
-                                    expected: "either data or accessor property descriptor"
-                                        .to_string(),
-                                    got: "descriptor mixes value with get/set".to_string(),
-                                });
-                            }
-                            let endpoint = |name: &str,
-                                            value: Option<Value>|
-                             -> Result<Option<Arc<Value>>, InterpreterError> {
-                                match value.unwrap_or(Value::Undefined) {
-                                    Value::Undefined => Ok(None),
-                                    callable if callable.is_callable() => {
-                                        Ok(Some(Arc::new(callable)))
-                                    }
-                                    other => Err(InterpreterError::TypeError {
-                                        expected: format!("callable or undefined descriptor.{name}"),
-                                        got: other.type_name().to_string(),
-                                    }),
-                                }
-                            };
-                            Value::Accessor {
-                                get: endpoint("get", get)?,
-                                set: endpoint("set", set)?,
-                            }
-                        } else {
-                            value.unwrap_or(Value::Undefined)
-                        }
-                    }
-                    other => other,
-                };
-                let array_index = prop_name.as_str().and_then(Self::canonical_array_index_key);
-                self.set_object_runtime_property(obj_id, prop_name, effective_value)?;
-                if let Some(index) = array_index {
-                    // Defining an own array index grows length just like an
-                    // indexed assignment, including accessor descriptors. Do
-                    // not invoke the getter while maintaining array metadata.
-                    self.maintain_array_index_assignment(obj_id, index)?;
-                }
+                let descriptor_val = self.arg_or_undefined(args, 2)?;
+                let effective_value = self.property_value_from_descriptor(&descriptor_val)?;
+                self.define_own_property_value(obj_id, prop_name, effective_value)?;
                 let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
                 self.join_object_mutation_label(obj_id, &mutation_label)?;
 
                 Ok(obj_val) // Return the original object
+            }
+            "builtin:ObjectDefineProperties" => {
+                // Object.defineProperties(O, Properties), ES2020 19.1.2.3.1
+                // ObjectDefineProperties: every descriptor is read and validated
+                // before any property is defined.
+                let obj_val = self.arg_or_undefined(args, 0)?;
+                let Value::Object(obj_id) = obj_val else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object target for Object.defineProperties".to_string(),
+                        got: obj_val.type_name().to_string(),
+                    });
+                };
+                let props_val = self.arg_or_undefined(args, 1)?;
+                let props_id = match props_val {
+                    Value::Object(props_id) => props_id,
+                    Value::Undefined | Value::Null => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object-coercible Object.defineProperties properties"
+                                .to_string(),
+                            got: props_val.type_name().to_string(),
+                        });
+                    }
+                    // A primitive has no own enumerable data keys to define.
+                    _ => return Ok(obj_val),
+                };
+                let keys = self
+                    .heap
+                    .get(props_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: props_id.0 })?
+                    .properties
+                    .exact_keys()
+                    .into_iter()
+                    .filter(|key| self.ordinary_own_string_key_is_enumerable(props_id, key))
+                    .collect::<Vec<_>>();
+                let mut definitions = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let key_text = key.to_string();
+                    let descriptor_val = self.proxy_aware_get_property(
+                        module,
+                        props_id,
+                        &key_text,
+                        Value::Object(props_id),
+                        0,
+                    )?;
+                    let effective_value = self.property_value_from_descriptor(&descriptor_val)?;
+                    definitions.push((key, effective_value));
+                }
+                for (key, effective_value) in definitions {
+                    let prop_name = self.executable_property_key_from_value(&Value::Str(key));
+                    self.define_own_property_value(obj_id, prop_name, effective_value)?;
+                }
+                let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
+                self.join_object_mutation_label(obj_id, &mutation_label)?;
+                Ok(obj_val)
             }
             "builtin:Proxy" => {
                 let target = self.read_object_argument(args, 0, "Proxy target object")?;
@@ -81043,7 +81256,11 @@ impl InterpreterCore {
         Ok(match key {
             "prototype" => Value::Object(self.ensure_builtin_prototype(name)?),
             "name" => Value::str(name),
-            "length" => Value::Int(i64::from(!matches!(name, "Map" | "Set"))),
+            "length" => Value::Int(match name {
+                "Map" | "Set" => 0,
+                name if TypedArrayKind::from_type_name(name).is_some() => 3,
+                _ => 1,
+            }),
             _ => {
                 if let Some(value) = Self::function_prototype_property(key) {
                     value
@@ -81094,6 +81311,12 @@ impl InterpreterCore {
             "Boolean" => self.dispatch_builtin_hostcall("builtin:Boolean", args, Some(module)),
             "Map" => self.dispatch_builtin_hostcall("builtin:Map", args, Some(module)),
             "Set" => self.dispatch_builtin_hostcall("builtin:Set", args, Some(module)),
+            "ArrayBuffer" | "DataView" => {
+                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
+            }
+            name if TypedArrayKind::from_type_name(name).is_some() => {
+                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
+            }
             "Array" => {
                 let values = self.call_arguments(args)?;
                 if let [length @ (Value::Int(_) | Value::Float(_))] = values.as_slice() {

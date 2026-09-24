@@ -42,7 +42,6 @@ const CLASSES: &str = "bd-performance-conformance-bridge-tu32j.15.12";
 const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
 const ARGUMENTS: &str = "bd-performance-conformance-bridge-tu32j.14.5";
-const FUNCTION_BUILTINS: &str = "bd-performance-conformance-bridge-tu32j.16.2";
 const DATE_JSON: &str = "bd-performance-conformance-bridge-tu32j.16.5";
 const COLLECTIONS: &str = "bd-performance-conformance-bridge-tu32j.16.6";
 const TYPED_ARRAYS: &str = "bd-performance-conformance-bridge-tu32j.16.7";
@@ -57,7 +56,9 @@ const ASYNC_FUNCTION_EXPRESSIONS: &str = "bd-xbv99";
 /// Case id -> expectation. Every corpus case must appear exactly once.
 /// Filled from the observed verdicts of the first run (2026-09-23): 20 match
 /// Node, 4 are refused by design, 26 fail. 29_promise_all_race moved to Pass
-/// with bd-auy04 (`new Promise`).
+/// with bd-auy04 (`new Promise`); on 2026-09-24 06, 15, 37, 40, 42 and 47
+/// started matching Node (standard globals and Map/Set iteration, bd-9vouw.17;
+/// number formatting, bd-9vouw.2; large integer literals, bd-6vl81).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::KnownFailure(CLASSES)),
@@ -67,7 +68,7 @@ const LEDGER: &[(&str, Expect)] = &[
         "05_async_order",
         Expect::KnownFailure(ASYNC_FUNCTION_EXPRESSIONS),
     ),
-    ("06_map_set", Expect::KnownFailure(COLLECTIONS)),
+    ("06_map_set", Expect::Pass),
     ("07_json", Expect::KnownFailure(DATE_JSON)),
     (
         "08_regexp_named_lookbehind",
@@ -82,7 +83,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("12_typed_arrays", Expect::KnownFailure(TYPED_ARRAYS)),
     ("13_bigint", Expect::KnownFailure(BIGINT)),
     ("14_labels_switch", Expect::Pass),
-    ("15_try_finally", Expect::KnownFailure(ERRORS_AND_URI)),
+    ("15_try_finally", Expect::Pass),
     ("16_defineProperty", Expect::KnownFailure(DESCRIPTORS)),
     ("17_array_methods", Expect::Pass),
     ("18_string_methods", Expect::Pass),
@@ -110,15 +111,12 @@ const LEDGER: &[(&str, Expect)] = &[
     ("34_string_unicode", Expect::KnownFailure(ERRORS_AND_URI)),
     ("35_math", Expect::Pass),
     ("36_closures_in_loops", Expect::Pass),
-    ("37_function_props", Expect::KnownFailure(FUNCTION_BUILTINS)),
+    ("37_function_props", Expect::Pass),
     ("38_json_reviver", Expect::Pass),
     ("39_destructure_default", Expect::Pass),
-    (
-        "40_exceptions_across_calls",
-        Expect::KnownFailure(ERRORS_AND_URI),
-    ),
+    ("40_exceptions_across_calls", Expect::Pass),
     ("41_int_overflow", Expect::Pass),
-    ("42_int_overflow_loop", Expect::KnownFailure(NUMBER)),
+    ("42_int_overflow_loop", Expect::Pass),
     ("43_arguments_object", Expect::KnownFailure(ARGUMENTS)),
     (
         "44_regexp_backref_lookahead",
@@ -126,7 +124,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ),
     ("45_date_methods", Expect::KnownFailure(DATE_JSON)),
     ("46_catch_message", Expect::Pass),
-    ("47_number_to_string", Expect::KnownFailure(NUMBER)),
+    ("47_number_to_string", Expect::Pass),
     ("48_ambient_process", Expect::DeniedByDesign),
     ("49_ambient_require_fs", Expect::DeniedByDesign),
     ("50_getter_label_join", Expect::Pass),

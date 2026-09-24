@@ -61092,11 +61092,20 @@ impl InterpreterCore {
         definition_label: Label,
     ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(&key)?;
-        let Value::Closure(closure_id) = function else {
-            return Err(InterpreterError::TypeError {
-                expected: "fresh closure for concise method definition".to_string(),
-                got: function.type_name().to_string(),
-            });
+        let closure_id = match function {
+            Value::Closure(closure_id) | Value::AsyncFunction(closure_id) => closure_id,
+            // Generator and async-generator methods (`*m(){}`, `async *m(){}`)
+            // install as ordinary data properties; they carry no
+            // [[HomeObject]] yet, so `super` inside them is unsupported.
+            Value::GeneratorFunction(_) | Value::AsyncGeneratorFunction(_) => {
+                return self.set_object_runtime_property(object_id, key, function);
+            }
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "fresh closure for concise method definition".to_string(),
+                    got: function.type_name().to_string(),
+                });
+            }
         };
         self.closures
             .get(closure_id as usize)

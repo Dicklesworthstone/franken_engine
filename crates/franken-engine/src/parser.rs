@@ -2508,6 +2508,53 @@ fn physical_line_segments(source: &str) -> Vec<PhysicalLine<'_>> {
 
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
+/// Whether `statement` ends in a statement header still waiting for its
+/// braced body: `function f(...)`, `if (...)`, `class C extends B`, and a
+/// trailing `else` / `else if (...)` / `catch (e)` / `finally` / `try` / `do`
+/// after an earlier clause's `}`. A header already followed by a body (so
+/// `if (x) f()` before a block) does not qualify.
+fn statement_header_awaits_body(statement: &str) -> bool {
+    let tail = statement
+        .rfind('}')
+        .map_or(statement, |index| &statement[index + 1..])
+        .trim();
+    let tail = tail
+        .strip_prefix("else")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .map_or(tail, str::trim_start);
+    if tail.is_empty() || tail.contains('{') || tail.ends_with(';') {
+        return false;
+    }
+    if ["else", "do", "try", "finally"].contains(&tail) || starts_with_keyword(tail, "class") {
+        return true;
+    }
+    let params_close_at_end = |header: &str| {
+        header.find('(').is_some_and(|open| {
+            extract_balanced(&header[open..], '(', ')')
+                .is_some_and(|(_, rest)| rest.trim().is_empty())
+        })
+    };
+    let parenthesized_header = [
+        "function", "async", "if", "for", "while", "switch", "with", "catch",
+    ]
+    .iter()
+    .any(|keyword| starts_with_keyword(tail, keyword));
+    if parenthesized_header {
+        return params_close_at_end(tail);
+    }
+    // A function expression header ending the statement:
+    // `var f = function (a)` / `x.m = function* g()`.
+    tail.match_indices("function").any(|(index, _)| {
+        let before_ok = tail[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !(ch.is_alphanumeric() || ch == '_' || ch == '$'));
+        before_ok
+            && starts_with_keyword(&tail[index..], "function")
+            && params_close_at_end(&tail[index..])
+    })
+}
+
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let physical_lines = physical_line_segments(text);
     let mut result = Vec::with_capacity(16);
@@ -2575,7 +2622,18 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                         || (starts_with_keyword(trimmed_line, "else")
                             && starts_with_keyword(previous, "if")))
             });
-            if dot_continues_previous || block_clause_continues_previous {
+            // A brace on its own line after a statement header (Allman
+            // style: `function f(a)\n{`, `if (x)\n{`, `else\n{`) opens that
+            // header's body; it is not a new block statement.
+            let brace_continues_header = trimmed_line.starts_with('{')
+                && result.last().is_some_and(|prev| {
+                    let segments = split_statement_segments(&prev.text);
+                    let Some((_, _, previous)) = segments.last() else {
+                        return false;
+                    };
+                    statement_header_awaits_body(strip_leading_labels(previous).trim())
+                });
+            if dot_continues_previous || block_clause_continues_previous || brace_continues_header {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;
                 current_source_boundaries = prev.source_boundaries;
@@ -7467,18 +7525,54 @@ fn try_parse_object_method(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Option<(Expression, Expression, bool)>> {
+    // Method modifiers (ES2020 14.4-14.7): `*name(){}`, `async name(){}`,
+    // `async *name(){}`. `async(){}` / `async: v` name a property `async`.
+    let (is_async, part) = match part.strip_prefix("async") {
+        Some(rest)
+            if rest.starts_with([' ', '\t'])
+                && !rest.trim_start().starts_with(['(', ':', ',', '=']) =>
+        {
+            (true, rest.trim_start())
+        }
+        _ => (false, part),
+    };
+    let (is_generator, part) = match part.strip_prefix('*') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, part),
+    };
+    let method_value = |params_and_body: &str,
+                        context: &mut ParseExecutionContext<'_>|
+     -> ParseResult<Expression> {
+        if !is_async && !is_generator {
+            return parse_object_method_function_expression(
+                params_and_body,
+                span,
+                context,
+                recursion_depth + 1,
+            );
+        }
+        let source = if is_generator {
+            format!("*{params_and_body}")
+        } else {
+            params_and_body.to_string()
+        };
+        parse_function_expression_with_super(
+            &source,
+            span,
+            context,
+            recursion_depth + 1,
+            true,
+            is_async,
+        )
+    };
+
     // Computed method: `[expr](params){body}`.
     if part.starts_with('[') {
         if let Some((key_inner, after)) = extract_balanced(part, '[', ']') {
             let after = after.trim_start();
             if after.starts_with('(') {
                 let key = parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
-                let value = parse_object_method_function_expression(
-                    after,
-                    span,
-                    context,
-                    recursion_depth + 1,
-                )?;
+                let value = method_value(after, context)?;
                 return Ok(Some((key, value, true)));
             }
         }
@@ -7504,12 +7598,7 @@ fn try_parse_object_method(
     } else {
         return Ok(None);
     };
-    let value = parse_object_method_function_expression(
-        &part[paren_idx..],
-        span,
-        context,
-        recursion_depth + 1,
-    )?;
+    let value = method_value(&part[paren_idx..], context)?;
     Ok(Some((key, value, false)))
 }
 

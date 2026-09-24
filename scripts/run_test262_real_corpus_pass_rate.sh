@@ -59,7 +59,7 @@ command -v python3 >/dev/null 2>&1 || refuse "python3 required"
 # Resolve a tree at the pinned commit (the same pin the harness enforces). A
 # shared checkout that has moved past the pin is never checked out in place; a
 # detached worktree of the pin is used instead.
-# shellcheck source=lib/test262_pinned_tree.sh
+# shellcheck source=scripts/lib/test262_pinned_tree.sh
 source "$SCRIPT_DIR/lib/test262_pinned_tree.sh"
 PINNED_COMMIT="$(test262_pinned_commit "$PINS")"
 [[ -n "$PINNED_COMMIT" ]] || refuse "no test262_commit pin in $PINS"

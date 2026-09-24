@@ -82,6 +82,15 @@ fn class_static_members_install_on_the_constructor() {
 }
 
 #[test]
+fn functions_expose_name_and_length() {
+    check("function foo(a, b) {} foo.length + ':' + foo.name;", "2:foo");
+    check("function rest(a, ...more) {} rest.length;", "1");
+    // `name` / `length` are non-writable: a sloppy assignment is ignored.
+    check("function F() {} F.length = 5; F.length;", "0");
+    check("function F() {} F.name = 'x'; F.name;", "F");
+}
+
+#[test]
 fn prototype_path_is_unchanged() {
     check(
         "function F() {} F.prototype.m = function () { return 7; }; F.x = 1; new F().m() + F.x;",

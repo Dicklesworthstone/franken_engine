@@ -25,7 +25,8 @@ impl InterpreterCore {
         args: RegRange,
         operation: ReflectPropertyOperation,
     ) -> Result<Value, InterpreterError> {
-        let target = self.read_object_argument(args, 0, "Reflect target object")?;
+        let target_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let target = self.reflection_target_object(&target_value)?;
         let input_key = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let is_set = matches!(operation, ReflectPropertyOperation::Set);
         let value = if is_set {
@@ -34,8 +35,9 @@ impl InterpreterCore {
             Value::Undefined
         };
         let receiver = if matches!(operation, ReflectPropertyOperation::Get) || is_set {
+            // The storage object is not the callable's observable identity.
             self.builtin_arg(args, if is_set { 3 } else { 2 })?
-                .unwrap_or(Value::Object(target))
+                .unwrap_or_else(|| target_value.clone())
         } else {
             Value::Undefined
         };
@@ -45,7 +47,8 @@ impl InterpreterCore {
             .as_ref()
             .map(Self::estimate_label_bytes)
             .unwrap_or(0);
-        let roots_bytes = Self::estimate_value_bytes(&input_key)
+        let roots_bytes = Self::estimate_value_bytes(&target_value)
+            .saturating_add(Self::estimate_value_bytes(&input_key))
             .saturating_add(Self::estimate_value_bytes(&value))
             .saturating_add(Self::estimate_value_bytes(&receiver));
         let scratch = saved_bytes.saturating_add(roots_bytes);
@@ -62,6 +65,9 @@ impl InterpreterCore {
             self.json_charge_work()?;
             // No guest Get occurs here. A revoked target Proxy is checked by
             // its internal method only AFTER property conversion has run.
+            if !matches!(&target_value, Value::Object(_)) {
+                self.json_observe_reachable_value(&target_value)?;
+            }
             for root in [&Value::Object(target), &input_key, &value, &receiver] {
                 self.json_observe_reachable_value(root)?;
             }
@@ -93,8 +99,11 @@ impl InterpreterCore {
                     // writes may keep a conservative floor; successful writes
                     // must never outlive a refused label allocation.
                     self.reflect_admit_mutation_label(target)?;
-                    if let Value::Object(receiver) = &receiver {
-                        self.reflect_admit_mutation_label(*receiver)?;
+                    if receiver.is_object_like()
+                        && let Some(receiver_object) =
+                            self.iterator_carrier_backing_id(&receiver, "Reflect receiver")?
+                    {
+                        self.reflect_admit_mutation_label(receiver_object)?;
                     }
                     Value::Bool(self.proxy_aware_set_runtime_property(
                         module, target, &key, value, receiver, 0,
@@ -587,5 +596,175 @@ impl InterpreterCore {
         self.mutate_heap(|heap| heap[cell.0 as usize] = projected);
         self.mutate_function_prototypes(|registry| registry.insert(key, cell));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod constructor_property_tests {
+    use super::*;
+    use crate::ast::ParseGoal;
+    use crate::capability::RuntimeCapability;
+    use crate::ir_contract::Ir0Module;
+    use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    fn assert_native_true(source: &str) {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "constructor-reflect.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("constructor reflection source must parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "constructor-reflect.js"),
+            &LoweringContext::new("reflect-trace", "reflect-decision", "reflect-policy"),
+        )
+        .expect("constructor reflection source must lower")
+        .ir3;
+        for mut config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "constructor-reflect");
+            let result = core
+                .execute(&module)
+                .expect("constructor reflection must execute");
+            assert_eq!(result.value, Value::Bool(true), "{source}");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "constructor reflection must release callback and key reservations"
+            );
+        }
+    }
+
+    #[test]
+    fn reflect_reads_existing_constructor_property_storage() {
+        assert_native_true(
+            r#"
+            Reflect.get(Date, 'now') === Date.now && Reflect.has(Date, 'now') &&
+                Reflect.get(Promise, 'resolve') === Promise.resolve &&
+                Reflect.has(Promise, 'resolve') && !Reflect.has(Promise, 'now') &&
+                Reflect.get(Date, 'prototype') === Date.prototype;
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_getters_keep_default_and_explicit_receivers() {
+        assert_native_true(
+            r#"
+            const parent = { get receiver() { return this; } };
+            Object.setPrototypeOf(Date, parent);
+            const other = {};
+            Reflect.get(Date, 'receiver') === Date &&
+                Reflect.get(Date, 'receiver', other) === other &&
+                Reflect.has(Date, 'receiver') && typeof Date === 'function';
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_inherited_setters_keep_callable_this() {
+        assert_native_true(
+            r#"
+            let seen;
+            let argument;
+            const parent = { set value(next) { seen = this; argument = next; } };
+            Object.setPrototypeOf(Date, parent);
+            const first = Reflect.set(Date, 'value', 17);
+            const original = seen === Date && argument === 17;
+            const other = {};
+            const second = Reflect.set(Date, 'value', 23, other);
+            first && original && second && seen === other && argument === 23;
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_data_writes_honor_distinct_object_receiver() {
+        assert_native_true(
+            r#"
+            const other = {};
+            const stored = Reflect.set(Date, 'extra', 42, other);
+            const absent = !Reflect.has(Date, 'extra');
+            const frozen = Object.preventExtensions(other);
+            stored && absent && frozen === other && other.extra === 42 &&
+                !Reflect.set(Date, 'newKey', 7, other) &&
+                Reflect.set(Date, 'extra', 43, other) && other.extra === 43;
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_deletion_updates_the_same_live_property_store() {
+        assert_native_true(
+            r#"
+            const present = Reflect.has(Date, 'now');
+            const deleted = Reflect.deleteProperty(Date, 'now');
+            present && deleted && !Reflect.has(Date, 'now') &&
+                Reflect.get(Date, 'now') === undefined &&
+                Reflect.deleteProperty(Date, 'now') &&
+                Reflect.has(Promise, 'resolve') && typeof Date === 'function';
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_symbol_lookup_and_deletion_respect_inheritance() {
+        assert_native_true(
+            r#"
+            const key = Symbol('inherited');
+            const parent = { [key]: 33 };
+            Object.setPrototypeOf(Promise, parent);
+            Reflect.get(Promise, key) === 33 && Reflect.has(Promise, key) &&
+                Reflect.deleteProperty(Promise, key) &&
+                Reflect.get(Promise, key) === 33 && parent[key] === 33;
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_key_conversion_runs_once_after_target_validation() {
+        assert_native_true(
+            r#"
+            let count = 0;
+            const key = { [Symbol.toPrimitive](hint) { count += 1; return 'now'; } };
+            const method = Reflect.get(Date, key);
+            const valid = method === Date.now && count === 1;
+            let rejected = 0;
+            try { Reflect.get(1, key); } catch (e) { rejected += e.name === 'TypeError'; }
+            try { Reflect.set(null, key, 7); } catch (e) { rejected += e.name === 'TypeError'; }
+            try { Reflect.has(undefined, key); } catch (e) { rejected += e.name === 'TypeError'; }
+            try { Reflect.deleteProperty(false, key); } catch (e) { rejected += e.name === 'TypeError'; }
+            valid && rejected === 4 && count === 1;
+            "#,
+        );
+    }
+
+    #[test]
+    fn constructor_getter_throw_preserves_identity_and_restores_context() {
+        assert_native_true(
+            r#"
+            const failure = {};
+            const parent = { get value() { throw failure; } };
+            Object.setPrototypeOf(Promise, parent);
+            let caught = false;
+            try { Reflect.get(Promise, 'value'); } catch (error) { caught = error === failure; }
+            caught && Reflect.has(Promise, 'value') &&
+                Reflect.get(Date, 'now') === Date.now;
+            "#,
+        );
     }
 }

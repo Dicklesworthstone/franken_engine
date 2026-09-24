@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.test262-compatibility-pass-rate.v1",
-  "generated_at_utc": "2026-05-02T11:37:43Z",
+  "generated_at_utc": "2026-09-24T01:40:00Z",
   "component": "test262_release_gate",
   "proof_state": "checked_in_vectors_provisional",
   "claim_scope": "checked_in_test262_derived_vectors",
@@ -12,12 +12,12 @@
   "runner_command": "cargo test -p frankenengine-engine --test test262_release_gate",
   "denominator": 3,
   "passed": 2,
-  "failed": 0,
+  "failed": 1,
   "skipped": 0,
-  "waived": 1,
+  "waived": 0,
   "timed_out": 0,
   "crashed": 0,
-  "blocked_failures": 0,
+  "blocked_failures": 1,
   "pass_rate_millionths": 666666,
   "full_suite_claim_allowed": false,
   "limitations": [

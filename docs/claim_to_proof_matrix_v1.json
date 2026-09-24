@@ -6,7 +6,7 @@
       "artifact_path": "docs/evidence/FE-CLAIM-001",
       "claim_id": "FE-CLAIM-001",
       "claim_scope": "runtime",
-      "claim_text": "FrankenEngine is a native Rust runtime for adversarial extension workloads with deterministic replay, cryptographic decision receipts, and fleet-scale containment.",
+      "claim_text": "FrankenEngine is a native Rust runtime for adversarial JavaScript/TypeScript extension workloads.",
       "decision": "allow_observed",
       "downgrade_text": "Native Rust runtime target with deterministic replay and evidence-led containment under active verification.",
       "freshness_days": 30,

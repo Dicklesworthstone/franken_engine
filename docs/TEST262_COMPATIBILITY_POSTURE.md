@@ -14,8 +14,8 @@ Current checked-in vector measurement:
 | Test262 pin | `d0c1b4555b03dd404873fd6422a4b5da00136500` |
 | Denominator | `3` |
 | Passed | `2` |
-| Failed | `0` |
-| Waived | `1` |
+| Failed | `1` (blocking) |
+| Waived | `0` |
 | Timed out | `0` |
 | Crashed | `0` |
 | Pass rate | `666666` millionths |

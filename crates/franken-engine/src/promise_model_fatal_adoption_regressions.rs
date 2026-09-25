@@ -219,7 +219,9 @@ fn fatal_adoption_uses_reaction_slot_identity_not_record_backreference() {
     adopt(&mut store, source, child);
     // The public serialized backreference is not permission to address a
     // different slot: traversal must follow the actual reaction handle.
-    store.get_mut(child).unwrap().handle = PromiseHandle(u32::MAX);
+    store
+        .update(child, |record| record.handle = PromiseHandle(u32::MAX))
+        .unwrap();
     assert_eq!(
         store.extend_terminal_rejection_without_jobs(source, &Label::Internal, 2),
         Ok(2)

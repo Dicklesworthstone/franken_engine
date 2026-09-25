@@ -411,10 +411,213 @@ pub(crate) fn estimate_witness_event_memory_bytes(event: &WitnessEvent) -> u64 {
     }
 }
 
+/// Full-walk estimate of a witness log; the reference that
+/// [`WitnessLog::memory_bytes`] must equal.
 fn estimate_witness_log_memory_bytes(witness: &[WitnessEvent]) -> u64 {
     estimate_vector_slot_bytes::<WitnessEvent>(witness.len()).saturating_add(saturating_sum(
         witness.iter().map(estimate_witness_event_memory_bytes),
     ))
+}
+
+/// Replay witness log with a running total of its events' dynamic payload
+/// bytes (bd-9vouw.31).
+///
+/// The log grows with every Promise and task operation and is charged to the
+/// interpreter's resident-memory estimate, which the interpreter re-reads
+/// around each Promise operation. Summing the events on every read made each
+/// operation O(operations so far). Serialized as the plain event sequence;
+/// reads go through `Deref<Target = [WitnessEvent]>`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WitnessLog {
+    events: Vec<WitnessEvent>,
+    dynamic_bytes: u64,
+}
+
+impl WitnessLog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, event: WitnessEvent) {
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_add(estimate_witness_event_memory_bytes(&event));
+        self.events.push(event);
+    }
+
+    pub fn pop(&mut self) -> Option<WitnessEvent> {
+        let event = self.events.pop()?;
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_sub(estimate_witness_event_memory_bytes(&event));
+        Some(event)
+    }
+
+    pub fn remove(&mut self, index: usize) -> WitnessEvent {
+        let event = self.events.remove(index);
+        self.dynamic_bytes = self
+            .dynamic_bytes
+            .saturating_sub(estimate_witness_event_memory_bytes(&event));
+        event
+    }
+
+    /// Resident bytes of the log: event slots plus their dynamic payloads.
+    fn memory_bytes(&self) -> u64 {
+        let bytes = estimate_vector_slot_bytes::<WitnessEvent>(self.events.len())
+            .saturating_add(self.dynamic_bytes);
+        #[cfg(test)]
+        debug_assert_eq!(bytes, estimate_witness_log_memory_bytes(&self.events));
+        bytes
+    }
+}
+
+impl std::ops::Deref for WitnessLog {
+    type Target = [WitnessEvent];
+
+    fn deref(&self) -> &[WitnessEvent] {
+        &self.events
+    }
+}
+
+impl From<Vec<WitnessEvent>> for WitnessLog {
+    fn from(events: Vec<WitnessEvent>) -> Self {
+        let dynamic_bytes = saturating_sum(events.iter().map(estimate_witness_event_memory_bytes));
+        Self {
+            events,
+            dynamic_bytes,
+        }
+    }
+}
+
+impl Serialize for WitnessLog {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.events.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for WitnessLog {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<WitnessEvent>::deserialize(deserializer).map(Self::from)
+    }
+}
+
+/// Resident bytes owned by one occupied Promise record beyond its arena slot:
+/// settled payload, label, reaction slots and reaction labels.
+fn estimate_promise_record_memory_bytes(record: &PromiseRecord) -> u64 {
+    let state_bytes = match &record.state {
+        PromiseState::Pending => 0,
+        PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
+            estimate_js_value_memory_bytes(value)
+        }
+    };
+    state_bytes
+        .saturating_add(estimate_label_memory_bytes(&record.label))
+        .saturating_add(estimate_vector_slot_bytes::<PromiseReaction>(
+            record.reactions.len(),
+        ))
+        .saturating_add(saturating_sum(
+            record
+                .reactions
+                .iter()
+                .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
+        ))
+}
+
+/// Promise arena slots with the occupied count and the sum of
+/// [`estimate_promise_record_memory_bytes`] kept current (bd-9vouw.31).
+/// Every in-place record mutation goes through [`Self::update`], which
+/// re-measures that one record. Serialized as the plain slot sequence; reads
+/// go through `Deref<Target = [Option<PromiseRecord>]>`.
+#[derive(Debug, Clone, Default)]
+struct PromiseSlots {
+    slots: Vec<Option<PromiseRecord>>,
+    occupied: usize,
+    record_bytes: u64,
+}
+
+impl PromiseSlots {
+    fn push(&mut self, record: Option<PromiseRecord>) {
+        if let Some(record) = &record {
+            self.occupied += 1;
+            self.record_bytes = self
+                .record_bytes
+                .saturating_add(estimate_promise_record_memory_bytes(record));
+        }
+        self.slots.push(record);
+    }
+
+    fn release(&mut self, record: &Option<PromiseRecord>) {
+        if let Some(record) = record {
+            self.occupied -= 1;
+            self.record_bytes = self
+                .record_bytes
+                .saturating_sub(estimate_promise_record_memory_bytes(record));
+        }
+    }
+
+    fn pop(&mut self) -> Option<Option<PromiseRecord>> {
+        let record = self.slots.pop()?;
+        self.release(&record);
+        Some(record)
+    }
+
+    /// Vacate one slot, keeping later handles stable.
+    fn take(&mut self, index: usize) -> Option<PromiseRecord> {
+        let record = self.slots.get_mut(index)?.take();
+        self.release(&record);
+        record
+    }
+
+    /// Mutate one occupied record in place and re-measure it.
+    fn update<R>(
+        &mut self,
+        index: usize,
+        mutate: impl FnOnce(&mut PromiseRecord) -> R,
+    ) -> Option<R> {
+        let record = self.slots.get_mut(index)?.as_mut()?;
+        let before = estimate_promise_record_memory_bytes(record);
+        let result = mutate(record);
+        let after = estimate_promise_record_memory_bytes(record);
+        self.record_bytes = self
+            .record_bytes
+            .saturating_sub(before)
+            .saturating_add(after);
+        Some(result)
+    }
+
+    fn memory_bytes(&self) -> u64 {
+        estimate_vector_slot_bytes::<PromiseRecord>(self.occupied).saturating_add(self.record_bytes)
+    }
+}
+
+impl std::ops::Deref for PromiseSlots {
+    type Target = [Option<PromiseRecord>];
+
+    fn deref(&self) -> &[Option<PromiseRecord>] {
+        &self.slots
+    }
+}
+
+impl Serialize for PromiseSlots {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.slots.serialize(serializer)
+    }
+}
+
+impl From<Vec<Option<PromiseRecord>>> for PromiseSlots {
+    fn from(slots: Vec<Option<PromiseRecord>>) -> Self {
+        let mut rebuilt = Self::default();
+        for record in slots {
+            rebuilt.push(record);
+        }
+        rebuilt
+    }
+}
+
+impl<'de> Deserialize<'de> for PromiseSlots {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<Option<PromiseRecord>>::deserialize(deserializer).map(Self::from)
+    }
 }
 
 pub(crate) fn estimate_microtask_payload_memory_bytes(task: &Microtask) -> u64 {
@@ -484,25 +687,38 @@ impl std::fmt::Display for PromiseError {
 pub struct PromiseStore {
     /// All promise slots, indexed by handle. Execution-boundary cancellation
     /// leaves a vacant slot so later handles remain stable and monotonic.
-    promises: Vec<Option<PromiseRecord>>,
+    promises: PromiseSlots,
     /// Monotonic creation counter.
     next_seq: u64,
     /// Witness log for replay.
-    witness: Vec<WitnessEvent>,
+    witness: WitnessLog,
 }
 
 impl PromiseStore {
     pub fn new() -> Self {
         Self {
-            promises: Vec::new(),
+            promises: PromiseSlots::default(),
             next_seq: 0,
-            witness: Vec::new(),
+            witness: WitnessLog::new(),
         }
     }
 
     /// Deterministic resident-memory estimate for every Promise-owned record,
-    /// reaction, label, settled payload, and replay witness.
+    /// reaction, label, settled payload, and replay witness, read from the
+    /// running totals (bd-9vouw.31). Unit-test builds assert it against
+    /// [`Self::estimated_memory_bytes_by_walk`] on every call.
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        let bytes = self
+            .promises
+            .memory_bytes()
+            .saturating_add(self.witness.memory_bytes());
+        #[cfg(test)]
+        debug_assert_eq!(bytes, self.estimated_memory_bytes_by_walk());
+        bytes
+    }
+
+    /// Full-walk reference for [`Self::estimated_memory_bytes`].
+    pub(crate) fn estimated_memory_bytes_by_walk(&self) -> u64 {
         estimate_vector_slot_bytes::<PromiseRecord>(
             self.promises
                 .iter()
@@ -713,8 +929,9 @@ impl PromiseStore {
             })
             .ok_or(PromiseError::InvalidHandle { handle })?;
 
-        let record = self.promises[handle.0 as usize]
-            .take()
+        let record = self
+            .promises
+            .take(handle.0 as usize)
             .expect("validated pending Promise slot remains occupied");
         self.witness.remove(witness_index);
         Ok(record)
@@ -728,11 +945,15 @@ impl PromiseStore {
             .ok_or(PromiseError::InvalidHandle { handle })
     }
 
-    /// Get a mutable reference to a Promise by handle.
-    fn get_mut(&mut self, handle: PromiseHandle) -> Result<&mut PromiseRecord, PromiseError> {
+    /// Mutate a Promise record in place, keeping the store's resident-memory
+    /// totals exact (bd-9vouw.31).
+    fn update<R>(
+        &mut self,
+        handle: PromiseHandle,
+        mutate: impl FnOnce(&mut PromiseRecord) -> R,
+    ) -> Result<R, PromiseError> {
         self.promises
-            .get_mut(handle.0 as usize)
-            .and_then(Option::as_mut)
+            .update(handle.0 as usize, mutate)
             .ok_or(PromiseError::InvalidHandle { handle })
     }
 
@@ -750,10 +971,12 @@ impl PromiseStore {
         }
 
         // Drain reactions before mutating state to avoid borrow issues.
-        let record = self.get_mut(handle)?;
-        let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
-        record.state = PromiseState::Fulfilled(value.clone());
-        record.label = label.clone();
+        let reactions: Vec<PromiseReaction> = self.update(handle, |record| {
+            let reactions = std::mem::take(&mut record.reactions);
+            record.state = PromiseState::Fulfilled(value.clone());
+            record.label = label.clone();
+            reactions
+        })?;
 
         self.witness.push(WitnessEvent::PromiseFulfilled {
             handle,
@@ -789,15 +1012,17 @@ impl PromiseStore {
             return Err(PromiseError::AlreadySettled { handle });
         }
 
-        let record = self.get_mut(handle)?;
-        let reactions: Vec<PromiseReaction> = std::mem::take(&mut record.reactions);
-        let rejection_handled = record.rejection_handled
-            || reactions
-                .iter()
-                .any(|reaction| reaction.kind == ReactionKind::Reject);
-        record.state = PromiseState::Rejected(reason.clone());
-        record.label = label.clone();
-        record.rejection_handled = rejection_handled;
+        let reactions: Vec<PromiseReaction> = self.update(handle, |record| {
+            let reactions = std::mem::take(&mut record.reactions);
+            let rejection_handled = record.rejection_handled
+                || reactions
+                    .iter()
+                    .any(|reaction| reaction.kind == ReactionKind::Reject);
+            record.state = PromiseState::Rejected(reason.clone());
+            record.label = label.clone();
+            record.rejection_handled = rejection_handled;
+            reactions
+        })?;
 
         self.witness.push(WitnessEvent::PromiseRejected {
             handle,
@@ -870,7 +1095,7 @@ impl PromiseStore {
         label: &Label,
         terminal_epoch: u64,
     ) -> Result<usize, PromiseError> {
-        let root = self.get_mut(handle)?;
+        let root = self.get(handle)?;
         if root.state.is_settled() {
             return if root.terminal_epoch == terminal_epoch {
                 Ok(0)
@@ -891,44 +1116,46 @@ impl PromiseStore {
             },
         };
 
-        root.state = PromiseState::Rejected(JsValue::Undefined);
-        root.label = terminal_label.clone();
-        root.rejection_handled = false;
-        root.terminal_epoch = 0;
+        self.update(handle, |root| {
+            root.state = PromiseState::Rejected(JsValue::Undefined);
+            root.label = terminal_label.clone();
+            root.rejection_handled = false;
+            root.terminal_epoch = 0;
+        })?;
         let mut pending = Some(handle);
         let mut rejected_count = 0usize;
 
         while let Some(current) = pending {
             // Only occupied slots are linked, and this walk never vacates one.
-            let record = self
-                .get_mut(current)
+            let (next, reactions) = self
+                .update(current, |record| {
+                    let next = record
+                        .terminal_epoch
+                        .checked_sub(1)
+                        .map(|index| PromiseHandle(index as u32));
+                    record.terminal_epoch = terminal_epoch;
+                    (next, std::mem::take(&mut record.reactions))
+                })
                 .expect("terminal-rejection worklist contains occupied slots");
-            pending = record
-                .terminal_epoch
-                .checked_sub(1)
-                .map(|index| PromiseHandle(index as u32));
-            record.terminal_epoch = terminal_epoch;
-            let reactions = std::mem::take(&mut record.reactions);
+            pending = next;
             rejected_count = rejected_count.saturating_add(1);
 
             for reaction in reactions {
                 let child_handle = reaction.result_promise;
-                let Some(child) = self
-                    .promises
-                    .get_mut(child_handle.0 as usize)
-                    .and_then(Option::as_mut)
-                else {
-                    continue;
-                };
-                if child.state.is_settled() {
-                    continue;
+                let link = pending.map_or(0, |next| u64::from(next.0) + 1);
+                let linked = self.promises.update(child_handle.0 as usize, |child| {
+                    if child.state.is_settled() {
+                        return false;
+                    }
+                    child.state = PromiseState::Rejected(JsValue::Undefined);
+                    child.label = terminal_label.clone();
+                    child.rejection_handled = false;
+                    child.terminal_epoch = link;
+                    true
+                });
+                if linked == Some(true) {
+                    pending = Some(child_handle);
                 }
-
-                child.state = PromiseState::Rejected(JsValue::Undefined);
-                child.label = terminal_label.clone();
-                child.rejection_handled = false;
-                child.terminal_epoch = pending.map_or(0, |next| u64::from(next.0) + 1);
-                pending = Some(child_handle);
             }
         }
         Ok(rejected_count)
@@ -964,19 +1191,20 @@ impl PromiseStore {
 
         match state {
             PromiseState::Pending => {
-                let record = self.get_mut(handle)?;
-                record.reactions.push(PromiseReaction {
-                    kind: ReactionKind::Fulfill,
-                    handler: on_fulfilled,
-                    result_promise,
-                    label: label.clone(),
-                });
-                record.reactions.push(PromiseReaction {
-                    kind: ReactionKind::Reject,
-                    handler: on_rejected,
-                    result_promise,
-                    label,
-                });
+                self.update(handle, |record| {
+                    record.reactions.push(PromiseReaction {
+                        kind: ReactionKind::Fulfill,
+                        handler: on_fulfilled,
+                        result_promise,
+                        label: label.clone(),
+                    });
+                    record.reactions.push(PromiseReaction {
+                        kind: ReactionKind::Reject,
+                        handler: on_rejected,
+                        result_promise,
+                        label,
+                    });
+                })?;
             }
             PromiseState::Fulfilled(value) => {
                 queue.enqueue(Microtask::PromiseReaction {
@@ -1007,7 +1235,7 @@ impl PromiseStore {
         // PerformPromiseThen marks the source handled even when the rejection
         // callback is the implicit thrower. In that case the queued rejection
         // job transfers any unhandled rejection to `result_promise`.
-        self.get_mut(handle)?.rejection_handled = true;
+        self.update(handle, |record| record.rejection_handled = true)?;
 
         Ok(result_promise)
     }
@@ -1054,20 +1282,20 @@ impl PromiseStore {
         if self.get(source)?.state.is_settled() {
             return Err(PromiseError::AlreadySettled { handle: source });
         }
-        let record = self.get_mut(source)?;
-        // Adopting a promise handles it, exactly like PerformPromiseThen and
-        // then_for_await: a later rejection flows into `target` through the
-        // forwarding reaction below and must never surface as unhandled.
-        record.rejection_handled = true;
-        for kind in [ReactionKind::Fulfill, ReactionKind::Reject] {
-            record.reactions.push(PromiseReaction {
-                kind,
-                handler: None,
-                result_promise: target,
-                label: label.clone(),
-            });
-        }
-        Ok(())
+        self.update(source, |record| {
+            // Adopting a promise handles it, exactly like PerformPromiseThen and
+            // then_for_await: a later rejection flows into `target` through the
+            // forwarding reaction below and must never surface as unhandled.
+            record.rejection_handled = true;
+            for kind in [ReactionKind::Fulfill, ReactionKind::Reject] {
+                record.reactions.push(PromiseReaction {
+                    kind,
+                    handler: None,
+                    result_promise: target,
+                    label: label.clone(),
+                });
+            }
+        })
     }
 
     /// Register the internal identity/thrower reactions used by `await`.
@@ -1090,20 +1318,21 @@ impl PromiseStore {
 
         match state {
             PromiseState::Pending => {
-                let record = self.get_mut(handle)?;
-                record.rejection_handled = true;
-                record.reactions.push(PromiseReaction {
-                    kind: ReactionKind::Fulfill,
-                    handler: None,
-                    result_promise,
-                    label: label.clone(),
-                });
-                record.reactions.push(PromiseReaction {
-                    kind: ReactionKind::Reject,
-                    handler: None,
-                    result_promise,
-                    label,
-                });
+                self.update(handle, |record| {
+                    record.rejection_handled = true;
+                    record.reactions.push(PromiseReaction {
+                        kind: ReactionKind::Fulfill,
+                        handler: None,
+                        result_promise,
+                        label: label.clone(),
+                    });
+                    record.reactions.push(PromiseReaction {
+                        kind: ReactionKind::Reject,
+                        handler: None,
+                        result_promise,
+                        label,
+                    });
+                })?;
             }
             PromiseState::Fulfilled(value) => {
                 queue.enqueue(Microtask::PromiseReaction {
@@ -1114,7 +1343,7 @@ impl PromiseStore {
                 });
             }
             PromiseState::Rejected(reason) => {
-                self.get_mut(handle)?.rejection_handled = true;
+                self.update(handle, |record| record.rejection_handled = true)?;
                 queue.enqueue(Microtask::PromiseRejection {
                     reason,
                     result_promise,
@@ -1155,15 +1384,12 @@ impl PromiseStore {
 
     /// Number of promises in the store.
     pub fn len(&self) -> usize {
-        self.promises
-            .iter()
-            .filter(|record| record.is_some())
-            .count()
+        self.promises.occupied
     }
 
     /// Whether the store is empty.
     pub fn is_empty(&self) -> bool {
-        self.promises.iter().all(Option::is_none)
+        self.promises.occupied == 0
     }
 
     /// Get the witness log (for replay/forensics).
@@ -1199,29 +1425,127 @@ impl Default for PromiseStore {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MicrotaskQueue {
     /// The queue.
-    tasks: Vec<Option<Microtask>>,
+    tasks: MicrotaskSlots,
     /// Read cursor — avoids Vec shifting.
     cursor: usize,
     /// Monotonic enqueue counter for witness events.
     enqueue_count: u64,
     /// Witness log.
-    witness: Vec<WitnessEvent>,
+    witness: WitnessLog,
+}
+
+/// Microtask buffer slots with the pending count and the sum of pending
+/// payload bytes kept current (bd-9vouw.31). Pending tasks only ever sit at or
+/// after the read cursor: `dequeue` takes every slot it passes, `compact`
+/// drains only consumed slots and rollback pops only a pending tail. So the
+/// occupied count equals [`MicrotaskQueue::pending_count`]. Serialized as the
+/// plain slot sequence; reads go through `Deref<Target = [Option<Microtask>]>`.
+#[derive(Debug, Clone, Default)]
+struct MicrotaskSlots {
+    slots: Vec<Option<Microtask>>,
+    occupied: usize,
+    payload_bytes: u64,
+}
+
+impl MicrotaskSlots {
+    fn push(&mut self, task: Option<Microtask>) {
+        if let Some(task) = &task {
+            self.occupied += 1;
+            self.payload_bytes = self
+                .payload_bytes
+                .saturating_add(estimate_microtask_payload_memory_bytes(task));
+        }
+        self.slots.push(task);
+    }
+
+    fn release(&mut self, task: &Option<Microtask>) {
+        if let Some(task) = task {
+            self.occupied -= 1;
+            self.payload_bytes = self
+                .payload_bytes
+                .saturating_sub(estimate_microtask_payload_memory_bytes(task));
+        }
+    }
+
+    #[cfg(test)]
+    fn pop(&mut self) -> Option<Option<Microtask>> {
+        let task = self.slots.pop()?;
+        self.release(&task);
+        Some(task)
+    }
+
+    fn take(&mut self, index: usize) -> Option<Microtask> {
+        let task = self.slots.get_mut(index)?.take();
+        self.release(&task);
+        task
+    }
+
+    fn drain_prefix(&mut self, len: usize) {
+        for task in self.slots.drain(..len) {
+            if let Some(task) = &task {
+                self.occupied -= 1;
+                self.payload_bytes = self
+                    .payload_bytes
+                    .saturating_sub(estimate_microtask_payload_memory_bytes(task));
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for MicrotaskSlots {
+    type Target = [Option<Microtask>];
+
+    fn deref(&self) -> &[Option<Microtask>] {
+        &self.slots
+    }
+}
+
+impl Serialize for MicrotaskSlots {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.slots.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MicrotaskSlots {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let slots = Vec::<Option<Microtask>>::deserialize(deserializer)?;
+        let mut rebuilt = Self::default();
+        for task in slots {
+            rebuilt.push(task);
+        }
+        Ok(rebuilt)
+    }
 }
 
 impl MicrotaskQueue {
     pub fn new() -> Self {
         Self {
-            tasks: Vec::new(),
+            tasks: MicrotaskSlots::default(),
             cursor: 0,
             enqueue_count: 0,
-            witness: Vec::new(),
+            witness: WitnessLog::new(),
         }
     }
 
     /// Deterministic resident-memory estimate for physical queue slots,
     /// pending task payloads, labels, and replay witnesses. Consumed slots stay
-    /// charged until [`Self::compact`] releases them.
+    /// charged until [`Self::compact`] releases them. Read from running
+    /// totals (bd-9vouw.31); unit-test builds assert it against
+    /// [`Self::estimated_memory_bytes_by_walk`] on every call.
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        let bytes = estimate_vector_slot_bytes::<Option<Microtask>>(self.tasks.len())
+            .saturating_add(self.tasks.payload_bytes)
+            .saturating_add(self.witness.memory_bytes())
+            .saturating_add(estimate_vector_slot_bytes::<WitnessEvent>(
+                self.tasks.occupied,
+            ));
+        #[cfg(test)]
+        debug_assert_eq!(bytes, self.estimated_memory_bytes_by_walk());
+        bytes
+    }
+
+    /// Full-walk reference for [`Self::estimated_memory_bytes`].
+    pub(crate) fn estimated_memory_bytes_by_walk(&self) -> u64 {
         estimate_vector_slot_bytes::<Option<Microtask>>(self.tasks.len())
             .saturating_add(saturating_sum(
                 self.tasks
@@ -1235,7 +1559,7 @@ impl MicrotaskQueue {
             // job out of the queue can never grow resident memory after the
             // queue has already been mutated.
             .saturating_add(estimate_vector_slot_bytes::<WitnessEvent>(
-                self.pending_count(),
+                self.pending_count_by_walk(),
             ))
     }
 
@@ -1287,7 +1611,7 @@ impl MicrotaskQueue {
             // Buffer slots are a suffix of all enqueues. Compaction changes
             // their local offsets, not the enqueue IDs used by replay.
             let index = self.enqueue_count - self.tasks.len() as u64 + self.cursor as u64;
-            let task = self.tasks[self.cursor].take();
+            let task = self.tasks.take(self.cursor);
             self.cursor += 1;
             if task.is_some() {
                 self.witness.push(WitnessEvent::MicrotaskDequeued { index });
@@ -1299,13 +1623,17 @@ impl MicrotaskQueue {
 
     /// Check if there are pending microtasks.
     pub fn is_empty(&self) -> bool {
-        self.tasks[self.cursor.min(self.tasks.len())..]
-            .iter()
-            .all(Option::is_none)
+        self.pending_count() == 0
     }
 
     /// Number of pending (unprocessed) microtasks.
     pub fn pending_count(&self) -> usize {
+        #[cfg(test)]
+        debug_assert_eq!(self.tasks.occupied, self.pending_count_by_walk());
+        self.tasks.occupied
+    }
+
+    fn pending_count_by_walk(&self) -> usize {
         self.tasks[self.cursor.min(self.tasks.len())..]
             .iter()
             .filter(|task| task.is_some())
@@ -1325,7 +1653,7 @@ impl MicrotaskQueue {
     /// Compact the internal buffer (call after draining a full turn).
     pub fn compact(&mut self) {
         if self.cursor > 0 {
-            self.tasks.drain(..self.cursor);
+            self.tasks.drain_prefix(self.cursor);
             self.cursor = 0;
         }
     }
@@ -1580,7 +1908,7 @@ pub struct EventLoop {
     /// The virtual clock.
     pub clock: VirtualClock,
     /// Witness log for event loop level events.
-    pub witness: Vec<WitnessEvent>,
+    pub witness: WitnessLog,
     /// Maximum number of microtasks to drain per turn (safety limit).
     pub max_microtasks_per_turn: u64,
 }
@@ -1591,7 +1919,7 @@ impl EventLoop {
             microtasks: MicrotaskQueue::new(),
             macrotasks: MacrotaskQueue::new(),
             clock: VirtualClock::new(),
-            witness: Vec::new(),
+            witness: WitnessLog::new(),
             max_microtasks_per_turn: 100_000,
         }
     }
@@ -1600,10 +1928,24 @@ impl EventLoop {
     /// event-loop-level witness log. The virtual clock and safety limit are
     /// inline numeric state and add no dynamic charge.
     pub(crate) fn estimated_memory_bytes(&self) -> u64 {
+        self.microtasks.estimated_memory_bytes().saturating_add(
+            self.estimated_macrotask_and_witness_memory_bytes(self.witness.memory_bytes()),
+        )
+    }
+
+    /// Full-walk reference for [`Self::estimated_memory_bytes`] (bd-9vouw.31).
+    pub(crate) fn estimated_memory_bytes_by_walk(&self) -> u64 {
         self.microtasks
+            .estimated_memory_bytes_by_walk()
+            .saturating_add(self.estimated_macrotask_and_witness_memory_bytes(
+                estimate_witness_log_memory_bytes(&self.witness),
+            ))
+    }
+
+    fn estimated_macrotask_and_witness_memory_bytes(&self, witness_bytes: u64) -> u64 {
+        self.macrotasks
             .estimated_memory_bytes()
-            .saturating_add(self.macrotasks.estimated_memory_bytes())
-            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
+            .saturating_add(witness_bytes)
             // A selected task appends `MacrotaskExecuted` and may first append
             // `ClockAdvanced`. Reserve both slots while the task is pending;
             // `turn()` therefore only transfers or releases ownership.
@@ -2540,13 +2882,15 @@ mod tests {
                 creation_seq: 0,
                 rejection_handled: false,
                 terminal_epoch: 0,
-            })],
+            })]
+            .into(),
             next_seq: 1,
             witness: vec![WitnessEvent::PromiseFulfilled {
                 handle: PromiseHandle(0),
                 value: value.clone(),
                 label: label.clone(),
-            }],
+            }]
+            .into(),
         };
 
         let expected = estimate_vector_slot_bytes::<PromiseRecord>(1)

@@ -7119,6 +7119,267 @@ struct ClosureValue {
     captured_env: Vec<ScopeFrame>,
 }
 
+/// One binding cell held by a long-lived accounting surface (bd-9vouw.31).
+#[derive(Debug, Clone)]
+struct ColdBindingCell {
+    /// Keeps the allocation alive so the address key cannot be reused by a
+    /// different cell while this entry exists.
+    _cell: Weak<RefCell<ScopeBindingState>>,
+    /// Number of binding entries across the cold surfaces that alias the cell.
+    aliases: usize,
+    /// Payload charged for the cell, refreshed on every write to it.
+    charged_bytes: u64,
+}
+
+/// Exact ledger of the binding cells reachable from closure captured
+/// environments and suspended generator / isolated async activations
+/// (bd-9vouw.31).
+///
+/// bd-sblaq charges each physical cell's payload exactly once across every
+/// accounted surface. Deriving that by walking every closure environment on
+/// each scope operation made every operation O(live closures), so programs
+/// with N live closures or pending async calls ran in O(N^2). These surfaces
+/// change only when a closure is created or rolled back, when an activation is
+/// parked or resumed, and when one of their cells is written, so the deduped
+/// payload is maintained at those points. The live scope chain and the
+/// call-frame saved chains are still walked per operation, skipping cells
+/// this ledger already charges; `shared_binding_cell_payloads_memory_bytes`
+/// remains the full-walk oracle.
+#[derive(Debug, Clone, Default)]
+struct ColdBindingCells {
+    cells: BTreeMap<usize, ColdBindingCell>,
+    payload_bytes: u64,
+}
+
+impl ColdBindingCells {
+    fn key(cell: &Rc<RefCell<ScopeBindingState>>) -> usize {
+        Rc::as_ptr(cell) as usize
+    }
+
+    fn contains(&self, cell: &Rc<RefCell<ScopeBindingState>>) -> bool {
+        self.cells.contains_key(&Self::key(cell))
+    }
+
+    fn register_cell(&mut self, cell: &Rc<RefCell<ScopeBindingState>>) {
+        match self.cells.entry(Self::key(cell)) {
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().aliases += 1;
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let charged_bytes = InterpreterCore::estimate_binding_cell_payload_bytes(cell);
+                self.payload_bytes = self.payload_bytes.saturating_add(charged_bytes);
+                entry.insert(ColdBindingCell {
+                    _cell: Rc::downgrade(cell),
+                    aliases: 1,
+                    charged_bytes,
+                });
+            }
+        }
+    }
+
+    fn release_cell(&mut self, cell: &Rc<RefCell<ScopeBindingState>>) {
+        let std::collections::btree_map::Entry::Occupied(mut entry) =
+            self.cells.entry(Self::key(cell))
+        else {
+            debug_assert!(false, "released a binding cell the ledger does not hold");
+            return;
+        };
+        let record = entry.get_mut();
+        record.aliases -= 1;
+        if record.aliases == 0 {
+            self.payload_bytes = self.payload_bytes.saturating_sub(record.charged_bytes);
+            entry.remove();
+        }
+    }
+
+    fn register_frames(&mut self, frames: &[ScopeFrame]) {
+        for frame in frames {
+            for binding in frame.bindings.values() {
+                self.register_cell(&binding.state);
+            }
+        }
+    }
+
+    fn release_frames(&mut self, frames: &[ScopeFrame]) {
+        for frame in frames {
+            for binding in frame.bindings.values() {
+                self.release_cell(&binding.state);
+            }
+        }
+    }
+
+    /// Frames reachable from a suspended activation: its scope chain and
+    /// every call frame's saved caller chain (the surfaces
+    /// `accumulate_generator_execution_cell_payload_bytes` walks).
+    fn register_activation(&mut self, execution: &GeneratorExecutionSnapshot) {
+        self.register_frames(&execution.scope_chain.frames);
+        for frame in &execution.call_stack {
+            if let Some(saved) = &frame.saved_scope_chain {
+                self.register_frames(saved);
+            }
+        }
+    }
+
+    fn release_activation(&mut self, execution: &GeneratorExecutionSnapshot) {
+        self.release_frames(&execution.scope_chain.frames);
+        for frame in &execution.call_stack {
+            if let Some(saved) = &frame.saved_scope_chain {
+                self.release_frames(saved);
+            }
+        }
+    }
+
+    /// Re-charge a cell after its value or label was written. A cell no cold
+    /// surface holds is charged by the live walk instead.
+    fn refresh_cell(&mut self, cell: &Rc<RefCell<ScopeBindingState>>) {
+        if let Some(record) = self.cells.get_mut(&Self::key(cell)) {
+            let next_bytes = InterpreterCore::estimate_binding_cell_payload_bytes(cell);
+            self.payload_bytes = self
+                .payload_bytes
+                .saturating_sub(record.charged_bytes)
+                .saturating_add(next_bytes);
+            record.charged_bytes = next_bytes;
+        }
+    }
+}
+
+/// The closure store plus the running accounting totals derived from it
+/// (bd-9vouw.31). Entries are only appended, popped on rollback, or cleared,
+/// so the structural bytes of every captured environment are summed as
+/// closures come and go, and each captured cell is registered in the shared
+/// cold-cell ledger. Reads go through `Deref<Target = [ClosureValue]>`; there
+/// is deliberately no mutable access to an entry.
+#[derive(Debug, Clone, Default)]
+struct ClosureTable {
+    entries: Vec<ClosureValue>,
+    /// Sum of `InterpreterCore::estimate_closure_bytes` over `entries`.
+    structural_bytes: u64,
+    /// Cells reachable from closure environments and from suspended
+    /// generator / isolated async activations, deduplicated across both.
+    cold_cells: ColdBindingCells,
+}
+
+impl ClosureTable {
+    fn push(&mut self, closure: ClosureValue) {
+        self.structural_bytes = self
+            .structural_bytes
+            .saturating_add(InterpreterCore::estimate_closure_bytes(&closure));
+        self.cold_cells.register_frames(&closure.captured_env);
+        self.entries.push(closure);
+    }
+
+    fn pop(&mut self) -> Option<ClosureValue> {
+        let closure = self.entries.pop()?;
+        self.structural_bytes = self
+            .structural_bytes
+            .saturating_sub(InterpreterCore::estimate_closure_bytes(&closure));
+        self.cold_cells.release_frames(&closure.captured_env);
+        Some(closure)
+    }
+
+    fn clear(&mut self) {
+        while self.pop().is_some() {}
+    }
+
+    fn structural_bytes(&self) -> u64 {
+        self.structural_bytes
+    }
+
+    /// Call after writing a binding cell's value or label, once the write
+    /// borrow is released, so a cell held by a cold surface is re-charged.
+    fn refresh_cell(&mut self, cell: &Rc<RefCell<ScopeBindingState>>) {
+        self.cold_cells.refresh_cell(cell);
+    }
+
+    /// Store `next` in a suspended-activation slot, keeping the cold-cell
+    /// ledger exact, and return the previous occupant.
+    fn replace_activation(
+        &mut self,
+        slot: &mut Option<GeneratorExecutionSnapshot>,
+        next: Option<GeneratorExecutionSnapshot>,
+    ) -> Option<GeneratorExecutionSnapshot> {
+        if let Some(execution) = &next {
+            self.cold_cells.register_activation(execution);
+        }
+        let previous = std::mem::replace(slot, next);
+        if let Some(execution) = &previous {
+            self.cold_cells.release_activation(execution);
+        }
+        previous
+    }
+}
+
+impl std::ops::Deref for ClosureTable {
+    type Target = [ClosureValue];
+
+    fn deref(&self) -> &[ClosureValue] {
+        &self.entries
+    }
+}
+
+impl<'a> IntoIterator for &'a ClosureTable {
+    type Item = &'a ClosureValue;
+    type IntoIter = std::slice::Iter<'a, ClosureValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+/// A closure-id keyed side table that keeps the running total of its entries'
+/// estimated bytes (bd-9vouw.31), so the closure accounting component does not
+/// re-walk every entry on each call setup and closure creation. Reads go
+/// through `Deref<Target = BTreeMap>`; writes must use `insert` / `remove`.
+#[derive(Debug, Clone)]
+struct ClosureSideTable<V> {
+    entries: BTreeMap<u32, V>,
+    bytes: u64,
+    entry_bytes: fn(&V) -> u64,
+}
+
+impl<V> ClosureSideTable<V> {
+    fn new(entry_bytes: fn(&V) -> u64) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            bytes: 0,
+            entry_bytes,
+        }
+    }
+
+    fn insert(&mut self, closure_id: u32, value: V) -> Option<V> {
+        let added = (self.entry_bytes)(&value);
+        let previous = self.entries.insert(closure_id, value);
+        let removed = previous.as_ref().map_or(0, self.entry_bytes);
+        self.bytes = self.bytes.saturating_sub(removed).saturating_add(added);
+        previous
+    }
+
+    fn remove(&mut self, closure_id: &u32) -> Option<V> {
+        let previous = self.entries.remove(closure_id);
+        if let Some(value) = &previous {
+            self.bytes = self.bytes.saturating_sub((self.entry_bytes)(value));
+        }
+        previous
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.bytes = 0;
+    }
+
+    fn bytes(&self) -> u64 {
+        self.bytes
+    }
+}
+
+impl<V> std::ops::Deref for ClosureSideTable<V> {
+    type Target = BTreeMap<u32, V>;
+
+    fn deref(&self) -> &BTreeMap<u32, V> {
+        &self.entries
+    }
+}
+
 /// Private, per-closure state installed by `DefineMethod`.
 ///
 /// This must not live in guest-visible properties or be keyed by a function
@@ -10901,31 +11162,32 @@ pub struct InterpreterCore {
     /// internal status registers. Entries are identity-deduplicated, so loops
     /// do not grow this table once they keep resolving to the same cell.
     runtime_name_references: Vec<RuntimeNameReference>,
-    /// Closure store: maps closure IDs to captured environments.
-    closures: Vec<ClosureValue>,
+    /// Closure store: maps closure IDs to captured environments, with the
+    /// running accounting totals for them and for suspended activations.
+    closures: ClosureTable,
     /// Non-forgeable concise-method identity and [[HomeObject]], keyed by the
     /// closure occurrence produced while evaluating the object literal.
-    closure_method_metadata: BTreeMap<u32, ClosureMethodMetadata>,
+    closure_method_metadata: ClosureSideTable<ClosureMethodMetadata>,
     /// Non-forgeable lexical `super` binding captured by closures created in a
     /// concise-method frame. Parser context prevents ordinary nested functions
     /// from containing `super`; this private carrier serves the nested-arrow
     /// lane without exposing a guest-writable marker.
-    closure_lexical_super_metadata: BTreeMap<u32, ClosureLexicalSuperMetadata>,
+    closure_lexical_super_metadata: ClosureSideTable<ClosureLexicalSuperMetadata>,
     /// Lexical `this` captured at `CreateArrowClosure` /
     /// `CreateAsyncArrowClosure` (bd-asw4m.3): closure_id -> the creating
     /// frame's `this` value and label. Consulted by
     /// `clone_closure_lexical_this_binding` so every `Call`/`CallMethod`
     /// binds the arrow's defining `this` instead of the receiver or the
     /// caller's live `this`. Ordinary closures have no entry.
-    arrow_lexical_this: BTreeMap<u32, (Value, Label)>,
+    arrow_lexical_this: ClosureSideTable<(Value, Label)>,
     /// Program provenance for closures created by the live interpreter. Test
     /// fixtures that seed the private closure table directly intentionally
     /// have no entry and retain same-module behavior.
-    closure_module_origins: BTreeMap<u32, String>,
+    closure_module_origins: ClosureSideTable<String>,
     /// Generated-artifact program provenance for closures whose function
     /// indices belong to a retained `Function` constructor artifact rather
     /// than to `closure_module_origins`' ordinary module program.
-    closure_generated_function_artifacts: BTreeMap<u32, GeneratedFunctionArtifactHandle>,
+    closure_generated_function_artifacts: ClosureSideTable<GeneratedFunctionArtifactHandle>,
     /// Cross-module calls execute through an isolated wrapper whose local call
     /// stack is intentionally empty. Keep an outer, non-snapshotted depth so
     /// alternating module recursion cannot reset `max_call_depth` at every
@@ -11421,6 +11683,7 @@ impl InterpreterCore {
             });
         }
         binding.state_mut()?.value = value;
+        self.closures.refresh_cell(&binding.state);
         if let Err(error) = self.apply_scope_closure_call_stack_realm_memory_delta(
             previous_scope_bytes,
             previous_closure_bytes,
@@ -11429,6 +11692,7 @@ impl InterpreterCore {
             previous_generated_realm_global_bytes,
         ) {
             binding.restore_state(previous_state)?;
+            self.closures.refresh_cell(&binding.state);
             return Err(error);
         }
         Ok(())
@@ -11759,12 +12023,22 @@ impl InterpreterCore {
             generated_function_realm_globals: None,
             generated_function_realm_generation: 0,
             runtime_name_references: Vec::new(),
-            closures: Vec::new(),
-            closure_method_metadata: BTreeMap::new(),
-            closure_lexical_super_metadata: BTreeMap::new(),
-            arrow_lexical_this: BTreeMap::new(),
-            closure_module_origins: BTreeMap::new(),
-            closure_generated_function_artifacts: BTreeMap::new(),
+            closures: ClosureTable::default(),
+            closure_method_metadata: ClosureSideTable::new(
+                Self::estimate_closure_method_metadata_entry_bytes,
+            ),
+            closure_lexical_super_metadata: ClosureSideTable::new(
+                Self::estimate_closure_lexical_super_metadata_entry_bytes,
+            ),
+            arrow_lexical_this: ClosureSideTable::new(
+                Self::estimate_arrow_lexical_this_entry_bytes,
+            ),
+            closure_module_origins: ClosureSideTable::new(|origin| {
+                Self::estimate_closure_module_origin_entry_bytes(origin)
+            }),
+            closure_generated_function_artifacts: ClosureSideTable::new(|_| {
+                Self::estimate_closure_generated_function_artifact_entry_bytes()
+            }),
             module_reentrant_call_depth: 0,
             active_foreign_module_call_depth: 0,
             isolated_async_entry_pending: false,
@@ -31207,11 +31481,19 @@ impl InterpreterCore {
         self.arrow_lexical_this.clear();
         self.closure_module_origins.clear();
         self.closure_generated_function_artifacts.clear();
+        for generator in &mut self.generators {
+            self.closures
+                .replace_activation(&mut generator.execution, None);
+        }
         self.generators.clear();
         self.generator_yielded = false;
         self.generator_resume_dst = None;
         self.generator_result_label = Label::Public;
         self.generator_delegation = None;
+        for function in &mut self.async_functions {
+            self.closures
+                .replace_activation(&mut function.isolated_execution, None);
+        }
         self.async_functions.clear();
         self.async_generators.clear();
         self.async_generator_runtime = AsyncGeneratorRuntime::default();
@@ -32303,9 +32585,12 @@ impl InterpreterCore {
                 .map(ScopeBinding::snapshot_state)
                 .transpose()?;
             if let Some(binding) = frame.get_mut(name) {
-                let mut state = binding.state_mut()?;
-                state.value = value;
-                state.initialized = true;
+                {
+                    let mut state = binding.state_mut()?;
+                    state.value = value;
+                    state.initialized = true;
+                }
+                self.closures.refresh_cell(&binding.state);
             }
             (replaced, replaced_state)
         };
@@ -32315,6 +32600,7 @@ impl InterpreterCore {
                 if let Some(old_binding) = replaced {
                     if let Some(old_state) = replaced_state {
                         old_binding.restore_state(old_state)?;
+                        self.closures.refresh_cell(&old_binding.state);
                     }
                     frame.bindings.insert(name.to_string(), old_binding);
                 } else {
@@ -32365,9 +32651,12 @@ impl InterpreterCore {
                     .map(ScopeBinding::snapshot_state)
                     .transpose()?;
                 if let Some(binding) = frame.get_mut(&name) {
-                    let mut state = binding.state_mut()?;
-                    state.value = value;
-                    state.initialized = true;
+                    {
+                        let mut state = binding.state_mut()?;
+                        state.value = value;
+                        state.initialized = true;
+                    }
+                    self.closures.refresh_cell(&binding.state);
                 }
                 replaced.push((name, replaced_binding, replaced_state));
             }
@@ -32378,6 +32667,7 @@ impl InterpreterCore {
                     if let Some(old_binding) = old {
                         if let Some(old_state) = old_state {
                             old_binding.restore_state(old_state)?;
+                            self.closures.refresh_cell(&old_binding.state);
                         }
                         current.bindings.insert(name, old_binding);
                     } else {
@@ -38307,6 +38597,9 @@ impl InterpreterCore {
             state.initialized = true;
         }
         drop(states);
+        for cell in &pending_cells {
+            self.closures.refresh_cell(cell);
+        }
         if let Err(error) = self.apply_scope_closure_call_stack_memory_delta(
             previous_scope_bytes,
             previous_closure_bytes,
@@ -38314,6 +38607,7 @@ impl InterpreterCore {
         ) {
             for (cell, previous) in &previous_cell_states {
                 *cell.borrow_mut() = previous.clone();
+                self.closures.refresh_cell(cell);
             }
             return Err(error);
         }
@@ -38322,6 +38616,7 @@ impl InterpreterCore {
         {
             for (cell, previous) in &previous_cell_states {
                 *cell.borrow_mut() = previous.clone();
+                self.closures.refresh_cell(cell);
             }
             self.sync_estimated_memory_bytes()?;
             return Err(error);
@@ -38368,6 +38663,7 @@ impl InterpreterCore {
                     .saturating_add(previous_export_bytes);
                 for (cell, previous) in &previous_cell_states {
                     *cell.borrow_mut() = previous.clone();
+                    self.closures.refresh_cell(cell);
                 }
                 self.sync_estimated_memory_bytes()?;
                 Err(error)
@@ -38860,7 +39156,12 @@ impl InterpreterCore {
         let previous_register_bytes = self
             .registers_memory_bytes()
             .saturating_add(self.register_labels_memory_bytes());
-        let previous_async_bytes = self.async_functions_memory_bytes();
+        // Only this async function object changes below, so its own bytes are
+        // the component delta (bd-9vouw.31: no walk over every async object).
+        let previous_async_bytes = self
+            .async_functions
+            .get(async_function_id as usize)
+            .map_or(0, Self::estimate_async_function_bytes);
         // Extract the suspension payload by move. Cloning here retained a
         // duplicate register snapshot after resumption and made every String
         // payload appear live in both stores.
@@ -38954,10 +39255,10 @@ impl InterpreterCore {
                 got: format!("async#{async_function_id} not found"),
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
+        let next_async_bytes = Self::estimate_async_function_bytes(async_function);
         let next_register_bytes = self
             .registers_memory_bytes()
             .saturating_add(self.register_labels_memory_bytes());
-        let next_async_bytes = self.async_functions_memory_bytes();
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_register_bytes)
@@ -39051,9 +39352,12 @@ impl InterpreterCore {
 
         let failure_label = Self::terminal_async_failure_label(&settlement_label);
         let async_function_count_before_run = self.async_functions.len();
-        let activation = self.async_functions[async_function_id as usize]
-            .isolated_execution
-            .take()
+        let activation = self
+            .closures
+            .replace_activation(
+                &mut self.async_functions[async_function_id as usize].isolated_execution,
+                None,
+            )
             .expect("isolated async execution was checked");
         let contained_codegen_grant = activation.contained_codegen_grant;
         let owner_is_foreign = fallback_module
@@ -39140,7 +39444,10 @@ impl InterpreterCore {
         if result.is_ok()
             && let Some(suspended_id) = suspended_async_id
         {
-            self.async_functions[suspended_id as usize].isolated_execution = continuation.take();
+            self.closures.replace_activation(
+                &mut self.async_functions[suspended_id as usize].isolated_execution,
+                continuation.take(),
+            );
         }
         drop(continuation);
 
@@ -39150,9 +39457,10 @@ impl InterpreterCore {
                     let mut abandoned_async_ids = active_async_ids.clone();
                     let retained_async_ids = suspended_async_id
                         .and_then(|suspended_id| {
-                            self.async_functions[suspended_id as usize]
-                                .isolated_execution
-                                .take()
+                            self.closures.replace_activation(
+                                &mut self.async_functions[suspended_id as usize].isolated_execution,
+                                None,
+                            )
                         })
                         .map(|execution| {
                             Self::async_function_ids_in_call_stack(&execution.call_stack, 0)
@@ -41118,6 +41426,7 @@ impl InterpreterCore {
             {
                 let promise_store = &mut self.promise_store;
                 let async_functions = &mut self.async_functions;
+                let closures = &mut self.closures;
                 self.async_resumption_contexts
                     .retain(|result_promise, context| {
                         let result_promise = crate::promise_model::PromiseHandle(*result_promise);
@@ -41130,7 +41439,8 @@ impl InterpreterCore {
                             async_functions.get_mut(context.async_function_id as usize)
                         {
                             async_function.phase = AsyncFunctionPhase::Completed;
-                            async_function.isolated_execution = None;
+                            closures
+                                .replace_activation(&mut async_function.isolated_execution, None);
                             async_function.saved_registers = Vec::new();
                             async_function.saved_register_labels = Vec::new();
                             let published_promise =
@@ -41227,7 +41537,8 @@ impl InterpreterCore {
                 continue;
             }
             async_function.phase = AsyncFunctionPhase::Completed;
-            async_function.isolated_execution = None;
+            self.closures
+                .replace_activation(&mut async_function.isolated_execution, None);
             async_function.saved_registers = Vec::new();
             async_function.saved_register_labels = Vec::new();
 
@@ -41322,7 +41633,10 @@ impl InterpreterCore {
             .first_mut()
             .map(|label| std::mem::replace(label, Label::Public))
             .unwrap_or(Label::Public);
-        self.async_functions[suspended_async_id as usize].isolated_execution = Some(execution);
+        self.closures.replace_activation(
+            &mut self.async_functions[suspended_async_id as usize].isolated_execution,
+            Some(execution),
+        );
         Ok(Some((published_promise, result_label, suspended_async_id)))
     }
 
@@ -41692,7 +42006,8 @@ impl InterpreterCore {
             let generator = &mut self.generators[generator_index];
             generator.phase = GeneratorPhase::Completed;
             generator.invocation = None;
-            generator.execution = None;
+            self.closures
+                .replace_activation(&mut generator.execution, None);
             generator.resume_dst = None;
             self.sync_estimated_memory_bytes()?;
             return outcome;
@@ -41736,13 +42051,12 @@ impl InterpreterCore {
             (activation, None)
         } else {
             let generator = &mut self.generators[generator_index];
-            let activation =
-                generator
-                    .execution
-                    .take()
-                    .ok_or_else(|| InterpreterError::InternalError {
-                        details: format!("generator#{gen_id} lost its suspended activation"),
-                    })?;
+            let activation = self
+                .closures
+                .replace_activation(&mut generator.execution, None)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: format!("generator#{gen_id} lost its suspended activation"),
+                })?;
             (activation, generator.resume_dst.take())
         };
         if activation.registers.len() != activation.register_labels.len() {
@@ -41750,7 +42064,8 @@ impl InterpreterCore {
             let label_count = activation.register_labels.len();
             if phase == GeneratorPhase::SuspendedYield {
                 let generator = &mut self.generators[generator_index];
-                generator.execution = Some(activation);
+                self.closures
+                    .replace_activation(&mut generator.execution, Some(activation));
                 generator.resume_dst = resume_dst;
             }
             return Err(InterpreterError::InternalError {
@@ -41812,7 +42127,8 @@ impl InterpreterCore {
             self.async_generator_runtime.active = caller_async_generator;
             let generator = &mut self.generators[generator_index];
             if phase == GeneratorPhase::SuspendedYield {
-                generator.execution = Some(activation);
+                self.closures
+                    .replace_activation(&mut generator.execution, Some(activation));
                 generator.resume_dst = resume_dst;
             }
             generator.phase = phase;
@@ -41898,7 +42214,8 @@ impl InterpreterCore {
         match result {
             Ok(yielded_value) if yielded => {
                 let generator = &mut self.generators[generator_index];
-                generator.execution = Some(activation);
+                self.closures
+                    .replace_activation(&mut generator.execution, Some(activation));
                 generator.resume_dst = yielded_resume_dst;
                 generator.phase = GeneratorPhase::SuspendedYield;
                 self.sync_estimated_memory_bytes()?;
@@ -41906,7 +42223,8 @@ impl InterpreterCore {
             }
             Ok(return_value) => {
                 let generator = &mut self.generators[generator_index];
-                generator.execution = None;
+                self.closures
+                    .replace_activation(&mut generator.execution, None);
                 generator.resume_dst = None;
                 generator.phase = GeneratorPhase::Completed;
                 self.sync_estimated_memory_bytes()?;
@@ -41917,7 +42235,8 @@ impl InterpreterCore {
             }
             Err(InterpreterError::Halted) => {
                 let generator = &mut self.generators[generator_index];
-                generator.execution = None;
+                self.closures
+                    .replace_activation(&mut generator.execution, None);
                 generator.resume_dst = None;
                 generator.phase = GeneratorPhase::Completed;
                 self.sync_estimated_memory_bytes()?;
@@ -41928,7 +42247,8 @@ impl InterpreterCore {
             }
             Err(error) => {
                 let generator = &mut self.generators[generator_index];
-                generator.execution = None;
+                self.closures
+                    .replace_activation(&mut generator.execution, None);
                 generator.resume_dst = None;
                 generator.phase = GeneratorPhase::Completed;
                 if let Some((value, label)) = escaped_exception {
@@ -46564,9 +46884,12 @@ impl InterpreterCore {
                             });
                         }
                         previous = Some((binding.clone(), previous_state));
-                        let mut state = binding.state_mut()?;
-                        state.value = val;
-                        state.label = label;
+                        {
+                            let mut state = binding.state_mut()?;
+                            state.value = val;
+                            state.label = label;
+                        }
+                        self.closures.refresh_cell(&binding.state);
                     }
                     // Silently ignore stores to undeclared variables
                     // (strict mode would throw, but baseline is lenient).
@@ -46577,6 +46900,7 @@ impl InterpreterCore {
                     ) {
                         if let Some((binding, old_state)) = previous {
                             binding.restore_state(old_state)?;
+                            self.closures.refresh_cell(&binding.state);
                         }
                         return Err(err);
                     }
@@ -46618,10 +46942,13 @@ impl InterpreterCore {
                     let mut previous = None;
                     if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
                         previous = Some((binding.clone(), binding.snapshot_state()?));
-                        let mut state = binding.state_mut()?;
-                        state.value = val;
-                        state.label = label;
-                        state.initialized = true;
+                        {
+                            let mut state = binding.state_mut()?;
+                            state.value = val;
+                            state.label = label;
+                            state.initialized = true;
+                        }
+                        self.closures.refresh_cell(&binding.state);
                     }
                     if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
                         previous_scope_bytes,
@@ -46630,6 +46957,7 @@ impl InterpreterCore {
                     ) {
                         if let Some((binding, old_state)) = previous {
                             binding.restore_state(old_state)?;
+                            self.closures.refresh_cell(&binding.state);
                         }
                         return Err(err);
                     }
@@ -62161,9 +62489,10 @@ impl InterpreterCore {
             );
             let retained_async_ids = isolated_async_execution_owner
                 .and_then(|owner_id| {
-                    self.async_functions[owner_id as usize]
-                        .isolated_execution
-                        .take()
+                    self.closures.replace_activation(
+                        &mut self.async_functions[owner_id as usize].isolated_execution,
+                        None,
+                    )
                 })
                 .map(|execution| {
                     Self::async_function_ids_in_call_stack(
@@ -79626,22 +79955,24 @@ impl InterpreterCore {
             expected: "generator table capacity".into(),
             got: format!("exceeded u32::MAX ({})", self.generators.len()),
         })?;
-        let previous_bytes = self.generators_memory_bytes();
-        self.generators.push(generator);
-        let next_bytes = self.generators_memory_bytes();
-        if let Err(error) = self.apply_memory_component_delta(previous_bytes, next_bytes) {
-            self.generators.pop();
-            return Err(error);
+        // The component is a plain sum over the table, so appending changes it
+        // by exactly the new object's bytes (bd-9vouw.31: no table walk).
+        self.apply_memory_component_delta(0, Self::estimate_generator_bytes(&generator))?;
+        if let Some(execution) = &generator.execution {
+            self.closures.cold_cells.register_activation(execution);
         }
+        self.generators.push(generator);
         Ok(id)
     }
 
     fn pop_generator_object_and_release(&mut self) {
-        let previous_bytes = self.generators_memory_bytes();
-        self.generators.pop();
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(previous_bytes.saturating_sub(self.generators_memory_bytes()));
+        if let Some(mut generator) = self.generators.pop() {
+            let released_bytes = Self::estimate_generator_bytes(&generator);
+            self.closures
+                .replace_activation(&mut generator.execution, None);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(released_bytes);
+        }
     }
 
     fn push_async_function_object(
@@ -79653,22 +79984,24 @@ impl InterpreterCore {
                 expected: "async function table capacity".into(),
                 got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
             })?;
-        let previous_bytes = self.async_functions_memory_bytes();
-        self.async_functions.push(function);
-        let next_bytes = self.async_functions_memory_bytes();
-        if let Err(error) = self.apply_memory_component_delta(previous_bytes, next_bytes) {
-            self.async_functions.pop();
-            return Err(error);
+        // Plain sum over the table: appending adds exactly the new object's
+        // bytes (bd-9vouw.31: no table walk per async call).
+        self.apply_memory_component_delta(0, Self::estimate_async_function_bytes(&function))?;
+        if let Some(execution) = &function.isolated_execution {
+            self.closures.cold_cells.register_activation(execution);
         }
+        self.async_functions.push(function);
         Ok(id)
     }
 
     fn pop_async_function_object_and_release(&mut self) {
-        let previous_bytes = self.async_functions_memory_bytes();
-        self.async_functions.pop();
-        self.estimated_memory_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(previous_bytes.saturating_sub(self.async_functions_memory_bytes()));
+        if let Some(mut function) = self.async_functions.pop() {
+            let released_bytes = Self::estimate_async_function_bytes(&function);
+            self.closures
+                .replace_activation(&mut function.isolated_execution, None);
+            self.estimated_memory_bytes =
+                self.estimated_memory_bytes.saturating_sub(released_bytes);
+        }
     }
 
     fn push_async_generator_object(
@@ -79866,6 +80199,17 @@ impl InterpreterCore {
         self.promise_store
             .estimated_memory_bytes()
             .saturating_add(self.event_loop.estimated_memory_bytes())
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes)
+    }
+
+    /// Full-walk reference for [`Self::promise_runtime_memory_bytes`], used
+    /// by the `recompute_estimated_memory_bytes` oracle (bd-9vouw.31).
+    fn promise_runtime_memory_bytes_by_walk(&self) -> u64 {
+        self.promise_store
+            .estimated_memory_bytes_by_walk()
+            .saturating_add(self.event_loop.estimated_memory_bytes_by_walk())
             .saturating_add(self.promise_combinators_memory_bytes())
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes)
@@ -80696,13 +81040,73 @@ impl InterpreterCore {
 
     /// Structural bytes of the live scope chain plus the deduped payload of
     /// every shared binding cell across all accounted surfaces (bd-sblaq).
-    /// Keeping the payload walk inside this component means every existing
+    /// Keeping the payload inside this component means every existing
     /// scope-bracketed delta (push/pop/declare/store/call-setup/restore)
     /// observes payload ownership changes exactly, including a popped frame
     /// whose cells survive through closure aliases.
+    ///
+    /// bd-9vouw.31: cells held by closures and suspended activations come from
+    /// the incrementally maintained cold-cell ledger; only the live chain and
+    /// the call-frame saved chains are walked. Equal to
+    /// [`Self::scope_chain_memory_bytes_by_walk`] by construction; unit-test
+    /// builds assert that on every call.
     fn scope_chain_memory_bytes(&self) -> u64 {
+        let bytes = Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
+            .saturating_add(self.closures.cold_cells.payload_bytes)
+            .saturating_add(self.live_only_binding_cell_payload_bytes());
+        #[cfg(test)]
+        debug_assert_eq!(
+            bytes,
+            self.scope_chain_memory_bytes_by_walk(),
+            "cold binding-cell ledger drifted from the full payload walk (bd-9vouw.31)"
+        );
+        bytes
+    }
+
+    /// Full-walk reference for [`Self::scope_chain_memory_bytes`], used by the
+    /// `recompute_estimated_memory_bytes` oracle.
+    fn scope_chain_memory_bytes_by_walk(&self) -> u64 {
         Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
             .saturating_add(self.shared_binding_cell_payloads_memory_bytes())
+    }
+
+    /// Payload of the cells reachable from the live scope chain or a call
+    /// frame's saved caller chain that no cold surface holds (bd-9vouw.31).
+    fn live_only_binding_cell_payload_bytes(&self) -> u64 {
+        let cold = &self.closures.cold_cells;
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut total = Self::accumulate_live_only_cell_payload_bytes(
+            &self.scope_chain.frames,
+            cold,
+            &mut seen,
+        );
+        for frame in &self.call_stack {
+            if let Some(saved) = &frame.saved_scope_chain {
+                total = total.saturating_add(Self::accumulate_live_only_cell_payload_bytes(
+                    saved, cold, &mut seen,
+                ));
+            }
+        }
+        total
+    }
+
+    fn accumulate_live_only_cell_payload_bytes(
+        frames: &[ScopeFrame],
+        cold: &ColdBindingCells,
+        seen: &mut BTreeSet<usize>,
+    ) -> u64 {
+        let mut total = 0u64;
+        for frame in frames {
+            for binding in frame.bindings.values() {
+                if !cold.contains(&binding.state)
+                    && seen.insert(Rc::as_ptr(&binding.state) as usize)
+                {
+                    total = total
+                        .saturating_add(Self::estimate_binding_cell_payload_bytes(&binding.state));
+                }
+            }
+        }
+        total
     }
 
     fn realm_dynamic_globals_memory_bytes(&self) -> u64 {
@@ -80744,7 +81148,42 @@ impl InterpreterCore {
         }))
     }
 
+    /// Closure-table component from the running totals kept by
+    /// [`ClosureTable`] and each [`ClosureSideTable`] (bd-9vouw.31). Equal to
+    /// [`Self::closures_memory_bytes_by_walk`] by construction; unit-test
+    /// builds assert that on every call.
     fn closures_memory_bytes(&self) -> u64 {
+        let bytes = self
+            .closures
+            .structural_bytes()
+            .saturating_add(self.closure_method_metadata.bytes())
+            .saturating_add(self.closure_lexical_super_metadata.bytes())
+            .saturating_add(self.arrow_lexical_this.bytes())
+            .saturating_add(self.closure_module_origins.bytes())
+            .saturating_add(self.closure_generated_function_artifacts.bytes())
+            .saturating_add(self.runtime_name_references_memory_bytes());
+        #[cfg(test)]
+        debug_assert_eq!(
+            bytes,
+            self.closures_memory_bytes_by_walk(),
+            "closure running totals drifted from the full walk (bd-9vouw.31)"
+        );
+        bytes
+    }
+
+    fn estimate_closure_module_origin_entry_bytes(origin: &str) -> u64 {
+        (std::mem::size_of::<u32>() as u64).saturating_add(Self::estimate_string_bytes(origin))
+    }
+
+    fn estimate_closure_generated_function_artifact_entry_bytes() -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(std::mem::size_of::<u32>() as u64)
+            .saturating_add(std::mem::size_of::<GeneratedFunctionArtifactHandle>() as u64)
+    }
+
+    /// Full-walk reference for [`Self::closures_memory_bytes`], used by the
+    /// `recompute_estimated_memory_bytes` oracle.
+    fn closures_memory_bytes_by_walk(&self) -> u64 {
         Self::estimate_closures_bytes(&self.closures)
             .saturating_add(Self::saturating_sum(
                 self.closure_method_metadata
@@ -80803,10 +81242,6 @@ impl InterpreterCore {
                 .map(Self::estimate_call_frame_snapshot_clone_bytes),
         )
         .saturating_add(self.abrupt_completion_memory_bytes())
-    }
-
-    fn generators_memory_bytes(&self) -> u64 {
-        Self::estimate_generators_bytes(&self.generators)
     }
 
     fn event_listeners_memory_bytes(&self) -> u64 {
@@ -81038,7 +81473,39 @@ impl InterpreterCore {
     /// is a validation surface, not a hot-path API: integration tests compare
     /// it against `estimated_memory_bytes()` to prove the incremental
     /// accumulator has not drifted (bd-o4cbn.13.4).
+    ///
+    /// bd-9vouw.31: this walks every closure environment, suspended
+    /// activation, Promise record and replay-witness event for the scope,
+    /// closure and Promise-runtime components, so it stays the independent
+    /// oracle; runtime re-synchronization uses
+    /// [`Self::recompute_base_estimated_memory_bytes`], which reads those
+    /// components from their running totals.
+    fn recompute_base_estimated_memory_bytes_by_walk(&self) -> u64 {
+        self.base_estimated_memory_bytes_with(
+            self.scope_chain_memory_bytes_by_walk(),
+            self.closures_memory_bytes_by_walk(),
+            self.promise_runtime_memory_bytes_by_walk(),
+        )
+    }
+
+    /// Runtime re-derivation of the base estimate. Identical algebra to
+    /// [`Self::recompute_base_estimated_memory_bytes_by_walk`], with the
+    /// scope, closure and Promise-runtime components taken from their running
+    /// totals (bd-9vouw.31).
     fn recompute_base_estimated_memory_bytes(&self) -> u64 {
+        self.base_estimated_memory_bytes_with(
+            self.scope_chain_memory_bytes(),
+            self.closures_memory_bytes(),
+            self.promise_runtime_memory_bytes(),
+        )
+    }
+
+    fn base_estimated_memory_bytes_with(
+        &self,
+        scope_chain_bytes: u64,
+        closure_bytes: u64,
+        promise_runtime_bytes: u64,
+    ) -> u64 {
         self.symbol_state_memory_bytes()
             .saturating_add(Self::saturating_sum(
                 self.heap.iter().map(Self::estimate_heap_object_bytes),
@@ -81047,10 +81514,10 @@ impl InterpreterCore {
                 self.registers.iter().map(Self::estimate_value_bytes),
             ))
             .saturating_add(self.register_context_labels_memory_bytes())
-            .saturating_add(self.scope_chain_memory_bytes())
+            .saturating_add(scope_chain_bytes)
             .saturating_add(self.realm_dynamic_globals_memory_bytes())
             .saturating_add(self.generated_function_realm_globals_memory_bytes())
-            .saturating_add(self.closures_memory_bytes())
+            .saturating_add(closure_bytes)
             .saturating_add(self.call_stack_memory_bytes())
             .saturating_add(Self::saturating_sum(
                 self.iterators.iter().map(Self::estimate_iterator_bytes),
@@ -81066,7 +81533,7 @@ impl InterpreterCore {
             .saturating_add(self.completed_child_processes_memory_bytes())
             .saturating_add(self.child_process_streams_memory_bytes())
             .saturating_add(self.pending_timer_tasks_memory_bytes())
-            .saturating_add(self.promise_runtime_memory_bytes())
+            .saturating_add(promise_runtime_bytes)
             .saturating_add(self.promise_reaction_callables_memory_bytes())
             .saturating_add(self.next_tick_queue_memory_bytes())
             .saturating_add(self.weakmap_storage_memory_bytes())
@@ -81105,7 +81572,7 @@ impl InterpreterCore {
     }
 
     pub fn recompute_estimated_memory_bytes(&self) -> u64 {
-        self.total_memory_bytes_from_base(self.recompute_base_estimated_memory_bytes())
+        self.total_memory_bytes_from_base(self.recompute_base_estimated_memory_bytes_by_walk())
     }
 
     fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
@@ -85121,6 +85588,143 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         );
     }
 
+    fn lower_script_bd_9vouw_31(source: &str) -> Ir3Module {
+        let syntax_tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "bd_9vouw_31.js".to_string(),
+                    text: source.to_string(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("ledger lifecycle source should parse");
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(syntax_tree, "bd_9vouw_31.js"),
+            &LoweringContext::new("bd-9vouw-31", "cold-cell-ledger", "lifecycle"),
+        )
+        .expect("ledger lifecycle source should lower")
+        .ir3
+    }
+
+    /// bd-9vouw.31: drive the cold-cell ledger through every transition a real
+    /// program produces — per-iteration cells captured by many closures, a
+    /// write to a cell that only closures and the live chain share, a generator
+    /// parking and resuming its activation, and async activations left parked
+    /// at the end. In unit-test builds every scope/closure accounting call
+    /// asserts the ledger against the full payload walk, so any missed
+    /// registration, release or write refresh fails here; the end state is
+    /// checked against the walk-based recompute as well.
+    #[test]
+    fn cold_cell_ledger_tracks_closures_generators_and_parked_async_bd_9vouw_31() {
+        let module = lower_script_bd_9vouw_31(
+            "const fns = [];\
+             let shared = 'seed';\
+             for (let i = 0; i < 40; i++) { fns.push(() => i + shared.length); }\
+             shared = 'a payload that grows a captured global cell after capture';\
+             function* gen(n) { let acc = n; while (true) { acc = acc + (yield acc); } }\
+             const g = gen(1);\
+             g.next(); g.next(2); g.next(3);\
+             async function pending(x) { await new Promise(() => {}); return x; }\
+             const parked = [];\
+             for (let i = 0; i < 5; i++) { parked.push(pending(i)); }\
+             let total = 0;\
+             for (const f of fns) { total = total + f(); }\
+             total + g.next(4).value;",
+        );
+        let mut core = accounting_test_core();
+        let result = core
+            .execute(&module)
+            .expect("ledger lifecycle program runs");
+        // Node v22.2.0 prints 3070: 40 closures give sum(i) + 40 * 57 = 780 +
+        // 2280, read after the captured global grew; the generator yields 10.
+        assert_eq!(result.value, Value::Int(3070));
+        assert!(
+            core.closures.cold_cells.cells.len() >= 40,
+            "every per-iteration cell captured by a live closure is in the ledger"
+        );
+        assert_invariant(
+            &core,
+            "after closures, generator park/resume and parked async",
+        );
+        assert_eq!(
+            core.scope_chain_memory_bytes(),
+            core.scope_chain_memory_bytes_by_walk()
+        );
+        assert_eq!(
+            core.closures_memory_bytes(),
+            core.closures_memory_bytes_by_walk()
+        );
+    }
+
+    /// bd-9vouw.31: aliases are counted, so a cell stays charged while any
+    /// closure holds it and is released with the last one; rollback pops keep
+    /// the ledger exact.
+    #[test]
+    fn cold_cell_ledger_releases_with_last_closure_alias_bd_9vouw_31() {
+        let mut core = accounting_test_core();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push frame");
+        let payload_bytes = declare_large_binding(&mut core, "held", 2048);
+        for _ in 0..2 {
+            let previous_closure_bytes = core.closures_memory_bytes();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.apply_closures_memory_delta(previous_closure_bytes)
+                .expect("alias fits");
+        }
+        let held = core
+            .scope_chain
+            .resolve("held")
+            .map(|(_, binding)| binding.clone())
+            .expect("held binding");
+        assert!(core.closures.cold_cells.contains(&held.state));
+        let charged_with_two_aliases = core.closures.cold_cells.payload_bytes;
+        assert!(charged_with_two_aliases >= payload_bytes);
+
+        // Drop the live frame: only the closures reach the cell now.
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.scope_chain.pop().expect("frame pops");
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("pop fits");
+        assert_invariant(&core, "cell reachable only through closures");
+
+        let previous_closure_bytes = core.closures_memory_bytes();
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.closures.pop().expect("first alias pops");
+        core.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            core.call_stack_memory_bytes(),
+        )
+        .expect("release fits");
+        assert!(core.closures.cold_cells.contains(&held.state));
+        assert_eq!(
+            core.closures.cold_cells.payload_bytes,
+            charged_with_two_aliases
+        );
+        assert_invariant(&core, "one closure alias left");
+
+        let previous_closure_bytes = core.closures_memory_bytes();
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.closures.pop().expect("last alias pops");
+        core.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            core.call_stack_memory_bytes(),
+        )
+        .expect("release fits");
+        // The last alias also released every global-frame cell the closures
+        // captured; nothing else is cold in this fixture.
+        assert!(!core.closures.cold_cells.contains(&held.state));
+        assert!(core.closures.cold_cells.cells.is_empty());
+        assert_eq!(core.closures.cold_cells.payload_bytes, 0);
+        assert_invariant(&core, "last closure alias released");
+    }
+
     #[test]
     fn mutation_through_alias_reprices_payload_once_bd_sblaq() {
         let mut core = accounting_test_core();
@@ -85149,6 +85753,7 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
             let mut state = alias.state.try_borrow_mut().expect("cell borrow");
             state.value = Value::str("y".repeat(8192));
         }
+        core.closures.refresh_cell(&alias.state);
         core.apply_scope_chain_memory_delta(previous_scope_bytes)
             .expect("mutation fits");
         assert_invariant(&core, "after mutation through alias");
@@ -128237,6 +128842,7 @@ mod tests {
             binding
                 .set_state(replacement, true)
                 .expect("scope binding update");
+            core.closures.refresh_cell(&binding.state);
         }
         core.apply_scope_closure_call_stack_memory_delta(
             previous_scope_bytes,
@@ -128330,6 +128936,7 @@ mod tests {
             binding
                 .set_state(Value::str("expanded captured payload"), true)
                 .expect("scope binding update");
+            core.closures.refresh_cell(&binding.state);
         }
         core.call_stack.push(CallFrame {
             return_ip: 123,
@@ -128493,6 +129100,7 @@ mod tests {
             binding
                 .set_state(Value::str("expanded async payload"), true)
                 .expect("scope binding update");
+            core.closures.refresh_cell(&binding.state);
         }
         let result_promise = core.promise_store.create().0;
         let async_function_id = core.async_functions.len() as u32;
@@ -128686,6 +129294,7 @@ mod tests {
             binding
                 .set_state(Value::str("expanded unwind payload"), true)
                 .expect("scope binding update");
+            core.closures.refresh_cell(&binding.state);
         }
         core.suspended_abrupt_completions
             .push(AbruptCompletion::Return(LabeledReturn {
@@ -139224,6 +139833,7 @@ mod memory_accounting_tests {
                         })?
                     };
                     binding.set_state(replacement, true)?;
+                    core.closures.refresh_cell(&binding.state);
                     core.apply_scope_closure_call_stack_memory_delta(
                         previous_scope_bytes,
                         previous_closure_bytes,

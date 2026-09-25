@@ -228,11 +228,22 @@ impl EsmModule {
     /// Add an import entry.
     pub fn add_import(&mut self, entry: ImportEntry) {
         self.dependencies.insert(entry.module_request.clone());
+        // Export declarations may precede their imports in source order.
+        for export in &mut self.exports {
+            Self::normalize_imported_export(export, &entry);
+        }
         self.imports.push(entry);
     }
 
     /// Add an export entry.
-    pub fn add_export(&mut self, entry: ExportEntry) {
+    pub fn add_export(&mut self, mut entry: ExportEntry) {
+        if let Some(import) = self
+            .imports
+            .iter()
+            .find(|import| entry.local_name.as_deref() == Some(import.local_name.as_str()))
+        {
+            Self::normalize_imported_export(&mut entry, import);
+        }
         if entry.export_name == "default" {
             self.has_default_export = true;
         }
@@ -240,6 +251,20 @@ impl EsmModule {
             self.dependencies.insert(req.clone());
         }
         self.exports.push(entry);
+    }
+
+    /// ParseModule classifies an exported named import as an indirect export:
+    /// it aliases the source binding rather than allocating a new local cell.
+    /// Namespace imports remain local bindings to their namespace objects.
+    fn normalize_imported_export(export: &mut ExportEntry, import: &ImportEntry) {
+        if export.module_request.is_none()
+            && export.local_name.as_deref() == Some(import.local_name.as_str())
+            && import.import_name != "*"
+        {
+            export.module_request = Some(import.module_request.clone());
+            export.import_name = Some(import.import_name.clone());
+            export.local_name = None;
+        }
     }
 }
 
@@ -341,11 +366,19 @@ impl ModuleGraph {
     }
 
     /// Add a module to the graph. Returns error if graph is full.
-    pub fn add_module(&mut self, module: EsmModule) -> Result<(), EsmLoaderError> {
+    pub fn add_module(&mut self, mut module: EsmModule) -> Result<(), EsmLoaderError> {
         if self.modules.len() >= MAX_MODULE_GRAPH_SIZE {
             return Err(EsmLoaderError::GraphTooLarge {
                 limit: MAX_MODULE_GRAPH_SIZE,
             });
+        }
+        // Normalize records assembled through public fields or serde too.
+        // Use the incremental path once, not a full import/export cross-product
+        // after every addition to a growing module.
+        let exports = std::mem::take(&mut module.exports);
+        module.exports.reserve(exports.len());
+        for export in exports {
+            module.add_export(export);
         }
         let specifier = module.specifier.clone();
         if self.entry_point.is_none() {

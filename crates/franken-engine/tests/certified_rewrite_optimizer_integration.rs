@@ -62,7 +62,7 @@ fn public_optimizer_applies_validated_builtin_rewrite() {
         "integration-identity-add-zero".to_string(),
         epoch(),
         OptimizationTier::Standard,
-        "x + 0".to_string(),
+        "2 + 0".to_string(),
     )
     .with_validation_mode(ValidationMode::SymbolicEquivalence {
         proof_hash: ContentHash::compute(b"integration-proof"),
@@ -73,7 +73,7 @@ fn public_optimizer_applies_validated_builtin_rewrite() {
         .expect("enabled optimizer should run a supported built-in rewrite");
 
     assert!(result.success);
-    assert_eq!(result.optimized_program.as_deref(), Some("x"));
+    assert_eq!(result.optimized_program.as_deref(), Some("2"));
     assert_eq!(result.optimization_steps.len(), 1);
     assert!(result.all_steps_validated());
     assert!(result.all_steps_certified());
@@ -87,8 +87,8 @@ fn public_optimizer_applies_validated_builtin_rewrite() {
         .optimization_steps
         .first()
         .expect("supported rewrite should produce one step");
-    assert_eq!(step.before_program, "x + 0");
-    assert_eq!(step.after_program, "x");
+    assert_eq!(step.before_program, "2 + 0");
+    assert_eq!(step.after_program, "2");
     assert!(
         step.validation_receipt
             .as_ref()
@@ -121,5 +121,65 @@ fn optimizer_rejects_tampered_request_hash_fail_closed() {
             assert!(reason.contains("input_hash"));
         }
         other => panic!("expected invalid request error, got {other:?}"),
+    }
+}
+
+#[test]
+fn unknown_or_effectful_operands_remain_on_baseline() {
+    for input in [
+        "x + 0",
+        "0 + x",
+        "x * 1",
+        "x * 0",
+        "0 * x",
+        "effect() * 0",
+        "object.value * 0",
+        "missing * 0",
+        "'5' + 0",
+        "1n * 0",
+        "Infinity * 0",
+        "(effect(), 1) * 0",
+        "1; effect() * 0",
+    ] {
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch());
+        let request = OptimizationRequest::new(
+            format!("unsafe-identity:{input}"),
+            epoch(),
+            OptimizationTier::Standard,
+            input.to_string(),
+        );
+        let result = optimizer.optimize(request).expect("baseline fallback");
+        assert!(result.success);
+        assert_eq!(result.optimized_program.as_deref(), Some(input));
+        assert!(result.optimization_steps.is_empty(), "{input}");
+        assert_eq!(result.metrics.steps_certified, 0);
+        assert!(!result.all_steps_certified());
+    }
+}
+
+#[test]
+fn public_optimizer_preserves_number_semantics() {
+    for (input, output) in [
+        ("5 / 2", "2.5"),
+        ("-3 * 0", "-0"),
+        ("-0 + 0", "0"),
+        ("(1 + 2) * 3", "9"),
+        ("1 + 2 * 3", "7"),
+        ("0.1 + 0.2", "0.30000000000000004"),
+        ("9007199254740993 - 9007199254740992", "0"),
+    ] {
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch());
+        let request = OptimizationRequest::new(
+            format!("number-semantics:{input}"),
+            epoch(),
+            OptimizationTier::Standard,
+            input.to_string(),
+        );
+        let result = optimizer.optimize(request).expect("pure Number rewrite");
+        assert!(result.success);
+        assert_eq!(result.optimized_program.as_deref(), Some(output));
+        assert_eq!(result.optimization_steps.len(), 1);
+        assert!(result.all_steps_validated());
+        assert!(result.all_steps_certified());
     }
 }

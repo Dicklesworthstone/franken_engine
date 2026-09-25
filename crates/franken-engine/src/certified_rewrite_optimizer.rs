@@ -15,8 +15,10 @@
 //! - Deterministic optimization with reproducible results
 //! - Performance telemetry and regression detection
 //!
-//! All arithmetic uses fixed-point millionths (1_000_000 = 1.0) for
-//! deterministic computation.
+//! Policy and performance quantities use fixed-point millionths. Guest
+//! Number expressions use binary64 arithmetic, preserving JavaScript rounding
+//! and signed zero. Only bounded, side-effect-free constant expressions are
+//! eligible for built-in algebraic rewrites.
 //!
 //! Reference: [RGC-607], bead bd-1lsy.7.7.
 
@@ -34,6 +36,8 @@ use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::translation_validation::{TranslationValidationGate, ValidationMode, ValidationVerdict};
 use crate::versioned_rewrite_pack::{RewritePack, RewriteRuleEntry};
+
+mod numeric;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -973,9 +977,10 @@ impl CertifiedRewriteOptimizer {
         }
 
         let expected = self.apply_rewrite_rule(before, rule_id)?;
-        if expected != after {
-            let reason =
-                format!("candidate output differs from rule application: expected '{expected}'");
+        if expected != after || !numeric::equivalent(before, after) {
+            let reason = format!(
+                "candidate is not a pure Number equivalent of the input; expected '{expected}'"
+            );
             let receipt = ValidationReceipt::from_verdict(
                 receipt_id,
                 ValidationVerdict::Fail {
@@ -1045,75 +1050,14 @@ impl CertifiedRewriteOptimizer {
     }
 
     fn apply_builtin_rewrite(program: &str, rule_id: &str) -> Option<String> {
-        match rule_id {
-            RULE_CONST_FOLD => Self::rewrite_constant_expression(program)
-                .or_else(|| Self::rewrite_add_zero(program))
-                .or_else(|| Self::rewrite_mul_one(program))
-                .or_else(|| Self::rewrite_mul_zero(program)),
-            RULE_IDENTITY_ADD_ZERO => Self::rewrite_add_zero(program),
-            RULE_IDENTITY_MUL_ONE => Self::rewrite_mul_one(program),
-            RULE_MUL_ZERO => Self::rewrite_mul_zero(program),
-            _ => None,
-        }
-    }
-
-    fn rewrite_add_zero(program: &str) -> Option<String> {
-        let (left, right) = Self::split_binary(program, '+')?;
-        if right == "0" && !left.is_empty() {
-            return Some(left.to_string());
-        }
-        if left == "0" && !right.is_empty() {
-            return Some(right.to_string());
-        }
-        None
-    }
-
-    fn rewrite_mul_one(program: &str) -> Option<String> {
-        let (left, right) = Self::split_binary(program, '*')?;
-        if right == "1" && !left.is_empty() {
-            return Some(left.to_string());
-        }
-        if left == "1" && !right.is_empty() {
-            return Some(right.to_string());
-        }
-        None
-    }
-
-    fn rewrite_mul_zero(program: &str) -> Option<String> {
-        let (left, right) = Self::split_binary(program, '*')?;
-        if (left == "0" && !right.is_empty()) || (right == "0" && !left.is_empty()) {
-            return Some("0".to_string());
-        }
-        None
-    }
-
-    fn rewrite_constant_expression(program: &str) -> Option<String> {
-        for operator in ['+', '-', '*', '/'] {
-            if let Some((left, right)) = Self::split_binary(program, operator) {
-                let left_value = left.parse::<i64>().ok()?;
-                let right_value = right.parse::<i64>().ok()?;
-                let value = match operator {
-                    '+' => left_value.checked_add(right_value)?,
-                    '-' => left_value.checked_sub(right_value)?,
-                    '*' => left_value.checked_mul(right_value)?,
-                    '/' if right_value != 0 => left_value.checked_div(right_value)?,
-                    _ => return None,
-                };
-                return Some(value.to_string());
-            }
-        }
-        None
-    }
-
-    fn split_binary(program: &str, operator: char) -> Option<(&str, &str)> {
-        let trimmed = program.trim();
-        let mut parts = trimmed.split(operator);
-        let left = parts.next()?.trim();
-        let right = parts.next()?.trim();
-        if parts.next().is_some() || left.is_empty() || right.is_empty() {
-            return None;
-        }
-        Some((left, right))
+        let rule = match rule_id {
+            RULE_CONST_FOLD => numeric::Rule::Constant,
+            RULE_IDENTITY_ADD_ZERO => numeric::Rule::AddZero,
+            RULE_IDENTITY_MUL_ONE => numeric::Rule::MultiplyOne,
+            RULE_MUL_ZERO => numeric::Rule::MultiplyZero,
+            _ => return None,
+        };
+        numeric::rewrite(program, rule)
     }
 }
 
@@ -1389,7 +1333,7 @@ mod tests {
             "basic_test".to_string(),
             epoch,
             OptimizationTier::Standard,
-            "x + 0".to_string(),
+            "2 + 0".to_string(),
         );
 
         let result = optimizer.optimize(request);
@@ -1397,7 +1341,7 @@ mod tests {
 
         let result = result.expect("operation should succeed for valid inputs");
         assert!(result.success);
-        assert_eq!(result.optimized_program, Some("x".to_string()));
+        assert_eq!(result.optimized_program, Some("2".to_string()));
         assert!(result.all_steps_validated());
         assert!(result.all_steps_certified());
         assert!(result.errors.is_empty());
@@ -1471,15 +1415,15 @@ mod tests {
     #[test]
     fn select_best_applicable_rule_prefers_canonical_builtin_order() {
         let optimizer = CertifiedRewriteOptimizer::new(SecurityEpoch::from_raw(1));
-        // "x+0" matches RULE_CONST_FOLD (whose builtin rewrite delegates to the
-        // add-zero identity) AND RULE_IDENTITY_ADD_ZERO, so more than one rule
-        // applies — exercising selection rather than a degenerate single match.
+        // A proven Number expression matches both the constant-folding and
+        // add-zero rules. An unknown `x+0` must match neither: x could be a
+        // string, BigInt, object with coercion hooks, or an unbound name.
         let applicable = optimizer
-            .find_applicable_rules("x+0")
+            .find_applicable_rules("2+0")
             .expect("find_applicable_rules should succeed");
         assert!(
             applicable.len() >= 2,
-            "expected x+0 to match both const_fold and identity_add_zero, got {applicable:?}"
+            "expected 2+0 to match both const_fold and identity_add_zero, got {applicable:?}"
         );
         // RULE_CONST_FOLD is first in BUILTIN_RULE_ORDER, so it is the
         // highest-precedence (best) applicable rule.
@@ -1780,10 +1724,11 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
 
-        // Programs that should optimize to equivalent results regardless of operand order.
+        // Commutativity is justified only for known Number operands. Unknown
+        // values can concatenate strings or invoke observable coercion hooks.
         let commutative_pairs = [
-            ("x + 0", "0 + x"), // Additive identity commutativity
-            ("x * 1", "1 * x"), // Multiplicative identity commutativity
+            ("2 + 0", "0 + 2"), // Pure Number addition
+            ("2 * 1", "1 * 2"), // Pure Number multiplication
         ];
 
         for (i, (prog_a, prog_b)) in commutative_pairs.iter().enumerate() {

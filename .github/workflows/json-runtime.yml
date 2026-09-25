@@ -101,7 +101,7 @@ jobs:
           path: json-validation/
           retention-days: 7
   array-from-integration:
-    if: contains(github.event.head_commit.message, '[array-from-rebase]')
+    if: contains(github.event.head_commit.message, '[array-from-finalize]')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 35
     permissions:
@@ -116,7 +116,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Integrate exact reviewed sources without changing a ref
+      - name: Prepare exact rebased implementation and error-carrier assertion
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -146,28 +146,14 @@ jobs:
           original = parent.read_bytes()
           assert identity(original) == '66e931228bbe203f7b2413599e82e2869da91291', 'parent changed; rebase required'
           (root / 'original-baseline.rs').write_bytes(original)
-          prepared = blob('d9c82cd0e8653e03cd113a1a17858bc56399e308').decode()
-          text = original.decode()
-          assert text.count('mod async_generator;') == 1 and 'mod array_from;' not in text
-          text = text.replace('mod async_generator;', 'mod array_from;\nmod async_generator;', 1)
-          start = text.index('    fn invoke_simple_array_from_callback(')
-          end = text.index('\n    fn invoke_inline_method_call(', start)
-          assert hashlib.sha256(text[start:end].encode()).hexdigest() == 'ea02f94c143f32ef373790266ab42fb81408b7ff93877f14a3c21af2842e7be2'
-          text = text[:start-1] + text[end:]
-          start = text.index('            "builtin:ArrayFrom" =>')
-          end = text.index('\n            "builtin:', start + 30)
-          assert hashlib.sha256(text[start:end].encode()).hexdigest() == 'c511bd82dd43c0fa23c17a64dfc83062c1d472bb83e76617b17b49f0292f0b11'
-          text = text[:start] + '            "builtin:ArrayFrom" => self.array_from_builtin(module, args),\n' + text[end:]
-          needle = '    fn callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td()'
-          start = text.index(needle)
+          text = blob('da2d7d8bea3eff8b87ba4ba729170dd62f46ef67').decode()
+          start = text.index('    fn array_from_rejects_non_callable_map_fn()')
           end = text.index('\n    #[test]', start)
-          assert hashlib.sha256(text[start:end].encode()).hexdigest() == '60701bfbea65e36d87140e704af0cd8aab957d3aa32d65e699ffd32dbd6f9f82'
-          replacement_start = prepared.index(needle)
-          replacement_end = prepared.index('\n    #[test]', replacement_start)
-          text = text[:start] + prepared[replacement_start:replacement_end] + text[end:]
-          assert 'invoke_simple_array_from_callback' not in text and 'apply_array_from_map_fn' not in text
+          assert hashlib.sha256(text[start:end].encode()).hexdigest() == 'bb6af09b1eadc2bacb9f2e6db3e0f059bbc39f38ca2869e1712ae4618b6e78f7'
+          replacement = blob('0add44ae0c75dd55b15f1a8651149aff8003e082').decode()
+          text = text[:start] + replacement + text[end:]
           data = text.encode()
-          assert identity(data) == 'da2d7d8bea3eff8b87ba4ba729170dd62f46ef67'
+          assert identity(data) == 'eedae3c641d31ebe5a1d9411b6ddf0f41a40da14'
           parent.write_bytes(data)
           entries = {
               paths[0]: identity(data),
@@ -193,6 +179,12 @@ jobs:
           print(json.dumps(output, indent=2), flush=True)
           PY
           git diff --check
+      - name: Retain prepared source identities before compilation
+        uses: actions/upload-artifact@v4
+        with:
+          name: array-from-final-sources
+          path: array-from-validation/
+          retention-days: 7
       - name: Install pinned Rust
         run: |
           toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
@@ -201,12 +193,6 @@ jobs:
       - name: Check prepared source formatting
         run: |
           rustfmt --edition 2024 --check --config skip_children=true crates/franken-engine/src/baseline_interpreter/array_from.rs crates/franken-engine/tests/array_from_execution.rs
-      - name: Retain exact prepared source identities
-        uses: actions/upload-artifact@v4
-        with:
-          name: array-from-rebased-sources
-          path: array-from-validation/
-          retention-days: 7
       - name: Select existing native runtime dependency closure
         run: |
           python3 - <<'PY'
@@ -219,6 +205,60 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked -p frankenengine-engine --no-default-features --test array_from_execution -- --nocapture 2>&1 | tee array-from-validation/array-from-tests.log
+      - name: Execute exact private callback and exception assertions
+        if: always()
+        run: |
+          test -f array-from-validation/source-blobs.json
+          python3 - <<'PY'
+          import hashlib, pathlib
+          root = pathlib.Path('array-from-validation')
+          parent = pathlib.Path('crates/franken-engine/src/baseline_interpreter.rs')
+          text = parent.read_text()
+          groups = [
+              ('calls', 'mod function_prototype_call_apply_tests_current {',
+               ['test_module_with_functions', 'test_config', 'test_interpreter', 'seed_object', 'seed_array_like',
+                'array_from_honors_map_fn_and_this_arg', 'array_from_rejects_non_callable_map_fn',
+                'array_from_maps_string_elements_with_index'],
+               ['array_from_honors_map_fn_and_this_arg', 'array_from_rejects_non_callable_map_fn',
+                'array_from_maps_string_elements_with_index']),
+              ('bigints', '\nmod tests {\n',
+               ['test_module', 'test_module_with_functions', 'test_quickjs_config', 'quickjs_test_core',
+                'bigint_callback_fixture', 'bigint_callback_peak',
+                'callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td'],
+               ['callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td']),
+          ]
+          probe = 'use super::*;\nuse crate::ir_contract::{Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion};\n'
+          for name, marker, functions, tests in groups:
+              source = text.split(marker, 1)[1]
+              bodies = []
+              for function in functions:
+                  start = source.index('    fn ' + function + '(')
+                  end = source.index('\n    }\n', start) + len('\n    }\n')
+                  bodies.append(source[start:end])
+              body = '\n'.join(bodies)
+              (root / (name + '-unit-bodies.rs')).write_text(body)
+              print(name, 'exact unit-body SHA256:', hashlib.sha256(body.encode()).hexdigest())
+              calls = '\n'.join('        ' + test + '();' for test in tests)
+              probe += '\nmod ' + name + ' {\n    use super::*;\n' + body + '\n    pub fn run() {\n' + calls + '\n    }\n}\n'
+          probe += '\npub fn run() { calls::run(); bigints::run(); println!("All four private callback/exception/BigInt assertion groups passed"); }\n'
+          pathlib.Path('crates/franken-engine/src/baseline_interpreter/array_from_private_probe.rs').write_text(probe)
+          parent.write_text(text + '\npub mod array_from_private_probe;\n')
+          example = pathlib.Path('crates/franken-engine/examples/array_from_private_probe.rs')
+          example.parent.mkdir(parents=True, exist_ok=True)
+          example.write_text('fn main() { frankenengine_engine::baseline_interpreter::array_from_private_probe::run(); }\n')
+          with pathlib.Path('crates/franken-engine/Cargo.toml').open('a') as file:
+              file.write('\n[[example]]\nname = "array_from_private_probe"\npath = "examples/array_from_private_probe.rs"\n')
+          PY
+          set -o pipefail
+          cargo run --locked -p frankenengine-engine --no-default-features --example array_from_private_probe 2>&1 | tee array-from-validation/private-unit.log
+      - name: Restore exact product source after private probe
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          path = 'crates/franken-engine/src/baseline_interpreter.rs'
+          pathlib.Path(path).write_bytes(pathlib.Path('array-from-validation/source', path).read_bytes())
+          PY
       - name: Run surrounding JSON and UTF-16 regressions
         if: always()
         run: |
@@ -235,6 +275,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: array-from-rebased-validation
+          name: array-from-final-validation
           path: array-from-validation/
           retention-days: 7

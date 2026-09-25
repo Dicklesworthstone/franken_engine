@@ -183,3 +183,147 @@ fn public_optimizer_preserves_number_semantics() {
         assert!(result.all_steps_certified());
     }
 }
+
+#[test]
+fn requests_cannot_cross_security_epochs() {
+    for request_epoch in [SecurityEpoch::from_raw(606), SecurityEpoch::from_raw(608)] {
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch());
+        let request = OptimizationRequest::new(
+            "cross-epoch".to_string(),
+            request_epoch,
+            OptimizationTier::Standard,
+            "2 + 3".to_string(),
+        );
+        let error = optimizer.optimize(request).expect_err("epoch mismatch");
+        assert!(matches!(
+            error,
+            CertifiedOptimizerError::InvalidRequest { reason, .. }
+                if reason.contains("security_epoch")
+        ));
+    }
+}
+
+#[test]
+fn required_certificate_failure_aborts_optimization() {
+    let exhausted = SecurityEpoch::from_raw(u64::MAX);
+    let mut optimizer = CertifiedRewriteOptimizer::new(exhausted);
+    let request = OptimizationRequest::new(
+        "required-certificate".to_string(),
+        exhausted,
+        OptimizationTier::Standard,
+        "2 + 3".to_string(),
+    );
+    let error = optimizer.optimize(request).expect_err("certificate cannot expire");
+    match error {
+        CertifiedOptimizerError::CertificationFailed {
+            request_id,
+            step_number,
+            reason,
+        } => {
+            assert_eq!(request_id, "required-certificate");
+            assert_eq!(step_number, 0);
+            assert!(reason.contains("epoch exhaustion"));
+        }
+        other => panic!("expected certification failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn optional_proofs_do_not_fabricate_certificates() {
+    let exhausted = SecurityEpoch::from_raw(u64::MAX);
+    let mut optimizer = CertifiedRewriteOptimizer::new(exhausted);
+    let request = OptimizationRequest::new(
+        "optional-certificate".to_string(),
+        exhausted,
+        OptimizationTier::Standard,
+        "2 + 3".to_string(),
+    )
+    .with_formal_proofs(false);
+    let result = optimizer.optimize(request).expect("explicitly optional proof");
+    assert_eq!(result.optimized_program.as_deref(), Some("5"));
+    assert!(result.all_steps_validated());
+    assert!(!result.all_steps_certified());
+    assert_eq!(result.metrics.steps_certified, 0);
+}
+
+#[test]
+fn invalid_or_missing_receipt_cannot_authorize_activation() {
+    let invalid = ValidationReceipt::new("failed-receipt".to_string(), false);
+    assert!(!ValidationResult::success(invalid).is_valid());
+
+    let valid = ValidationResult::success(ValidationReceipt::new("valid".to_string(), true));
+    let mut encoded = serde_json::to_value(valid).expect("encode result");
+    encoded["receipt"] = serde_json::Value::Null;
+    let forged: ValidationResult = serde_json::from_value(encoded).expect("decode result");
+    assert!(!forged.is_valid());
+}
+
+#[test]
+fn evidence_binds_the_complete_validation_mode() {
+    let hash_a = ContentHash::compute(b"artifact-a");
+    let hash_b = ContentHash::compute(b"artifact-b");
+    for (mode_a, mode_b) in [
+        (
+            ValidationMode::GoldenCorpusReplay { corpus_hash: hash_a, vector_count: 5 },
+            ValidationMode::GoldenCorpusReplay { corpus_hash: hash_b, vector_count: 5 },
+        ),
+        (
+            ValidationMode::SymbolicEquivalence { proof_hash: hash_a },
+            ValidationMode::SymbolicEquivalence { proof_hash: hash_b },
+        ),
+        (
+            ValidationMode::DifferentialTrace { workload_hash: hash_a, trace_pair_count: 5 },
+            ValidationMode::DifferentialTrace { workload_hash: hash_b, trace_pair_count: 5 },
+        ),
+    ] {
+        let receipt_for = |mode: ValidationMode| {
+            let mut optimizer = CertifiedRewriteOptimizer::new(epoch());
+            let request = OptimizationRequest::new(
+                "mode-binding".to_string(),
+                epoch(),
+                OptimizationTier::Standard,
+                "2 + 3".to_string(),
+            )
+            .with_validation_mode(mode);
+            optimizer
+                .optimize(request)
+                .expect("valid request")
+                .optimization_steps[0]
+                .validation_receipt
+                .clone()
+                .expect("receipt")
+        };
+        let receipt_a = receipt_for(mode_a.clone());
+        let receipt_b = receipt_for(mode_b);
+        assert_ne!(receipt_a.receipt_id, receipt_b.receipt_id);
+        assert_eq!(receipt_a.before_hash, receipt_b.before_hash);
+        assert_eq!(receipt_a.after_hash, receipt_b.after_hash);
+        assert_eq!(receipt_a, receipt_for(mode_a));
+    }
+}
+
+#[test]
+fn certificate_witnesses_are_bound_to_the_issuing_epoch() {
+    let certificate_for = |epoch: SecurityEpoch| {
+        let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
+        let request = OptimizationRequest::new(
+            "certificate-epoch-binding".to_string(),
+            epoch,
+            OptimizationTier::Standard,
+            "2 + 3".to_string(),
+        );
+        optimizer
+            .optimize(request)
+            .expect("valid request")
+            .optimization_steps[0]
+            .optimization_certificate
+            .clone()
+            .expect("certificate")
+    };
+    let first = certificate_for(epoch());
+    let second = certificate_for(epoch().next());
+    assert_ne!(first.cert_id, second.cert_id);
+    assert_ne!(first.proof_hash, second.proof_hash);
+    assert_eq!(first.issued_epoch, epoch());
+    assert_eq!(first.expiry_epoch, epoch().next());
+}

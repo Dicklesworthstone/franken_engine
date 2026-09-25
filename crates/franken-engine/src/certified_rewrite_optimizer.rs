@@ -181,9 +181,13 @@ impl ValidationResult {
         }
     }
 
-    /// Returns whether validation passed.
+    /// Returns whether validation passed with an activation-permitting receipt.
     pub fn is_valid(&self) -> bool {
         self.valid
+            && self
+                .receipt
+                .as_ref()
+                .is_some_and(ValidationReceipt::validation_passed)
     }
 
     /// Returns the validation receipt.
@@ -723,8 +727,15 @@ impl CertifiedRewriteOptimizer {
         &mut self,
         request: OptimizationRequest,
     ) -> Result<OptimizationResult, CertifiedOptimizerError> {
-        // Validate the request
+        // An otherwise valid request cannot borrow this optimizer's authority
+        // across a trust-state transition.
         request.validate()?;
+        if request.security_epoch != self.security_epoch {
+            return Err(CertifiedOptimizerError::InvalidRequest {
+                request_id: request.request_id.clone(),
+                reason: "request security_epoch does not match optimizer security_epoch".to_string(),
+            });
+        }
 
         let start_time = Instant::now();
         let timeout = Duration::from_millis(request.timeout_ms);
@@ -816,10 +827,13 @@ impl CertifiedRewriteOptimizer {
                         total_certification_time += cert_start.elapsed().as_millis() as u64;
                     }
                     Err(e) => {
-                        result.add_warning(format!(
-                            "Step {} certification failed: {}, continuing without certificate",
-                            step_number, e
-                        ));
+                        // Required means required: never activate or return an
+                        // uncertified candidate after a certification failure.
+                        return Err(CertifiedOptimizerError::CertificationFailed {
+                            request_id: request.request_id.clone(),
+                            step_number,
+                            reason: e.to_string(),
+                        });
                     }
                 }
             }
@@ -953,12 +967,20 @@ impl CertifiedRewriteOptimizer {
         rule_id: &RewriteRuleId,
         mode: &ValidationMode,
     ) -> Result<ValidationResult, CertifiedOptimizerError> {
-        let evidence_payload = format!(
-            "{SCHEMA_VERSION}:{rule_id}:{}:{}:{mode}",
+        // Display intentionally abbreviates modes and omits corpus/proof
+        // hashes. Bind the complete structured mode, not its display label.
+        let evidence_payload = serde_json::to_vec(&(
+            SCHEMA_VERSION,
+            rule_id,
             ContentHash::compute(before.as_bytes()),
-            ContentHash::compute(after.as_bytes())
-        );
-        let evidence_hash = ContentHash::compute(evidence_payload.as_bytes());
+            ContentHash::compute(after.as_bytes()),
+            mode,
+        ))
+        .map_err(|error| CertifiedOptimizerError::InternalError {
+            request_id: COMPONENT.to_string(),
+            error: format!("cannot serialize validation evidence: {error}"),
+        })?;
+        let evidence_hash = ContentHash::compute(&evidence_payload);
         let receipt_id = format!("{COMPONENT}:validation:{rule_id}:{evidence_hash}");
 
         if before == after {
@@ -1014,28 +1036,45 @@ impl CertifiedRewriteOptimizer {
         after: &str,
     ) -> Result<OptimizationCertificate, CertifiedOptimizerError> {
         let expected = self.apply_rewrite_rule(before, rule_id)?;
-        if expected != after {
+        if expected != after || !numeric::equivalent(before, after) {
             return Err(CertifiedOptimizerError::CertificationFailed {
                 request_id: COMPONENT.to_string(),
                 step_number: 0,
-                reason: "certificate candidate does not match validated rewrite".to_string(),
+                reason: "certificate candidate does not match a pure Number equivalent rewrite"
+                    .to_string(),
+            });
+        }
+
+        let expiry_epoch = self.security_epoch.next();
+        if expiry_epoch <= self.security_epoch {
+            return Err(CertifiedOptimizerError::CertificationFailed {
+                request_id: COMPONENT.to_string(),
+                step_number: 0,
+                reason: "cannot issue a certificate after security epoch exhaustion".to_string(),
             });
         }
 
         let before_hash = ContentHash::compute(before.as_bytes());
         let after_hash = ContentHash::compute(after.as_bytes());
         let proof_hash = ContentHash::compute(
-            format!("{SCHEMA_VERSION}:proof:{rule_id}:{before_hash}:{after_hash}").as_bytes(),
+            format!(
+                "{SCHEMA_VERSION}:proof:{}:{rule_id}:{before_hash}:{after_hash}",
+                self.security_epoch
+            )
+            .as_bytes(),
         );
 
         Ok(OptimizationCertificate {
-            cert_id: format!("{COMPONENT}:cert:{rule_id}:{before_hash}:{after_hash}"),
+            cert_id: format!(
+                "{COMPONENT}:cert:{}:{rule_id}:{before_hash}:{after_hash}",
+                self.security_epoch
+            ),
             tier: OptimizationTier::Standard,
             function_id: format!("{COMPONENT}:{rule_id}"),
             rewrite_count: 1,
             proof_hash,
             issued_epoch: self.security_epoch,
-            expiry_epoch: self.security_epoch.next(),
+            expiry_epoch,
             translation_receipt_valid: true,
             status: CertificateStatus::Valid,
         })

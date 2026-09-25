@@ -1,0 +1,124 @@
+name: Native Collection Runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-engine/src/baseline_interpreter*'
+      - 'crates/franken-engine/src/baseline_interpreter/**'
+      - 'crates/franken-engine/tests/collection_key_execution.rs'
+      - '.github/workflows/collection-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  key-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+    env:
+      CARGO_BUILD_JOBS: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record exact source and collection bead
+        run: |
+          mkdir -p collection-validation
+          git rev-parse HEAD > collection-validation/revision.txt
+          python3 - <<'PY'
+          import json, pathlib
+          for line in pathlib.Path('.beads/issues.jsonl').read_text().splitlines():
+              bead = json.loads(line)
+              if bead['id'] == 'bd-9vouw.33':
+                  print(json.dumps(bead, indent=2))
+          PY
+      - name: Install pinned Rust
+        run: rustup toolchain install nightly-2026-09-21 --profile minimal --component rustfmt --component clippy
+      - name: Select existing production runtime dependency closure
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess, textwrap
+          text = pathlib.Path('.github/workflows/native-runtime.yml').read_text()
+          step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
+          subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
+          PY
+      - name: Capture unmodified native baseline failures
+        run: |
+          status=0
+          cargo +nightly-2026-09-21 test --locked -p frankenengine-engine --no-default-features --test collection_key_execution -- --nocapture > collection-validation/baseline.log 2>&1 || status=$?
+          printf '%s\n' "$status" > collection-validation/baseline-exit-code.txt
+          tail -n 100 collection-validation/baseline.log
+      - name: Apply exact reviewed collection source hunks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os, pathlib, subprocess, urllib.request
+          source = pathlib.Path('crates/franken-engine/src/baseline_interpreter.rs')
+          data = source.read_bytes()
+          digest = hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest()
+          assert digest == 'eedae3c641d31ebe5a1d9411b6ddf0f41a40da14', digest
+          # This immutable Git blob carries only a bounded exact patch for the
+          # 5.6 MB monolith. Hash guards bind both the input and every edit.
+          # No branch is written here. Connector publication follows real tests;
+          # this temporary preparation step is removed at publication.
+          request = urllib.request.Request(
+              'https://api.github.com/repos/' + os.environ['REPOSITORY'] + '/git/blobs/a577a2a119c20594e4774ebafd5ba7e247055304',
+              headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})
+          with urllib.request.urlopen(request) as response:
+              blob = json.load(response)
+          patch = gzip.decompress(base64.b64decode(blob['content']))
+          assert hashlib.sha256(patch).hexdigest() == '1925a5dfe5edac4e321d1047c9fe6dca8077d3fab7f1c680917aa2a233ed1901'
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'collection.patch'
+          path.write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', str(path)], check=True)
+          subprocess.run(['git', 'apply', str(path)], check=True)
+          pathlib.Path('collection-validation/production.patch').write_bytes(patch)
+          PY
+      - name: Format collection regression source
+        run: rustfmt +nightly-2026-09-21 --edition 2024 crates/franken-engine/tests/collection_key_execution.rs
+      - name: Execute native collection and Array.from regressions
+        run: |
+          set -o pipefail
+          cargo +nightly-2026-09-21 test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test collection_key_execution --test array_from_execution -- --nocapture 2>&1 | tee collection-validation/tests.log
+      - name: Publish validated source blobs without moving any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, urllib.request
+          entries = {}
+          for path in ['crates/franken-engine/src/baseline_interpreter.rs', 'crates/franken-engine/tests/collection_key_execution.rs']:
+              data = pathlib.Path(path).read_bytes()
+              expected = hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest()
+              request = urllib.request.Request(
+                  'https://api.github.com/repos/' + os.environ['REPOSITORY'] + '/git/blobs',
+                  data=json.dumps({'encoding': 'base64', 'content': base64.b64encode(data).decode()}).encode(),
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'}, method='POST')
+              with urllib.request.urlopen(request) as response:
+                  result = json.load(response)
+              assert result['sha'] == expected
+              entries[path] = result['sha']
+              destination = pathlib.Path('collection-validation/source') / path
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              destination.write_bytes(data)
+          pathlib.Path('collection-validation/source-blobs.json').write_text(json.dumps(entries, indent=2))
+          print('VALIDATED_SOURCE_BLOBS=' + json.dumps(entries))
+          PY
+      - name: Retain complete native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collection-key-candidate
+          path: collection-validation/
+          retention-days: 7

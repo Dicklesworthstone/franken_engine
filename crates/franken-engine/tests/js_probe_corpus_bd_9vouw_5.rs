@@ -40,14 +40,11 @@ enum Expect {
 // focused bugs filed from this corpus's first real run on 2026-09-23).
 const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
-const DATE_JSON: &str = "bd-performance-conformance-bridge-tu32j.16.5";
 const COLLECTIONS: &str = "bd-performance-conformance-bridge-tu32j.16.6";
 const TYPED_ARRAYS: &str = "bd-performance-conformance-bridge-tu32j.16.7";
-const ERRORS_AND_URI: &str = "bd-performance-conformance-bridge-tu32j.16.11";
 const SYMBOLS: &str = "bd-performance-conformance-bridge-tu32j.16.17";
 const BIGINT: &str = "bd-performance-conformance-bridge-tu32j.16.19";
 const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
-const REGEXP_STRING_METHODS: &str = "bd-performance-conformance-bridge-tu32j.17.3";
 /// `for await` lowers to synchronous for-of (no `@@asyncIterator` dispatch).
 const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
 
@@ -59,7 +56,9 @@ const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
 /// number formatting, bd-9vouw.2; large integer literals, bd-6vl81), 02 with
 /// `super` in classes (bd-9vouw.24), 05 once `await` stopped suspending its
 /// caller (bd-9vouw.26), and 23 and 43 with Number.prototype.toPrecision and
-/// the arguments object (f2870e990, bd-9vouw.25).
+/// the arguments object (f2870e990, bd-9vouw.25), and 07, 09, 24, 34 and 45
+/// with Date methods, RegExp replace and the URI globals (861c1a92c /
+/// 247a2a99c, bd-9vouw.51-.53).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::Pass),
@@ -67,15 +66,12 @@ const LEDGER: &[(&str, Expect)] = &[
     ("04_generators", Expect::Pass),
     ("05_async_order", Expect::Pass),
     ("06_map_set", Expect::Pass),
-    ("07_json", Expect::KnownFailure(DATE_JSON)),
+    ("07_json", Expect::Pass),
     (
         "08_regexp_named_lookbehind",
         Expect::KnownFailure(REGEXP_GRAMMAR),
     ),
-    (
-        "09_regexp_replace",
-        Expect::KnownFailure(REGEXP_STRING_METHODS),
-    ),
+    ("09_regexp_replace", Expect::Pass),
     ("10_proxy_reflect", Expect::Pass),
     ("11_symbol_iter", Expect::Pass),
     ("12_typed_arrays", Expect::KnownFailure(TYPED_ARRAYS)),
@@ -90,7 +86,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("21_sloppy_with_args", Expect::KnownFailure(SLOPPY_MODE)),
     ("22_eval_function", Expect::DeniedByDesign),
     ("23_number_format", Expect::Pass),
-    ("24_date", Expect::KnownFailure(DATE_JSON)),
+    ("24_date", Expect::Pass),
     ("25_getter_setter_proto", Expect::Pass),
     ("26_error_types", Expect::DeniedByDesign),
     ("27_weakmap_holes", Expect::KnownFailure(COLLECTIONS)),
@@ -103,7 +99,7 @@ const LEDGER: &[(&str, Expect)] = &[
         "33_class_private_post2020",
         Expect::OutOfScope("ES2022 class private fields; the target is ES2020"),
     ),
-    ("34_string_unicode", Expect::KnownFailure(ERRORS_AND_URI)),
+    ("34_string_unicode", Expect::Pass),
     ("35_math", Expect::Pass),
     ("36_closures_in_loops", Expect::Pass),
     ("37_function_props", Expect::Pass),
@@ -117,7 +113,7 @@ const LEDGER: &[(&str, Expect)] = &[
         "44_regexp_backref_lookahead",
         Expect::KnownFailure(REGEXP_GRAMMAR),
     ),
-    ("45_date_methods", Expect::KnownFailure(DATE_JSON)),
+    ("45_date_methods", Expect::Pass),
     ("46_catch_message", Expect::Pass),
     ("47_number_to_string", Expect::Pass),
     ("48_ambient_process", Expect::DeniedByDesign),

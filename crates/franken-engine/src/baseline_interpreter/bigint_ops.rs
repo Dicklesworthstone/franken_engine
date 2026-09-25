@@ -2,10 +2,9 @@
 //! decimal text that [`Value::BigInt`](super::Value) carries (bd-9vouw.54).
 //!
 //! `num-bigint` does the arithmetic; the value representation stays decimal
-//! text, so hashing, serialization and `===` are unchanged. A result larger
-//! than [`MAX_BIGINT_BITS`] is refused with a RangeError before it is
-//! materialized, so an untrusted `2n ** 10n ** 9n` cannot exhaust memory or
-//! time.
+//! text, so hashing, serialization and `===` are unchanged. String conversion
+//! bounds significant input before allocating a magnitude, and arithmetic
+//! results above [`MAX_BIGINT_BITS`] are refused before decimal formatting.
 
 use std::cmp::Ordering;
 
@@ -204,7 +203,7 @@ pub(super) fn compare_with_number(bigint: &str, number: f64) -> Option<Ordering>
 /// `0x`/`0o`/`0b` literal, surrounded by whitespace; the empty string is 0n.
 /// `None` when the text is not such a literal.
 pub(super) fn from_string(text: &str) -> Option<String> {
-    let text = text.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let text = text.trim_matches(is_string_integer_whitespace);
     if text.is_empty() {
         return Some("0".to_string());
     }
@@ -225,14 +224,67 @@ pub(super) fn from_string(text: &str) -> Option<String> {
             None => (text.strip_prefix('+').unwrap_or(text), 10, false),
         },
     };
-    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+    if digits.is_empty() {
         return None;
     }
+    // Leading zeroes do not increase the magnitude. Keep this a borrowed
+    // slice: even a very long zero prefix must not allocate a second string
+    // or force the bigint parser to process an unbounded number of limbs.
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some("0".to_string());
+    }
+    let bits_per_digit = match radix {
+        2 => 1,
+        8 => 3,
+        16 => 4,
+        // 10 > 2^3: ceil(MAX_BIGINT_BITS / 3) is a conservative upper
+        // bound on the decimal digit count of any admissible magnitude.
+        // The exact bit check below still rejects the small excess range.
+        10 => 3,
+        _ => unreachable!("StringToBigInt admits only binary, octal, decimal and hex"),
+    };
+    if digits.len() as u64 > MAX_BIGINT_BITS.div_ceil(bits_per_digit)
+        || !digits.chars().all(|c| c.is_digit(radix))
+    {
+        return None;
+    }
+    if radix != 10 {
+        let leading = (digits.as_bytes()[0] as char).to_digit(radix)?;
+        let bits = (digits.len() as u64 - 1)
+            .saturating_mul(bits_per_digit)
+            .saturating_add(u64::from(u32::BITS - leading.leading_zeros()));
+        if bits > MAX_BIGINT_BITS {
+            return None;
+        }
+    }
+    // Only bounded significant input reaches the allocating parser. In
+    // particular, checking magnitude.bits() after parsing alone is too late
+    // to defend this boundary against an oversized untrusted literal.
     let magnitude = BigInt::parse_bytes(digits.as_bytes(), radix)?;
     if magnitude.bits() > MAX_BIGINT_BITS {
         return None;
     }
     Some(if negative { -magnitude } else { magnitude }.to_string())
+}
+
+// StringIntegerLiteral uses ECMAScript WhiteSpace and LineTerminator, not
+// Unicode White_Space. In particular U+0085 is not accepted; U+FEFF is.
+fn is_string_integer_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0009}'..='\u{000d}'
+            | '\u{0020}'
+            | '\u{00a0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{3000}'
+            | '\u{feff}'
+    )
 }
 
 /// BigInt::toString(x, radix) with lowercase digits.
@@ -279,4 +331,95 @@ pub(super) fn as_int_n(bits: u64, text: &str) -> Result<String, BigIntError> {
     } else {
         unsigned
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_integer_grammar_and_canonical_signs() {
+        for (source, expected) in [
+            ("", "0"),
+            ("-000", "0"),
+            ("+00042", "42"),
+            ("-00042", "-42"),
+            ("0b00101", "5"),
+            ("0O077", "63"),
+            ("0x00fF", "255"),
+        ] {
+            assert_eq!(from_string(source).as_deref(), Some(expected), "{source:?}");
+        }
+        for source in [
+            "+", "-", "0x", "0b2", "0o8", "-0x1", "+0b1", "1_0", "1n", "1.0", "1e2",
+            "1 2", "Infinity", "１２", "٠١",
+        ] {
+            assert_eq!(from_string(source), None, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn string_integer_uses_ecmascript_not_unicode_whitespace() {
+        for whitespace in [
+            '\u{0009}', '\u{000a}', '\u{000b}', '\u{000c}', '\u{000d}', '\u{0020}',
+            '\u{00a0}', '\u{1680}', '\u{2000}', '\u{200a}', '\u{2028}', '\u{2029}',
+            '\u{202f}', '\u{205f}', '\u{3000}', '\u{feff}',
+        ] {
+            let source = format!("{whitespace}-42{whitespace}");
+            assert_eq!(from_string(&source).as_deref(), Some("-42"));
+            assert_eq!(from_string(&whitespace.to_string()).as_deref(), Some("0"));
+        }
+        for whitespace in ['\u{0085}', '\u{180e}', '\u{200b}', '\u{2060}'] {
+            for source in [format!("{whitespace}1"), format!("1{whitespace}")] {
+                assert_eq!(from_string(&source), None, "{source:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn large_zero_prefixes_do_not_consume_the_magnitude_budget() {
+        let zeroes = "0".repeat(MAX_BIGINT_BITS as usize + 1);
+        for prefix in ["", "+", "-", "0b", "0o", "0x"] {
+            assert_eq!(from_string(&format!("{prefix}{zeroes}")).as_deref(), Some("0"));
+            let expected = if prefix == "-" { "-1" } else { "1" };
+            assert_eq!(
+                from_string(&format!("{prefix}{zeroes}1")).as_deref(),
+                Some(expected)
+            );
+            assert_eq!(from_string(&format!("{prefix}{zeroes}z")), None);
+        }
+    }
+
+    #[test]
+    fn oversized_radix_inputs_are_rejected_before_magnitude_allocation() {
+        for (prefix, leading, zeroes) in [
+            ("0b", "1", MAX_BIGINT_BITS),
+            ("0o", "2", MAX_BIGINT_BITS / 3),
+            ("0x", "1", MAX_BIGINT_BITS / 4),
+            ("", "1", MAX_BIGINT_BITS.div_ceil(3)),
+        ] {
+            let source = format!("{prefix}{leading}{}", "0".repeat(zeroes as usize));
+            assert_eq!(from_string(&source), None, "radix prefix {prefix:?}");
+        }
+    }
+
+    #[test]
+    fn exact_bit_limit_remains_accepted_in_every_radix() {
+        let magnitude = (BigInt::from(1u8) << MAX_BIGINT_BITS) - BigInt::from(1u8);
+        let decimal = magnitude.to_string();
+        for (prefix, radix) in [("0b", 2), ("0o", 8), ("", 10), ("0x", 16)] {
+            let source = format!("{prefix}{}", magnitude.to_str_radix(radix));
+            assert_eq!(from_string(&source).as_deref(), Some(decimal.as_str()));
+        }
+        let negative = format!("-{decimal}");
+        assert_eq!(from_string(&negative).as_deref(), Some(negative.as_str()));
+    }
+
+    #[test]
+    fn decimal_exact_limit_is_checked_after_conservative_admission() {
+        let too_large = (BigInt::from(1u8) << MAX_BIGINT_BITS).to_string();
+        assert!(too_large.len() as u64 <= MAX_BIGINT_BITS.div_ceil(3));
+        assert_eq!(from_string(&too_large), None);
+        assert_eq!(from_string(&format!("-{too_large}")), None);
+    }
 }

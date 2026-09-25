@@ -97,6 +97,13 @@ impl InterpreterCore {
                     )),
                 };
             }
+            // A Promise value has no ordinary property storage; it inherits
+            // from the realm's %Promise.prototype% (bd-9vouw.34).
+            if matches!(target, Value::Promise(_))
+                && matches!(operation, ObjectIntegrityOperation::GetPrototype)
+            {
+                return Ok(Value::Object(self.ensure_builtin_prototype("Promise")?));
+            }
             let target_id = match &target {
                 value if value.is_object_like() => Some(self.reflection_target_object(value)?),
                 value if reflect => {
@@ -219,7 +226,7 @@ impl InterpreterCore {
 
     /// [[GetPrototypeOf]] of a function value: a derived class's parent, the
     /// link recorded by `Object.setPrototypeOf`, else `Function.prototype`.
-    fn function_value_prototype(
+    pub(super) fn function_value_prototype(
         &mut self,
         module: Option<&Ir3Module>,
         function: &Value,
@@ -298,7 +305,7 @@ impl InterpreterCore {
                 .and_then(|object| object.prototype);
             depth += 1;
         }
-        self.mutate_heap(|heap| heap[backing.0 as usize].prototype = prototype);
+        self.store_prototype_link(backing, prototype);
         self.gc_write_barrier(backing);
         Ok(true)
     }
@@ -351,8 +358,8 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         self.integrity_step(id, depth)?;
         let Some((target, handler)) = self.active_proxy_record(id)? else {
-            return Ok(self.heap[id.0 as usize]
-                .prototype
+            return Ok(self
+                .ordinary_get_prototype_of(id)?
                 .map_or(Value::Null, Value::Object));
         };
         let Some(result) = self.invoke_proxy_trap(
@@ -416,7 +423,16 @@ impl InterpreterCore {
             }
             return Ok(true);
         }
-        if self.heap[id.0 as usize].prototype == prototype {
+        let object = &self.heap[id.0 as usize];
+        let unchanged = match prototype {
+            Some(_) => self.observable_prototype_link(object, id) == prototype,
+            None => {
+                object.prototype.is_none()
+                    && (object.is_null_prototype
+                        || self.builtin_prototypes.get("Object") == Some(&id))
+            }
+        };
+        if unchanged {
             return Ok(true);
         }
         if !self.heap[id.0 as usize].extensible()
@@ -436,13 +452,13 @@ impl InterpreterCore {
             if self.proxy_record(candidate)?.is_some() {
                 break;
             }
-            current = self.heap[candidate.0 as usize].prototype;
+            current = self.observable_prototype_of(candidate);
             walked += 1;
         }
         if self.active_inline_callback_context_label.is_some() {
             self.reflect_admit_mutation_label(id)?;
         }
-        self.mutate_heap(|heap| heap[id.0 as usize].prototype = prototype);
+        self.store_prototype_link(id, prototype);
         self.gc_write_barrier(id);
         Ok(true)
     }

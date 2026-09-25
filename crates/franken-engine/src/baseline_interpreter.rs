@@ -808,6 +808,9 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Uint32Array" => Some("Uint32Array"),
         "Float32Array" => Some("Float32Array"),
         "Float64Array" => Some("Float64Array"),
+        "Date" => Some("Date"),
+        "Promise" => Some("Promise"),
+        "RegExp" => Some("RegExp"),
         _ => None,
     }
 }
@@ -3153,6 +3156,8 @@ pub enum BuiltinFunctionKind {
     /// the `__value` of the bound holder (bd-9vouw.39). Append only.
     PromiseFinallyValueThunk,
     PromiseFinallyThrower,
+    /// `Object.prototype.isPrototypeOf` (ES2020 19.1.3.3). Append only.
+    ObjectPrototypeIsPrototypeOf,
 }
 
 impl BuiltinFunctionKind {
@@ -4844,6 +4849,7 @@ impl BuiltinFunction {
             | BuiltinFunctionKind::PromiseCatchFinally
             | BuiltinFunctionKind::PromiseFinallyValueThunk
             | BuiltinFunctionKind::PromiseFinallyThrower => "",
+            BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
         }
     }
 }
@@ -4852,7 +4858,7 @@ impl BuiltinFunction {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 26] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 27] = [
     "Object",
     "Array",
     "Number",
@@ -4868,6 +4874,7 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 26] = [
     "SyntaxError",
     "EvalError",
     "URIError",
+    "RegExp",
     // Binary data constructors: direct `new Uint8Array(...)` stays intercepted
     // at lowering; these bindings make the constructors usable as values
     // (Test262's testTypedArray.js lists all nine at load).
@@ -5673,6 +5680,11 @@ pub struct HeapObject {
     is_non_extensible: bool,
     /// Whether this object is the engine-owned `import.meta` contract object.
     pub is_import_meta: bool,
+    /// Whether a `None` `prototype` is an explicit null
+    /// (`Object.create(null)`, `setPrototypeOf(o, null)`, `__proto__ = null`)
+    /// rather than the unset default link to %Object.prototype% /
+    /// %Array.prototype% (bd-9vouw.34).
+    is_null_prototype: bool,
 }
 
 /// The boolean attributes of an own property (ES2020 6.1.7.1). `writable` is
@@ -5784,6 +5796,7 @@ impl Serialize for HeapObject {
         let mut object = serializer.serialize_struct(
             "HeapObject",
             10 + usize::from(self.is_non_extensible)
+                + usize::from(self.is_null_prototype)
                 + usize::from(!symbol_properties.is_empty())
                 + usize::from(!self.property_labels.is_empty())
                 + usize::from(!self.property_attributes.is_empty())
@@ -5800,6 +5813,9 @@ impl Serialize for HeapObject {
         object.serialize_field("is_frozen", &self.is_frozen)?;
         if self.is_non_extensible {
             object.serialize_field("is_non_extensible", &true)?;
+        }
+        if self.is_null_prototype {
+            object.serialize_field("is_null_prototype", &true)?;
         }
         object.serialize_field("is_import_meta", &self.is_import_meta)?;
         if has_constructor_metadata {
@@ -5864,6 +5880,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_frozen: bool,
             #[serde(default)]
             is_non_extensible: bool,
+            #[serde(default)]
+            is_null_prototype: bool,
             #[serde(default)]
             is_import_meta: bool,
             #[serde(default)]
@@ -5952,6 +5970,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             data_view: wire.data_view,
             is_frozen: wire.is_frozen,
             is_non_extensible: wire.is_non_extensible,
+            is_null_prototype: wire.is_null_prototype && wire.prototype.is_none(),
             is_import_meta: wire.is_import_meta,
             derived_constructor_parent: wire.derived_constructor_parent,
             derived_constructor_parent_label: wire.derived_constructor_parent_label,
@@ -13443,7 +13462,8 @@ impl InterpreterCore {
     }
 
     fn alloc_fs_date(&mut self, modified_millis: i64) -> Result<Value, InterpreterError> {
-        let date_id = self.alloc_object_with_prototype(None)?;
+        let date_prototype = self.ensure_builtin_prototype("Date")?;
+        let date_id = self.alloc_object_with_prototype(Some(date_prototype))?;
         self.set_object_property(date_id, "__type".to_string(), Value::str("Date"))?;
         self.set_object_property(
             date_id,
@@ -37795,6 +37815,29 @@ impl InterpreterCore {
                 let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.regexp_test_value(&receiver, &input)
             }
+            BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => {
+                // ES2020 19.1.3.3: a primitive V is never inherited from;
+                // otherwise walk V's chain for this (ToObject'd) receiver.
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                if !value.is_object_like() {
+                    return Ok(Value::Bool(false));
+                }
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                if matches!(receiver, Value::Undefined | Value::Null) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object-coercible this for isPrototypeOf".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                if !receiver.is_object_like() {
+                    return Ok(Value::Bool(false));
+                }
+                Ok(Value::Bool(self.value_prototype_chain_contains(
+                    Some(module),
+                    &value,
+                    &receiver,
+                )?))
+            }
             BuiltinFunctionKind::ObjectHasOwnProperty => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Some(property) = self.builtin_arg(args, 0)? else {
@@ -39351,7 +39394,7 @@ impl InterpreterCore {
             if let Some(value) = object.properties.get(key) {
                 return Some(value);
             }
-            current = object.prototype;
+            current = self.observable_prototype_link(object, id);
             depth += 1;
         }
         None
@@ -44234,11 +44277,8 @@ impl InterpreterCore {
                                     // `__proto__` reads the internal prototype link
                                     // (set by class `extends` and `o.__proto__ = p`),
                                     // not a data property (bd-ppfds).
-                                    self.heap
-                                        .get(oid.0 as usize)
-                                        .and_then(|o| o.prototype)
-                                        .map(Value::Object)
-                                        .unwrap_or(Value::Null)
+                                    self.ordinary_get_prototype_of(oid)?
+                                        .map_or(Value::Null, Value::Object)
                                 } else if ordinary_own_property_fast_path {
                                     let value = self
                                     .heap
@@ -44314,7 +44354,15 @@ impl InterpreterCore {
                                 }
                             }
                             Value::BuiltinFunction(builtin) => {
-                                if let Some(property_object) =
+                                if property_key.as_str() == Some("prototype")
+                                    && let Some(name) =
+                                        Self::materialized_global_prototype_name(&builtin)
+                                {
+                                    // bd-9vouw.34: `Date.prototype` and
+                                    // `Promise.prototype` are the realm's
+                                    // intrinsics (non-writable in ES2020).
+                                    Value::Object(self.ensure_builtin_prototype(name)?)
+                                } else if let Some(property_object) =
                                     Self::builtin_function_property_object(&builtin)
                                 {
                                     self.run_pre_runtime_property_access_hook(
@@ -44533,12 +44581,7 @@ impl InterpreterCore {
                                     _ => None,
                                 };
                                 if let Some(new_proto) = proto_update {
-                                    let idx = oid.0 as usize;
-                                    self.mutate_heap(|heap| {
-                                        if let Some(obj) = heap.get_mut(idx) {
-                                            obj.prototype = new_proto;
-                                        }
-                                    });
+                                    self.store_prototype_link(oid, new_proto);
                                 }
                             } else {
                                 // Precharge and stage the label before the value
@@ -47380,9 +47423,9 @@ impl InterpreterCore {
                 got: constructor.type_name().to_string(),
             });
         }
-        let Value::Object(object_id) = candidate else {
+        if !candidate.is_object_like() {
             return Ok(Value::Bool(false));
-        };
+        }
         let prototype = if let Some((value, _)) =
             self.constructor_prototype_override(module, &constructor)?
         {
@@ -47417,6 +47460,21 @@ impl InterpreterCore {
                 {
                     self.ensure_builtin_prototype("EventEmitter")?
                 }
+                // bd-9vouw.34: `x instanceof Date`, `x instanceof Promise`,
+                // `x instanceof R` for a standard constructor value `R`.
+                Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::StandardConstructor =>
+                {
+                    let name = Self::standard_constructor_name(&builtin)?;
+                    self.ensure_builtin_prototype(name)?
+                }
+                Value::BuiltinFunction(builtin)
+                    if Self::materialized_global_prototype_name(&builtin).is_some() =>
+                {
+                    let name = Self::materialized_global_prototype_name(&builtin)
+                        .expect("guarded above");
+                    self.ensure_builtin_prototype(name)?
+                }
                 other => {
                     return Err(InterpreterError::TypeError {
                         expected: "function".to_string(),
@@ -47426,9 +47484,11 @@ impl InterpreterCore {
             }
         };
 
-        Ok(Value::Bool(
-            self.prototype_chain_contains(object_id, prototype)?,
-        ))
+        Ok(Value::Bool(self.value_prototype_chain_contains(
+            Some(module),
+            &candidate,
+            &Value::Object(prototype),
+        )?))
     }
 
     fn eval_in_operator(
@@ -49796,11 +49856,12 @@ impl InterpreterCore {
         object_id: ObjectId,
         prototype: ObjectId,
     ) -> Result<bool, InterpreterError> {
-        let mut current = self
-            .heap
-            .get(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .prototype;
+        let mut current = self.observable_prototype_link(
+            self.heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?,
+            object_id,
+        );
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
         visited.insert(object_id);
@@ -49812,15 +49873,163 @@ impl InterpreterCore {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
                 return Ok(false);
             }
-            current = self
-                .heap
-                .get(id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?
-                .prototype;
+            current = self.observable_prototype_link(
+                self.heap
+                    .get(id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?,
+                id,
+            );
             depth += 1;
         }
 
         Ok(false)
+    }
+
+    /// The [[Prototype]] link user code observes (bd-9vouw.34). Ordinary
+    /// objects and arrays are allocated without a stored link. Unless that
+    /// link was explicitly nulled, it is the realm's %Array.prototype%
+    /// (arrays) or %Object.prototype%, which ends every chain. Only
+    /// intrinsics that already exist are followed: one never allocated holds
+    /// no properties to find, and [`Self::chain_reaches_object_prototype`]
+    /// answers membership without allocating.
+    fn observable_prototype_link(&self, object: &HeapObject, id: ObjectId) -> Option<ObjectId> {
+        if object.prototype.is_some() || object.is_null_prototype {
+            return object.prototype;
+        }
+        let object_prototype = self.builtin_prototypes.get("Object").copied();
+        if object_prototype == Some(id) {
+            return None;
+        }
+        if object.is_array
+            && let Some(array_prototype) = self.builtin_prototypes.get("Array").copied()
+            && array_prototype != id
+        {
+            return Some(array_prototype);
+        }
+        object_prototype
+    }
+
+    /// [`Self::observable_prototype_link`] by id.
+    fn observable_prototype_of(&self, id: ObjectId) -> Option<ObjectId> {
+        self.heap
+            .get(id.0 as usize)
+            .and_then(|object| self.observable_prototype_link(object, id))
+    }
+
+    /// Whether `id`'s chain ends at %Object.prototype%, allocated or not; an
+    /// explicit null link ends it before.
+    fn chain_reaches_object_prototype(&self, id: ObjectId) -> bool {
+        let object_prototype = self.builtin_prototypes.get("Object").copied();
+        let mut current = id;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            if Some(current) == object_prototype {
+                return true;
+            }
+            let Some(object) = self.heap.get(current.0 as usize) else {
+                return false;
+            };
+            match object.prototype {
+                Some(next) => current = next,
+                None => return !object.is_null_prototype,
+            }
+        }
+        false
+    }
+
+    /// [[GetPrototypeOf]] of an ordinary object, allocating the default
+    /// intrinsic the first time user code observes it (bd-9vouw.34).
+    fn ordinary_get_prototype_of(
+        &mut self,
+        id: ObjectId,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let object = self
+            .heap
+            .get(id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+        if object.prototype.is_some() || object.is_null_prototype {
+            return Ok(object.prototype);
+        }
+        let is_array = object.is_array;
+        let object_prototype = self.ensure_builtin_prototype("Object")?;
+        if object_prototype == id {
+            return Ok(None);
+        }
+        if is_array {
+            let array_prototype = self.ensure_builtin_prototype("Array")?;
+            if array_prototype != id {
+                return Ok(Some(array_prototype));
+            }
+        }
+        Ok(Some(object_prototype))
+    }
+
+    /// Store `prototype` as `id`'s [[Prototype]]; `None` is an explicit null.
+    fn store_prototype_link(&mut self, id: ObjectId, prototype: Option<ObjectId>) {
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(id.0 as usize) {
+                object.prototype = prototype;
+                object.is_null_prototype = prototype.is_none();
+            }
+        });
+    }
+
+    /// Whether `needle` is on the [[Prototype]] chain of the object-like
+    /// `value` (OrdinaryHasInstance step 7 and `isPrototypeOf`). A function
+    /// value's chain starts at its function [[Prototype]], so
+    /// `f instanceof Object` and `B instanceof Function` hold (bd-9vouw.34).
+    fn value_prototype_chain_contains(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+        needle: &Value,
+    ) -> Result<bool, InterpreterError> {
+        let mut current = value.clone();
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let next = match &current {
+                Value::Object(id) => {
+                    if let Value::Object(needle) = needle {
+                        return self.prototype_chain_contains(*id, *needle);
+                    }
+                    self.observable_prototype_of(*id)
+                        .map_or(Value::Null, Value::Object)
+                }
+                callable if callable.is_callable() => {
+                    self.function_value_prototype(module, callable)?
+                }
+                Value::Promise(_) => Value::Object(self.ensure_builtin_prototype("Promise")?),
+                _ => return Ok(false),
+            };
+            if next == *needle {
+                return Ok(true);
+            }
+            if matches!(next, Value::Null) {
+                return Ok(false);
+            }
+            current = next;
+        }
+        Ok(false)
+    }
+
+    /// Whether `key` names a builtin method this engine supplies virtually
+    /// (not as an own property of the shared prototype objects) somewhere on
+    /// `object_id`'s chain, so `'push' in []` and `'hasOwnProperty' in {}`
+    /// agree with the [[Get]] fallbacks (bd-9vouw.34).
+    fn chain_has_virtual_builtin_property(&self, object_id: ObjectId, key: &str) -> bool {
+        let root_is_array = self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| object.is_array);
+        if root_is_array && Self::array_prototype_method(key).is_some() {
+            return true;
+        }
+        if self
+            .builtin_prototype_method_for_chain(object_id, key)
+            .is_some()
+        {
+            return true;
+        }
+        self.chain_reaches_object_prototype(object_id)
+            && (key == "constructor" || Self::object_prototype_method(key).is_some())
     }
 
     /// Walk the prototype chain to find a property value.
@@ -49911,7 +50120,10 @@ impl InterpreterCore {
                     .heap
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-                (object.own_runtime_property_value(key), object.prototype)
+                (
+                    object.own_runtime_property_value(key),
+                    self.observable_prototype_link(object, id),
+                )
             };
             if let Some(val) = property_value {
                 // Capture property resolution success for deterministic replay
@@ -50671,6 +50883,9 @@ impl InterpreterCore {
             "propertyIsEnumerable" => Some(BuiltinFunction::object_property_is_enumerable()),
             "valueOf" => Some(BuiltinFunction::object_value_of()),
             "toString" => Some(BuiltinFunction::object_to_string()),
+            "isPrototypeOf" => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf,
+            )),
             _ => None,
         }
     }
@@ -51113,7 +51328,7 @@ impl InterpreterCore {
             if object.contains_own_runtime_property(key) {
                 return Ok(true);
             }
-            current = object.prototype;
+            current = self.observable_prototype_link(object, id);
             depth += 1;
         }
 
@@ -51523,7 +51738,7 @@ impl InterpreterCore {
                     }
                     break;
                 }
-                match object.prototype {
+                match self.observable_prototype_link(object, owner) {
                     Some(prototype) => {
                         owner = prototype;
                         owner_depth += 1;
@@ -51643,10 +51858,12 @@ impl InterpreterCore {
                 if object.contains_own_runtime_property(key) {
                     return Ok(true);
                 }
-                current = object.prototype;
+                current = self.observable_prototype_link(object, id);
                 depth += 1;
             }
-            return Ok(false);
+            return Ok(key
+                .as_str()
+                .is_some_and(|key| self.chain_has_virtual_builtin_property(object_id, key)));
         };
 
         if let Some(result) = self.invoke_proxy_trap(
@@ -51868,10 +52085,7 @@ impl InterpreterCore {
         object_id: ObjectId,
     ) -> Result<Option<ObjectId>, InterpreterError> {
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return Ok(self
-                .heap
-                .get(object_id.0 as usize)
-                .and_then(|object| object.prototype));
+            return Ok(self.observable_prototype_of(object_id));
         };
         match self.invoke_proxy_trap(
             module,
@@ -51880,10 +52094,7 @@ impl InterpreterCore {
             vec![Value::Object(target)],
         )? {
             // Trap absent: the target's prototype governs.
-            None => Ok(self
-                .heap
-                .get(target.0 as usize)
-                .and_then(|object| object.prototype)),
+            None => Ok(self.observable_prototype_of(target)),
             Some(Value::Object(prototype_id)) => Ok(Some(prototype_id)),
             Some(Value::Null) => Ok(None),
             Some(other) => Err(InterpreterError::TypeError {
@@ -52161,7 +52372,10 @@ impl InterpreterCore {
         // Bounded like the other prototype walks; a longer chain keeps the
         // non-observable conversion.
         for _ in 0..128 {
-            let Some(object) = current.and_then(|id| self.heap.get(id.0 as usize)) else {
+            let Some(id) = current else {
+                return false;
+            };
+            let Some(object) = self.heap.get(id.0 as usize) else {
                 return false;
             };
             let guest_method = |name: &str| {
@@ -52185,7 +52399,7 @@ impl InterpreterCore {
             {
                 return true;
             }
-            current = object.prototype;
+            current = self.observable_prototype_link(object, id);
         }
         false
     }
@@ -62442,7 +62656,7 @@ impl InterpreterCore {
             if let Some(value) = object.own_runtime_property_value(key) {
                 return Ok(Some((id, value)));
             }
-            current = object.prototype;
+            current = self.observable_prototype_link(object, id);
             depth += 1;
         }
 
@@ -69605,13 +69819,15 @@ impl InterpreterCore {
                 });
             }
             let candidate = self.read_reg(args.start)?;
-            let Value::Object(object_id) = candidate else {
+            if !candidate.is_object_like() {
                 return Ok(Value::Bool(false));
-            };
+            }
             let prototype = self.ensure_builtin_prototype(name)?;
-            return Ok(Value::Bool(
-                self.prototype_chain_contains(object_id, prototype)?,
-            ));
+            return Ok(Value::Bool(self.value_prototype_chain_contains(
+                module,
+                &candidate,
+                &Value::Object(prototype),
+            )?));
         }
 
         match cap {
@@ -70710,24 +70926,24 @@ impl InterpreterCore {
                 }
             }
             "builtin:ObjectCreate" => {
-                // Object.create implementation - creates new object with specified prototype
-                let prototype = if args.count == 0 {
-                    None
-                } else {
-                    let prototype_arg = self.read_reg(args.start)?;
-                    match prototype_arg {
-                        Value::Null => None,
-                        Value::Object(proto_id) => Some(proto_id),
-                        other => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object or null prototype for Object.create".to_string(),
-                                got: other.type_name().to_string(),
-                            });
-                        }
+                // Object.create(O, Properties) (ES2020 19.1.2.2): O must be an
+                // object or null; a missing O is undefined and throws.
+                let prototype_arg = self.arg_or_undefined(args, 0)?;
+                let prototype = match prototype_arg {
+                    Value::Null => None,
+                    Value::Object(proto_id) => Some(proto_id),
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object or null prototype for Object.create".to_string(),
+                            got: other.type_name().to_string(),
+                        });
                     }
                 };
 
                 let obj_id = self.alloc_object_with_prototype(prototype)?;
+                if prototype.is_none() {
+                    self.store_prototype_link(obj_id, None);
+                }
                 let properties_arg = self.arg_or_undefined(args, 1)?;
                 if !matches!(properties_arg, Value::Undefined) {
                     self.object_define_properties(module, obj_id, properties_arg, "Object.create")?;
@@ -71461,7 +71677,8 @@ impl InterpreterCore {
                 // renders an integral value like `0` (not `0.0`), so
                 // `new Date(0).getTime()` stringifies to "0". Use the
                 // capability-checked allocator rather than poking the heap Vec.
-                let date_id = self.alloc_object_with_prototype(None)?;
+                let date_prototype = self.ensure_builtin_prototype("Date")?;
+                let date_id = self.alloc_object_with_prototype(Some(date_prototype))?;
                 self.set_object_property(date_id, "__type".to_string(), Value::str("Date"))?;
                 self.set_object_property(
                     date_id,
@@ -73561,7 +73778,8 @@ impl InterpreterCore {
                 };
 
                 // Create RegExp object
-                let regexp_id = self.alloc_object_with_prototype(None)?;
+                let regexp_prototype = self.ensure_builtin_prototype("RegExp")?;
+                let regexp_id = self.alloc_object_with_prototype(Some(regexp_prototype))?;
 
                 // Set RegExp metadata
                 self.set_object_property(regexp_id, "__type".to_string(), Value::str("RegExp"))?;
@@ -81657,7 +81875,7 @@ impl InterpreterCore {
             if object.contains_own_runtime_property(key) {
                 return self.own_stored_runtime_property_label(id, key);
             }
-            current = object.prototype;
+            current = self.observable_prototype_link(object, id);
             depth += 1;
         }
         Label::Public
@@ -82673,7 +82891,7 @@ impl InterpreterCore {
             if object.contains_own_runtime_property(key) {
                 return true;
             }
-            current = object.prototype;
+            current = self.observable_prototype_link(object, id);
             depth += 1;
         }
         false
@@ -83070,6 +83288,16 @@ impl InterpreterCore {
     /// (bd-1piai); every EventEmitter once wrapper owns a distinct object so
     /// repeated `rawListeners()` calls observe stable `.listener` state
     /// (bd-asw4m.2).
+    /// The intrinsic prototype of a materialized constructor global.
+    fn materialized_global_prototype_name(builtin: &BuiltinFunction) -> Option<&'static str> {
+        match builtin.kind {
+            BuiltinFunctionKind::DateConstructor => Some("Date"),
+            BuiltinFunctionKind::PromiseConstructor => Some("Promise"),
+            BuiltinFunctionKind::FunctionConstructor => Some("Function"),
+            _ => None,
+        }
+    }
+
     fn builtin_function_property_object(builtin: &BuiltinFunction) -> Option<ObjectId> {
         matches!(
             builtin.kind,
@@ -83217,6 +83445,7 @@ impl InterpreterCore {
             "name" => Value::str(name),
             "length" => Value::Int(match name {
                 "Map" | "Set" => 0,
+                "RegExp" => 2,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
             }),
@@ -83274,6 +83503,9 @@ impl InterpreterCore {
             "Boolean" => self.dispatch_builtin_hostcall("builtin:Boolean", args, Some(module)),
             "Map" => self.dispatch_builtin_hostcall("builtin:Map", args, Some(module)),
             "Set" => self.dispatch_builtin_hostcall("builtin:Set", args, Some(module)),
+            // `RegExp(p, f)` and `new R(p, f)` through a RegExp value: the same
+            // hostcall `new RegExp(...)` and literals lower to.
+            "RegExp" => self.dispatch_builtin_hostcall("builtin:RegExp", args, Some(module)),
             "ArrayBuffer" | "DataView" => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }
@@ -83491,12 +83723,22 @@ impl InterpreterCore {
         let map_method = Self::collection_prototype_method("Map", key).map(Value::BuiltinFunction);
         let set_method = Self::collection_prototype_method("Set", key).map(Value::BuiltinFunction);
         let function_method = Self::function_prototype_property(key);
+        let date_method = Self::collection_prototype_method("Date", key).map(Value::BuiltinFunction);
+        let regexp_method =
+            Self::collection_prototype_method("RegExp", key).map(Value::BuiltinFunction);
+        let promise_method = match Self::promise_property_value(key) {
+            Value::Undefined => None,
+            method => Some(method),
+        };
         if array_method.is_none()
             && string_method.is_none()
             && number_method.is_none()
             && map_method.is_none()
             && set_method.is_none()
             && function_method.is_none()
+            && date_method.is_none()
+            && regexp_method.is_none()
+            && promise_method.is_none()
         {
             return None;
         }
@@ -83518,12 +83760,12 @@ impl InterpreterCore {
                 Some("Map") => return map_method,
                 Some("Set") => return set_method,
                 Some("Function") => return function_method,
+                Some("Date") => return date_method,
+                Some("RegExp") => return regexp_method,
+                Some("Promise") => return promise_method,
                 _ => {}
             }
-            current = self
-                .heap
-                .get(id.0 as usize)
-                .and_then(|object| object.prototype);
+            current = self.observable_prototype_of(id);
             depth += 1;
         }
         None
@@ -83557,13 +83799,13 @@ impl InterpreterCore {
             {
                 return Some(constructor(name));
             }
-            current = self
-                .heap
-                .get(id.0 as usize)
-                .and_then(|object| object.prototype);
+            current = self.observable_prototype_of(id);
             depth += 1;
         }
-        None
+        // Every other ordinary chain ends at %Object.prototype%, whose
+        // `constructor` is `Object` (bd-9vouw.34).
+        self.chain_reaches_object_prototype(object_id)
+            .then(|| constructor("Object"))
     }
 
     /// Write `set_val` to `property_key` on an ordinary-property backing

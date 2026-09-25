@@ -72,12 +72,7 @@ pub(super) fn binary(op: BigIntBinaryOp, left: &str, right: &str) -> Result<Stri
     let y = parse(right);
     let result = match op {
         BigIntBinaryOp::Sub => x - y,
-        BigIntBinaryOp::Mul => {
-            if x.bits().saturating_add(y.bits()) > MAX_BIGINT_BITS.saturating_add(1) {
-                return Err(BigIntError::TooLarge);
-            }
-            x * y
-        }
+        BigIntBinaryOp::Mul => multiply_bounded(&x, &y)?,
         BigIntBinaryOp::Div | BigIntBinaryOp::Rem if is_zero(&y) => {
             return Err(BigIntError::DivisionByZero);
         }
@@ -120,7 +115,43 @@ fn exponentiate(base: &BigInt, exponent: &BigInt) -> Result<String, BigIntError>
     if (base.bits() - 1).saturating_mul(u64::from(exponent)) >= MAX_BIGINT_BITS {
         return Err(BigIntError::TooLarge);
     }
-    bounded(base.pow(exponent))
+    // A lower bound alone is insufficient: e.g. 3^n can pass the estimate
+    // above while its actual magnitude is over budget. Check every product,
+    // rather than allocating that oversized power and rejecting it afterward.
+    let mut remaining = exponent;
+    let mut factor = base.clone();
+    let mut result = BigInt::from(1u8);
+    while remaining != 0 {
+        if remaining & 1 != 0 {
+            result = multiply_bounded(&result, &factor)?;
+        }
+        remaining >>= 1;
+        // Do not square after the last used exponent bit: an unused factor
+        // can exceed the limit even though the requested result fits.
+        if remaining != 0 {
+            factor = multiply_bounded(&factor, &factor)?;
+        }
+    }
+    bounded(result)
+}
+
+/// A nonzero product has either x.bits() + y.bits() or one fewer bits.
+/// Reject a provably oversized multiplication before num-bigint allocates it.
+/// Only the one-bit boundary case needs multiplication followed by an exact
+/// check. Squaring in exponentiation uses this same admission boundary.
+fn multiply_bounded(x: &BigInt, y: &BigInt) -> Result<BigInt, BigIntError> {
+    if is_zero(x) || is_zero(y) {
+        return Ok(BigInt::from(0u8));
+    }
+    if x.bits().saturating_add(y.bits()) > MAX_BIGINT_BITS.saturating_add(1) {
+        return Err(BigIntError::TooLarge);
+    }
+    let product = x * y;
+    if product.bits() > MAX_BIGINT_BITS {
+        Err(BigIntError::TooLarge)
+    } else {
+        Ok(product)
+    }
 }
 
 /// `value << amount`; a negative amount shifts right, rounding toward
@@ -422,4 +453,84 @@ mod tests {
         assert_eq!(from_string(&too_large), None);
         assert_eq!(from_string(&format!("-{too_large}")), None);
     }
+
+    #[test]
+    fn bounded_exponentiation_matches_integer_powers_and_signs() {
+        for base in -16..=16 {
+            for exponent in 0..=20u32 {
+                let expected = BigInt::from(base).pow(exponent).to_string();
+                assert_eq!(
+                    binary(BigIntBinaryOp::Exp, &base.to_string(), &exponent.to_string()),
+                    Ok(expected),
+                    "base={base}, exponent={exponent}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tiny_bases_keep_huge_exponents_and_negative_exponents_still_throw() {
+        let even = "10000000000000000000000000000000000000000";
+        let odd = "10000000000000000000000000000000000000001";
+        for (base, exponent, expected) in [
+            ("0", even, "0"),
+            ("1", odd, "1"),
+            ("-1", even, "1"),
+            ("-1", odd, "-1"),
+            ("0", "0", "1"),
+        ] {
+            assert_eq!(
+                binary(BigIntBinaryOp::Exp, base, exponent).as_deref(),
+                Ok(expected)
+            );
+        }
+        for base in ["0", "1", "-1", "2"] {
+            assert_eq!(
+                binary(BigIntBinaryOp::Exp, base, "-1"),
+                Err(BigIntError::NegativeExponent)
+            );
+        }
+    }
+
+    #[test]
+    fn powers_that_pass_the_lower_bound_still_obey_the_intermediate_limit() {
+        let exponent = (MAX_BIGINT_BITS - 1).to_string();
+        // The old admission test sees only (bits(3)-1)*exponent < limit.
+        // The actual result has many more bits, so product admission must
+        // reject it during exponentiation, before constructing the power.
+        assert_eq!(
+            binary(BigIntBinaryOp::Exp, "3", &exponent),
+            Err(BigIntError::TooLarge)
+        );
+        assert_eq!(
+            binary(BigIntBinaryOp::Exp, "-3", &exponent),
+            Err(BigIntError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn multiplication_checks_the_boundary_without_rejecting_exact_fit() {
+        let edge = BigInt::from(1u8) << (MAX_BIGINT_BITS - 1);
+        assert_eq!(multiply_bounded(&edge, &BigInt::from(1u8)), Ok(edge.clone()));
+        assert_eq!(multiply_bounded(&edge, &BigInt::from(-1)), Ok(-edge.clone()));
+        assert_eq!(
+            multiply_bounded(&edge, &BigInt::from(2u8)),
+            Err(BigIntError::TooLarge)
+        );
+        assert_eq!(
+            multiply_bounded(&edge, &BigInt::from(0u8)),
+            Ok(BigInt::from(0u8))
+        );
+    }
+
+    #[test]
+    fn final_unused_square_cannot_reject_a_valid_power() {
+        let edge = BigInt::from(1u8) << (MAX_BIGINT_BITS - 1);
+        assert_eq!(exponentiate(&edge, &BigInt::from(1u8)), Ok(edge.to_string()));
+        assert_eq!(
+            exponentiate(&BigInt::from(2u8), &BigInt::from(MAX_BIGINT_BITS - 1)),
+            Ok(edge.to_string())
+        );
+    }
+
 }

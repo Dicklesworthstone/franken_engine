@@ -94,3 +94,16 @@ fn long_zero_prefixes_and_radices_keep_exact_values() {
         &["0 42", "255", "63 5"],
     );
 }
+
+#[test]
+fn bounded_power_path_preserves_arithmetic_and_range_errors() {
+    assert_output(
+        r#"
+        console.log(String((-3n) ** 7n), String(3n ** 20n), String(0n ** 0n));
+        console.log(String((-1n) ** 10000000000000000000000000000000000000001n));
+        try { 2n ** -1n; console.log('wrong'); }
+        catch (error) { console.log(error.name); }
+        "#,
+        &["-2187 3486784401 1", "-1", "RangeError"],
+    );
+}

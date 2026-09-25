@@ -1976,6 +1976,7 @@ dependencies = [
  "lz4_flex",
  "md-5",
  "mimalloc",
+ "num-bigint 0.4.6",
  "p256",
  "pbkdf2",
  "polyval 0.6.2",

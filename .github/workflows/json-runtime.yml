@@ -11,6 +11,7 @@ on:
       - 'crates/franken-engine/src/parser.rs'
       - 'crates/franken-engine/tests/json_*'
       - 'crates/franken-engine/tests/js_string_integration.rs'
+      - 'crates/franken-engine/tests/array_from_execution.rs'
       - '.github/workflows/json-runtime.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -35,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Retain exact committed JSON sources
+      - name: Retain exact committed runtime sources
         run: |
           mkdir -p json-validation
           git rev-parse HEAD > json-validation/revision.txt
@@ -45,9 +46,11 @@ jobs:
               'crates/franken-engine/src/baseline_interpreter.rs',
               'crates/franken-engine/src/baseline_interpreter/json_parse.rs',
               'crates/franken-engine/src/baseline_interpreter/json_stringify.rs',
+              'crates/franken-engine/src/baseline_interpreter/array_from.rs',
               'crates/franken-engine/tests/js_string_integration.rs',
               'crates/franken-engine/tests/json_parse_execution.rs',
               'crates/franken-engine/tests/json_stringify_execution.rs',
+              'crates/franken-engine/tests/array_from_execution.rs',
               'crates/franken-engine/src/lowering_pipeline.rs',
               'crates/franken-engine/src/capability.rs',
               'crates/franken-engine/src/parser.rs',
@@ -65,9 +68,9 @@ jobs:
           PY
       - name: Install Rust
         run: rustup toolchain install nightly --profile minimal --component rustfmt --component clippy
-      - name: Check committed JSON module formatting
+      - name: Check committed runtime module formatting
         run: |
-          rustfmt +nightly --edition 2024 --check --config skip_children=true crates/franken-engine/src/baseline_interpreter/json_parse.rs crates/franken-engine/src/baseline_interpreter/json_stringify.rs crates/franken-engine/tests/json_parse_execution.rs crates/franken-engine/tests/json_stringify_execution.rs
+          rustfmt +nightly --edition 2024 --check --config skip_children=true crates/franken-engine/src/baseline_interpreter/json_parse.rs crates/franken-engine/src/baseline_interpreter/json_stringify.rs crates/franken-engine/src/baseline_interpreter/array_from.rs crates/franken-engine/tests/json_parse_execution.rs crates/franken-engine/tests/json_stringify_execution.rs crates/franken-engine/tests/array_from_execution.rs
       - name: Check complete native engine library
         if: matrix.mode == 'full-engine-check'
         run: |
@@ -83,11 +86,11 @@ jobs:
           subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
           pathlib.Path('json-validation/runtime-modules.txt').write_bytes(pathlib.Path('async-generator-validation/runtime-modules.txt').read_bytes())
           PY
-      - name: Run JSON and UTF-16 execution regressions
+      - name: Run JSON, Array.from and UTF-16 execution regressions
         if: matrix.mode == 'runtime-tests'
         run: |
           set -o pipefail
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test json_parse_execution --test json_stringify_execution --test js_string_integration -- --nocapture 2>&1 | tee json-validation/source-tests.log
+          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test json_parse_execution --test json_stringify_execution --test js_string_integration --test array_from_execution -- --nocapture 2>&1 | tee json-validation/source-tests.log
       - name: Check full-engine strict lint
         if: matrix.mode == 'full-engine-check'
         run: |
@@ -99,182 +102,4 @@ jobs:
         with:
           name: json-validation-${{ matrix.mode }}
           path: json-validation/
-          retention-days: 7
-  array-from-integration:
-    if: contains(github.event.head_commit.message, '[array-from-finalize]')
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 35
-    permissions:
-      contents: write
-    env:
-      CARGO_BUILD_JOBS: '1'
-      CARGO_INCREMENTAL: '0'
-      CARGO_PROFILE_TEST_DEBUG: '0'
-      CARGO_PROFILE_DEV_DEBUG: '0'
-      CARGO_TERM_COLOR: never
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Prepare exact rebased implementation and error-carrier assertion
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p array-from-validation
-          git rev-parse HEAD > array-from-validation/revision.txt
-          python3 - <<'PY'
-          import base64, hashlib, json, os, pathlib, urllib.request
-          root = pathlib.Path('array-from-validation')
-          paths = [
-              'crates/franken-engine/src/baseline_interpreter.rs',
-              'crates/franken-engine/src/baseline_interpreter/array_from.rs',
-              'crates/franken-engine/tests/array_from_execution.rs',
-          ]
-          api = f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/git/blobs'
-          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                     'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0',
-                     'Content-Type': 'application/json'}
-          def identity(data):
-              return hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
-          def blob(sha):
-              request = urllib.request.Request(api + '/' + sha, headers=headers)
-              with urllib.request.urlopen(request, timeout=60) as response:
-                  data = base64.b64decode(json.load(response)['content'])
-              assert identity(data) == sha
-              return data
-          parent = pathlib.Path(paths[0])
-          original = parent.read_bytes()
-          assert identity(original) == '66e931228bbe203f7b2413599e82e2869da91291', 'parent changed; rebase required'
-          (root / 'original-baseline.rs').write_bytes(original)
-          text = blob('da2d7d8bea3eff8b87ba4ba729170dd62f46ef67').decode()
-          start = text.index('    fn array_from_rejects_non_callable_map_fn()')
-          end = text.index('\n    #[test]', start)
-          assert hashlib.sha256(text[start:end].encode()).hexdigest() == 'bb6af09b1eadc2bacb9f2e6db3e0f059bbc39f38ca2869e1712ae4618b6e78f7'
-          replacement = blob('0add44ae0c75dd55b15f1a8651149aff8003e082').decode()
-          text = text[:start] + replacement + text[end:]
-          data = text.encode()
-          assert identity(data) == 'eedae3c641d31ebe5a1d9411b6ddf0f41a40da14'
-          parent.write_bytes(data)
-          entries = {
-              paths[0]: identity(data),
-              paths[1]: '6ed58ea7a66f87be8ec5e549ac91c8b4aeb0d824',
-              paths[2]: '2db55cecf7e6bb1e53efd95bc70c0ffb4da1aec2',
-          }
-          for path in paths[1:]:
-              target = pathlib.Path(path)
-              assert not target.exists(), 'do not replace concurrent implementation'
-              target.parent.mkdir(parents=True, exist_ok=True)
-              target.write_bytes(blob(entries[path]))
-          request = urllib.request.Request(api,
-              data=json.dumps({'content': base64.b64encode(data).decode(), 'encoding': 'base64'}).encode(),
-              headers=headers, method='POST')
-          with urllib.request.urlopen(request, timeout=60) as response:
-              assert json.load(response)['sha'] == entries[paths[0]]
-          for path in paths:
-              dest = root / 'source' / path
-              dest.parent.mkdir(parents=True, exist_ok=True)
-              dest.write_bytes(pathlib.Path(path).read_bytes())
-          output = {'base': (root / 'revision.txt').read_text().strip(), 'entries': entries}
-          (root / 'source-blobs.json').write_text(json.dumps(output, indent=2))
-          print(json.dumps(output, indent=2), flush=True)
-          PY
-          git diff --check
-      - name: Retain prepared source identities before compilation
-        uses: actions/upload-artifact@v4
-        with:
-          name: array-from-final-sources
-          path: array-from-validation/
-          retention-days: 7
-      - name: Install pinned Rust
-        run: |
-          toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
-          rustup toolchain install "$toolchain" --profile minimal --component rustfmt --component clippy
-          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
-      - name: Check prepared source formatting
-        run: |
-          rustfmt --edition 2024 --check --config skip_children=true crates/franken-engine/src/baseline_interpreter/array_from.rs crates/franken-engine/tests/array_from_execution.rs
-      - name: Select existing native runtime dependency closure
-        run: |
-          python3 - <<'PY'
-          import pathlib, subprocess, textwrap
-          text = pathlib.Path('.github/workflows/native-runtime.yml').read_text()
-          step = text.split('      - name: Select native runtime dependency closure\n', 1)[1].split('\n      - name:', 1)[0]
-          subprocess.run(['bash', '-e', '-c', textwrap.dedent(step.split('        run: |\n', 1)[1])], check=True)
-          PY
-      - name: Run all Array.from source and containment regressions
-        run: |
-          set -o pipefail
-          cargo test --locked -p frankenengine-engine --no-default-features --test array_from_execution -- --nocapture 2>&1 | tee array-from-validation/array-from-tests.log
-      - name: Execute exact private callback and exception assertions
-        if: always()
-        run: |
-          test -f array-from-validation/source-blobs.json
-          python3 - <<'PY'
-          import hashlib, pathlib
-          root = pathlib.Path('array-from-validation')
-          parent = pathlib.Path('crates/franken-engine/src/baseline_interpreter.rs')
-          text = parent.read_text()
-          groups = [
-              ('calls', 'mod function_prototype_call_apply_tests_current {',
-               ['test_module_with_functions', 'test_config', 'test_interpreter', 'seed_object', 'seed_array_like',
-                'array_from_honors_map_fn_and_this_arg', 'array_from_rejects_non_callable_map_fn',
-                'array_from_maps_string_elements_with_index'],
-               ['array_from_honors_map_fn_and_this_arg', 'array_from_rejects_non_callable_map_fn',
-                'array_from_maps_string_elements_with_index']),
-              ('bigints', '\nmod tests {\n',
-               ['test_module', 'test_module_with_functions', 'test_quickjs_config', 'quickjs_test_core',
-                'bigint_callback_fixture', 'bigint_callback_peak',
-                'callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td'],
-               ['callback_bigints_reserve_cumulative_locals_and_construction_peak_bd_aw8td']),
-          ]
-          probe = 'use super::*;\nuse crate::ir_contract::{Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion};\n'
-          for name, marker, functions, tests in groups:
-              source = text.split(marker, 1)[1]
-              bodies = []
-              for function in functions:
-                  start = source.index('    fn ' + function + '(')
-                  end = source.index('\n    }\n', start) + len('\n    }\n')
-                  bodies.append(source[start:end])
-              body = '\n'.join(bodies)
-              (root / (name + '-unit-bodies.rs')).write_text(body)
-              print(name, 'exact unit-body SHA256:', hashlib.sha256(body.encode()).hexdigest())
-              calls = '\n'.join('        ' + test + '();' for test in tests)
-              probe += '\nmod ' + name + ' {\n    use super::*;\n' + body + '\n    pub fn run() {\n' + calls + '\n    }\n}\n'
-          probe += '\npub fn run() { calls::run(); bigints::run(); println!("All four private callback/exception/BigInt assertion groups passed"); }\n'
-          pathlib.Path('crates/franken-engine/src/baseline_interpreter/array_from_private_probe.rs').write_text(probe)
-          parent.write_text(text + '\npub mod array_from_private_probe;\n')
-          example = pathlib.Path('crates/franken-engine/examples/array_from_private_probe.rs')
-          example.parent.mkdir(parents=True, exist_ok=True)
-          example.write_text('fn main() { frankenengine_engine::baseline_interpreter::array_from_private_probe::run(); }\n')
-          with pathlib.Path('crates/franken-engine/Cargo.toml').open('a') as file:
-              file.write('\n[[example]]\nname = "array_from_private_probe"\npath = "examples/array_from_private_probe.rs"\n')
-          PY
-          set -o pipefail
-          cargo run --locked -p frankenengine-engine --no-default-features --example array_from_private_probe 2>&1 | tee array-from-validation/private-unit.log
-      - name: Restore exact product source after private probe
-        if: always()
-        run: |
-          python3 - <<'PY'
-          import pathlib
-          path = 'crates/franken-engine/src/baseline_interpreter.rs'
-          pathlib.Path(path).write_bytes(pathlib.Path('array-from-validation/source', path).read_bytes())
-          PY
-      - name: Run surrounding JSON and UTF-16 regressions
-        if: always()
-        run: |
-          test -f array-from-validation/source-blobs.json
-          set -o pipefail
-          cargo test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test json_parse_execution --test json_stringify_execution --test js_string_integration -- --nocapture 2>&1 | tee array-from-validation/surrounding-tests.log
-      - name: Check strict runtime lint
-        if: always()
-        run: |
-          test -f array-from-validation/source-blobs.json
-          set -o pipefail
-          cargo clippy --locked -p frankenengine-engine --no-default-features --lib --test array_from_execution -- -D warnings 2>&1 | tee array-from-validation/clippy.log
-      - name: Retain validation output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: array-from-final-validation
-          path: array-from-validation/
           retention-days: 7

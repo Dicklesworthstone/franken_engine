@@ -72,6 +72,7 @@ use subtle::ConstantTimeEq;
 use url::{Url, form_urlencoded};
 use zeroize::Zeroizing;
 
+mod array_from;
 mod async_generator;
 mod json_parse;
 mod json_stringify;
@@ -61168,324 +61169,6 @@ impl InterpreterCore {
         })
     }
 
-    fn invoke_simple_array_from_callback(
-        &mut self,
-        module: Option<&Ir3Module>,
-        callback: &Value,
-        this_arg: Value,
-        current_value: Value,
-        element_index: usize,
-    ) -> Result<Value, InterpreterError> {
-        let previous_callback_temporary_bytes = self.simple_callback_temporary_bytes;
-        let result = self.invoke_simple_array_from_callback_inner(
-            module,
-            callback,
-            this_arg,
-            current_value,
-            element_index,
-        );
-        self.simple_callback_temporary_bytes = previous_callback_temporary_bytes;
-        result
-    }
-
-    fn invoke_simple_array_from_callback_inner(
-        &mut self,
-        module: Option<&Ir3Module>,
-        callback: &Value,
-        this_arg: Value,
-        current_value: Value,
-        element_index: usize,
-    ) -> Result<Value, InterpreterError> {
-        let module = module.ok_or_else(|| InterpreterError::TypeError {
-            expected: "module-backed Array.from mapper callback".to_string(),
-            got: "Array.from called without module context".to_string(),
-        })?;
-        let function_index = match callback {
-            Value::Function(index) => *index,
-            Value::Closure(closure_id) => {
-                self.closures
-                    .get(*closure_id as usize)
-                    .ok_or_else(|| InterpreterError::TypeError {
-                        expected: "valid Array.from mapper closure".to_string(),
-                        got: format!("closure#{closure_id} not found"),
-                    })?
-                    .function_index
-            }
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "function".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
-        };
-        let function = module.function_table.get(function_index as usize).ok_or(
-            InterpreterError::FunctionNotFound {
-                index: function_index,
-                table_size: module.function_table.len() as u32,
-            },
-        )?;
-        let previous_callback_temporary_bytes = self.simple_callback_temporary_bytes;
-        let register_count = self.config.max_registers as usize;
-        let register_carrier_bytes = u64::try_from(register_count)
-            .unwrap_or(u64::MAX)
-            .saturating_mul(u64::try_from(std::mem::size_of::<Value>()).unwrap_or(u64::MAX));
-        self.check_temporary_memory_budget(register_carrier_bytes)?;
-        self.simple_callback_temporary_bytes = self
-            .simple_callback_temporary_bytes
-            .saturating_add(register_carrier_bytes);
-        let mut local_registers = vec![Value::Undefined; register_count];
-        Self::write_local_register(&mut local_registers, 0, current_value)?;
-        Self::write_local_register(
-            &mut local_registers,
-            1,
-            Value::Int(i64::try_from(element_index).unwrap_or(i64::MAX)),
-        )?;
-
-        let mut instruction_pointer = function.entry as usize;
-        for _step in 0..self.config.instruction_budget {
-            self.simple_callback_temporary_bytes = previous_callback_temporary_bytes
-                .saturating_add(Self::simple_callback_register_bytes(&local_registers));
-            let instruction_ref = module.instructions.get(instruction_pointer).ok_or(
-                InterpreterError::InstructionOutOfBounds {
-                    ip: instruction_pointer,
-                    count: module.instructions.len(),
-                },
-            )?;
-            if let Ir3Instruction::LoadBigInt { value, .. } = instruction_ref {
-                self.check_temporary_memory_budget(Self::bigint_literal_construction_peak_bytes(
-                    value,
-                ))?;
-            }
-            let instruction = instruction_ref.clone();
-            match instruction {
-                Ir3Instruction::LoadInt { dst, value } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadBigInt { dst, value } => {
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::BigInt(Arc::from(value)),
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadFloat { dst, bits } => {
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::Float(Float64::new(f64::from_bits(bits))),
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadStr { dst, pool_index } => {
-                    let value = module
-                        .constant_pool
-                        .get(pool_index as usize)
-                        .cloned()
-                        .ok_or(InterpreterError::StringPoolOutOfBounds {
-                            index: pool_index,
-                            pool_size: module.constant_pool.len() as u32,
-                        })?;
-                    Self::write_local_register(&mut local_registers, dst, Value::str(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadBool { dst, value } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Bool(value))?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadNull { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Null)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadUndefined { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadName {
-                    dst,
-                    name_pool_index,
-                    allow_missing,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = self.load_runtime_name(name.as_ref(), allow_missing)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::ResolveNameStatus {
-                    dst,
-                    name_pool_index,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let reference_token = self.capture_runtime_name_reference(name.as_ref())?;
-                    Self::write_local_register(
-                        &mut local_registers,
-                        dst,
-                        Value::Int(i64::from(reference_token)),
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::PutName {
-                    src,
-                    name_pool_index,
-                    strict,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    self.put_runtime_name(name.as_ref(), value, strict)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::PutNameWithStatus {
-                    src,
-                    status,
-                    name_pool_index,
-                    strict,
-                } => {
-                    let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    let reference_token = Self::runtime_name_reference_token(
-                        Self::read_local_register(&local_registers, status)?,
-                    )?;
-                    self.put_runtime_name_with_status(
-                        name.as_ref(),
-                        value,
-                        strict,
-                        reference_token,
-                    )?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadThis { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, this_arg.clone())?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::LoadNewTarget { dst } => {
-                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Move { dst, src } => {
-                    let value = Self::read_local_register(&local_registers, src)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Add { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = self.eval_add_values(&left, &right)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Sub { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_arith_values(&left, &right, "sub")?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Mul { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_arith_values(&left, &right, "mul")?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Div { dst, lhs, rhs } => {
-                    let left = Self::read_local_register(&local_registers, lhs)?;
-                    let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = Self::eval_div_values(&left, &right)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::GetProperty { obj, key, dst } => {
-                    let object_value = Self::read_local_register(&local_registers, obj)?;
-                    let key_value = Self::read_local_register(&local_registers, key)?;
-                    let value = self.simple_callback_get_property(object_value, &key_value)?;
-                    Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::SetProperty { obj, key, val } => {
-                    let object_value = Self::read_local_register(&local_registers, obj)?;
-                    let key_value = Self::read_local_register(&local_registers, key)?;
-                    let property_value = Self::read_local_register(&local_registers, val)?;
-                    self.simple_callback_set_property(object_value, &key_value, property_value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::Jump { target } => {
-                    instruction_pointer = target as usize;
-                }
-                Ir3Instruction::JumpIf { cond, target } => {
-                    let value = Self::read_local_register(&local_registers, cond)?;
-                    if value.is_truthy() {
-                        instruction_pointer = target as usize;
-                    } else {
-                        instruction_pointer += 1;
-                    }
-                }
-                Ir3Instruction::Return { value } => {
-                    return Self::read_local_register(&local_registers, value);
-                }
-                Ir3Instruction::Halt => {
-                    return Ok(Value::Undefined);
-                }
-                Ir3Instruction::Throw { value } => {
-                    // bd-8enww.4.8: same legacy mini-lane family as the reducer
-                    // callback above — preserve the mapper's explicitly-thrown
-                    // value so an enclosing `try`/`catch` sees the ORIGINAL value
-                    // rather than a re-boxed "unsupported instruction" Error. The
-                    // `Array.from` dispatch routes this `UncaughtException`
-                    // through `route_isolated_explicit_throw`, which re-raises the
-                    // preserved value; the dispatch site's throw-path label join
-                    // re-establishes confidentiality for this label-less lane.
-                    let thrown = Self::read_local_register(&local_registers, value)?;
-                    self.replace_pending_abrupt_slots(Some((thrown.clone(), Label::Public)), None)?;
-                    return Err(InterpreterError::UncaughtException {
-                        value: self.uncaught_exception_description(&thrown),
-                    });
-                }
-                other => {
-                    return Err(InterpreterError::TypeError {
-                        expected: "simple synchronous Array.from mapper callback".to_string(),
-                        got: format!("unsupported mapper instruction {other:?}"),
-                    });
-                }
-            }
-        }
-
-        Err(InterpreterError::BudgetExhausted {
-            executed: self.config.instruction_budget,
-            budget: self.config.instruction_budget,
-        })
-    }
-
-    fn apply_array_from_map_fn(
-        &mut self,
-        module: Option<&Ir3Module>,
-        map_fn: &Value,
-        this_arg: Value,
-        element: Value,
-        index: usize,
-    ) -> Result<Value, InterpreterError> {
-        match map_fn {
-            Value::Function(_) | Value::Closure(_) => {
-                self.invoke_simple_array_from_callback(module, map_fn, this_arg, element, index)
-            }
-            _ => match (module, map_fn) {
-                (Some(module), _) => self.invoke_inline_method_call(
-                    Some(module),
-                    map_fn.clone(),
-                    this_arg,
-                    vec![
-                        element,
-                        Value::Int(i64::try_from(index).unwrap_or(i64::MAX)),
-                    ],
-                ),
-                (None, _) => Err(InterpreterError::TypeError {
-                    expected: "module-backed Array.from mapper callback".to_string(),
-                    got: "missing module context".to_string(),
-                }),
-            },
-        }
-    }
-
     fn invoke_inline_method_call(
         &mut self,
         module: Option<&Ir3Module>,
@@ -70421,95 +70104,8 @@ impl InterpreterCore {
                 // Return the new array object
                 Ok(Value::Object(array_id))
             }
-            "builtin:ArrayFrom" => {
-                // Array.from implementation - creates new Array instance from array-like or iterable object
-                if args.count == 0 {
-                    // Array.from() with no arguments creates empty array
-                    let array_id = self.alloc_array_with_prototype(None)?;
-                    self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
-                    return Ok(Value::Object(array_id));
-                }
+            "builtin:ArrayFrom" => self.array_from_builtin(module, args),
 
-                let first_arg = self.read_reg(args.start)?;
-                let map_fn = if args.count > 1 {
-                    let mapper = self.read_reg(args.start + 1)?;
-                    if matches!(mapper, Value::Undefined) {
-                        None
-                    } else if mapper.is_callable() {
-                        Some(mapper)
-                    } else {
-                        return Err(InterpreterError::TypeError {
-                            expected: "function".to_string(),
-                            got: mapper.type_name().to_string(),
-                        });
-                    }
-                } else {
-                    None
-                };
-                let this_arg = if args.count > 2 {
-                    self.read_reg(args.start + 2)?
-                } else {
-                    Value::Undefined
-                };
-
-                // Create new array object
-                let array_id = self.alloc_array_with_prototype(None)?;
-
-                let mut elements = match first_arg {
-                    // Map/Set are iterables, not array-likes (bd-9vouw.33).
-                    Value::Object(obj_id) => match self.collection_iteration_values(obj_id)? {
-                        Some(values) => values,
-                        None => self.array_like_values(obj_id)?,
-                    },
-                    // An iterator or generator (`Array.from(map.values())`)
-                    // is drained through the for-of protocol.
-                    iterator @ (Value::Iterator(_) | Value::Generator(_)) => {
-                        let iterator = self.init_for_of_iterator(module, iterator)?;
-                        let mut values = Vec::new();
-                        while let Some(value) =
-                            self.advance_for_of_iterator(module, iterator.clone())?
-                        {
-                            values.push(value);
-                        }
-                        values
-                    }
-                    Value::Str(s) => {
-                        // One element per code point, lone surrogates
-                        // preserved exactly (ES string iteration; bd-rdnhc).
-                        s.code_point_elements()
-                            .into_iter()
-                            .map(Value::Str)
-                            .collect()
-                    }
-                    _ => {
-                        // Non-iterable value, create empty array
-                        Vec::new()
-                    }
-                };
-
-                if let Some(map_fn) = map_fn.as_ref() {
-                    for (index, element) in elements.iter_mut().enumerate() {
-                        *element = self.apply_array_from_map_fn(
-                            module,
-                            map_fn,
-                            this_arg.clone(),
-                            element.clone(),
-                            index,
-                        )?;
-                    }
-                }
-
-                for (index, element) in elements.iter().cloned().enumerate() {
-                    self.set_object_property(array_id, index.to_string(), element)?;
-                }
-                self.set_object_property(
-                    array_id,
-                    "length".to_string(),
-                    Value::Int(elements.len() as i64),
-                )?;
-
-                Ok(Value::Object(array_id))
-            }
             "builtin:ArrayPrototypeJoin" => {
                 // Array.prototype.join implementation - joins array elements into string
                 if args.count == 0 {
@@ -117632,21 +117228,46 @@ mod function_prototype_call_apply_tests_current {
 
     #[test]
     fn array_from_rejects_non_callable_map_fn() {
-        let mut core = test_interpreter();
-        let array_like_id = seed_array_like(&mut core, &[Value::Int(1)]);
-        core.mutate_registers(|r| {
-            r[0] = Value::Object(array_like_id);
-            r[1] = Value::Int(99);
-        });
+        for label in [Label::Public, Label::Secret, Label::TopSecret] {
+            let mut core = test_interpreter();
+            let array_like_id = seed_array_like(&mut core, &[Value::Int(1)]);
+            core.write_reg(0, Value::Object(array_like_id))
+                .expect("source register");
+            core.write_reg_with_label(1, Value::Int(99), label.clone())
+                .expect("invalid mapper register");
 
-        let err = core
-            .dispatch_builtin_hostcall("builtin:ArrayFrom", RegRange { start: 0, count: 2 }, None)
-            .expect_err("Array.from should reject non-callable mapFn");
-        assert!(matches!(
-            err,
-            InterpreterError::TypeError { ref expected, ref got }
-                if expected == "function" && got == "number"
-        ));
+            let err = core
+                .dispatch_builtin_hostcall("builtin:ArrayFrom", RegRange { start: 0, count: 2 }, None)
+                .expect_err("Array.from should reject non-callable mapFn");
+            // The ordinary callback boundary seals native language errors into
+            // guest objects before restoring its confidentiality context.
+            let Some(Value::Object(error_id)) = core.pending_exception.as_ref() else {
+                panic!("invalid mapper must retain its TypeError object: {err:?}");
+            };
+            let error = &core.heap[error_id.0 as usize];
+            let message = InterpreterError::TypeError {
+                expected: "function".to_string(),
+                got: "number".to_string(),
+            }
+            .to_string();
+            assert_eq!(error.properties.get("name"), Some(&Value::str("TypeError")));
+            assert_eq!(error.properties.get("message"), Some(&Value::str(&message)));
+            assert_eq!(
+                err,
+                InterpreterError::UncaughtException {
+                    value: format!("TypeError: {message}"),
+                }
+            );
+            assert_eq!(core.pending_exception_label, label);
+            assert_eq!(core.registers[0], Value::Object(array_like_id));
+            assert_eq!(core.registers[1], Value::Int(99));
+            assert!(core.active_inline_callback_context_label.is_none());
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
     }
 
     #[test]
@@ -120015,8 +119636,7 @@ mod tests {
         let (mut reduce_short, module, left, right) = bigint_callback_fixture();
         let peak = bigint_callback_peak(&reduce_short, &left, &right);
         let baseline = reduce_short.estimated_memory_bytes();
-        reduce_short.config.max_total_memory_bytes =
-            baseline.saturating_add(peak).saturating_sub(1);
+        reduce_short.config.max_total_memory_bytes = baseline.saturating_add(peak).saturating_sub(1);
         assert!(matches!(
             reduce_short.invoke_simple_reduce_callback(
                 Some(&module),
@@ -120053,39 +119673,83 @@ mod tests {
         ));
         assert_eq!(reduce_exact.simple_callback_temporary_bytes, 0);
 
-        let (mut map_short, module, left, right) = bigint_callback_fixture();
-        let peak = bigint_callback_peak(&map_short, &left, &right);
-        let baseline = map_short.estimated_memory_bytes();
-        map_short.config.max_total_memory_bytes = baseline.saturating_add(peak).saturating_sub(1);
+        // Array.from now executes the ordinary interpreter, not a private
+        // Vec of mini-interpreter locals. Its register file is already in the
+        // baseline; pin the cumulative operand + construction peak on the
+        // actual run_loop path, without the removed Vec's carrier charge.
+        // The reducer above still owns (and tests) its separate local Vec.
+        let (mut ordinary_short, mut module, left, right) = bigint_callback_fixture();
+        *module.instructions.last_mut().expect("callback return") = Ir3Instruction::Halt;
+        let live_operands = InterpreterCore::estimate_string_bytes(&left)
+            .saturating_add(InterpreterCore::estimate_string_bytes(&right));
+        let peak = live_operands.saturating_add(InterpreterCore::bigint_add_construction_peak_bytes(
+            &left, &right,
+        ));
+        let baseline = ordinary_short.estimated_memory_bytes();
+        ordinary_short.config.max_total_memory_bytes = baseline.saturating_add(peak).saturating_sub(1);
         assert!(matches!(
-            map_short.invoke_simple_array_from_callback(
-                Some(&module),
-                &Value::Function(0),
-                Value::Undefined,
-                Value::Int(1),
-                0,
-            ),
+            ordinary_short.run_loop(&module),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
-        assert_eq!(map_short.simple_callback_temporary_bytes, 0);
+        assert_eq!(ordinary_short.ip, 2, "refuse before BigInt addition");
+        assert_eq!(ordinary_short.read_reg(6).unwrap(), Value::Undefined);
+        assert_eq!(
+            ordinary_short.estimated_memory_bytes(),
+            baseline.saturating_add(live_operands),
+        );
+        assert_eq!(
+            ordinary_short.estimated_memory_bytes(),
+            ordinary_short.recompute_estimated_memory_bytes(),
+        );
+        assert_eq!(ordinary_short.simple_callback_temporary_bytes, 0);
 
-        let (mut map_exact, module, left, right) = bigint_callback_fixture();
-        let peak = bigint_callback_peak(&map_exact, &left, &right);
-        let baseline = map_exact.estimated_memory_bytes();
-        map_exact.config.max_total_memory_bytes = baseline.saturating_add(peak);
-        assert!(matches!(
-            map_exact
-                .invoke_simple_array_from_callback(
-                    Some(&module),
-                    &Value::Function(0),
-                    Value::Undefined,
-                    Value::Int(1),
-                    0,
-                )
-                .expect("Array.from callback at exact construction ceiling"),
-            Value::BigInt(_)
-        ));
-        assert_eq!(map_exact.simple_callback_temporary_bytes, 0);
+        let (mut ordinary_exact, mut module, left, right) = bigint_callback_fixture();
+        *module.instructions.last_mut().expect("callback return") = Ir3Instruction::Halt;
+        let peak = InterpreterCore::estimate_string_bytes(&left)
+            .saturating_add(InterpreterCore::estimate_string_bytes(&right))
+            .saturating_add(InterpreterCore::bigint_add_construction_peak_bytes(
+                &left, &right,
+            ));
+        let baseline = ordinary_exact.estimated_memory_bytes();
+        ordinary_exact.config.max_total_memory_bytes = baseline.saturating_add(peak);
+        assert_eq!(
+            ordinary_exact.run_loop(&module),
+            Err(InterpreterError::Halted)
+        );
+        let expected = Value::BigInt(Arc::from("9".repeat(256)));
+        assert_eq!(ordinary_exact.read_reg(6).unwrap(), expected);
+        assert_eq!(ordinary_exact.simple_callback_temporary_bytes, 0);
+        assert_eq!(
+            ordinary_exact.estimated_memory_bytes(),
+            ordinary_exact.recompute_estimated_memory_bytes(),
+        );
+
+        // Exercise the public operation's mapper wiring as well: real call
+        // frames need more registers than the removed eight-slot local Vec.
+        let (mut mapped, module, _, _) = bigint_callback_fixture();
+        mapped.config.max_registers = 32;
+        let source = mapped.alloc_array_from_values(&[Value::Int(1)]).unwrap();
+        mapped.write_reg(0, Value::Object(source)).unwrap();
+        mapped.write_reg(1, Value::Function(0)).unwrap();
+        let Value::Object(result) = mapped
+            .array_from_builtin(Some(&module), RegRange { start: 0, count: 2 })
+            .expect("ordinary Array.from BigInt callback")
+        else {
+            panic!("Array.from must produce an array");
+        };
+        assert_eq!(
+            mapped.heap[result.0 as usize].properties.get("0"),
+            Some(&expected)
+        );
+        assert_eq!(
+            mapped.heap[result.0 as usize].properties.get("length"),
+            Some(&Value::Int(1)),
+        );
+        assert_eq!(mapped.simple_callback_temporary_bytes, 0);
+        assert_eq!(
+            mapped.estimated_memory_bytes(),
+            mapped.recompute_estimated_memory_bytes(),
+        );
     }
 
     #[test]

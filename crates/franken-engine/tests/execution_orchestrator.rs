@@ -1334,17 +1334,19 @@ fn result_action_decision_action_matches_containment_action_or_stopping_override
     let pkg = simple_package("ext-ad", "42");
     let result = orch.execute(&pkg).expect("execute");
     // Containment action can differ from action_decision.action due to the
-    // stopping override (escalates Allow to Sandbox) or the bd-sxh8o.4
-    // benign-completion downgrade (Challenge to Allow when a completed Benign
-    // run produced no risk signal).
+    // stopping override (escalates Allow to Sandbox) or the bd-sxh8o.4 /
+    // bd-pgzo7 benign-completion downgrade (Challenge or Sandbox to Allow when
+    // a completed Benign run produced no risk signal).
     let base_action = result.action_decision.action;
     assert!(
         result.containment_action == base_action
             || result.containment_action == ContainmentAction::Sandbox
-            || (base_action == ContainmentAction::Challenge
-                && result.containment_action == ContainmentAction::Allow),
+            || (matches!(
+                base_action,
+                ContainmentAction::Challenge | ContainmentAction::Sandbox
+            ) && result.containment_action == ContainmentAction::Allow),
         "containment action should match decision, be Sandbox (stopping override), \
-         or be Allow (benign-completion downgrade from Challenge)"
+         or be Allow (benign-completion downgrade from Challenge or Sandbox)"
     );
 }
 
@@ -1829,6 +1831,69 @@ fn benign_completed_run_chosen_record_matches_allow_candidate() {
         "downgrade must be audit-visible in the rationale, got: {}",
         entry.chosen_action.rationale
     );
+}
+
+#[test]
+fn conservative_benign_completion_reports_allow_not_sandbox_bd_pgzo7() {
+    // franken-node maps its strict profile to the Conservative matrix. With a
+    // prior-only posterior that matrix selects Sandbox (3.23M) over Challenge
+    // (3.25M), so every benign strict run, `console.log('hello')` included,
+    // exited 92. The selector's choice stays visible in action_decision.
+    let config = OrchestratorConfig {
+        loss_matrix_preset: LossMatrixPreset::Conservative,
+        ..OrchestratorConfig::default()
+    };
+    let mut orch = ExecutionOrchestrator::new(config);
+    let pkg = simple_package("ext-conservative-benign", "const answer = 40 + 2;");
+    let result = orch.execute(&pkg).expect("execute");
+    assert_eq!(
+        result.risk_state,
+        frankenengine_engine::bayesian_posterior::RiskState::Benign
+    );
+    assert_eq!(result.action_decision.action, ContainmentAction::Sandbox);
+    assert_eq!(result.containment_action, ContainmentAction::Allow);
+    assert!(
+        result.evidence_entries[0]
+            .chosen_action
+            .rationale
+            .contains("benign_completion_downgrade=true"),
+        "{}",
+        result.evidence_entries[0].chosen_action.rationale
+    );
+}
+
+#[test]
+fn long_benign_run_is_not_read_as_resource_abuse_bd_pgzo7() {
+    // The resource signal used `instructions * 5`, saturating at 200k
+    // instructions; a plain loop past that read as ">70% resource usage" and
+    // shifted the posterior toward malicious. It is now the share of the
+    // run's instruction budget, which this loop barely touches under the
+    // 200M budget franken-node's strict profile configures.
+    let mut runtime_config = frankenengine_engine::runtime_config::RuntimeConfig::default();
+    runtime_config.execution.deterministic_budget = 200_000_000;
+    runtime_config.execution.throughput_budget = 200_000_000;
+    let mut orch =
+        ExecutionOrchestrator::new_with_runtime_config(OrchestratorConfig::default(), runtime_config);
+    let pkg = simple_package(
+        "ext-long-benign",
+        "let total = 0; for (let i = 0; i < 50000; i++) { total += i; }",
+    );
+    let result = orch.execute(&pkg).expect("execute");
+    assert!(
+        result.instructions_executed > 200_000,
+        "fixture must exceed the old saturation point, ran {}",
+        result.instructions_executed
+    );
+    assert_eq!(
+        result.risk_state,
+        frankenengine_engine::bayesian_posterior::RiskState::Benign
+    );
+    assert_eq!(
+        result.posterior,
+        frankenengine_engine::bayesian_posterior::Posterior::default_prior(),
+        "a run that fires no likelihood signal must leave the prior unchanged"
+    );
+    assert_eq!(result.containment_action, ContainmentAction::Allow);
 }
 
 #[test]

@@ -83567,8 +83567,30 @@ impl InterpreterCore {
         } else {
             let prototype = self.alloc_object_with_prototype(None)?;
             self.mutate_function_prototypes(|fp| fp.insert(key, prototype));
+            self.install_prototype_constructor(prototype, Value::Function(func_idx))?;
             Ok(prototype)
         }
+    }
+
+    /// MakeConstructor (ES2020 9.2.5 step 5) and ClassDefinitionEvaluation
+    /// (14.6.13 step 16): a function's own `prototype` object carries a
+    /// writable, non-enumerable, configurable `constructor` back to the
+    /// function, so `new F().constructor === F`.
+    fn install_prototype_constructor(
+        &mut self,
+        prototype: ObjectId,
+        constructor: Value,
+    ) -> Result<(), InterpreterError> {
+        self.set_object_property(prototype, "constructor".to_string(), constructor)?;
+        self.set_own_property_attributes(
+            prototype,
+            &RuntimePropertyKey::String(JsString::from("constructor")),
+            PropertyAttributes {
+                writable: true,
+                enumerable: false,
+                configurable: true,
+            },
+        )
     }
 
     fn closure_prototype_owner_id(module: &Ir3Module) -> ContentHash {
@@ -83602,6 +83624,7 @@ impl InterpreterCore {
         } else {
             let prototype = self.alloc_object_with_prototype(None)?;
             self.mutate_function_prototypes(|prototypes| prototypes.insert(key, prototype));
+            self.install_prototype_constructor(prototype, Value::Closure(closure_id))?;
             Ok(prototype)
         }
     }

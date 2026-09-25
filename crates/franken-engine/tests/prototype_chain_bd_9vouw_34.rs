@@ -194,3 +194,36 @@ fn cyclic_prototypes_and_missing_create_argument_throw() {
         "true,true",
     );
 }
+
+#[test]
+fn function_prototypes_point_back_to_their_constructor() {
+    // MakeConstructor (ES2020 9.2.5): `F.prototype.constructor === F`, a
+    // writable, non-enumerable, configurable data property. Before this, user
+    // functions and classes had none, so `e.constructor` fell through to
+    // Object and Test262's assert.throws reported "Expected a Test262Error but
+    // got a Object".
+    check(
+        "class A {} class B extends A {} var f = function () {}; \
+         [new A().constructor === A, new B().constructor === B, \
+         A.prototype.hasOwnProperty('constructor'), f.prototype.constructor === f, \
+         Object.keys(f.prototype).length, (function g() {}).prototype.constructor.name].join()",
+        "true,true,true,true,0,g",
+    );
+    check(
+        "function E(m) { this.m = m; } var e = new E(1); \
+         var d = Object.getOwnPropertyDescriptor(E.prototype, 'constructor'); \
+         [e.constructor === E, d.writable, d.enumerable, d.configurable, JSON.stringify(e)].join()",
+        r#"true,true,false,true,{"m":1}"#,
+    );
+    // Replacing the prototype object drops the link, as in Node.
+    check(
+        "function F() {} F.prototype = { hi: 1 }; \
+         [new F().constructor === Object, new F().constructor === F].join()",
+        "true,false",
+    );
+    check(
+        "function T(m) { this.message = m; } function thrower() { throw new T('x'); } \
+         var r; try { thrower(); } catch (e) { r = e.constructor === T; } r",
+        "true",
+    );
+}

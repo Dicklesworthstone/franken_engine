@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   key-candidate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 35
     permissions:
       contents: write
@@ -42,6 +42,86 @@ jobs:
           PY
       - name: Install pinned Rust
         run: rustup toolchain install nightly-2026-09-21 --profile minimal --component rustfmt --component clippy
+      - name: Prepare entry isolation and host budget regressions
+        run: |
+          cat >> crates/franken-engine/tests/collection_key_execution.rs <<'RS'
+
+          source_case!(
+              yielded_entry_mutation_cannot_modify_map_storage,
+              r#"
+          const key = Symbol('key');
+          const map = new Map([[key, 'original']]);
+          const entry = Array.from(map)[0];
+          entry[0] = 'forged'; entry[1] = 'changed';
+          [map.size, map.get(key), map.has('forged'), Array.from(map.keys())[0] === key].join('|');
+          "#,
+              "1|original|false|true"
+          );
+
+          source_case!(
+              replacing_map_value_does_not_rewrite_a_yielded_entry,
+              r#"
+          const key = () => 3;
+          const map = new Map([[key, 'before']]);
+          const entry = Array.from(map.entries())[0];
+          map.set(key, 'after');
+          [entry[0] === key, entry[0](), entry[1], map.get(key), map.size].join('|');
+          "#,
+              "true|3|before|after|1"
+          );
+
+          #[test]
+          fn collection_heap_refusal_is_not_catchable_guest_code() {
+              use frankenengine_engine::baseline_interpreter::InterpreterError;
+              let source = r#"
+          const map = new Map();
+          try {
+              for (let index = 0; index < 1024; index++) {
+                  map.set(Symbol('distinct'), index);
+              }
+          } catch (error) {
+              console.log('caught a host resource refusal');
+          }
+          console.log('continued after refusal');
+          "#;
+              let tree = CanonicalEs2020Parser
+                  .parse_with_options(
+                      ParserSource {
+                          label: "collection-budget.js".into(),
+                          text: source.into(),
+                      },
+                      ParseGoal::Script,
+                      &ParserOptions::default(),
+                  )
+                  .expect("collection budget source must parse");
+              let module = lower_ir0_to_ir3(
+                  &Ir0Module::from_syntax_tree(tree, "collection-budget.js"),
+                  &LoweringContext::new("budget-trace", "budget-decision", "budget-policy"),
+              )
+              .expect("collection budget source must lower")
+              .ir3;
+              for mut config in [
+                  InterpreterConfig::quickjs_defaults(),
+                  InterpreterConfig::v8_defaults(),
+              ] {
+                  config.max_heap_objects = 256;
+                  config.instruction_budget = 1_000_000;
+                  config.granted_capabilities = [
+                      RuntimeCapability::VmDispatch,
+                      RuntimeCapability::HeapAllocate,
+                      RuntimeCapability::Builtin,
+                      RuntimeCapability::Console,
+                  ]
+                  .into_iter()
+                  .collect();
+                  let mut core = InterpreterCore::new(config, "collection-budget");
+                  let outcome = core.execute(&module);
+                  assert!(matches!(outcome, Err(InterpreterError::MemoryBudgetExceeded { .. })), "{outcome:?}");
+                  assert!(core.console_output().is_empty(), "guest catch or continuation ran");
+                  assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+              }
+          }
+          RS
       - name: Select existing production runtime dependency closure
         run: |
           python3 - <<'PY'
@@ -67,10 +147,8 @@ jobs:
           data = source.read_bytes()
           digest = hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest()
           assert digest == 'eedae3c641d31ebe5a1d9411b6ddf0f41a40da14', digest
-          # This immutable Git blob carries only a bounded exact patch for the
-          # 5.6 MB monolith. Hash guards bind both the input and every edit.
-          # No branch is written here. Connector publication follows real tests;
-          # this temporary preparation step is removed at publication.
+          # Immutable transport for exact source hunks, not executable external
+          # code. Remove preparation and blob writes at production publication.
           request = urllib.request.Request(
               'https://api.github.com/repos/' + os.environ['REPOSITORY'] + '/git/blobs/a577a2a119c20594e4774ebafd5ba7e247055304',
               headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'User-Agent': 'OpenAI File Downloader, XaiImageApiFetch/1.0'})

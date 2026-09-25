@@ -226,6 +226,29 @@ fn callbacks_handed_to_engine_methods_cannot_launder_secrets_bd_zk58q() {
 }
 
 #[test]
+fn guest_conversion_methods_cannot_launder_secrets_bd_9vouw_37() {
+    // `+` and template substitutions now run a guest toString / valueOf at
+    // runtime. The static gate already refuses these flows (an object whose
+    // method returns a secret fails high); pin that so the runtime change
+    // cannot open a laundering path through operators.
+    assert_denied(
+        "secret_from_to_string_in_concat",
+        "const o = { toString(){ return 'secret-token' } }; console.log('' + o);",
+        Label::Secret,
+    );
+    assert_denied(
+        "secret_from_value_of_in_sum",
+        "const o = { valueOf(){ return 'secret-token' } }; console.log(o + 1);",
+        Label::Secret,
+    );
+    assert_denied(
+        "secret_from_to_string_in_template",
+        "const o = { toString(){ return 'secret-token' } }; console.log(`${o}`);",
+        Label::Secret,
+    );
+}
+
+#[test]
 fn benign_callbacks_handed_to_engine_methods_still_lower_bd_zk58q() {
     // Without a sensitive source the program ceiling is Internal, so failing
     // these calls high costs nothing.

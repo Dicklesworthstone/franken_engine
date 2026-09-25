@@ -3140,6 +3140,18 @@ pub enum BuiltinFunctionKind {
     /// `Date.UTC` / `Date.parse` (ES2020 20.4.3). Append only.
     DateUtc,
     DateParse,
+    /// `Promise.prototype.finally` reaction steps (ES2020 25.6.5.3.1-2),
+    /// bound (via `bound_object`) to a holder whose `__onFinally` is the user
+    /// callback: call it with no arguments, then pass the original value
+    /// (`PromiseThenFinally`) or rethrow the original reason
+    /// (`PromiseCatchFinally`) once its result settles (bd-9vouw.39). Append
+    /// only.
+    PromiseThenFinally,
+    PromiseCatchFinally,
+    /// Continuations after `onFinally` returned a Promise: return, or throw,
+    /// the `__value` of the bound holder (bd-9vouw.39). Append only.
+    PromiseFinallyValueThunk,
+    PromiseFinallyThrower,
 }
 
 impl BuiltinFunctionKind {
@@ -3254,6 +3266,17 @@ impl BuiltinFunction {
             module_specifier: BuiltinModuleSpecifier::default(),
             iterator_handle: None,
             bound_object: None,
+        }
+    }
+
+    /// A builtin closure over engine-owned state kept in `holder`'s
+    /// properties (Promise.prototype.finally steps, bd-9vouw.39).
+    fn bound_to(kind: BuiltinFunctionKind, holder: ObjectId) -> Self {
+        Self {
+            kind,
+            module_specifier: BuiltinModuleSpecifier::default(),
+            iterator_handle: None,
+            bound_object: Some(holder.0),
         }
     }
 
@@ -4815,6 +4838,11 @@ impl BuiltinFunction {
                 static_hostcall_name(&self.module_specifier).unwrap_or("anonymous")
             }
             BuiltinFunctionKind::ErrorPrototypeToString => "toString",
+            // Anonymous built-in closures in the spec.
+            BuiltinFunctionKind::PromiseThenFinally
+            | BuiltinFunctionKind::PromiseCatchFinally
+            | BuiltinFunctionKind::PromiseFinallyValueThunk
+            | BuiltinFunctionKind::PromiseFinallyThrower => "",
         }
     }
 }
@@ -10875,6 +10903,12 @@ pub struct InterpreterCore {
     /// Non-zero only while an imported ordinary closure is executing in its
     /// retained owner program.
     active_foreign_module_call_depth: usize,
+    /// bd-9vouw.26: every async-function call runs in an isolated wrapper
+    /// activation so a pending `await` parks only that activation and the
+    /// caller continues with the result Promise. Set just before the wrapper
+    /// runs and consumed by the wrapper's own entry call, which must execute
+    /// inline instead of isolating again.
+    isolated_async_entry_pending: bool,
     /// Pending capture names for the next `CreateClosure` instruction.
     pending_captures: Vec<u32>,
     /// Generator object store.
@@ -11702,6 +11736,7 @@ impl InterpreterCore {
             closure_generated_function_artifacts: BTreeMap::new(),
             module_reentrant_call_depth: 0,
             active_foreign_module_call_depth: 0,
+            isolated_async_entry_pending: false,
             pending_captures: Vec::new(),
             generators: Vec::new(),
             generator_yielded: false,
@@ -30701,6 +30736,15 @@ impl InterpreterCore {
         self.execute_with_trace_handoff(module, None, TraceHandoff::RetainInCore)
     }
 
+    /// Read-only settlement state of a Promise value this core created
+    /// (`Value::Promise(handle)`); `None` for an unknown handle.
+    pub fn promise_state(&self, promise: u32) -> Option<crate::promise_model::PromiseState> {
+        self.promise_store
+            .get(crate::promise_model::PromiseHandle(promise))
+            .ok()
+            .map(|record| record.state.clone())
+    }
+
     fn execute_ephemeral(
         &mut self,
         module: &Ir3Module,
@@ -31111,6 +31155,7 @@ impl InterpreterCore {
         self.runtime_name_references.clear();
         self.module_reentrant_call_depth = 0;
         self.active_foreign_module_call_depth = 0;
+        self.isolated_async_entry_pending = false;
         // A repeat run replays the previous run's budget and trace domain
         // from zero; both accumulate across `execute` calls otherwise.
         self.instructions_executed = 0;
@@ -36457,6 +36502,16 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 };
                 self.collection_clear(set_id, "Set", "__values")
+            }
+            BuiltinFunctionKind::PromiseThenFinally | BuiltinFunctionKind::PromiseCatchFinally => {
+                self.promise_finally_step(module, builtin, args)
+            }
+            BuiltinFunctionKind::PromiseFinallyValueThunk => {
+                self.promise_finally_bound_property(builtin, "__value")
+            }
+            BuiltinFunctionKind::PromiseFinallyThrower => {
+                let reason = self.promise_finally_bound_property(builtin, "__value")?;
+                Err(self.throw_guest_value(reason, Label::Public)?)
             }
             BuiltinFunctionKind::DateConstructor => {
                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))
@@ -42504,6 +42559,59 @@ impl InterpreterCore {
                 self.write_reg_with_label(dst, result, result_label)?;
                 self.ip += 1;
             }
+            // bd-9vouw.37: `+` with an object operand (ES2020 12.8.3.1):
+            // ToPrimitive(lhs) then ToPrimitive(rhs) with the default hint,
+            // then string concatenation or numeric addition. The conversion
+            // methods' result labels join the operand labels.
+            Ir3Instruction::Add { dst, lhs, rhs } => {
+                let operand_label = self.binary_operation_label(lhs, rhs)?;
+                self.clear_pending_hostcall_result_label();
+                let left = match self.observable_to_primitive_operand(module, lhs, false) {
+                    Ok(value) => value,
+                    Err(error) => return self.route_reentrant_guest_error(module, error),
+                };
+                let right = match self.observable_to_primitive_operand(module, rhs, false) {
+                    Ok(value) => value,
+                    Err(error) => return self.route_reentrant_guest_error(module, error),
+                };
+                let label = operand_label.join(
+                    &self
+                        .take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                );
+                let result = self.eval_add_values(&left, &right)?;
+                self.write_reg_with_label(dst, result, label)?;
+                self.ip += 1;
+            }
+            // bd-9vouw.37: template substitutions are ToString(ToPrimitive(
+            // hint string)) (ES2020 12.2.9.6).
+            Ir3Instruction::TemplateLiteral { parts, dst } => {
+                let parts_label = self.join_arg_range_label(parts)?;
+                self.clear_pending_hostcall_result_label();
+                let mut result = JsString::empty();
+                for i in 0..parts.count {
+                    let reg = parts.start.checked_add(i).ok_or(
+                        InterpreterError::RegisterOutOfBounds {
+                            register: parts.start,
+                            max: self.config.max_registers,
+                        },
+                    )?;
+                    let part = match self.observable_to_primitive_operand(module, reg, true) {
+                        Ok(value) => value,
+                        Err(error) => return self.route_reentrant_guest_error(module, error),
+                    };
+                    let part_str = self.template_part_js_string(part)?;
+                    self.check_string_limit(result.len().saturating_add(part_str.len()))?;
+                    result = result.concat(&part_str);
+                }
+                let label = parts_label.join(
+                    &self
+                        .take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                );
+                self.write_reg_with_label(dst, Value::Str(result), label)?;
+                self.ip += 1;
+            }
             _ => unreachable!("non-reentrant opcode crossed the iterator/hostcall boundary"),
         }
         if let (Some(profiler), Some(profile_start)) = (&mut self.profiling_data, profile_start) {
@@ -42665,7 +42773,18 @@ impl InterpreterCore {
             // per-opcode recorder observes the original IR3 instruction. The
             // production lanes do not install this profiler today.
             let compact_instruction = if self.profiling_data.is_none() {
-                compact_tier1.and_then(|program| program.instruction_at(self.ip))
+                compact_tier1
+                    .and_then(|program| program.instruction_at(self.ip))
+                    // bd-9vouw.37: an object operand of `+` needs the
+                    // observable ToPrimitive, which only the Tier-R handler
+                    // (reentrant path) performs.
+                    .filter(|compact| {
+                        compact.opcode != CompactTier1Opcode::Add
+                            || !(self
+                                .register_needs_observable_to_primitive(u32::from(compact.lhs))
+                                || self
+                                    .register_needs_observable_to_primitive(u32::from(compact.rhs)))
+                    })
             } else {
                 None
             };
@@ -42758,6 +42877,14 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::Add { dst, lhs, rhs } => {
+                    if self.register_needs_observable_to_primitive(lhs)
+                        || self.register_needs_observable_to_primitive(rhs)
+                    {
+                        return Ok(DispatchOutcome::ReentrantInstruction {
+                            instruction_ip: self.ip,
+                            profile_start,
+                        });
+                    }
                     let _bigint_peak = self.preflight_bigint_add(dst, lhs, rhs)?;
                     let result_label = self.binary_operation_label(lhs, rhs)?;
                     let result = self.eval_add(lhs, rhs)?;
@@ -42868,8 +42995,12 @@ impl InterpreterCore {
                         });
                     }
 
-                    if let Some(_origin_module) =
-                        self.foreign_closure_module(&callee_val, module)?
+                    // bd-9vouw.26: an async call runs in its own isolated
+                    // activation (see `isolated_async_entry_pending`).
+                    let isolate_async_call = matches!(callee_val, Value::AsyncFunction(_))
+                        && !std::mem::take(&mut self.isolated_async_entry_pending);
+                    if isolate_async_call
+                        || self.foreign_closure_module(&callee_val, module)?.is_some()
                     {
                         let call_labels =
                             self.clone_isolated_call_labels_from_registers(None, args)?;
@@ -43445,8 +43576,12 @@ impl InterpreterCore {
                         });
                     }
 
-                    if let Some(_origin_module) =
-                        self.foreign_closure_module(&callee_val, module)?
+                    // bd-9vouw.26: an async call runs in its own isolated
+                    // activation (see `isolated_async_entry_pending`).
+                    let isolate_async_call = matches!(callee_val, Value::AsyncFunction(_))
+                        && !std::mem::take(&mut self.isolated_async_entry_pending);
+                    if isolate_async_call
+                        || self.foreign_closure_module(&callee_val, module)?.is_some()
                     {
                         let call_labels =
                             self.clone_isolated_call_labels_from_registers(Some(receiver), args)?;
@@ -45469,6 +45604,20 @@ impl InterpreterCore {
                     }
                 }
                 Ir3Instruction::TemplateLiteral { parts, dst } => {
+                    // bd-9vouw.37: an object substitution is ToString(ToPrimitive
+                    // (hint string)), which may run its toString/valueOf; only
+                    // the reentrant path can run guest code.
+                    if (0..parts.count).any(|i| {
+                        parts
+                            .start
+                            .checked_add(i)
+                            .is_some_and(|reg| self.register_needs_observable_to_primitive(reg))
+                    }) {
+                        return Ok(DispatchOutcome::ReentrantInstruction {
+                            instruction_ip: self.ip,
+                            profile_start,
+                        });
+                    }
                     // Concatenate over exact code units so string parts
                     // holding lone surrogates keep them (and heal across
                     // part boundaries) instead of collapsing to the lossy
@@ -45482,35 +45631,7 @@ impl InterpreterCore {
                             },
                         )?;
                         let val = self.read_reg(reg)?;
-                        let part_str = match val {
-                            Value::Str(s) => s,
-                            Value::Int(n) => JsString::from(n.to_string()),
-                            Value::BigInt(n) => JsString::from(n.as_ref()),
-                            Value::Float(f) => JsString::from(f.to_string()),
-                            Value::Bool(b) => JsString::from(if b { "true" } else { "false" }),
-                            Value::Null => JsString::from("null"),
-                            Value::Undefined => JsString::from("undefined"),
-                            Value::Symbol(_) => {
-                                return Err(InterpreterError::TypeError {
-                                    expected: "template literal substitution coercible to string"
-                                        .to_string(),
-                                    got: "symbol".to_string(),
-                                });
-                            }
-                            Value::Object(id) => JsString::from(self.object_to_coerced_string(id)),
-                            Value::Iterator(_) | Value::Generator(_) | Value::Accessor { .. } => {
-                                JsString::from("[object Object]")
-                            }
-                            Value::Promise(_) => JsString::from("[object Promise]"),
-                            Value::Function(_)
-                            | Value::Closure(_)
-                            | Value::GeneratorFunction(_)
-                            | Value::BuiltinFunction(_)
-                            | Value::AsyncFunction(_)
-                            | Value::AsyncFunctionObject(_)
-                            | Value::AsyncGeneratorFunction(_) => JsString::from("function"),
-                            Value::AsyncGeneratorObject(_) => JsString::from("object"),
-                        };
+                        let part_str = self.template_part_js_string(val)?;
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
                         result = result.concat(&part_str);
                     }
@@ -46134,62 +46255,29 @@ impl InterpreterCore {
                             got: e.to_string(),
                         }
                     })?;
-                    let promise_state = promise_record.state.clone();
                     let promise_label = promise_record.label.clone();
                     let effective_label = awaited_label.join(&promise_label);
 
-                    // Module evaluation always crosses a Promise-reaction
-                    // microtask boundary, including for non-Promise and
-                    // already-settled operands.
+                    // Await always crosses a Promise-reaction microtask
+                    // boundary, including for non-Promise and already-settled
+                    // operands (ES2020 25.7.5.3; bd-9vouw.26). An async
+                    // function runs in its own isolated activation, so only
+                    // that activation is parked and its caller continues.
                     if is_module_await {
                         self.suspend_top_level_await(promise_handle, promise_reg, effective_label)?;
-                        // Suspension marker, not program data: the resumed
-                        // completion carries the real label.
-                        return Ok(DispatchOutcome::Complete(LabeledReturn {
-                            value: Value::Undefined,
-                            label: Label::Public,
-                        }));
-                    }
-
-                    if promise_state.is_settled() {
-                        // Promise already settled - continue execution synchronously
-                        match promise_state {
-                            crate::promise_model::PromiseState::Fulfilled(js_val) => {
-                                let result_value = Self::js_value_to_value(&js_val);
-                                self.write_reg_with_label(
-                                    promise_reg,
-                                    result_value,
-                                    effective_label,
-                                )?;
-                                self.ip += 1;
-                            }
-                            crate::promise_model::PromiseState::Rejected(js_reason) => {
-                                let error_value = Self::js_value_to_value(&js_reason);
-                                if self.raise_await_rejection_with_label(
-                                    error_value.clone(),
-                                    effective_label,
-                                )? {
-                                    continue;
-                                }
-                            }
-                            crate::promise_model::PromiseState::Pending => {
-                                unreachable!("is_settled() returned true but state is Pending")
-                            }
-                        }
                     } else {
                         self.suspend_async_function_for_await(
                             promise_handle,
                             promise_reg,
                             effective_label,
                         )?;
-
-                        // Return special value to indicate suspension
-                        // The interpreter loop should exit and return control to the event loop
-                        return Ok(DispatchOutcome::Complete(LabeledReturn {
-                            value: Value::Undefined,
-                            label: Label::Public,
-                        }));
                     }
+                    // Suspension marker, not program data: the resumed
+                    // completion carries the real label.
+                    return Ok(DispatchOutcome::Complete(LabeledReturn {
+                        value: Value::Undefined,
+                        label: Label::Public,
+                    }));
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
                     let return_value = self.read_reg(value_reg)?;
@@ -52029,6 +52117,126 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// bd-9vouw.37: an ordinary-object operand of `+` or a template
+    /// substitution converts through the observable ToPrimitive (it may define
+    /// toString / valueOf / @@toPrimitive on itself or its prototype chain),
+    /// which only the reentrant Tier-R path can run.
+    fn register_needs_observable_to_primitive(&self, register: u32) -> bool {
+        matches!(self.read_reg(register), Ok(Value::Object(_)))
+    }
+
+    /// ES2020 7.1.1 ToPrimitive for an operand register (hint "string" when
+    /// `prefer_string`, else "default"). Objects with guest conversion hooks
+    /// run them, joining the methods' result label into
+    /// `pending_hostcall_result_label`; engine objects keep their
+    /// non-observable string form; primitives pass through unchanged.
+    fn observable_to_primitive_operand(
+        &mut self,
+        module: &Ir3Module,
+        register: u32,
+        prefer_string: bool,
+    ) -> Result<Value, InterpreterError> {
+        let value = self.read_reg(register)?;
+        let Value::Object(object_id) = value else {
+            return Ok(value);
+        };
+        if !self.object_has_user_conversion_hook(object_id) {
+            // The engine's own prototypes convert without running guest
+            // code; keep their established string form (arrays join, plain
+            // objects "[object Object]").
+            return Ok(Value::Str(JsString::from(
+                self.object_to_coerced_string(object_id),
+            )));
+        }
+        let hint = if prefer_string { "string" } else { "default" };
+        self.coerce_runtime_primitive_with_hint(Some(module), value, hint)
+    }
+
+    /// Whether the object or its prototype chain defines a guest `toString` /
+    /// `valueOf` method or any `@@toPrimitive` property (bd-9vouw.37).
+    fn object_has_user_conversion_hook(&self, object_id: ObjectId) -> bool {
+        let to_primitive = WellKnownSymbol::ToPrimitive.id();
+        let mut current = Some(object_id);
+        // Bounded like the other prototype walks; a longer chain keeps the
+        // non-observable conversion.
+        for _ in 0..128 {
+            let Some(object) = current.and_then(|id| self.heap.get(id.0 as usize)) else {
+                return false;
+            };
+            let guest_method = |name: &str| {
+                matches!(
+                    object.properties.get(name),
+                    Some(
+                        Value::Closure(_)
+                            | Value::Function(_)
+                            | Value::AsyncFunction(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncGeneratorFunction(_)
+                    )
+                )
+            };
+            if guest_method("toString")
+                || guest_method("valueOf")
+                || object
+                    .properties
+                    .baseline_symbol_property(core_symbol_id(to_primitive))
+                    .is_some()
+            {
+                return true;
+            }
+            current = object.prototype;
+        }
+        false
+    }
+
+    /// Route an error raised while a reentrant instruction ran guest code: a
+    /// guest throw unwinds to the nearest handler exactly like `throw`;
+    /// anything else propagates.
+    fn route_reentrant_guest_error(
+        &mut self,
+        module: &Ir3Module,
+        error: InterpreterError,
+    ) -> Result<(), InterpreterError> {
+        self.clear_pending_hostcall_result_label();
+        match self.route_isolated_explicit_throw(module, error)? {
+            None => Ok(()),
+            Some(error) => Err(error),
+        }
+    }
+
+    /// ToString for a template-literal substitution that is already a
+    /// primitive, or an object handled by the non-observable fallback.
+    fn template_part_js_string(&self, val: Value) -> Result<JsString, InterpreterError> {
+        Ok(match val {
+            Value::Str(s) => s,
+            Value::Int(n) => JsString::from(n.to_string()),
+            Value::BigInt(n) => JsString::from(n.as_ref()),
+            Value::Float(f) => JsString::from(f.to_string()),
+            Value::Bool(b) => JsString::from(if b { "true" } else { "false" }),
+            Value::Null => JsString::from("null"),
+            Value::Undefined => JsString::from("undefined"),
+            Value::Symbol(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "template literal substitution coercible to string".to_string(),
+                    got: "symbol".to_string(),
+                });
+            }
+            Value::Object(id) => JsString::from(self.object_to_coerced_string(id)),
+            Value::Iterator(_) | Value::Generator(_) | Value::Accessor { .. } => {
+                JsString::from("[object Object]")
+            }
+            Value::Promise(_) => JsString::from("[object Promise]"),
+            Value::Function(_)
+            | Value::Closure(_)
+            | Value::GeneratorFunction(_)
+            | Value::BuiltinFunction(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncFunctionObject(_)
+            | Value::AsyncGeneratorFunction(_) => JsString::from("function"),
+            Value::AsyncGeneratorObject(_) => JsString::from("object"),
+        })
+    }
+
     /// Resolve observable ToPrimitive(string) hooks once. Source property names
     /// are coerced eagerly; saved assignment references defer this to PutValue.
     fn coerce_runtime_property_key(
@@ -52062,6 +52270,20 @@ impl InterpreterCore {
         value: Value,
         prefer_string: bool,
     ) -> Result<Value, InterpreterError> {
+        let hint = if prefer_string { "string" } else { "number" };
+        self.coerce_runtime_primitive_with_hint(module, value, hint)
+    }
+
+    /// ES2020 7.1.1 ToPrimitive with an explicit hint: "string", "number" or
+    /// "default" (`+` and `==`). @@toPrimitive receives the hint; without it
+    /// OrdinaryToPrimitive tries toString first only for "string".
+    fn coerce_runtime_primitive_with_hint(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        hint: &'static str,
+    ) -> Result<Value, InterpreterError> {
+        let prefer_string = hint == "string";
         Ok(if value.is_object_like() {
             if let Some(object_id) =
                 self.iterator_carrier_backing_id(&value, "property key object")?
@@ -52080,7 +52302,7 @@ impl InterpreterCore {
                         module,
                         method,
                         value.clone(),
-                        vec![Value::str(if prefer_string { "string" } else { "number" })],
+                        vec![Value::str(hint)],
                         None,
                     )?;
                     let label = self
@@ -53126,6 +53348,114 @@ impl InterpreterCore {
         Ok(Some(self.read_reg(register)?))
     }
 
+    /// Arm `value` as the pending guest exception and return the error that
+    /// unwinds to the nearest handler, exactly like a `throw` statement.
+    fn throw_guest_value(
+        &mut self,
+        value: Value,
+        label: Label,
+    ) -> Result<InterpreterError, InterpreterError> {
+        let description = self.uncaught_exception_description(&value);
+        self.replace_pending_abrupt_slots(Some((value, label)), None)?;
+        Ok(InterpreterError::UncaughtException { value: description })
+    }
+
+    /// Reaction handlers for `promise.finally(onFinally)`: a callable
+    /// onFinally is wrapped in the Then Finally / Catch Finally steps; a
+    /// non-callable one passes the settlement through unchanged (ES2020
+    /// 25.6.5.3; bd-9vouw.39 — this used to be `then(onFinally, onFinally)`,
+    /// which swallowed rejections).
+    fn promise_finally_handlers(
+        &mut self,
+        on_finally: Option<Value>,
+    ) -> Result<
+        (
+            Option<crate::closure_model::ClosureHandle>,
+            Option<crate::closure_model::ClosureHandle>,
+        ),
+        InterpreterError,
+    > {
+        let Some(on_finally) = on_finally.filter(Value::is_callable) else {
+            return Ok((None, None));
+        };
+        let holder = self.alloc_object_with_properties(&[("__onFinally", on_finally)])?;
+        let then_finally = self.promise_reaction_handler_from_value(
+            Value::BuiltinFunction(BuiltinFunction::bound_to(
+                BuiltinFunctionKind::PromiseThenFinally,
+                holder,
+            )),
+            "onFinally",
+        )?;
+        let catch_finally = self.promise_reaction_handler_from_value(
+            Value::BuiltinFunction(BuiltinFunction::bound_to(
+                BuiltinFunctionKind::PromiseCatchFinally,
+                holder,
+            )),
+            "onFinally",
+        )?;
+        Ok((then_finally, catch_finally))
+    }
+
+    /// A property of the engine-owned holder a Promise.prototype.finally step
+    /// is bound to (bd-9vouw.39).
+    fn promise_finally_bound_property(
+        &self,
+        builtin: &BuiltinFunction,
+        name: &str,
+    ) -> Result<Value, InterpreterError> {
+        builtin
+            .bound_object
+            .and_then(|holder| self.heap.get(holder as usize))
+            .and_then(|holder| holder.properties.get(name).cloned())
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: format!("Promise.prototype.finally step lost its bound {name}"),
+            })
+    }
+
+    /// ES2020 25.6.5.3.1 Then Finally / 25.6.5.3.2 Catch Finally: call
+    /// onFinally() with no arguments. A throw from it propagates (rejecting the
+    /// chain with that error). If it returns a Promise, continue with that
+    /// Promise's settlement and then pass the original value or rethrow the
+    /// original reason; otherwise pass/rethrow immediately.
+    fn promise_finally_step(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let settlement = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let on_finally = self.promise_finally_bound_property(builtin, "__onFinally")?;
+        let fulfilled = builtin.kind == BuiltinFunctionKind::PromiseThenFinally;
+        let result =
+            self.invoke_inline_method_call(Some(module), on_finally, Value::Undefined, Vec::new())?;
+        if let Value::Promise(awaited) = result {
+            let carrier = self.alloc_object_with_properties(&[("__value", settlement)])?;
+            let continuation = self.promise_reaction_handler_from_value(
+                Value::BuiltinFunction(BuiltinFunction::bound_to(
+                    if fulfilled {
+                        BuiltinFunctionKind::PromiseFinallyValueThunk
+                    } else {
+                        BuiltinFunctionKind::PromiseFinallyThrower
+                    },
+                    carrier,
+                )),
+                "onFinally",
+            )?;
+            let derived = self.register_promise_then(
+                crate::promise_model::PromiseHandle(awaited),
+                continuation,
+                None,
+                Label::Public,
+            )?;
+            return Ok(Value::Promise(derived.0));
+        }
+        if fulfilled {
+            Ok(settlement)
+        } else {
+            Err(self.throw_guest_value(settlement, Label::Public)?)
+        }
+    }
+
     fn dispatch_promise_reaction_builtin(
         &mut self,
         args: RegRange,
@@ -53169,12 +53499,14 @@ impl InterpreterCore {
                 };
                 (None, on_rejected)
             }
+            // ES2020 25.6.5.3: a callable onFinally is wrapped so it runs with
+            // no arguments and the original settlement passes through; a
+            // non-callable one passes the settlement through unchanged
+            // (bd-9vouw.39; this was `then(onFinally, onFinally)`, which
+            // swallowed rejections).
             PromiseReactionKind::Finally => {
-                let on_finally = match self.builtin_arg(args, 0)? {
-                    Some(value) => self.promise_reaction_handler_from_value(value, "onFinally")?,
-                    None => None,
-                };
-                (on_finally, on_finally)
+                let on_finally = self.builtin_arg(args, 0)?;
+                self.promise_finally_handlers(on_finally)?
             }
         };
         let result = self.register_promise_then(handle, on_fulfilled, on_rejected, label)?;
@@ -53446,7 +53778,6 @@ impl InterpreterCore {
                 Ok(Value::Promise(result.0))
             }
             "promise:finally" => {
-                // Similar to .then(handler, handler) for finally semantics.
                 let arg0 = if args.count > 0 {
                     self.read_reg(args.start)?
                 } else {
@@ -53464,11 +53795,10 @@ impl InterpreterCore {
                         });
                     }
                 };
-                let on_finally = match self.promise_reaction_arg(args, 1)? {
-                    Some(value) => self.promise_reaction_handler_from_value(value, "onFinally")?,
-                    None => None,
-                };
-                let result = self.register_promise_then(handle, on_finally, on_finally, label)?;
+                let on_finally = self.promise_reaction_arg(args, 1)?;
+                let (then_finally, catch_finally) = self.promise_finally_handlers(on_finally)?;
+                let result =
+                    self.register_promise_then(handle, then_finally, catch_finally, label)?;
                 Ok(Value::Promise(result.0))
             }
             "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
@@ -54170,12 +54500,22 @@ impl InterpreterCore {
                                     }
                                 },
                                 Err(err) => {
-                                    let reason = Self::promise_rejection_from_error(&err);
-                                    self.reject_promise(
-                                        *result_promise,
-                                        reason,
-                                        task_label.clone(),
-                                    )?;
+                                    // A guest throw re-arms the thrown value in
+                                    // the pending-exception slot; reject with it
+                                    // (an Error object stays an object) instead
+                                    // of its stringified message (bd-9vouw.38).
+                                    let (reason, reason_label) =
+                                        match self.take_pending_exception_slot() {
+                                            Some((thrown, thrown_label)) => (
+                                                Self::value_to_js_value(&thrown),
+                                                thrown_label.join(task_label),
+                                            ),
+                                            None => (
+                                                Self::promise_rejection_from_error(&err),
+                                                task_label.clone(),
+                                            ),
+                                        };
+                                    self.reject_promise(*result_promise, reason, reason_label)?;
                                 }
                             }
                         }
@@ -54583,9 +54923,7 @@ impl InterpreterCore {
                         let previous_promise_bytes = self.promise_runtime_memory_bytes();
                         let handler_id = match &callback {
                             Value::Closure(id) | Value::Function(id) => *id,
-                            _ => {
-                                unreachable!("pending timer callback was validated at registration")
-                            }
+                            _ => u32::MAX,
                         };
                         let seq = self.event_loop.set_timeout(
                             crate::closure_model::ClosureHandle(handler_id),
@@ -54806,7 +55144,7 @@ impl InterpreterCore {
         immediate: bool,
         registration_label: Label,
     ) -> Result<Value, InterpreterError> {
-        if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
+        if !callback.is_callable() {
             // Preserved lenient legacy contract: a non-callable callback
             // yields the invalid timer id instead of throwing.
             return Ok(Value::Int(0));
@@ -54821,9 +55159,14 @@ impl InterpreterCore {
         };
 
         let timer_id = self.next_timer_id;
+        // Async, generator and builtin callables (`setTimeout(resolve, ms)`,
+        // `setTimeout(async () => ...)`) are ordinary callbacks too; the
+        // stored `callback` is what runs. Non-closure callables record the
+        // same sentinel handle `schedule_pending_timer_task` uses
+        // (bd-9vouw.30).
         let callback_id = match &callback {
             Value::Closure(id) | Value::Function(id) => *id,
-            _ => unreachable!("callability was checked above"),
+            _ => u32::MAX,
         };
         let effect_permit = if immediate {
             None
@@ -58970,6 +59313,11 @@ impl InterpreterCore {
             } else {
                 (item.clone(), item)
             };
+            // An entry deleted by an earlier callback is not visited
+            // (ES2020 23.1.3.5 iterates the live entry list).
+            if !self.collection_has(collection_id, tag, storage, &key) {
+                continue;
+            }
             self.preflight_inline_method_call_with_argument_label(
                 Some(module),
                 &callback,
@@ -61403,8 +61751,10 @@ impl InterpreterCore {
         // cross-module function-index collision.
         let foreign_module = self.foreign_closure_module(&callee, caller_module)?;
         let is_foreign_call = foreign_module.is_some();
-        let foreign_async_call = is_foreign_call && matches!(&callee, Value::AsyncFunction(_));
-        let foreign_async_index = foreign_async_call.then_some(self.async_functions.len());
+        // bd-9vouw.26: every async callee (not only foreign ones) keeps its
+        // activation parked at a pending `await`, so the caller resumes now.
+        let isolated_async_call = matches!(&callee, Value::AsyncFunction(_));
+        let foreign_async_index = isolated_async_call.then_some(self.async_functions.len());
         self.check_module_reentrant_call_depth()?;
         // Isolating a same-module callback hides caller frames just as surely
         // as entering a foreign module. Preserve them in the shared depth
@@ -61558,7 +61908,9 @@ impl InterpreterCore {
                 self.active_foreign_module_call_depth =
                     previous_foreign_call_depth.saturating_add(1);
             }
+            self.isolated_async_entry_pending = isolated_async_call;
             let result = self.run_loop(&wrapper);
+            self.isolated_async_entry_pending = false;
             self.module_reentrant_call_depth = previous_reentrant_depth;
             self.active_foreign_module_call_depth = previous_foreign_call_depth;
             result
@@ -70104,7 +70456,23 @@ impl InterpreterCore {
                 let array_id = self.alloc_array_with_prototype(None)?;
 
                 let mut elements = match first_arg {
-                    Value::Object(obj_id) => self.array_like_values(obj_id)?,
+                    // Map/Set are iterables, not array-likes (bd-9vouw.33).
+                    Value::Object(obj_id) => match self.collection_iteration_values(obj_id)? {
+                        Some(values) => values,
+                        None => self.array_like_values(obj_id)?,
+                    },
+                    // An iterator or generator (`Array.from(map.values())`)
+                    // is drained through the for-of protocol.
+                    iterator @ (Value::Iterator(_) | Value::Generator(_)) => {
+                        let iterator = self.init_for_of_iterator(module, iterator)?;
+                        let mut values = Vec::new();
+                        while let Some(value) =
+                            self.advance_for_of_iterator(module, iterator.clone())?
+                        {
+                            values.push(value);
+                        }
+                        values
+                    }
                     Value::Str(s) => {
                         // One element per code point, lone surrogates
                         // preserved exactly (ES string iteration; bd-rdnhc).
@@ -90655,8 +91023,11 @@ mod async_runtime_tests_current {
         let result = core
             .execute(&module)
             .expect("pending await should suspend without aborting");
-        assert_eq!(result.value, Value::Undefined);
+        // The caller continues past the call with the async function's result
+        // Promise and halts with it (bd-9vouw.26); the suspended await used to
+        // abort the whole program with Undefined.
         let async_result_promise = core.async_functions[0].result_promise;
+        assert_eq!(result.value, Value::Promise(async_result_promise));
 
         core.fulfill_promise(
             awaited,
@@ -90714,8 +91085,11 @@ mod async_runtime_tests_current {
         let result = core
             .execute(&module)
             .expect("pending await should suspend without aborting");
-        assert_eq!(result.value, Value::Undefined);
+        // The caller continues past the call with the async function's result
+        // Promise and halts with it (bd-9vouw.26); the suspended await used to
+        // abort the whole program with Undefined.
         let async_result_promise = core.async_functions[0].result_promise;
+        assert_eq!(result.value, Value::Promise(async_result_promise));
 
         core.reject_promise(
             awaited,
@@ -90782,8 +91156,11 @@ mod async_runtime_tests_current {
         let result = core
             .execute(&module)
             .expect("pending await should suspend without aborting");
-        assert_eq!(result.value, Value::Undefined);
+        // The caller continues past the call with the async function's result
+        // Promise and halts with it (bd-9vouw.26); the suspended await used to
+        // abort the whole program with Undefined.
         let async_result_promise = core.async_functions[0].result_promise;
+        assert_eq!(result.value, Value::Promise(async_result_promise));
 
         core.reject_promise(
             awaited,
@@ -90808,35 +91185,78 @@ mod async_runtime_tests_current {
 
     #[test]
     fn await_non_promise_preserves_register_label() {
+        // `return await secretSeven` in an async function: Await always
+        // resumes from a Promise job (bd-9vouw.26), and both the synthetic
+        // Promise wrapping the non-Promise operand and the async result keep
+        // the operand's Secret label across that resumption. (This test used
+        // a top-level AwaitValue with no async frame, which only ran through
+        // the removed synchronous fast path; lowering never emits it.)
         let module = test_module_with_functions(
             vec![
-                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
                 Ir3Instruction::Halt,
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::Return { value: 0 },
             ],
-            vec![],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("await_secret_value".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
         );
 
         let mut core = test_interpreter();
-        core.mutate_registers(|r| {
-            r[0] = Value::Int(7);
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
         });
-        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+        core.mutate_registers(|r| {
+            r[1] = Value::Int(7);
+            r[3] = Value::AsyncFunction(0);
+        });
+        core.set_register_label(1, crate::ifc_artifacts::Label::Secret)
             .expect("test register label should be settable");
 
-        core.execute(&module)
-            .expect("awaiting a non-promise should complete synchronously");
-
-        assert_eq!(core.registers[0], Value::Int(7));
-        assert_eq!(
-            core.get_register_label(0)
-                .expect("result register label should exist"),
-            &crate::ifc_artifacts::Label::Secret
-        );
-        let promise = core
+        let result = core
+            .execute(&module)
+            .expect("awaiting a non-promise suspends and resumes from a Promise job");
+        let result_promise = core.async_functions[0].result_promise;
+        assert_eq!(result.value, Value::Promise(result_promise));
+        let settled = core
             .promise_store
-            .get(crate::promise_model::PromiseHandle(0))
-            .expect("synthetic await promise should exist");
-        assert_eq!(promise.label, crate::ifc_artifacts::Label::Secret);
+            .get(crate::promise_model::PromiseHandle(result_promise))
+            .expect("async result promise should exist");
+        assert_eq!(
+            settled.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(7))
+        );
+        assert!(
+            settled.label >= crate::ifc_artifacts::Label::Secret,
+            "the awaited Secret value must keep its label through resumption, got {:?}",
+            settled.label
+        );
+        let synthetic_await_promise_labels: Vec<_> = (0..u32::MAX)
+            .map(crate::promise_model::PromiseHandle)
+            .map_while(|handle| {
+                core.promise_store
+                    .get(handle)
+                    .ok()
+                    .map(|record| record.label.clone())
+            })
+            .collect();
+        assert!(
+            synthetic_await_promise_labels
+                .iter()
+                .any(|label| *label == crate::ifc_artifacts::Label::Secret),
+            "the synthetic Promise for the awaited non-Promise must carry its Secret label, got {synthetic_await_promise_labels:?}"
+        );
     }
 
     /// bd-oswo2: awaiting a PENDING promise that later FULFILLS must resume
@@ -113515,15 +113935,23 @@ mod function_prototype_call_apply_tests_current {
         };
         assert_eq!(result_label, Label::Confidential);
         assert_eq!(outer_promise, core.async_functions[0].result_promise);
-        assert_eq!(core.async_functions[0].phase, AsyncFunctionPhase::Executing);
-        assert!(core.async_functions[0].isolated_execution.is_none());
+        // Each async call parks its own activation (bd-9vouw.26): the inner
+        // call suspends at its pending await and returns its Promise, and the
+        // outer function then suspends awaiting that Promise. The inner
+        // activation used to own the whole stack, leaving the outer frame
+        // Executing inside it.
+        assert_eq!(
+            core.async_functions[0].phase,
+            AsyncFunctionPhase::SuspendedAwait
+        );
+        assert!(core.async_functions[0].isolated_execution.is_some());
         assert_eq!(
             core.async_functions[1].phase,
             AsyncFunctionPhase::SuspendedAwait
         );
         assert!(
             core.async_functions[1].isolated_execution.is_some(),
-            "the innermost suspended async object must own the full activation"
+            "the inner suspended async object must own its own activation"
         );
         assert_ne!(
             outer_promise, core.async_functions[1].result_promise,
@@ -114064,11 +114492,13 @@ mod function_prototype_call_apply_tests_current {
         core.sync_estimated_memory_bytes()
             .expect("same-module async fixture accounting");
 
-        assert_eq!(
-            core.run_loop(&module)
-                .expect("same-module async call should reach its first await"),
-            Value::Undefined
-        );
+        // The call parks at its first await in its own isolated activation and
+        // the caller runs on to Halt (bd-9vouw.26; the pending await used to
+        // stop the whole top-level run with Undefined).
+        assert!(matches!(
+            core.run_loop(&module),
+            Err(InterpreterError::Halted)
+        ));
         let Value::Promise(result_promise) = core.registers[2].clone() else {
             panic!(
                 "same-module async call should publish a Promise, got {:?}",
@@ -114079,7 +114509,7 @@ mod function_prototype_call_apply_tests_current {
             core.async_functions[0].phase,
             AsyncFunctionPhase::SuspendedAwait
         );
-        assert!(core.async_functions[0].isolated_execution.is_none());
+        assert!(core.async_functions[0].isolated_execution.is_some());
 
         core.fulfill_promise(awaited, crate::object_model::JsValue::Int(2), Label::Secret)
             .expect("same-module awaited Promise should be fulfillable");

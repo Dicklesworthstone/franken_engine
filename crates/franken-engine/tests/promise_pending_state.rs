@@ -10,6 +10,8 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange,
 };
+use frankenengine_engine::object_model::JsValue;
+use frankenengine_engine::promise_model::PromiseState;
 
 fn test_config() -> InterpreterConfig {
     let mut config = InterpreterConfig::quickjs_defaults();
@@ -57,10 +59,29 @@ fn async_module(mut body: Vec<Ir3Instruction>, constant_pool: Vec<String>) -> Ir
 }
 
 fn execute_public_async_module(module: &Ir3Module) -> Value {
+    execute_public_async_module_with_core(module).1
+}
+
+fn execute_public_async_module_with_core(module: &Ir3Module) -> (InterpreterCore, Value) {
     let mut core = InterpreterCore::new(test_config(), "promise-pending-state-test");
-    core.execute(module)
+    let value = core
+        .execute(module)
         .expect("public async promise module should execute without panic")
-        .value
+        .value;
+    (core, value)
+}
+
+/// ES2020: calling an async function always returns its result Promise; a
+/// pending `await` parks only that activation and the caller runs on (to
+/// `Halt`, which completes with the call's result register). bd-9vouw.26: the
+/// suite used to pin the opposite, that a pending await aborted the whole
+/// program with `Undefined` (the suspension marker leaking out as the result).
+fn result_promise_state(core: &InterpreterCore, value: &Value) -> PromiseState {
+    let Value::Promise(handle) = value else {
+        panic!("an async function call must complete as its result Promise, got {value:?}");
+    };
+    core.promise_state(*handle)
+        .expect("result Promise created by this core")
 }
 
 #[test]
@@ -79,15 +100,17 @@ fn pending_promise_await_from_public_ir_returns_control_without_resumption_claim
     );
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        execute_public_async_module(&module)
+        execute_public_async_module_with_core(&module)
     }));
     assert!(
         result.is_ok(),
         "awaiting a pending promise must return control without panicking"
     );
-    assert!(
-        matches!(result.expect("panic-free pending await"), Value::Undefined),
-        "pending await should return control without claiming async resumption"
+    let (core, value) = result.expect("panic-free pending await");
+    assert_eq!(
+        result_promise_state(&core, &value),
+        PromiseState::Pending,
+        "a pending await returns control with the still-pending result Promise and claims no resumption"
     );
 }
 
@@ -189,19 +212,21 @@ fn async_functions_suspend_and_complete_independently() {
     // Baseline: each activation, run in isolation on its own core, yields its
     // characteristic outcome. The two outcomes are observably distinct, so the two
     // async functions are distinguishable rather than collapsing to a single state.
-    let pending_alone = execute_public_async_module(&pending);
-    let fulfilled_alone = execute_public_async_module(&fulfilled);
-    assert!(
-        matches!(pending_alone, Value::Undefined),
-        "a pending await must return control as Undefined, got {pending_alone:?}"
+    let (pending_core, pending_alone) = execute_public_async_module_with_core(&pending);
+    let (fulfilled_core, fulfilled_alone) = execute_public_async_module_with_core(&fulfilled);
+    let pending_state = result_promise_state(&pending_core, &pending_alone);
+    let fulfilled_state = result_promise_state(&fulfilled_core, &fulfilled_alone);
+    assert_eq!(
+        pending_state,
+        PromiseState::Pending,
+        "a pending await leaves its result Promise pending"
     );
     assert!(
-        matches!(fulfilled_alone, Value::Promise(_)),
-        "a fulfilled await must complete as a result Promise, got {fulfilled_alone:?}"
+        matches!(fulfilled_state, PromiseState::Fulfilled(JsValue::Int(99))),
+        "a fulfilled await resumes (from a Promise job) and fulfills its result Promise with 99, got {fulfilled_state:?}"
     );
     assert_ne!(
-        std::mem::discriminant(&pending_alone),
-        std::mem::discriminant(&fulfilled_alone),
+        pending_state, fulfilled_state,
         "pending and fulfilled activations must reach observably distinct states"
     );
 
@@ -230,8 +255,8 @@ fn async_functions_suspend_and_complete_independently() {
         Vec::new(),
     );
 
-    // `true` => the activation awaits a settled promise and must complete as a Promise;
-    // `false` => it awaits a pending promise and must return control as Undefined.
+    // `true` => the activation awaits a settled promise and its result Promise
+    // fulfills; `false` => it awaits a pending promise and its result stays pending.
     let schedule: [(&Ir3Module, bool); 5] = [
         (&pending, false),
         (&fulfilled, true),
@@ -240,16 +265,18 @@ fn async_functions_suspend_and_complete_independently() {
         (&fulfilled, true),
     ];
     for (round, (module, expect_completion)) in schedule.into_iter().enumerate() {
-        let outcome = execute_public_async_module(module);
+        let (core, outcome) = execute_public_async_module_with_core(module);
+        let state = result_promise_state(&core, &outcome);
         if expect_completion {
             assert!(
-                matches!(outcome, Value::Promise(_)),
-                "round {round}: a fulfilled-await activation must complete as a Promise regardless of what ran before it, got {outcome:?}"
+                matches!(state, PromiseState::Fulfilled(_)),
+                "round {round}: a fulfilled-await activation must fulfill its result Promise regardless of what ran before it, got {state:?}"
             );
         } else {
-            assert!(
-                matches!(outcome, Value::Undefined),
-                "round {round}: a pending-await activation must return control as Undefined regardless of what ran before it, got {outcome:?}"
+            assert_eq!(
+                state,
+                PromiseState::Pending,
+                "round {round}: a pending-await activation must leave its result Promise pending regardless of what ran before it"
             );
         }
     }

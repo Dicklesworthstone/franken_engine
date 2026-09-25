@@ -40,34 +40,32 @@ enum Expect {
 // focused bugs filed from this corpus's first real run on 2026-09-23).
 const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
-const ARGUMENTS: &str = "bd-performance-conformance-bridge-tu32j.14.5";
 const DATE_JSON: &str = "bd-performance-conformance-bridge-tu32j.16.5";
 const COLLECTIONS: &str = "bd-performance-conformance-bridge-tu32j.16.6";
 const TYPED_ARRAYS: &str = "bd-performance-conformance-bridge-tu32j.16.7";
 const ERRORS_AND_URI: &str = "bd-performance-conformance-bridge-tu32j.16.11";
 const SYMBOLS: &str = "bd-performance-conformance-bridge-tu32j.16.17";
-const NUMBER: &str = "bd-performance-conformance-bridge-tu32j.16.18";
 const BIGINT: &str = "bd-performance-conformance-bridge-tu32j.16.19";
 const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 const REGEXP_STRING_METHODS: &str = "bd-performance-conformance-bridge-tu32j.17.3";
-const ASYNC_FUNCTION_EXPRESSIONS: &str = "bd-xbv99";
+/// `for await` lowers to synchronous for-of (no `@@asyncIterator` dispatch).
+const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
 
 /// Case id -> expectation. Every corpus case must appear exactly once.
 /// Filled from the observed verdicts of the first run (2026-09-23): 20 match
 /// Node, 4 are refused by design, 26 fail. 29_promise_all_race moved to Pass
 /// with bd-auy04 (`new Promise`); on 2026-09-24 06, 15, 37, 40, 42 and 47
 /// started matching Node (standard globals and Map/Set iteration, bd-9vouw.17;
-/// number formatting, bd-9vouw.2; large integer literals, bd-6vl81), and 02
-/// with `super` in classes (bd-9vouw.24).
+/// number formatting, bd-9vouw.2; large integer literals, bd-6vl81), 02 with
+/// `super` in classes (bd-9vouw.24), 05 once `await` stopped suspending its
+/// caller (bd-9vouw.26), and 23 and 43 with Number.prototype.toPrecision and
+/// the arguments object (f2870e990, bd-9vouw.25).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::Pass),
     ("03_destructure_spread", Expect::Pass),
     ("04_generators", Expect::Pass),
-    (
-        "05_async_order",
-        Expect::KnownFailure(ASYNC_FUNCTION_EXPRESSIONS),
-    ),
+    ("05_async_order", Expect::Pass),
     ("06_map_set", Expect::Pass),
     ("07_json", Expect::KnownFailure(DATE_JSON)),
     (
@@ -91,17 +89,14 @@ const LEDGER: &[(&str, Expect)] = &[
     ("20_tagged_template", Expect::Pass),
     ("21_sloppy_with_args", Expect::KnownFailure(SLOPPY_MODE)),
     ("22_eval_function", Expect::DeniedByDesign),
-    ("23_number_format", Expect::KnownFailure(NUMBER)),
+    ("23_number_format", Expect::Pass),
     ("24_date", Expect::KnownFailure(DATE_JSON)),
     ("25_getter_setter_proto", Expect::Pass),
     ("26_error_types", Expect::DeniedByDesign),
     ("27_weakmap_holes", Expect::KnownFailure(COLLECTIONS)),
     ("28_sort_stability", Expect::Pass),
     ("29_promise_all_race", Expect::Pass),
-    (
-        "30_async_iter",
-        Expect::KnownFailure(ASYNC_FUNCTION_EXPRESSIONS),
-    ),
+    ("30_async_iter", Expect::KnownFailure(ASYNC_ITERATION)),
     ("31_object_entries_order", Expect::Pass),
     ("32_instanceof_hasinstance", Expect::KnownFailure(SYMBOLS)),
     (
@@ -117,7 +112,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("40_exceptions_across_calls", Expect::Pass),
     ("41_int_overflow", Expect::Pass),
     ("42_int_overflow_loop", Expect::Pass),
-    ("43_arguments_object", Expect::KnownFailure(ARGUMENTS)),
+    ("43_arguments_object", Expect::Pass),
     (
         "44_regexp_backref_lookahead",
         Expect::KnownFailure(REGEXP_GRAMMAR),

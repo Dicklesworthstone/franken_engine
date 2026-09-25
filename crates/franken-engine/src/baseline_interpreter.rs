@@ -76,6 +76,7 @@ mod array_from;
 mod async_generator;
 mod json_parse;
 mod json_stringify;
+mod bigint_ops;
 mod object_integrity;
 mod primitive_conversion;
 mod reflect_invocation;
@@ -3158,6 +3159,12 @@ pub enum BuiltinFunctionKind {
     PromiseFinallyThrower,
     /// `Object.prototype.isPrototypeOf` (ES2020 19.1.3.3). Append only.
     ObjectPrototypeIsPrototypeOf,
+    /// `BigInt.prototype.toString` / `valueOf` / `toLocaleString` and
+    /// `BigInt.asUintN` / `asIntN` (ES2020 20.2). Append only.
+    BigIntToString,
+    BigIntValueOf,
+    BigIntAsUintN,
+    BigIntAsIntN,
 }
 
 impl BuiltinFunctionKind {
@@ -4850,6 +4857,10 @@ impl BuiltinFunction {
             | BuiltinFunctionKind::PromiseFinallyValueThunk
             | BuiltinFunctionKind::PromiseFinallyThrower => "",
             BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
+            BuiltinFunctionKind::BigIntToString => "toString",
+            BuiltinFunctionKind::BigIntValueOf => "valueOf",
+            BuiltinFunctionKind::BigIntAsUintN => "asUintN",
+            BuiltinFunctionKind::BigIntAsIntN => "asIntN",
         }
     }
 }
@@ -37815,6 +37826,60 @@ impl InterpreterCore {
                 let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.regexp_test_value(&receiver, &input)
             }
+            BuiltinFunctionKind::BigIntToString => {
+                // ES2020 20.2.3.3: thisBigIntValue, then a radix in 2..=36.
+                let Some(Value::BigInt(digits)) = &receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "BigInt receiver".to_string(),
+                        got: receiver.as_ref().map_or("undefined", Value::type_name).to_string(),
+                    });
+                };
+                let radix = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => 10,
+                    Some(arg) => Self::value_as_integer(&arg),
+                };
+                if !(2..=36).contains(&radix) {
+                    return Err(InterpreterError::RangeError {
+                        message: format!("toString() radix must be between 2 and 36 (got {radix})"),
+                    });
+                }
+                Ok(Value::str(bigint_ops::to_string_radix(&digits, radix as u32)))
+            }
+            BuiltinFunctionKind::BigIntValueOf => match receiver {
+                Some(value @ Value::BigInt(_)) => Ok(value),
+                other => Err(InterpreterError::TypeError {
+                    expected: "BigInt receiver".to_string(),
+                    got: other.as_ref().map_or("undefined", Value::type_name).to_string(),
+                }),
+            },
+            BuiltinFunctionKind::BigIntAsUintN | BuiltinFunctionKind::BigIntAsIntN => {
+                // ES2020 20.2.2.1-2: ToIndex(bits), then ToBigInt(bigint).
+                let bits = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let bits = match bits {
+                    Value::Undefined => 0.0,
+                    other => Self::coerce_to_float(&other)
+                        .map(|n| if n.is_nan() { 0.0 } else { n.trunc() })
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: "number-convertible bit count".to_string(),
+                            got: other.type_name().to_string(),
+                        })?,
+                };
+                if !(0.0..=9_007_199_254_740_991.0).contains(&bits) {
+                    return Err(InterpreterError::RangeError {
+                        message: "Invalid value: not (convertible to) a safe integer".to_string(),
+                    });
+                }
+                let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let Value::BigInt(digits) = self.to_bigint(value)? else {
+                    unreachable!("to_bigint returns a BigInt");
+                };
+                let result = if builtin.kind == BuiltinFunctionKind::BigIntAsUintN {
+                    bigint_ops::as_uint_n(bits as u64, &digits)
+                } else {
+                    bigint_ops::as_int_n(bits as u64, &digits)
+                };
+                Self::bigint_result(result)
+            }
             BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => {
                 // ES2020 19.1.3.3: a primitive V is never inherited from;
                 // otherwise walk V's chain for this (ToObject'd) receiver.
@@ -44327,6 +44392,9 @@ impl InterpreterCore {
                                 // Number.prototype methods, else undefined (bd-i08nh).
                                 Self::number_property_value,
                             ),
+                            Value::BigInt(_) => property_key
+                                .as_str()
+                                .map_or(Value::Undefined, Self::bigint_property_value),
                             // Functions are objects: reading `fn.prototype` returns the
                             // function's prototype object (where class instance methods
                             // live), matching what `Construct` links instances to so
@@ -47078,6 +47146,14 @@ impl InterpreterCore {
     fn eval_arith(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
+        let bigint_op = if op == "sub" {
+            bigint_ops::BigIntBinaryOp::Sub
+        } else {
+            bigint_ops::BigIntBinaryOp::Mul
+        };
+        if let Some(result) = Self::bigint_operands(&a, &b, bigint_op) {
+            return result;
+        }
 
         // Fast path: Int op Int stays in integer domain if safe and not producing -0.0
         if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
@@ -47119,6 +47195,9 @@ impl InterpreterCore {
     fn eval_div(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
+        if let Some(result) = Self::bigint_operands(&a, &b, bigint_ops::BigIntBinaryOp::Div) {
+            return result;
+        }
         let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} / {}", a.type_name(), b.type_name()),
@@ -47136,6 +47215,9 @@ impl InterpreterCore {
     fn eval_mod(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
+        if let Some(result) = Self::bigint_operands(&a, &b, bigint_ops::BigIntBinaryOp::Rem) {
+            return result;
+        }
 
         // Fast path: Int % Int stays in integer domain if non-zero divisor, safe, and not producing -0.0
         if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
@@ -47170,6 +47252,9 @@ impl InterpreterCore {
     fn eval_exp(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
+        if let Some(result) = Self::bigint_operands(&a, &b, bigint_ops::BigIntBinaryOp::Exp) {
+            return result;
+        }
         let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} ** {}", a.type_name(), b.type_name()),
@@ -47222,6 +47307,7 @@ impl InterpreterCore {
                 let inner = f.inner();
                 Ok(Value::Float(Float64::new(-inner)))
             }
+            Value::BigInt(digits) => Ok(Value::BigInt(Arc::from(bigint_ops::negate(digits)))),
             _ => {
                 let number =
                     Self::coerce_to_float(&value).ok_or_else(|| InterpreterError::TypeError {
@@ -47259,6 +47345,9 @@ impl InterpreterCore {
 
     fn eval_bit_not(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
+        if let Value::BigInt(digits) = &value {
+            return Ok(Value::BigInt(Arc::from(bigint_ops::bitwise_not(digits))));
+        }
         // JS bitwise ops: ToInt32 conversion
         let number = match &value {
             Value::Int(n) => *n as i32,
@@ -47298,6 +47387,14 @@ impl InterpreterCore {
                 }
             };
             return Ok(Value::Bool(result));
+        }
+        if let Some(ordering) = Self::bigint_relational_order(&a, &b)? {
+            return Ok(Value::Bool(ordering.is_some_and(|ordering| match op {
+                "<" => ordering == Ordering::Less,
+                "<=" => ordering != Ordering::Greater,
+                ">" => ordering == Ordering::Greater,
+                _ => ordering != Ordering::Less,
+            })));
         }
 
         // Numeric comparison using float (NaN comparisons return false)
@@ -47370,6 +47467,24 @@ impl InterpreterCore {
     fn eval_bitwise(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
+        if matches!(a, Value::BigInt(_)) || matches!(b, Value::BigInt(_)) {
+            let bigint_op = match op {
+                "&" => bigint_ops::BigIntBinaryOp::And,
+                "|" => bigint_ops::BigIntBinaryOp::Or,
+                "^" => bigint_ops::BigIntBinaryOp::Xor,
+                "<<" => bigint_ops::BigIntBinaryOp::Shl,
+                ">>" => bigint_ops::BigIntBinaryOp::Shr,
+                // BigInt::unsignedRightShift throws (ES2020 6.1.6.2.11).
+                _ => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "BigInt operator other than >>>".to_string(),
+                        got: op.to_string(),
+                    });
+                }
+            };
+            return Self::bigint_operands(&a, &b, bigint_op)
+                .expect("a BigInt operand selects the BigInt path");
+        }
 
         // JS ToInt32: truncate toward zero then reduce modulo 2^32 (wrapping,
         // not saturating — see `js_to_int32`).
@@ -49718,6 +49833,19 @@ impl InterpreterCore {
             )),
             "toString" => Value::BuiltinFunction(BuiltinFunction::number_to_string()),
             "valueOf" => Value::BuiltinFunction(BuiltinFunction::number_value_of()),
+            _ => Value::Undefined,
+        }
+    }
+
+    /// `BigInt.prototype` methods on a BigInt primitive (ES2020 20.2.3).
+    fn bigint_property_value(key: &str) -> Value {
+        match key {
+            "toString" | "toLocaleString" => {
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntToString))
+            }
+            "valueOf" => {
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntValueOf))
+            }
             _ => Value::Undefined,
         }
     }
@@ -61023,6 +61151,9 @@ impl InterpreterCore {
             Value::Int(_) | Value::Float(_) => Ok(key
                 .as_str()
                 .map_or(Value::Undefined, Self::number_property_value)),
+            Value::BigInt(_) => Ok(key
+                .as_str()
+                .map_or(Value::Undefined, Self::bigint_property_value)),
             Value::BuiltinFunction(builtin) => {
                 let Some(property_object) = Self::builtin_function_property_object(&builtin) else {
                     return Ok(Value::Undefined);
@@ -62258,6 +62389,14 @@ impl InterpreterCore {
         right: &Value,
         operator: &str,
     ) -> Result<Value, InterpreterError> {
+        let bigint_op = if operator == "sub" {
+            bigint_ops::BigIntBinaryOp::Sub
+        } else {
+            bigint_ops::BigIntBinaryOp::Mul
+        };
+        if let Some(result) = Self::bigint_operands(left, right, bigint_op) {
+            return result;
+        }
         if let (Value::Int(left_int), Value::Int(right_int)) = (left, right) {
             return match operator {
                 "sub" => Ok(js_int_sub(*left_int, *right_int)),
@@ -62292,6 +62431,9 @@ impl InterpreterCore {
     }
 
     fn eval_div_values(left: &Value, right: &Value) -> Result<Value, InterpreterError> {
+        if let Some(result) = Self::bigint_operands(left, right, bigint_ops::BigIntBinaryOp::Div) {
+            return result;
+        }
         let left_number =
             Self::coerce_to_float(left).ok_or_else(|| InterpreterError::TypeError {
                 expected: "number".to_string(),
@@ -62309,6 +62451,83 @@ impl InterpreterCore {
         // bd-9vouw.2: preserve -0 and keep Value::Int to the safe-integer
         // range, exactly like the main evaluator.
         Ok(js_number_to_value(value))
+    }
+
+    /// A BigInt operation's value, or its RangeError (bd-9vouw.54).
+    fn bigint_result(
+        result: Result<String, bigint_ops::BigIntError>,
+    ) -> Result<Value, InterpreterError> {
+        result
+            .map(|digits| Value::BigInt(Arc::from(digits)))
+            .map_err(|error| InterpreterError::RangeError {
+                message: error.message().to_string(),
+            })
+    }
+
+    /// `op` on two numeric operands when either is a BigInt: both BigInt
+    /// computes, a BigInt mixed with anything else is a TypeError (ES2020
+    /// 12.15.3 step 7 / 6.1.6.2). `None` when neither operand is a BigInt.
+    fn bigint_operands(
+        left: &Value,
+        right: &Value,
+        op: bigint_ops::BigIntBinaryOp,
+    ) -> Option<Result<Value, InterpreterError>> {
+        match (left, right) {
+            (Value::BigInt(x), Value::BigInt(y)) => {
+                Some(Self::bigint_result(bigint_ops::binary(op, x, y)))
+            }
+            (Value::BigInt(_), other) | (other, Value::BigInt(_)) => {
+                Some(Err(InterpreterError::TypeError {
+                    expected: "BigInt operands on both sides (cannot mix BigInt and other types)"
+                        .to_string(),
+                    got: other.type_name().to_string(),
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    /// IsLessThan-style order when a BigInt is involved (ES2020 7.2.13
+    /// steps 3-4): `Some(None)` is undefined (NaN or an unparsable string).
+    fn bigint_relational_order(
+        left: &Value,
+        right: &Value,
+    ) -> Result<Option<Option<Ordering>>, InterpreterError> {
+        let against = |bigint: &str, other: &Value| -> Result<Option<Ordering>, InterpreterError> {
+            match other {
+                Value::BigInt(other) => Ok(Some(bigint_ops::compare(bigint, other))),
+                Value::Str(text) => Ok(bigint_ops::from_string(&text.to_string())
+                    .map(|other| bigint_ops::compare(bigint, &other))),
+                other => {
+                    let number =
+                        Self::coerce_to_float(other).ok_or_else(|| InterpreterError::TypeError {
+                            expected: "comparable primitive".to_string(),
+                            got: other.type_name().to_string(),
+                        })?;
+                    Ok(bigint_ops::compare_with_number(bigint, number))
+                }
+            }
+        };
+        match (left, right) {
+            (Value::BigInt(x), other) => against(x, other).map(Some),
+            (other, Value::BigInt(y)) => {
+                against(y, other).map(|ordering| Some(ordering.map(Ordering::reverse)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Abstract equality of a BigInt with a non-BigInt primitive (ES2020
+    /// 7.2.14 steps 6-7 and 12-13).
+    fn bigint_loosely_equals(bigint: &str, other: &Value) -> bool {
+        match other {
+            Value::Str(text) => bigint_ops::from_string(&text.to_string())
+                .is_some_and(|other| bigint_ops::compare(bigint, &other) == Ordering::Equal),
+            Value::Int(_) | Value::Float(_) | Value::Bool(_) => Self::coerce_to_float(other)
+                .and_then(|number| bigint_ops::compare_with_number(bigint, number))
+                == Some(Ordering::Equal),
+            _ => false,
+        }
     }
 
     fn add_bigint_decimal(lhs: &str, rhs: &str) -> String {
@@ -62437,6 +62656,11 @@ impl InterpreterCore {
             (Value::Int(n), Value::Float(f)) | (Value::Float(f), Value::Int(n)) => {
                 let fv = f.inner();
                 if fv.is_nan() { false } else { *n as f64 == fv }
+            }
+            (Value::BigInt(bigint), other) | (other, Value::BigInt(bigint))
+                if !matches!(other, Value::Null | Value::Undefined) =>
+            {
+                Self::bigint_loosely_equals(bigint, other)
             }
             (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
             // ES2020 §7.2.14: null/undefined are only == to each other, never
@@ -83449,6 +83673,12 @@ impl InterpreterCore {
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
             }),
+            "asUintN" if name == "BigInt" => {
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsUintN))
+            }
+            "asIntN" if name == "BigInt" => {
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsIntN))
+            }
             "BYTES_PER_ELEMENT" if TypedArrayKind::from_type_name(name).is_some() => {
                 let kind = TypedArrayKind::from_type_name(name).expect("guarded above");
                 Value::Int(i64::try_from(kind.element_size()).unwrap_or(i64::MAX))
@@ -83572,6 +83802,19 @@ impl InterpreterCore {
     }
 
     /// `BigInt(value)` for the primitive inputs the engine represents.
+    /// ToBigInt (ES2020 7.1.13): Numbers are a TypeError, unlike `BigInt()`.
+    fn to_bigint(&mut self, value: Value) -> Result<Value, InterpreterError> {
+        match value {
+            Value::Int(_) | Value::Float(_) | Value::Undefined | Value::Null | Value::Symbol(_) => {
+                Err(InterpreterError::TypeError {
+                    expected: "value convertible to BigInt".to_string(),
+                    got: value.type_name().to_string(),
+                })
+            }
+            other => self.bigint_from_value(other),
+        }
+    }
+
     fn bigint_from_value(&mut self, value: Value) -> Result<Value, InterpreterError> {
         let digits = match value {
             Value::BigInt(digits) => return Ok(Value::BigInt(digits)),
@@ -83590,25 +83833,14 @@ impl InterpreterCore {
             }
             Value::Str(s) => {
                 let text = s.to_string();
-                let trimmed = text.trim();
-                let (sign, body) = match trimmed.strip_prefix('-') {
-                    Some(rest) => ("-", rest),
-                    None => ("", trimmed.strip_prefix('+').unwrap_or(trimmed)),
-                };
-                if body.is_empty() {
-                    "0".to_string()
-                } else if body.bytes().all(|b| b.is_ascii_digit()) {
-                    let canonical = body.trim_start_matches('0');
-                    if canonical.is_empty() {
-                        "0".to_string()
-                    } else {
-                        format!("{sign}{canonical}")
+                match bigint_ops::from_string(&text) {
+                    Some(digits) => digits,
+                    None => {
+                        return Err(self.throw_js_error(
+                            "SyntaxError",
+                            format!("Cannot convert {text} to a BigInt"),
+                        ));
                     }
-                } else {
-                    return Err(self.throw_js_error(
-                        "SyntaxError",
-                        format!("Cannot convert {text} to a BigInt"),
-                    ));
                 }
             }
             other => {

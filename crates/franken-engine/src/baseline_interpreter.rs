@@ -74,9 +74,9 @@ use zeroize::Zeroizing;
 
 mod array_from;
 mod async_generator;
+mod bigint_ops;
 mod json_parse;
 mod json_stringify;
-mod bigint_ops;
 mod object_integrity;
 mod primitive_conversion;
 mod reflect_invocation;
@@ -36044,31 +36044,22 @@ impl InterpreterCore {
                                 .unwrap_or(Value::Undefined),
                         );
                     }
+                    // SortCompare (ES2020 22.1.3.27.1): undefined sorts last
+                    // and never reaches the comparator.
+                    let undefined_count = elements
+                        .iter()
+                        .filter(|element| matches!(element, Value::Undefined))
+                        .count();
+                    elements.retain(|element| !matches!(element, Value::Undefined));
                     if let Some(comparator) = comparator {
-                        // Insertion sort: keep the comparator's re-entrant call
-                        // outside any closure borrowing `self`.
-                        for i in 1..elements.len() {
-                            let mut j = i;
-                            while j > 0 {
-                                let ordering = self.sort_compare(
-                                    module,
-                                    &comparator,
-                                    &elements[j - 1],
-                                    &elements[j],
-                                )?;
-                                if ordering == std::cmp::Ordering::Greater {
-                                    elements.swap(j - 1, j);
-                                    j -= 1;
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
+                        elements =
+                            self.merge_sort_with_comparator(module, &comparator, elements)?;
                     } else {
                         elements.sort_by(|a, b| {
                             Self::sort_string_key(a).cmp(&Self::sort_string_key(b))
                         });
                     }
+                    elements.extend(std::iter::repeat_n(Value::Undefined, undefined_count));
                     let was_dense = self.array_cache_is_dense(arr_id);
                     for (index, element) in elements.into_iter().enumerate() {
                         self.set_object_property(arr_id, index.to_string(), element)?;
@@ -37843,7 +37834,7 @@ impl InterpreterCore {
                         message: format!("toString() radix must be between 2 and 36 (got {radix})"),
                     });
                 }
-                Ok(Value::str(bigint_ops::to_string_radix(&digits, radix as u32)))
+                Ok(Value::str(bigint_ops::to_string_radix(digits, radix as u32)))
             }
             BuiltinFunctionKind::BigIntValueOf => match receiver {
                 Some(value @ Value::BigInt(_)) => Ok(value),
@@ -37870,8 +37861,8 @@ impl InterpreterCore {
                     });
                 }
                 let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-                let Value::BigInt(digits) = self.to_bigint(value)? else {
-                    unreachable!("to_bigint returns a BigInt");
+                let Value::BigInt(digits) = self.coerce_to_bigint(value)? else {
+                    unreachable!("coerce_to_bigint returns a BigInt");
                 };
                 let result = if builtin.kind == BuiltinFunctionKind::BigIntAsUintN {
                     bigint_ops::as_uint_n(bits as u64, &digits)
@@ -43673,8 +43664,34 @@ impl InterpreterCore {
                     args,
                     dst,
                 } => {
-                    let receiver_val = self.read_reg(receiver)?;
-                    let callee_val = self.read_reg(callee)?;
+                    let mut receiver_val = self.read_reg(receiver)?;
+                    let mut callee_val = self.read_reg(callee)?;
+                    let (mut receiver, mut callee, mut args) = (receiver, callee, args);
+
+                    // `f.call(t, ...xs)` on an ordinary same-module function is
+                    // the call `t.f(...xs)` whose operands already sit in
+                    // registers: re-dispatch it in place rather than through an
+                    // isolated activation, which snapshots the execution state
+                    // and clones the whole module on every call. Generator,
+                    // async and foreign callees keep the isolated path.
+                    if let Value::BuiltinFunction(builtin) = &callee_val
+                        && builtin.kind == BuiltinFunctionKind::FunctionPrototypeCall
+                        && builtin.bound_object.is_none()
+                        && args.count > 0
+                        && matches!(receiver_val, Value::Closure(_) | Value::Function(_))
+                        && self
+                            .foreign_closure_module(&receiver_val, module)?
+                            .is_none()
+                    {
+                        callee = receiver;
+                        callee_val = receiver_val;
+                        receiver = args.start;
+                        receiver_val = self.read_reg(receiver)?;
+                        args = RegRange {
+                            start: args.start + 1,
+                            count: args.count - 1,
+                        };
+                    }
 
                     if let Value::BuiltinFunction(builtin) = callee_val {
                         return Ok(DispatchOutcome::BuiltinCall {
@@ -47586,8 +47603,8 @@ impl InterpreterCore {
                 Value::BuiltinFunction(builtin)
                     if Self::materialized_global_prototype_name(&builtin).is_some() =>
                 {
-                    let name = Self::materialized_global_prototype_name(&builtin)
-                        .expect("guarded above");
+                    let name =
+                        Self::materialized_global_prototype_name(&builtin).expect("guarded above");
                     self.ensure_builtin_prototype(name)?
                 }
                 other => {
@@ -49840,12 +49857,12 @@ impl InterpreterCore {
     /// `BigInt.prototype` methods on a BigInt primitive (ES2020 20.2.3).
     fn bigint_property_value(key: &str) -> Value {
         match key {
-            "toString" | "toLocaleString" => {
-                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntToString))
-            }
-            "valueOf" => {
-                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntValueOf))
-            }
+            "toString" | "toLocaleString" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::BigIntToString,
+            )),
+            "valueOf" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::BigIntValueOf,
+            )),
             _ => Value::Undefined,
         }
     }
@@ -51866,7 +51883,14 @@ impl InterpreterCore {
                     }
                     break;
                 }
-                match self.observable_prototype_link(object, owner) {
+                // Only stored links (bd-9vouw.34): array and object literals
+                // still initialize through [[Set]] (NewArray/NewObject plus
+                // SetProperty), so following the implicit Object.prototype /
+                // Array.prototype link here would let an inherited setter or
+                // read-only property there intercept or reject literal
+                // construction. Until literals lower to CreateDataProperty,
+                // [[Set]] keeps the pre-.34 behavior for the implicit link.
+                match object.prototype {
                     Some(prototype) => {
                         owner = prototype;
                         owner_depth += 1;
@@ -59556,6 +59580,7 @@ impl InterpreterCore {
     fn sort_string_key(value: &Value) -> String {
         match value {
             Value::Str(s) => s.to_string(),
+            Value::BigInt(digits) => digits.to_string(),
             Value::Int(n) => n.to_string(),
             Value::Float(f) => f.to_string(),
             Value::Bool(b) => b.to_string(),
@@ -59565,9 +59590,54 @@ impl InterpreterCore {
         }
     }
 
+    /// Stable bottom-up merge sort by a comparator (ES2019+ requires a stable
+    /// sort): O(n log n) comparator calls, where the insertion sort this
+    /// replaces made O(n^2) (5,000 elements took minutes). The comparator
+    /// re-enters the interpreter, so no closure borrows `self`; an abrupt
+    /// comparator leaves the caller's array untouched.
+    fn merge_sort_with_comparator(
+        &mut self,
+        module: &Ir3Module,
+        comparator: &Value,
+        elements: Vec<Value>,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let len = elements.len();
+        let mut source = elements;
+        let mut merged: Vec<Value> = Vec::with_capacity(len);
+        let mut width = 1usize;
+        while width < len {
+            merged.clear();
+            let mut start = 0usize;
+            while start < len {
+                let middle = start.saturating_add(width).min(len);
+                let end = start.saturating_add(width.saturating_mul(2)).min(len);
+                let (mut left, mut right) = (start, middle);
+                while left < middle && right < end {
+                    // Take the right run's element only when it orders strictly
+                    // before the left one, which keeps equal elements stable.
+                    let ordering =
+                        self.sort_compare(module, comparator, &source[left], &source[right])?;
+                    if ordering == std::cmp::Ordering::Greater {
+                        merged.push(source[right].clone());
+                        right += 1;
+                    } else {
+                        merged.push(source[left].clone());
+                        left += 1;
+                    }
+                }
+                merged.extend_from_slice(&source[left..middle]);
+                merged.extend_from_slice(&source[right..end]);
+                start = end;
+            }
+            std::mem::swap(&mut source, &mut merged);
+            width = width.saturating_mul(2);
+        }
+        Ok(source)
+    }
+
     /// Compare two elements via a user `Array.prototype.sort` comparator: the
-    /// sign of `comparator(a, b)` gives the order (negative → a first). A
-    /// non-numeric / NaN result is treated as equal.
+    /// sign of `ToNumber(comparator(a, b))` gives the order (negative → a
+    /// first); NaN is treated as equal.
     fn sort_compare(
         &mut self,
         module: &Ir3Module,
@@ -59581,10 +59651,12 @@ impl InterpreterCore {
             Value::Undefined,
             vec![a.clone(), b.clone()],
         )?;
+        // ToNumber of the result: a boolean comparator (`(a, b) => a > b`)
+        // orders by 1 / 0, and NaN is +0.
         let n = match result {
             Value::Int(i) => i as f64,
             Value::Float(f) => f.inner(),
-            _ => 0.0,
+            other => Self::coerce_to_float(&other).unwrap_or(0.0),
         };
         Ok(if n < 0.0 {
             std::cmp::Ordering::Less
@@ -61225,6 +61297,56 @@ impl InterpreterCore {
         result
     }
 
+    /// Whether every instruction reachable from `entry` (following jumps to a
+    /// return, throw or halt) is one the reducer mini-lane below executes.
+    fn simple_reduce_lane_supports(module: &Ir3Module, entry: usize) -> bool {
+        const MAX_SCANNED_INSTRUCTIONS: usize = 4096;
+        let mut pending = vec![entry];
+        let mut visited = BTreeSet::new();
+        while let Some(ip) = pending.pop() {
+            if !visited.insert(ip) {
+                continue;
+            }
+            if visited.len() > MAX_SCANNED_INSTRUCTIONS {
+                return false;
+            }
+            let Some(instruction) = module.instructions.get(ip) else {
+                return false;
+            };
+            match instruction {
+                Ir3Instruction::Return { .. }
+                | Ir3Instruction::Halt
+                | Ir3Instruction::Throw { .. } => {}
+                Ir3Instruction::Jump { target } => pending.push(*target as usize),
+                Ir3Instruction::JumpIf { target, .. } => {
+                    pending.push(*target as usize);
+                    pending.push(ip + 1);
+                }
+                Ir3Instruction::LoadInt { .. }
+                | Ir3Instruction::LoadFloat { .. }
+                | Ir3Instruction::LoadStr { .. }
+                | Ir3Instruction::LoadBool { .. }
+                | Ir3Instruction::LoadNull { .. }
+                | Ir3Instruction::LoadUndefined { .. }
+                | Ir3Instruction::LoadBigInt { .. }
+                | Ir3Instruction::LoadNewTarget { .. }
+                | Ir3Instruction::Move { .. }
+                | Ir3Instruction::Add { .. }
+                | Ir3Instruction::Sub { .. }
+                | Ir3Instruction::Mul { .. }
+                | Ir3Instruction::Div { .. }
+                | Ir3Instruction::GetProperty { .. }
+                | Ir3Instruction::SetProperty { .. }
+                | Ir3Instruction::LoadName { .. }
+                | Ir3Instruction::PutName { .. }
+                | Ir3Instruction::ResolveNameStatus { .. }
+                | Ir3Instruction::PutNameWithStatus { .. } => pending.push(ip + 1),
+                _ => return false,
+            }
+        }
+        true
+    }
+
     fn invoke_simple_reduce_callback_inner(
         &mut self,
         module: Option<&Ir3Module>,
@@ -61280,6 +61402,23 @@ impl InterpreterCore {
                 table_size: module.function_table.len() as u32,
             },
         )?;
+        if !Self::simple_reduce_lane_supports(module, function.entry as usize) {
+            // Calls, comparisons, allocation or block scopes: the ordinary
+            // callback path, chosen before the callback starts so no side
+            // effect is replayed (`(a, b) => a.concat(b)`, group-by and
+            // `if (...) { let ... }` reducers used to throw here).
+            return self.invoke_inline_method_call(
+                Some(module),
+                callback.clone(),
+                Value::Undefined,
+                vec![
+                    accumulator,
+                    current_value,
+                    Value::Int(element_index),
+                    Value::Object(array_id),
+                ],
+            );
+        }
         let previous_callback_temporary_bytes = self.simple_callback_temporary_bytes;
         let register_count = self.config.max_registers as usize;
         let register_carrier_bytes = u64::try_from(register_count)
@@ -62496,14 +62635,15 @@ impl InterpreterCore {
         let against = |bigint: &str, other: &Value| -> Result<Option<Ordering>, InterpreterError> {
             match other {
                 Value::BigInt(other) => Ok(Some(bigint_ops::compare(bigint, other))),
-                Value::Str(text) => Ok(bigint_ops::from_string(&text.to_string())
+                Value::Str(text) => Ok(bigint_ops::from_string(text.as_ref())
                     .map(|other| bigint_ops::compare(bigint, &other))),
                 other => {
-                    let number =
-                        Self::coerce_to_float(other).ok_or_else(|| InterpreterError::TypeError {
+                    let number = Self::coerce_to_float(other).ok_or_else(|| {
+                        InterpreterError::TypeError {
                             expected: "comparable primitive".to_string(),
                             got: other.type_name().to_string(),
-                        })?;
+                        }
+                    })?;
                     Ok(bigint_ops::compare_with_number(bigint, number))
                 }
             }
@@ -62521,11 +62661,13 @@ impl InterpreterCore {
     /// 7.2.14 steps 6-7 and 12-13).
     fn bigint_loosely_equals(bigint: &str, other: &Value) -> bool {
         match other {
-            Value::Str(text) => bigint_ops::from_string(&text.to_string())
+            Value::Str(text) => bigint_ops::from_string(text.as_ref())
                 .is_some_and(|other| bigint_ops::compare(bigint, &other) == Ordering::Equal),
-            Value::Int(_) | Value::Float(_) | Value::Bool(_) => Self::coerce_to_float(other)
-                .and_then(|number| bigint_ops::compare_with_number(bigint, number))
-                == Some(Ordering::Equal),
+            Value::Int(_) | Value::Float(_) | Value::Bool(_) => {
+                Self::coerce_to_float(other)
+                    .and_then(|number| bigint_ops::compare_with_number(bigint, number))
+                    == Some(Ordering::Equal)
+            }
             _ => false,
         }
     }
@@ -68749,6 +68891,16 @@ impl InterpreterCore {
         self.clear_pending_hostcall_result_label();
         self.builtin_dispatch_hit_unknown_member = false;
         let args_hash = self.hostcall_arguments_hash(args);
+        if cap.starts_with("builtin:Math") {
+            for offset in 0..args.count {
+                if let Value::BigInt(_) = self.read_reg(args.start + offset)? {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Number argument for a Math function".to_string(),
+                        got: "bigint (cannot convert a BigInt value to a number)".to_string(),
+                    });
+                }
+            }
+        }
         let outcome = match cap {
             "builtin:DestructureIteratorInit"
             | "builtin:DestructureIteratorNext"
@@ -83498,7 +83650,7 @@ impl InterpreterCore {
             "bind" => BuiltinFunctionKind::FunctionPrototypeBind,
             // Function.prototype inherits Object.prototype's own-property
             // queries (`fn.hasOwnProperty('x')`).
-            "hasOwnProperty" | "propertyIsEnumerable" => {
+            "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
                 return Self::object_prototype_method(key).map(Value::BuiltinFunction);
             }
             _ => return None,
@@ -83673,9 +83825,9 @@ impl InterpreterCore {
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
             }),
-            "asUintN" if name == "BigInt" => {
-                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsUintN))
-            }
+            "asUintN" if name == "BigInt" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::BigIntAsUintN,
+            )),
             "asIntN" if name == "BigInt" => {
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsIntN))
             }
@@ -83803,7 +83955,7 @@ impl InterpreterCore {
 
     /// `BigInt(value)` for the primitive inputs the engine represents.
     /// ToBigInt (ES2020 7.1.13): Numbers are a TypeError, unlike `BigInt()`.
-    fn to_bigint(&mut self, value: Value) -> Result<Value, InterpreterError> {
+    fn coerce_to_bigint(&mut self, value: Value) -> Result<Value, InterpreterError> {
         match value {
             Value::Int(_) | Value::Float(_) | Value::Undefined | Value::Null | Value::Symbol(_) => {
                 Err(InterpreterError::TypeError {
@@ -83955,7 +84107,8 @@ impl InterpreterCore {
         let map_method = Self::collection_prototype_method("Map", key).map(Value::BuiltinFunction);
         let set_method = Self::collection_prototype_method("Set", key).map(Value::BuiltinFunction);
         let function_method = Self::function_prototype_property(key);
-        let date_method = Self::collection_prototype_method("Date", key).map(Value::BuiltinFunction);
+        let date_method =
+            Self::collection_prototype_method("Date", key).map(Value::BuiltinFunction);
         let regexp_method =
             Self::collection_prototype_method("RegExp", key).map(Value::BuiltinFunction);
         let promise_method = match Self::promise_property_value(key) {
@@ -117711,7 +117864,11 @@ mod function_prototype_call_apply_tests_current {
                 .expect("invalid mapper register");
 
             let err = core
-                .dispatch_builtin_hostcall("builtin:ArrayFrom", RegRange { start: 0, count: 2 }, None)
+                .dispatch_builtin_hostcall(
+                    "builtin:ArrayFrom",
+                    RegRange { start: 0, count: 2 },
+                    None,
+                )
                 .expect_err("Array.from should reject non-callable mapFn");
             // The ordinary callback boundary seals native language errors into
             // guest objects before restoring its confidentiality context.
@@ -120110,7 +120267,8 @@ mod tests {
         let (mut reduce_short, module, left, right) = bigint_callback_fixture();
         let peak = bigint_callback_peak(&reduce_short, &left, &right);
         let baseline = reduce_short.estimated_memory_bytes();
-        reduce_short.config.max_total_memory_bytes = baseline.saturating_add(peak).saturating_sub(1);
+        reduce_short.config.max_total_memory_bytes =
+            baseline.saturating_add(peak).saturating_sub(1);
         assert!(matches!(
             reduce_short.invoke_simple_reduce_callback(
                 Some(&module),
@@ -120156,11 +120314,12 @@ mod tests {
         *module.instructions.last_mut().expect("callback return") = Ir3Instruction::Halt;
         let live_operands = InterpreterCore::estimate_string_bytes(&left)
             .saturating_add(InterpreterCore::estimate_string_bytes(&right));
-        let peak = live_operands.saturating_add(InterpreterCore::bigint_add_construction_peak_bytes(
-            &left, &right,
-        ));
+        let peak = live_operands.saturating_add(
+            InterpreterCore::bigint_add_construction_peak_bytes(&left, &right),
+        );
         let baseline = ordinary_short.estimated_memory_bytes();
-        ordinary_short.config.max_total_memory_bytes = baseline.saturating_add(peak).saturating_sub(1);
+        ordinary_short.config.max_total_memory_bytes =
+            baseline.saturating_add(peak).saturating_sub(1);
         assert!(matches!(
             ordinary_short.run_loop(&module),
             Err(InterpreterError::MemoryBudgetExceeded { .. })

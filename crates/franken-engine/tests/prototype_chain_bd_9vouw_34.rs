@@ -156,6 +156,33 @@ fn date_promise_and_regexp_have_intrinsic_prototypes() {
 }
 
 #[test]
+fn literals_initialize_past_inherited_read_only_properties_and_setters() {
+    // Array and object literals define their own properties
+    // (CreateDataProperty): an inherited read-only index, getter-only
+    // accessor or setter on the default prototypes must neither reject nor
+    // observe literal construction (Test262 11.1.4_5-6-1,
+    // Array/prototype/map/15.4.4.19-8-c-i-6).
+    check(
+        "Object.defineProperty(Array.prototype, '1', {value: 100, writable: false, \
+         configurable: true}); var arr = [101, 12]; \
+         var r = arr.hasOwnProperty('1') + ',' + arr[1]; delete Array.prototype[1]; r",
+        "true,12",
+    );
+    check(
+        "var calls = 0; Object.defineProperty(Object.prototype, 'x', {set: function (v) { \
+         calls++; }, configurable: true}); var o = {x: 1}; \
+         var r = calls + ',' + o.hasOwnProperty('x') + ',' + o.x; delete Object.prototype.x; r",
+        "0,true,1",
+    );
+    check(
+        "Object.defineProperty(Array.prototype, '0', {get: function () { return 9; }, \
+         configurable: true}); var t = ['abc'].map(function (v) { return v === 'abc'; }); \
+         var r = t[0]; delete Array.prototype[0]; r",
+        "true",
+    );
+}
+
+#[test]
 fn cyclic_prototypes_and_missing_create_argument_throw() {
     // `[]` inherits from Array.prototype, so making it Array.prototype's
     // prototype would close a cycle.

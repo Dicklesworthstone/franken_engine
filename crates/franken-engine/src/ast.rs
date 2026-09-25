@@ -1347,11 +1347,12 @@ pub struct MethodDefinition {
     pub computed: bool,
     pub span: SourceSpan,
     /// `async m() {}` (ES2020 14.7). Absent in ASTs serialized before it
-    /// was modeled.
-    #[serde(default)]
+    /// was modeled, and omitted when false so ordinary methods serialize
+    /// exactly as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_async: bool,
     /// `*m() {}` / `async *m() {}` (ES2020 14.4, 14.5).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_generator: bool,
 }
 

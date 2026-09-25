@@ -43,7 +43,6 @@ const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
 const COLLECTIONS: &str = "bd-performance-conformance-bridge-tu32j.16.6";
 const TYPED_ARRAYS: &str = "bd-performance-conformance-bridge-tu32j.16.7";
 const SYMBOLS: &str = "bd-performance-conformance-bridge-tu32j.16.17";
-const BIGINT: &str = "bd-performance-conformance-bridge-tu32j.16.19";
 const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 /// `for await` lowers to synchronous for-of (no `@@asyncIterator` dispatch).
 const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
@@ -58,7 +57,7 @@ const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
 /// caller (bd-9vouw.26), and 23 and 43 with Number.prototype.toPrecision and
 /// the arguments object (f2870e990, bd-9vouw.25), and 07, 09, 24, 34 and 45
 /// with Date methods, RegExp replace and the URI globals (861c1a92c /
-/// 247a2a99c, bd-9vouw.51-.53).
+/// 247a2a99c, bd-9vouw.51-.53), and 13 with BigInt arithmetic (bd-9vouw.54).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::Pass),
@@ -75,7 +74,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("10_proxy_reflect", Expect::Pass),
     ("11_symbol_iter", Expect::Pass),
     ("12_typed_arrays", Expect::KnownFailure(TYPED_ARRAYS)),
-    ("13_bigint", Expect::KnownFailure(BIGINT)),
+    ("13_bigint", Expect::Pass),
     ("14_labels_switch", Expect::Pass),
     ("15_try_finally", Expect::Pass),
     ("16_defineProperty", Expect::KnownFailure(DESCRIPTORS)),

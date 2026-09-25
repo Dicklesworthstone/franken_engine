@@ -6282,7 +6282,11 @@ fn try_parse_unary_prefix(
             b'-' if !expr.as_bytes()[1].is_ascii_digit() => {
                 (Some(UnaryOperator::Negate), &expr[1..])
             }
-            b'+' if !expr.as_bytes()[1].is_ascii_digit() => {
+            // `+1n` is unary plus on a BigInt (a runtime TypeError), not a
+            // signed literal like `+1`.
+            b'+' if !expr.as_bytes()[1].is_ascii_digit()
+                || parse_bigint_numeric_literal(&expr[1..]).is_some() =>
+            {
                 (Some(UnaryOperator::UnaryPlus), &expr[1..])
             }
             _ => (None, expr),
@@ -7759,10 +7763,10 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
 }
 
 fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
+    // `-1n` folds to a negative literal. `+1n` must not: unary `+` on a BigInt
+    // throws a TypeError (ES2020 12.5.6.1), so it stays a unary expression.
     let (is_neg, digits) = if let Some(rest) = input.strip_prefix('-') {
         (true, rest)
-    } else if let Some(rest) = input.strip_prefix('+') {
-        (false, rest)
     } else {
         (false, input)
     };

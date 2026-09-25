@@ -68,5 +68,9 @@ fn own_properties_shadow_object_prototype_methods() {
 #[test]
 fn array_exotics_still_inherit_object_prototype_methods() {
     assert_eq!(eval_value("let a = [10]; a.hasOwnProperty(\"0\");"), "true");
-    assert_eq!(eval_value("let a = [10]; a.toString();"), "[object Array]");
+    // Array.prototype.toString shadows Object.prototype.toString and joins
+    // (ES2020 22.1.3.30); Node prints "10". The engine already printed "10"
+    // (at 6eae41f98, before bd-9vouw.34); the old "[object Array]"
+    // expectation was stale and this assertion was red.
+    assert_eq!(eval_value("let a = [10]; a.toString();"), "10");
 }

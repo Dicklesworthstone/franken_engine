@@ -131,7 +131,7 @@ expression: scrubbed_actual
           },
           {
             "key": {
-              "Identifier": "async request"
+              "Identifier": "request"
             },
             "kind": "Method",
             "params": [
@@ -776,7 +776,8 @@ expression: scrubbed_actual
               "start_column": "[START_COLUMN]",
               "end_line": "[END_LINE]",
               "end_column": "[END_COLUMN]"
-            }
+            },
+            "is_async": true
           },
           {
             "key": {

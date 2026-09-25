@@ -16,10 +16,10 @@ use num_bigint::{BigInt, Sign};
 /// operation, including the decimal conversion, within a bounded time.
 pub(super) const MAX_BIGINT_BITS: u64 = 1 << 20;
 
-/// Binary BigInt operators (ES2020 6.1.6.2). `>>>` has no BigInt form.
+/// Binary BigInt operators (ES2020 6.1.6.2). `>>>` has no BigInt form; `+`
+/// keeps its preflighted decimal path (`add_bigint_decimal`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BigIntBinaryOp {
-    Add,
     Sub,
     Mul,
     Div,
@@ -72,7 +72,6 @@ pub(super) fn binary(op: BigIntBinaryOp, left: &str, right: &str) -> Result<Stri
     let x = parse(left);
     let y = parse(right);
     let result = match op {
-        BigIntBinaryOp::Add => x + y,
         BigIntBinaryOp::Sub => x - y,
         BigIntBinaryOp::Mul => {
             if x.bits().saturating_add(y.bits()) > MAX_BIGINT_BITS.saturating_add(1) {
@@ -133,10 +132,20 @@ fn shift_left(value: &BigInt, amount: &BigInt) -> Result<String, BigIntError> {
     }
     if amount.sign() == Sign::Minus {
         let Ok(right) = u64::try_from(amount.magnitude()) else {
-            return Ok(if value.sign() == Sign::Minus { "-1" } else { "0" }.to_string());
+            return Ok(if value.sign() == Sign::Minus {
+                "-1"
+            } else {
+                "0"
+            }
+            .to_string());
         };
         if right >= value.bits() {
-            return Ok(if value.sign() == Sign::Minus { "-1" } else { "0" }.to_string());
+            return Ok(if value.sign() == Sign::Minus {
+                "-1"
+            } else {
+                "0"
+            }
+            .to_string());
         }
         return bounded(value >> right);
     }
@@ -191,19 +200,6 @@ pub(super) fn compare_with_number(bigint: &str, number: f64) -> Option<Ordering>
     }
 }
 
-/// Number(bigint): the nearest double, ties to even.
-pub(super) fn to_f64(text: &str) -> f64 {
-    text.parse::<f64>().unwrap_or(f64::NAN)
-}
-
-/// NumberToBigInt (ES2020 20.2.1.1.1): `None` for a non-integral Number.
-pub(super) fn from_integral_f64(number: f64) -> Option<String> {
-    (number.is_finite() && number.fract() == 0.0).then(|| {
-        let text = format!("{number:.0}");
-        if text == "-0" { "0".to_string() } else { text }
-    })
-}
-
 /// StringToBigInt (ES2020 7.1.14): an optionally signed decimal integer, or a
 /// `0x`/`0o`/`0b` literal, surrounded by whitespace; the empty string is 0n.
 /// `None` when the text is not such a literal.
@@ -212,9 +208,16 @@ pub(super) fn from_string(text: &str) -> Option<String> {
     if text.is_empty() {
         return Some("0".to_string());
     }
-    let prefixed = [("0x", 16), ("0X", 16), ("0o", 8), ("0O", 8), ("0b", 2), ("0B", 2)]
-        .into_iter()
-        .find_map(|(prefix, radix)| text.strip_prefix(prefix).map(|digits| (digits, radix)));
+    let prefixed = [
+        ("0x", 16),
+        ("0X", 16),
+        ("0o", 8),
+        ("0O", 8),
+        ("0b", 2),
+        ("0B", 2),
+    ]
+    .into_iter()
+    .find_map(|(prefix, radix)| text.strip_prefix(prefix).map(|digits| (digits, radix)));
     let (digits, radix, negative) = match prefixed {
         Some((digits, radix)) => (digits, radix, false),
         None => match text.strip_prefix('-') {

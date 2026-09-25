@@ -22,10 +22,9 @@ This specification proves:
 Related: ADR-0006 (label propagation), ADR-0007 (Lean 4 selection), bd-cixqu.7.3
 -/
 
-import Mathlib.Order.Lattice
+import Mathlib.Order.Lattice.Basic
 import Mathlib.Order.BoundedOrder
 import Mathlib.Data.Fintype.Basic
-import Mathlib.Tactic
 
 -- =============================================================================
 -- LabelClass: Security level labels (Public ≤ Internal ≤ ... ≤ TopSecret)
@@ -39,7 +38,6 @@ inductive LabelClass : Type
   | Confidential : LabelClass  -- level 2
   | Secret        : LabelClass  -- level 3
   | TopSecret     : LabelClass  -- level 4
-deriving DecidableEq, Repr
 
 namespace LabelClass
 
@@ -51,37 +49,33 @@ def level : LabelClass → Nat
   | Secret => 3
   | TopSecret => 4
 
+/-- Decidable equality for LabelClass -/
+instance : DecidableEq LabelClass := by
+  intro a b
+  cases a <;> cases b <;> simp [level] <;>
+  first | exact isTrue rfl | exact isFalse (by simp)
+
 /-- Finite type instance -/
 instance : Fintype LabelClass := by
   refine ⟨{Public, Internal, Confidential, Secret, TopSecret}, ?_⟩
   intro x
   cases x <;> simp
 
-/-- Partial order based on security level (lower level ≤ higher level). -/
-instance : PartialOrder LabelClass where
+/-- Partial order based on security level (lower level ≤ higher level) -/
+instance : LE LabelClass where
   le := fun a b => a.level ≤ b.level
+
+instance : LT LabelClass where
   lt := fun a b => a.level < b.level
-  le_refl := by
-    intro a
-    exact Nat.le_refl a.level
-  le_trans := by
-    intro a b c h_ab h_bc
-    exact Nat.le_trans h_ab h_bc
-  le_antisymm := by
-    intro a b h_ab h_ba
-    cases a <;> cases b <;> simp [level] at h_ab h_ba ⊢ <;> omega
-  lt_iff_le_not_le := by
-    intro a b
-    cases a <;> cases b <;> simp [level]
 
 /-- Decidable ordering -/
 instance decidableLE : DecidableRel (@LE.le LabelClass _) := by
   intro a b
-  infer_instance
+  exact Nat.decidable_le a.level b.level
 
 instance decidableLT : DecidableRel (@LT.lt LabelClass _) := by
   intro a b
-  infer_instance
+  exact Nat.decidable_lt a.level b.level
 
 /-- Join operation (least upper bound) - returns higher security level -/
 def join : LabelClass → LabelClass → LabelClass
@@ -97,26 +91,42 @@ instance : Lattice LabelClass where
   inf := meet
   le_sup_left := by
     intro a b
-    cases a <;> cases b <;> native_decide
+    simp [join]
+    split_ifs with h
+    · rfl
+    · simp [LE.le, level]
+      omega
   le_sup_right := by
     intro a b
-    cases a <;> cases b <;> native_decide
+    simp [join]
+    split_ifs with h
+    · simp [LE.le, level]
+      omega
+    · rfl
   sup_le := by
     intro a b c h1 h2
     simp [join]
-    split_ifs
+    split_ifs with h
     · exact h1
     · exact h2
   inf_le_left := by
     intro a b
-    cases a <;> cases b <;> native_decide
+    simp [meet]
+    split_ifs with h
+    · rfl
+    · simp [LE.le, level]
+      omega
   inf_le_right := by
     intro a b
-    cases a <;> cases b <;> native_decide
+    simp [meet]
+    split_ifs with h
+    · simp [LE.le, level]
+      omega
+    · rfl
   le_inf := by
     intro a b c h1 h2
     simp [meet]
-    split_ifs
+    split_ifs with h
     · exact h1
     · exact h2
 
@@ -126,10 +136,12 @@ instance : BoundedOrder LabelClass where
   bot := Public
   le_top := by
     intro a
-    cases a <;> native_decide
+    simp [LE.le, level]
+    cases a <;> norm_num
   bot_le := by
     intro a
-    cases a <;> native_decide
+    simp [LE.le, level]
+    cases a <;> norm_num
 
 -- =============================================================================
 -- Lattice Axiom Proofs for LabelClass
@@ -137,35 +149,57 @@ instance : BoundedOrder LabelClass where
 
 /-- Idempotence: a ⊔ a = a -/
 theorem join_idempotent (a : LabelClass) : a ⊔ a = a := by
-  cases a <;> native_decide
+  simp [Lattice.sup, join]
+  rfl
 
 /-- Idempotence: a ⊓ a = a -/
 theorem meet_idempotent (a : LabelClass) : a ⊓ a = a := by
-  cases a <;> native_decide
+  simp [Lattice.inf, meet]
+  rfl
 
 /-- Commutativity: a ⊔ b = b ⊔ a -/
 theorem join_commutative (a b : LabelClass) : a ⊔ b = b ⊔ a := by
-  cases a <;> cases b <;> native_decide
+  simp [Lattice.sup, join]
+  split_ifs with h1 h2
+  · simp [LE.le, level] at h2
+    omega
+  · simp [LE.le, level] at h1
+    omega
+  · rfl
+  · simp [LE.le, level] at h1 h2
+    omega
 
 /-- Commutativity: a ⊓ b = b ⊓ a -/
 theorem meet_commutative (a b : LabelClass) : a ⊓ b = b ⊓ a := by
-  cases a <;> cases b <;> native_decide
+  simp [Lattice.inf, meet]
+  split_ifs with h1 h2
+  · simp [LE.le, level] at h2
+    omega
+  · simp [LE.le, level] at h1
+    omega
+  · rfl
+  · simp [LE.le, level] at h1 h2
+    omega
 
 /-- Associativity: (a ⊔ b) ⊔ c = a ⊔ (b ⊔ c) -/
 theorem join_associative (a b c : LabelClass) : (a ⊔ b) ⊔ c = a ⊔ (b ⊔ c) := by
-  cases a <;> cases b <;> cases c <;> native_decide
+  simp [Lattice.sup, join, level]
+  split_ifs <;> simp [LE.le, level] at * <;> omega
 
 /-- Associativity: (a ⊓ b) ⊓ c = a ⊓ (b ⊓ c) -/
 theorem meet_associative (a b c : LabelClass) : (a ⊓ b) ⊓ c = a ⊓ (b ⊓ c) := by
-  cases a <;> cases b <;> cases c <;> native_decide
+  simp [Lattice.inf, meet, level]
+  split_ifs <;> simp [LE.le, level] at * <;> omega
 
 /-- Absorption: a ⊔ (a ⊓ b) = a -/
 theorem join_absorption (a b : LabelClass) : a ⊔ (a ⊓ b) = a := by
-  cases a <;> cases b <;> native_decide
+  simp [Lattice.sup, Lattice.inf, join, meet, level]
+  split_ifs <;> simp [LE.le, level] at * <;> omega
 
 /-- Absorption: a ⊓ (a ⊔ b) = a -/
 theorem meet_absorption (a b : LabelClass) : a ⊓ (a ⊔ b) = a := by
-  cases a <;> cases b <;> native_decide
+  simp [Lattice.sup, Lattice.inf, join, meet, level]
+  split_ifs <;> simp [LE.le, level] at * <;> omega
 
 end LabelClass
 
@@ -181,7 +215,6 @@ inductive Clearance : Type
   | AuditedSink    : Clearance  -- level 2, up to Confidential with audit
   | SealedSink     : Clearance  -- level 3, up to Secret with declassification
   | NeverSink      : Clearance  -- level 4, only Public
-deriving DecidableEq, Repr
 
 namespace Clearance
 
@@ -201,36 +234,32 @@ def maxLabelLevel : Clearance → Nat
   | SealedSink => 3     -- Up to Secret
   | NeverSink => 0      -- Only Public
 
+/-- Decidable equality -/
+instance : DecidableEq Clearance := by
+  intro a b
+  cases a <;> cases b <;> simp [level] <;>
+  first | exact isTrue rfl | exact isFalse (by simp)
+
 /-- Finite type instance -/
 instance : Fintype Clearance := by
   refine ⟨{OpenSink, RestrictedSink, AuditedSink, SealedSink, NeverSink}, ?_⟩
   intro x
   cases x <;> simp
 
-/-- Partial order: lower clearance level ≤ higher clearance level. -/
-instance : PartialOrder Clearance where
+/-- Partial order: lower clearance level ≤ higher clearance level -/
+instance : LE Clearance where
   le := fun a b => a.level ≤ b.level
+
+instance : LT Clearance where
   lt := fun a b => a.level < b.level
-  le_refl := by
-    intro a
-    exact Nat.le_refl a.level
-  le_trans := by
-    intro a b c h_ab h_bc
-    exact Nat.le_trans h_ab h_bc
-  le_antisymm := by
-    intro a b h_ab h_ba
-    cases a <;> cases b <;> simp [level] at h_ab h_ba ⊢ <;> omega
-  lt_iff_le_not_le := by
-    intro a b
-    cases a <;> cases b <;> simp [level]
 
 instance decidableLE : DecidableRel (@LE.le Clearance _) := by
   intro a b
-  infer_instance
+  exact Nat.decidable_le a.level b.level
 
 instance decidableLT : DecidableRel (@LT.lt Clearance _) := by
   intro a b
-  infer_instance
+  exact Nat.decidable_lt a.level b.level
 
 /-- Join operation (least upper bound) for clearance widening -/
 def join : Clearance → Clearance → Clearance
@@ -246,26 +275,42 @@ instance : Lattice Clearance where
   inf := meet
   le_sup_left := by
     intro a b
-    cases a <;> cases b <;> native_decide
+    simp [join]
+    split_ifs with h
+    · rfl
+    · simp [LE.le, level]
+      omega
   le_sup_right := by
     intro a b
-    cases a <;> cases b <;> native_decide
+    simp [join]
+    split_ifs with h
+    · simp [LE.le, level]
+      omega
+    · rfl
   sup_le := by
     intro a b c h1 h2
     simp [join]
-    split_ifs
+    split_ifs with h
     · exact h1
     · exact h2
   inf_le_left := by
     intro a b
-    cases a <;> cases b <;> native_decide
+    simp [meet]
+    split_ifs with h
+    · rfl
+    · simp [LE.le, level]
+      omega
   inf_le_right := by
     intro a b
-    cases a <;> cases b <;> native_decide
+    simp [meet]
+    split_ifs with h
+    · simp [LE.le, level]
+      omega
+    · rfl
   le_inf := by
     intro a b c h1 h2
     simp [meet]
-    split_ifs
+    split_ifs with h
     · exact h1
     · exact h2
 
@@ -275,10 +320,12 @@ instance : BoundedOrder Clearance where
   bot := OpenSink
   le_top := by
     intro a
-    cases a <;> native_decide
+    simp [LE.le, level]
+    cases a <;> norm_num
   bot_le := by
     intro a
-    cases a <;> native_decide
+    simp [LE.le, level]
+    cases a <;> norm_num
 
 -- =============================================================================
 -- Flow Legality Specification
@@ -289,11 +336,10 @@ instance : BoundedOrder Clearance where
 def canFlowTo (label : LabelClass) (clearance : Clearance) : Prop :=
   label.level ≤ clearance.maxLabelLevel
 
-/-- Decidable instance for flow checking. -/
-instance (label : LabelClass) (clearance : Clearance) :
-    Decidable (canFlowTo label clearance) := by
-  unfold canFlowTo
-  infer_instance
+/-- Decidable instance for flow checking -/
+instance : DecidablePred₂ canFlowTo := by
+  intro label clearance
+  exact Nat.decidable_le label.level clearance.maxLabelLevel
 
 end Clearance
 
@@ -304,12 +350,14 @@ end Clearance
 /-- Public data can flow to any sink -/
 theorem public_flows_everywhere (c : Clearance) :
   Clearance.canFlowTo LabelClass.Public c := by
-  cases c <;> native_decide
+  simp [Clearance.canFlowTo, LabelClass.level, Clearance.maxLabelLevel]
+  cases c <;> norm_num
 
 /-- TopSecret can only flow to OpenSink -/
 theorem topSecret_only_to_openSink (c : Clearance) :
   Clearance.canFlowTo LabelClass.TopSecret c ↔ c = Clearance.OpenSink := by
-  cases c <;> native_decide
+  simp [Clearance.canFlowTo, LabelClass.level, Clearance.maxLabelLevel]
+  cases c <;> simp <;> norm_num
 
 /-- Flow checking respects label ordering: higher labels need higher clearance -/
 theorem flow_respects_ordering (l1 l2 : LabelClass) (c : Clearance)
@@ -352,4 +400,5 @@ theorem clearance_is_lattice :
     ((a ⊔ b) ⊔ c = a ⊔ (b ⊔ c)) ∧ ((a ⊓ b) ⊓ c = a ⊓ (b ⊓ c)) ∧
     (a ⊔ (a ⊓ b) = a) ∧ (a ⊓ (a ⊔ b) = a) := by
   intro a b c
-  cases a <;> cases b <;> cases c <;> native_decide
+  simp [Lattice.sup, Lattice.inf, Clearance.join, Clearance.meet]
+  cases a <;> cases b <;> cases c <;> simp [Clearance.level] <;> norm_num

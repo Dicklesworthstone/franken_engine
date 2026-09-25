@@ -108,3 +108,34 @@ d.speak() + " " + (d instanceof Animal) + " " + Dog.create("Ace").speak();"#,
         "Rex barks; Rex makes a sound true Ace barks; Ace makes a sound",
     );
 }
+
+/// bd-9vouw.32: `new` on a bound function constructs the target with the
+/// bound arguments (the bound `this` is ignored), `instanceof` looks through
+/// the binding, and `name` / `length` follow ES2020 19.2.3.2.
+#[test]
+fn bound_functions_construct_and_report_name_and_length() {
+    check(
+        "function P(x, y) { this.x = x; this.y = y; } var B = P.bind({ignored: true}, 1); \
+         var b = new B(2); [b.x, b.y, b instanceof P, b instanceof B, b.ignored].join()",
+        "1,2,true,true,",
+    );
+    check(
+        "class K { constructor(a, b) { this.s = a + b; } } var BK = K.bind(null, 10); \
+         [new BK(5).s, new BK(5) instanceof K].join()",
+        "15,true",
+    );
+    check(
+        "var arrow = () => 1; var BA = arrow.bind(null); var r; \
+         try { new BA(); r = 'constructed'; } catch (e) { r = e instanceof TypeError; } r",
+        "true",
+    );
+    check(
+        "function f(a, b, c) {} var g = f.bind(null, 1); [g.name, g.length, \
+         f.bind(null, 1, 2, 3, 4).length, g.bind(null, 2).name, g.bind(null, 2).length].join()",
+        "bound f,2,0,bound bound f,1",
+    );
+    check(
+        "var named = function named(a) {}; [named.bind(null).name, Math.max.bind(null).name].join()",
+        "bound named,bound max",
+    );
+}

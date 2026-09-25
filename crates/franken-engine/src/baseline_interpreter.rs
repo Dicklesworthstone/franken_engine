@@ -812,6 +812,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Date" => Some("Date"),
         "Promise" => Some("Promise"),
         "RegExp" => Some("RegExp"),
+        "WeakMap" => Some("WeakMap"),
+        "WeakSet" => Some("WeakSet"),
         _ => None,
     }
 }
@@ -3165,6 +3167,9 @@ pub enum BuiltinFunctionKind {
     BigIntValueOf,
     BigIntAsUintN,
     BigIntAsIntN,
+    /// `WeakSet.prototype.add/has/delete`; the method name travels in
+    /// `module_specifier`. Append only.
+    WeakSetMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4834,6 +4839,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::RegExpPrototypeExec => "exec",
             BuiltinFunctionKind::DateUtc => "UTC",
             BuiltinFunctionKind::DateParse => "parse",
+            BuiltinFunctionKind::WeakSetMethod => ["add", "has", "delete"]
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("weakSetMethod"),
             BuiltinFunctionKind::WeakMapMethod => ["get", "set", "has", "delete"]
                 .iter()
                 .copied()
@@ -4869,7 +4879,7 @@ impl BuiltinFunction {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 27] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 29] = [
     "Object",
     "Array",
     "Number",
@@ -4886,6 +4896,8 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 27] = [
     "EvalError",
     "URIError",
     "RegExp",
+    "WeakMap",
+    "WeakSet",
     // Binary data constructors: direct `new Uint8Array(...)` stays intercepted
     // at lowering; these bindings make the constructors usable as values
     // (Test262's testTypedArray.js lists all nine at load).
@@ -32245,15 +32257,19 @@ impl InterpreterCore {
         // undercharged the twelve canonical bindings by 384 bytes on this
         // target and made the debug recomputation assertion fail.
         let binding_label_bytes = std::mem::size_of::<Label>() as u64;
-        let object_entries = ["console", "performance", "Promise", "Math"];
+        let object_entries = ["console", "performance", "Math"];
         let object_bytes = Self::saturating_sum(object_entries.into_iter().map(|name| {
             MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                 .saturating_add(Self::estimate_string_bytes(name))
                 .saturating_add(binding_label_bytes)
         }));
+        // `Date` and `Promise` are constructible builtin function values
+        // (`alloc_date_global` / `alloc_promise_global`), not plain objects:
+        // each carries a builtin payload like the timer globals.
         let empty_builtin_bytes = Self::estimate_string_bytes("");
         let builtin_bytes = Self::saturating_sum(
-            std::iter::once("Date")
+            ["Date", "Promise"]
+                .into_iter()
                 .chain(Self::timer_global_kinds().into_iter().map(|(name, _)| name))
                 .map(|name| {
                     MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
@@ -33170,6 +33186,18 @@ impl InterpreterCore {
             .saturating_add(required_capabilities)
             .saturating_add(specialization)
             .saturating_add(Self::estimate_string_bytes(specifier))
+    }
+
+    /// Transient bytes of an isolated call's synthetic call site: a private
+    /// copy of the module for an async callee (which may park its activation
+    /// on it), otherwise the two trampoline instructions. Charging the module
+    /// walked every instruction on every callback.
+    fn isolated_call_site_bytes(module: &Ir3Module, callee_is_async: bool) -> u64 {
+        if callee_is_async {
+            Self::transient_module_wrapper_bytes(module)
+        } else {
+            2u64.saturating_mul(std::mem::size_of::<Ir3Instruction>() as u64)
+        }
     }
 
     fn transient_module_wrapper_bytes(module: &Ir3Module) -> u64 {
@@ -35092,6 +35120,15 @@ impl InterpreterCore {
                     .unwrap_or_default()
                     .to_string();
                 self.weakmap_method(&method, receiver.unwrap_or(Value::Undefined), args)
+            }
+            BuiltinFunctionKind::WeakSetMethod => {
+                let method = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.weakset_method(&method, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::DatePrototypeMethod => {
                 let method = builtin
@@ -42428,6 +42465,37 @@ impl InterpreterCore {
             .map(|completion| completion.value)
     }
 
+    /// `run_loop` with `trampoline` executing at instruction indices
+    /// `module.instructions.len()..`: the synthetic call site of an isolated
+    /// call, without cloning the module to append it.
+    fn run_loop_with_trampoline(
+        &mut self,
+        module: &Ir3Module,
+        trampoline: &[Ir3Instruction],
+    ) -> Result<Value, InterpreterError> {
+        self.run_loop_labeled_with_trampoline(module, None, trampoline)
+            .map(|completion| completion.value)
+    }
+
+    /// The instruction at `ip`: the module's own, else the trampoline's.
+    fn instruction_with_trampoline<'a>(
+        module: &'a Ir3Module,
+        trampoline: &'a [Ir3Instruction],
+        ip: usize,
+    ) -> Result<&'a Ir3Instruction, InterpreterError> {
+        module
+            .instructions
+            .get(ip)
+            .or_else(|| {
+                ip.checked_sub(module.instructions.len())
+                    .and_then(|offset| trampoline.get(offset))
+            })
+            .ok_or(InterpreterError::InstructionOutOfBounds {
+                ip,
+                count: module.instructions.len() + trampoline.len(),
+            })
+    }
+
     /// Run the dispatch loop, carrying the completion value's IFC label on
     /// every exit (bd-5ilh1). The labeled type forces each dispatch exit site
     /// to state its completion provenance explicitly — a new exit path cannot
@@ -42627,15 +42695,11 @@ impl InterpreterCore {
     fn finish_reentrant_instruction(
         &mut self,
         module: &Ir3Module,
+        trampoline: &[Ir3Instruction],
         instruction_ip: usize,
         profile_start: Option<std::time::Instant>,
     ) -> Result<(), InterpreterError> {
-        let instruction = module.instructions.get(instruction_ip).ok_or(
-            InterpreterError::InstructionOutOfBounds {
-                ip: instruction_ip,
-                count: module.instructions.len(),
-            },
-        )?;
+        let instruction = Self::instruction_with_trampoline(module, trampoline, instruction_ip)?;
         match *instruction {
             Ir3Instruction::ForInInit { src, dst } => {
                 let result_label = self.unary_operation_label(src)?;
@@ -43046,6 +43110,15 @@ impl InterpreterCore {
         module: &Ir3Module,
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<LabeledReturn, InterpreterError> {
+        self.run_loop_labeled_with_trampoline(module, compact_tier1, &[])
+    }
+
+    fn run_loop_labeled_with_trampoline(
+        &mut self,
+        module: &Ir3Module,
+        compact_tier1: Option<&CompactTier1Program>,
+        trampoline: &[Ir3Instruction],
+    ) -> Result<LabeledReturn, InterpreterError> {
         // Initialize CheckpointGuard if cancellation token is provided
         let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
             Some(CheckpointGuard::new(
@@ -43063,8 +43136,12 @@ impl InterpreterCore {
         };
 
         loop {
-            let result = match self.run_loop_dispatch(module, compact_tier1, &mut checkpoint_guard)
-            {
+            let result = match self.run_loop_dispatch(
+                module,
+                compact_tier1,
+                trampoline,
+                &mut checkpoint_guard,
+            ) {
                 Ok(DispatchOutcome::Complete(completion)) => Ok(Some(completion)),
                 Ok(DispatchOutcome::BuiltinCall {
                     builtin,
@@ -43081,7 +43158,7 @@ impl InterpreterCore {
                     instruction_ip,
                     profile_start,
                 }) => self
-                    .finish_reentrant_instruction(module, instruction_ip, profile_start)
+                    .finish_reentrant_instruction(module, trampoline, instruction_ip, profile_start)
                     .map(|()| None),
                 Err(error) => Err(error),
             };
@@ -43150,6 +43227,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         compact_tier1: Option<&CompactTier1Program>,
+        trampoline: &[Ir3Instruction],
         checkpoint_guard: &mut Option<CheckpointGuard>,
     ) -> Result<DispatchOutcome, InterpreterError> {
         loop {
@@ -43160,7 +43238,7 @@ impl InterpreterCore {
             // (bd-fqlfw.3.5.5). O(1) branch when disarmed.
             self.check_state_capture_boundary();
 
-            if self.ip >= module.instructions.len() {
+            if self.ip >= module.instructions.len() + trampoline.len() {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
                     if let Some(completion) =
@@ -43183,12 +43261,7 @@ impl InterpreterCore {
                 });
             }
 
-            let instr_ref = module.instructions.get(self.ip).ok_or(
-                InterpreterError::InstructionOutOfBounds {
-                    ip: self.ip,
-                    count: module.instructions.len(),
-                },
-            )?;
+            let instr_ref = Self::instruction_with_trampoline(module, trampoline, self.ip)?;
             // Profiling retains the canonical Tier-R handler so its existing
             // per-opcode recorder observes the original IR3 instruction. The
             // production lanes do not install this profiler today.
@@ -44759,7 +44832,13 @@ impl InterpreterCore {
                                 }
                             }
                             Value::BuiltinFunction(builtin) => {
-                                if property_key.as_str() == Some("prototype")
+                                if builtin.kind == BuiltinFunctionKind::BoundFunction
+                                    && let Some(key) = property_key.as_str()
+                                    && let Some(value) =
+                                        self.bound_function_property(module, &builtin, key)?
+                                {
+                                    value
+                                } else if property_key.as_str() == Some("prototype")
                                     && let Some(name) =
                                         Self::materialized_global_prototype_name(&builtin)
                                 {
@@ -45796,6 +45875,23 @@ impl InterpreterCore {
                                   in v1 (bd-8enww.3.3): invoke it as a plain call instead"
                                 .to_string(),
                         });
+                    }
+
+                    if let Value::BuiltinFunction(builtin) = &callee_val
+                        && builtin.kind == BuiltinFunctionKind::BoundFunction
+                    {
+                        let (result, result_label) = match self
+                            .construct_bound_function(module, builtin, args)
+                        {
+                            Ok(value) => value,
+                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
+                                None => continue,
+                                Some(err) => return Err(err),
+                            },
+                        };
+                        self.write_reg_with_label(dst, result, result_label.join(&callee_label))?;
+                        self.ip += 1;
+                        continue;
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
@@ -47876,7 +47972,13 @@ impl InterpreterCore {
         rhs: u32,
     ) -> Result<Value, InterpreterError> {
         let candidate = self.read_reg(lhs)?;
-        let constructor = self.read_reg(rhs)?;
+        let mut constructor = self.read_reg(rhs)?;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            match self.bound_function_target(&constructor)? {
+                Some(target) => constructor = target,
+                None => break,
+            }
+        }
         if !self.is_constructible_value(&constructor) {
             return Err(InterpreterError::TypeError {
                 expected: "constructible function".to_string(),
@@ -51282,6 +51384,12 @@ impl InterpreterCore {
             ("RegExp", "exec") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::RegExpPrototypeExec,
             )),
+            ("WeakSet", method @ ("add" | "has" | "delete")) => Some(BuiltinFunction {
+                kind: BuiltinFunctionKind::WeakSetMethod,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                iterator_handle: None,
+                bound_object: None,
+            }),
             ("WeakMap", method @ ("get" | "set" | "has" | "delete")) => Some(BuiltinFunction {
                 kind: BuiltinFunctionKind::WeakMapMethod,
                 module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
@@ -60620,6 +60728,61 @@ impl InterpreterCore {
 
     /// `WeakMap.prototype.get/set/has/delete` over the WeakMap side storage
     /// (object keys only; entries are charged like the constructor's seeding).
+    /// `WeakSet.prototype.add/has/delete` (ES2020 23.4.3) over the
+    /// constructor's `__values` storage, keyed by object identity. A
+    /// non-object value cannot be a member: `add` throws, `has` and `delete`
+    /// report false.
+    fn weakset_method(
+        &mut self,
+        method: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let values_id = match &receiver {
+            Value::Object(set_id) => self.collection_storage_id(*set_id, "WeakSet", "__values"),
+            _ => None,
+        }
+        .ok_or_else(|| InterpreterError::TypeError {
+            expected: format!("WeakSet receiver for WeakSet.prototype.{method}"),
+            got: receiver.type_name().to_string(),
+        })?;
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let is_object = value.is_object_like();
+        let repr = Self::collection_key_repr(&value);
+        match method {
+            "add" => {
+                if !is_object {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object WeakSet value".to_string(),
+                        got: value.type_name().to_string(),
+                    });
+                }
+                self.set_object_property(values_id, repr, value)?;
+                Ok(receiver)
+            }
+            "has" => Ok(Value::Bool(
+                is_object
+                    && self
+                        .heap
+                        .get(values_id.0 as usize)
+                        .is_some_and(|values| values.properties.contains_key(&repr)),
+            )),
+            "delete" => {
+                if !is_object {
+                    return Ok(Value::Bool(false));
+                }
+                let key = RuntimePropertyKey::String(JsString::from(repr));
+                Ok(Value::Bool(
+                    self.remove_object_runtime_property(values_id, &key)?,
+                ))
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "WeakSet method".to_string(),
+                got: other.to_string(),
+            }),
+        }
+    }
+
     fn weakmap_method(
         &mut self,
         method: &str,
@@ -60810,14 +60973,13 @@ impl InterpreterCore {
         Ok(Value::BuiltinFunction(bound))
     }
 
-    /// ES2020 9.4.1.1 [[Call]] of a bound function: call the target with the
-    /// bound `this` and the bound arguments followed by the call's own.
-    fn invoke_bound_function(
-        &mut self,
-        module: &Ir3Module,
+    /// A bound function's [[BoundTargetFunction]], [[BoundThis]] and
+    /// [[BoundArguments]] (ES2020 9.4.1), plus the private state object that
+    /// carries their label.
+    fn bound_function_parts(
+        &self,
         builtin: &BuiltinFunction,
-        args: RegRange,
-    ) -> Result<Value, InterpreterError> {
+    ) -> Result<(Value, Value, Vec<Value>, ObjectId), InterpreterError> {
         let state =
             builtin
                 .bound_object
@@ -60853,16 +61015,121 @@ impl InterpreterCore {
             Some(Value::Int(length)) => usize::try_from(*length).unwrap_or(0),
             _ => 0,
         };
-        let mut arguments = Vec::with_capacity(bound_count.saturating_add(args.count as usize));
-        for index in 0..bound_count {
-            arguments.push(
+        let bound_arguments = (0..bound_count)
+            .map(|index| {
                 arguments_object
                     .properties
                     .get(&index.to_string())
                     .cloned()
-                    .unwrap_or(Value::Undefined),
-            );
+                    .unwrap_or(Value::Undefined)
+            })
+            .collect();
+        Ok((target, bound_this, bound_arguments, state))
+    }
+
+    /// The target of a bound function, else the value itself.
+    fn bound_function_target(&self, value: &Value) -> Result<Option<Value>, InterpreterError> {
+        match value {
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::BoundFunction =>
+            {
+                Ok(Some(self.bound_function_parts(builtin)?.0))
+            }
+            _ => Ok(None),
         }
+    }
+
+    /// ES2020 9.4.1.2 [[Construct]] of a bound function: construct the target
+    /// with the bound arguments followed by the call's own; `new.target` is
+    /// the target. Every argument carries the call's and the bound state's
+    /// labels.
+    fn construct_bound_function(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<(Value, Label), InterpreterError> {
+        let (target, _bound_this, mut arguments, state) = self.bound_function_parts(builtin)?;
+        if !self.is_constructible_value(&target) {
+            return Err(InterpreterError::TypeError {
+                expected: "bound function with a constructible target".to_string(),
+                got: target.type_name().to_string(),
+            });
+        }
+        for index in 0..args.count {
+            arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+        }
+        let mut label = self.join_arg_range_label(args)?;
+        if let Some(state_label) = self.object_mutation_labels.get(&state) {
+            label = label.join(state_label);
+        }
+        let (value, result_label) = self.invoke_inline_construct_with_labels(
+            Some(module),
+            target,
+            arguments,
+            Some(IsolatedCallLabels {
+                receiver: Label::Public,
+                arguments: IsolatedArgumentLabels::Uniform(label.clone()),
+            }),
+            None,
+        )?;
+        Ok((value, result_label.join(&label)))
+    }
+
+    /// `name` ("bound " + the target's name) and `length` (the target's
+    /// length less the bound arguments, at least 0) of a bound function
+    /// (ES2020 19.2.3.2 steps 5-11).
+    fn bound_function_property(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        key: &str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if !matches!(key, "name" | "length") {
+            return Ok(None);
+        }
+        let (target, _, bound_arguments, _) = self.bound_function_parts(builtin)?;
+        let target_value = match &target {
+            Value::Function(index) => {
+                Self::function_name_or_length(module, *index, key).unwrap_or(Value::Undefined)
+            }
+            Value::Closure(closure_id) => self.closure_property_value(module, *closure_id, key)?,
+            Value::BuiltinFunction(inner) if inner.kind == BuiltinFunctionKind::BoundFunction => {
+                self.bound_function_property(module, inner, key)?
+                    .unwrap_or(Value::Undefined)
+            }
+            Value::BuiltinFunction(inner) if key == "name" => Value::str(inner.display_name()),
+            _ => Value::Int(0),
+        };
+        Ok(Some(if key == "name" {
+            let name = match target_value {
+                Value::Str(name) => name.to_string(),
+                _ => String::new(),
+            };
+            Value::str(format!("bound {name}"))
+        } else {
+            let length = match target_value {
+                Value::Int(length) => length,
+                Value::Float(length) if length.inner().is_finite() => length.inner().trunc() as i64,
+                _ => 0,
+            };
+            let bound = i64::try_from(bound_arguments.len()).unwrap_or(i64::MAX);
+            Value::Int(length.saturating_sub(bound).max(0))
+        }))
+    }
+
+    /// ES2020 9.4.1.1 [[Call]] of a bound function: call the target with the
+    /// bound `this` and the bound arguments followed by the call's own.
+    fn invoke_bound_function(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (target, bound_this, bound_arguments, state) = self.bound_function_parts(builtin)?;
+        let mut arguments =
+            Vec::with_capacity(bound_arguments.len().saturating_add(args.count as usize));
+        arguments.extend(bound_arguments);
         for index in 0..args.count {
             arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
         }
@@ -62120,8 +62387,9 @@ impl InterpreterCore {
             });
         }
 
-        let transient_execution_bytes = Self::transient_module_wrapper_bytes(module)
-            .saturating_add(self.module_execution_snapshot_memory_bytes());
+        let transient_execution_bytes =
+            Self::isolated_call_site_bytes(module, matches!(callee, Value::AsyncFunction(_)))
+                .saturating_add(self.module_execution_snapshot_memory_bytes());
         let callback_context_label = match (
             self.active_inline_callback_context_label.as_ref(),
             argument_label,
@@ -62279,7 +62547,7 @@ impl InterpreterCore {
             });
         }
 
-        let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
+        let transient_wrapper_bytes = Self::isolated_call_site_bytes(module, isolated_async_call);
         let transient_execution_bytes = transient_wrapper_bytes;
         let mut remaining_label_transport_bytes = call_labels
             .as_ref()
@@ -62315,20 +62583,30 @@ impl InterpreterCore {
             0,
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         )?;
-        let mut wrapper = module.clone();
-        let wrapper_start = wrapper.instructions.len();
-        wrapper.instructions.push(Ir3Instruction::CallMethod {
-            receiver: 0,
-            callee: 1,
-            args: RegRange {
-                start: 2,
-                count: arg_count,
+        // The synthetic call site runs as a trampoline past the end of the
+        // module rather than on a clone of the module with it appended, which
+        // cost O(module) per call. An async callee may leave its activation
+        // parked on the call site, so it keeps a private copy.
+        let wrapper_instructions = [
+            Ir3Instruction::CallMethod {
+                receiver: 0,
+                callee: 1,
+                args: RegRange {
+                    start: 2,
+                    count: arg_count,
+                },
+                dst: 0,
             },
-            dst: 0,
+            Ir3Instruction::Return { value: 0 },
+        ];
+        let wrapper = isolated_async_call.then(|| {
+            let mut wrapper = module.clone();
+            wrapper
+                .instructions
+                .extend(wrapper_instructions.iter().cloned());
+            wrapper
         });
-        wrapper
-            .instructions
-            .push(Ir3Instruction::Return { value: 0 });
+        let wrapper_start = module.instructions.len();
 
         let snapshot = match self.snapshot_module_execution() {
             Ok(snapshot) => snapshot,
@@ -62404,7 +62682,10 @@ impl InterpreterCore {
                     previous_foreign_call_depth.saturating_add(1);
             }
             self.isolated_async_entry_pending = isolated_async_call;
-            let result = self.run_loop(&wrapper);
+            let result = match &wrapper {
+                Some(wrapper) => self.run_loop(wrapper),
+                None => self.run_loop_with_trampoline(module, &wrapper_instructions),
+            };
             self.isolated_async_entry_pending = false;
             self.module_reentrant_call_depth = previous_reentrant_depth;
             self.active_foreign_module_call_depth = previous_foreign_call_depth;
@@ -62596,7 +62877,7 @@ impl InterpreterCore {
             });
         }
 
-        let transient_wrapper_bytes = Self::transient_module_wrapper_bytes(module);
+        let transient_wrapper_bytes = Self::isolated_call_site_bytes(module, false);
         let transient_execution_bytes = transient_wrapper_bytes;
         let mut remaining_label_transport_bytes = call_labels
             .as_ref()
@@ -62617,36 +62898,35 @@ impl InterpreterCore {
             0,
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         )?;
-        let mut wrapper = module.clone();
-        let wrapper_start = wrapper.instructions.len();
-        wrapper.instructions.push(if explicit_new_target.is_some() {
-            Ir3Instruction::ConstructWithNewTarget {
-                callee: 0,
-                new_target: 1,
-                args: RegRange {
-                    start: argument_start,
-                    count: arg_count,
-                },
-                dst: 0,
-            }
-        } else {
-            Ir3Instruction::Construct {
-                callee: 0,
-                args: RegRange {
-                    start: argument_start,
-                    count: arg_count,
-                },
-                dst: 0,
-            }
-        });
-        wrapper
-            .instructions
-            .push(Ir3Instruction::Return { value: 0 });
+        // Trampoline past the end of the module, as for isolated calls.
+        let wrapper_instructions = [
+            if explicit_new_target.is_some() {
+                Ir3Instruction::ConstructWithNewTarget {
+                    callee: 0,
+                    new_target: 1,
+                    args: RegRange {
+                        start: argument_start,
+                        count: arg_count,
+                    },
+                    dst: 0,
+                }
+            } else {
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange {
+                        start: argument_start,
+                        count: arg_count,
+                    },
+                    dst: 0,
+                }
+            },
+            Ir3Instruction::Return { value: 0 },
+        ];
+        let wrapper_start = module.instructions.len();
 
         let snapshot = match self.snapshot_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                drop(wrapper);
                 self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
                     transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
                 );
@@ -62718,7 +62998,7 @@ impl InterpreterCore {
                 self.active_foreign_module_call_depth =
                     previous_foreign_call_depth.saturating_add(1);
             }
-            let result = self.run_loop(&wrapper);
+            let result = self.run_loop_with_trampoline(module, &wrapper_instructions);
             self.module_reentrant_call_depth = previous_reentrant_depth;
             self.active_foreign_module_call_depth = previous_foreign_call_depth;
             result
@@ -62735,7 +63015,6 @@ impl InterpreterCore {
                 .map(|value| (value, self.pending_exception_label.clone())),
             _ => None,
         };
-        drop(wrapper);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         );
@@ -73792,7 +74071,8 @@ impl InterpreterCore {
                 let previous_estimated_bytes = self.estimated_memory_bytes;
                 let mut published_weakmap = None;
                 let outcome = (|| {
-                    let weakmap_id = self.alloc_object_with_prototype(None)?;
+                    let weakmap_prototype = self.ensure_builtin_prototype("WeakMap")?;
+                    let weakmap_id = self.alloc_object_with_prototype(Some(weakmap_prototype))?;
                     published_weakmap = Some(weakmap_id);
 
                     self.set_object_property(
@@ -73823,7 +74103,8 @@ impl InterpreterCore {
             }
             "builtin:WeakSet" => {
                 // WeakSet([iterable]) constructor implementation (simplified)
-                let weakset_id = self.alloc_object_with_prototype(None)?;
+                let weakset_prototype = self.ensure_builtin_prototype("WeakSet")?;
+                let weakset_id = self.alloc_object_with_prototype(Some(weakset_prototype))?;
                 let values_id = self.alloc_object_with_prototype(None)?;
 
                 self.set_object_property(weakset_id, "__type".to_string(), Value::str("WeakSet"))?;
@@ -83349,6 +83630,12 @@ impl InterpreterCore {
                     && !self.closure_method_metadata.contains_key(closure_id)
                     && !self.arrow_lexical_this.contains_key(closure_id)
             }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::BoundFunction =>
+            {
+                self.bound_function_parts(builtin)
+                    .is_ok_and(|(target, ..)| self.is_constructible_value(&target))
+            }
             Value::BuiltinFunction(builtin) => builtin.kind.is_constructible(),
             _ => false,
         }
@@ -84287,7 +84574,7 @@ impl InterpreterCore {
             "prototype" => Value::Object(self.ensure_builtin_prototype(name)?),
             "name" => Value::str(name),
             "length" => Value::Int(match name {
-                "Map" | "Set" => 0,
+                "Map" | "Set" | "WeakMap" | "WeakSet" => 0,
                 "RegExp" => 2,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
@@ -84355,6 +84642,9 @@ impl InterpreterCore {
             // `RegExp(p, f)` and `new R(p, f)` through a RegExp value: the same
             // hostcall `new RegExp(...)` and literals lower to.
             "RegExp" => self.dispatch_builtin_hostcall("builtin:RegExp", args, Some(module)),
+            "WeakMap" | "WeakSet" => {
+                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
+            }
             "ArrayBuffer" | "DataView" => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }
@@ -84582,6 +84872,10 @@ impl InterpreterCore {
             Value::Undefined => None,
             method => Some(method),
         };
+        let weakmap_method =
+            Self::collection_prototype_method("WeakMap", key).map(Value::BuiltinFunction);
+        let weakset_method =
+            Self::collection_prototype_method("WeakSet", key).map(Value::BuiltinFunction);
         if array_method.is_none()
             && string_method.is_none()
             && number_method.is_none()
@@ -84591,6 +84885,8 @@ impl InterpreterCore {
             && date_method.is_none()
             && regexp_method.is_none()
             && promise_method.is_none()
+            && weakmap_method.is_none()
+            && weakset_method.is_none()
         {
             return None;
         }
@@ -84615,6 +84911,8 @@ impl InterpreterCore {
                 Some("Date") => return date_method,
                 Some("RegExp") => return regexp_method,
                 Some("Promise") => return promise_method,
+                Some("WeakMap") => return weakmap_method,
+                Some("WeakSet") => return weakset_method,
                 _ => {}
             }
             current = self.observable_prototype_of(id);

@@ -62,3 +62,28 @@ fn weakmap_methods() {
         "1,true,true,false,",
     );
 }
+
+/// `WeakSet.prototype.add/has/delete` over object identity, and `WeakMap` /
+/// `WeakSet` as first-class constructors whose instances inherit from their
+/// prototypes. Before this, `ws.add` was undefined and `typeof WeakSet`
+/// threw a ReferenceError.
+#[test]
+fn weakset_methods_and_weak_constructor_values() {
+    check(
+        "var ws = new WeakSet(); var a = {}, b = {}; ws.add(a); \
+         [ws.has(a), ws.has(b), ws.delete(a), ws.has(a), ws.delete(a), ws.has(1), \
+         ws.add(b) === ws].join()",
+        "true,false,true,false,false,false,true",
+    );
+    check(
+        "var r; try { new WeakSet().add(1); r = 'added'; } catch (e) { r = e instanceof TypeError; } \
+         var s; try { WeakSet.prototype.has.call({}, {}); s = 'ok'; } \
+         catch (e) { s = e instanceof TypeError; } r + ',' + s",
+        "true,true",
+    );
+    check(
+        "var k = {}; var ws = new WeakSet([k]); [typeof WeakSet, typeof WeakMap, ws.has(k), \
+         ws instanceof WeakSet, new WeakMap() instanceof WeakMap, ws instanceof Object].join()",
+        "function,function,true,true,true,true",
+    );
+}

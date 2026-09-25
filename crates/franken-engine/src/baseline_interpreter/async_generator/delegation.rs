@@ -57,9 +57,23 @@ impl InterpreterCore {
         if matches!(source, Value::AsyncGeneratorObject(_)) {
             return Ok((Self::async_generator_iterator_init(source.clone()), false));
         }
-        if source.is_object_like()
-            && let Some(backing) = self.iterator_carrier_backing_id(source, "async iterable")?
-        {
+        // GetMethod uses GetV: primitives consult their realm's intrinsic
+        // prototype too. Keep the original primitive as the getter/call
+        // receiver; boxing it here would change strict-mode `this` semantics.
+        // Reuse the same materialized prototypes as ordinary property reads
+        // and Array.from, so hooks and their IFC labels are not bypassed.
+        let backing = match source {
+            value if value.is_object_like() => {
+                self.iterator_carrier_backing_id(value, "async iterable")?
+            }
+            Value::Str(_) => Some(self.ensure_builtin_prototype("String")?),
+            Value::Int(_) | Value::Float(_) => Some(self.ensure_builtin_prototype("Number")?),
+            Value::Bool(_) => Some(self.ensure_builtin_prototype("Boolean")?),
+            Value::BigInt(_) => Some(self.ensure_builtin_prototype("BigInt")?),
+            Value::Symbol(_) => Some(self.ensure_builtin_prototype("Symbol")?),
+            _ => None,
+        };
+        if let Some(backing) = backing {
             let method = self.optional_callable_runtime_property(
                 Some(module),
                 backing,

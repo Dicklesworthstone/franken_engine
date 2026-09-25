@@ -2801,6 +2801,7 @@ impl ExecutionOrchestrator {
                 &exec_result,
                 evidence_capability_summary,
                 self.config.epoch,
+                instruction_budget,
             );
             let epoch = self.config.epoch;
             let updater = self.posterior_updaters.get_or_create(&package.extension_id);
@@ -2823,9 +2824,14 @@ impl ExecutionOrchestrator {
             // and made the escalation ladder uninformative. That case is a
             // prior tax, not containment: emit Allow. Every observed signal
             // (denied hostcall, e-process stop, hook request) bypasses this
-            // branch and still escalates below.
-            let benign_completion_downgrade = containment_action == ContainmentAction::Challenge
-                && risk_state == RiskState::Benign
+            // branch and still escalates below. The Conservative matrix taxes
+            // Allow harder, so the same prior-only posterior selects Sandbox
+            // (3.23M vs Challenge 3.25M), which sandboxed every benign
+            // strict-profile run (bd-pgzo7); it is the same prior tax.
+            let benign_completion_downgrade = matches!(
+                containment_action,
+                ContainmentAction::Challenge | ContainmentAction::Sandbox
+            ) && risk_state == RiskState::Benign
                 && stopping_decision != StoppingDecision::Stop
                 && exec_result.requested_hook_action.is_none()
                 && exec_result.hostcall_decisions.iter().all(|d| d.allowed);
@@ -5238,6 +5244,7 @@ impl ExecutionOrchestrator {
         exec: &ExecutionResult,
         capability_summary: EvidenceCapabilitySummary,
         epoch: SecurityEpoch,
+        instruction_budget: u64,
     ) -> Evidence {
         let hostcall_count = exec.hostcall_decisions.len() as u64;
         let hostcall_rate_millionths = hostcall_count
@@ -5245,8 +5252,18 @@ impl ExecutionOrchestrator {
             .checked_div(exec.instructions_executed)
             .unwrap_or(0);
 
-        let resource_score_millionths =
-            (exec.instructions_executed.saturating_mul(5)).min(1_000_000);
+        // Share of this run's instruction budget the run consumed, so the
+        // likelihood model's "resource usage above 70%" means what it says.
+        // The previous `instructions * 5` scale saturated at 200k
+        // instructions: every ordinary program crossed it once budgets moved
+        // to the hundreds of millions, and a benign run read as resource
+        // abuse (bd-pgzo7). A zero budget counts as fully consumed.
+        let resource_score_millionths = exec
+            .instructions_executed
+            .saturating_mul(1_000_000)
+            .checked_div(instruction_budget)
+            .unwrap_or(1_000_000)
+            .min(1_000_000);
 
         let denied = exec
             .hostcall_decisions

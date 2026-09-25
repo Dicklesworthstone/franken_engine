@@ -2290,7 +2290,7 @@ fn merge_logical_lines_requires_continuation(
 /// regex-vs-division heuristic and comment boundaries are detected identically.
 pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut in_quote: Option<char> = None;
+    let mut quotes = QuoteState::default();
     let mut in_block_comment = false;
     let mut in_line_comment = false;
     let mut in_regex_literal = false;
@@ -2323,19 +2323,9 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             }
             continue;
         }
-        if let Some(q) = in_quote {
+        if quotes.active() {
             out.push(ch);
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
+            quotes.advance_char(ch);
             continue;
         }
         if in_regex_literal {
@@ -2390,7 +2380,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             },
             '\'' | '"' | '`' => {
                 out.push(ch);
-                in_quote = Some(ch);
+                quotes.open_char(ch);
                 last_significant = Some(ch);
                 trailing_identifier.clear();
             }
@@ -2424,6 +2414,151 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
         }
     }
     out
+}
+
+/// String / template-literal state shared by the source scanners
+/// (bd-9vouw.41).
+///
+/// A template literal is not a flat quote. Its `${ ... }` substitutions hold
+/// code, which may contain strings, braces and further templates. The
+/// template in `` `a${`<${x}>`}b` `` closes at its fourth backtick, not its
+/// second. Treating the backtick as a plain quote ended the outer literal at
+/// the inner opening backtick, which exposed the inner text (`<`, `,`, `?`,
+/// a backtick inside a string) as top-level syntax to the operator, comma
+/// and statement splitters.
+///
+/// Scanners call [`Self::active`] first; while it holds, every byte goes to
+/// [`Self::advance`]. Otherwise they call [`Self::open`] on a quote or
+/// backtick. Backward scanners use [`quoted_byte_mask`], which is computed
+/// forward with the same machine. Comments and regular-expression literals
+/// inside a substitution are not interpreted; they are opaque template
+/// content to every scanner, exactly like the rest of the substitution.
+#[derive(Debug, Default)]
+struct QuoteState {
+    stack: Vec<QuoteContext>,
+    escaped: bool,
+    after_dollar: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuoteContext {
+    /// Inside a `'` or `"` string.
+    String(u8),
+    /// Inside the literal text of a template.
+    Template,
+    /// Inside a `${ ... }` substitution, with its open-brace depth.
+    Substitution(u32),
+}
+
+impl QuoteState {
+    /// A scanner positioned just after a template's `${`.
+    fn in_substitution() -> Self {
+        Self {
+            stack: vec![QuoteContext::Substitution(0)],
+            ..Self::default()
+        }
+    }
+
+    /// Whether the scanner is inside a string, a template, or a template
+    /// substitution.
+    fn active(&self) -> bool {
+        !self.stack.is_empty()
+    }
+
+    /// Enter a string or template if `b` opens one. Returns whether it did.
+    fn open(&mut self, b: u8) -> bool {
+        match b {
+            b'\'' | b'"' => self.stack.push(QuoteContext::String(b)),
+            b'`' => self.stack.push(QuoteContext::Template),
+            _ => return false,
+        }
+        self.escaped = false;
+        self.after_dollar = false;
+        true
+    }
+
+    fn open_char(&mut self, ch: char) -> bool {
+        ch.is_ascii() && self.open(ch as u8)
+    }
+
+    /// Consume one byte while [`Self::active`].
+    fn advance(&mut self, b: u8) {
+        let Some(&context) = self.stack.last() else {
+            return;
+        };
+        match context {
+            QuoteContext::String(quote) => {
+                if self.escaped {
+                    self.escaped = false;
+                } else if b == b'\\' {
+                    self.escaped = true;
+                } else if b == quote {
+                    self.stack.pop();
+                }
+            }
+            QuoteContext::Template => {
+                let after_dollar = std::mem::replace(&mut self.after_dollar, false);
+                if self.escaped {
+                    self.escaped = false;
+                } else if b == b'\\' {
+                    self.escaped = true;
+                } else if b == b'`' {
+                    self.stack.pop();
+                } else if b == b'{' && after_dollar {
+                    self.stack.push(QuoteContext::Substitution(0));
+                } else {
+                    self.after_dollar = b == b'$';
+                }
+            }
+            QuoteContext::Substitution(depth) => match b {
+                b'\'' | b'"' | b'`' => {
+                    self.open(b);
+                }
+                b'{' => {
+                    *self.stack.last_mut().expect("substitution context") =
+                        QuoteContext::Substitution(depth + 1);
+                }
+                b'}' if depth == 0 => {
+                    self.stack.pop();
+                }
+                b'}' => {
+                    *self.stack.last_mut().expect("substitution context") =
+                        QuoteContext::Substitution(depth - 1);
+                }
+                _ => {}
+            },
+        }
+    }
+
+    /// A physical line terminator consumed an escape (a backslash line
+    /// continuation) or ended the line; the escape does not carry over.
+    fn line_break(&mut self) {
+        self.escaped = false;
+        self.after_dollar = false;
+    }
+
+    fn advance_char(&mut self, ch: char) {
+        // Every delimiter is ASCII; any other character is plain content.
+        self.advance(if ch.is_ascii() { ch as u8 } else { 0x80 });
+    }
+}
+
+/// For each byte of `s`, whether it belongs to a string or template literal
+/// (delimiters and substitutions included), computed forward with
+/// [`QuoteState`]. Scanners that walk right-to-left use this, because a
+/// template's nesting cannot be recovered from its right end (bd-9vouw.41).
+fn quoted_byte_mask(s: &str) -> Vec<bool> {
+    let mut quotes = QuoteState::default();
+    s.bytes()
+        .map(|b| {
+            if quotes.active() {
+                quotes.advance(b);
+                true
+            } else {
+                quotes.open(b)
+            }
+        })
+        .collect()
 }
 
 /// Emit `len_utf8()` spaces for a blanked (comment) character, preserving the
@@ -2565,7 +2700,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut brace_depth: i64 = 0;
     let mut paren_depth: i64 = 0;
     let mut bracket_depth: i64 = 0;
-    let mut in_quote: Option<char> = None;
+    let mut quotes = QuoteState::default();
     let mut in_block_comment = false;
     let mut in_regex_literal = false;
     let mut regex_in_char_class = false;
@@ -2667,7 +2802,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 );
             }
         } else {
-            if in_quote.is_some() {
+            if quotes.active() {
                 append_source_fragment(
                     &mut current_text,
                     &mut current_source_boundaries,
@@ -2706,18 +2841,8 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 }
                 continue;
             }
-            if let Some(q) = in_quote {
-                if escaped {
-                    escaped = false;
-                    continue;
-                }
-                if ch == '\\' {
-                    escaped = true;
-                    continue;
-                }
-                if ch == q {
-                    in_quote = None;
-                }
+            if quotes.active() {
+                quotes.advance_char(ch);
                 continue;
             }
             if in_regex_literal {
@@ -2766,7 +2891,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     _ => {}
                 },
                 '\'' | '"' | '`' => {
-                    in_quote = Some(ch);
+                    quotes.open_char(ch);
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
@@ -2824,14 +2949,14 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         // The exact string cooker must distinguish a backslash continuation
         // (which removes the terminator) from a raw ECMAScript line terminator
         // (whose validity depends on the literal grammar).
-        if in_quote.is_some() && !line_ending.is_empty() {
+        if quotes.active() && !line_ending.is_empty() {
             append_source_fragment(
                 &mut current_text,
                 &mut current_source_boundaries,
                 line_ending,
                 byte_offset.saturating_add(line.len()),
             );
-            escaped = false;
+            quotes.line_break();
         }
 
         byte_offset = byte_offset.saturating_add(segment.len());
@@ -2839,7 +2964,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         let balanced = brace_depth <= 0
             && paren_depth <= 0
             && bracket_depth <= 0
-            && in_quote.is_none()
+            && !quotes.active()
             && !in_block_comment
             && !in_regex_literal;
         if balanced
@@ -3203,30 +3328,21 @@ fn strip_leading_labels(segment: &str) -> &str {
 fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     let mut out = Vec::with_capacity(4);
     let mut segment_start = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
 
     for (index, ch) in line.char_indices() {
-        if let Some(quote) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance_char(ch);
             continue;
         }
 
         match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
+            '\'' | '"' | '`' => {
+                quotes.open_char(ch);
+            }
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '[' => bracket_depth = bracket_depth.saturating_add(1),
@@ -4000,26 +4116,17 @@ fn parse_binding_pattern_inner(
 /// Find `=` at the top level (not inside brackets, parens, braces, or strings).
 fn find_top_level_eq(source: &str) -> Option<usize> {
     let mut depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
 
     for (i, ch) in source.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance_char(ch);
             continue;
         }
         match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
+            '\'' | '"' | '`' => {
+                quotes.open_char(ch);
+            }
             '(' | '[' | '{' => depth = depth.saturating_add(1),
             ')' | ']' | '}' => depth = depth.saturating_sub(1),
             '=' if depth == 0 => {
@@ -4187,26 +4294,17 @@ fn parse_contextual_static_property_key(
 /// Find `:` at the top level of a pattern element.
 fn find_top_level_colon_in_pattern(source: &str) -> Option<usize> {
     let mut depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
 
     for (i, ch) in source.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance_char(ch);
             continue;
         }
         match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
+            '\'' | '"' | '`' => {
+                quotes.open_char(ch);
+            }
             '(' | '[' | '{' => depth = depth.saturating_add(1),
             ')' | ']' | '}' => depth = depth.saturating_sub(1),
             ':' if depth == 0 => return Some(i),
@@ -4273,26 +4371,17 @@ fn split_pattern_elements(source: &str) -> Vec<&str> {
     let mut out = Vec::with_capacity(4);
     let mut start = 0;
     let mut depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
 
     for (i, ch) in source.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance_char(ch);
             continue;
         }
         match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
+            '\'' | '"' | '`' => {
+                quotes.open_char(ch);
+            }
             '(' | '[' | '{' => depth = depth.saturating_add(1),
             ')' | ']' | '}' => depth = depth.saturating_sub(1),
             ',' if depth == 0 => {
@@ -4909,26 +4998,21 @@ fn is_unseparated_expression_sequence(expression: &str) -> bool {
 
 fn strip_trailing_line_comment(expression: &str) -> &str {
     let bytes = expression.as_bytes();
-    let mut quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut index = 0usize;
 
     while index + 1 < bytes.len() {
         let byte = bytes[index];
-        if let Some(active_quote) = quote {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == active_quote {
-                quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(byte);
             index += 1;
             continue;
         }
 
         match byte {
-            b'\'' | b'"' | b'`' => quote = Some(byte),
+            b'\'' | b'"' | b'`' => {
+                quotes.open(byte);
+            }
             b'/' if bytes[index + 1] == b'/'
                 && (index == 0 || bytes[index.saturating_sub(1)].is_ascii_whitespace()) =>
             {
@@ -5103,32 +5187,19 @@ fn find_top_level_arrow(s: &str) -> Option<usize> {
     let mut depth_paren: i32 = 0;
     let mut depth_bracket: i32 = 0;
     let mut depth_brace: i32 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut i = 0usize;
 
     while i + 1 < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 i += 1;
                 continue;
             }
@@ -5263,8 +5334,6 @@ fn parse_template_literal(
     let mut expressions = Vec::with_capacity(4);
     let mut current_quasi = String::new();
     let mut i = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
 
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
@@ -5312,42 +5381,17 @@ fn parse_template_literal(
             current_quasi.clear();
             i += 2; // skip `${`
             let start = i;
-            let mut depth = 1i32;
+            // The substitution ends at the `}` that balances its `${`,
+            // skipping strings and nested templates (bd-9vouw.41).
+            let mut substitution = QuoteState::in_substitution();
             while i < bytes.len() {
-                if let Some(q) = in_quote {
-                    if escaped {
-                        escaped = false;
-                        i += 1;
-                        continue;
-                    }
-                    if bytes[i] == b'\\' {
-                        escaped = true;
-                        i += 1;
-                        continue;
-                    }
-                    if bytes[i] == q {
-                        in_quote = None;
-                    }
-                    i += 1;
-                    continue;
-                }
-
-                match bytes[i] {
-                    b'\'' | b'"' | b'`' => {
-                        in_quote = Some(bytes[i]);
-                    }
-                    b'{' => depth += 1,
-                    b'}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
+                substitution.advance(bytes[i]);
+                if !substitution.active() {
+                    break;
                 }
                 i += 1;
             }
-            if depth != 0 {
+            if substitution.active() {
                 return Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     "template literal interpolation has unbalanced braces",
@@ -5490,32 +5534,19 @@ fn try_parse_assignment(
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut i: usize = 0;
 
     while i < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 i += 1;
                 continue;
             }
@@ -5664,32 +5695,19 @@ fn try_parse_conditional(
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut i: usize = 0;
 
     while i < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 i += 1;
                 continue;
             }
@@ -5772,26 +5790,15 @@ fn find_top_level_colon(s: &str) -> Option<usize> {
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     for (i, &b) in bytes.iter().enumerate() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 continue;
             }
             b'(' => {
@@ -5839,26 +5846,19 @@ fn find_ternary_colon(s: &str) -> Option<usize> {
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut question_depth: i64 = 0;
     let mut i: usize = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 i += 1;
                 continue;
             }
@@ -5938,8 +5938,7 @@ fn try_parse_binary(
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
 
     // Track the lowest-precedence operator found at top level.
     let mut best_op: Option<BinaryOperator> = None;
@@ -5949,26 +5948,14 @@ fn try_parse_binary(
     let mut i: usize = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 i += 1;
                 continue;
             }
@@ -6808,30 +6795,21 @@ fn contains_optional_chain(expression: &Expression) -> bool {
 
 /// Find the first top-level backtick that begins a trailing template literal.
 fn find_top_level_template_start(s: &str) -> Option<usize> {
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
 
     for (index, ch) in s.char_indices() {
-        if let Some(quote) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == quote {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance_char(ch);
             continue;
         }
 
         match ch {
-            '\'' | '"' => in_quote = Some(ch),
+            '\'' | '"' => {
+                quotes.open_char(ch);
+            }
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '[' => bracket_depth = bracket_depth.saturating_add(1),
@@ -6840,6 +6818,11 @@ fn find_top_level_template_start(s: &str) -> Option<usize> {
             '}' => brace_depth = brace_depth.saturating_sub(1),
             '`' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return Some(index);
+            }
+            // A template nested in an argument or index is opaque
+            // (bd-9vouw.41); its text must not move the bracket depths.
+            '`' => {
+                quotes.open_char(ch);
             }
             _ => {}
         }
@@ -6854,8 +6837,7 @@ fn find_top_level_template_start(s: &str) -> Option<usize> {
 /// list so any trailing member/call/index chain can be split off (bd-if9uy).
 fn find_first_top_level_paren_pair(s: &str) -> Option<(usize, usize)> {
     let bytes = s.as_bytes();
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut open: Option<usize> = None;
     let mut paren: i64 = 0;
     let mut bracket: i64 = 0;
@@ -6863,19 +6845,15 @@ fn find_first_top_level_paren_pair(s: &str) -> Option<(usize, usize)> {
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
-            b'\'' | b'"' | b'`' => in_quote = Some(b),
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
             b'[' => bracket += 1,
             b']' => bracket -= 1,
             b'{' => brace += 1,
@@ -6906,29 +6884,17 @@ fn find_first_top_level_paren_pair(s: &str) -> Option<(usize, usize)> {
 /// Find the position of the opening `(` that matches the final `)`.
 fn find_matching_open_paren(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
+    // Walking right-to-left cannot recover template nesting, so string and
+    // template extents come from a forward pass (bd-9vouw.41).
+    let quoted = quoted_byte_mask(s);
     let mut depth: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
     let mut i = bytes.len();
     while i > 0 {
         i -= 1;
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if i > 0 && bytes[i - 1] == b'\\' && !escaped {
-                escaped = true;
-                continue;
-            }
-            escaped = false;
-            if b == q {
-                in_quote = None;
-            }
+        if quoted[i] {
             continue;
         }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                continue;
-            }
+        match bytes[i] {
             b')' => depth += 1,
             b'(' => {
                 depth -= 1;
@@ -6945,29 +6911,17 @@ fn find_matching_open_paren(s: &str) -> Option<usize> {
 /// Find the position of the opening `[` that matches the final `]`.
 fn find_matching_open_bracket(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
+    // Walking right-to-left cannot recover template nesting, so string and
+    // template extents come from a forward pass (bd-9vouw.41).
+    let quoted = quoted_byte_mask(s);
     let mut depth: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
     let mut i = bytes.len();
     while i > 0 {
         i -= 1;
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if i > 0 && bytes[i - 1] == b'\\' && !escaped {
-                escaped = true;
-                continue;
-            }
-            escaped = false;
-            if b == q {
-                in_quote = None;
-            }
+        if quoted[i] {
             continue;
         }
-        match b {
-            b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
-                continue;
-            }
+        match bytes[i] {
             b']' => depth += 1,
             b'[' => {
                 depth -= 1;
@@ -6987,28 +6941,17 @@ fn find_last_top_level_dot(s: &str) -> Option<usize> {
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut last_dot: Option<usize> = None;
 
     for (i, &b) in bytes.iter().enumerate() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 continue;
             }
             b'(' => {
@@ -7054,33 +6997,20 @@ fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut last_optional: Option<usize> = None;
     let mut i = 0usize;
 
     while i + 1 < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 i += 1;
                 continue;
             }
@@ -7570,7 +7500,7 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
+    let mut quotes = QuoteState::default();
     let mut escaped = false;
     // A regex literal (`/,/`) may contain commas and brackets; it is skipped
     // with the same regex-vs-division rule the line merger uses.
@@ -7582,17 +7512,10 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     let mut start = 0;
 
     for (i, &b) in bytes.iter().enumerate() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
+        if quotes.active() {
+            quotes.advance(b);
+            if !quotes.active() {
+                // The closed literal is an operand: a following `/` divides.
                 last_significant = Some(')');
                 trailing_identifier.clear();
             }
@@ -7619,7 +7542,7 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 continue;
             }
             b'/' => {
@@ -9282,25 +9205,16 @@ fn extract_balanced(s: &str, open_char: char, close_char: char) -> Option<(&str,
     }
     let bytes = s.as_bytes();
     let mut depth: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     for (i, &b) in bytes.iter().enumerate() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             continue;
         }
         match b {
-            b'\'' | b'"' | b'`' => in_quote = Some(b),
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
             _ if b == open_char as u8 => depth += 1,
             _ if b == close_char as u8 => {
                 depth -= 1;
@@ -9601,31 +9515,18 @@ fn find_top_level_else(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut depth_brace: i64 = 0;
     let mut depth_paren: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 i += 1;
                 continue;
             }
@@ -9731,26 +9632,21 @@ fn split_for_header(header: &str) -> Option<(&str, &str, &str)> {
     let mut depth_paren: i64 = 0;
     let mut depth_bracket: i64 = 0;
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut semis: [usize; 2] = [0, 0];
     let mut count: usize = 0;
     let mut i: usize = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
-            b'\'' | b'"' | b'`' => in_quote = Some(b),
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
             b'(' => depth_paren += 1,
             b')' => depth_paren -= 1,
             b'[' => depth_bracket += 1,
@@ -9950,35 +9846,14 @@ fn find_top_level_keyword(src: &str, keyword: &str) -> Option<usize> {
     let mut depth_paren = 0i32;
     let mut depth_bracket = 0i32;
     let mut depth_brace = 0i32;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut in_backtick = false;
+    let mut quotes = QuoteState::default();
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if in_single {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'\'' {
-                in_single = false;
-            }
-        } else if in_double {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'"' {
-                in_double = false;
-            }
-        } else if in_backtick {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'`' {
-                in_backtick = false;
-            }
-        } else {
+        if quotes.active() {
+            quotes.advance(b);
+        } else if !quotes.open(b) {
             match b {
-                b'\'' => in_single = true,
-                b'"' => in_double = true,
-                b'`' => in_backtick = true,
                 b'(' => depth_paren += 1,
                 b')' => depth_paren -= 1,
                 b'[' => depth_bracket += 1,
@@ -10381,31 +10256,18 @@ fn parse_switch_statement(
 fn split_at_next_case(s: &str) -> (&str, &str) {
     let bytes = s.as_bytes();
     let mut depth_brace: i64 = 0;
-    let mut in_quote: Option<u8> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if b == b'\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if b == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance(b);
             i += 1;
             continue;
         }
         match b {
             b'\'' | b'"' | b'`' => {
-                in_quote = Some(b);
+                quotes.open(b);
                 i += 1;
                 continue;
             }
@@ -10867,26 +10729,17 @@ fn split_class_members(body: &str) -> Vec<&str> {
     let mut start = 0;
     let mut brace_depth = 0usize;
     let mut paren_depth = 0usize;
-    let mut in_quote: Option<char> = None;
-    let mut escaped = false;
+    let mut quotes = QuoteState::default();
 
     for (i, ch) in body.char_indices() {
-        if let Some(q) = in_quote {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            if ch == '\\' {
-                escaped = true;
-                continue;
-            }
-            if ch == q {
-                in_quote = None;
-            }
+        if quotes.active() {
+            quotes.advance_char(ch);
             continue;
         }
         match ch {
-            '\'' | '"' | '`' => in_quote = Some(ch),
+            '\'' | '"' | '`' => {
+                quotes.open_char(ch);
+            }
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
@@ -17850,5 +17703,69 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let tree1 = parse_script("/test/gi;");
         let tree2 = parse_script("/test/gi;");
         assert_eq!(tree1.canonical_hash(), tree2.canonical_hash());
+    }
+
+    // bd-9vouw.41: a template literal is one opaque unit to every source
+    // scanner, including its `${ ... }` substitutions, nested templates and
+    // strings inside substitutions.
+
+    #[test]
+    fn quoted_byte_mask_spans_nested_templates_and_substitution_strings_bd_9vouw_41() {
+        let src = "`a${`<${x}>`}b${\"`\"}c`, 2";
+        let mask = quoted_byte_mask(src);
+        let literal_end = src.find(", 2").expect("tail");
+        assert!(mask[..literal_end].iter().all(|quoted| *quoted));
+        assert!(mask[literal_end..].iter().all(|quoted| !*quoted));
+
+        // A brace inside a substitution string does not end the substitution.
+        let src = "`x${\"}\"}y` + 1";
+        let mask = quoted_byte_mask(src);
+        let literal_end = src.find(" + 1").expect("tail");
+        assert!(mask[..literal_end].iter().all(|quoted| *quoted));
+        assert!(mask[literal_end..].iter().all(|quoted| !*quoted));
+    }
+
+    #[test]
+    fn scanners_see_a_nested_template_as_one_literal_bd_9vouw_41() {
+        // The inner template's `<`, `,`, `)` and `;` are template text, not
+        // operators, separators, delimiters or statement ends.
+        let parts: Vec<&str> =
+            split_top_level_commas("`${[1,2].map(x=>`<${x}>`).join(\"\")}`, `a${\"`\"}b`")
+                .into_iter()
+                .map(str::trim)
+                .collect();
+        assert_eq!(
+            parts,
+            vec!["`${[1,2].map(x=>`<${x}>`).join(\"\")}`", "`a${\"`\"}b`"]
+        );
+        assert_eq!(find_matching_open_paren("f(`)${`(`}`)"), Some(1));
+        assert_eq!(find_top_level_template_start("tag(`)`)`x`"), Some(8));
+        let segments: Vec<&str> = split_statement_segments("a(`;${`;`}`); b;")
+            .into_iter()
+            .map(|(_, _, text)| text)
+            .collect();
+        assert_eq!(segments, vec!["a(`;${`;`}`)", "b"]);
+        // `//` inside a nested template is not a comment.
+        assert_eq!(
+            strip_comments_to_whitespace("f(`${`http://x`}`); // c"),
+            "f(`${`http://x`}`);     "
+        );
+    }
+
+    #[test]
+    fn parse_nested_template_literals_bd_9vouw_41() {
+        for (source, statements) in [
+            ("console.log(`${[1,2].map(x=>`<${x}>`).join(\"\")}`);", 1),
+            (
+                "const h = `<ul>${items.map(it => `<li class=\"${it.k}\">${it.v > 1 ? `big ${it.v}` : `small`}</li>`).join(\"\")}</ul>`;",
+                1,
+            ),
+            ("console.log(`a${\"`\"}b`, `c${'`'.length}d`);", 1),
+            ("const u = `${`http://x`}`; next();", 2),
+            ("const v = `1${`2${`3${4}3`}2`}1`;\nconst w = 2;", 2),
+        ] {
+            let tree = parse_script(source);
+            assert_eq!(tree.body.len(), statements, "{source}");
+        }
     }
 }

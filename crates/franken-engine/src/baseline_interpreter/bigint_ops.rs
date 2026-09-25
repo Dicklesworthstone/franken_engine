@@ -160,7 +160,7 @@ pub(super) fn negate(text: &str) -> String {
 
 /// `~value` (BigInt::bitwiseNOT): `-value - 1`.
 pub(super) fn bitwise_not(text: &str) -> String {
-    (-parse(text) - 1).to_string()
+    (-parse(text) - BigInt::from(1u8)).to_string()
 }
 
 /// Order of two BigInts.

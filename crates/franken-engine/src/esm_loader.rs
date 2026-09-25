@@ -286,6 +286,15 @@ pub struct ModuleGraph {
     trace_events: Vec<TraceEvent>,
 }
 
+/// State owned by one evaluation-scheduling attempt. No module body executes
+/// here, so a failed attempt must roll back its entire unpublished schedule.
+#[derive(Default)]
+struct EvaluationTraversal {
+    order: Vec<String>,
+    active: BTreeSet<String>,
+    previous_orders: Vec<(String, Option<u32>)>,
+}
+
 /// A trace event for the evidence ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceEvent {
@@ -580,41 +589,47 @@ impl ModuleGraph {
     // Evaluate phase — topological execution
     // -----------------------------------------------------------------------
 
-    /// Evaluate all linked modules in topological order.
+    /// Schedule linked modules in deterministic dependency-first order.
     ///
-    /// Returns the evaluation order as a list of specifiers.
+    /// This graph operation does not execute JavaScript bodies. A successful
+    /// call publishes the schedule and updates module statuses; a failed call
+    /// restores every status/order it changed so a retry cannot skip work.
+    /// Previously evaluated modules and failure records are left untouched.
     pub fn evaluate(&mut self) -> Result<EvalResult, EsmLoaderError> {
         let entry = self
             .entry_point
             .clone()
             .ok_or(EsmLoaderError::NoEntryPoint)?;
+        let mut traversal = EvaluationTraversal::default();
 
-        let mut eval_order: Vec<String> = Vec::new();
-        let mut eval_counter: u32 = 0;
-
-        self.evaluate_module(&entry, &mut eval_order, &mut eval_counter, 0)?;
+        if let Err(error) = self.evaluate_module(&entry, &mut traversal, 0) {
+            let restored_count = traversal.previous_orders.len();
+            for (specifier, previous_order) in traversal.previous_orders {
+                if let Some(module) = self.modules.get_mut(&specifier) {
+                    module.status = ModuleStatus::Linked;
+                    module.eval_order = previous_order;
+                }
+            }
+            self.trace(
+                TracePhase::Evaluate,
+                &entry,
+                format!("evaluation scheduling failed; restored {restored_count} modules: {error}"),
+            );
+            return Err(error);
+        }
 
         Ok(EvalResult {
-            eval_order,
-            evaluated_count: eval_counter as usize,
+            evaluated_count: traversal.order.len(),
+            eval_order: traversal.order,
         })
     }
 
     fn evaluate_module(
         &mut self,
         specifier: &str,
-        eval_order: &mut Vec<String>,
-        eval_counter: &mut u32,
+        traversal: &mut EvaluationTraversal,
         depth: usize,
     ) -> Result<(), EsmLoaderError> {
-        if depth >= MAX_MODULE_DEPTH {
-            return Err(EsmLoaderError::DepthExceeded {
-                specifier: specifier.to_string(),
-                depth,
-                limit: MAX_MODULE_DEPTH,
-            });
-        }
-
         let status = self
             .modules
             .get(specifier)
@@ -624,7 +639,14 @@ impl ModuleGraph {
         match status {
             ModuleStatus::Evaluated => return Ok(()),
             ModuleStatus::Evaluating => {
-                // Cycle — module is already being evaluated; skip per ES2020.
+                if !traversal.active.contains(specifier) {
+                    return Err(EsmLoaderError::InvalidStatus {
+                        specifier: specifier.to_string(),
+                        expected: "evaluating module owned by the current traversal",
+                        actual: "orphan evaluating state".into(),
+                    });
+                }
+                // Only a back-edge owned by this attempt is a real cycle.
                 return Ok(());
             }
             ModuleStatus::EvaluationError => {
@@ -633,7 +655,7 @@ impl ModuleGraph {
                     reason: "previous evaluation failed".into(),
                 });
             }
-            ModuleStatus::Linked => {} // proceed
+            ModuleStatus::Linked => {}
             _ => {
                 return Err(EsmLoaderError::InvalidStatus {
                     specifier: specifier.to_string(),
@@ -643,10 +665,23 @@ impl ModuleGraph {
             }
         }
 
-        // Mark as evaluating.
+        // A completed dependency or an owned cycle does not need another
+        // activation, including a back-edge at the maximum permitted depth.
+        if depth >= MAX_MODULE_DEPTH {
+            return Err(EsmLoaderError::DepthExceeded {
+                specifier: specifier.to_string(),
+                depth,
+                limit: MAX_MODULE_DEPTH,
+            });
+        }
+
         if let Some(module) = self.modules.get_mut(specifier) {
+            traversal
+                .previous_orders
+                .push((specifier.to_string(), module.eval_order));
             module.status = ModuleStatus::Evaluating;
         }
+        traversal.active.insert(specifier.to_string());
 
         self.trace(
             TracePhase::Evaluate,
@@ -654,26 +689,22 @@ impl ModuleGraph {
             format!("evaluating at depth {depth}"),
         );
 
-        // Evaluate dependencies first (post-order DFS = topological order).
         let deps: Vec<String> = self.modules[specifier]
             .dependencies
             .iter()
             .cloned()
             .collect();
-
         for dep in &deps {
-            self.evaluate_module(dep, eval_order, eval_counter, depth + 1)?;
+            self.evaluate_module(dep, traversal, depth + 1)?;
         }
 
-        // Mark as evaluated and record order.
-        let order = *eval_counter;
-        *eval_counter += 1;
+        let order = traversal.order.len() as u32;
         if let Some(module) = self.modules.get_mut(specifier) {
             module.status = ModuleStatus::Evaluated;
             module.eval_order = Some(order);
         }
-        eval_order.push(specifier.to_string());
-
+        traversal.order.push(specifier.to_string());
+        traversal.active.remove(specifier);
         Ok(())
     }
 

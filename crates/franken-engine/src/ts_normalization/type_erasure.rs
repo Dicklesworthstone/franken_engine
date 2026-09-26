@@ -47,6 +47,7 @@ fn analyze(source: &str, depth: usize) -> Option<Eraser<'_>> {
         tokens,
         pairs,
         spans: Vec::new(),
+        module_marker: None,
     };
     // Track runtime conditional operators at each delimiter depth. A colon
     // after a parenthesized/call expression in a conditional can introduce an
@@ -80,7 +81,7 @@ fn analyze(source: &str, depth: usize) -> Option<Eraser<'_>> {
             _ => {}
         }
     }
-    eraser.erase_expression_types();
+    eraser.erase_expression_types(depth == 0);
     eraser.erase_template_expressions(depth);
     Some(eraser)
 }
@@ -91,6 +92,9 @@ struct Eraser<'a> {
     pairs: Vec<Option<usize>>,
     removed: Vec<bool>,
     spans: Vec<(usize, usize)>,
+    // An erased exported declaration must still make the output a module.
+    // Emit one empty export inside its original span, retaining byte offsets.
+    module_marker: Option<usize>,
 }
 
 impl Eraser<'_> {
@@ -528,15 +532,22 @@ impl Eraser<'_> {
             }
             let start = start.max(copied);
             output.push_str(&self.source[copied..start]);
+            let mut marker = if self.module_marker == Some(start) {
+                "export{};"
+            } else {
+                ""
+            }
+            .chars();
             for ch in self.source[start..end].chars() {
                 if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
                     output.push(ch);
                 } else {
                     for _ in 0..ch.len_utf8() {
-                        output.push(' ');
+                        output.push(marker.next().unwrap_or(' '));
                     }
                 }
             }
+            debug_assert!(marker.next().is_none(), "declaration fits empty export");
             copied = end;
         }
         output.push_str(&self.source[copied..]);
@@ -808,8 +819,10 @@ mod tests {
         check("function identity⟦<T extends {value: number}>⟧(input⟦: T⟧)⟦: T⟧ { return input; }");
         check("const identity = ⟦<T>⟧(input⟦: T⟧)⟦: T⟧ => input;");
         check("class Box⟦<T>⟧ { value⟦: T⟧; choose⟦<U>⟧(value⟦: U⟧)⟦: U⟧ { return value; } }");
-        check("const value = a < b > (c); const other = (a < b) ? c : d;");
-        check("a < b > (c)\n{ work(); }");
+        // In TypeScript these are generic calls, not chained comparisons.
+        // The explicitly parenthesized comparison remains a runtime operation.
+        check("const value = a ⟦< b >⟧ (c); const other = (a < b) ? c : d;");
+        check("a ⟦< b >⟧ (c)\n{ work(); }");
     }
 
     #[test]

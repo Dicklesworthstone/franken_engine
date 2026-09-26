@@ -56,8 +56,8 @@ impl Eraser<'_> {
         }
     }
 
-    pub(super) fn erase_expression_types(&mut self) {
-        self.erase_function_overloads();
+    pub(super) fn erase_expression_types(&mut self, module_scope: bool) {
+        self.erase_type_only_declarations(module_scope);
         let mut cursor = 0;
         let mut previous = None;
         let mut asserted = false;
@@ -126,26 +126,47 @@ impl Eraser<'_> {
         }
     }
 
-    /// Overloads and ambient function declarations have no executable body.
+    /// Type-only declarations have no executable body or local binding.
     /// Remove the complete declaration before processing expression suffixes,
     /// so its name/generics cannot be mistaken for a generic call. The actual
     /// implementation is left in place, preserving hoisting and identity.
-    fn erase_function_overloads(&mut self) {
+    fn erase_type_only_declarations(&mut self, module_scope: bool) {
         let mut index = 0;
+        let mut nesting = 0usize;
         while index < self.tokens.len() {
-            if !self.removed[index]
-                && self.text(index) == "function"
-                && let Some((start, end)) = self.function_overload_span(index)
-            {
-                self.mark(start, end);
+            let exported = module_scope && nesting == 0;
+            let declaration = if self.removed[index] {
+                None
+            } else {
+                match self.text(index) {
+                    "function" => self.function_overload_span(index, exported),
+                    "declare" => self.ambient_variable_span(index, exported),
+                    _ => None,
+                }
+            };
+            if let Some((start, end)) = declaration {
+                self.mark_type_declaration(start, end);
                 index = end;
             } else {
+                match self.text(index) {
+                    "(" | "[" | "{" => nesting += 1,
+                    ")" | "]" | "}" => nesting = nesting.saturating_sub(1),
+                    _ => {}
+                }
                 index += 1;
             }
         }
     }
 
-    fn function_overload_span(&self, function: usize) -> Option<(usize, usize)> {
+    fn mark_type_declaration(&mut self, start: usize, end: usize) {
+        if self.text(start) == "export" {
+            let offset = self.tokens[start].start;
+            self.module_marker = Some(self.module_marker.map_or(offset, |old| old.min(offset)));
+        }
+        self.mark(start, end);
+    }
+
+    fn function_overload_span(&self, function: usize, exported: bool) -> Option<(usize, usize)> {
         if self.property_name(function) {
             return None;
         }
@@ -153,7 +174,7 @@ impl Eraser<'_> {
         if start > 0 && self.text(start - 1) == "async" && !self.newline_before(start) {
             start -= 1;
         }
-        if start > 0 && self.text(start - 1) == "declare" {
+        if start > 0 && self.text(start - 1) == "declare" && !self.newline_before(start) {
             start -= 1;
         }
         if start > 0 && self.text(start - 1) == "default" {
@@ -165,7 +186,7 @@ impl Eraser<'_> {
         } else if start > 0 && self.text(start - 1) == "export" {
             start -= 1;
         }
-        if !self.function_declaration_site(start) {
+        if (self.text(start) == "export" && !exported) || !self.type_declaration_site(start) {
             return None;
         }
         // Anonymous expressions and generator declarations do not admit
@@ -229,7 +250,78 @@ impl Eraser<'_> {
         }
     }
 
-    fn function_declaration_site(&self, start: usize) -> bool {
+    /// Ambient host bindings describe existing values; they must not allocate
+    /// local var/let/const slots or evaluate initializer expressions. Admit
+    /// the whole list atomically, retaining unsupported/effectful initializers
+    /// for parser diagnostics instead of deleting their effects.
+    fn ambient_variable_span(&self, declare: usize, exported: bool) -> Option<(usize, usize)> {
+        if self.property_name(declare) || self.newline_before(declare + 1) {
+            return None;
+        }
+        let start = if declare > 0 && self.text(declare - 1) == "export" {
+            if !exported {
+                return None;
+            }
+            declare - 1
+        } else {
+            declare
+        };
+        if !self.type_declaration_site(start) {
+            return None;
+        }
+        let constant = self.text(declare + 1) == "const";
+        if !matches!(self.text(declare + 1), "var" | "let" | "const") {
+            return None;
+        }
+        let mut cursor = declare + 2;
+        loop {
+            // Ambient variable declarations have identifier bindings, not
+            // destructuring patterns with possibly executable defaults.
+            if self.tokens.get(cursor)?.kind != Kind::Word {
+                return None;
+            }
+            cursor += 1;
+            if self.text(cursor) == ":" {
+                cursor = self.type_end(cursor + 1, 0)?;
+            }
+            if self.text(cursor) == "=" {
+                if !constant {
+                    return None;
+                }
+                cursor = self.ambient_constant_end(cursor + 1)?;
+            }
+            match self.text(cursor) {
+                "," => cursor += 1,
+                ";" => return Some((start, cursor + 1)),
+                "}" => return Some((start, cursor)),
+                _ if cursor == self.tokens.len()
+                    || (self.newline_before(cursor)
+                        && self.tokens[cursor].kind == Kind::Word) =>
+                {
+                    return Some((start, cursor));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn ambient_constant_end(&self, mut cursor: usize) -> Option<usize> {
+        let signed = matches!(self.text(cursor), "-" | "+");
+        if signed {
+            cursor += 1;
+        }
+        let token = self.tokens.get(cursor)?;
+        let numeric = token.kind == Kind::Literal
+            && token.text.as_bytes().first().is_some_and(u8::is_ascii_digit);
+        let quoted = token.kind == Kind::Literal && token.text.starts_with(['\'', '"']);
+        if numeric || (!signed && (quoted || matches!(token.text, "true" | "false"))) {
+            Some(cursor + 1)
+        } else {
+            None
+        }
+    }
+
+    fn type_declaration_site(&self, start: usize) -> bool {
         if start == 0 {
             return true;
         }
@@ -431,6 +523,69 @@ mod tests {
     use super::super::tests::check;
 
     #[test]
+    fn ambient_variables_never_create_runtime_bindings() {
+        check("⟦declare const host: {read(path: string): string};⟧ host.read('a');");
+        check("⟦declare let count: number, name: string;⟧ const local = 3;");
+        check("⟦declare var legacy;⟧ use(legacy);");
+        check("⟦declare const code = -42, label = 'ready', active = true;⟧ use(code);");
+        check("⟦declare var 名称:\n {名: 'é'}⟧\nuse(名称);");
+    }
+
+    #[test]
+    fn ambient_lists_with_effectful_initializers_are_not_partially_deleted() {
+        check("declare const bad⟦: number⟧ = effect();");
+        check("declare let bad⟦: number⟧ = 1;");
+        check("declare const good⟦: number⟧, bad = effect();");
+        check("declare const {value = effect()}⟦: Shape⟧;");
+        check("const value = 'declare const host: Host'; object.declare(value);");
+        check("const declare = 3; const object = {declare};");
+    }
+
+    #[test]
+    fn exported_ambient_bindings_preserve_an_empty_module_and_byte_positions() {
+        let declaration = "export declare const host: Host;";
+        let source = format!("{declaration}\nconst value = 3;");
+        let expected = format!("export{{}};{}\nconst value = 3;", " ".repeat(declaration.len() - 9));
+        assert_eq!(super::super::erase(&source), expected);
+        assert_eq!(expected.len(), source.len());
+        assert_eq!(super::super::erase(&expected), expected);
+        let source = "export\ndeclare const 名称:\n 'é';";
+        let expected = format!("export\n{{}};{}\n{}", " ".repeat("declare const 名称:".len() - 3), " ".repeat(" 'é';".len()));
+        assert_eq!(super::super::erase(source), expected);
+        assert_eq!(expected.len(), source.len());
+    }
+
+    #[test]
+    fn only_one_empty_export_is_emitted_for_multiple_erased_declarations() {
+        let first = "export declare const value: number;";
+        let second = "export declare function external(): void;";
+        let source = format!("{first}\n{second}");
+        assert_eq!(
+            super::super::erase(&source),
+            format!("export{{}};{}\n{}", " ".repeat(first.len() - 9), " ".repeat(second.len()))
+        );
+    }
+
+    #[test]
+    fn invalid_nested_exports_are_not_hidden_by_declaration_erasure() {
+        check("function outer() { export declare function invalid(): void; }");
+        check("const text = `${(() => { export declare function invalid(): void; return 1; })()}`;");
+        check("function outer() { export declare const invalid⟦: number⟧; }");
+        check("class Object { ⟦export(value: number): number;⟧ export(value) { return value; } }");
+    }
+
+    #[test]
+    fn declare_is_a_modifier_only_without_a_line_terminator() {
+        // On a new line `declare` is an identifier expression, not a modifier.
+        // Deleting it could hide a ReferenceError or a host getter's effects.
+        check("declare\nconst value⟦: number⟧ = 1;");
+        check("declare /*\n*/ const value⟦: number⟧ = 1;");
+        check("declare\n⟦function run(value: number): number;⟧ function run(value) { return value; }");
+        check("⟦declare /* inline */ const host: Host;⟧");
+        check("⟦declare /* inline */ function run(value: number): number;⟧");
+    }
+
+    #[test]
     fn free_function_overloads_leave_one_runtime_implementation() {
         check("⟦function choose(value: number): number;⟧ ⟦function choose(value: string): string;⟧ function choose(value⟦: unknown⟧) { return value; }");
         check("⟦function map<T extends {value: number}>(value: T): {result: T};⟧ function map(value) { return {result: value}; }");
@@ -440,9 +595,18 @@ mod tests {
     #[test]
     fn exported_and_ambient_functions_have_no_runtime_binding() {
         check("⟦declare function external(value: number): string;⟧ use(external);");
-        check("⟦export declare function external<T>(value: T): T;⟧ export const value = 1;");
-        check("⟦export default function choose(value: number): number;⟧ export default function choose(value) { return value; }");
         check("⟦async function load(value: number): Promise<number>;⟧ async function load(value) { return value; }");
+        let declaration = "export default function choose(value: number): number;";
+        let implementation = " export default function choose(value) { return value; }";
+        assert_eq!(
+            super::super::erase(&format!("{declaration}{implementation}")),
+            format!("export{{}};{}{implementation}", " ".repeat(declaration.len() - 9))
+        );
+        let declaration = "export declare function external<T>(value: T): T;";
+        assert_eq!(
+            super::super::erase(declaration),
+            format!("export{{}};{}", " ".repeat(declaration.len() - 9))
+        );
     }
 
     #[test]

@@ -10,6 +10,14 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserS
 use frankenengine_engine::ts_normalization::prepare_source_entry_for_public_entrypoints;
 
 fn assert_output(source: &str, expected: &[&str]) {
+    assert_output_goal(source, expected, ParseGoal::Script);
+}
+
+fn assert_module_output(source: &str, expected: &[&str]) {
+    assert_output_goal(source, expected, ParseGoal::Module);
+}
+
+fn assert_output_goal(source: &str, expected: &[&str], goal: ParseGoal) {
     let prepared = prepare_source_entry_for_public_entrypoints(
         source,
         "function-execution.ts",
@@ -24,7 +32,7 @@ fn assert_output(source: &str, expected: &[&str]) {
                 label: prepared.source_label,
                 text: prepared.prepared_source,
             },
-            ParseGoal::Script,
+            goal,
             &ParserOptions::default(),
         )
         .expect("normalized source must parse as JavaScript");
@@ -206,10 +214,107 @@ fn exported_signatures_are_removed_but_implementation_exports_still_parse() {
         "export function read(value: number): number;\nexport function read(value: number) { return value; }",
         "exported-overload.ts", "t", "d", "p",
     ).expect("exported overload should normalize");
-    assert_eq!(prepared.prepared_source.matches("export").count(), 1);
+    assert_eq!(prepared.prepared_source.matches("export function read").count(), 1);
+    assert!(prepared.prepared_source.starts_with("export{};"));
     assert!(prepared.prepared_source.contains("export function read"));
     CanonicalEs2020Parser.parse_with_options(
         ParserSource { label: prepared.source_label, text: prepared.prepared_source },
         ParseGoal::Module, &ParserOptions::default(),
     ).expect("remaining runtime export must parse as a JavaScript module");
+}
+
+#[test]
+fn ambient_host_bindings_do_not_shadow_real_runtime_builtins() {
+    assert_output(
+        r#"
+        declare const console: {log(...values: unknown[]): void};
+        declare var Math: {max(...values: number[]): number};
+        declare let JSON: {stringify(value: unknown): string};
+        console.log(Math.max(2, 5, 3), JSON.stringify({value: 7}));
+        "#,
+        &["5 {\"value\":7}"],
+    );
+}
+
+#[test]
+fn ambient_binding_kinds_create_no_undefined_slots_or_literal_values() {
+    assert_output(
+        r#"
+        declare var absentVar: number;
+        declare let absentLet: string;
+        declare const absentConst = 42, absentString = 'text', absentFlag = true;
+        console.log(typeof absentVar, typeof absentLet, typeof absentConst);
+        console.log(typeof absentString, typeof absentFlag);
+        try { absentConst; } catch (error) { console.log(error.name); }
+        "#,
+        &["undefined undefined undefined", "undefined undefined", "ReferenceError"],
+    );
+}
+
+#[test]
+fn ambient_declarations_preserve_existing_variable_values_and_literal_text() {
+    assert_output(
+        r#"
+        var supplied = 12;
+        declare var supplied: number;
+        const text = 'declare const missing: number;';
+        console.log(supplied, text);
+        "#,
+        &["12 declare const missing: number;"],
+    );
+}
+
+#[test]
+fn an_erased_exported_ambient_binding_keeps_module_this_and_strict_functions() {
+    assert_module_output(
+        r#"
+        export declare const providedByHost: {value: number};
+        function receiver() { return this; }
+        console.log(this === undefined, receiver() === undefined, typeof providedByHost);
+        "#,
+        &["true true undefined"],
+    );
+}
+
+#[test]
+fn an_ambient_only_exported_source_is_an_executable_empty_module() {
+    assert_module_output(
+        r#"
+        export declare function external(value: number): number;
+        export declare const externalValue: {value: number};
+        "#,
+        &[],
+    );
+}
+
+#[test]
+fn invalid_ambient_initializers_are_preserved_for_diagnostics() {
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        "declare const valid: number, invalid = effect();\nconsole.log('after');",
+        "invalid-ambient.ts", "t", "d", "p",
+    ).expect("unsupported initializer is retained for the parser");
+    assert!(prepared.prepared_source.contains("declare const valid"));
+    assert!(prepared.prepared_source.contains("invalid = effect()"));
+    assert!(prepared.prepared_source.contains("console.log('after')"));
+}
+
+#[test]
+fn newline_separated_declare_identifiers_still_execute() {
+    assert_output(
+        r#"
+        try {
+            declare
+            const value: number = 1;
+            console.log('wrong');
+        } catch (error) { console.log(error.name); }
+        try {
+            declare
+            function read(value: number): number;
+            function read(value: number) { return value; }
+            console.log('wrong');
+        } catch (error) { console.log(error.name); }
+        console.log('after');
+        "#,
+        &["ReferenceError", "ReferenceError", "after"],
+    );
 }

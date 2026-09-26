@@ -11,6 +11,8 @@ use crate::ir_contract::{EffectBoundary, Ir0Module};
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 
+mod type_erasure;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TsCompilerOptions {
     pub strict: bool,
@@ -1824,7 +1826,7 @@ fn statement_uses_type_only_import_export_syntax(statement: &str) -> bool {
         }
     } else {
         return false;
-    }
+    };
 
     let Some(brace_start) = find_top_level_char(statement, start, '{') else {
         return false;
@@ -2516,179 +2518,7 @@ fn class_header_precedes_implements(source: &str, index: usize) -> bool {
 }
 
 fn strip_type_annotations(source: &str) -> String {
-    let mut output = String::new();
-    let bytes = source.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    // Track string/comment/template-literal state to avoid stripping colons
-    // inside literal contexts.
-    #[derive(PartialEq)]
-    enum Ctx {
-        Code,
-        SingleQuote,
-        DoubleQuote,
-        TemplateLiteral,
-        LineComment,
-        BlockComment,
-    }
-
-    // Helper: advance index past one full UTF-8 codepoint starting at `start`
-    // and return the end index. All context-switching characters are ASCII, so
-    // multi-byte codepoints are always opaque content.
-    #[inline]
-    fn utf8_advance(bytes: &[u8], start: usize) -> usize {
-        if start >= bytes.len() {
-            return start;
-        }
-        let b = bytes[start];
-        if b < 0x80 {
-            start + 1
-        } else if b & 0xE0 == 0xC0 {
-            start + 2
-        } else if b & 0xF0 == 0xE0 {
-            start + 3
-        } else {
-            start + 4
-        }
-        .min(bytes.len())
-    }
-
-    let mut ctx = Ctx::Code;
-
-    while i < len {
-        let ch = bytes[i];
-
-        match ctx {
-            Ctx::LineComment => {
-                if ch == b'\n' {
-                    output.push('\n');
-                    i += 1;
-                    ctx = Ctx::Code;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::BlockComment => {
-                if ch == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
-                    output.push_str("*/");
-                    i += 2;
-                    ctx = Ctx::Code;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::SingleQuote => {
-                if ch == b'\\' && i + 1 < len {
-                    // Escaped character: copy backslash + full next codepoint.
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'\'' {
-                    output.push('\'');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::DoubleQuote => {
-                if ch == b'\\' && i + 1 < len {
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'"' {
-                    output.push('"');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::TemplateLiteral => {
-                if ch == b'\\' && i + 1 < len {
-                    let esc_end = utf8_advance(bytes, i + 1);
-                    output.push_str(&source[i..esc_end]);
-                    i = esc_end;
-                } else if ch == b'`' {
-                    output.push('`');
-                    ctx = Ctx::Code;
-                    i += 1;
-                } else {
-                    let end = utf8_advance(bytes, i);
-                    output.push_str(&source[i..end]);
-                    i = end;
-                }
-                continue;
-            }
-            Ctx::Code => {}
-        }
-
-        // In code context: detect string/comment openings.
-        if ch == b'\'' {
-            ctx = Ctx::SingleQuote;
-            output.push('\'');
-            i += 1;
-            continue;
-        }
-        if ch == b'"' {
-            ctx = Ctx::DoubleQuote;
-            output.push('"');
-            i += 1;
-            continue;
-        }
-        if ch == b'`' {
-            ctx = Ctx::TemplateLiteral;
-            output.push('`');
-            i += 1;
-            continue;
-        }
-        if ch == b'/' && i + 1 < len {
-            if bytes[i + 1] == b'/' {
-                ctx = Ctx::LineComment;
-                output.push_str("//");
-                i += 2;
-                continue;
-            }
-            if bytes[i + 1] == b'*' {
-                ctx = Ctx::BlockComment;
-                output.push_str("/*");
-                i += 2;
-                continue;
-            }
-        }
-
-        // Strip type annotations: skip from colon until the next delimiter.
-        if ch == b':' {
-            i += 1;
-            while i < len {
-                if matches!(bytes[i], b',' | b')' | b'=' | b';' | b'{' | b'}' | b'\n') {
-                    break;
-                }
-                i += 1;
-            }
-            continue;
-        }
-
-        // Default: copy the full UTF-8 codepoint.
-        let end = utf8_advance(bytes, i);
-        output.push_str(&source[i..end]);
-        i = end;
-    }
-
-    output
+    type_erasure::erase(source)
 }
 
 fn lower_simple_jsx(source: &str) -> String {

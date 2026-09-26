@@ -8829,6 +8829,13 @@ pub struct ConsoleEntry {
     pub instruction_index: u64,
 }
 
+/// Receives the console output a lane execution produced before it failed.
+///
+/// A successful run hands its console output back inside [`ExecutionResult`];
+/// a failed run returns only the error, so without this sink everything the
+/// program printed before throwing would be lost.
+pub type FailedConsoleSink = Arc<std::sync::Mutex<Vec<ConsoleEntry>>>;
+
 // ---------------------------------------------------------------------------
 // ExecutionResult
 // ---------------------------------------------------------------------------
@@ -87308,6 +87315,7 @@ pub struct QuickJsLane {
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
+    failed_console_output: Option<FailedConsoleSink>,
 }
 
 impl Default for QuickJsLane {
@@ -87319,6 +87327,7 @@ impl Default for QuickJsLane {
             process_spawn: None,
             host_effect_journal: None,
             timer_effect_authority: None,
+            failed_console_output: None,
         }
     }
 }
@@ -87336,6 +87345,7 @@ impl QuickJsLane {
             process_spawn: None,
             host_effect_journal: None,
             timer_effect_authority: None,
+            failed_console_output: None,
         }
     }
 
@@ -87363,6 +87373,12 @@ impl QuickJsLane {
 
     pub fn set_timer_effect_authority(&mut self, authority: Arc<dyn TimerEffectAuthority>) {
         self.timer_effect_authority = Some(authority);
+    }
+
+    /// Install the sink that receives this lane's console output when an
+    /// execution fails, so output printed before a throw is not lost.
+    pub fn set_failed_console_output_sink(&mut self, sink: FailedConsoleSink) {
+        self.failed_console_output = Some(sink);
     }
 
     pub fn execute(
@@ -87406,6 +87422,7 @@ impl QuickJsLane {
             self.process_spawn.clone(),
             self.host_effect_journal.clone(),
             self.timer_effect_authority.clone(),
+            self.failed_console_output.clone(),
             module,
             trace_id,
             hook,
@@ -87443,6 +87460,7 @@ pub struct V8Lane {
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
+    failed_console_output: Option<FailedConsoleSink>,
 }
 
 impl Default for V8Lane {
@@ -87454,6 +87472,7 @@ impl Default for V8Lane {
             process_spawn: None,
             host_effect_journal: None,
             timer_effect_authority: None,
+            failed_console_output: None,
         }
     }
 }
@@ -87487,6 +87506,7 @@ fn execute_lane_with_provisioned_stack(
     process_spawn: Option<Arc<dyn ProcessSpawnProvider>>,
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
+    failed_console_output: Option<FailedConsoleSink>,
     module: &Ir3Module,
     trace_id: &str,
     hook: Option<Arc<dyn InterpreterHook>>,
@@ -87515,26 +87535,36 @@ fn execute_lane_with_provisioned_stack(
                     Some(program) => core.execute_ephemeral_with_compact_tier1(module, program),
                     None => core.execute_ephemeral(module),
                 };
-                match execution {
+                let outcome = match execution {
                     Ok(result) => Ok(result),
                     Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
-                        let requested_hook_action =
-                            requested_hook_action_from_error(action.as_str(), reason.clone())
-                                .ok_or(InterpreterError::ContainmentActionRequested {
-                                    action,
-                                    reason,
-                                })?;
-                        Ok(core.take_execution_result_with_trace_handoff(
-                            LabeledReturn {
-                                value: Value::Undefined,
-                                label: Label::Public,
-                            },
-                            Some(requested_hook_action),
-                            TraceHandoff::DrainEphemeralCore,
-                        ))
+                        match requested_hook_action_from_error(action.as_str(), reason.clone()) {
+                            Some(requested_hook_action) => Ok(core
+                                .take_execution_result_with_trace_handoff(
+                                    LabeledReturn {
+                                        value: Value::Undefined,
+                                        label: Label::Public,
+                                    },
+                                    Some(requested_hook_action),
+                                    TraceHandoff::DrainEphemeralCore,
+                                )),
+                            None => {
+                                Err(InterpreterError::ContainmentActionRequested { action, reason })
+                            }
+                        }
                     }
                     Err(error) => Err(error),
+                };
+                // A failed execution keeps its console buffer in the core
+                // (only a completed one moves it into the result); hand it
+                // to the sink before the core is dropped.
+                if outcome.is_err()
+                    && let Some(sink) = &failed_console_output
+                    && let Ok(mut captured) = sink.lock()
+                {
+                    *captured = core.console_output().to_vec();
                 }
+                outcome
             })
             .map_err(|error| InterpreterError::InternalError {
                 details: format!(
@@ -87561,6 +87591,7 @@ impl V8Lane {
             process_spawn: None,
             host_effect_journal: None,
             timer_effect_authority: None,
+            failed_console_output: None,
         }
     }
 
@@ -87588,6 +87619,12 @@ impl V8Lane {
 
     pub fn set_timer_effect_authority(&mut self, authority: Arc<dyn TimerEffectAuthority>) {
         self.timer_effect_authority = Some(authority);
+    }
+
+    /// Install the sink that receives this lane's console output when an
+    /// execution fails, so output printed before a throw is not lost.
+    pub fn set_failed_console_output_sink(&mut self, sink: FailedConsoleSink) {
+        self.failed_console_output = Some(sink);
     }
 
     pub fn execute(
@@ -87621,6 +87658,7 @@ impl V8Lane {
             self.process_spawn.clone(),
             self.host_effect_journal.clone(),
             self.timer_effect_authority.clone(),
+            self.failed_console_output.clone(),
             module,
             trace_id,
             hook,
@@ -88092,6 +88130,14 @@ impl LaneRouter {
     pub fn set_timer_effect_authority(&mut self, authority: Arc<dyn TimerEffectAuthority>) {
         self.quickjs.set_timer_effect_authority(authority.clone());
         self.v8.set_timer_effect_authority(authority);
+    }
+
+    /// Install the same failed-run console sink on both lanes so whichever
+    /// lane runs the module reports what it printed before failing.
+    pub fn set_failed_console_output_sink(&mut self, sink: FailedConsoleSink) {
+        self.quickjs
+            .set_failed_console_output_sink(Arc::clone(&sink));
+        self.v8.set_failed_console_output_sink(sink);
     }
 
     /// Route and execute the module.

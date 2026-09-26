@@ -2720,6 +2720,89 @@ fn commonjs_entry_user_declared_require_is_not_a_builtin_loader_bd_rff5g() {
     }
 }
 
+// =========================================================================
+// Console output printed before a failure is not lost
+// =========================================================================
+
+fn failed_console_lines(orchestrator: &ExecutionOrchestrator) -> Vec<String> {
+    orchestrator
+        .last_failed_console_output()
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect()
+}
+
+/// A program that prints and then throws keeps what it printed, on both
+/// lanes; a later successful execution on the same orchestrator reports its
+/// own output and no leftover failure output.
+#[test]
+fn failed_execution_keeps_console_output_printed_before_the_throw() {
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        });
+        let error = orchestrator
+            .execute(&simple_package(
+                "ext-console-before-throw",
+                "console.log(\"before\");\nthrow new Error(\"boom\");\n",
+            ))
+            .expect_err("an uncaught throw fails the execution");
+        assert_eq!(
+            failed_console_lines(&orchestrator),
+            ["before"],
+            "{lane:?}: {error}"
+        );
+
+        let result = orchestrator
+            .execute(&simple_package(
+                "ext-console-after-throw",
+                "console.log(\"after\");\n",
+            ))
+            .unwrap_or_else(|error| panic!("{lane:?}: follow-up run failed: {error}"));
+        assert_eq!(console_lines(&result), ["after"], "{lane:?}");
+        assert!(
+            failed_console_lines(&orchestrator).is_empty(),
+            "{lane:?}: a completed run must not report the earlier failure's output"
+        );
+    }
+}
+
+/// Output printed by a CommonJS entry and by the module it requires survives
+/// when that module throws, since both run in the same interpreter.
+#[test]
+fn failed_commonjs_require_keeps_console_output_of_entry_and_dependency() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    std::fs::write(
+        root.path().join("bad.js"),
+        "console.log(\"in dep\");\nthrow new Error(\"dep failed\");\n",
+    )
+    .expect("dependency");
+    let entry = root.path().join("app.js");
+    std::fs::write(
+        &entry,
+        "console.log(\"before\");\nrequire('./bad');\nconsole.log(\"unreachable\");\n",
+    )
+    .expect("entry");
+
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+        commonjs_entry: true,
+        ..OrchestratorConfig::default()
+    });
+    let error = orchestrator
+        .execute(&commonjs_entry_package(
+            root.path(),
+            &entry,
+            "ext-cjs-dep-throws",
+        ))
+        .expect_err("a throwing dependency fails the entry");
+    assert_eq!(
+        failed_console_lines(&orchestrator),
+        ["before", "in dep"],
+        "{error}"
+    );
+}
+
 /// A declared root widens containment only to itself: imports that escape the
 /// DECLARED root still fail closed, even when the target exists on disk.
 #[test]

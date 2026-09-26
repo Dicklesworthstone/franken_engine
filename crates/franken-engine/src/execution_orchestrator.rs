@@ -25,8 +25,9 @@ pub use frankenengine_core::execution_work_budget::{ExecutionWorkPool, WorkBudge
 
 use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
-    CompactTier1Program, ConsoleEntry, ExecutionResult, HookAction, InterpreterConfig,
-    InterpreterError, InterpreterHook, LaneChoice, LaneReason, LaneRouter, RoutedResult,
+    CompactTier1Program, ConsoleEntry, ExecutionResult, FailedConsoleSink, HookAction,
+    InterpreterConfig, InterpreterError, InterpreterHook, LaneChoice, LaneReason, LaneRouter,
+    RoutedResult,
 };
 use crate::bayesian_posterior::{Evidence, Posterior, RiskState, UpdateResult, UpdaterStore};
 use crate::capability::RuntimeCapability;
@@ -1870,6 +1871,10 @@ pub struct ExecutionOrchestrator {
     /// the retained failure journal must use the same trace the successful path
     /// would have reported, never a locally minted substitute.
     last_failed_trace_id: Option<String>,
+    /// Console output the most recent failed execution printed before it
+    /// failed. The lane writes it through this shared sink because a failed
+    /// execution returns only its error.
+    last_failed_console_output: FailedConsoleSink,
     /// Optional per-run cancellation signal supplied by the product supervisor.
     cancellation_token: Option<CancellationToken>,
     /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
@@ -2149,6 +2154,7 @@ impl ExecutionOrchestrator {
             last_failed_host_effect_journal: Vec::new(),
             last_failed_host_effect_journal_records: Vec::new(),
             last_failed_trace_id: None,
+            last_failed_console_output: Arc::default(),
             cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
@@ -2251,6 +2257,20 @@ impl ExecutionOrchestrator {
     #[must_use]
     pub fn last_failed_trace_id(&self) -> Option<&str> {
         self.last_failed_trace_id.as_deref()
+    }
+
+    /// Console output the most recent execution printed before its interpreter
+    /// run failed; empty when that run completed or failed before executing.
+    ///
+    /// A completed run reports its console output in its result. A run that
+    /// throws returns only the error, so a product caller reads what the
+    /// program printed before failing from here.
+    #[must_use]
+    pub fn last_failed_console_output(&self) -> Vec<ConsoleEntry> {
+        self.last_failed_console_output
+            .lock()
+            .map(|captured| captured.clone())
+            .unwrap_or_default()
     }
 
     /// Install a per-run cooperative cancellation signal for both interpreter
@@ -2466,6 +2486,9 @@ impl ExecutionOrchestrator {
         self.last_failed_host_effect_journal.clear();
         self.last_failed_host_effect_journal_records.clear();
         self.last_failed_trace_id = None;
+        if let Ok(mut captured) = self.last_failed_console_output.lock() {
+            captured.clear();
+        }
         if let Some(attempt) = &process_spawn_attempt {
             attempt
                 .authority
@@ -3567,6 +3590,7 @@ impl ExecutionOrchestrator {
             lane_router.set_process_spawn(provider, journal);
         }
         lane_router.set_timer_effect_authority(timer_effect_authority);
+        lane_router.set_failed_console_output_sink(Arc::clone(&self.last_failed_console_output));
         let compact_tier1 = CompactTier1Program::compile(ir3);
         let routed = lane_router
             .execute_with_hook_and_compact_tier1(

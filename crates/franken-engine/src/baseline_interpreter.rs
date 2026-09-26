@@ -8860,15 +8860,15 @@ pub struct ExecutionResult {
 /// public caller can pair compact instructions with a different module. Each
 /// cell corresponds to exactly one source IR3 instruction; unsupported cells
 /// retain the baseline opcode and execute through Tier R at the same source IP.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CompactTier1Program {
     source_module_hash: ContentHash,
     /// `Ir3FunctionDesc::canonical_value` intentionally omits rest metadata
     /// for historical hash stability. Keep an exact private ABI twin so a
     /// compact plan cannot trust frame verification from a same-hash module
     /// with different rest-parameter binding behavior.
-    source_rest_param_indices: Box<[Option<u32>]>,
-    instructions: Box<[CompactTier1Instruction]>,
+    source_rest_param_indices: Arc<[Option<u32>]>,
+    instructions: Arc<[CompactTier1Instruction]>,
     compact_instruction_count: usize,
     /// Largest verified callable frame in this exact module.
     /// `None` keeps the canonical full-width reset for hand-authored or
@@ -8877,10 +8877,10 @@ pub(crate) struct CompactTier1Program {
     /// Exact verified width for each function. The interpreter combines the
     /// selected callee width with its cross-call high-water mark, so a narrow
     /// callee cannot inherit stale registers from an earlier wider callee.
-    verified_function_frame_clear_widths: Box<[u32]>,
+    verified_function_frame_clear_widths: Arc<[u32]>,
     /// Per-function proof that execution is a non-reentrant register-only leaf
     /// and therefore does not require a fresh lexical scope activation.
-    verified_scope_inert_leaf_functions: Box<[bool]>,
+    verified_scope_inert_leaf_functions: Arc<[bool]>,
 }
 
 #[repr(u8)]
@@ -8995,10 +8995,9 @@ impl CompactTier1Program {
                 .function_table
                 .iter()
                 .map(|function| function.frame_size)
-                .collect::<Vec<_>>()
-                .into_boxed_slice()
+                .collect::<Arc<[u32]>>()
         } else {
-            Box::default()
+            Arc::from([])
         };
         let verified_scope_inert_leaf_functions =
             if verified_function_frame_clear_width.is_some() {
@@ -9006,7 +9005,7 @@ impl CompactTier1Program {
             } else {
                 vec![false; module.function_table.len()]
             }
-            .into_boxed_slice();
+            .into();
         let mut compact_instruction_count = 0usize;
         let mut compact_work_instruction_count = 0usize;
         let instructions = module
@@ -9024,16 +9023,14 @@ impl CompactTier1Program {
                 }
                 compact
             })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
+            .collect::<Arc<[_]>>();
         (compact_work_instruction_count > 0).then_some(Self {
             source_module_hash: module.content_hash(),
             source_rest_param_indices: module
                 .function_table
                 .iter()
                 .map(|function| function.rest_param_index)
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
+                .collect::<Arc<[_]>>(),
             instructions,
             compact_instruction_count,
             verified_function_frame_clear_width,
@@ -11171,6 +11168,11 @@ pub struct InterpreterCore {
     /// executes a narrower module: stale values and labels from the older,
     /// wider module are still cleared before the new callee starts.
     stacked_register_frame_clear_width_high_water: usize,
+    /// The top-level run's compact Tier-I plan and the address of the module
+    /// it was compiled for. Nested builtin callbacks in that same module
+    /// dispatch through it too (verified frame widths, scope-inert leaves,
+    /// compact opcodes) instead of the full-width baseline path.
+    top_level_compact_tier1: Option<(usize, CompactTier1Program)>,
     /// Stack of active try/catch frames for exception unwinding.
     catch_frames: Vec<CatchFrame>,
     /// A pending exception value during an unwind edge, consumed by
@@ -12076,6 +12078,7 @@ impl InterpreterCore {
             trace_id,
             register_base: 0,
             stacked_register_frame_clear_width_high_water: 0,
+            top_level_compact_tier1: None,
             catch_frames: Vec::new(),
             pending_exception: None,
             pending_exception_label: Label::Public,
@@ -31603,7 +31606,12 @@ impl InterpreterCore {
         module: &Ir3Module,
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<LabeledReturn, InterpreterError> {
+        let previous_compact_tier1 = std::mem::replace(
+            &mut self.top_level_compact_tier1,
+            compact_tier1.map(|program| (Self::module_address(module), program.clone())),
+        );
         let result = self.run_loop_labeled_with_compact_tier1(module, compact_tier1);
+        self.top_level_compact_tier1 = previous_compact_tier1;
         if result.is_err() {
             // Tier-R leaves the failing callee's captured environment and
             // fresh local scope installed while checkpoints drain. Reify the
@@ -45778,7 +45786,11 @@ impl InterpreterCore {
                             &prototype_label,
                         )?;
                     }
-                    let result = self.eval_instanceof(module, lhs, rhs)?;
+                    let (result, handler_label) = self.eval_instanceof(module, lhs, rhs)?;
+                    if let Some(handler_label) = handler_label {
+                        result_label = self
+                            .join_owned_label_with_temporary_budget(result_label, &handler_label)?;
+                    }
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
@@ -48159,14 +48171,77 @@ impl InterpreterCore {
         Ok(Value::Int(result))
     }
 
+    /// `lhs instanceof rhs`. The label is the result label of a user
+    /// `Symbol.hasInstance` handler when one decided the result.
     fn eval_instanceof(
         &mut self,
         module: &Ir3Module,
         lhs: u32,
         rhs: u32,
-    ) -> Result<Value, InterpreterError> {
+    ) -> Result<(Value, Option<Label>), InterpreterError> {
         let candidate = self.read_reg(lhs)?;
-        let mut constructor = self.read_reg(rhs)?;
+        let constructor = self.read_reg(rhs)?;
+        // ES2020 12.10.4 InstanceofOperator step 2: GetMethod(target,
+        // @@hasInstance). A user handler (typically `static
+        // [Symbol.hasInstance]`) decides the result via ToBoolean. The
+        // intrinsic Function.prototype[@@hasInstance] is OrdinaryHasInstance,
+        // which the code below performs.
+        if let Some(handler) = self.user_has_instance_handler(module, &constructor)? {
+            let call_labels = self.clone_isolated_call_labels_from_registers(
+                Some(rhs),
+                RegRange {
+                    start: lhs,
+                    count: 1,
+                },
+            )?;
+            let (result, label) = self.invoke_inline_method_call_with_labels(
+                Some(module),
+                handler,
+                constructor,
+                vec![candidate],
+                None,
+                call_labels,
+            )?;
+            return Ok((Value::Bool(result.is_truthy()), Some(label)));
+        }
+        Ok((
+            self.ordinary_instanceof(module, candidate, constructor)?,
+            None,
+        ))
+    }
+
+    /// A callable `Symbol.hasInstance` on an object target, or among a user
+    /// function's own properties (static class members).
+    fn user_has_instance_handler(
+        &mut self,
+        module: &Ir3Module,
+        target: &Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let backing = match target {
+            Value::Object(object_id) => Some(*object_id),
+            Value::Function(_)
+            | Value::Closure(_)
+            | Value::GeneratorFunction(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncGeneratorFunction(_) => {
+                self.function_own_property_object(module, target)?
+            }
+            _ => None,
+        };
+        let Some(backing) = backing else {
+            return Ok(None);
+        };
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::HasInstance.id());
+        self.optional_callable_runtime_property(Some(module), backing, &key, target.clone())
+    }
+
+    fn ordinary_instanceof(
+        &mut self,
+        module: &Ir3Module,
+        candidate: Value,
+        constructor: Value,
+    ) -> Result<Value, InterpreterError> {
+        let mut constructor = constructor;
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
             match self.bound_function_target(&constructor)? {
                 Some(target) => constructor = target,
@@ -63027,6 +63102,22 @@ impl InterpreterCore {
     ///
     /// The caller guarantees no pending exception, return, finally entry,
     /// hostcall result label or generator delegation, so none needs parking.
+    /// Identity of a module for the lifetime of a run: the top-level module
+    /// reference outlives every nested dispatch, so an equal address is the
+    /// same module.
+    fn module_address(module: &Ir3Module) -> usize {
+        std::ptr::from_ref(module) as usize
+    }
+
+    /// The top-level compact plan when `module` is the module it was compiled
+    /// for (O(1): the plan's tables are shared).
+    fn top_level_compact_tier1_for(&self, module: &Ir3Module) -> Option<CompactTier1Program> {
+        self.top_level_compact_tier1
+            .as_ref()
+            .filter(|(address, _)| *address == Self::module_address(module))
+            .map(|(_, program)| program.clone())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn invoke_nested_callback(
         &mut self,
@@ -63128,7 +63219,9 @@ impl InterpreterCore {
                 Ir3Instruction::Halt,
             ];
             self.ip = module.instructions.len();
-            match self.run_loop_labeled_with_trampoline(module, None, &trampoline) {
+            let compact_tier1 = self.top_level_compact_tier1_for(module);
+            match self.run_loop_labeled_with_trampoline(module, compact_tier1.as_ref(), &trampoline)
+            {
                 Err(InterpreterError::Halted) if self.call_stack.len() == boundary_index + 1 => {
                     let value = self.read_reg(0)?;
                     let label = self.clone_register_label_with_temporary_budget(0)?;
@@ -102941,12 +103034,18 @@ mod async_runtime_tests_current {
             level: 5,
         };
         let caller_value = Value::str("caller-snapshot-value");
-        let baseline = {
+        let (baseline, baseline_register_bytes) = {
             let mut core = test_interpreter();
             core.write_reg_with_label(7, caller_value.clone(), caller_label.clone())
                 .expect("caller snapshot register");
-            core.sync_estimated_memory_bytes()
-                .expect("caller snapshot accounting")
+            let total = core
+                .sync_estimated_memory_bytes()
+                .expect("caller snapshot accounting");
+            (
+                total,
+                core.registers_memory_bytes()
+                    .saturating_add(core.register_labels_memory_bytes()),
+            )
         };
         let attempt = |budget: u64| {
             let mut core = test_interpreter();
@@ -103035,7 +103134,22 @@ mod async_runtime_tests_current {
             &caller_label
         );
         assert_eq!(exact_core.active_inline_callback_context_label, None);
-        assert_eq!(exact_core.estimated_memory_bytes(), baseline);
+        // A same-module callback runs as a nested call on the live register
+        // stack (65ccf179a), not in a snapshot the wrapper restores. Like
+        // every ordinary call, it leaves its dead frames' registers in place
+        // until a later frame at that depth clears them. Every other
+        // component is exactly back at the baseline; the only residual is
+        // the register file's contents.
+        let register_bytes = |core: &InterpreterCore| {
+            core.registers_memory_bytes()
+                .saturating_add(core.register_labels_memory_bytes())
+        };
+        assert_eq!(
+            exact_core
+                .estimated_memory_bytes()
+                .saturating_sub(register_bytes(&exact_core)),
+            baseline.saturating_sub(baseline_register_bytes)
+        );
         assert_eq!(
             exact_core.estimated_memory_bytes(),
             exact_core.recompute_estimated_memory_bytes()
@@ -120684,7 +120798,10 @@ mod tests {
             baseline_core.recompute_estimated_memory_bytes()
         );
 
-        let callback_temporary_bytes = InterpreterCore::transient_module_wrapper_bytes(module)
+        // The preflight charges the synthetic call site (two trampoline
+        // instructions since fc0428914, not a module copy) plus the caller
+        // snapshot.
+        let callback_temporary_bytes = InterpreterCore::isolated_call_site_bytes(module, false)
             .saturating_add(compact_core.module_execution_snapshot_memory_bytes());
         let one_byte_short = compact_core
             .estimated_memory_bytes()

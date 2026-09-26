@@ -40,9 +40,7 @@ enum Expect {
 // focused bugs filed from this corpus's first real run on 2026-09-23).
 const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
-const COLLECTIONS: &str = "bd-performance-conformance-bridge-tu32j.16.6";
 const TYPED_ARRAYS: &str = "bd-performance-conformance-bridge-tu32j.16.7";
-const SYMBOLS: &str = "bd-performance-conformance-bridge-tu32j.16.17";
 const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 /// `for await` lowers to synchronous for-of (no `@@asyncIterator` dispatch).
 const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
@@ -57,7 +55,8 @@ const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
 /// caller (bd-9vouw.26), and 23 and 43 with Number.prototype.toPrecision and
 /// the arguments object (f2870e990, bd-9vouw.25), and 07, 09, 24, 34 and 45
 /// with Date methods, RegExp replace and the URI globals (861c1a92c /
-/// 247a2a99c, bd-9vouw.51-.53), and 13 with BigInt arithmetic (bd-9vouw.54).
+/// 247a2a99c, bd-9vouw.51-.53), 13 with BigInt arithmetic (bd-9vouw.54), 27
+/// once array literal elisions became holes, and 32 with `Symbol.hasInstance`.
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::Pass),
@@ -88,12 +87,12 @@ const LEDGER: &[(&str, Expect)] = &[
     ("24_date", Expect::Pass),
     ("25_getter_setter_proto", Expect::Pass),
     ("26_error_types", Expect::DeniedByDesign),
-    ("27_weakmap_holes", Expect::KnownFailure(COLLECTIONS)),
+    ("27_weakmap_holes", Expect::Pass),
     ("28_sort_stability", Expect::Pass),
     ("29_promise_all_race", Expect::Pass),
     ("30_async_iter", Expect::KnownFailure(ASYNC_ITERATION)),
     ("31_object_entries_order", Expect::Pass),
-    ("32_instanceof_hasinstance", Expect::KnownFailure(SYMBOLS)),
+    ("32_instanceof_hasinstance", Expect::Pass),
     (
         "33_class_private_post2020",
         Expect::OutOfScope("ES2022 class private fields; the target is ES2020"),

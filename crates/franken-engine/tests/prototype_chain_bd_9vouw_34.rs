@@ -227,3 +227,40 @@ fn function_prototypes_point_back_to_their_constructor() {
         "true",
     );
 }
+
+#[test]
+fn symbol_has_instance_decides_instanceof() {
+    // ES2020 12.10.4 InstanceofOperator: a user `Symbol.hasInstance` (a static
+    // class method or an object's method) is called with the target as
+    // `this`, and ToBoolean of its result is the answer (JS probe corpus case
+    // 32). Without one, the prototype walk is unchanged.
+    check(
+        "class Even { static [Symbol.hasInstance](n) { return n % 2 === 0; } } \
+         [2 instanceof Even, 3 instanceof Even].join()",
+        "true,false",
+    );
+    check(
+        "var o = { [Symbol.hasInstance](v) { return v === 1; } }; \
+         var T = { [Symbol.hasInstance]() { return 'yes'; } }; \
+         [1 instanceof o, 2 instanceof o, 0 instanceof T].join()",
+        "true,false,true",
+    );
+    check(
+        "var seen; var U = { [Symbol.hasInstance](v) { seen = this === U; return false; } }; \
+         var r = 1 instanceof U; [r, seen].join()",
+        "false,true",
+    );
+    // A non-callable handler is a TypeError; a throwing handler propagates.
+    check(
+        "var B = { [Symbol.hasInstance]: 1 }; \
+         var C = { [Symbol.hasInstance]() { throw new RangeError('x'); } }; var a, b; \
+         try { 1 instanceof B; a = 'no'; } catch (e) { a = e instanceof TypeError; } \
+         try { 1 instanceof C; b = 'no'; } catch (e) { b = e instanceof RangeError; } [a, b].join()",
+        "true,true",
+    );
+    check(
+        "class A {} class D extends A {} \
+         [new A() instanceof A, ({}) instanceof A, new D() instanceof A].join()",
+        "true,false,true",
+    );
+}

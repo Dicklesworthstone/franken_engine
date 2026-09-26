@@ -71,6 +71,7 @@ fn create_deterministic_config() -> OrchestratorConfig {
         max_concurrent_sagas: 1,
         epoch: SecurityEpoch::from_raw(1000), // Fixed epoch for determinism
         parse_goal: ParseGoal::Script,
+        commonjs_entry: false,
         parser_options: ParserOptions::default(),
         trace_id_prefix: "metamorphic_test".to_string(),
         policy_id: "metamorphic_test_policy".to_string(),

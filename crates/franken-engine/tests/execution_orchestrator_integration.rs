@@ -1035,6 +1035,7 @@ fn config_clone_preserves_all_fields() {
         max_concurrent_sagas: 16,
         epoch: SecurityEpoch::from_raw(77),
         parse_goal: ParseGoal::Module,
+        commonjs_entry: false,
         trace_id_prefix: "clone-test".to_string(),
         policy_id: "policy-clone".to_string(),
         parser_options: Default::default(),

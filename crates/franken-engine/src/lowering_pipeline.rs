@@ -89,6 +89,11 @@ const RUNTIME_LEXICAL_BINDING_NAME_PREFIX: &str = "\0runtime-lexical\0";
 const TYPEOF_DYNAMIC_NAME_SENTINEL_PREFIX: &str = "\0typeof-dynamic\0";
 const AUTHENTICATED_COMMONJS_RUNTIME_BINDINGS: [&str; 5] =
     ["require", "exports", "module", "__filename", "__dirname"];
+/// Records the binding id of the authenticated CommonJS `require` so builtin
+/// recognizers can tell it from a source declaration. It carries the lexical
+/// prefix so fresh function bodies inherit it with the other lexical markers;
+/// the NUL-led name can never be a source identifier.
+const CANONICAL_COMMONJS_REQUIRE_SENTINEL: &str = "\0lexical\0\0canonical-commonjs-require";
 
 /// Maximum number of IR1 ops to preallocate based on AST size (prevents pathological growth).
 const MAX_PREALLOC_OPS: usize = 1_000_000; // 1M ops max
@@ -207,6 +212,30 @@ fn is_lexically_shadowed(binding_lookup: &BTreeMap<String, BindingId>, name: &st
     binding_lookup.contains_key(name)
         || has_source_lexical_binding(binding_lookup, name)
         || binding_lookup.contains_key(&typeof_dynamic_name_sentinel(name))
+}
+
+/// Whether a `require` callee may be read as Node's own `require` by the
+/// builtin-module recognizers (`require('fs')`, `require('node:path')`, ...):
+/// either the ambient identifier, or the authenticated CommonJS wrapper
+/// binding when that injected binding is the one visible here (bd-rff5g).
+/// Any source declaration of `require` (parameter, `let`, `var`, function,
+/// block scope) carries a different binding id and keeps the recognizers off.
+/// Only the recognizers use this; a plain `require(...)` call on the wrapper
+/// binding still lowers to a call of the runtime loader.
+fn is_builtin_require_callee(binding_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
+    if name != "require" {
+        return false;
+    }
+    if !is_lexically_shadowed(binding_lookup, name) {
+        return true;
+    }
+    let Some(&injected) = binding_lookup.get(CANONICAL_COMMONJS_REQUIRE_SENTINEL) else {
+        return false;
+    };
+    match binding_lookup.get(name) {
+        Some(&visible) => visible == injected,
+        None => binding_lookup.get(&capture_origin_sentinel(name)) == Some(&injected),
+    }
 }
 
 fn is_internal_lowering_binding(name: &str) -> bool {
@@ -647,6 +676,7 @@ pub fn lower_ir0_to_ir3(
     let ir3_result = match lower_ir2_to_ir3_with_host_io_exception_provenance(
         &ir2_result.module,
         context.host_io_exception_provenance,
+        context.authenticated_commonjs_runtime_bindings,
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir2_to_ir3_lowered"));
@@ -882,16 +912,24 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
             declared_root_bindings.insert(name.to_string());
         }
     }
-    declared_root_bindings.extend(reserve_root_scope_bindings(
-        &ir0.tree.body,
-        &mut binding_lookup,
-        &mut binding_index,
-    ));
-    declared_root_bindings.extend(reserve_hoisted_var_bindings(
-        &ir0.tree.body,
-        &mut binding_lookup,
-        &mut binding_index,
-    ));
+    let source_root_bindings =
+        reserve_root_scope_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
+    let source_hoisted_bindings =
+        reserve_hoisted_var_bindings(&ir0.tree.body, &mut binding_lookup, &mut binding_index);
+    // A root-level source declaration of `require` reuses the wrapper's
+    // binding id, so it must be excluded here rather than by id comparison.
+    if authenticated_commonjs_runtime_bindings
+        && !source_root_bindings.contains("require")
+        && !source_hoisted_bindings.contains("require")
+        && let Some(&injected_require) = binding_lookup.get("require")
+    {
+        binding_lookup.insert(
+            CANONICAL_COMMONJS_REQUIRE_SENTINEL.to_string(),
+            injected_require,
+        );
+    }
+    declared_root_bindings.extend(source_root_bindings);
+    declared_root_bindings.extend(source_hoisted_bindings);
     for name in &declared_root_bindings {
         binding_lookup.insert(lexical_binding_sentinel(name), 0);
         let binding_id = *binding_lookup
@@ -7277,12 +7315,17 @@ fn ensure_lowering_values(stack: &[Reg], needed: usize) -> Result<(), LoweringPi
 pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
-    lower_ir2_to_ir3_with_host_io_exception_provenance(ir2, HostIoExceptionProvenance::Unknown)
+    lower_ir2_to_ir3_with_host_io_exception_provenance(
+        ir2,
+        HostIoExceptionProvenance::Unknown,
+        false,
+    )
 }
 
 fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     ir2: &Ir2Module,
     host_io_exception_provenance: HostIoExceptionProvenance,
+    authenticated_commonjs_runtime_bindings: bool,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
     // Nested function bodies are re-annotated below for their runtime flow
@@ -7411,11 +7454,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 .or_insert(binding.kind);
         }
     }
-    let is_commonjs = Path::new(&ir2.header.source_label)
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("cjs"))
-        .unwrap_or(false);
+    // The wrapper bindings live in the runtime scope chain, where the
+    // CommonJS loader writes them. The authenticated lowering context is what
+    // declared them; a `.js` CommonJS module (a required `.js`, or a
+    // host-declared entry) has no `.cjs` label, and reading its `require` from
+    // a never-written register made it undefined (bd-rff5g).
+    let is_commonjs = authenticated_commonjs_runtime_bindings
+        || Path::new(&ir2.header.source_label)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("cjs"))
+            .unwrap_or(false);
     let mut scoped_runtime_binding_ids = BTreeSet::<BindingId>::new();
     if is_commonjs {
         if let Some(binding_id) = name_to_binding_id.get("require") {
@@ -18066,7 +18115,7 @@ fn is_require_fs_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -18440,7 +18489,7 @@ fn is_require_path_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -18546,7 +18595,7 @@ fn is_path_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bi
             callee, arguments, ..
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
-                if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+                if is_builtin_require_callee(binding_lookup, name))
                 && matches!(arguments.as_slice(), [spec]
                     if well_formed_string_literal(spec).is_some_and(is_path_module_specifier))
         }
@@ -18879,7 +18928,7 @@ fn is_require_url_module_initializer(
         return false;
     };
     matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
         && matches!(arguments.as_slice(), [specifier]
             if well_formed_string_literal(specifier).is_some_and(is_url_module_specifier))
 }
@@ -19144,7 +19193,7 @@ fn is_require_querystring_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -19182,7 +19231,7 @@ fn is_querystring_module_object(
             callee, arguments, ..
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
-                if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+                if is_builtin_require_callee(binding_lookup, name))
                 && matches!(arguments.as_slice(), [spec]
                     if well_formed_string_literal(spec)
                         .is_some_and(is_querystring_module_specifier))
@@ -19298,7 +19347,7 @@ fn is_require_zlib_module_initializer(
         return false;
     };
     matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
         && matches!(arguments.as_slice(), [specifier]
             if well_formed_string_literal(specifier).is_some_and(is_zlib_module_specifier))
 }
@@ -19491,7 +19540,7 @@ fn is_require_crypto_module_initializer(
         return false;
     };
     matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
         && matches!(arguments.as_slice(), [specifier]
             if well_formed_string_literal(specifier).is_some_and(is_crypto_module_specifier))
 }
@@ -20222,7 +20271,7 @@ fn is_require_cluster_module_initializer(
         return false;
     };
     matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
         && matches!(arguments.as_slice(), [specifier]
             if well_formed_string_literal(specifier).is_some_and(is_cluster_module_specifier))
 }
@@ -20362,7 +20411,7 @@ fn is_require_child_process_module_initializer(
         return false;
     };
     matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
         && matches!(arguments.as_slice(), [specifier]
             if well_formed_string_literal(specifier)
                 .is_some_and(is_child_process_module_specifier))
@@ -20565,7 +20614,7 @@ fn is_require_timers_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -20586,7 +20635,7 @@ fn is_require_timers_promises_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -21048,7 +21097,7 @@ fn is_require_net_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -22796,7 +22845,7 @@ fn is_require_tls_module_initializer(
         return false;
     };
     matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
         && matches!(arguments.as_slice(), [specifier]
             if well_formed_string_literal(specifier).is_some_and(is_tls_module_specifier))
 }
@@ -23107,7 +23156,7 @@ fn is_require_stream_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -23705,7 +23754,7 @@ fn is_require_events_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -24133,7 +24182,7 @@ fn is_require_os_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -24204,7 +24253,7 @@ fn is_os_module_object(expr: &Expression, binding_lookup: &BTreeMap<String, Bind
             callee, arguments, ..
         } => {
             matches!(callee.as_ref(), Expression::Identifier(name)
-                if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+                if is_builtin_require_callee(binding_lookup, name))
                 && matches!(arguments.as_slice(), [spec]
                     if well_formed_string_literal(spec).is_some_and(is_os_module_specifier))
         }
@@ -24369,7 +24418,7 @@ fn is_require_http_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -24388,7 +24437,7 @@ fn is_require_https_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }
@@ -25087,7 +25136,7 @@ fn is_require_fs_promises_module_initializer(
         return false;
     };
     if !matches!(callee.as_ref(), Expression::Identifier(name)
-        if name == "require" && !is_lexically_shadowed(binding_lookup, name))
+        if is_builtin_require_callee(binding_lookup, name))
     {
         return false;
     }

@@ -678,6 +678,14 @@ pub struct OrchestratorConfig {
     pub epoch: SecurityEpoch,
     /// Parse goal (Script or Module).
     pub parse_goal: ParseGoal,
+    /// The trusted host declares a Script-goal entry to be a CommonJS module
+    /// (Node's reading of `.cjs`, and of `.js` outside a `"type": "module"`
+    /// package). The entry is then lowered and run like a required CommonJS
+    /// module: `require`, `module`, `exports`, `__filename` and `__dirname`
+    /// are bound, and relative `require` resolves from the entry's own path
+    /// inside the module root (bd-rff5g). A source label alone never enables
+    /// this; the host must opt in.
+    pub commonjs_entry: bool,
     /// Parser mode + deterministic budget configuration.
     pub parser_options: ParserOptions,
     /// Prefix for generated trace IDs.
@@ -698,6 +706,7 @@ impl Default for OrchestratorConfig {
             max_concurrent_sagas: runtime_orchestrator.max_concurrent_sagas,
             epoch: SecurityEpoch::from_raw(1),
             parse_goal: ParseGoal::Script,
+            commonjs_entry: false,
             parser_options: ParserOptions::default(),
             trace_id_prefix: "orch".to_string(),
             policy_id: "default-policy".to_string(),
@@ -3263,7 +3272,10 @@ impl ExecutionOrchestrator {
             self.config.parse_goal,
             &self.config.parser_options,
         )?;
-        let ir0_source_label = if self.config.parse_goal == ParseGoal::Module {
+        // A module entry, ESM or host-declared CommonJS, is labelled with its
+        // own path so relative specifiers resolve from the entry's directory.
+        let commonjs_entry = self.commonjs_entry();
+        let ir0_source_label = if self.config.parse_goal == ParseGoal::Module || commonjs_entry {
             effective_source_label
         } else {
             &source_label
@@ -3289,6 +3301,11 @@ impl ExecutionOrchestrator {
         let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id)
             .with_ambient_authority_grant(self.ambient_authority_grant)
             .with_host_io_exception_provenance(host_io_exception_provenance);
+        let lowering_ctx = if commonjs_entry {
+            lowering_ctx.with_authenticated_commonjs_runtime_bindings()
+        } else {
+            lowering_ctx
+        };
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
         Ok(PreparedLoweringOutput {
             source_label,
@@ -3375,6 +3392,12 @@ impl ExecutionOrchestrator {
         Ok(Some((root_string, canonical_root)))
     }
 
+    /// A host-declared CommonJS entry only applies to Script-goal sources; a
+    /// Module-goal entry is an ES module whatever the flag says.
+    fn commonjs_entry(&self) -> bool {
+        self.config.commonjs_entry && self.config.parse_goal == ParseGoal::Script
+    }
+
     fn lane_router_for_execution(
         &self,
         package: &ExtensionPackage,
@@ -3401,6 +3424,7 @@ impl ExecutionOrchestrator {
         quickjs_config.granted_capabilities = granted_capabilities.clone();
         quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.cancellation_token = cancellation_token.cloned();
+        quickjs_config.commonjs_entry = self.commonjs_entry();
         if let Some((root, canonical_root)) = module_root.as_ref() {
             quickjs_config.module_root = Some(root.clone());
             quickjs_config.canonical_module_root = canonical_root.clone();
@@ -3414,6 +3438,7 @@ impl ExecutionOrchestrator {
         v8_config.granted_capabilities = granted_capabilities;
         v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.cancellation_token = cancellation_token.cloned();
+        v8_config.commonjs_entry = self.commonjs_entry();
         if let Some((root, canonical_root)) = module_root {
             v8_config.module_root = Some(root);
             v8_config.canonical_module_root = canonical_root;

@@ -1879,8 +1879,10 @@ fn long_benign_run_is_not_read_as_resource_abuse_bd_pgzo7() {
     let mut runtime_config = frankenengine_engine::runtime_config::RuntimeConfig::default();
     runtime_config.execution.deterministic_budget = 200_000_000;
     runtime_config.execution.throughput_budget = 200_000_000;
-    let mut orch =
-        ExecutionOrchestrator::new_with_runtime_config(OrchestratorConfig::default(), runtime_config);
+    let mut orch = ExecutionOrchestrator::new_with_runtime_config(
+        OrchestratorConfig::default(),
+        runtime_config,
+    );
     let pkg = simple_package(
         "ext-long-benign",
         "let total = 0; for (let i = 0; i < 50000; i++) { total += i; }",
@@ -2517,6 +2519,204 @@ fn default_module_root_still_refuses_parent_import_bd_8mgzb() {
             ),
             "{lane:?}: unexpected error {error}"
         );
+    }
+}
+
+// =========================================================================
+// bd-rff5g: host-declared CommonJS entry
+// =========================================================================
+
+fn commonjs_entry_package(
+    root: &std::path::Path,
+    entry: &std::path::Path,
+    id: &str,
+) -> ExtensionPackage {
+    let mut package = simple_package(id, &std::fs::read_to_string(entry).expect("read entry"));
+    package.source_file = Some(entry.display().to_string());
+    package.module_root = Some(root.display().to_string());
+    package.capabilities.push("module_load".to_string());
+    package.capabilities.push("builtin".to_string());
+    package
+}
+
+fn console_lines(
+    result: &frankenengine_engine::execution_orchestrator::OrchestratorResult,
+) -> Vec<String> {
+    result
+        .console_output
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect()
+}
+
+/// A CommonJS entry requires a sibling `.js` module by relative path, reads
+/// `__dirname`, and still gets `require('path')` lowered through the builtin
+/// recognizer rather than the runtime loader (which has no builtin objects).
+#[test]
+fn commonjs_entry_requires_relative_modules_and_keeps_builtins_bd_rff5g() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    std::fs::create_dir(root.path().join("lib")).expect("lib dir");
+    std::fs::write(
+        root.path().join("lib").join("math.js"),
+        "module.exports = { add: (a, b) => a + b };\n",
+    )
+    .expect("math module");
+    let entry = root.path().join("app.js");
+    std::fs::write(
+        &entry,
+        "const math = require('./lib/math');\n\
+         const path = require('path');\n\
+         console.log(String(math.add(2, 3)));\n\
+         console.log(path.join('a', 'b'));\n\
+         console.log(typeof __dirname);\n",
+    )
+    .expect("entry");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        };
+        let result = ExecutionOrchestrator::new(config)
+            .execute(&commonjs_entry_package(
+                root.path(),
+                &entry,
+                "ext-cjs-entry",
+            ))
+            .unwrap_or_else(|error| panic!("{lane:?}: CommonJS entry failed: {error}"));
+        assert_eq!(console_lines(&result), ["5", "a/b", "string"], "{lane:?}");
+    }
+}
+
+/// Each step of the CommonJS entry contract on its own, reported together so
+/// a failure names the step rather than only the first symptom.
+#[test]
+fn commonjs_entry_contract_steps_bd_rff5g() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    std::fs::create_dir(root.path().join("lib")).expect("lib dir");
+    std::fs::write(
+        root.path().join("lib").join("math.js"),
+        "module.exports = { add: (a, b) => a + b };\n",
+    )
+    .expect("math module");
+    std::fs::write(root.path().join("dep.cjs"), "module.exports = 41;\n").expect("dep");
+    let steps = [
+        ("require-type", "console.log(typeof require);", "function"),
+        ("dirname-type", "console.log(typeof __dirname);", "string"),
+        (
+            "module-exports-type",
+            "console.log(typeof module.exports);",
+            "object",
+        ),
+        (
+            "cjs-dep",
+            "console.log(String(require('./dep.cjs') + 1));",
+            "42",
+        ),
+        (
+            "js-dep-type",
+            "console.log(typeof require('./lib/math'));",
+            "object",
+        ),
+        (
+            "js-dep-member",
+            "console.log(typeof require('./lib/math').add);",
+            "function",
+        ),
+        // Builtin aliases are recognized from their call uses; a non-call use
+        // such as `typeof path.join` needs runtime builtin module objects
+        // (engine bd-305gi) and is not part of this contract yet.
+        (
+            "path-builtin",
+            "const path = require('path');\nconsole.log(path.join('x', 'y'));",
+            "x/y",
+        ),
+    ];
+    let mut report = Vec::new();
+    for (name, source, expected) in steps {
+        let entry = root.path().join(format!("{name}.js"));
+        std::fs::write(&entry, source).expect("entry");
+        let config = OrchestratorConfig {
+            force_lane: Some(LaneChoice::QuickJs),
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        };
+        let outcome = ExecutionOrchestrator::new(config).execute(&commonjs_entry_package(
+            root.path(),
+            &entry,
+            "ext-cjs-steps",
+        ));
+        let observed = match &outcome {
+            Ok(result) => console_lines(result).join("|"),
+            Err(error) => format!("ERROR {error}"),
+        };
+        if observed != expected {
+            report.push(format!(
+                "{name}: expected {expected:?}, observed {observed:?}"
+            ));
+        }
+    }
+    assert!(report.is_empty(), "{}", report.join("\n"));
+}
+
+/// The opt-in is the host's: the same entry lowered as an ordinary script
+/// keeps `require` an ambient identifier and is refused at lowering.
+#[test]
+fn script_entry_without_commonjs_opt_in_still_refuses_require_bd_rff5g() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    std::fs::write(root.path().join("dep.cjs"), "module.exports = 1;\n").expect("dep");
+    let entry = root.path().join("app.js");
+    std::fs::write(&entry, "console.log(String(require('./dep.cjs')));\n").expect("entry");
+
+    let error = ExecutionOrchestrator::new(OrchestratorConfig::default())
+        .execute(&commonjs_entry_package(
+            root.path(),
+            &entry,
+            "ext-script-entry",
+        ))
+        .expect_err("a plain script entry must not reach the module loader");
+    assert!(
+        error.to_string().contains("ambient authority"),
+        "unexpected error {error}"
+    );
+}
+
+/// A source declaration of `require` is never mistaken for Node's: the
+/// builtin recognizer stays off both for a parameter that shadows the
+/// wrapper binding and for a root-level redeclaration.
+#[test]
+fn commonjs_entry_user_declared_require_is_not_a_builtin_loader_bd_rff5g() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    let cases = [
+        (
+            "param.js",
+            "function load(require) { return require('path'); }\n\
+             console.log(typeof load(function (name) { return 'fake:' + name; }));\n",
+            "string",
+        ),
+        (
+            "root.js",
+            "var require = function (name) { return 'mine:' + name; };\n\
+             console.log(require('path'));\n",
+            "mine:path",
+        ),
+    ];
+    for (file, source, expected) in cases {
+        let entry = root.path().join(file);
+        std::fs::write(&entry, source).expect("entry");
+        let config = OrchestratorConfig {
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        };
+        let result = ExecutionOrchestrator::new(config)
+            .execute(&commonjs_entry_package(
+                root.path(),
+                &entry,
+                "ext-cjs-shadow",
+            ))
+            .unwrap_or_else(|error| panic!("{file}: {error}"));
+        assert_eq!(console_lines(&result), [expected], "{file}");
     }
 }
 

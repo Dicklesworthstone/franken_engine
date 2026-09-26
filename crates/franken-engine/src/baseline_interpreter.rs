@@ -8600,6 +8600,12 @@ pub struct InterpreterConfig {
     pub cancellation_token: Option<CancellationToken>,
     /// Checkpoint density (default: every 1000 instructions).
     pub checkpoint_density: u64,
+    /// The entry program is a host-declared CommonJS module (bd-rff5g): its
+    /// root scope receives the wrapper bindings a required module receives.
+    /// Only the orchestrator sets this, together with lowering the entry in
+    /// the authenticated CommonJS context.
+    #[serde(default)]
+    pub commonjs_entry: bool,
 }
 
 impl PartialEq for InterpreterConfig {
@@ -8636,6 +8642,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
+            commonjs_entry: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8656,6 +8663,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
+            commonjs_entry: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8676,6 +8684,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
+            commonjs_entry: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8696,6 +8705,7 @@ impl InterpreterConfig {
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
+            commonjs_entry: false,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -31612,12 +31622,30 @@ impl InterpreterCore {
         module: &Ir3Module,
         compact_tier1: Option<&CompactTier1Program>,
     ) -> Result<LabeledReturn, InterpreterError> {
-        let previous_compact_tier1 = std::mem::replace(
-            &mut self.top_level_compact_tier1,
-            compact_tier1.map(|program| (Self::module_address(module), program.clone())),
-        );
-        let result = self.run_loop_labeled_with_compact_tier1(module, compact_tier1);
-        self.top_level_compact_tier1 = previous_compact_tier1;
+        let result = if self.config.commonjs_entry {
+            // bd-rff5g: a host-declared CommonJS entry, lowered with the
+            // authenticated wrapper bindings, runs exactly like a module
+            // loaded through `require`: the same wrapper environment, the
+            // same `module.exports` finalization. Its completion value is not
+            // observable, as in Node.
+            let entry = self
+                .entry_module_specifier
+                .clone()
+                .unwrap_or_else(|| module.header.source_label.clone());
+            self.evaluate_cjs_ir3(module, &entry)
+                .map(|()| LabeledReturn {
+                    value: Value::Undefined,
+                    label: Label::Public,
+                })
+        } else {
+            let previous_compact_tier1 = std::mem::replace(
+                &mut self.top_level_compact_tier1,
+                compact_tier1.map(|program| (Self::module_address(module), program.clone())),
+            );
+            let result = self.run_loop_labeled_with_compact_tier1(module, compact_tier1);
+            self.top_level_compact_tier1 = previous_compact_tier1;
+            result
+        };
         if result.is_err() {
             // Tier-R leaves the failing callee's captured environment and
             // fresh local scope installed while checkpoints drain. Reify the
@@ -33515,7 +33543,7 @@ impl InterpreterCore {
         {
             Some(ext) if ext.eq_ignore_ascii_case("cjs") => true,
             Some(ext) if ext.eq_ignore_ascii_case("mjs") => false,
-            Some(ext) if ext.eq_ignore_ascii_case("js") => false,
+            Some(ext) if ext.eq_ignore_ascii_case("js") => !self.required_js_is_esm(&resolved),
             _ => true,
         };
         let namespace = self.load_module_resolved(module, &resolved, is_cjs)?;
@@ -33533,6 +33561,60 @@ impl InterpreterCore {
         };
         let default_value = self.prototype_chain_get(namespace_object, "default")?;
         Ok(default_value)
+    }
+
+    /// Node's reading of a `require`d `.js` (bd-rff5g): the nearest
+    /// `package.json` inside the module root decides when it declares a
+    /// `"type"`; otherwise, as with Node's module-syntax detection, a file that
+    /// parses as a script is CommonJS and one that needs `import`/`export` is
+    /// an ES module. `resolved` is already canonical and inside the root.
+    fn required_js_is_esm(&self, resolved: &str) -> bool {
+        let root = self.config.canonical_module_root.clone().or_else(|| {
+            self.config
+                .module_root
+                .as_deref()
+                .and_then(|root| Path::new(root).canonicalize().ok())
+        });
+        if let Some(root) = root {
+            for dir in Path::new(resolved).ancestors().skip(1) {
+                if !dir.starts_with(&root) {
+                    break;
+                }
+                let manifest = dir.join("package.json");
+                if !manifest.is_file() {
+                    continue;
+                }
+                let declared_type = fs::read(&manifest)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+                    .and_then(|manifest| {
+                        manifest
+                            .get("type")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned)
+                    });
+                match declared_type.as_deref() {
+                    Some("module") => return true,
+                    Some("commonjs") => return false,
+                    _ => break,
+                }
+            }
+        }
+        let Ok(text) = fs::read_to_string(resolved) else {
+            // Unreadable here means unreadable for the loader too, which
+            // reports the real error; the goal chosen does not matter.
+            return false;
+        };
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: resolved.to_string(),
+                    text,
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .is_err()
     }
 
     fn generated_function_owner(

@@ -230,3 +230,106 @@ fn generic_erasure_does_not_discard_hostcall_capability_intents() {
     assert!(prepared.prepared_source.contains("hostcall()"));
     assert!(!prepared.prepared_source.contains("<number>"));
 }
+
+#[test]
+fn specialized_aliases_keep_function_identity_and_metadata() {
+    assert_output(
+        r#"
+        function identity<T>(value: T): T { return value; }
+        const numberIdentity = identity<number>;
+        function select() { return identity<string>; }
+        const stringIdentity = select();
+        console.log(numberIdentity === identity, stringIdentity === identity);
+        console.log(numberIdentity.name === identity.name, numberIdentity.length === identity.length);
+        console.log(numberIdentity(7), stringIdentity('kept'));
+        "#,
+        &["true true", "true true", "7 kept"],
+    );
+}
+
+#[test]
+fn specialized_method_references_preserve_grouped_calls_and_detached_aliases() {
+    assert_output(
+        r#"
+        let reads = 0;
+        function method(value) {
+            'use strict';
+            return this === object ? this.base + value : value;
+        }
+        const object = {base: 8, get method() { reads++; return method; }};
+        const alias = object.method<number>;
+        console.log(alias === method, reads, alias(2));
+        console.log((object.method<number>)(2), reads);
+        "#,
+        &["true 1 2", "10 2"],
+    );
+}
+
+#[test]
+fn specialized_constructors_support_new_without_argument_parentheses() {
+    assert_output(
+        r#"
+        let constructed = 0;
+        class Counter<T> { constructor() { constructed++; } }
+        const Constructor = Counter<number>;
+        console.log(Constructor === Counter, constructed);
+        const first = new Constructor;
+        const second = new Counter<string>;
+        const NumberMap = Map<string, number>;
+        const map = new NumberMap;
+        map.set('answer', 42);
+        console.log(first instanceof Counter, second instanceof Counter, constructed, map.get('answer'));
+        "#,
+        &["true 0", "true true 2 42"],
+    );
+}
+
+#[test]
+fn instantiation_operands_are_evaluated_once_without_invoking_the_result() {
+    assert_output(
+        r#"
+        let factories = 0;
+        let calls = 0;
+        function make() {
+            factories++;
+            return function<T>(value: T): T { calls++; return value; };
+        }
+        const specialized = make()<number>;
+        console.log(factories, calls);
+        console.log(specialized(3), factories, calls);
+        const methods = [specialized<number>, specialized<string>];
+        console.log(methods[0] === specialized, methods[1] === specialized);
+        "#,
+        &["1 0", "3 1 1", "true true"],
+    );
+}
+
+#[test]
+fn instantiation_expressions_compose_with_conditionals_and_templates() {
+    assert_output(
+        r#"
+        function first<T>(value: T): T { return value; }
+        function second<T>(value: T): T { return value; }
+        const chosen = true ? first<number> : second<number>;
+        const alternate = first<number> || second<number>;
+        console.log(chosen === first, alternate === first);
+        console.log(`${(first<number>) === first}:${(second<string>)('ok')}`);
+        console.log(first<number> === first, second<number> !== first);
+        "#,
+        &["true true", "true:ok", "true true"],
+    );
+}
+
+#[test]
+fn instantiation_lookahead_leaves_prefix_and_greater_equal_operations_live() {
+    assert_output(
+        r#"
+        const a = 1, b = 2;
+        let c = 0;
+        console.log(a < b>=c, a < b >= c);
+        console.log(a < b > ++c, a < b > --c, c);
+        console.log(a < b > !c, a < b > ~c, a < b > [c]);
+        "#,
+        &["true true", "false true 0", "false true true"],
+    );
+}

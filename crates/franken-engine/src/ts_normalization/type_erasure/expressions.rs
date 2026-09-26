@@ -87,7 +87,7 @@ impl Eraser<'_> {
                     self.text(index) == "hostcall" && !self.property_name(index)
                 })
                 && let Some(end) = self.expression_type_arguments_end(arguments)
-                && self.generic_call_follows(end, optional)
+                && self.generic_suffix_follows(end, optional)
             {
                 self.mark(arguments, end);
                 if optional {
@@ -149,17 +149,46 @@ impl Eraser<'_> {
         }
     }
 
-    fn generic_call_follows(&self, end: usize, optional: bool) -> bool {
+    fn generic_suffix_follows(&self, end: usize, optional: bool) -> bool {
         if self.text(end) == "(" {
             return true;
         }
         // `callee?.<T>(args)` can only be an optional call, never an
         // instantiation expression or optional tagged template.
-        !optional
-            && ((self.text(end) == "?." && self.text(end + 1) == "(")
-                || self.tokens.get(end).is_some_and(|token| {
-                    token.kind == Kind::Literal && token.text.starts_with('`')
-                }))
+        if optional {
+            return false;
+        }
+        if (self.text(end) == "?." && self.text(end + 1) == "(")
+            || self.tokens.get(end).is_some_and(|token| {
+                token.kind == Kind::Literal && token.text.starts_with('`')
+            })
+        {
+            return true;
+        }
+        // Instantiation expressions specialize a *type*, not a runtime
+        // function. `const specialized = factory<T>` must retain the exact
+        // original callable, with no invocation or wrapper allocation.
+        // The same boundary admits `new Constructor<T>` without arguments.
+        // These ambiguous followers instead continue relational expressions,
+        // even across a line break: `a < b > +c` must still read b and c.
+        if matches!(self.text(end), "<" | ">" | "+" | "-") {
+            return false;
+        }
+        // The parent lexer splits angle brackets for nested types. Do not
+        // steal the `>` from the runtime >= operator in `a < b >= c`.
+        if self.tokens.get(end).is_some_and(|token| {
+            self.tokens[end - 1].end == token.start && token.text.starts_with('=')
+        }) {
+            return false;
+        }
+        end == self.tokens.len()
+            || self.newline_before(end)
+            || matches!(
+                self.text(end),
+                ";" | "," | ")" | "]" | "}" | "?" | ":" | "=" | "==" | "!="
+                    | "*" | "/" | "%" | "&" | "|" | "^" | "&&" | "||" | "??"
+                    | "in" | "instanceof" | "as" | "satisfies"
+            )
     }
 
     fn suffix_operand(&self, previous: usize) -> bool {
@@ -262,6 +291,35 @@ impl Eraser<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::check;
+
+    #[test]
+    fn instantiation_expressions_preserve_callable_and_constructor_values() {
+        check("const specialized = factory⟦<Result>⟧; return factory⟦<number>⟧;");
+        check("const constructors = [Map⟦<string, number>⟧, Set⟦<number>⟧];");
+        check("const value = new Box⟦<{name: string}>⟧; new ns.Box⟦<number>⟧;");
+        check("const value = (factory⟦<number>⟧) === factory;");
+        check("const value = factory⟦<number>⟧ ⟦as Callable⟧;");
+    }
+
+    #[test]
+    fn instantiation_expressions_respect_runtime_operator_precedence() {
+        check("const value = yes ? first⟦<Type>⟧ : second⟦<Other>⟧;");
+        check("const value = factory⟦<Type>⟧ === original;");
+        check("const value = factory⟦<Type>⟧ && fallback;");
+        check("const value = factory⟦<Type>⟧ || fallback;");
+        check("const value = factory⟦<Type>⟧ ?? fallback;");
+        check("const value = factory⟦<Type>⟧ / 2;");
+        check("const value = factory⟦<Type>⟧\nnext();");
+    }
+
+    #[test]
+    fn instantiation_lookahead_cannot_consume_relational_or_prefix_operators() {
+        check("a < b >= c; a < b>=c; a < b >> c; a < b >>> c;");
+        check("a < b > +c; a < b > -c; a < b > ++c; a < b > --c;");
+        check("a < b > !c; a < b > ~c; a < b > [c]; a ⟦<b>⟧ ({c});");
+        check("a < b >\n+c; a < b >\n-c; a < b > c;");
+        check("const value = factory<Type>.property;");
+    }
 
     #[test]
     fn generic_calls_erase_nested_and_multiple_type_arguments() {

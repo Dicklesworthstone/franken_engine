@@ -8,6 +8,7 @@
 //! line terminators. In particular, object properties, destructuring aliases,
 //! labels, switch cases and conditional expressions are not annotation sites.
 
+mod classes;
 mod expressions;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,125 +254,6 @@ impl Eraser<'_> {
             self.mark(after, body);
         }
         self.bindings(open + 1, close, true);
-    }
-
-    fn class_fields(&mut self, index: usize) {
-        let mut cursor = index + 1;
-        if self.tokens.get(cursor).is_some_and(|token| token.kind == Kind::Word)
-            && self.text(cursor) != "extends"
-        {
-            cursor += 1;
-        }
-        if self.text(cursor) == "<" {
-            let Some(end) = self.angle_end(cursor) else {
-                return;
-            };
-            self.mark(cursor, end);
-            cursor = end;
-        }
-        if matches!(self.text(cursor), "extends" | "implements") {
-            cursor += 1;
-            while cursor < self.tokens.len() && self.text(cursor) != "{" {
-                if matches!(self.text(cursor), ";" | "}") {
-                    return;
-                }
-                cursor = self.group_end(cursor).unwrap_or(cursor + 1);
-            }
-        }
-        if self.text(cursor) != "{" {
-            return;
-        }
-        let Some(close) = self.pairs[cursor] else {
-            return;
-        };
-        cursor += 1;
-        while cursor < close {
-            if self.text(cursor) == ";" {
-                cursor += 1;
-                continue;
-            }
-            while matches!(
-                self.text(cursor),
-                "public" | "private" | "protected" | "readonly" | "abstract" | "declare"
-                    | "override" | "static" | "get" | "set" | "async"
-            ) && !matches!(self.text(cursor + 1), ":" | "=" | ";" | "(" | "?")
-            {
-                if matches!(self.text(cursor), "public" | "private" | "protected" | "readonly" | "override") {
-                    self.mark(cursor, cursor + 1);
-                }
-                cursor += 1;
-            }
-            if self.text(cursor) == "{" {
-                // A static block, not an object-shaped field type.
-                cursor = self.group_end(cursor).unwrap_or(close);
-                continue;
-            }
-            if self.text(cursor) == "*" || self.text(cursor) == "#" {
-                cursor += 1;
-            }
-            cursor = if self.text(cursor) == "[" {
-                match self.group_end(cursor) {
-                    Some(end) => end,
-                    None => return,
-                }
-            } else if self.tokens.get(cursor).is_some_and(|token| token.kind != Kind::Punctuation) {
-                cursor + 1
-            } else {
-                return;
-            };
-            if self.text(cursor) == "<" {
-                let Some(end) = self.angle_end(cursor) else {
-                    return;
-                };
-                if self.text(end) != "(" {
-                    return;
-                };
-                self.mark(cursor, end);
-                cursor = end;
-            }
-            let marker = cursor;
-            if matches!(self.text(cursor), "?" | "!") {
-                cursor += 1;
-            }
-            if self.text(cursor) == "(" {
-                let Some(after_params) = self.group_end(cursor) else {
-                    return;
-                };
-                cursor = after_params;
-                if self.text(cursor) == ":" {
-                    let Some(end) = self.type_end(cursor + 1, 0) else {
-                        return;
-                    };
-                    cursor = end;
-                }
-                if self.text(cursor) == "{" {
-                    cursor = self.group_end(cursor).unwrap_or(close);
-                }
-                continue;
-            }
-            if self.text(cursor) == ":" {
-                let Some(end) = self.type_end(cursor + 1, 0) else {
-                    return;
-                };
-                if end > close
-                    || (end < close
-                        && !matches!(self.text(end), "=" | ";" | "}")
-                        && !self.newline_before(end))
-                {
-                    return;
-                }
-                self.mark(marker, end);
-                cursor = end;
-            }
-            if self.text(cursor) == "=" {
-                cursor = self.initializer_end(cursor + 1, close, true);
-            } else if cursor == marker {
-                // Untyped field without an initializer.
-                if self.text(cursor) != ";" && cursor < close && !self.newline_before(cursor) {
-                    return;
-                }
-            }
-        }
     }
 
     fn newline_before(&self, index: usize) -> bool {
@@ -1003,7 +885,7 @@ mod tests {
     fn class_fields_do_not_erase_runtime_object_properties() {
         check("class Box { value⟦: {count: number}⟧ = {count: 3}; run(x⟦: number⟧)⟦: number⟧ { return x; } }");
         check("class Box { missing⟦?: string⟧; assigned⟦!: number⟧; ['key']⟦: string⟧ = 'value'; }");
-        check("class Box implements Contract { value⟦: number⟧ = 1; }");
+        check("class Box ⟦implements Contract⟧ { value⟦: number⟧ = 1; }");
         check("class Box { value⟦: number⟧ = 1\n other⟦: string⟧ = 'x'\n }");
     }
 

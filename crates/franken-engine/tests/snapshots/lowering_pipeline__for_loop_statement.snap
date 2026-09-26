@@ -505,8 +505,14 @@ expression: actual_json
     "instructions": [
       {
         "LoadInt": {
-          "dst": 1,
+          "dst": 2,
           "value": 0
+        }
+      },
+      {
+        "Move": {
+          "dst": 1,
+          "src": 2
         }
       },
       {
@@ -516,27 +522,21 @@ expression: actual_json
         }
       },
       {
-        "Move": {
-          "dst": 3,
-          "src": 2
-        }
-      },
-      {
         "LoadInt": {
-          "dst": 4,
+          "dst": 3,
           "value": 5
         }
       },
       {
         "Lt": {
-          "dst": 5,
-          "lhs": 3,
-          "rhs": 4
+          "dst": 4,
+          "lhs": 2,
+          "rhs": 3
         }
       },
       {
         "JumpIf": {
-          "cond": 5,
+          "cond": 4,
           "target": 7
         }
       },
@@ -548,61 +548,61 @@ expression: actual_json
       {
         "Move": {
           "dst": 0,
-          "src": 5
+          "src": 4
         }
       },
       {
         "LoadName": {
-          "dst": 6,
+          "dst": 2,
           "name_pool_index": 0,
           "allow_missing": false
         }
       },
       {
         "Move": {
-          "dst": 7,
-          "src": 2
+          "dst": 3,
+          "src": 1
         }
       },
       {
         "Move": {
-          "dst": 8,
-          "src": 7
+          "dst": 4,
+          "src": 3
         }
       },
       {
         "Call": {
-          "callee": 6,
+          "callee": 2,
           "args": {
-            "start": 8,
+            "start": 4,
             "count": 1
           },
-          "dst": 9
+          "dst": 5
         }
       },
       {
         "Move": {
           "dst": 0,
-          "src": 9
+          "src": 5
         }
       },
       {
         "LoadInt": {
-          "dst": 10,
+          "dst": 2,
           "value": 1
         }
       },
       {
         "Add": {
-          "dst": 2,
-          "lhs": 2,
-          "rhs": 10
+          "dst": 1,
+          "lhs": 1,
+          "rhs": 2
         }
       },
       {
         "Move": {
           "dst": 0,
-          "src": 2
+          "src": 1
         }
       },
       {
@@ -624,7 +624,7 @@ expression: actual_json
       {
         "entry": 0,
         "arity": 0,
-        "frame_size": 11,
+        "frame_size": 6,
         "name": "main",
         "is_generator": false
       }
@@ -702,7 +702,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:f803a98a5c1dfdcccebe8fd327c3622b75eef4f303c85db29f3b33bab201d58d",
-      "output_hash": "sha256:dc88c9ecb04e09d098027a19a243067ae3bc324ceef3e348c37390a918f44a6c",
+      "output_hash": "sha256:074a01dee02096563d3197928f922dafb5dd1a6b42793eeb786a8d7ac038136e",
       "rollback_token": "sha256:f803a98a5c1dfdcccebe8fd327c3622b75eef4f303c85db29f3b33bab201d58d",
       "invariant_checks": [
         {
@@ -746,7 +746,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:f803a98a5c1dfdcccebe8fd327c3622b75eef4f303c85db29f3b33bab201d58d",
-      "output_hash": "sha256:dc88c9ecb04e09d098027a19a243067ae3bc324ceef3e348c37390a918f44a6c",
+      "output_hash": "sha256:074a01dee02096563d3197928f922dafb5dd1a6b42793eeb786a8d7ac038136e",
       "input_op_count": 22,
       "output_op_count": 19
     }

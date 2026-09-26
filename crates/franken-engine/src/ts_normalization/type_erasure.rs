@@ -28,12 +28,18 @@ struct Token<'a> {
 const MAX_TYPE_DEPTH: usize = 128;
 
 pub(super) fn erase(source: &str) -> String {
-    let Some(tokens) = tokenize(source) else {
+    let Some(eraser) = analyze(source, 0) else {
         return source.to_owned();
     };
-    let Some(pairs) = delimiter_pairs(&tokens) else {
-        return source.to_owned();
-    };
+    eraser.finish()
+}
+
+fn analyze(source: &str, depth: usize) -> Option<Eraser<'_>> {
+    if depth >= MAX_TYPE_DEPTH {
+        return None;
+    }
+    let tokens = tokenize(source)?;
+    let pairs = delimiter_pairs(&tokens)?;
     let mut eraser = Eraser {
         source,
         removed: vec![false; tokens.len()],
@@ -74,7 +80,8 @@ pub(super) fn erase(source: &str) -> String {
         }
     }
     eraser.erase_expression_types();
-    eraser.finish()
+    eraser.erase_template_expressions(depth);
+    Some(eraser)
 }
 
 struct Eraser<'a> {
@@ -194,9 +201,16 @@ impl Eraser<'_> {
             return;
         };
         let previous = open.checked_sub(1).map_or("", |index| self.text(index));
-        if matches!(previous, "if" | "for" | "while" | "switch" | "with") {
+        if matches!(previous, "if" | "for" | "while" | "switch" | "with")
+            && self.text(close + 1) != ":"
+            && !self.parameters_have_annotation(open + 1, close)
+        {
             return;
         }
+        // Reserved words are valid method names. A parameter/return type
+        // distinguishes a typed `if(value: T): U { ... }` method from a real
+        // control-flow head. The body check below still owns signature
+        // admission; a conditional inside `if (x ? y : z)` is not a type.
         let after = close + 1;
         let mut body = after;
         if self.text(after) == ":" {
@@ -673,50 +687,70 @@ fn tokenize(source: &str) -> Option<Vec<Token<'_>>> {
     let mut cursor = 0;
     let mut regex_allowed = true;
     let mut control_parens = Vec::new();
-    while cursor < source.len() {
-        let ch = source[cursor..].chars().next()?;
+    let mut previous = "";
+    let mut before_previous = "";
+    while let Some(token) = next_token(source, &mut cursor, regex_allowed, 0)? {
+        regex_allowed = regex_after_token(&token, previous, before_previous, &mut control_parens);
+        before_previous = previous;
+        previous = token.text;
+        tokens.push(token);
+    }
+    Some(tokens)
+}
+
+// Some(None) is clean EOF; None is malformed lexical input. Both the outer
+// token stream and interpolation-boundary scanner use this one lexer so a
+// division after `)` cannot become a regex swallowing `}` and template text.
+fn next_token<'a>(
+    source: &'a str,
+    cursor: &mut usize,
+    regex_allowed: bool,
+    depth: usize,
+) -> Option<Option<Token<'a>>> {
+    while *cursor < source.len() {
+        let ch = source[*cursor..].chars().next()?;
         if ch.is_whitespace() || ch == '\u{feff}' {
-            cursor += ch.len_utf8();
+            *cursor += ch.len_utf8();
             continue;
         }
-        if source[cursor..].starts_with("//") {
-            cursor = line_comment_end(source, cursor + 2);
+        if source[*cursor..].starts_with("//") {
+            *cursor = line_comment_end(source, *cursor + 2);
             continue;
         }
-        if source[cursor..].starts_with("/*") {
-            cursor += source[cursor + 2..].find("*/")? + 4;
+        if source[*cursor..].starts_with("/*") {
+            *cursor += source[*cursor + 2..].find("*/")? + 4;
             continue;
         }
-        let start = cursor;
+        let start = *cursor;
         let kind;
         if matches!(ch, '\'' | '"') {
-            cursor = quoted_end(source, cursor, ch)?;
+            *cursor = quoted_end(source, *cursor, ch)?;
             kind = Kind::Literal;
         } else if ch == '`' {
-            cursor = template_end(source, cursor, 0)?;
+            *cursor = template_end(source, *cursor, depth)?;
             kind = Kind::Literal;
-        } else if ch == '/' && regex_allowed && regex_end(source, cursor).is_some() {
-            cursor = regex_end(source, cursor)?;
+        } else if ch == '/' && regex_allowed && regex_end(source, *cursor).is_some() {
+            *cursor = regex_end(source, *cursor)?;
             kind = Kind::Literal;
         } else if ch == '_' || ch == '$' || ch.is_alphabetic() {
-            cursor += ch.len_utf8();
-            while let Some(next) = source[cursor..].chars().next() {
+            *cursor += ch.len_utf8();
+            while let Some(next) = source[*cursor..].chars().next() {
                 if next == '_' || next == '$' || next.is_alphanumeric() {
-                    cursor += next.len_utf8();
+                    *cursor += next.len_utf8();
                 } else {
                     break;
                 }
             }
             kind = Kind::Word;
         } else if ch.is_ascii_digit() {
-            cursor += 1;
-            while let Some(next) = source[cursor..].chars().next() {
+            *cursor += 1;
+            while let Some(next) = source[*cursor..].chars().next() {
                 if next.is_ascii_alphanumeric()
                     || matches!(next, '.' | '_')
                     || (matches!(next, '+' | '-')
-                        && matches!(source.as_bytes()[cursor - 1], b'e' | b'E'))
+                        && matches!(source.as_bytes()[*cursor - 1], b'e' | b'E'))
                 {
-                    cursor += 1;
+                    *cursor += 1;
                 } else {
                     break;
                 }
@@ -725,24 +759,33 @@ fn tokenize(source: &str) -> Option<Vec<Token<'_>>> {
         } else {
             let width = ["...", "=>", "?.", "++", "--", "&&", "||", "??", "==", "!="]
                 .into_iter()
-                .find(|punct| source[cursor..].starts_with(*punct))
+                .find(|punct| source[*cursor..].starts_with(*punct))
                 .map_or(ch.len_utf8(), str::len);
-            cursor += width;
+            *cursor += width;
             kind = Kind::Punctuation;
         }
-        let text = &source[start..cursor];
-        let previous = tokens.last().map_or("", |token| token.text);
-        regex_allowed = if text == "(" {
-            control_parens.push(matches!(previous, "if" | "while" | "for" | "with" | "switch" | "catch"));
-            true
-        } else if text == ")" {
-            control_parens.pop().unwrap_or(false)
-        } else {
-            regex_may_follow(text, kind)
-        };
-        tokens.push(Token { text, start, end: cursor, kind });
+        return Some(Some(Token { text: &source[start..*cursor], start, end: *cursor, kind }));
     }
-    Some(tokens)
+    Some(None)
+}
+
+fn regex_after_token(
+    token: &Token<'_>,
+    previous: &str,
+    before_previous: &str,
+    control_parens: &mut Vec<bool>,
+) -> bool {
+    if token.text == "(" {
+        control_parens.push(
+            !matches!(before_previous, "." | "?.")
+                && matches!(previous, "if" | "while" | "for" | "with" | "switch" | "catch"),
+        );
+        true
+    } else if token.text == ")" {
+        control_parens.pop().unwrap_or(false)
+    } else {
+        regex_may_follow(token.text, token.kind)
+    }
 }
 
 fn regex_may_follow(text: &str, kind: Kind) -> bool {
@@ -798,8 +841,8 @@ fn regex_end(source: &str, start: usize) -> Option<usize> {
     None
 }
 
-/// Templates are opaque to this pass. Walk nested interpolation syntax only
-/// to find the real closing backtick; never treat template text as declarations.
+/// Lexing keeps templates as opaque tokens. Walk nested interpolation syntax
+/// to find the real closing backtick; the transform visits expressions later.
 fn template_end(source: &str, start: usize, depth: usize) -> Option<usize> {
     if depth >= MAX_TYPE_DEPTH {
         return None;
@@ -824,48 +867,23 @@ fn template_end(source: &str, start: usize, depth: usize) -> Option<usize> {
 fn interpolation_end(source: &str, mut cursor: usize, depth: usize) -> Option<usize> {
     let mut braces = 1usize;
     let mut regex_allowed = true;
-    while cursor < source.len() {
-        let ch = source[cursor..].chars().next()?;
-        if ch.is_whitespace() {
-            cursor += ch.len_utf8();
-            continue;
-        }
-        if source[cursor..].starts_with("//") {
-            cursor = line_comment_end(source, cursor + 2);
-            continue;
-        }
-        if source[cursor..].starts_with("/*") {
-            cursor += source[cursor + 2..].find("*/")? + 4;
-            continue;
-        }
-        match ch {
-            '\'' | '"' => { cursor = quoted_end(source, cursor, ch)?; regex_allowed = false; }
-            '`' => { cursor = template_end(source, cursor, depth)?; regex_allowed = false; }
-            '/' if regex_allowed && regex_end(source, cursor).is_some() => {
-                cursor = regex_end(source, cursor)?;
-                regex_allowed = false;
-            }
-            '{' => { braces += 1; cursor += 1; regex_allowed = true; }
-            '}' => {
+    let mut control_parens = Vec::new();
+    let mut previous = "";
+    let mut before_previous = "";
+    while let Some(token) = next_token(source, &mut cursor, regex_allowed, depth)? {
+        match token.text {
+            "{" => braces += 1,
+            "}" => {
                 braces -= 1;
-                cursor += 1;
-                if braces == 0 { return Some(cursor); }
-                regex_allowed = true;
-            }
-            _ if ch == '_' || ch == '$' || ch.is_alphabetic() => {
-                let start = cursor;
-                cursor += ch.len_utf8();
-                while let Some(next) = source[cursor..].chars().next() {
-                    if next == '_' || next == '$' || next.is_alphanumeric() { cursor += next.len_utf8(); }
-                    else { break; }
+                if braces == 0 {
+                    return Some(cursor);
                 }
-                regex_allowed = regex_may_follow(&source[start..cursor], Kind::Word);
             }
-            _ => {
-                cursor += ch.len_utf8();
-                regex_allowed = !ch.is_ascii_digit() && !matches!(ch, ']' | '.');
-            }
+            _ => {}
         }
+        regex_allowed = regex_after_token(&token, previous, before_previous, &mut control_parens);
+        before_previous = previous;
+        previous = token.text;
     }
     None
 }
@@ -941,6 +959,14 @@ mod tests {
         check("const o = { 'run'(x⟦: number⟧)⟦: number⟧ { return x; } };");
         check("function* values(x⟦: number⟧)⟦: Iterable<number>⟧ { yield x; }");
         check("try { work(); } catch (error⟦: unknown⟧) { throw error; }");
+    }
+
+    #[test]
+    fn typed_keyword_methods_are_not_control_flow_heads() {
+        check("const object = { if(value⟦: number⟧)⟦: number⟧ { return value; }, while()⟦: number⟧ { return 1; } };");
+        check("class Object { for(value⟦: number⟧) { return value; } switch()⟦: number⟧ { return 1; } }");
+        check("if (x ? y : z) { work(); } while (x = yes ? first : second) { work(); }");
+        check("if ({value: true}.value) { work(); } switch (value) { case 1: work(); }");
     }
 
     #[test]

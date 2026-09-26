@@ -354,3 +354,74 @@ fn assertions_accept_nested_types_while_preserving_live_object_identity() {
         &["true 9 7"],
     );
 }
+
+#[test]
+fn template_interpolations_execute_assertions_without_changing_literal_text() {
+    assert_output(
+        r#"
+        const value: unknown = {count: 4};
+        const text = `as number: ${(value as {count: number}).count}: done`;
+        console.log(text);
+        console.log(`escaped \${notCode as Type}: ${(value satisfies unknown) === value}`);
+        "#,
+        &["as number: 4: done", "escaped ${notCode as Type}: true"],
+    );
+}
+
+#[test]
+fn typed_template_callbacks_keep_statements_defaults_and_object_properties() {
+    assert_output(
+        r#"
+        const first = `${((value: number, options: {increment: number} = {increment: 2}): number => value + options.increment)(3)}`;
+        const second = `${(() => { const value: {x: number} = {x: 7}; return value.x; })()}`;
+        console.log(first, second);
+        "#,
+        &["5 7"],
+    );
+}
+
+#[test]
+fn nested_templates_preserve_evaluation_order_and_live_getters() {
+    assert_output(
+        r#"
+        let reads: number = 0;
+        const source = {get value() { reads++; return reads; }};
+        const text = `outer ${`inner ${source!.value as number}`} then ${source!.value}`;
+        console.log(text, reads);
+        "#,
+        &["outer inner 1 then 2 2"],
+    );
+}
+
+#[test]
+fn template_boundaries_keep_division_and_regular_expression_braces_distinct() {
+    assert_output(
+        r#"
+        const value: unknown = 8;
+        console.log(`${(value as number) / 2}: slash / raw`);
+        console.log(`${/a}b/.test('a}b') ? value! : 0}`);
+        console.log(`${(() => { if (true) /}/.test('}'); return value as number; })()}`);
+        const object = { if(input: number): number { return input; } };
+        console.log(`${object.if(value as number) / 2}: slash / raw`);
+        "#,
+        &["4: slash / raw", "8", "8", "4: slash / raw"],
+    );
+}
+
+#[test]
+fn tagged_templates_keep_the_tag_receiver_and_raw_segments() {
+    assert_output(
+        r#"
+        const object = {
+            prefix: 'tag',
+            tag(parts, value) {
+                console.log(this.prefix, parts.raw[0], value);
+                return parts[1];
+            }
+        };
+        const value: unknown = 3;
+        console.log(object.tag`line\n${value as number}:tail`);
+        "#,
+        &["tag line\\n 3", ":tail"],
+    );
+}

@@ -7,6 +7,55 @@
 use super::{Eraser, Kind};
 
 impl Eraser<'_> {
+    pub(super) fn erase_template_expressions(&mut self, depth: usize) {
+        for index in 0..self.tokens.len() {
+            let token = self.tokens[index];
+            if self.removed[index]
+                || token.kind != Kind::Literal
+                || !token.text.starts_with('`')
+            {
+                continue;
+            }
+            // The lexer has validated this template's boundaries. Analyze
+            // only interpolation expressions, never the cooked/raw quasis.
+            let mut cursor = token.start + 1;
+            while cursor < token.end - 1 {
+                let ch = self.source[cursor..]
+                    .chars()
+                    .next()
+                    .expect("validated template character");
+                if ch == '\\' {
+                    cursor += 1;
+                    cursor += self.source[cursor..]
+                        .chars()
+                        .next()
+                        .expect("validated template escape")
+                        .len_utf8();
+                } else if self.source[cursor..].starts_with("${") {
+                    let start = cursor + 2;
+                    let Some(end) = super::interpolation_end(self.source, start, depth + 1)
+                    else {
+                        break;
+                    };
+                    if end > token.end {
+                        break;
+                    }
+                    if let Some(inner) = super::analyze(&self.source[start..end - 1], depth + 1)
+                    {
+                        // Translate the nested pass's exact source coordinates
+                        // rather than reparsing or regenerating JavaScript.
+                        self.spans.extend(
+                            inner.spans.into_iter().map(|(a, b)| (start + a, start + b)),
+                        );
+                    }
+                    cursor = end;
+                } else {
+                    cursor += ch.len_utf8();
+                }
+            }
+        }
+    }
+
     pub(super) fn erase_expression_types(&mut self) {
         let mut cursor = 0;
         let mut previous = None;
@@ -149,6 +198,44 @@ impl Eraser<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::check;
+
+    #[test]
+    fn templates_erase_only_interpolation_code() {
+        check("const text = `raw as number: ${value ⟦as number⟧}: done`;");
+        check("const text = `outer ${`inner ${object⟦!⟧.value}`} end`;");
+        check("const text = `\\${notCode as Type}: ${(object ⟦satisfies {value: number}⟧).value}`;");
+    }
+
+    #[test]
+    fn template_callbacks_use_the_same_binding_and_signature_pass() {
+        check("const text = `${((value⟦: number⟧)⟦: number⟧ => value + 1)(3)}`;");
+        check("const text = `${(() => { const value⟦: {x: number}⟧ = {x: 3}; return value.x; })()}`;");
+        check("const text = `${({run(value⟦: number⟧)⟦: number⟧ { return value; }}).run(3)}`;");
+    }
+
+    #[test]
+    fn interpolation_lexer_distinguishes_division_from_regular_expressions() {
+        check("const text = `${(value ⟦as number⟧) / 2}: slash / raw`;");
+        check("const text = `${object.if(value ⟦as number⟧) / 2}: slash / raw`;");
+        check("const text = `${(() => { if (ready) /}/.test('}'); return value ⟦as number⟧; })()}`;");
+        check("const text = `${/a}b/.test('a}b') ? value⟦!⟧ : 0}`;");
+    }
+
+    #[test]
+    fn template_type_literals_and_raw_unicode_keep_their_own_spaces() {
+        check("const text⟦: `prefix${number}`⟧ = `prefix${value ⟦as number⟧}`;");
+        check("const text = `é\n  ${value ⟦as {名: 'é'}⟧}\n\n    tail`;");
+        check("tag`raw\\n${value⟦!⟧}\\${untouched: text}`;");
+    }
+
+    #[test]
+    fn nested_template_transforms_have_a_depth_bound() {
+        let mut source = "value as number".to_owned();
+        for _ in 0..super::super::MAX_TYPE_DEPTH + 1 {
+            source = format!("`nested ${{{source}}}`");
+        }
+        assert_eq!(super::super::erase(&source), source);
+    }
 
     #[test]
     fn assertions_erase_whole_nested_types_without_evaluating_them() {

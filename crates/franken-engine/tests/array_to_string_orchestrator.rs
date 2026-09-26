@@ -76,8 +76,10 @@ fn array_to_string_joins_elements_bd_sxh8o_3() {
     );
 }
 
+/// `console.log` renders an array the way Node's `util.inspect` does (the
+/// join `1,2,3` this test used to expect was ToString, not what Node prints).
 #[test]
-fn console_log_of_array_prints_join_bd_sxh8o_3() {
+fn console_log_of_array_prints_inspected_array_bd_sxh8o_3() {
     let messages = run_console_messages(
         "fe_sxh8o3_console",
         "bd-sxh8o3-console",
@@ -85,8 +87,8 @@ fn console_log_of_array_prints_join_bd_sxh8o_3() {
     );
     assert_eq!(
         messages,
-        vec!["1,2,3", "2,4,6"],
-        "console.log of an array must not print [object Array]/[object Object]"
+        vec!["[ 1, 2, 3 ]", "[ 2, 4, 6 ]"],
+        "console.log of an array must print what Node v22.2.0 prints"
     );
 }
 

@@ -75,6 +75,7 @@ use zeroize::Zeroizing;
 mod array_from;
 mod async_generator;
 mod bigint_ops;
+mod inspect;
 mod json_parse;
 mod json_stringify;
 mod object_integrity;
@@ -3176,6 +3177,13 @@ pub enum BuiltinFunctionKind {
     /// `WeakSet.prototype.add/has/delete`; the method name travels in
     /// `module_specifier`. Append only.
     WeakSetMethod,
+    /// `next` / `return` of the async iterator that
+    /// `require('timers/promises').setInterval` returns (bd-suwvw). Append
+    /// only.
+    TimersPromisesIntervalNext,
+    TimersPromisesIntervalReturn,
+    /// `Function.prototype.toString` (ES2020 19.2.3.5). Append only.
+    FunctionPrototypeToString,
 }
 
 impl BuiltinFunctionKind {
@@ -4845,6 +4853,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::RegExpPrototypeExec => "exec",
             BuiltinFunctionKind::DateUtc => "UTC",
             BuiltinFunctionKind::DateParse => "parse",
+            BuiltinFunctionKind::TimersPromisesIntervalNext => "next",
+            BuiltinFunctionKind::TimersPromisesIntervalReturn => "return",
+            BuiltinFunctionKind::FunctionPrototypeToString => "toString",
             BuiltinFunctionKind::WeakSetMethod => ["add", "has", "delete"]
                 .iter()
                 .copied()
@@ -35280,6 +35291,24 @@ impl InterpreterCore {
                     .to_string();
                 self.weakset_method(&method, receiver.unwrap_or(Value::Undefined), args)
             }
+            BuiltinFunctionKind::TimersPromisesIntervalNext
+            | BuiltinFunctionKind::TimersPromisesIntervalReturn => self
+                .timers_promises_interval_step(
+                    receiver,
+                    receiver_register,
+                    args,
+                    builtin.kind == BuiltinFunctionKind::TimersPromisesIntervalReturn,
+                ),
+            BuiltinFunctionKind::FunctionPrototypeToString => match receiver {
+                Some(function) if function.is_callable() => {
+                    Ok(Value::str(self.function_native_source_text(Some(module), &function)))
+                }
+                other => Err(InterpreterError::TypeError {
+                    expected: "Function.prototype.toString receiver that is a function"
+                        .to_string(),
+                    got: other.as_ref().map_or("undefined", Value::type_name).to_string(),
+                }),
+            },
             BuiltinFunctionKind::DatePrototypeMethod => {
                 let method = builtin
                     .module_specifier
@@ -38470,15 +38499,15 @@ impl InterpreterCore {
             BuiltinFunctionKind::CryptoSetAuthTag => {
                 self.crypto_set_auth_tag(receiver, builtin, args)
             }
-            BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
+            BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args, Some(module)),
             BuiltinFunctionKind::ConsoleError => {
-                self.dispatch_console_hostcall("console:error", args)
+                self.dispatch_console_hostcall("console:error", args, Some(module))
             }
             BuiltinFunctionKind::ConsoleWarn => {
-                self.dispatch_console_hostcall("console:warn", args)
+                self.dispatch_console_hostcall("console:warn", args, Some(module))
             }
             BuiltinFunctionKind::ConsoleInfo => {
-                self.dispatch_console_hostcall("console:info", args)
+                self.dispatch_console_hostcall("console:info", args, Some(module))
             }
             BuiltinFunctionKind::ProxyRevoke => {
                 let proxy_id = builtin.bound_object.map(ObjectId).ok_or_else(|| {
@@ -43160,7 +43189,7 @@ impl InterpreterCore {
                         self.dispatch_number_hostcall(&capability.0, args)?
                     }
                     HostcallDispatchBinding::Console => {
-                        self.dispatch_console_hostcall(&capability.0, args)?
+                        self.dispatch_console_hostcall(&capability.0, args, Some(module))?
                     }
                     HostcallDispatchBinding::Timer => {
                         self.dispatch_timer_hostcall(&capability.0, args)?
@@ -43258,7 +43287,7 @@ impl InterpreterCore {
                         .take_pending_hostcall_result_label()
                         .unwrap_or(Label::Public),
                 );
-                let result = self.eval_add_values(&left, &right)?;
+                let result = self.eval_add_values(Some(module), &left, &right)?;
                 self.write_reg_with_label(dst, result, label)?;
                 self.ip += 1;
             }
@@ -43519,7 +43548,7 @@ impl InterpreterCore {
             if let Some(compact_instruction) = compact_instruction {
                 self.tier_i_instructions_executed =
                     self.tier_i_instructions_executed.saturating_add(1);
-                self.execute_compact_tier1_instruction(compact_instruction)?;
+                self.execute_compact_tier1_instruction(module, compact_instruction)?;
                 continue;
             }
 
@@ -43575,7 +43604,7 @@ impl InterpreterCore {
                     }
                     let _bigint_peak = self.preflight_bigint_add(dst, lhs, rhs)?;
                     let result_label = self.binary_operation_label(lhs, rhs)?;
-                    let result = self.eval_add(lhs, rhs)?;
+                    let result = self.eval_add(Some(module), lhs, rhs)?;
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
@@ -45093,12 +45122,36 @@ impl InterpreterCore {
                                         .unwrap_or(Value::Undefined)
                                 }
                             }
-                            Value::GeneratorFunction(_)
-                            | Value::AsyncFunction(_)
-                            | Value::AsyncGeneratorFunction(_) => property_key
-                                .as_str()
-                                .and_then(Self::function_prototype_property)
-                                .unwrap_or(Value::Undefined),
+                            // Own `name` and `length` come from the function
+                            // descriptor (or a concise method's name), like an
+                            // ordinary closure's.
+                            ref function @ (Value::GeneratorFunction(closure_id)
+                            | Value::AsyncFunction(closure_id)
+                            | Value::AsyncGeneratorFunction(closure_id)) => {
+                                match property_key.as_str() {
+                                    Some(key @ ("name" | "length")) => {
+                                        if let (Some(metadata), "name") =
+                                            (self.closure_method_metadata.get(&closure_id), key)
+                                        {
+                                            Value::Str(metadata.name.clone())
+                                        } else {
+                                            let owner_module =
+                                                self.foreign_closure_module(function, module)?;
+                                            let function_index =
+                                                self.closure_function_index(closure_id)?;
+                                            Self::function_name_or_length(
+                                                owner_module.as_deref().unwrap_or(module),
+                                                function_index,
+                                                key,
+                                            )
+                                            .unwrap_or(Value::Undefined)
+                                        }
+                                    }
+                                    key => key
+                                        .and_then(Self::function_prototype_property)
+                                        .unwrap_or(Value::Undefined),
+                                }
+                            }
                             Value::Generator(_) => match property_key {
                                 RuntimePropertyKey::String(ref key) => match key.as_str() {
                                     Some("next") => {
@@ -47429,6 +47482,7 @@ impl InterpreterCore {
     #[inline]
     fn execute_compact_tier1_instruction(
         &mut self,
+        module: &Ir3Module,
         instruction: CompactTier1Instruction,
     ) -> Result<(), InterpreterError> {
         use CompactTier1Opcode as Op;
@@ -47487,7 +47541,7 @@ impl InterpreterCore {
                 if !compact_handled {
                     let _bigint_peak = self.preflight_bigint_add(dst, lhs, rhs)?;
                     let result_label = self.binary_operation_label(lhs, rhs)?;
-                    let result = self.eval_add(lhs, rhs)?;
+                    let result = self.eval_add(Some(module), lhs, rhs)?;
                     self.write_reg_with_label(dst, result, result_label)?;
                 }
                 self.ip += 1;
@@ -47809,7 +47863,12 @@ impl InterpreterCore {
         }
     }
 
-    fn eval_add(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+    fn eval_add(
+        &self,
+        module: Option<&Ir3Module>,
+        lhs: u32,
+        rhs: u32,
+    ) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
         match (&a, &b) {
@@ -47842,10 +47901,9 @@ impl InterpreterCore {
                     Value::Object(id) => self.object_to_coerced_string(*id),
                     Value::Iterator(_) | Value::Generator(_) => "[object Object]".to_string(),
                     Value::Promise(_) => "[object Promise]".to_string(),
-                    Value::Function(_)
-                    | Value::Closure(_)
-                    | Value::GeneratorFunction(_)
-                    | Value::BuiltinFunction(_) => "function".to_string(),
+                    callable if callable.is_callable() => {
+                        self.function_native_source_text(module, callable)
+                    }
                     _ => other.to_string(),
                 };
                 self.check_string_limit(x.len().saturating_add(other_str.len()))?;
@@ -47856,10 +47914,9 @@ impl InterpreterCore {
                     Value::Object(id) => self.object_to_coerced_string(*id),
                     Value::Iterator(_) | Value::Generator(_) => "[object Object]".to_string(),
                     Value::Promise(_) => "[object Promise]".to_string(),
-                    Value::Function(_)
-                    | Value::Closure(_)
-                    | Value::GeneratorFunction(_)
-                    | Value::BuiltinFunction(_) => "function".to_string(),
+                    callable if callable.is_callable() => {
+                        self.function_native_source_text(module, callable)
+                    }
                     _ => other.to_string(),
                 };
                 self.check_string_limit(other_str.len().saturating_add(y.len()))?;
@@ -49378,9 +49435,23 @@ impl InterpreterCore {
         name: &str,
         message: String,
     ) -> Result<(), InterpreterError> {
+        // Like V8, `stack` starts with the `Name: message` summary above the
+        // frames, so `console.error(err.stack)` shows what went wrong.
+        let header = if message.is_empty() {
+            name.to_string()
+        } else if name.is_empty() {
+            message.clone()
+        } else {
+            format!("{name}: {message}")
+        };
         self.set_object_property(object_id, "name".to_string(), Value::str(name))?;
         self.set_object_property(object_id, "message".to_string(), Value::str(message))?;
-        let stack_trace = self.format_stack_trace();
+        let frames = self.format_stack_trace();
+        let stack_trace = if frames.is_empty() {
+            header
+        } else {
+            format!("{header}\n{frames}")
+        };
         self.set_object_property(object_id, "stack".to_string(), Value::str(stack_trace))?;
         Ok(())
     }
@@ -53279,7 +53350,10 @@ impl InterpreterCore {
     /// toString / valueOf / @@toPrimitive on itself or its prototype chain),
     /// which only the reentrant Tier-R path can run.
     fn register_needs_observable_to_primitive(&self, register: u32) -> bool {
-        matches!(self.read_reg(register), Ok(Value::Object(_)))
+        // Functions convert through Function.prototype.toString or their own
+        // `toString`/`valueOf`, which only the reentrant path can run.
+        self.read_reg(register)
+            .is_ok_and(|value| matches!(value, Value::Object(_)) || value.is_callable())
     }
 
     /// ES2020 7.1.1 ToPrimitive for an operand register (hint "string" when
@@ -53294,6 +53368,10 @@ impl InterpreterCore {
         prefer_string: bool,
     ) -> Result<Value, InterpreterError> {
         let value = self.read_reg(register)?;
+        if value.is_callable() {
+            let hint = if prefer_string { "string" } else { "default" };
+            return self.coerce_runtime_primitive_with_hint(Some(module), value, hint);
+        }
         let Value::Object(object_id) = value else {
             return Ok(value);
         };
@@ -53386,13 +53464,15 @@ impl InterpreterCore {
                 JsString::from("[object Object]")
             }
             Value::Promise(_) => JsString::from("[object Promise]"),
-            Value::Function(_)
+            ref callable @ (Value::Function(_)
             | Value::Closure(_)
             | Value::GeneratorFunction(_)
             | Value::BuiltinFunction(_)
             | Value::AsyncFunction(_)
-            | Value::AsyncFunctionObject(_)
-            | Value::AsyncGeneratorFunction(_) => JsString::from("function"),
+            | Value::AsyncGeneratorFunction(_)) => {
+                JsString::from(self.function_native_source_text(None, callable))
+            }
+            Value::AsyncFunctionObject(_) => JsString::from("function"),
             Value::AsyncGeneratorObject(_) => JsString::from("object"),
         })
     }
@@ -53514,6 +53594,60 @@ impl InterpreterCore {
                             primitive = Some(result);
                             break;
                         }
+                    }
+                }
+                primitive.ok_or_else(|| InterpreterError::TypeError {
+                    expected: "primitive conversion result".to_string(),
+                    got: "object from both conversion methods".to_string(),
+                })?
+            } else if value.is_callable() {
+                // Functions have no @@toPrimitive, so OrdinaryToPrimitive
+                // reaches Function.prototype.toString unless the function
+                // has its own `toString`/`valueOf` (Object.prototype.valueOf
+                // returns the function itself and is skipped).
+                let names = if prefer_string {
+                    ["toString", "valueOf"]
+                } else {
+                    ["valueOf", "toString"]
+                };
+                let backing = match module {
+                    Some(module) => self
+                        .function_own_property_key(module, &value)?
+                        .and_then(|key| self.function_prototypes.get(&key).copied()),
+                    None => None,
+                };
+                let mut primitive = None;
+                for name in names {
+                    let own = backing.and_then(|backing| {
+                        self.heap
+                            .get(backing.0 as usize)
+                            .and_then(|object| object.properties.get(name).cloned())
+                    });
+                    let Some(method) = own.filter(Value::is_callable) else {
+                        if name == "toString" {
+                            primitive =
+                                Some(Value::str(self.function_native_source_text(module, &value)));
+                            break;
+                        }
+                        continue;
+                    };
+                    let (result, label) = self.invoke_inline_method_call_with_argument_label(
+                        module,
+                        method,
+                        value.clone(),
+                        Vec::new(),
+                        None,
+                    )?;
+                    let label = self
+                        .pending_hostcall_result_label
+                        .as_ref()
+                        .unwrap_or(&Label::Public)
+                        .join(&label);
+                    self.replace_pending_hostcall_result_label(Some(label))?;
+                    self.observe_scoped_callback_result()?;
+                    if !result.is_object_like() {
+                        primitive = Some(result);
+                        break;
                     }
                 }
                 primitive.ok_or_else(|| InterpreterError::TypeError {
@@ -56584,6 +56718,77 @@ impl InterpreterCore {
             WitnessEventKind::HostcallDispatched,
             Some(&format!("builtin:timersPromises:{timer_id}")),
         );
+        Ok(Value::Promise(promise.0))
+    }
+
+    /// bd-suwvw: `next()` / `return()` of a `timers/promises` setInterval
+    /// iterator. `next` advances the deterministic virtual clock by the
+    /// interval delay and resolves `{ value, done: false }`; `return` ends the
+    /// iteration, after which `next` resolves `{ value: undefined, done: true }`.
+    /// The promise carries the receiver's and arguments' labels, since it
+    /// hands out the value the interval was created with.
+    fn timers_promises_interval_step(
+        &mut self,
+        receiver: Option<Value>,
+        receiver_register: Option<u32>,
+        args: RegRange,
+        finish: bool,
+    ) -> Result<Value, InterpreterError> {
+        let interval = match receiver {
+            Some(Value::Object(object_id))
+                if matches!(
+                    self.heap
+                        .get(object_id.0 as usize)
+                        .and_then(|object| object.properties.get("__type")),
+                    Some(Value::Str(kind)) if kind.as_ref() == TIMERS_PROMISES_INTERVAL_TYPE
+                ) =>
+            {
+                object_id
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "timers/promises setInterval iterator receiver".to_string(),
+                    got: other
+                        .as_ref()
+                        .map_or("undefined", Value::type_name)
+                        .to_string(),
+                });
+            }
+        };
+        let (delay_ms, value, done) = {
+            let properties = &self.heap[interval.0 as usize].properties;
+            let delay_ms = match properties.get("__delayMs") {
+                Some(Value::Int(ms)) => (*ms).max(1) as u64,
+                _ => 1,
+            };
+            let value = properties
+                .get("__value")
+                .cloned()
+                .unwrap_or(Value::Undefined);
+            let done = matches!(properties.get("__done"), Some(Value::Bool(true)));
+            (delay_ms, value, done)
+        };
+        let mut label = self.join_arg_range_label(args)?;
+        if let Some(register) = receiver_register {
+            let receiver_label = self.get_register_label(register)?;
+            if *receiver_label > label {
+                label = receiver_label.clone();
+            }
+        }
+        let next_value = if finish || done {
+            if !done {
+                self.set_object_property(interval, "__done".to_string(), Value::Bool(true))?;
+            }
+            None
+        } else {
+            let now = self.event_loop.clock.now_ms();
+            self.event_loop
+                .clock
+                .advance_to(now.saturating_add(delay_ms));
+            Some(value)
+        };
+        let result = self.alloc_iterator_result_object(next_value)?;
+        let promise = self.create_fulfilled_promise(Self::value_to_js_value(&result), label)?;
         Ok(Value::Promise(promise.0))
     }
 
@@ -62816,7 +63021,7 @@ impl InterpreterCore {
                 Ir3Instruction::Add { dst, lhs, rhs } => {
                     let left = Self::read_local_register(&local_registers, lhs)?;
                     let right = Self::read_local_register(&local_registers, rhs)?;
-                    let value = self.eval_add_values(&left, &right)?;
+                    let value = self.eval_add_values(Some(module), &left, &right)?;
                     Self::write_local_register(&mut local_registers, dst, value)?;
                     instruction_pointer += 1;
                 }
@@ -63932,7 +64137,12 @@ impl InterpreterCore {
             ))
     }
 
-    fn eval_add_values(&self, left: &Value, right: &Value) -> Result<Value, InterpreterError> {
+    fn eval_add_values(
+        &self,
+        module: Option<&Ir3Module>,
+        left: &Value,
+        right: &Value,
+    ) -> Result<Value, InterpreterError> {
         match (left, right) {
             // bd-9vouw.2: the callback mini-lanes (reduce, Array.from) share
             // the main evaluator's Number semantics instead of wrapping i64.
@@ -63968,14 +64178,22 @@ impl InterpreterCore {
                 })
             }
             (Value::Str(left_string), other) => {
-                let other_string = self.value_to_string(other);
+                let other_string = if other.is_callable() {
+                    self.function_native_source_text(module, other)
+                } else {
+                    self.value_to_string(other)
+                };
                 self.check_string_limit(left_string.len().saturating_add(other_string.len()))?;
                 Ok(Value::Str(
                     left_string.concat(&JsString::from(other_string)),
                 ))
             }
             (other, Value::Str(right_string)) => {
-                let other_string = self.value_to_string(other);
+                let other_string = if other.is_callable() {
+                    self.function_native_source_text(module, other)
+                } else {
+                    self.value_to_string(other)
+                };
                 self.check_string_limit(other_string.len().saturating_add(right_string.len()))?;
                 Ok(Value::Str(
                     JsString::from(other_string).concat(right_string),
@@ -64408,10 +64626,11 @@ impl InterpreterCore {
         &mut self,
         cap: &str,
         args: RegRange,
+        module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
-        let outcome = self.dispatch_console_hostcall_inner(cap, args);
+        let outcome = self.dispatch_console_hostcall_inner(cap, args, module);
         self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
         outcome
     }
@@ -64420,6 +64639,7 @@ impl InterpreterCore {
         &mut self,
         cap: &str,
         args: RegRange,
+        module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         let level = match cap {
             "console:log" => ConsoleLevel::Log,
@@ -64431,21 +64651,9 @@ impl InterpreterCore {
 
         self.check_console_confidentiality(args, cap)?;
 
-        // Collect arguments as strings
-        let mut parts = Vec::new();
-        for i in 0..args.count {
-            let reg = args
-                .start
-                .checked_add(i)
-                .ok_or(InterpreterError::RegisterOutOfBounds {
-                    register: args.start,
-                    max: self.config.max_registers,
-                })?;
-            let val = self.read_reg(reg)?;
-            parts.push(self.value_to_string(&val));
-        }
-
-        let message = parts.join(" ");
+        // Node's `util.format`: strings as-is, everything else through
+        // `util.inspect`, `%` directives in a leading string.
+        let message = self.console_format_arguments(module, args)?;
 
         self.push_console_output(level, message);
 
@@ -70528,7 +70736,7 @@ impl InterpreterCore {
                 self.dispatch_number_hostcall(cap, delegated_args)
             }
             Some(HostcallDispatchBinding::Console) => {
-                self.dispatch_console_hostcall(cap, delegated_args)
+                self.dispatch_console_hostcall(cap, delegated_args, module)
             }
             Some(HostcallDispatchBinding::Timer) => {
                 self.dispatch_timer_hostcall(cap, delegated_args)
@@ -73409,9 +73617,15 @@ impl InterpreterCore {
                     _ => Ok(Value::Bool(false)), // Number.isFinite only returns true for finite numbers, not type coerced
                 }
             }
-            "builtin:ConsoleLog" => self.dispatch_console_hostcall_inner("console:log", args),
-            "builtin:ConsoleError" => self.dispatch_console_hostcall_inner("console:error", args),
-            "builtin:ConsoleWarn" => self.dispatch_console_hostcall_inner("console:warn", args),
+            "builtin:ConsoleLog" => {
+                self.dispatch_console_hostcall_inner("console:log", args, module)
+            }
+            "builtin:ConsoleError" => {
+                self.dispatch_console_hostcall_inner("console:error", args, module)
+            }
+            "builtin:ConsoleWarn" => {
+                self.dispatch_console_hostcall_inner("console:warn", args, module)
+            }
             "builtin:DateNow" => {
                 // Date.now implementation - returns deterministic timestamp in milliseconds
                 // Uses fixed epoch (2026-01-01T00:00:00Z) for deterministic replay
@@ -78409,7 +78623,28 @@ impl InterpreterCore {
                     ("__type", Value::str(TIMERS_PROMISES_INTERVAL_TYPE)),
                     ("__delayMs", Value::Int(delay_ms as i64)),
                     ("__value", value),
+                    (
+                        "next",
+                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                            BuiltinFunctionKind::TimersPromisesIntervalNext,
+                        )),
+                    ),
+                    (
+                        "return",
+                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                            BuiltinFunctionKind::TimersPromisesIntervalReturn,
+                        )),
+                    ),
                 ])?;
+                // `for await` (desugared to the async iteration protocol)
+                // finds the iterator through @@asyncIterator.
+                self.set_symbol_property(
+                    object_id,
+                    WellKnownSymbol::AsyncIterator.id(),
+                    BaselineSymbolProperty::Data(Value::BuiltinFunction(
+                        BuiltinFunction::new_kind(BuiltinFunctionKind::AsyncGeneratorIteratorSelf),
+                    )),
+                )?;
                 Ok(Value::Object(object_id))
             }
 
@@ -78425,7 +78660,9 @@ impl InterpreterCore {
             // Removed duplicate IsNaN - implementation at line 8326 has better JS compliance and explicit type conversion rules
 
             // Removed duplicate IsFinite - implementation at line 8354 has better JS compliance and explicit type conversion rules
-            "builtin:ConsoleInfo" => self.dispatch_console_hostcall_inner("console:info", args),
+            "builtin:ConsoleInfo" => {
+                self.dispatch_console_hostcall_inner("console:info", args, module)
+            }
 
             "builtin:StringPrototypeToLocaleLowerCase" => {
                 // String.prototype.toLocaleLowerCase() implementation - simplified locale-aware lowercase
@@ -85276,6 +85513,7 @@ impl InterpreterCore {
             "call" => BuiltinFunctionKind::FunctionPrototypeCall,
             "apply" => BuiltinFunctionKind::FunctionPrototypeApply,
             "bind" => BuiltinFunctionKind::FunctionPrototypeBind,
+            "toString" => BuiltinFunctionKind::FunctionPrototypeToString,
             // Function.prototype inherits Object.prototype's own-property
             // queries (`fn.hasOwnProperty('x')`).
             "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
@@ -93839,7 +94077,7 @@ mod async_runtime_tests_current {
             Value::Undefined
         );
         assert_eq!(
-            core.dispatch_console_hostcall_inner("console:future-acknowledgement", no_args)
+            core.dispatch_console_hostcall_inner("console:future-acknowledgement", no_args, None)
                 .expect("unknown console family route"),
             Value::Undefined
         );
@@ -132741,7 +132979,7 @@ mod tests {
         core.set_reg(0, Value::Int(1));
         core.set_reg(1, Value::Float(Float64::new(0.5)));
         let result = core
-            .eval_add(0, 1)
+            .eval_add(None, 0, 1)
             .expect("operation should succeed for valid inputs");
         assert_eq!(result, Value::Float(Float64::new(1.5)));
     }
@@ -132756,7 +132994,7 @@ mod tests {
         core.set_reg(0, Value::Float(Float64::new(2.5)));
         core.set_reg(1, Value::Int(3));
         let result = core
-            .eval_add(0, 1)
+            .eval_add(None, 0, 1)
             .expect("operation should succeed for valid inputs");
         assert_eq!(result, Value::Float(Float64::new(5.5)));
     }
@@ -132846,7 +133084,7 @@ mod tests {
         core.set_reg(0, Value::Float(Float64::new(f64::NAN)));
         core.set_reg(1, Value::Int(1));
         let result = core
-            .eval_add(0, 1)
+            .eval_add(None, 0, 1)
             .expect("operation should succeed for valid inputs");
         if let Value::Float(f) = result {
             assert!(f.inner().is_nan());
@@ -132917,7 +133155,7 @@ mod tests {
         core.set_reg(0, Value::Float(Float64::new(0.1)));
         core.set_reg(1, Value::Float(Float64::new(0.2)));
         let result = core
-            .eval_add(0, 1)
+            .eval_add(None, 0, 1)
             .expect("operation should succeed for valid inputs");
         if let Value::Float(f) = result {
             // The exact value is 0.30000000000000004
@@ -135891,7 +136129,7 @@ mod tests {
         let mut core = quickjs_test_core();
 
         core.set_reg(0, Value::str("Info hostcall"));
-        core.dispatch_console_hostcall("console:info", RegRange { start: 0, count: 1 })
+        core.dispatch_console_hostcall("console:info", RegRange { start: 0, count: 1 }, None)
             .expect("operation should succeed for valid inputs");
 
         assert_eq!(core.console_output.len(), 1);
@@ -137667,7 +137905,7 @@ mod tests {
         ] {
             core.set_reg(0, Value::str(cap));
             let result = core
-                .dispatch_console_hostcall(cap, RegRange { start: 0, count: 1 })
+                .dispatch_console_hostcall(cap, RegRange { start: 0, count: 1 }, None)
                 .expect("console hostcall should return normally with zero output cap");
 
             assert_eq!(result, Value::Undefined);

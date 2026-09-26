@@ -171,3 +171,34 @@ fn caught_native_error_string_coercion_carries_name() {
         "0"
     );
 }
+
+/// Like V8, `stack` begins with the `Name: message` summary, then one
+/// `    at ...` line per frame, so `console.error(err.stack)` shows what went
+/// wrong. The summary line was missing: `stack` held only the frame lines.
+/// Expected values are what Node v22.2.0 prints.
+#[test]
+fn stack_starts_with_name_and_message() {
+    assert_eq!(
+        eval_value(
+            r#"var e = new TypeError("bad input"); var f = new Error(); var g = new RangeError("");
+               [e.stack.split("\n")[0], f.stack.split("\n")[0], g.stack.split("\n")[0],
+                e.stack.split("\n").length > 1].join("|")"#
+        ),
+        "TypeError: bad input|Error|RangeError|true"
+    );
+    assert_eq!(
+        eval_value(
+            r#"function thrower() { throw new Error("deep"); } var s;
+               try { thrower(); } catch (x) { s = x.stack; }
+               [s.split("\n")[0], /^    at /.test(s.split("\n")[1])].join("|")"#
+        ),
+        "Error: deep|true"
+    );
+    // Native faults caught as JS errors carry the summary too.
+    assert_eq!(
+        eval_value(
+            r#"var s; try { null.x; } catch (x) { s = x.stack; } s.split("\n")[0].indexOf("TypeError: ")"#
+        ),
+        "0"
+    );
+}

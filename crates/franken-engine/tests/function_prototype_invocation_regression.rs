@@ -436,3 +436,46 @@ fn computed_literal_key_conversion_works_inside_functions_and_closures() {
         "7",
     );
 }
+
+/// `String(fn)`, `` `${fn}` ``, `"" + fn`, `fn.toString()` and
+/// `Function.prototype.toString.call(fn)` all run Function.prototype.toString
+/// (ES2020 19.2.3.5). `String(fn)` used to throw a TypeError, `"" + fn` gave
+/// `"function"`, and `fn.toString()` found no method. Built-ins print in
+/// NativeFunction form exactly as Node v22.2.0 does. User functions print
+/// in the same form (the engine keeps no source text), so for them only
+/// the shape and the agreement of every path are asserted. An own
+/// `toString` still wins.
+#[test]
+fn function_to_string_is_native_function_text() {
+    assert_eval(
+        r#"[String(Math.max), Function.prototype.toString.call(parseInt), `${[].push}`,
+            "" + Math.min, Math.abs.toString()].join("|")"#,
+        "function max() { [native code] }|function parseInt() { [native code] }|\
+         function push() { [native code] }|function min() { [native code] }|\
+         function abs() { [native code] }",
+    );
+    assert_eval(
+        r#"function f() {} f.toString = function () { return "custom"; }; var g = function () {};
+           [String(f), `${f}`, (function () {}).toString === Function.prototype.toString,
+            typeof String(g), String(g) === g.toString(), String(g) === "" + g,
+            String(g) === `${g}`].join("|")"#,
+        "custom|custom|true|string|true|true|true",
+    );
+    // `+` and template substitutions run the function's own `toString` too.
+    assert_eval(
+        r#"function f() {} f.toString = function () { return "custom"; };
+           ["" + f, f + 1, `a${f}b`].join("|")"#,
+        "custom|custom1|acustomb",
+    );
+    assert_eval(
+        r#"var r; try { Function.prototype.toString.call({}); r = "no"; }
+           catch (e) { r = e instanceof TypeError; }
+           var b = function h() {}.bind(null); [r, String(b)].join("|")"#,
+        "true|function () { [native code] }",
+    );
+    assert_eval(
+        r#"var s = String(function named(a, b) { return a + b; });
+           [s.indexOf("function"), s.indexOf("named") > 0].join("|")"#,
+        "0|true",
+    );
+}

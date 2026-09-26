@@ -3595,6 +3595,7 @@ fn lower_destructuring_to_ir1(
             });
 
             ops.push(Ir1Op::Label { id: default_label });
+            let start = ops.len();
             lower_expression_to_ir1(
                 right,
                 ops,
@@ -3605,6 +3606,9 @@ fn lower_destructuring_to_ir1(
                 label_counter,
                 span_table,
             )?;
+            if let BindingPattern::Identifier(name) = left.as_ref() {
+                name_anonymous_function_definition(ops, start, right, name);
+            }
             ops.push(Ir1Op::StoreBinding {
                 binding_id: source_bid,
             });
@@ -3804,6 +3808,7 @@ fn lower_destructuring_assignment_element_to_ir1(
         ops.push(Ir1Op::JumpIfFalsyConsume {
             label_id: assign_label,
         });
+        let start = ops.len();
         lower_expression_to_ir1(
             default,
             ops,
@@ -3814,6 +3819,9 @@ fn lower_destructuring_assignment_element_to_ir1(
             label_counter,
             span_table,
         )?;
+        if let Expression::Identifier(name) = target {
+            name_anonymous_function_definition(ops, start, default, name);
+        }
         ops.push(Ir1Op::StoreBinding {
             binding_id: value_bid,
         });
@@ -4743,6 +4751,7 @@ fn lower_statement_to_ir1_with_flow(
                             value: Ir1Literal::Undefined,
                         });
                     } else {
+                        let start = ops.len();
                         lower_expression_to_ir1(
                             init,
                             ops,
@@ -4753,6 +4762,9 @@ fn lower_statement_to_ir1_with_flow(
                             label_counter,
                             span_table,
                         )?;
+                        if let BindingPattern::Identifier(name) = &d.pattern {
+                            name_anonymous_function_definition(ops, start, init, name);
+                        }
                     }
                 } else {
                     ops.push(Ir1Op::LoadLiteral {
@@ -12576,6 +12588,64 @@ fn lower_expression_to_ir1(
     Ok(())
 }
 
+/// ES2020 IsAnonymousFunctionDefinition (14.1.12): an anonymous function,
+/// arrow or class expression.
+fn is_anonymous_function_definition(expression: &Expression) -> bool {
+    matches!(
+        expression,
+        Expression::Function { name: None, .. }
+            | Expression::ArrowFunction { .. }
+            | Expression::ClassExpression { name: None, .. }
+    )
+}
+
+/// ES2020 NamedEvaluation: an anonymous function, arrow or class definition
+/// bound directly to a name takes that name, so `var f = function () {}` has
+/// `f.name === "f"`. Call it after `expression` was lowered into
+/// `ops[start..]`.
+///
+/// Only the descriptor's display name changes. Unlike a named function
+/// expression the definition gets no self binding, so its body keeps
+/// resolving the outer binding. IR3 picks the self binding by matching the
+/// name against the free variables, so the name is left off when it would
+/// coincide with one.
+fn name_anonymous_function_definition(
+    ops: &mut [Ir1Op],
+    start: usize,
+    expression: &Expression,
+    name: &str,
+) {
+    if !is_anonymous_function_definition(expression) {
+        return;
+    }
+    let Some(emitted) = ops.get_mut(start..) else {
+        return;
+    };
+    if matches!(expression, Expression::ClassExpression { .. }) {
+        // The class lowering declares the constructor before any other
+        // function (heritage and members come after it).
+        if let Some(Ir1Op::DeclareFunction {
+            name: constructor_name,
+            free_vars,
+            ..
+        }) = emitted
+            .iter_mut()
+            .find(|op| matches!(op, Ir1Op::DeclareFunction { .. }))
+            && !free_vars.iter().any(|free_var| free_var == name)
+        {
+            *constructor_name = name.to_string();
+        }
+    } else if let Some(Ir1Op::CreateFunction {
+        name: function_name @ None,
+        free_vars,
+        ..
+    }) = emitted.last_mut()
+        && !free_vars.iter().any(|free_var| free_var == name)
+    {
+        *function_name = Some(name.to_string());
+    }
+}
+
 /// Keep nested arrow bodies out of the generic expression lowerer's large
 /// recursive frame. A callback can retain several local bindings while its
 /// body creates more callbacks; lowering those children through the same
@@ -13483,6 +13553,7 @@ fn lower_expression_to_ir1_inner(
                             label_id: end_label,
                         });
                         ops.push(Ir1Op::Label { id: eval_rhs_label });
+                        let start = ops.len();
                         lower_expression_to_ir1(
                             right,
                             ops,
@@ -13493,6 +13564,7 @@ fn lower_expression_to_ir1_inner(
                             label_counter,
                             span_table,
                         )?;
+                        name_anonymous_function_definition(ops, start, right, name);
                         if let Some(binding_id) = resolved_binding_id {
                             ops.push(Ir1Op::AssignOp {
                                 binding_id,
@@ -13521,6 +13593,7 @@ fn lower_expression_to_ir1_inner(
                 }
 
                 if let Some(binding_id) = resolved_binding_id {
+                    let start = ops.len();
                     lower_expression_to_ir1(
                         right,
                         ops,
@@ -13531,6 +13604,9 @@ fn lower_expression_to_ir1_inner(
                         label_counter,
                         span_table,
                     )?;
+                    if *operator == AssignmentOperator::Assign {
+                        name_anonymous_function_definition(ops, start, right, name);
+                    }
                     ops.push(Ir1Op::AssignOp {
                         binding_id,
                         operator: *operator,
@@ -13544,6 +13620,7 @@ fn lower_expression_to_ir1_inner(
                         name: name.clone(),
                         status_id: dynamic_status_id.expect("dynamic target status exists"),
                     });
+                    let start = ops.len();
                     lower_expression_to_ir1(
                         right,
                         ops,
@@ -13554,6 +13631,7 @@ fn lower_expression_to_ir1_inner(
                         label_counter,
                         span_table,
                     )?;
+                    name_anonymous_function_definition(ops, start, right, name);
                     ops.push(Ir1Op::PutNameWithStatus {
                         name: name.clone(),
                         status_id: dynamic_status_id.expect("dynamic target status exists"),
@@ -16460,7 +16538,7 @@ fn lower_expression_to_ir1_inner(
                         match prop.kind {
                             ObjectPropertyKind::Data => {
                                 // Normal property - emit key and value, then set.
-                                if prop.computed {
+                                let static_key = if prop.computed {
                                     lower_expression_to_ir1(
                                         &prop.key,
                                         ops,
@@ -16475,12 +16553,15 @@ fn lower_expression_to_ir1_inner(
                                         capability: "builtin:ToPropertyKey".to_string(),
                                         arg_count: 1,
                                     });
+                                    None
                                 } else {
                                     let key_str = canonical_static_object_property_key(&prop.key)?;
                                     ops.push(Ir1Op::LoadLiteral {
-                                        value: Ir1Literal::String(key_str),
+                                        value: Ir1Literal::String(key_str.clone()),
                                     });
-                                }
+                                    Some(key_str)
+                                };
+                                let start = ops.len();
                                 lower_expression_to_ir1(
                                     &prop.value,
                                     ops,
@@ -16491,6 +16572,18 @@ fn lower_expression_to_ir1_inner(
                                     label_counter,
                                     span_table,
                                 )?;
+                                // `__proto__: v` sets the prototype; it is not
+                                // a NamedEvaluation site.
+                                if let Some(key) = static_key.as_ref().and_then(JsString::as_str)
+                                    && key != "__proto__"
+                                {
+                                    name_anonymous_function_definition(
+                                        ops,
+                                        start,
+                                        &prop.value,
+                                        key,
+                                    );
+                                }
                                 // Build a single-property temp object `{key: value}` and
                                 // spread it into the target. A bare `SetProperty` here is
                                 // WRONG for an object literal (bd-oca1s): its Ir1->Ir3
@@ -16527,6 +16620,7 @@ fn lower_expression_to_ir1_inner(
                                     let key_str = canonical_static_object_property_key(&prop.key)?;
                                     Ir1PropertyKey::Static(key_str)
                                 };
+                                let start = ops.len();
                                 lower_expression_to_ir1(
                                     &prop.value,
                                     ops,
@@ -16537,6 +16631,18 @@ fn lower_expression_to_ir1_inner(
                                     label_counter,
                                     span_table,
                                 )?;
+                                // Generator methods carry no method metadata,
+                                // so their key is their descriptor name.
+                                if let Ir1PropertyKey::Static(key) = &property_key
+                                    && let Some(key) = key.as_str()
+                                {
+                                    name_anonymous_function_definition(
+                                        ops,
+                                        start,
+                                        &prop.value,
+                                        key,
+                                    );
+                                }
                                 ops.push(Ir1Op::DefineMethod { key: property_key });
                             }
                             ObjectPropertyKind::Get | ObjectPropertyKind::Set => {
@@ -16588,7 +16694,7 @@ fn lower_expression_to_ir1_inner(
             } else {
                 // No spreads - use original batch approach
                 for prop in properties {
-                    if prop.computed {
+                    let static_key = if prop.computed {
                         lower_expression_to_ir1(
                             &prop.key,
                             ops,
@@ -16606,12 +16712,15 @@ fn lower_expression_to_ir1_inner(
                             capability: "builtin:ToPropertyKey".to_string(),
                             arg_count: 1,
                         });
+                        None
                     } else {
                         let key_str = canonical_static_object_property_key(&prop.key)?;
                         ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::String(key_str),
+                            value: Ir1Literal::String(key_str.clone()),
                         });
-                    }
+                        Some(key_str)
+                    };
+                    let start = ops.len();
                     lower_expression_to_ir1(
                         &prop.value,
                         ops,
@@ -16622,6 +16731,13 @@ fn lower_expression_to_ir1_inner(
                         label_counter,
                         span_table,
                     )?;
+                    // `__proto__: v` sets the prototype; it is not a
+                    // NamedEvaluation site.
+                    if let Some(key) = static_key.as_ref().and_then(JsString::as_str)
+                        && key != "__proto__"
+                    {
+                        name_anonymous_function_definition(ops, start, &prop.value, key);
+                    }
                 }
                 ops.push(Ir1Op::NewObject {
                     count: properties.len() as u32,

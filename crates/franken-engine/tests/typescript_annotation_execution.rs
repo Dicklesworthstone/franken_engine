@@ -248,3 +248,109 @@ fn generic_declarations_and_class_modifiers_use_the_native_runtime() {
         &["5 3 kept"],
     );
 }
+
+#[test]
+fn expression_assertions_preserve_values_and_do_not_cast_or_check() {
+    assert_output(
+        r#"
+        const original: unknown = '41';
+        const asserted = original as number;
+        const settings = {port: 80} satisfies {port: number};
+        const same = settings as unknown as {port: number};
+        console.log(typeof asserted, asserted, same === settings, same.port);
+        "#,
+        &["string 41 true 80"],
+    );
+}
+
+#[test]
+fn asserted_method_calls_preserve_the_original_receiver() {
+    assert_output(
+        r#"
+        const receiver = {
+            base: 8,
+            method(offset: number): number { return this.base + offset; }
+        };
+        console.log((receiver.method as (offset: number) => number)(4));
+        console.log(receiver!.method(5));
+        "#,
+        &["12", "13"],
+    );
+}
+
+#[test]
+fn non_null_assertions_are_not_runtime_guards_or_boolean_negations() {
+    assert_output(
+        r#"
+        const value: {count: number} | null = null;
+        console.log(value!, !value, !!value);
+        try { console.log(value!.count); }
+        catch (error) { console.log(error.name); }
+        const object = {count: 7};
+        console.log(object!!.count, object !== null);
+        "#,
+        &["null true false", "TypeError", "7 true"],
+    );
+}
+
+#[test]
+fn asserted_assignment_targets_are_evaluated_once_in_source_order() {
+    assert_output(
+        r#"
+        let reads: number = 0;
+        const state = {value: 1};
+        function target(): {value: number} { reads++; return state; }
+        (target() as {value: number}).value += 2;
+        target()!.value++;
+        console.log(reads, state.value);
+        let keys: number = 0;
+        function key(): string { keys++; return 'value'; }
+        state[key()]! += 3;
+        console.log(keys, state.value);
+        "#,
+        &["2 4", "1 7"],
+    );
+}
+
+#[test]
+fn assertions_preserve_comparisons_conditional_branches_and_statement_boundaries() {
+    assert_output(
+        r#"
+        const first: unknown = 3;
+        const second = false ? 1 as number : first as number;
+        console.log(second, first as number < 5, first as number === 3);
+        const value = first as number
+        const next = 7;
+        console.log(value, next);
+        "#,
+        &["3 true true", "3 7"],
+    );
+}
+
+#[test]
+fn runtime_properties_and_functions_named_as_and_satisfies_remain_callable() {
+    assert_output(
+        r#"
+        function as(value: number): number { return value + 1; }
+        function satisfies(value: number): number { return value * 2; }
+        const object = {as: as, satisfies: satisfies};
+        console.log(object.as(4), object.satisfies(4));
+        console.log((object.as as (value: number) => number)(5));
+        "#,
+        &["5 8", "6"],
+    );
+}
+
+#[test]
+fn assertions_accept_nested_types_while_preserving_live_object_identity() {
+    assert_output(
+        r#"
+        const entries = {items: [{value: 3}, {value: 7}]};
+        const typed = entries as Record<string, Array<{value: number} | null>>;
+        const checked = typed satisfies {items: Array<{value: number}>};
+        typed.items[0]!.value = 9;
+        console.log(checked === entries, entries.items[0].value, typed.items[1]!.value);
+        "#,
+        &["true 9 7"],
+    );
+}

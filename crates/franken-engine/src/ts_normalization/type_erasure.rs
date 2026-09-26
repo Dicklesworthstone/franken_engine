@@ -8,6 +8,8 @@
 //! line terminators. In particular, object properties, destructuring aliases,
 //! labels, switch cases and conditional expressions are not annotation sites.
 
+mod expressions;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Word,
@@ -71,6 +73,7 @@ pub(super) fn erase(source: &str) -> String {
             _ => {}
         }
     }
+    eraser.erase_expression_types();
     eraser.finish()
 }
 
@@ -308,7 +311,7 @@ impl Eraser<'_> {
                 };
                 if self.text(end) != "(" {
                     return;
-                }
+                };
                 self.mark(cursor, end);
                 cursor = end;
             }
@@ -451,6 +454,13 @@ impl Eraser<'_> {
             }
         }
         let token = self.tokens.get(cursor)?;
+        let mut type_arguments = token.kind == Kind::Word
+            && !matches!(
+                token.text,
+                "any" | "unknown" | "number" | "bigint" | "boolean" | "string"
+                    | "symbol" | "object" | "void" | "undefined" | "null" | "never"
+                    | "true" | "false" | "this"
+            );
         let function_parameters = token.text == "(" && self.type_parameter_list(cursor, depth + 1);
         if matches!(token.text, "(" | "[" | "{") {
             cursor = self.group_end(cursor)?;
@@ -466,9 +476,22 @@ impl Eraser<'_> {
             match self.text(cursor) {
                 "." if self.tokens.get(cursor + 1).is_some_and(|token| token.kind == Kind::Word) => {
                     cursor += 2;
+                    type_arguments = true;
                 }
-                "<" => cursor = self.angle_end(cursor)?,
-                "[" => cursor = self.group_end(cursor)?,
+                "<" if type_arguments => {
+                    // In an expression assertion, an unmatched `<` starts a
+                    // runtime comparison, not a type-argument list. Binding
+                    // annotations still reject this boundary at their caller.
+                    let Some(end) = self.angle_end(cursor) else {
+                        break;
+                    };
+                    cursor = end;
+                    type_arguments = false;
+                }
+                "[" => {
+                    cursor = self.group_end(cursor)?;
+                    type_arguments = false;
+                }
                 _ => break,
             }
         }
@@ -853,7 +876,7 @@ mod tests {
 
     // Mark the exact erased spans. Everything else, including whitespace and
     // runtime colons, must remain byte-for-byte identical to the source.
-    fn check(marked: &str) {
+    pub(super) fn check(marked: &str) {
         let mut source = String::new();
         let mut expected = String::new();
         let mut rest = marked;

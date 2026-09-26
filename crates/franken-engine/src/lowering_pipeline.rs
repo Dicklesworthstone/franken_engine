@@ -2399,6 +2399,37 @@ fn mark_pre_reserved_source_scope_bindings(
     }
 }
 
+/// `let`/`const`/`class` names declared directly in a block, with their
+/// binding kind. Block-level function declarations are excluded: they keep
+/// their hoisted initialization.
+fn direct_block_lexical_kinds(statements: &[Statement]) -> Vec<(String, BindingKind)> {
+    let mut kinds = Vec::new();
+    for statement in statements {
+        match statement {
+            Statement::VariableDeclaration(declaration)
+                if matches!(
+                    declaration.kind,
+                    VariableDeclarationKind::Let | VariableDeclarationKind::Const
+                ) =>
+            {
+                let kind = binding_kind_for_variable_declaration(declaration.kind);
+                for declarator in &declaration.declarations {
+                    for name in declarator.pattern.binding_names() {
+                        kinds.push((name.to_string(), kind));
+                    }
+                }
+            }
+            Statement::ClassDeclaration(class) => {
+                if let Some(name) = &class.name {
+                    kinds.push((name.clone(), BindingKind::Let));
+                }
+            }
+            _ => {}
+        }
+    }
+    kinds
+}
+
 fn direct_lexical_binding_names(statements: &[Statement]) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for statement in statements {
@@ -4749,6 +4780,23 @@ fn lower_statement_to_ir1_with_flow(
             let lexical_names = direct_lexical_binding_names(&block.body);
             let lexical_binding_snapshot = binding_entry_snapshot(binding_lookup, &lexical_names);
             reserve_and_mark_source_scope_bindings(&block.body, binding_lookup, binding_index);
+            // ES2020 13.2.13 BlockDeclarationInstantiation: every entry to a
+            // block creates fresh let/const/class bindings. Inside a loop, a
+            // closure made in one iteration must keep that iteration's value
+            // (`while (..) { const v = i; fs.push(() => v); }`). All such
+            // closures used to share one cell and saw the last value. Only
+            // captured (scope-routed) bindings lower to a runtime operation.
+            if control_flow.continue_label.is_some() {
+                for (name, kind) in direct_block_lexical_kinds(&block.body) {
+                    if let Some(&binding_id) = binding_lookup.get(name.as_str()) {
+                        ops.push(Ir1Op::CreatePerIterationBinding {
+                            binding_id,
+                            kind,
+                            preserve_state: false,
+                        });
+                    }
+                }
+            }
             for inner in &block.body {
                 lower_statement_to_ir1_with_flow(
                     inner,

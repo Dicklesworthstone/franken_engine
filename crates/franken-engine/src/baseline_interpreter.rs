@@ -38809,7 +38809,14 @@ impl InterpreterCore {
             .call_stack
             .last()
             .is_some_and(|frame| frame.scope_inert_virtual_scope_bytes > 0);
+        // bd-9vouw.31: returning swaps the callee's chain for the caller's
+        // saved one. Only structural bytes and the cells of frames the callee
+        // pushed change, so neither side is re-walked.
         let previous_scope_bytes =
+            (!scope_inert_activation).then(|| self.scope_chain_structural_bytes());
+        let callee_frames = (!scope_inert_activation).then(|| self.scope_chain.frames.clone());
+        #[cfg(debug_assertions)]
+        let walked_scope_before =
             (!scope_inert_activation).then(|| self.scope_chain_memory_bytes());
         let previous_closure_bytes =
             (!scope_inert_activation).then(|| self.closures_memory_bytes());
@@ -38850,12 +38857,22 @@ impl InterpreterCore {
             self.restore_call_frame_state(&mut frame);
             self.ip = return_ip;
             let frame_memory_result = match (previous_scope_bytes, previous_closure_bytes) {
-                (Some(previous_scope_bytes), Some(previous_closure_bytes)) => self
-                    .apply_scope_closure_call_stack_memory_delta(
+                (Some(previous_scope_bytes), Some(previous_closure_bytes)) => {
+                    let released_cell_bytes = self.released_frame_cell_payload_bytes(
+                        callee_frames.as_deref().unwrap_or_default(),
+                    );
+                    #[cfg(debug_assertions)]
+                    self.debug_assert_scope_swap_delta(
+                        walked_scope_before.expect("ordinary scope accounting"),
                         previous_scope_bytes,
+                        released_cell_bytes,
+                    );
+                    self.apply_structural_scope_closure_call_stack_memory_delta(
+                        previous_scope_bytes.saturating_add(released_cell_bytes),
                         previous_closure_bytes,
                         previous_call_stack_bytes,
-                    ),
+                    )
+                }
                 (None, None) => self.apply_call_stack_memory_delta(previous_call_stack_bytes),
                 _ => unreachable!("scope and closure accounting share one activation proof"),
             };
@@ -44037,7 +44054,15 @@ impl InterpreterCore {
                                     self.config.max_scope_depth,
                                 )?;
                             }
-                            let previous_scope_bytes =
+                            // bd-9vouw.31: every cell of a closure's captured
+                            // environment is in the cold ledger, and the
+                            // caller's chain stays reachable as the new frame's
+                            // saved chain, so installing the callee's chain
+                            // changes only structural scope bytes.
+                            let previous_scope_bytes = (!scope_inert_activation)
+                                .then(|| self.scope_chain_structural_bytes());
+                            #[cfg(debug_assertions)]
+                            let walked_scope_before =
                                 (!scope_inert_activation).then(|| self.scope_chain_memory_bytes());
                             let previous_closure_bytes =
                                 (!scope_inert_activation).then(|| self.closures_memory_bytes());
@@ -44099,11 +44124,22 @@ impl InterpreterCore {
                                     self.rollback_call_setup_state();
                                     return Err(err);
                                 }
-                                if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
-                                    previous_scope_bytes.expect("ordinary scope accounting"),
-                                    previous_closure_bytes.expect("ordinary closure accounting"),
-                                    previous_call_stack_bytes,
-                                ) {
+                                let previous_scope_bytes =
+                                    previous_scope_bytes.expect("ordinary scope accounting");
+                                #[cfg(debug_assertions)]
+                                self.debug_assert_scope_swap_delta(
+                                    walked_scope_before.expect("ordinary scope accounting"),
+                                    previous_scope_bytes,
+                                    0,
+                                );
+                                if let Err(err) = self
+                                    .apply_structural_scope_closure_call_stack_memory_delta(
+                                        previous_scope_bytes,
+                                        previous_closure_bytes
+                                            .expect("ordinary closure accounting"),
+                                        previous_call_stack_bytes,
+                                    )
+                                {
                                     self.rollback_call_setup_state();
                                     return Err(err);
                                 }
@@ -46932,9 +46968,22 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::PushScope => {
-                    let previous_scope_bytes = self.scope_chain_memory_bytes();
+                    // bd-9vouw.31: an empty frame changes only structural
+                    // bytes.
+                    let previous_scope_bytes = self.scope_chain_structural_bytes();
+                    #[cfg(debug_assertions)]
+                    let walked_scope_before = self.scope_chain_memory_bytes();
                     self.scope_chain.push(self.config.max_scope_depth)?;
-                    if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
+                    #[cfg(debug_assertions)]
+                    self.debug_assert_scope_swap_delta(
+                        walked_scope_before,
+                        previous_scope_bytes,
+                        0,
+                    );
+                    if let Err(err) = self.apply_memory_component_delta(
+                        previous_scope_bytes,
+                        self.scope_chain_structural_bytes(),
+                    ) {
                         self.scope_chain.pop();
                         return Err(err);
                     }
@@ -46947,10 +46996,26 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::PopScope => {
-                    let previous_scope_bytes = self.scope_chain_memory_bytes();
+                    // bd-9vouw.31: structural bytes plus the popped frame's
+                    // own cells, which nothing else reaches unless captured
+                    // (cold).
+                    let previous_scope_bytes = self.scope_chain_structural_bytes();
+                    #[cfg(debug_assertions)]
+                    let walked_scope_before = self.scope_chain_memory_bytes();
                     let popped = self.scope_chain.pop();
-                    if popped.is_some() {
-                        self.apply_scope_chain_memory_delta(previous_scope_bytes)?;
+                    if let Some(frame) = &popped {
+                        let released_cell_bytes =
+                            self.released_frame_cell_payload_bytes(std::slice::from_ref(frame));
+                        #[cfg(debug_assertions)]
+                        self.debug_assert_scope_swap_delta(
+                            walked_scope_before,
+                            previous_scope_bytes,
+                            released_cell_bytes,
+                        );
+                        self.apply_memory_component_delta(
+                            previous_scope_bytes.saturating_add(released_cell_bytes),
+                            self.scope_chain_structural_bytes(),
+                        )?;
                     }
                     debug_assert!(popped.is_some() || self.scope_chain.depth() == 1);
                     self.ip += 1;
@@ -46965,12 +47030,49 @@ impl InterpreterCore {
                         .map(ToString::to_string)
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
                     let binding_kind = BindingKind::from_u8(kind)?;
-                    let previous_scope_bytes = self.scope_chain_memory_bytes();
+                    let existing = self.scope_chain.current()?.get(&name).is_some();
+                    // bd-9vouw.31: a new name adds its entry plus one fresh
+                    // cell that nothing else reaches, and re-declaring an
+                    // existing `var` changes nothing. Only replacing a
+                    // lexical entry (rare) re-walks the live cells.
+                    let local_delta = !existing || binding_kind == BindingKind::Var;
+                    let previous_scope_bytes = if local_delta {
+                        self.scope_chain_structural_bytes()
+                    } else {
+                        self.scope_chain_memory_bytes()
+                    };
+                    #[cfg(debug_assertions)]
+                    let walked_scope_before = self.scope_chain_memory_bytes();
                     let replaced = self
                         .scope_chain
                         .current_mut()?
                         .declare(name.clone(), binding_kind);
-                    if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
+                    let memory_result = if local_delta {
+                        let added_cell_bytes = if existing {
+                            0
+                        } else {
+                            self.scope_chain.current()?.get(&name).map_or(0, |binding| {
+                                Self::estimate_binding_cell_payload_bytes(&binding.state)
+                            })
+                        };
+                        #[cfg(debug_assertions)]
+                        debug_assert_eq!(
+                            i128::from(self.scope_chain_memory_bytes())
+                                - i128::from(walked_scope_before),
+                            i128::from(self.scope_chain_structural_bytes())
+                                - i128::from(previous_scope_bytes)
+                                + i128::from(added_cell_bytes),
+                            "a declaration must change scope memory by its entry and new cell"
+                        );
+                        self.apply_memory_component_delta(
+                            previous_scope_bytes,
+                            self.scope_chain_structural_bytes()
+                                .saturating_add(added_cell_bytes),
+                        )
+                    } else {
+                        self.apply_scope_chain_memory_delta(previous_scope_bytes)
+                    };
+                    if let Err(err) = memory_result {
                         if let Ok(current) = self.scope_chain.current_mut() {
                             if let Some(old) = replaced {
                                 current.insert_binding(name, old);
@@ -47046,9 +47148,8 @@ impl InterpreterCore {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
                     let label = self.get_register_label(src)?.clone();
-                    let previous_scope_bytes = self.scope_chain_memory_bytes();
-                    let previous_closure_bytes = self.closures_memory_bytes();
-                    let previous_call_stack_bytes = self.call_stack_memory_bytes();
+                    #[cfg(debug_assertions)]
+                    let walked_before = self.scope_closure_call_stack_memory_bytes();
                     let mut previous = None;
                     if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
                         let previous_state = binding.snapshot_state()?;
@@ -47062,7 +47163,9 @@ impl InterpreterCore {
                                 name: name.into_owned(),
                             });
                         }
-                        previous = Some((binding.clone(), previous_state));
+                        let previous_payload =
+                            Self::estimate_binding_cell_payload_bytes(&binding.state);
+                        previous = Some((binding.clone(), previous_state, previous_payload));
                         {
                             let mut state = binding.state_mut()?;
                             state.value = val;
@@ -47072,16 +47175,20 @@ impl InterpreterCore {
                     }
                     // Silently ignore stores to undeclared variables
                     // (strict mode would throw, but baseline is lenient).
-                    if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
-                        previous_scope_bytes,
-                        previous_closure_bytes,
-                        previous_call_stack_bytes,
-                    ) {
-                        if let Some((binding, old_state)) = previous {
+                    if let Some((binding, old_state, previous_payload)) = previous {
+                        #[cfg(debug_assertions)]
+                        self.debug_assert_cell_write_delta(
+                            walked_before,
+                            previous_payload,
+                            &binding.state,
+                        );
+                        if let Err(err) =
+                            self.apply_scope_cell_write_delta(previous_payload, &binding.state)
+                        {
                             binding.restore_state(old_state)?;
                             self.closures.refresh_cell(&binding.state);
+                            return Err(err);
                         }
-                        return Err(err);
                     }
                     self.ip += 1;
                 }
@@ -47115,12 +47222,14 @@ impl InterpreterCore {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
                     let label = self.get_register_label(src)?.clone();
-                    let previous_scope_bytes = self.scope_chain_memory_bytes();
-                    let previous_closure_bytes = self.closures_memory_bytes();
-                    let previous_call_stack_bytes = self.call_stack_memory_bytes();
+                    #[cfg(debug_assertions)]
+                    let walked_before = self.scope_closure_call_stack_memory_bytes();
                     let mut previous = None;
                     if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
-                        previous = Some((binding.clone(), binding.snapshot_state()?));
+                        let previous_payload =
+                            Self::estimate_binding_cell_payload_bytes(&binding.state);
+                        previous =
+                            Some((binding.clone(), binding.snapshot_state()?, previous_payload));
                         {
                             let mut state = binding.state_mut()?;
                             state.value = val;
@@ -47129,21 +47238,25 @@ impl InterpreterCore {
                         }
                         self.closures.refresh_cell(&binding.state);
                     }
-                    if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
-                        previous_scope_bytes,
-                        previous_closure_bytes,
-                        previous_call_stack_bytes,
-                    ) {
-                        if let Some((binding, old_state)) = previous {
-                            binding.restore_state(old_state)?;
+                    if let Some((binding, old_state, previous_payload)) = &previous {
+                        #[cfg(debug_assertions)]
+                        self.debug_assert_cell_write_delta(
+                            walked_before,
+                            *previous_payload,
+                            &binding.state,
+                        );
+                        if let Err(err) =
+                            self.apply_scope_cell_write_delta(*previous_payload, &binding.state)
+                        {
+                            binding.restore_state(old_state.clone())?;
                             self.closures.refresh_cell(&binding.state);
+                            return Err(err);
                         }
-                        return Err(err);
                     }
                     if let Some(pending) = pending_cyclic_import_binding
                         && pending.source_register == src
                         && pending.expected_init_ip == self.ip
-                        && let Some((binding, _)) = previous.as_ref()
+                        && let Some((binding, _, _)) = previous.as_ref()
                         && let Some(record) =
                             self.module_state.modules.get_mut(&pending.module_specifier)
                     {
@@ -48242,10 +48355,6 @@ impl InterpreterCore {
             let event = make_event(trace.record_id.clone(), trace.events.len() as u64);
             trace.record_event(event);
         }
-    }
-
-    fn record_iteration_next_result(&mut self, trace_index: usize, value: Option<Value>) {
-        self.record_iteration_next_result_impl(trace_index, value, false, true);
     }
 
     fn record_for_in_iteration_next_result(&mut self, trace_index: usize, value: Option<Value>) {
@@ -62978,7 +63087,16 @@ impl InterpreterCore {
 
         let run = (|| -> Result<(Value, Label), InterpreterError> {
             self.apply_call_stack_memory_delta(previous_call_stack_bytes)?;
-            self.enter_stacked_register_frame(None);
+            // The trampoline reads only the receiver, callee and arguments.
+            // A full-width request would pin the shared clear high-water mark
+            // at max_registers, so every later call would clear the whole
+            // window.
+            self.enter_stacked_register_frame_width(
+                usize::try_from(arg_count)
+                    .unwrap_or(usize::MAX)
+                    .saturating_add(2)
+                    .min(self.config.max_registers as usize),
+            );
             let (receiver_label, argument_labels) = match call_labels {
                 Some(labels) => (Some(labels.receiver), labels.arguments),
                 None => (None, IsolatedArgumentLabels::Public),
@@ -63855,44 +63973,6 @@ impl InterpreterCore {
         );
 
         Ok(Value::Undefined)
-    }
-
-    fn prototype_chain_find_runtime_property(
-        &self,
-        object_id: ObjectId,
-        key: &RuntimePropertyKey,
-    ) -> Result<Option<Value>, InterpreterError> {
-        Ok(self
-            .prototype_chain_find_runtime_property_owner(object_id, key)?
-            .map(|(_, value)| value))
-    }
-
-    fn prototype_chain_find_runtime_property_owner(
-        &self,
-        object_id: ObjectId,
-        key: &RuntimePropertyKey,
-    ) -> Result<Option<(ObjectId, Value)>, InterpreterError> {
-        self.validate_executable_property_key(key)?;
-        let mut current = Some(object_id);
-        let mut depth = 0u32;
-        let mut visited = BTreeSet::new();
-
-        while let Some(id) = current {
-            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
-                return Ok(None);
-            }
-            let object = self
-                .heap
-                .get(id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if let Some(value) = object.own_runtime_property_value(key) {
-                return Ok(Some((id, value)));
-            }
-            current = self.observable_prototype_link(object, id);
-            depth += 1;
-        }
-
-        Ok(None)
     }
 
     fn resolve_accessor_get(
@@ -82158,6 +82238,124 @@ impl InterpreterCore {
         }
         self.estimated_memory_bytes = requested_bytes;
         Ok(requested_bytes)
+    }
+
+    /// Charge a value/label write to one binding cell resolved through the
+    /// live scope chain (bd-9vouw.31). Each distinct cell's payload is counted
+    /// exactly once, by the cold-cell ledger (the caller refreshes it) or by
+    /// the live-only walk, and the write changes no other component, so the
+    /// delta is the cell's own payload change. Re-walking every live binding
+    /// before and after made each scoped store O(bindings): with 2000
+    /// top-level bindings, 20k calls of `s = add(s, i)` took 8.3 s.
+    fn apply_scope_cell_write_delta(
+        &mut self,
+        previous_payload_bytes: u64,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_payload_bytes,
+            Self::estimate_binding_cell_payload_bytes(cell),
+        )
+    }
+
+    /// Structural bytes of the active scope chain: frame bases plus binding
+    /// names, O(depth) from each frame's cached total (bd-9vouw.31).
+    fn scope_chain_structural_bytes(&self) -> u64 {
+        Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
+    }
+
+    /// Payload of the cells a returning callee's chain held that are
+    /// charged by nothing once the caller's chain is back (bd-9vouw.31).
+    /// Frames still on the restored chain are skipped by identity. Captured
+    /// cells stay in the cold ledger. What remains are the cells of frames
+    /// the callee pushed, which nothing else reaches.
+    fn released_frame_cell_payload_bytes(&self, callee_frames: &[ScopeFrame]) -> u64 {
+        let restored_maps = self
+            .scope_chain
+            .frames
+            .iter()
+            .map(|frame| Rc::as_ptr(&frame.bindings))
+            .collect::<Vec<_>>();
+        let cold = &self.closures.cold_cells;
+        let mut seen = BTreeSet::new();
+        let mut total = 0u64;
+        for frame in callee_frames {
+            if restored_maps.contains(&Rc::as_ptr(&frame.bindings)) {
+                continue;
+            }
+            for binding in frame.bindings.values() {
+                if !cold.contains(&binding.state) && seen.insert(Rc::as_ptr(&binding.state)) {
+                    total = total
+                        .saturating_add(Self::estimate_binding_cell_payload_bytes(&binding.state));
+                }
+            }
+        }
+        total
+    }
+
+    /// Apply a scope/closure/call-stack delta whose scope side is already
+    /// known: `previous_scope_bytes` holds the structural bytes before the
+    /// change plus any payload it released.
+    fn apply_structural_scope_closure_call_stack_memory_delta(
+        &mut self,
+        previous_scope_bytes: u64,
+        previous_closure_bytes: u64,
+        previous_call_stack_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_scope_bytes
+                .saturating_add(previous_closure_bytes)
+                .saturating_add(previous_call_stack_bytes),
+            self.scope_chain_structural_bytes()
+                .saturating_add(self.closures_memory_bytes())
+                .saturating_add(self.call_stack_memory_bytes()),
+        )
+    }
+
+    /// A chain swap's structural delta minus the payload it released equals
+    /// the full-walk scope delta.
+    #[cfg(debug_assertions)]
+    fn debug_assert_scope_swap_delta(
+        &self,
+        walked_before: u64,
+        structural_before: u64,
+        released_payload_bytes: u64,
+    ) {
+        debug_assert_eq!(
+            i128::from(self.scope_chain_memory_bytes()) - i128::from(walked_before),
+            i128::from(self.scope_chain_structural_bytes())
+                - i128::from(structural_before)
+                - i128::from(released_payload_bytes),
+            "a call or return must change scope memory by its structural delta \
+             less the payload of the frames it released"
+        );
+    }
+
+    /// Scope, closure and call-stack components by full walk: the total a
+    /// scoped store used to diff before and after itself. Debug builds check
+    /// every local delta against it.
+    #[cfg(debug_assertions)]
+    fn scope_closure_call_stack_memory_bytes(&self) -> u64 {
+        self.scope_chain_memory_bytes()
+            .saturating_add(self.closures_memory_bytes())
+            .saturating_add(self.call_stack_memory_bytes())
+    }
+
+    /// The cell-local delta equals the full-walk delta it replaced.
+    #[cfg(debug_assertions)]
+    fn debug_assert_cell_write_delta(
+        &self,
+        walked_before: u64,
+        previous_payload_bytes: u64,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+    ) {
+        let walked_after = self.scope_closure_call_stack_memory_bytes();
+        let next_payload_bytes = Self::estimate_binding_cell_payload_bytes(cell);
+        debug_assert_eq!(
+            i128::from(walked_after) - i128::from(walked_before),
+            i128::from(next_payload_bytes) - i128::from(previous_payload_bytes),
+            "a scoped cell write must change memory by exactly its own payload delta"
+        );
     }
 
     fn apply_scope_chain_memory_delta(

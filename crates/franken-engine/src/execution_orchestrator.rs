@@ -9761,6 +9761,7 @@ mod tests {
             &exec,
             capability_summary,
             SecurityEpoch::from_raw(1),
+            1_000_000,
         );
         assert_eq!(ev.extension_id, "test-ext-1");
         assert_eq!(ev.hostcall_rate_millionths, 0);
@@ -9795,6 +9796,7 @@ mod tests {
             &exec,
             capability_summary,
             SecurityEpoch::from_raw(1),
+            1_000_000,
         );
         assert_eq!(ev.resource_score_millionths, 1_000_000);
     }
@@ -9842,6 +9844,7 @@ mod tests {
             &exec,
             capability_summary,
             SecurityEpoch::from_raw(2),
+            1_000_000,
         );
         assert_eq!(ev.distinct_capabilities, 2);
         assert_eq!(ev.epoch, SecurityEpoch::from_raw(2));
@@ -10088,6 +10091,7 @@ mod tests {
             &exec,
             capability_summary,
             SecurityEpoch::from_raw(1),
+            1_000_000,
         );
         // Division by zero for hostcall_rate should be handled (returns 0).
         assert_eq!(ev.hostcall_rate_millionths, 0);
@@ -10330,7 +10334,13 @@ mod tests {
             let epoch = SecurityEpoch::from_raw(raw_epoch);
             let capability_summary =
                 ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
-            let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, capability_summary, epoch);
+            let ev = ExecutionOrchestrator::build_evidence(
+                &pkg,
+                &exec,
+                capability_summary,
+                epoch,
+                1_000_000,
+            );
             assert_eq!(ev.epoch, epoch);
         }
     }

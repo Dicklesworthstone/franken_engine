@@ -382,8 +382,8 @@ mod tests {
             assert_eq!(from_string(source).as_deref(), Some(expected), "{source:?}");
         }
         for source in [
-            "+", "-", "0x", "0b2", "0o8", "-0x1", "+0b1", "1_0", "1n", "1.0", "1e2",
-            "1 2", "Infinity", "１２", "٠١",
+            "+", "-", "0x", "0b2", "0o8", "-0x1", "+0b1", "1_0", "1n", "1.0", "1e2", "1 2",
+            "Infinity", "１２", "٠١",
         ] {
             assert_eq!(from_string(source), None, "{source:?}");
         }
@@ -392,9 +392,9 @@ mod tests {
     #[test]
     fn string_integer_uses_ecmascript_not_unicode_whitespace() {
         for whitespace in [
-            '\u{0009}', '\u{000a}', '\u{000b}', '\u{000c}', '\u{000d}', '\u{0020}',
-            '\u{00a0}', '\u{1680}', '\u{2000}', '\u{200a}', '\u{2028}', '\u{2029}',
-            '\u{202f}', '\u{205f}', '\u{3000}', '\u{feff}',
+            '\u{0009}', '\u{000a}', '\u{000b}', '\u{000c}', '\u{000d}', '\u{0020}', '\u{00a0}',
+            '\u{1680}', '\u{2000}', '\u{200a}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}',
+            '\u{3000}', '\u{feff}',
         ] {
             let source = format!("{whitespace}-42{whitespace}");
             assert_eq!(from_string(&source).as_deref(), Some("-42"));
@@ -411,7 +411,10 @@ mod tests {
     fn large_zero_prefixes_do_not_consume_the_magnitude_budget() {
         let zeroes = "0".repeat(MAX_BIGINT_BITS as usize + 1);
         for prefix in ["", "+", "-", "0b", "0o", "0x"] {
-            assert_eq!(from_string(&format!("{prefix}{zeroes}")).as_deref(), Some("0"));
+            assert_eq!(
+                from_string(&format!("{prefix}{zeroes}")).as_deref(),
+                Some("0")
+            );
             let expected = if prefix == "-" { "-1" } else { "1" };
             assert_eq!(
                 from_string(&format!("{prefix}{zeroes}1")).as_deref(),
@@ -460,7 +463,11 @@ mod tests {
             for exponent in 0..=20u32 {
                 let expected = BigInt::from(base).pow(exponent).to_string();
                 assert_eq!(
-                    binary(BigIntBinaryOp::Exp, &base.to_string(), &exponent.to_string()),
+                    binary(
+                        BigIntBinaryOp::Exp,
+                        &base.to_string(),
+                        &exponent.to_string()
+                    ),
                     Ok(expected),
                     "base={base}, exponent={exponent}"
                 );
@@ -511,8 +518,14 @@ mod tests {
     #[test]
     fn multiplication_checks_the_boundary_without_rejecting_exact_fit() {
         let edge = BigInt::from(1u8) << (MAX_BIGINT_BITS - 1);
-        assert_eq!(multiply_bounded(&edge, &BigInt::from(1u8)), Ok(edge.clone()));
-        assert_eq!(multiply_bounded(&edge, &BigInt::from(-1)), Ok(-edge.clone()));
+        assert_eq!(
+            multiply_bounded(&edge, &BigInt::from(1u8)),
+            Ok(edge.clone())
+        );
+        assert_eq!(
+            multiply_bounded(&edge, &BigInt::from(-1)),
+            Ok(-edge.clone())
+        );
         assert_eq!(
             multiply_bounded(&edge, &BigInt::from(2u8)),
             Err(BigIntError::TooLarge)
@@ -526,11 +539,13 @@ mod tests {
     #[test]
     fn final_unused_square_cannot_reject_a_valid_power() {
         let edge = BigInt::from(1u8) << (MAX_BIGINT_BITS - 1);
-        assert_eq!(exponentiate(&edge, &BigInt::from(1u8)), Ok(edge.to_string()));
+        assert_eq!(
+            exponentiate(&edge, &BigInt::from(1u8)),
+            Ok(edge.to_string())
+        );
         assert_eq!(
             exponentiate(&BigInt::from(2u8), &BigInt::from(MAX_BIGINT_BITS - 1)),
             Ok(edge.to_string())
         );
     }
-
 }

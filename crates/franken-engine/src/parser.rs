@@ -6243,13 +6243,21 @@ fn try_parse_unary_prefix(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> Option<ParseResult<Expression>> {
-    // Keyword-style unary: typeof, void, delete
-    for (prefix, op) in [
-        ("typeof ", UnaryOperator::Typeof),
-        ("void ", UnaryOperator::Void),
-        ("delete ", UnaryOperator::Delete),
+    // Keyword-style unary: typeof, void, delete. The keyword ends at any
+    // character that cannot continue an identifier, so `typeof(x)` and
+    // `void(0)` are operators (they used to parse as calls to an undefined
+    // `typeof`), while `typeofFoo` stays a name.
+    for (keyword, op) in [
+        ("typeof", UnaryOperator::Typeof),
+        ("void", UnaryOperator::Void),
+        ("delete", UnaryOperator::Delete),
     ] {
-        if let Some(rest) = expr.strip_prefix(prefix) {
+        if let Some(rest) = expr.strip_prefix(keyword)
+            && rest
+                .chars()
+                .next()
+                .is_some_and(|next| !is_identifier_continue(next))
+        {
             let arg = match parse_expression(rest.trim(), span, context, recursion_depth + 1) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),

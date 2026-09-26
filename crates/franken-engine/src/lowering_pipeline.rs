@@ -16220,6 +16220,41 @@ fn lower_expression_to_ir1_inner(
                 ops.push(Ir1Op::NewArray {
                     count: elements.len() as u32,
                 });
+                // An elision is a hole: no own property at that index, while
+                // `length` still counts it (`1 in [1, , 3]` is false). The
+                // batch path above placed `undefined` there; delete it
+                // through a temporary, since the array must stay on the stack.
+                let holes = elements
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, element)| element.is_none())
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                if !holes.is_empty() {
+                    let array_bid = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "array_holes",
+                    )?;
+                    ops.push(Ir1Op::InitializeBinding {
+                        binding_id: array_bid,
+                    });
+                    ops.push(Ir1Op::Discard);
+                    for index in holes {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: array_bid,
+                        });
+                        ops.push(Ir1Op::DeleteProperty {
+                            key: Ir1PropertyKey::Static(index.to_string().into()),
+                        });
+                        ops.push(Ir1Op::Discard);
+                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: array_bid,
+                    });
+                }
             }
         }
         Expression::ObjectLiteral(properties) => {

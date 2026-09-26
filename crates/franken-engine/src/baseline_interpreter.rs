@@ -7016,16 +7016,42 @@ impl ScopeBinding {
 }
 
 /// A single scope frame in the environment chain.
+///
+/// The binding map is shared copy-on-write. Closure captures and saved caller
+/// chains clone the `Rc`. The first structural change to a shared frame copies
+/// the map, so every view keeps exactly what a deep clone gave it. Values live
+/// in the shared `ScopeBinding` cells either way. Before this, every closure
+/// call deep-copied every captured binding name, twice.
 #[derive(Debug, Clone)]
 struct ScopeFrame {
-    bindings: BTreeMap<String, ScopeBinding>,
+    bindings: Rc<BTreeMap<String, ScopeBinding>>,
+    /// Sum of [`Self::binding_key_bytes`] over `bindings`, kept current by
+    /// every structural change so a scope-chain clone charge is O(depth).
+    key_bytes: u64,
 }
 
 impl ScopeFrame {
     fn new() -> Self {
         Self {
-            bindings: BTreeMap::new(),
+            bindings: Rc::new(BTreeMap::new()),
+            key_bytes: 0,
         }
+    }
+
+    fn from_bindings(bindings: BTreeMap<String, ScopeBinding>) -> Self {
+        let key_bytes = InterpreterCore::saturating_sum(
+            bindings.keys().map(|name| Self::binding_key_bytes(name)),
+        );
+        Self {
+            bindings: Rc::new(bindings),
+            key_bytes,
+        }
+    }
+
+    /// Structural bytes of one binding entry: its base plus its name.
+    fn binding_key_bytes(name: &str) -> u64 {
+        MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
+            .saturating_add(InterpreterCore::estimate_string_bytes(name))
     }
 
     fn declare(&mut self, name: String, kind: BindingKind) -> Option<ScopeBinding> {
@@ -7034,7 +7060,31 @@ impl ScopeFrame {
         {
             return Some(existing.clone());
         }
-        self.bindings.insert(name, ScopeBinding::new(kind))
+        self.insert_binding(name, ScopeBinding::new(kind))
+    }
+
+    fn insert_binding(&mut self, name: String, binding: ScopeBinding) -> Option<ScopeBinding> {
+        let added = Self::binding_key_bytes(&name);
+        let replaced = Rc::make_mut(&mut self.bindings).insert(name, binding);
+        if replaced.is_none() {
+            self.key_bytes = self.key_bytes.saturating_add(added);
+        }
+        replaced
+    }
+
+    fn remove_binding(&mut self, name: &str) -> Option<ScopeBinding> {
+        if !self.bindings.contains_key(name) {
+            return None;
+        }
+        let removed = Rc::make_mut(&mut self.bindings).remove(name);
+        if removed.is_some() {
+            self.key_bytes = self.key_bytes.saturating_sub(Self::binding_key_bytes(name));
+        }
+        removed
+    }
+
+    fn replace_bindings(&mut self, bindings: BTreeMap<String, ScopeBinding>) {
+        *self = Self::from_bindings(bindings);
     }
 
     fn get(&self, name: &str) -> Option<&ScopeBinding> {
@@ -7042,7 +7092,10 @@ impl ScopeFrame {
     }
 
     fn get_mut(&mut self, name: &str) -> Option<&mut ScopeBinding> {
-        self.bindings.get_mut(name)
+        if !self.bindings.contains_key(name) {
+            return None;
+        }
+        Rc::make_mut(&mut self.bindings).get_mut(name)
     }
 }
 
@@ -7494,6 +7547,10 @@ struct CallFrame {
     scope_inert_virtual_scope_bytes: u64,
     /// Async function object that owns the result promise for this frame.
     async_function_id: Option<u32>,
+    /// A builtin running a guest callback sits below this frame (a nested
+    /// same-module callback): exception routing, async rejection and
+    /// abrupt-completion clearing never reach past it.
+    native_boundary: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -11787,8 +11844,7 @@ impl InterpreterCore {
                 .frames
                 .first_mut()
                 .expect("generated Function frame existence was checked")
-                .bindings
-                .insert(name.to_string(), binding);
+                .insert_binding(name.to_string(), binding);
             debug_assert!(
                 canonical_replaced.is_none(),
                 "canonical binding was unresolved"
@@ -11810,9 +11866,9 @@ impl InterpreterCore {
                 }
                 if let Some(global_frame) = self.scope_chain.frames.first_mut() {
                     if let Some(replaced) = frame_replaced {
-                        global_frame.bindings.insert(name.to_string(), replaced);
+                        global_frame.insert_binding(name.to_string(), replaced);
                     } else {
-                        global_frame.bindings.remove(name);
+                        global_frame.remove_binding(name);
                     }
                 }
                 return Err(error);
@@ -32365,9 +32421,7 @@ impl InterpreterCore {
             .ok_or_else(|| InterpreterError::InternalError {
                 details: "generated Function realm globals are not initialized".to_string(),
             })?;
-        Ok(ScopeFrame {
-            bindings: globals.clone(),
-        })
+        Ok(ScopeFrame::from_bindings(globals.clone()))
     }
 
     /// Replace the top-level dynamic-code realm. Old stores are released and
@@ -32447,7 +32501,7 @@ impl InterpreterCore {
                 details: "scope chain unexpectedly empty".to_string(),
             })?;
         let mut snapshot = BTreeMap::new();
-        for (name, binding) in &frame.bindings {
+        for (name, binding) in frame.bindings.iter() {
             snapshot.insert(name.clone(), binding.detached_clone()?);
         }
         Ok(snapshot)
@@ -32479,7 +32533,7 @@ impl InterpreterCore {
     ) {
         self.rollback_heap_to_len(heap_checkpoint);
         if let Some(frame) = self.scope_chain.frames.last_mut() {
-            frame.bindings = scope_checkpoint;
+            frame.replace_bindings(scope_checkpoint);
         }
         self.realm_dynamic_globals = realm_checkpoint;
         self.estimated_memory_bytes = memory_checkpoint;
@@ -32618,9 +32672,9 @@ impl InterpreterCore {
                         old_binding.restore_state(old_state)?;
                         self.closures.refresh_cell(&old_binding.state);
                     }
-                    frame.bindings.insert(name.to_string(), old_binding);
+                    frame.insert_binding(name.to_string(), old_binding);
                 } else {
-                    frame.bindings.remove(name);
+                    frame.remove_binding(name);
                 }
             }
             return Err(err);
@@ -32685,9 +32739,9 @@ impl InterpreterCore {
                             old_binding.restore_state(old_state)?;
                             self.closures.refresh_cell(&old_binding.state);
                         }
-                        current.bindings.insert(name, old_binding);
+                        current.insert_binding(name, old_binding);
                     } else {
-                        current.bindings.remove(&name);
+                        current.remove_binding(&name);
                     }
                 }
             }
@@ -38980,11 +39034,7 @@ impl InterpreterCore {
         error_value: Value,
         error_label: Label,
     ) -> Result<bool, InterpreterError> {
-        let Some(async_frame_index) = self
-            .call_stack
-            .iter()
-            .rposition(|frame| frame.async_function_id.is_some())
-        else {
+        let Some(async_frame_index) = self.innermost_async_frame_index() else {
             return Ok(false);
         };
 
@@ -39010,14 +39060,12 @@ impl InterpreterCore {
         await_label: Label,
     ) -> Result<(), InterpreterError> {
         // Find the current async function from the call stack
-        let async_frame_index = self
-            .call_stack
-            .iter()
-            .rposition(|frame| frame.async_function_id.is_some())
-            .ok_or_else(|| InterpreterError::TypeError {
-                expected: "async function context".to_string(),
-                got: "await outside of async function".to_string(),
-            })?;
+        let async_frame_index =
+            self.innermost_async_frame_index()
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "async function context".to_string(),
+                    got: "await outside of async function".to_string(),
+                })?;
 
         let current_frame = &self.call_stack[async_frame_index];
         let async_function_id =
@@ -39913,10 +39961,36 @@ impl InterpreterCore {
     }
 
     fn nearest_async_call_depth(&self) -> Option<usize> {
+        self.innermost_async_frame_index().map(|index| index + 1)
+    }
+
+    /// The innermost native call boundary frame, if a builtin is running a
+    /// nested guest callback.
+    fn native_boundary_frame(&self) -> Option<&CallFrame> {
         self.call_stack
             .iter()
+            .rev()
+            .find(|frame| frame.native_boundary)
+    }
+
+    /// Call-stack depth at and below which frames belong to the native
+    /// caller of a nested callback (0 when none is active).
+    fn native_boundary_depth(&self) -> usize {
+        self.call_stack
+            .iter()
+            .rposition(|frame| frame.native_boundary)
+            .map_or(0, |index| index + 1)
+    }
+
+    /// Index of the innermost async activation frame above the native
+    /// boundary: an async function below a nested callback's builtin caller
+    /// is not the callback's to reject or suspend.
+    fn innermost_async_frame_index(&self) -> Option<usize> {
+        let floor = self.native_boundary_depth();
+        self.call_stack[floor..]
+            .iter()
             .rposition(|frame| frame.async_function_id.is_some())
-            .map(|index| index + 1)
+            .map(|index| index + floor)
     }
 
     fn pop_exception_target_frame(&mut self) -> Result<Option<CatchFrame>, InterpreterError> {
@@ -39931,6 +40005,7 @@ impl InterpreterCore {
         &mut self,
         minimum_call_depth: usize,
     ) -> Result<Option<CatchFrame>, InterpreterError> {
+        let minimum_call_depth = minimum_call_depth.max(self.native_boundary_depth());
         let current_depth = self.call_stack.len();
         let Some(idx) = self
             .catch_frames
@@ -40056,7 +40131,10 @@ impl InterpreterCore {
     }
 
     fn clear_finally_frames(&mut self) {
-        self.truncate_finally_frames(0);
+        let floor = self
+            .native_boundary_frame()
+            .map_or(0, |frame| frame.saved_finally_mode_depth);
+        self.truncate_finally_frames(floor);
     }
 
     fn discard_current_finally_frame(&mut self) {
@@ -41058,6 +41136,7 @@ impl InterpreterCore {
             saved_scope_chain,
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
+            native_boundary: false,
         });
 
         if let Some(environment) = captured_env {
@@ -41306,6 +41385,7 @@ impl InterpreterCore {
                 saved_scope_chain: None,
                 scope_inert_virtual_scope_bytes: 0,
                 async_function_id: None,
+                native_boundary: false,
             }],
             ip: func.entry as usize,
             register_base: 0,
@@ -42306,7 +42386,10 @@ impl InterpreterCore {
     /// invisible here and is reached by re-propagating the host error upward.
     fn has_active_catch_frame(&self) -> bool {
         let depth = self.call_stack.len();
-        let minimum_depth = self.nearest_async_call_depth().unwrap_or(0);
+        let minimum_depth = self
+            .nearest_async_call_depth()
+            .unwrap_or(0)
+            .max(self.native_boundary_depth());
         self.catch_frames
             .iter()
             .any(|frame| frame.call_depth >= minimum_depth && frame.call_depth <= depth)
@@ -42409,12 +42492,7 @@ impl InterpreterCore {
 
         self.pending_finally_entry = None;
         self.replace_pending_abrupt_slots(Some((thrown, thrown_label)), None)?;
-        if let Some(async_depth) = self
-            .call_stack
-            .iter()
-            .rposition(|frame| frame.async_function_id.is_some())
-            .map(|index| index + 1)
-        {
+        if let Some(async_depth) = self.nearest_async_call_depth() {
             if let Some(frame) = self.pop_exception_target_frame_at_or_above(async_depth)? {
                 self.select_exception_target(Some(module), frame);
                 return Ok(None);
@@ -43740,6 +43818,7 @@ impl InterpreterCore {
                                 saved_scope_chain: saved_chain,
                                 scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: Some(async_id),
+                                native_boundary: false,
                             });
 
                             if let Some(env) = captured_env {
@@ -43998,6 +44077,7 @@ impl InterpreterCore {
                                     0
                                 },
                                 async_function_id: None,
+                                native_boundary: false,
                             });
 
                             if scope_inert_activation {
@@ -44326,6 +44406,7 @@ impl InterpreterCore {
                                 saved_scope_chain: saved_chain,
                                 scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: Some(async_id),
+                                native_boundary: false,
                             });
 
                             if let Some(env) = captured_env {
@@ -44499,6 +44580,7 @@ impl InterpreterCore {
                         saved_scope_chain: saved_chain,
                         scope_inert_virtual_scope_bytes: 0,
                         async_function_id: None,
+                        native_boundary: false,
                     });
 
                     if let Some(env) = captured_env {
@@ -46097,6 +46179,7 @@ impl InterpreterCore {
                                 saved_scope_chain: saved_chain,
                                 scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: None,
+                                native_boundary: false,
                             });
 
                             // If calling a closure, restore its captured environment.
@@ -46890,9 +46973,9 @@ impl InterpreterCore {
                     if let Err(err) = self.apply_scope_chain_memory_delta(previous_scope_bytes) {
                         if let Ok(current) = self.scope_chain.current_mut() {
                             if let Some(old) = replaced {
-                                current.bindings.insert(name, old);
+                                current.insert_binding(name, old);
                             } else {
-                                current.bindings.remove(&name);
+                                current.remove_binding(&name);
                             }
                         }
                         return Err(err);
@@ -47103,16 +47186,14 @@ impl InterpreterCore {
                         ScopeBinding::new(binding_kind)
                     };
                     self.scope_chain.frames[frame_index]
-                        .bindings
-                        .insert(name.to_string(), next_binding);
+                        .insert_binding(name.to_string(), next_binding);
                     if let Err(err) = self.apply_scope_closure_call_stack_memory_delta(
                         previous_scope_bytes,
                         previous_closure_bytes,
                         previous_call_stack_bytes,
                     ) {
                         self.scope_chain.frames[frame_index]
-                            .bindings
-                            .insert(name.into_owned(), previous_binding);
+                            .insert_binding(name.into_owned(), previous_binding);
                         return Err(err);
                     }
                     self.ip += 1;
@@ -62583,6 +62664,35 @@ impl InterpreterCore {
             0,
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         )?;
+        if matches!(callee, Value::Closure(_) | Value::Function(_))
+            && !is_foreign_call
+            && contained_codegen_grant.is_none()
+            && callee_generated_artifact.is_none()
+            && self.active_generated_function_artifact.is_none()
+            && self.pending_exception.is_none()
+            && self.pending_return.is_none()
+            && self.pending_finally_entry.is_none()
+            && self.pending_hostcall_result_label.is_none()
+            && self.generator_delegation.is_none()
+        {
+            let saved_module_specifier = self
+                .current_module_specifier
+                .replace(callee_module_specifier);
+            let outcome = self.invoke_nested_callback(
+                module,
+                callee,
+                receiver,
+                arguments,
+                callback_context_label,
+                call_labels,
+                &mut remaining_label_transport_bytes,
+            );
+            self.current_module_specifier = saved_module_specifier;
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
+                transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
+            );
+            return outcome;
+        }
         // The synthetic call site runs as a trampoline past the end of the
         // module rather than on a clone of the module with it appended, which
         // cost O(module) per call. An async callee may leave its activation
@@ -62795,6 +62905,154 @@ impl InterpreterCore {
         }
         let result_label = result_label?;
         result.map(|value| (value, result_label))
+    }
+
+    /// Run a same-module synchronous callback as a nested call on the live
+    /// stack. A native boundary frame is pushed for the builtin caller, the
+    /// receiver, callee and arguments are staged in a scratch register frame,
+    /// and the dispatch loop runs the `CallMethod` + `Halt` trampoline until
+    /// the callee returns. Exception routing, async rejection and completion
+    /// clearing stop at the boundary, so the callback is as isolated from its
+    /// caller's handlers as the snapshotting path, without cloning the
+    /// execution state or reallocating the register file per call.
+    ///
+    /// The caller guarantees no pending exception, return, finally entry,
+    /// hostcall result label or generator delegation, so none needs parking.
+    #[allow(clippy::too_many_arguments)]
+    fn invoke_nested_callback(
+        &mut self,
+        module: &Ir3Module,
+        callee: Value,
+        receiver: Value,
+        arguments: Vec<Value>,
+        callback_context_label: Option<Label>,
+        call_labels: Option<IsolatedCallLabels>,
+        remaining_label_transport_bytes: &mut u64,
+    ) -> Result<(Value, Label), InterpreterError> {
+        let arg_count = u32::try_from(arguments.len()).unwrap_or(u32::MAX);
+        let saved_ip = self.ip;
+        let saved_register_base = self.register_base;
+
+        let previous_context_bytes = self.active_inline_callback_context_memory_bytes();
+        let saved_context = std::mem::replace(
+            &mut self.active_inline_callback_context_label,
+            callback_context_label,
+        );
+        let context_bytes = self.active_inline_callback_context_memory_bytes();
+        if let Err(error) = self.apply_memory_component_delta(previous_context_bytes, context_bytes)
+        {
+            self.active_inline_callback_context_label = saved_context;
+            return Err(error);
+        }
+
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        let boundary_index = self.call_stack.len();
+        self.call_stack.push(CallFrame {
+            return_ip: saved_ip,
+            return_reg: 0,
+            register_base: saved_register_base,
+            function_index: None,
+            this_value: Value::Undefined,
+            this_label: Label::Public,
+            new_target_value: Value::Undefined,
+            new_target_label: Label::Public,
+            super_value: Value::Undefined,
+            super_label: Label::Public,
+            super_home_object: None,
+            construct_this: None,
+            derived_constructor: false,
+            this_initialized: true,
+            initialize_derived_this_on_return: false,
+            saved_pending_exception: None,
+            saved_pending_exception_label: Label::Public,
+            saved_pending_return: None,
+            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+            saved_finally_mode_depth: self.finally_frames.len(),
+            saved_scope_depth: self.scope_chain.depth(),
+            saved_scope_chain: None,
+            scope_inert_virtual_scope_bytes: 0,
+            async_function_id: None,
+            native_boundary: true,
+        });
+        let catch_frames_before = self.catch_frames.len();
+
+        let run = (|| -> Result<(Value, Label), InterpreterError> {
+            self.apply_call_stack_memory_delta(previous_call_stack_bytes)?;
+            self.enter_stacked_register_frame(None);
+            let (receiver_label, argument_labels) = match call_labels {
+                Some(labels) => (Some(labels.receiver), labels.arguments),
+                None => (None, IsolatedArgumentLabels::Public),
+            };
+            self.seed_isolated_receiver(
+                0,
+                receiver,
+                receiver_label,
+                remaining_label_transport_bytes,
+            )?;
+            self.write_reg(1, callee)?;
+            self.seed_isolated_arguments(
+                2,
+                arguments,
+                argument_labels,
+                remaining_label_transport_bytes,
+                "nested callback argument register",
+            )?;
+            let trampoline = [
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange {
+                        start: 2,
+                        count: arg_count,
+                    },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+            ];
+            self.ip = module.instructions.len();
+            match self.run_loop_labeled_with_trampoline(module, None, &trampoline) {
+                Err(InterpreterError::Halted) if self.call_stack.len() == boundary_index + 1 => {
+                    let value = self.read_reg(0)?;
+                    let label = self.clone_register_label_with_temporary_budget(0)?;
+                    Ok((value, label))
+                }
+                Ok(completion) => Ok((completion.value, completion.label)),
+                Err(InterpreterError::Halted) => Err(InterpreterError::InternalError {
+                    details: "nested callback halted above its native boundary".to_string(),
+                }),
+                Err(error) => Err(error),
+            }
+        })();
+
+        // Unwind whatever the callee left above the boundary (an escaping
+        // throw or a native fault), then drop the boundary frame itself.
+        let unwound = if self.call_stack.len() > boundary_index + 1 {
+            self.unwind_call_stack_to(boundary_index + 1).map(|_| ())
+        } else {
+            Ok(())
+        };
+        self.catch_frames.truncate(catch_frames_before);
+        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+        if let Some(boundary) = self.call_stack.pop() {
+            debug_assert!(
+                boundary.native_boundary,
+                "nested callback lost its boundary frame"
+            );
+            self.truncate_finally_frames(boundary.saved_finally_mode_depth);
+            self.restore_scope_chain_for_frame(&boundary);
+        }
+        let popped = self.apply_call_stack_memory_delta(previous_call_stack_bytes);
+        self.register_base = saved_register_base;
+        self.ip = saved_ip;
+
+        let previous_context_bytes = self.active_inline_callback_context_memory_bytes();
+        self.active_inline_callback_context_label = saved_context;
+        let context_bytes = self.active_inline_callback_context_memory_bytes();
+        let restored = self.apply_memory_component_delta(previous_context_bytes, context_bytes);
+        unwound?;
+        popped?;
+        restored?;
+        run
     }
 
     #[cfg(test)]
@@ -79496,6 +79754,18 @@ impl InterpreterCore {
     fn estimate_execution_seed_value_bytes(value: &Value) -> u64 {
         const MAX_ACCESSOR_GRAPH_WORK: usize = 256;
 
+        // Only accessor pairs nest. Every other value is its own total, so it
+        // skips zero-filling the 2 KiB work list: the reduce lane sums this over
+        // every register on every step.
+        match value {
+            Value::BigInt(digits) => return Self::estimate_string_bytes(digits),
+            Value::Str(text) => return Self::estimate_js_string_bytes(text),
+            Value::BuiltinFunction(builtin) => {
+                return Self::estimate_string_bytes(&builtin.module_specifier);
+            }
+            Value::Accessor { .. } => {}
+            _ => return 0,
+        }
         let arc_value_bytes = u64::try_from(std::mem::size_of::<Value>())
             .unwrap_or(u64::MAX)
             .saturating_add(
@@ -80129,15 +80399,19 @@ impl InterpreterCore {
     }
 
     fn clear_suspended_abrupt_completions(&mut self) {
-        let released_bytes = u64::try_from(self.suspended_abrupt_completions.len())
+        // A nested callback clears only its own suspended completions.
+        let floor = self
+            .native_boundary_frame()
+            .map_or(0, |frame| frame.saved_suspended_abrupt_depth)
+            .min(self.suspended_abrupt_completions.len());
+        let released = &self.suspended_abrupt_completions[floor..];
+        let released_bytes = u64::try_from(released.len())
             .unwrap_or(u64::MAX)
             .saturating_mul(std::mem::size_of::<AbruptCompletion>() as u64)
             .saturating_add(Self::saturating_sum(
-                self.suspended_abrupt_completions
-                    .iter()
-                    .map(Self::estimate_abrupt_completion_bytes),
+                released.iter().map(Self::estimate_abrupt_completion_bytes),
             ));
-        self.suspended_abrupt_completions.clear();
+        self.suspended_abrupt_completions.truncate(floor);
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
@@ -80914,12 +81188,17 @@ impl InterpreterCore {
     /// live binding changes size.
     fn estimate_scope_chain_shallow_clone_bytes(frames: &[ScopeFrame]) -> u64 {
         Self::saturating_sum(frames.iter().map(|frame| {
-            MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(Self::saturating_sum(
-                frame.bindings.keys().map(|name| {
-                    MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
-                        .saturating_add(Self::estimate_string_bytes(name))
-                }),
-            ))
+            debug_assert_eq!(
+                frame.key_bytes,
+                Self::saturating_sum(
+                    frame
+                        .bindings
+                        .keys()
+                        .map(|name| ScopeFrame::binding_key_bytes(name))
+                ),
+                "cached scope-frame key bytes drifted from the bindings"
+            );
+            MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(frame.key_bytes)
         }))
     }
 
@@ -85808,8 +86087,7 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         core.scope_chain
             .current_mut()
             .expect("live frame")
-            .bindings
-            .insert(
+            .insert_binding(
                 name.to_string(),
                 ScopeBinding::with_state(BindingKind::Var, Value::str("x".repeat(len)), true),
             );
@@ -86170,8 +86448,7 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         core.scope_chain
             .current_mut()
             .expect("live frame")
-            .bindings
-            .insert(
+            .insert_binding(
                 "fresh".to_string(),
                 ScopeBinding::with_state(BindingKind::Var, Value::str("z".repeat(4096)), true),
             );
@@ -86183,8 +86460,7 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         core.scope_chain
             .current_mut()
             .expect("live frame")
-            .bindings
-            .remove("fresh");
+            .remove_binding("fresh");
         assert_invariant(&core, "after refused declaration rollback");
     }
 }
@@ -87886,7 +88162,7 @@ mod active_builtin_regressions {
                 ),
             ])
             .unwrap();
-        core.scope_chain.current_mut().unwrap().bindings.insert(
+        core.scope_chain.current_mut().unwrap().insert_binding(
             "result".to_string(),
             ScopeBinding::with_state(BindingKind::Var, Value::Object(result), true),
         );
@@ -89864,7 +90140,7 @@ mod active_builtin_regressions {
             .value
             .clone();
         let mut alias_frame = canonical_frame.clone();
-        alias_frame.bindings.insert(
+        alias_frame.insert_binding(
             "userMathAlias".to_string(),
             ScopeBinding::with_state(BindingKind::Var, math_value, true),
         );
@@ -89884,7 +90160,7 @@ mod active_builtin_regressions {
         );
 
         let mut overwritten_frame = canonical_frame;
-        overwritten_frame.bindings.insert(
+        overwritten_frame.insert_binding(
             "Math".to_string(),
             ScopeBinding::with_state(BindingKind::Var, Value::Int(7), true),
         );
@@ -90084,8 +90360,7 @@ mod active_builtin_regressions {
         core.scope_chain
             .current_mut()
             .expect("global test scope should exist")
-            .bindings
-            .insert(
+            .insert_binding(
                 "result".to_string(),
                 ScopeBinding::with_state(BindingKind::Var, result, true),
             );
@@ -91300,8 +91575,7 @@ mod async_runtime_tests_current {
         core.scope_chain
             .current_mut()
             .expect("global scope")
-            .bindings
-            .insert(
+            .insert_binding(
                 "log".to_string(),
                 ScopeBinding::with_state(BindingKind::Var, Value::Object(log), true),
             );
@@ -93570,11 +93844,11 @@ mod async_runtime_tests_current {
         core.scope_chain
             .current_mut()
             .expect("scope")
-            .bindings
-            .extend([
-                ("first".to_string(), first.clone()),
-                ("second".to_string(), second.clone()),
-            ]);
+            .insert_binding("first".to_string(), first.clone());
+        core.scope_chain
+            .current_mut()
+            .expect("scope")
+            .insert_binding("second".to_string(), second.clone());
         core.module_state
             .modules
             .get_mut("cycle.mjs")
@@ -98016,6 +98290,7 @@ mod async_runtime_tests_current {
             saved_scope_chain: Some(saved_scope),
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
+            native_boundary: false,
         });
         core.sync_estimated_memory_bytes()
             .expect("rollback fixture should fit");
@@ -99849,6 +100124,7 @@ mod async_runtime_tests_current {
             saved_scope_chain: None,
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
+            native_boundary: false,
         };
         let frame_bytes = InterpreterCore::estimate_call_frame_bytes(&frame);
         let snapshot_bytes = InterpreterCore::estimate_call_frame_snapshot_clone_bytes(&frame);
@@ -115410,6 +115686,7 @@ mod function_prototype_call_apply_tests_current {
             saved_scope_chain: None,
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: Some(async_id),
+            native_boundary: false,
         });
         core.register_base = core.config.max_registers as usize;
         core.sync_estimated_memory_bytes()
@@ -120148,8 +120425,7 @@ mod tests {
         core.scope_chain
             .current_mut()
             .expect("global scope")
-            .bindings
-            .insert(
+            .insert_binding(
                 "unused_capture".to_string(),
                 ScopeBinding::with_labeled_state(
                     BindingKind::Let,
@@ -121346,7 +121622,7 @@ mod tests {
                 .expect("CJS exports fixture object");
             let frame = core.scope_chain.current_mut().expect("CJS fixture scope");
             for name in cjs_names {
-                frame.bindings.insert(
+                frame.insert_binding(
                     name.to_string(),
                     ScopeBinding::with_state(
                         BindingKind::Var,
@@ -129284,6 +129560,7 @@ mod tests {
             saved_scope_chain: Some(saved_scope),
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
+            native_boundary: false,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed call-frame state should fit memory budget");
@@ -129462,6 +129739,7 @@ mod tests {
             saved_scope_chain: Some(saved_scope),
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: Some(async_function_id),
+            native_boundary: false,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed async call-frame state should fit memory budget");
@@ -129647,6 +129925,7 @@ mod tests {
             saved_scope_chain: Some(saved_scope),
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
+            native_boundary: false,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed unwind call-frame state should fit memory budget");
@@ -129748,6 +130027,7 @@ mod tests {
             saved_scope_chain: Some(saved_scope),
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
+            native_boundary: false,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed rollback call-frame state should fit memory budget");
@@ -130260,8 +130540,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0k19b-exact-scope");
         let outer = ScopeBinding::with_state(BindingKind::Var, Value::Int(1), true);
         core.scope_chain.frames[0]
-            .bindings
-            .insert("bd_0k19b_exact_scope".to_string(), outer.clone());
+            .insert_binding("bd_0k19b_exact_scope".to_string(), outer.clone());
         core.sync_estimated_memory_bytes()
             .expect("seed outer binding accounting");
 
@@ -130275,8 +130554,7 @@ mod tests {
         core.scope_chain
             .current_mut()
             .expect("shadowing scope")
-            .bindings
-            .insert("bd_0k19b_exact_scope".to_string(), inner.clone());
+            .insert_binding("bd_0k19b_exact_scope".to_string(), inner.clone());
         core.sync_estimated_memory_bytes()
             .expect("seed shadowing binding accounting");
 
@@ -130354,15 +130632,15 @@ mod tests {
             .frames
             .first_mut()
             .expect("global scope frame");
-        global.bindings.insert(
+        global.insert_binding(
             "mutable".to_string(),
             ScopeBinding::with_state(BindingKind::Var, Value::Int(1), true),
         );
-        global.bindings.insert(
+        global.insert_binding(
             "constant".to_string(),
             ScopeBinding::with_state(BindingKind::Const, Value::Int(2), true),
         );
-        global.bindings.insert(
+        global.insert_binding(
             "uninitialized".to_string(),
             ScopeBinding::new(BindingKind::Let),
         );
@@ -130511,6 +130789,7 @@ mod tests {
             saved_scope_chain: Some(saved_scope),
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
+            native_boundary: false,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed shared binding fixture");
@@ -130566,7 +130845,7 @@ mod tests {
         core.scope_chain
             .push(core.config.max_scope_depth)
             .expect("operation should succeed for valid inputs");
-        core.scope_chain.current_mut().unwrap().bindings.insert(
+        core.scope_chain.current_mut().unwrap().insert_binding(
             "payload".to_string(),
             ScopeBinding::with_state(BindingKind::Var, Value::str("x".repeat(128)), true),
         );
@@ -130958,7 +131237,7 @@ mod tests {
     fn temporary_scope_clone_budget_counts_existing_snapshot() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "temporary-scope-clone-budget");
-        core.scope_chain.current_mut().unwrap().bindings.insert(
+        core.scope_chain.current_mut().unwrap().insert_binding(
             "payload".to_string(),
             ScopeBinding::with_state(BindingKind::Var, Value::str("x".repeat(128)), true),
         );
@@ -131698,7 +131977,7 @@ mod tests {
             }
             let binding_name = format!("var{}", i);
             let binding_value = format!("value{}", i);
-            core.scope_chain.current_mut().unwrap().bindings.insert(
+            core.scope_chain.current_mut().unwrap().insert_binding(
                 binding_name.clone(),
                 ScopeBinding::with_state(BindingKind::Var, Value::str(binding_value.clone()), true),
             );
@@ -138687,6 +138966,7 @@ mod lazy_seed_tests {
             saved_scope_chain: None,
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
+            native_boundary: false,
         });
         core.sync_estimated_memory_bytes()
             .expect("plain call-frame fixture must fit");

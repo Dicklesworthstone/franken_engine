@@ -79,6 +79,7 @@ mod inspect;
 mod json_parse;
 mod json_stringify;
 mod object_integrity;
+mod package_resolution;
 mod primitive_conversion;
 mod reflect_invocation;
 #[cfg(test)]
@@ -8302,7 +8303,9 @@ pub trait InterpreterHook: Send + Sync {
 /// Specific reasons for module resolution failure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModuleResolutionFailureReason {
-    /// Bare specifiers are not supported in the current resolution context.
+    /// Bare specifiers are not supported in the current resolution context:
+    /// ESM `import` of a package, or a `require` with no module root to bound
+    /// the `node_modules` search.
     BareSpecifiersNotSupported,
     /// Specifier format is malformed or invalid.
     MalformedSpecifier,
@@ -33083,14 +33086,29 @@ impl InterpreterCore {
     }
 
     fn resolve_require_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
-        let resolved = self.resolve_specifier_base(specifier)?;
-        let force_directory = specifier.ends_with('/');
-        let candidate = self
-            .resolve_require_candidate(&resolved, force_directory)
-            .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
-                specifier: specifier.to_string(),
-                reason: ModuleResolutionFailureReason::ModuleNotFound,
-            })?;
+        let is_path_specifier = specifier.starts_with("./")
+            || specifier.starts_with("../")
+            || specifier == "."
+            || specifier == ".."
+            || specifier.starts_with('/')
+            || Path::new(specifier).is_absolute();
+        let candidate = if is_path_specifier {
+            // `require('.')` and `require('..')` name directories, as `./`
+            // and `../` do.
+            let relative = match specifier {
+                "." => "./",
+                ".." => "../",
+                other => other,
+            };
+            let resolved = self.resolve_specifier_base(relative)?;
+            self.resolve_require_candidate(&resolved, relative.ends_with('/'))
+                .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: ModuleResolutionFailureReason::ModuleNotFound,
+                })?
+        } else {
+            self.resolve_bare_require_specifier(specifier)?
+        };
         let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
         Ok(canonical.display().to_string())
     }
@@ -33132,6 +33150,9 @@ impl InterpreterCore {
         None
     }
 
+    /// Node's LOAD_AS_FILE then LOAD_AS_DIRECTORY for a `require` path: the
+    /// file itself, then with an extension appended (`a.min` probes
+    /// `a.min.js`), then a directory's package.json `main`, then its index.
     fn resolve_require_candidate(
         &self,
         candidate: &Path,
@@ -33141,48 +33162,22 @@ impl InterpreterCore {
             if candidate.is_file() {
                 return Some(candidate.to_path_buf());
             }
-            if candidate.extension().is_none() {
-                let cjs_path = candidate.with_extension("cjs");
-                if cjs_path.is_file() {
-                    return Some(cjs_path);
-                }
-                let js_path = candidate.with_extension("js");
-                if js_path.is_file() {
-                    return Some(js_path);
-                }
-                let mjs_path = candidate.with_extension("mjs");
-                if mjs_path.is_file() {
-                    return Some(mjs_path);
-                }
+            let with_extension = ["cjs", "js", "json", "mjs"]
+                .into_iter()
+                .map(|extension| package_resolution::with_appended_extension(candidate, extension))
+                .find(|path| path.is_file());
+            if with_extension.is_some() {
+                return with_extension;
             }
         }
         if candidate.is_dir() {
-            let index_cjs = candidate.join("index.cjs");
-            if index_cjs.is_file() {
-                return Some(index_cjs);
+            if let Some(main) = Self::resolve_package_main(candidate) {
+                return Some(main);
             }
-            let index_js = candidate.join("index.js");
-            if index_js.is_file() {
-                return Some(index_js);
-            }
-            let index_mjs = candidate.join("index.mjs");
-            if index_mjs.is_file() {
-                return Some(index_mjs);
-            }
-        }
-        if !force_directory && candidate.extension().is_none() {
-            let index_cjs = candidate.join("index.cjs");
-            if index_cjs.is_file() {
-                return Some(index_cjs);
-            }
-            let index_js = candidate.join("index.js");
-            if index_js.is_file() {
-                return Some(index_js);
-            }
-            let index_mjs = candidate.join("index.mjs");
-            if index_mjs.is_file() {
-                return Some(index_mjs);
-            }
+            return ["index.cjs", "index.js", "index.json", "index.mjs"]
+                .into_iter()
+                .map(|index| candidate.join(index))
+                .find(|path| path.is_file());
         }
         None
     }
@@ -33463,6 +33458,15 @@ impl InterpreterCore {
                 specifier: resolved.to_string(),
                 error: error.to_string(),
             })?;
+        let source = if is_cjs
+            && Path::new(resolved)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            Self::json_module_source(&source)?
+        } else {
+            source
+        };
         let parser_source = ParserSource {
             label: resolved.to_string(),
             text: source,
@@ -33587,13 +33591,7 @@ impl InterpreterCore {
     /// parses as a script is CommonJS and one that needs `import`/`export` is
     /// an ES module. `resolved` is already canonical and inside the root.
     fn required_js_is_esm(&self, resolved: &str) -> bool {
-        let root = self.config.canonical_module_root.clone().or_else(|| {
-            self.config
-                .module_root
-                .as_deref()
-                .and_then(|root| Path::new(root).canonicalize().ok())
-        });
-        if let Some(root) = root {
+        if let Some(root) = self.canonical_module_root_path() {
             for dir in Path::new(resolved).ancestors().skip(1) {
                 if !dir.starts_with(&root) {
                     break;

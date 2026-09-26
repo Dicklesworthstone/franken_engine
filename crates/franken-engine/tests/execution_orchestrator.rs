@@ -2803,6 +2803,187 @@ fn failed_commonjs_require_keeps_console_output_of_entry_and_dependency() {
     );
 }
 
+// =========================================================================
+// bd-4dme3: Node's CommonJS package resolution
+// =========================================================================
+
+fn write_tree(root: &std::path::Path, files: &[(&str, &str)]) {
+    for (path, contents) in files {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture dir");
+        std::fs::write(&path, contents).expect("fixture file");
+    }
+}
+
+/// A `node_modules` tree laid out the way npm installs one, exercising each
+/// resolution rule an ordinary package relies on.
+const NODE_MODULES_FIXTURE: &[(&str, &str)] = &[
+    (
+        "node_modules/main-only/package.json",
+        r#"{"name": "main-only", "main": "lib/entry"}"#,
+    ),
+    (
+        "node_modules/main-only/lib/entry.js",
+        "module.exports = { kind: 'main' };\n",
+    ),
+    (
+        "node_modules/with-exports/package.json",
+        r#"{
+            "name": "with-exports",
+            "exports": {
+                ".": {"import": "./esm.mjs", "require": "./cjs.js", "default": "./fallback.js"},
+                "./feature": "./feature.js",
+                "./utils/*": "./src/utils/*.js",
+                "./internal/*": null
+            }
+        }"#,
+    ),
+    (
+        "node_modules/with-exports/cjs.js",
+        "module.exports = 'require-condition';\n",
+    ),
+    (
+        "node_modules/with-exports/esm.mjs",
+        "export default 'import-condition';\n",
+    ),
+    (
+        "node_modules/with-exports/fallback.js",
+        "module.exports = 'default-condition';\n",
+    ),
+    (
+        "node_modules/with-exports/feature.js",
+        "module.exports = 'feature';\n",
+    ),
+    (
+        "node_modules/with-exports/src/utils/strings.js",
+        "module.exports = 'pattern:strings';\n",
+    ),
+    (
+        "node_modules/with-exports/internal/hidden.js",
+        "module.exports = 'leaked';\n",
+    ),
+    (
+        "node_modules/@scope/pkg/index.js",
+        "module.exports = 'scoped-index';\n",
+    ),
+    (
+        "node_modules/data-pkg/package.json",
+        r#"{"name": "data-pkg", "main": "data.json"}"#,
+    ),
+    (
+        "node_modules/data-pkg/data.json",
+        r#"{"answer": 42, "list": [1, 2]}"#,
+    ),
+    (
+        "node_modules/outer/index.js",
+        "module.exports = 'outer+' + require('inner');\n",
+    ),
+    ("node_modules/inner/index.js", "module.exports = 'inner';\n"),
+    (
+        "node_modules/path/index.js",
+        "module.exports = { join: () => 'impostor' };\n",
+    ),
+    ("config.json", r#"{"name": "cfg"}"#),
+];
+
+/// A CommonJS entry loads installed packages the way Node does: `main`
+/// (extension appended), the `require` condition of an `exports` map ahead of
+/// `default`, exported subpaths and `*` patterns, a scoped package's index,
+/// JSON modules, and a hoisted dependency found by walking up from the
+/// requiring package; a core module name is never shadowed by a package.
+#[test]
+fn commonjs_entry_resolves_installed_packages_like_node_bd_4dme3() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    write_tree(root.path(), NODE_MODULES_FIXTURE);
+    let entry = root.path().join("app.js");
+    std::fs::write(
+        &entry,
+        "console.log(require('main-only').kind);\n\
+         console.log(require('with-exports'));\n\
+         console.log(require('with-exports/feature'));\n\
+         console.log(require('with-exports/utils/strings'));\n\
+         console.log(require('@scope/pkg'));\n\
+         const data = require('data-pkg');\n\
+         console.log(String(data.answer + data.list.length));\n\
+         console.log(require('./config').name);\n\
+         console.log(require('outer'));\n\
+         const path = require('path');\n\
+         console.log(path.join('a', 'b'));\n",
+    )
+    .expect("entry");
+
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let config = OrchestratorConfig {
+            force_lane: Some(lane),
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        };
+        let result = ExecutionOrchestrator::new(config)
+            .execute(&commonjs_entry_package(
+                root.path(),
+                &entry,
+                "ext-node-modules",
+            ))
+            .unwrap_or_else(|error| panic!("{lane:?}: installed packages failed: {error}"));
+        assert_eq!(
+            console_lines(&result),
+            [
+                "main",
+                "require-condition",
+                "feature",
+                "pattern:strings",
+                "scoped-index",
+                "44",
+                "cfg",
+                "outer+inner",
+                "a/b",
+            ],
+            "{lane:?}"
+        );
+    }
+}
+
+/// What a package does not export stays unreachable even when the file
+/// exists, and a missing package is reported by name.
+#[test]
+fn commonjs_require_refuses_unexported_and_missing_packages_bd_4dme3() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    write_tree(root.path(), NODE_MODULES_FIXTURE);
+    let cases = [
+        (
+            "unexported-file.js",
+            "with-exports/cjs.js",
+            "does not export",
+        ),
+        (
+            "excluded.js",
+            "with-exports/internal/hidden",
+            "does not export",
+        ),
+        ("missing.js", "not-installed", "module not found"),
+    ];
+    for (file, specifier, expected) in cases {
+        let entry = root.path().join(file);
+        std::fs::write(&entry, format!("console.log(require('{specifier}'));\n")).expect("entry");
+        let config = OrchestratorConfig {
+            commonjs_entry: true,
+            ..OrchestratorConfig::default()
+        };
+        let error = ExecutionOrchestrator::new(config)
+            .execute(&commonjs_entry_package(
+                root.path(),
+                &entry,
+                "ext-node-modules-refused",
+            ))
+            .expect_err("the require must fail");
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!("'{specifier}'")) && message.contains(expected),
+            "{file}: expected `{expected}` for `{specifier}`, got: {message}"
+        );
+    }
+}
+
 /// A declared root widens containment only to itself: imports that escape the
 /// DECLARED root still fail closed, even when the target exists on disk.
 #[test]

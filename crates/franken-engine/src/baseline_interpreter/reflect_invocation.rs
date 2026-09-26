@@ -480,16 +480,33 @@ impl InterpreterCore {
             // the native work/memory guards have had a chance to run.
             self.json_observe_reachable_value(&source)?;
             let source_label = self.json_parse_context_label()?;
+            let limit = self.apply_argument_limit(&target);
             let (arguments, argument_labels, selection_label) = self.observable_apply_arguments(
                 module,
                 source,
                 source_label,
                 &mut reserved,
                 false,
+                limit,
             )?;
             labels.arguments = IsolatedArgumentLabels::Exact(argument_labels);
             self.json_observe_label(selection_label)?;
-            let (value, label) = if construct {
+            // bd-9vouw.50: a list that does not fit a register frame goes to a
+            // vector-variadic builtin as a vector.
+            let vector_tag = (!construct)
+                .then(|| Self::vector_variadic_builtin_tag(&target))
+                .flatten()
+                .filter(|_| arguments.len() > self.config.max_registers.saturating_sub(2) as usize);
+            let (value, label) = if let Some(vector_tag) = vector_tag {
+                let context = self.json_parse_context_label()?;
+                self.apply_vector_variadic_builtin(
+                    module,
+                    vector_tag,
+                    arguments,
+                    &labels.arguments,
+                    context,
+                )?
+            } else if construct {
                 self.invoke_inline_construct_with_labels(
                     module,
                     target,
@@ -569,8 +586,15 @@ impl InterpreterCore {
         let mut outcome = (|| {
             self.json_observe_reachable_value(&source)?;
             let source_label = self.json_parse_context_label()?;
-            let (keys, labels, selection_label) =
-                self.observable_apply_arguments(module, source, source_label, &mut reserved, true)?;
+            let limit = self.config.max_registers.saturating_sub(2);
+            let (keys, labels, selection_label) = self.observable_apply_arguments(
+                module,
+                source,
+                source_label,
+                &mut reserved,
+                true,
+                limit,
+            )?;
             self.json_observe_label(selection_label)?;
             for label in labels {
                 self.json_observe_label(label)?;

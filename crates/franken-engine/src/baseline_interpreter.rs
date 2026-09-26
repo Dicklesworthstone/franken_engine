@@ -265,6 +265,12 @@ const RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"FrankenEngine.DecisionReceipt.Signatur
 
 /// Maximum call-stack depth.
 const MAX_CALL_DEPTH: usize = 256;
+
+/// Longest argument list a vector-variadic builtin (`Math.max`,
+/// `String.fromCharCode`, ...) accepts through spread or `apply`
+/// (bd-9vouw.50). It is still charged to the memory budget before
+/// materializing. Node's own limit comes from its stack, at roughly 10^5.
+const MAX_VECTOR_BUILTIN_ARGUMENTS: u32 = 1 << 17;
 /// Native stack reserved before baseline execution begins. The interpreter's
 /// debug dispatch frame is intentionally large; cross-module wrappers re-enter
 /// it recursively while preserving the logical depth in
@@ -60127,6 +60133,282 @@ impl InterpreterCore {
     /// Read the `index`th positional argument of a builtin call, or `None` when
     /// fewer arguments were supplied. Shared by the non-callback
     /// `Array.prototype` methods (bd-962ev.1) for their optional parameters.
+    /// Every argument of a register-staged builtin call, in order.
+    fn builtin_argument_values(&self, args: RegRange) -> Result<Vec<Value>, InterpreterError> {
+        (0..args.count)
+            .map(|offset| {
+                let register = args.start.checked_add(offset).ok_or(
+                    InterpreterError::RegisterOutOfBounds {
+                        register: args.start,
+                        max: self.config.max_registers,
+                    },
+                )?;
+                self.read_reg(register)
+            })
+            .collect()
+    }
+
+    /// ES2020 7.1.4 ToNumber for a numeric builtin argument. Objects go
+    /// through ToPrimitive (hint Number), which may run guest
+    /// valueOf/toString; strings use StringToNumber; BigInt and Symbol are
+    /// TypeErrors. A coercion's result label joins `label`.
+    fn builtin_argument_to_number(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        label: &mut Option<Label>,
+    ) -> Result<f64, InterpreterError> {
+        let primitive = if value.is_object_like() {
+            let primitive = self.coerce_runtime_primitive(module, value, false)?;
+            if let Some(pending) = self.take_pending_hostcall_result_label() {
+                *label = Some(match label.take() {
+                    Some(existing) => {
+                        self.join_owned_label_with_temporary_budget(existing, &pending)?
+                    }
+                    None => pending,
+                });
+            }
+            primitive
+        } else {
+            value
+        };
+        match &primitive {
+            Value::Str(text) => Ok(primitive_conversion::string_number(text)),
+            Value::BigInt(_) | Value::Symbol(_) => Err(InterpreterError::TypeError {
+                expected: "Number-convertible builtin argument".to_string(),
+                got: primitive.type_name().to_string(),
+            }),
+            other => Ok(Self::coerce_to_float(other).unwrap_or(f64::NAN)),
+        }
+    }
+
+    /// Join a label collected while converting builtin arguments into the
+    /// pending hostcall result label.
+    fn join_into_pending_hostcall_result_label(
+        &mut self,
+        label: Option<Label>,
+    ) -> Result<(), InterpreterError> {
+        let Some(label) = label else {
+            return Ok(());
+        };
+        let merged = match self.take_pending_hostcall_result_label() {
+            Some(pending) => self.join_owned_label_with_temporary_budget(pending, &label)?,
+            None => label,
+        };
+        self.replace_pending_hostcall_result_label(Some(merged))
+    }
+
+    /// `Math.max` (`is_max`) / `Math.min`, ES2020 20.2.2.24/.25. Every
+    /// argument is converted first, in order. Any NaN makes the result NaN.
+    /// +0 beats -0 for max and -0 beats +0 for min. An all-integer list keeps
+    /// an Int result.
+    fn math_extremum(
+        &mut self,
+        module: Option<&Ir3Module>,
+        values: Vec<Value>,
+        is_max: bool,
+    ) -> Result<Value, InterpreterError> {
+        let mut label = None;
+        let mut numbers = Vec::with_capacity(values.len());
+        let mut integers = Vec::with_capacity(values.len());
+        for value in values {
+            match value {
+                Value::Int(integer) => {
+                    integers.push(integer);
+                    numbers.push(integer as f64);
+                }
+                other => numbers.push(self.builtin_argument_to_number(module, other, &mut label)?),
+            }
+        }
+        self.join_into_pending_hostcall_result_label(label)?;
+        if !numbers.is_empty() && integers.len() == numbers.len() {
+            let extremum = if is_max {
+                integers.iter().copied().max()
+            } else {
+                integers.iter().copied().min()
+            };
+            return Ok(Value::Int(extremum.expect("non-empty integer list")));
+        }
+        let mut result = if is_max {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+        for number in numbers {
+            if number.is_nan() {
+                return Ok(Value::Float(Float64::new(f64::NAN)));
+            }
+            let better = if is_max {
+                number > result || (number == 0.0 && result == 0.0 && result.is_sign_negative())
+            } else {
+                number < result || (number == 0.0 && result == 0.0 && number.is_sign_negative())
+            };
+            if better {
+                result = number;
+            }
+        }
+        Ok(Value::Float(Float64::new(result)))
+    }
+
+    /// `String.fromCharCode`, ES2020 21.1.2.1: ToUint16(ToNumber(code)) per
+    /// argument. Surrogate units stay lone units (bd-neika) and heal into a
+    /// supplementary code point when a pair is adjacent.
+    fn string_from_char_code(
+        &mut self,
+        module: Option<&Ir3Module>,
+        values: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        self.check_string_limit(values.len())?;
+        let mut label = None;
+        let mut units: Vec<u16> = Vec::with_capacity(values.len());
+        for value in values {
+            let code = match value {
+                // Modular ToUint32 then ToUint16, as `js_to_uint32` does for
+                // floats (`fromCharCode(-1.5)` is 0xFFFF).
+                Value::Int(integer) => integer as u32,
+                other => {
+                    Self::js_to_uint32(self.builtin_argument_to_number(module, other, &mut label)?)
+                }
+            };
+            units.push((code & 0xFFFF) as u16);
+        }
+        self.join_into_pending_hostcall_result_label(label)?;
+        Ok(Value::Str(JsString::from_code_units(&units)))
+    }
+
+    /// `String.fromCodePoint`, ES2020 21.1.2.2: each ToNumber(argument) must
+    /// be an integral code point in 0..=0x10FFFF (surrogates included), else
+    /// RangeError.
+    fn string_from_code_point(
+        &mut self,
+        module: Option<&Ir3Module>,
+        values: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        self.check_string_limit(values.len())?;
+        let mut label = None;
+        let mut units: Vec<u16> = Vec::with_capacity(values.len());
+        for value in values {
+            let number = match value {
+                Value::Int(integer) => integer as f64,
+                other => self.builtin_argument_to_number(module, other, &mut label)?,
+            };
+            if !number.is_finite()
+                || number.fract() != 0.0
+                || !(0.0..=0x10FFFF as f64).contains(&number)
+            {
+                return Err(InterpreterError::RangeError {
+                    message: format!("String.fromCodePoint invalid code point: {number}"),
+                });
+            }
+            let code_point = number as u32;
+            if code_point < 0x10000 {
+                units.push(code_point as u16);
+            } else {
+                let offset = code_point - 0x10000;
+                units.push(0xD800 + (offset >> 10) as u16);
+                units.push(0xDC00 + (offset & 0x3FF) as u16);
+            }
+        }
+        self.check_string_limit(units.len())?;
+        self.join_into_pending_hostcall_result_label(label)?;
+        Ok(Value::Str(JsString::from_code_units(&units)))
+    }
+
+    /// Hostcall tags of the variadic builtins that can consume an argument
+    /// list longer than a register frame (bd-9vouw.50).
+    fn is_vector_variadic_tag(tag: &str) -> bool {
+        matches!(
+            tag,
+            "builtin:MathMax"
+                | "builtin:MathMin"
+                | "builtin:StringFromCharCode"
+                | "builtin:StringFromCodePoint"
+        )
+    }
+
+    /// The vector-variadic hostcall tag a callable builtin value runs, and
+    /// whether calling it checks the capability gate (static hostcall
+    /// values do).
+    fn vector_variadic_builtin_tag(value: &Value) -> Option<(&'static str, bool)> {
+        let Value::BuiltinFunction(builtin) = value else {
+            return None;
+        };
+        match builtin.kind {
+            BuiltinFunctionKind::MathMax => Some(("builtin:MathMax", false)),
+            BuiltinFunctionKind::MathMin => Some(("builtin:MathMin", false)),
+            BuiltinFunctionKind::StaticHostcall => match &*builtin.module_specifier {
+                "builtin:StringFromCharCode" => Some(("builtin:StringFromCharCode", true)),
+                "builtin:StringFromCodePoint" => Some(("builtin:StringFromCodePoint", true)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Longest `apply` argument list for `callee`: a vector-variadic builtin
+    /// takes a Vec; every other call stages receiver, callee and arguments
+    /// in one register frame.
+    fn apply_argument_limit(&self, callee: &Value) -> u32 {
+        if Self::vector_variadic_builtin_tag(callee).is_some() {
+            MAX_VECTOR_BUILTIN_ARGUMENTS
+        } else {
+            self.config.max_registers.saturating_sub(2)
+        }
+    }
+
+    /// Run a vector-variadic builtin over an argument vector.
+    fn dispatch_vector_variadic_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        tag: &str,
+        values: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        match tag {
+            "builtin:MathMax" => self.math_extremum(module, values, true),
+            "builtin:MathMin" => self.math_extremum(module, values, false),
+            "builtin:StringFromCharCode" => self.string_from_char_code(module, values),
+            "builtin:StringFromCodePoint" => self.string_from_code_point(module, values),
+            other => Err(InterpreterError::InternalError {
+                details: format!("{other} is not a vector-variadic builtin"),
+            }),
+        }
+    }
+
+    /// An `apply` of a vector-variadic builtin whose list does not fit a
+    /// register frame. The result label joins `context` and every argument
+    /// label.
+    fn apply_vector_variadic_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        (tag, gated): (&'static str, bool),
+        values: Vec<Value>,
+        argument_labels: &IsolatedArgumentLabels,
+        context: Label,
+    ) -> Result<(Value, Label), InterpreterError> {
+        if gated {
+            let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
+            check_hostcall_capability_gate(self, tag, instruction_index)?;
+        }
+        let mut label = context;
+        match argument_labels {
+            IsolatedArgumentLabels::Public => {}
+            IsolatedArgumentLabels::Exact(labels) => {
+                for argument_label in labels {
+                    label = self.join_owned_label_with_temporary_budget(label, argument_label)?;
+                }
+            }
+            IsolatedArgumentLabels::Uniform(argument_label) => {
+                label = self.join_owned_label_with_temporary_budget(label, argument_label)?;
+            }
+        }
+        self.clear_pending_hostcall_result_label();
+        let value = self.dispatch_vector_variadic_builtin(module, tag, values)?;
+        if let Some(pending) = self.take_pending_hostcall_result_label() {
+            label = self.join_owned_label_with_temporary_budget(label, &pending)?;
+        }
+        Ok((value, label))
+    }
+
     fn builtin_arg(&self, args: RegRange, index: u32) -> Result<Option<Value>, InterpreterError> {
         if index >= args.count {
             return Ok(None);
@@ -61473,12 +61755,14 @@ impl InterpreterCore {
                 } else {
                     Label::Public
                 };
+                let limit = self.apply_argument_limit(&function);
                 let (values, value_labels, selection_label) = self.observable_apply_arguments(
                     module,
                     source,
                     source_label,
                     &mut reserved,
                     false,
+                    limit,
                 )?;
                 context_label =
                     self.join_owned_label_with_temporary_budget(context_label, &selection_label)?;
@@ -61500,14 +61784,28 @@ impl InterpreterCore {
                 }
                 values
             };
-            let (value, label) = self.invoke_inline_method_call_with_labels(
-                module,
-                function,
-                this_arg,
-                values,
-                Some(context_label),
-                labels,
-            )?;
+            // bd-9vouw.50: a list that does not fit a register frame goes to
+            // the builtin as a vector.
+            let vector_tag = Self::vector_variadic_builtin_tag(&function)
+                .filter(|_| values.len() > self.config.max_registers.saturating_sub(2) as usize);
+            let (value, label) = if let Some(vector_tag) = vector_tag {
+                self.apply_vector_variadic_builtin(
+                    module,
+                    vector_tag,
+                    values,
+                    &labels.arguments,
+                    context_label,
+                )?
+            } else {
+                self.invoke_inline_method_call_with_labels(
+                    module,
+                    function,
+                    this_arg,
+                    values,
+                    Some(context_label),
+                    labels,
+                )?
+            };
             self.replace_pending_hostcall_result_label(Some(label))?;
             Ok(value)
         })();
@@ -61526,6 +61824,7 @@ impl InterpreterCore {
         mut source_label: Label,
         reserved: &mut u64,
         property_keys_only: bool,
+        max_length: u32,
     ) -> Result<(Vec<Value>, Vec<Label>, Label), InterpreterError> {
         self.json_charge_work()?;
         if matches!(source, Value::Null | Value::Undefined) {
@@ -61572,7 +61871,7 @@ impl InterpreterCore {
         };
         // Refuse before indexed getters or allocation. Untrusted length is
         // not permitted to reserve an unbounded Rust Vec or evade VM limits.
-        if length > f64::from(self.config.max_registers.saturating_sub(2)) {
+        if length > f64::from(max_length) {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register: u32::MAX,
                 max: self.config.max_registers,
@@ -61644,9 +61943,21 @@ impl InterpreterCore {
     /// separate active callback context carries whole-invocation control
     /// dependence for deferred work without smearing one element's label onto
     /// every other scratch register.
+    #[cfg(test)]
     fn prepare_delegated_hostcall_arguments(
         &mut self,
         value: Value,
+    ) -> Result<DelegatedHostcallArguments, InterpreterError> {
+        let max_count = self.config.max_registers;
+        self.prepare_delegated_hostcall_arguments_up_to(value, max_count)
+    }
+
+    /// As [`Self::prepare_delegated_hostcall_arguments`], refusing lists
+    /// longer than `max_count` before any indexed read or allocation.
+    fn prepare_delegated_hostcall_arguments_up_to(
+        &mut self,
+        value: Value,
+        max_count: u32,
     ) -> Result<DelegatedHostcallArguments, InterpreterError> {
         let (length, dynamic_value_bytes, dynamic_label_bytes) = match &value {
             Value::Undefined | Value::Null => (0usize, 0u64, 0u64),
@@ -61657,7 +61968,7 @@ impl InterpreterCore {
                         register: u32::MAX,
                         max: self.config.max_registers,
                     })?;
-                if count > self.config.max_registers {
+                if count > max_count {
                     return Err(InterpreterError::RegisterOutOfBounds {
                         register: count,
                         max: self.config.max_registers,
@@ -70044,6 +70355,48 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         delegation_inputs: &Label,
     ) -> Result<Value, InterpreterError> {
+        // bd-9vouw.50: a list that does not fit a register frame goes to a
+        // vector-variadic builtin directly. Its element labels join the result.
+        if Self::is_vector_variadic_tag(cap)
+            && arguments.values.len() > self.config.max_registers as usize
+        {
+            let DelegatedHostcallArguments {
+                values,
+                labels,
+                carrier_bytes,
+            } = arguments;
+            self.clear_pending_hostcall_result_label();
+            let mut outcome = self.dispatch_vector_variadic_builtin(module, cap, values);
+            if outcome.is_ok() {
+                let mut label = self.take_pending_hostcall_result_label();
+                let mut join_error = None;
+                for element_label in &labels {
+                    let next = match label.take() {
+                        Some(existing) => {
+                            match self
+                                .join_owned_label_with_temporary_budget(existing, element_label)
+                            {
+                                Ok(joined) => joined,
+                                Err(error) => {
+                                    join_error = Some(error);
+                                    break;
+                                }
+                            }
+                        }
+                        None => element_label.clone(),
+                    };
+                    label = Some(next);
+                }
+                if let Some(error) = join_error {
+                    outcome = Err(error);
+                } else if let Err(error) = self.replace_pending_hostcall_result_label(label) {
+                    outcome = Err(error);
+                }
+            }
+            drop(labels);
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(carrier_bytes);
+            return outcome;
+        }
         let count = u32::try_from(arguments.values.len()).map_err(|_| {
             InterpreterError::RegisterOutOfBounds {
                 register: u32::MAX,
@@ -70424,15 +70777,21 @@ impl InterpreterCore {
                 return Err(error);
             }
         };
-        let arguments = match self.prepare_delegated_hostcall_arguments(arguments_list) {
-            Ok(arguments) => arguments,
-            Err(error) => {
-                self.estimated_memory_bytes = self
-                    .estimated_memory_bytes
-                    .saturating_sub(delegation_input_bytes);
-                return Err(error);
-            }
+        let argument_limit = if Self::is_vector_variadic_tag(&target_cap) {
+            MAX_VECTOR_BUILTIN_ARGUMENTS
+        } else {
+            self.config.max_registers
         };
+        let arguments =
+            match self.prepare_delegated_hostcall_arguments_up_to(arguments_list, argument_limit) {
+                Ok(arguments) => arguments,
+                Err(error) => {
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_sub(delegation_input_bytes);
+                    return Err(error);
+                }
+            };
         let previous_context = self.active_inline_callback_context_label.take();
         let context_winner = previous_context
             .as_ref()
@@ -72918,102 +73277,12 @@ impl InterpreterCore {
                 }
             }
             "builtin:MathMax" => {
-                // Math.max implementation - returns largest of given numbers
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::NEG_INFINITY)));
-                }
-
-                let mut max_val = f64::NEG_INFINITY;
-                let mut has_nan = false;
-                let mut is_all_int = true;
-                let mut int_max = i64::MIN;
-
-                for i in 0..args.count {
-                    let arg = self.read_reg(args.start + i)?;
-                    match arg {
-                        Value::Int(n) => {
-                            if is_all_int {
-                                int_max = int_max.max(n);
-                            }
-                            max_val = max_val.max(n as f64);
-                        }
-                        Value::Float(f) => {
-                            is_all_int = false;
-                            let val = f.inner();
-                            if val.is_nan() {
-                                has_nan = true;
-                                break;
-                            }
-                            max_val = max_val.max(val);
-                        }
-                        _ => {
-                            // Non-numeric values become NaN in JavaScript
-                            has_nan = true;
-                            break;
-                        }
-                    }
-                }
-
-                if has_nan {
-                    Ok(Value::Float(Float64::new(f64::NAN)))
-                } else if is_all_int
-                    && max_val.is_finite()
-                    && max_val >= i64::MIN as f64
-                    && max_val <= i64::MAX as f64
-                {
-                    Ok(Value::Int(int_max))
-                } else {
-                    Ok(Value::Float(Float64::new(max_val)))
-                }
+                let values = self.builtin_argument_values(args)?;
+                self.math_extremum(module, values, true)
             }
             "builtin:MathMin" => {
-                // Math.min implementation - returns smallest of given numbers
-                if args.count == 0 {
-                    return Ok(Value::Float(Float64::new(f64::INFINITY)));
-                }
-
-                let mut min_val = f64::INFINITY;
-                let mut has_nan = false;
-                let mut is_all_int = true;
-                let mut int_min = i64::MAX;
-
-                for i in 0..args.count {
-                    let arg = self.read_reg(args.start + i)?;
-                    match arg {
-                        Value::Int(n) => {
-                            if is_all_int {
-                                int_min = int_min.min(n);
-                            }
-                            min_val = min_val.min(n as f64);
-                        }
-                        Value::Float(f) => {
-                            is_all_int = false;
-                            let val = f.inner();
-                            if val.is_nan() {
-                                has_nan = true;
-                                break;
-                            }
-                            min_val = min_val.min(val);
-                        }
-                        _ => {
-                            // Non-numeric values become NaN in JavaScript
-                            has_nan = true;
-                            break;
-                        }
-                    }
-                }
-
-                if has_nan {
-                    Ok(Value::Float(Float64::new(f64::NAN)))
-                } else if is_all_int
-                    && min_val.is_finite()
-                    && min_val >= i64::MIN as f64
-                    && min_val <= i64::MAX as f64
-                {
-                    Ok(Value::Int(int_min))
-                } else {
-                    Ok(Value::Float(Float64::new(min_val)))
-                }
+                let values = self.builtin_argument_values(args)?;
+                self.math_extremum(module, values, false)
             }
             "builtin:MathRandom" => {
                 // Math.random implementation - deterministic with proper [0,1) range
@@ -74936,31 +75205,8 @@ impl InterpreterCore {
             }
 
             "builtin:StringFromCharCode" => {
-                // String.fromCharCode(...charCodes) implementation
-                let mut units: Vec<u16> = Vec::with_capacity(args.count as usize);
-
-                // Iterate through all provided character codes
-                for i in 0..args.count {
-                    let char_code_val = self.read_reg(args.start + i)?;
-                    // ECMA `String.fromCharCode` applies ToUint16 to each code
-                    // unit. `f64 as u32` saturates, so float operands route
-                    // through `js_to_uint32` (modular); `fromCharCode(-1.5)`
-                    // must yield code unit 0xFFFF, not 0x0000. The `& 0xFFFF`
-                    // below then completes ToUint16.
-                    let char_code = match char_code_val {
-                        Value::Int(n) => n as u32,
-                        Value::Float(f) => Self::js_to_uint32(f.inner()),
-                        _ => 0, // Invalid character codes become null char
-                    };
-
-                    // ToUint16: keep the raw code unit. A surrogate unit stays
-                    // a real lone surrogate (bd-neika); adjacent high+low
-                    // units heal into the supplementary code point when the
-                    // sequence normalizes below.
-                    units.push((char_code & 0xFFFF) as u16);
-                }
-
-                Ok(Value::Str(JsString::from_code_units(&units)))
+                let values = self.builtin_argument_values(args)?;
+                self.string_from_char_code(module, values)
             }
 
             "builtin:StringRaw" => {
@@ -75656,59 +75902,8 @@ impl InterpreterCore {
             }
 
             "builtin:StringFromCodePoint" => {
-                // String.fromCodePoint(...codePoints) implementation
-                let mut units: Vec<u16> = Vec::with_capacity(args.count as usize);
-
-                // Iterate through all provided code points
-                for i in 0..args.count {
-                    let code_point_val = self.read_reg(args.start + i)?;
-                    let code_point_number = match code_point_val {
-                        Value::Int(n) => n as f64,
-                        Value::Float(f) => f.inner(),
-                        Value::Bool(true) => 1.0,
-                        Value::Bool(false) | Value::Null => 0.0,
-                        Value::Str(s) => {
-                            let trimmed = s.trim();
-                            if trimmed.is_empty() {
-                                0.0
-                            } else {
-                                trimmed.parse::<f64>().unwrap_or(f64::NAN)
-                            }
-                        }
-                        _ => f64::NAN,
-                    };
-
-                    // ES2020 21.1.2.2: each argument must be an integral Unicode
-                    // scalar value in 0..=0x10FFFF. The previous Path-A handler
-                    // returned the already-built prefix on invalid input, e.g.
-                    // `String.fromCodePoint(65, 0x110000)` returned "A".
-                    if !code_point_number.is_finite()
-                        || code_point_number.fract() != 0.0
-                        || !(0.0..=0x10FFFF as f64).contains(&code_point_number)
-                    {
-                        return Err(InterpreterError::RangeError {
-                            message: format!(
-                                "String.fromCodePoint invalid code point: {code_point_number}"
-                            ),
-                        });
-                    }
-
-                    let code_point = code_point_number as u32;
-                    // ES 21.1.2.2 accepts every integral code point in
-                    // 0..=0x10FFFF, *including* surrogate code points: a
-                    // surrogate argument yields a lone-surrogate code unit
-                    // (bd-neika) rather than a RangeError. Supplementary
-                    // code points encode as their UTF-16 surrogate pair.
-                    if code_point < 0x10000 {
-                        units.push(code_point as u16);
-                    } else {
-                        let offset = code_point - 0x10000;
-                        units.push(0xD800 + (offset >> 10) as u16);
-                        units.push(0xDC00 + (offset & 0x3FF) as u16);
-                    }
-                }
-
-                Ok(Value::Str(JsString::from_code_units(&units)))
+                let values = self.builtin_argument_values(args)?;
+                self.string_from_code_point(module, values)
             }
 
             "builtin:MathImul" => {

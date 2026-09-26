@@ -42,8 +42,6 @@ const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
 const TYPED_ARRAYS: &str = "bd-performance-conformance-bridge-tu32j.16.7";
 const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
-/// `for await` lowers to synchronous for-of (no `@@asyncIterator` dispatch).
-const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
 
 /// Case id -> expectation. Every corpus case must appear exactly once.
 /// Filled from the observed verdicts of the first run (2026-09-23): 20 match
@@ -56,7 +54,8 @@ const ASYNC_ITERATION: &str = "bd-performance-conformance-bridge-tu32j.18.9";
 /// the arguments object (f2870e990, bd-9vouw.25), and 07, 09, 24, 34 and 45
 /// with Date methods, RegExp replace and the URI globals (861c1a92c /
 /// 247a2a99c, bd-9vouw.51-.53), 13 with BigInt arithmetic (bd-9vouw.54), 27
-/// once array literal elisions became holes, and 32 with `Symbol.hasInstance`.
+/// once array literal elisions became holes, 32 with `Symbol.hasInstance`,
+/// and 30 once `for await` ran the async iteration protocol.
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::Pass),
@@ -90,7 +89,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("27_weakmap_holes", Expect::Pass),
     ("28_sort_stability", Expect::Pass),
     ("29_promise_all_race", Expect::Pass),
-    ("30_async_iter", Expect::KnownFailure(ASYNC_ITERATION)),
+    ("30_async_iter", Expect::Pass),
     ("31_object_entries_order", Expect::Pass),
     ("32_instanceof_hasinstance", Expect::Pass),
     (

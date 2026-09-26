@@ -7922,11 +7922,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let name =
                         runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
                     let pool_index = push_constant_optimized(&mut constant_pool, &name);
+                    // A root binding without TDZ tracking is declared
+                    // initialized, and its declaration store is a plain
+                    // StoreScoped. Its fresh cell copies the current state so
+                    // that store still succeeds. TDZ-tracked bindings
+                    // initialize with InitBinding and take the uninitialized
+                    // cell.
+                    let preserve_state =
+                        *preserve_state || !runtime_lexical_binding_ids.contains(binding_id);
                     ir3.instructions
                         .push(Ir3Instruction::CreatePerIterationBinding {
                             name_pool_index: pool_index,
                             kind: runtime_scope_binding_kind(*kind),
-                            preserve_state: *preserve_state,
+                            preserve_state,
                         });
                 }
             }

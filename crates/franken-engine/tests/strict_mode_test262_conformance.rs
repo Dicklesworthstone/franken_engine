@@ -623,9 +623,12 @@ mod tests {
                 "undefined",
             ),
             (
+                // `Promise` is a constructor: Node v22.2.0 prints
+                // "function:object:function". "object" pinned the pre-
+                // bd-9vouw.34 bug where the global was a plain namespace.
                 "default global shapes remain available",
                 "typeof Date + ':' + typeof Math + ':' + typeof Promise;",
-                "function:object:object",
+                "function:object:function",
             ),
             (
                 "default Math methods remain callable through aliases",

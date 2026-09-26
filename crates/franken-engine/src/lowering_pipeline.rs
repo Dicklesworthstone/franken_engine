@@ -7605,10 +7605,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         }
     }
     let mut statement_register_floor: Reg = register_cursor;
+    let mut live_status_registers = BTreeSet::<Reg>::new();
     let mut pinned_register_high: Reg = register_cursor;
     let mut register_high_water: Reg = register_cursor;
     for (op_index, op) in ir2.ops.iter().enumerate() {
-        if value_stack.is_empty() {
+        if value_stack.is_empty() && live_status_registers.is_empty() {
             statement_register_floor = register_cursor;
         }
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
@@ -7755,11 +7756,10 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 value_stack.push(dst);
             }
             Ir1Op::ResolveNameStatus { name, status_id } => {
-                let dst = alloc_pinned_register(
-                    &mut register_cursor,
-                    &mut pinned_register_high,
-                    &mut register_high_water,
-                );
+                // Live until its PutNameWithStatus (bd-9vouw.23): a
+                // statement-boundary rewind inside the RHS stops above it.
+                let dst = alloc_register(&mut register_cursor);
+                live_status_registers.insert(dst);
                 let name_pool_index = push_constant_optimized(&mut constant_pool, name);
                 name_status_registers.insert(*status_id, dst);
                 ir3.instructions.push(Ir3Instruction::ResolveNameStatus {
@@ -7855,6 +7855,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         detail: "dynamic name put is missing its pre-RHS status register",
                     },
                 )?;
+                live_status_registers.remove(&status);
                 let name_pool_index = push_constant_optimized(&mut constant_pool, name);
                 ir3.instructions.push(Ir3Instruction::PutNameWithStatus {
                     src,
@@ -8005,7 +8006,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 // emptying the stack ends a statement (bd-9vouw.23).
                 if value_stack.is_empty() {
                     register_high_water = register_high_water.max(register_cursor);
-                    register_cursor = statement_register_floor.max(pinned_register_high);
+                    register_cursor = statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers));
                 }
             }
             Ir1Op::Nop | Ir1Op::Pop => {
@@ -8023,7 +8026,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     }
                     if value_stack.is_empty() {
                         register_high_water = register_high_water.max(register_cursor);
-                        register_cursor = statement_register_floor.max(pinned_register_high);
+                        register_cursor = statement_register_floor
+                            .max(pinned_register_high)
+                            .max(live_status_register_ceiling(&live_status_registers));
                     }
                 } else {
                     ir3.instructions.push(Ir3Instruction::Move {
@@ -8628,13 +8633,25 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 is_async,
                 rest_param_index,
             } => {
-                let dst = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                    alloc_pinned_register(
-                        &mut register_cursor,
-                        &mut pinned_register_high,
-                        &mut register_high_water,
-                    )
-                });
+                // A scope-routed function binding (captured, or past the
+                // register-resident root budget like any spilled `var`,
+                // bd-9vouw.23) is only ever read through the runtime scope. It
+                // is built in a statement temporary and published under its
+                // runtime name. A spilled declaration used to pin a register
+                // and never reach its scope binding, so the function stayed
+                // undefined and each such declaration cost a whole register.
+                let scope_routed = scoped_runtime_binding_ids.contains(binding_id);
+                let dst = if scope_routed {
+                    alloc_register(&mut register_cursor)
+                } else {
+                    *binding_registers.entry(*binding_id).or_insert_with(|| {
+                        alloc_pinned_register(
+                            &mut register_cursor,
+                            &mut pinned_register_high,
+                            &mut register_high_water,
+                        )
+                    })
+                };
                 let temp_free_vars: Vec<&String> = free_vars
                     .iter()
                     .filter(|fv| !shared_top_level_capture_names.contains(*fv))
@@ -8712,6 +8729,28 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     }
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PopScope);
+                    }
+                    if scope_routed
+                        && !shared_top_level_capture_names_by_id.contains_key(binding_id)
+                    {
+                        let name = runtime_scope_binding_name(
+                            *binding_id,
+                            &runtime_scope_binding_names_by_id,
+                        );
+                        let name_pool_index = push_constant_optimized(&mut constant_pool, &name);
+                        ir3.instructions.push(
+                            if runtime_lexical_binding_ids.contains(binding_id) {
+                                Ir3Instruction::InitBinding {
+                                    name_pool_index,
+                                    src: dst,
+                                }
+                            } else {
+                                Ir3Instruction::StoreScoped {
+                                    src: dst,
+                                    name_pool_index,
+                                }
+                            },
+                        );
                     }
                 }
                 value_stack.push(dst);
@@ -9383,11 +9422,71 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             .copied()
             .collect::<BTreeSet<_>>();
         runtime_local_binding_ids.extend(child_capture_id_to_name.keys().copied());
+        // bd-9vouw.23: every other local pins a frame register for the whole
+        // body, and a lazily pinned binding lands above its own initializer
+        // temporary, so each costs up to two registers. A body with more
+        // locals than a frame holds failed at runtime ("register N out of
+        // bounds"). Bundler output wraps a whole program in one such
+        // function. Past a budget, the earliest-numbered locals get their
+        // registers up front (below every temporary, as at the root) and the
+        // rest take the identity-named function-entry scope route that
+        // captured and TDZ locals already use. Only bindings reached through
+        // plain load/store/assign/declare ops are candidates. Per-iteration
+        // loop bindings always stay in registers. Bodies within the budget
+        // keep their lowering unchanged.
+        let per_iteration_binding_ids = body_ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::CreatePerIterationBinding { binding_id, .. } => Some(*binding_id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let register_local_ids = body_ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::LoadBinding { binding_id }
+                | Ir1Op::StoreBinding { binding_id }
+                | Ir1Op::InitializeBinding { binding_id }
+                | Ir1Op::AssignOp { binding_id, .. }
+                | Ir1Op::DeclareFunction { binding_id, .. } => Some(*binding_id),
+                _ => None,
+            })
+            .filter(|binding_id| {
+                !param_binding_ids
+                    .values()
+                    .any(|param_id| param_id == binding_id)
+                    && !fv_id_to_name.contains_key(binding_id)
+                    && !runtime_global_id_to_name.contains_key(binding_id)
+                    && !runtime_local_binding_ids.contains(binding_id)
+            })
+            .collect::<BTreeSet<_>>();
+        let spills_locals = register_local_ids.len() > MAX_REGISTER_RESIDENT_FUNCTION_LOCALS;
+        let spilled_local_names = if spills_locals {
+            register_local_ids
+                .iter()
+                .filter(|binding_id| !per_iteration_binding_ids.contains(binding_id))
+                .skip(MAX_REGISTER_RESIDENT_FUNCTION_LOCALS)
+                .map(|binding_id| {
+                    let source_name = local_lexical_binding_by_id
+                        .get(binding_id)
+                        .map_or(SPILLED_FUNCTION_LOCAL_NAME, |binding| binding.name.as_str());
+                    (
+                        *binding_id,
+                        runtime_lexical_binding_name(*binding_id, source_name),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        } else {
+            BTreeMap::new()
+        };
+        runtime_local_binding_ids.extend(spilled_local_names.keys().copied());
         let runtime_local_id_to_name = runtime_local_binding_ids
             .iter()
             .filter_map(|binding_id| {
                 let name = if let Some(capture_name) = child_capture_id_to_name.get(binding_id) {
                     capture_name.clone()
+                } else if let Some(spilled_name) = spilled_local_names.get(binding_id) {
+                    spilled_name.clone()
                 } else {
                     let binding = local_lexical_binding_by_id.get(binding_id)?;
                     runtime_lexical_binding_name(*binding_id, &binding.name)
@@ -9445,13 +9544,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             host_io_exception_provenance,
             &program_label_ceiling,
         )?;
+        if spills_locals {
+            for binding_id in &register_local_ids {
+                if !spilled_local_names.contains_key(binding_id) {
+                    fn_binding_regs
+                        .entry(*binding_id)
+                        .or_insert_with(|| alloc_register(&mut fn_reg));
+                }
+            }
+        }
         // bd-9vouw.23: the same statement-boundary register reuse as the
         // top-level body (parameters sit below the initial floor).
         let mut fn_statement_register_floor: Reg = fn_reg;
+        let mut fn_live_status_registers = BTreeSet::<Reg>::new();
         let mut fn_pinned_register_high: Reg = fn_reg;
         let mut fn_register_high_water: Reg = fn_reg;
         for ir2_op in &annotated_body_ops {
-            if fn_value_stack.is_empty() {
+            if fn_value_stack.is_empty() && fn_live_status_registers.is_empty() {
                 fn_statement_register_floor = fn_reg;
             }
             // We handle a core subset of ops that appear in function bodies.
@@ -9550,11 +9659,8 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::ResolveNameStatus { name, status_id } => {
-                    let dst = alloc_pinned_register(
-                        &mut fn_reg,
-                        &mut fn_pinned_register_high,
-                        &mut fn_register_high_water,
-                    );
+                    let dst = alloc_register(&mut fn_reg);
+                    fn_live_status_registers.insert(dst);
                     let name_pool_index = push_constant_optimized(&mut constant_pool, name);
                     fn_name_status_registers.insert(*status_id, dst);
                     ir3.instructions.push(Ir3Instruction::ResolveNameStatus {
@@ -9681,6 +9787,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             detail: "dynamic name put is missing its pre-RHS status register",
                         },
                     )?;
+                    fn_live_status_registers.remove(&status);
                     let name_pool_index = push_constant_optimized(&mut constant_pool, name);
                     ir3.instructions.push(Ir3Instruction::PutNameWithStatus {
                         src,
@@ -9859,7 +9966,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let _ = pop_lowering_value(&mut fn_value_stack)?;
                     if fn_value_stack.is_empty() {
                         fn_register_high_water = fn_register_high_water.max(fn_reg);
-                        fn_reg = fn_statement_register_floor.max(fn_pinned_register_high);
+                        fn_reg = fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers));
                     }
                 }
                 Ir1Op::Nop => {
@@ -10173,13 +10282,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             "Empty DeclareFunction should not reach function body lowering"
                         );
                     }
-                    let dst = *fn_binding_regs.entry(*inner_bid).or_insert_with(|| {
-                        alloc_pinned_register(
-                            &mut fn_reg,
-                            &mut fn_pinned_register_high,
-                            &mut fn_register_high_water,
-                        )
-                    });
+                    // A captured or spilled declaration (bd-9vouw.23) is only
+                    // read through its function-entry scope cell, published
+                    // below, so it needs a temporary, not a pinned register:
+                    // 300 sibling functions calling each other used to
+                    // overflow the frame.
+                    let spilled_name = spilled_local_names.get(inner_bid);
+                    let dst = if runtime_local_id_to_name.contains_key(inner_bid) {
+                        alloc_register(&mut fn_reg)
+                    } else {
+                        *fn_binding_regs.entry(*inner_bid).or_insert_with(|| {
+                            alloc_pinned_register(
+                                &mut fn_reg,
+                                &mut fn_pinned_register_high,
+                                &mut fn_register_high_water,
+                            )
+                        })
+                    };
                     let available_capture_names: BTreeSet<&str> = fv_id_to_name
                         .values()
                         .chain(child_capture_id_to_name.values())
@@ -10255,6 +10374,13 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     }
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PopScope);
+                    }
+                    if let Some(name) = spilled_name {
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src: dst,
+                            name_pool_index: pool_idx,
+                        });
                     }
                     fn_value_stack.push(dst);
                 }
@@ -29872,6 +29998,28 @@ fn alloc_register(cursor: &mut Reg) -> Reg {
 /// half of the 256-register QuickJS-lane frame for `var`/function bindings and
 /// statement temporaries.
 const MAX_REGISTER_RESIDENT_ROOT_LEXICALS: usize = 128;
+
+/// bd-9vouw.23: register-resident function-body locals. A body with more
+/// spills the rest to its function-entry runtime scope. Within the budget a
+/// lazily pinned local costs up to two registers (it lands above its own
+/// initializer temporary), so 96 of them plus parameters and temporaries fit
+/// the 256-register QuickJS-lane frame.
+const MAX_REGISTER_RESIDENT_FUNCTION_LOCALS: usize = 96;
+
+/// Source-name slot of a spilled non-lexical function-body local's
+/// identity-qualified runtime name (lexical ones keep their source name, as
+/// TDZ locals do). Only the binding id distinguishes them: nothing resolves a
+/// spilled local by its source name (captured locals take the child-capture
+/// route instead).
+const SPILLED_FUNCTION_LOCAL_NAME: &str = "spilled-local";
+
+/// bd-9vouw.23: lowest register a statement-boundary rewind may return to
+/// while name-status slots are live (resolved before an assignment's RHS,
+/// consumed by its put). Pinning them instead cost one register per
+/// assignment to an undeclared name for the rest of the body.
+fn live_status_register_ceiling(live: &BTreeSet<Reg>) -> Reg {
+    live.last().map_or(0, |register| register.saturating_add(1))
+}
 
 /// bd-9vouw.23: allocate a register that must outlive the current statement
 /// (a binding or a name-status slot) and raise the floor below which

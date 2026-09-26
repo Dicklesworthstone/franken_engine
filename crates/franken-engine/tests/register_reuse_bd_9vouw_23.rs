@@ -4,9 +4,10 @@
 //! one, and every binding held a register for the whole body, so 300
 //! expression statements or ~200 top-level `let`s failed at runtime with
 //! "register 256 out of bounds (max 256)". Temporaries are now reused at
-//! statement boundaries and root-scope lexical bindings beyond a budget live in
-//! the runtime scope. Expected strings are what Node v22.2.0 prints for the
-//! same programs.
+//! statement boundaries. Root-scope bindings (functions included) and
+//! function-body locals beyond a budget live in the runtime scope. Name-status
+//! slots are released by their put. Expected strings are what Node v22.2.0
+//! prints for the same programs.
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path, plus
 //! the real lowering pipeline for the register high-water assertion.
@@ -152,5 +153,113 @@ fn bindings_read_before_their_first_write_never_see_stale_temporaries() {
         "function g() { var s = 'x' + 'y'; { let inner = s + 'z'; } \
          var r = typeof later; var later = 1; return r; } g();",
         "undefined",
+    );
+}
+
+fn top_level_vars(count: usize) -> String {
+    (0..count).map(|i| format!("var w{i} = {i};\n")).collect()
+}
+
+#[test]
+fn function_declarations_past_the_root_budget_are_callable() {
+    // A function declared after the register-resident root budget used to
+    // pin a register and never reach its runtime-scope binding, so `typeof
+    // add` was "undefined" and every call threw.
+    let source = format!(
+        "{}function add(a, b) {{ return a + b; }}\n\
+         typeof add + ':' + add(2, 3) + ':' + w0 + ':' + w199;",
+        top_level_vars(200)
+    );
+    assert_eq!(fixed_lane_value(&source), "function:5:0:199");
+    // Each such declaration also cost a whole register: 300 top-level
+    // functions overflowed the 256-register frame.
+    let functions: String = (0..300)
+        .map(|i| format!("function f{i}() {{ return {i}; }}\n"))
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!("{functions}f0() + f299();")),
+        "299"
+    );
+}
+
+#[test]
+fn large_function_bodies_fit_the_fixed_256_register_lane() {
+    // Bundler output wraps a whole program in one function. Its locals used
+    // to pin one register each for the whole body.
+    let vars = top_level_vars(300);
+    assert_eq!(
+        fixed_lane_value(&format!("(function () {{\n{vars}return w0 + w299; }})();")),
+        "299"
+    );
+    // Each function captures its predecessor, so all 300 declarations are
+    // scope-routed; each used to pin a register too. (No deep recursion: the
+    // lane's call depth is capped at 256.)
+    let chain: String = (1..300)
+        .map(|i| {
+            format!(
+                "function f{i}() {{ return typeof f{} === 'function' ? {i} : -1; }}\n",
+                i - 1
+            )
+        })
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{\nfunction f0() {{ return 0; }}\n{chain}return f1() + f299(); }})();"
+        )),
+        "300"
+    );
+}
+
+#[test]
+fn spilled_function_locals_keep_their_semantics() {
+    let vars = top_level_vars(200);
+    // Still hoisted: read before its declaration a spilled `var` is undefined.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var r = typeof late;\n{vars}var late = 5; return r + ':' + late; }})();"
+        )),
+        "undefined:5"
+    );
+    // Loop counters and compound assignment past the budget.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{\n{vars}var acc = 0; for (var i = 0; i < 10; i++) acc += i; return acc; }})();"
+        )),
+        "45"
+    );
+    // A closure over a local past the budget sees later writes.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{\n{vars}var cap = 1; var g = function () {{ return cap; }}; cap = 2; return g(); }})();"
+        )),
+        "2"
+    );
+    // A spilled function declaration is hoisted above its first call.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{\n{vars}return late(); function late() {{ return 'hoisted'; }} }})();"
+        )),
+        "hoisted"
+    );
+}
+
+#[test]
+fn assignments_to_undeclared_names_release_their_status_registers() {
+    // The pre-RHS resolution status of `name = value` for an undeclared name
+    // used to hold a register for the rest of the body.
+    let globals: String = (0..300).map(|i| format!("ig{i} = {i};\n")).collect();
+    assert_eq!(fixed_lane_value(&format!("{globals}ig0 + ig299;")), "299");
+    let globals: String = (0..300).map(|i| format!("jg{i} = {i};\n")).collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{\n{globals}return jg0 + jg299; }})();"
+        )),
+        "299"
+    );
+    // A statement boundary inside the RHS (a comma expression) must not
+    // reclaim the live status register.
+    assert_eq!(
+        fixed_lane_value("var side = 0; zz = (side++, side++, side + 40); zz + side;"),
+        "44"
     );
 }

@@ -9690,18 +9690,16 @@ fn parse_for_statement(
         .unwrap_or(statement)
         .trim_start();
     // bd-suwvw: accept the `for await (const x of iterable)` header shape.
-    // The engine's iteration protocol is synchronous (there is no
-    // `@@asyncIterator` dispatch); `for await` lowers to the same for-of
-    // machinery. Deterministic async iterables the engine itself vends
-    // (`require('timers/promises').setInterval`) advance the virtual clock
-    // inside their `next` step, so the observable console output matches the
-    // async protocol for engine-supported iterables. `await` must be a whole
-    // word (`for awaitFoo(...)` is not a for-await header).
-    let after_for = match after_for.strip_prefix("await") {
+    // A `for await ... of` runs the async iteration protocol through
+    // `desugar_for_await_of`. Engine-vended iterables without
+    // `@@asyncIterator` (`require('timers/promises').setInterval`) take its
+    // sync-iterator fallback, which awaits each value. `await` must be a
+    // whole word (`for awaitFoo(...)` is not a for-await header).
+    let (after_for, is_await) = match after_for.strip_prefix("await") {
         Some(rest) if rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '(') => {
-            rest.trim_start()
+            (rest.trim_start(), true)
         }
-        _ => after_for,
+        _ => (after_for, false),
     };
     let (header_src, rest) = extract_balanced(after_for, '(', ')').ok_or_else(|| {
         ParseError::new(
@@ -9711,6 +9709,10 @@ fn parse_for_statement(
             Some(span.clone()),
         )
     })?;
+
+    if is_await && let Some(desugared) = desugar_for_await_of(header_src, rest) {
+        return parse_statement(&desugared, goal, span, context);
+    }
 
     // Detect for-in / for-of before trying semicolon split.
     if let Some(forin) = try_parse_for_in_of(header_src, rest, &span, goal, context)? {
@@ -9844,6 +9846,63 @@ fn try_parse_for_in_of(
 
 /// Find a keyword (like ` in ` or ` of `) at the top level of an expression,
 /// respecting parentheses, brackets, braces, and quotes.
+/// `for await (TARGET of ITERABLE) BODY` as ordinary async code (ES2020
+/// 13.7.5.13 ForIn/OfBodyEvaluation with iteratorKind async). It uses:
+/// - `ITERABLE[Symbol.asyncIterator]`, else the sync iterator with each value
+///   awaited (CreateAsyncFromSyncIterator);
+/// - an awaited `next()` per step;
+/// - on break, return or throw from the body, an awaited `return()`
+///   (AsyncIteratorClose). No close after `next()` throws or reports done.
+///
+/// Before this, `for await` ran as a synchronous for-of: an async
+/// generator's `next()` promise was taken as the iteration result, and the
+/// loop body never saw a value.
+///
+/// Every helper is a block-scoped `let` in the rewritten block, so nested
+/// loops shadow each other correctly. A labeled `continue` that targets the
+/// `for await` itself is not supported by this rewrite.
+fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
+    let split = find_top_level_keyword(header, " of ")?;
+    let lhs = header[..split].trim();
+    let iterable = header[split + " of ".len()..].trim();
+    if lhs.is_empty() || iterable.is_empty() {
+        return None;
+    }
+    let value = "__franken_fa_sync ? await __franken_fa_r.value : __franken_fa_r.value";
+    let is_declaration = ["let", "const", "var"].iter().any(|kind| {
+        lhs.strip_prefix(kind)
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_whitespace()))
+    });
+    let bind = if is_declaration {
+        format!("{lhs} = {value};")
+    } else if lhs.starts_with('{') {
+        format!("({lhs} = {value});")
+    } else {
+        format!("{lhs} = {value};")
+    };
+    let body = body.trim();
+    let body_terminator = if body.ends_with('}') || body.ends_with(';') {
+        ""
+    } else {
+        ";"
+    };
+    Some(format!(
+        "{{ let __franken_fa_src = ({iterable}); \
+         let __franken_fa_am = __franken_fa_src[Symbol.asyncIterator]; \
+         let __franken_fa_sync = __franken_fa_am == null; \
+         let __franken_fa_it = __franken_fa_sync ? __franken_fa_src[Symbol.iterator]() : \
+         __franken_fa_am.call(__franken_fa_src); \
+         let __franken_fa_fin = false; \
+         try {{ while (true) {{ __franken_fa_fin = true; \
+         let __franken_fa_r = await __franken_fa_it.next(); \
+         if (__franken_fa_r.done) break; \
+         __franken_fa_fin = false; \
+         {bind} {body}{body_terminator} }} }} \
+         finally {{ if (!__franken_fa_fin) {{ let __franken_fa_ret = __franken_fa_it.return; \
+         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }}"
+    ))
+}
+
 fn find_top_level_keyword(src: &str, keyword: &str) -> Option<usize> {
     let bytes = src.as_bytes();
     let kw_bytes = keyword.as_bytes();

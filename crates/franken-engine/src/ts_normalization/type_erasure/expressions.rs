@@ -59,6 +59,7 @@ impl Eraser<'_> {
     pub(super) fn erase_expression_types(&mut self) {
         let mut cursor = 0;
         let mut previous = None;
+        let mut asserted = false;
         while cursor < self.tokens.len() {
             if self.removed[cursor] {
                 cursor += 1;
@@ -68,6 +69,30 @@ impl Eraser<'_> {
             // only the clause, not export-default expressions or import().
             if let Some(end) = self.module_clause_end(cursor) {
                 previous = end.checked_sub(1);
+                asserted = false;
+                cursor = end;
+                continue;
+            }
+            // Type arguments do not evaluate and must not turn a method
+            // reference into a detached function. Keep the entire callee,
+            // optional-chain punctuation, argument list and template intact.
+            // An unparenthesized `as` expression has already left the call
+            // grammar: `value as number < other > (third)` is a comparison.
+            let optional = self.text(cursor) == "?.";
+            let arguments = cursor + usize::from(optional);
+            if !asserted
+                && self.text(arguments) == "<"
+                && previous.is_some_and(|index| self.suffix_operand(index))
+                && !previous.is_some_and(|index| {
+                    self.text(index) == "hostcall" && !self.property_name(index)
+                })
+                && let Some(end) = self.expression_type_arguments_end(arguments)
+                && self.generic_call_follows(end, optional)
+            {
+                self.mark(arguments, end);
+                if optional {
+                    previous = Some(cursor);
+                }
                 cursor = end;
                 continue;
             }
@@ -81,6 +106,7 @@ impl Eraser<'_> {
                             && self.expression_type_boundary(end)
                         {
                             self.mark(cursor, end);
+                            asserted = true;
                             cursor = end;
                             continue;
                         }
@@ -94,8 +120,46 @@ impl Eraser<'_> {
                 }
             }
             previous = Some(cursor);
+            asserted = false;
             cursor += 1;
         }
+    }
+
+    /// Require complete, comma-separated types rather than erasing everything
+    /// between two angle brackets. In particular `a < b + c > (d)` is runtime
+    /// arithmetic, whereas `a < B<C>, D > (d)` is a generic call. Nested type
+    /// groups and the recursion limit belong to the existing type parser.
+    fn expression_type_arguments_end(&self, open: usize) -> Option<usize> {
+        let mut cursor = open + 1;
+        loop {
+            let end = self.type_end(cursor, 0)?;
+            if end <= cursor {
+                return None;
+            }
+            match self.text(end) {
+                ">" => return Some(end + 1),
+                "," => {
+                    cursor = end + 1;
+                    if self.text(cursor) == ">" {
+                        return Some(cursor + 1);
+                    }
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn generic_call_follows(&self, end: usize, optional: bool) -> bool {
+        if self.text(end) == "(" {
+            return true;
+        }
+        // `callee?.<T>(args)` can only be an optional call, never an
+        // instantiation expression or optional tagged template.
+        !optional
+            && ((self.text(end) == "?." && self.text(end + 1) == "(")
+                || self.tokens.get(end).is_some_and(|token| {
+                    token.kind == Kind::Literal && token.text.starts_with('`')
+                }))
     }
 
     fn suffix_operand(&self, previous: usize) -> bool {
@@ -200,6 +264,53 @@ mod tests {
     use super::super::tests::check;
 
     #[test]
+    fn generic_calls_erase_nested_and_multiple_type_arguments() {
+        check("load⟦<Result>⟧(input); object.load⟦<Map<string, {x: number}[]>, number>⟧(input);");
+        check("choose⟦<T extends U ? {yes: T} : {no: U}>⟧(input);");
+        check("invoke⟦<(x: number) => string, readonly [number, string],>⟧(callback);");
+        check("new Store⟦<{name: string}>⟧(input); new ns.Store⟦<number>⟧();");
+    }
+
+    #[test]
+    fn generic_calls_keep_receivers_and_optional_call_punctuation() {
+        check("object[key]⟦<number>⟧(3); (object.method)⟦<number>⟧(3);");
+        check("object?.method⟦<number>⟧(3); object.method?.⟦<number>⟧(3);");
+        check("object.method⟦<number>⟧?.(3); object⟦!⟧.method⟦!⟧⟦<number>⟧(3);");
+        check("object.if⟦<number>⟧(3); (factory())⟦<number>⟧(3);");
+    }
+
+    #[test]
+    fn generic_tags_and_interpolations_share_the_expression_pass() {
+        check("object.tag⟦<{name: string}>⟧`raw\\n${load⟦<number>⟧(3)} tail`;");
+        check("const text = `outer ${`inner ${load⟦<number>⟧(3)}`}`;");
+        check("const text = `${load⟦<number>⟧(3) / 2}: raw / slash`;");
+    }
+
+    #[test]
+    fn generic_call_lookahead_preserves_comparisons_and_shift_operators() {
+        check("a < b > c; a < b > +c; a < b > -c; a < b + c > (d);");
+        check("a < b >> (c); a < b >>> (c); a < b >= (c); a << b > (c);");
+        check("if (ready) <Type>(value); while (ready) <Type>(value);");
+        check("call ⟦<Type>⟧ (value); call\n⟦<Type>⟧(value);");
+    }
+
+    #[test]
+    fn generic_call_lookahead_retains_incomplete_types_and_literal_text() {
+        check("call<Type(value); call<Type, , Other>(value); call<>(value);");
+        check("const text = 'call<Type>(value)'; const pattern = /call<Type>/;");
+        check("const text = `call<Type>(value)`; // call<Type>(value)");
+        check("call⟦</*é*/ {名: 'é'},\nreadonly number[]>⟧(value);");
+    }
+
+    #[test]
+    fn hostcall_type_arguments_survive_until_capability_extraction() {
+        // normalize_typescript_to_es2020 extracts capability intents after
+        // this pass, then removes the reserved hostcall DSL's type arguments.
+        check("const result = hostcall<\"fs.read\">();");
+        check("hostcall<\"declassify.audit\">(value); load⟦<Result>⟧(value);");
+    }
+
+    #[test]
     fn templates_erase_only_interpolation_code() {
         check("const text = `raw as number: ${value ⟦as number⟧}: done`;");
         check("const text = `outer ${`inner ${object⟦!⟧.value}`} end`;");
@@ -278,11 +389,36 @@ mod tests {
         check("const value = yes ? first ⟦as number⟧ : second ⟦as number⟧;");
         check("const value = (left ⟦as number⟧) + (right ⟦as number⟧);");
         check("const value = first ⟦as number⟧ < second;");
-        check("const value = first ⟦as number⟧ < second > (third);");
         check("const value = first ⟦as (number)⟧ < second > third;");
         check("const value = first ⟦as number[]⟧ < second > third;");
         check("const value = first ⟦as number⟧ === second;");
         check("const value = first ⟦as number⟧\nconst next = 2;");
+    }
+
+    #[test]
+    fn asserted_comparisons_keep_their_javascript_parse() {
+        // The output language is JavaScript, not TypeScript. Reinterpreting
+        // `first < second > (third)` as TS makes it a generic call, whereas
+        // the original assertion forces a runtime comparison. TypeScript
+        // itself has this distinction, so idempotence under a *second TS
+        // parse* is not a valid invariant for this case. Keep exact bytes
+        // and verify both parses explicitly, rather than dropping coverage.
+        for assertion in ["as number", "satisfies number"] {
+            let source = format!("const value = first {assertion} < second > (third);");
+            let expected = format!(
+                "const value = first {} < second > (third);",
+                " ".repeat(assertion.len())
+            );
+            assert_eq!(super::super::erase(&source), expected);
+            assert_eq!(
+                super::super::erase(&expected),
+                format!(
+                    "const value = first {} {} (third);",
+                    " ".repeat(assertion.len()),
+                    " ".repeat("< second >".len())
+                )
+            );
+        }
     }
 
     #[test]

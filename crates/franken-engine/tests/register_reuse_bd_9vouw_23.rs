@@ -263,3 +263,84 @@ fn assignments_to_undeclared_names_release_their_status_registers() {
         "44"
     );
 }
+
+fn array_literal(count: usize) -> String {
+    let elements: Vec<String> = (0..count).map(|i| i.to_string()).collect();
+    format!("[{}]", elements.join(", "))
+}
+
+fn object_literal(count: usize) -> String {
+    let entries: Vec<String> = (0..count).map(|i| format!("k{i}: {i}")).collect();
+    format!("{{{}}}", entries.join(", "))
+}
+
+#[test]
+fn large_literals_fit_the_fixed_256_register_lane() {
+    // A literal held one register per element (two per object entry) until
+    // it was built, so data tables with hundreds of entries overflowed the
+    // frame. Test262's generated RegExp property-escape tests hit this too.
+    // Past 64 entries, literals build one entry at a time and reuse each
+    // entry's registers.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "var a = {}; a.length + a[299];",
+            array_literal(300)
+        )),
+        "599"
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "var o = {}; var n = 0, first, last; \
+             for (var k in o) {{ if (n === 0) first = k; last = k; n++; }} \
+             n + o.k299 + ':' + first + ':' + last;",
+            object_literal(300)
+        )),
+        "599:k0:k299"
+    );
+    let rows: Vec<String> = (0..100)
+        .map(|i| format!("{{a: {i}, b: [{i}, {i}], c: 'x'}}"))
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "var rows = [{}]; var t = 0; for (var i = 0; i < rows.length; i++) \
+             t += rows[i].a + rows[i].b[1]; t + ':' + rows.length;",
+            rows.join(", ")
+        )),
+        "9900:100"
+    );
+    let calls: Vec<String> = (0..300).map(|i| format!("f({i})")).collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "function f(x) {{ return x * 2; }} var a = [{}]; a[299] + a[0] + a.length;",
+            calls.join(", ")
+        )),
+        "898"
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "function sum(xs) {{ var t = 0; for (var i = 0; i < xs.length; i++) t += xs[i]; \
+             return t; }} sum({});",
+            array_literal(300)
+        )),
+        "44850"
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var a = {}; var o = {}; return a[150] + o.k150; }})();",
+            array_literal(300),
+            object_literal(300)
+        )),
+        "300"
+    );
+    // A literal `__proto__:` entry sets the prototype; such literals stay on
+    // the batch path, which implements that.
+    let entries: Vec<String> = (0..100).map(|i| format!("k{i}: {i}")).collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "var p = {{ z: 1 }}; var o = {{__proto__: p, {}}}; \
+             var n = 0; for (var k in o) n++; o.z + ':' + n + ':' + o.k99;",
+            entries.join(", ")
+        )),
+        "1:101:99"
+    );
+}

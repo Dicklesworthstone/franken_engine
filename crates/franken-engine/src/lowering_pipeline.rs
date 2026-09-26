@@ -8574,6 +8574,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 ir3.instructions
                     .push(Ir3Instruction::ArrayPush { array, element });
                 value_stack.push(array);
+                // bd-9vouw.23: the element and its temporaries are dead.
+                if value_stack.iter().all(|register| *register <= array) {
+                    register_high_water = register_high_water.max(register_cursor);
+                    register_cursor = register_cursor.min(
+                        array
+                            .saturating_add(1)
+                            .max(statement_register_floor)
+                            .max(pinned_register_high)
+                            .max(live_status_register_ceiling(&live_status_registers)),
+                    );
+                }
             }
             Ir1Op::ArraySlice => {
                 // Stack: [..., array, start_index] -> [..., sliced_array]
@@ -8599,6 +8610,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 ir3.instructions
                     .push(Ir3Instruction::SpreadIntoObject { target, source });
                 value_stack.push(target);
+                // bd-9vouw.23: the source and its temporaries are dead.
+                if value_stack.iter().all(|register| *register <= target) {
+                    register_high_water = register_high_water.max(register_cursor);
+                    register_cursor = register_cursor.min(
+                        target
+                            .saturating_add(1)
+                            .max(statement_register_floor)
+                            .max(pinned_register_high)
+                            .max(live_status_register_ceiling(&live_status_registers)),
+                    );
+                }
             }
             Ir1Op::Throw => {
                 let value = pop_lowering_value(&mut value_stack)?;
@@ -10232,6 +10254,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     ir3.instructions
                         .push(Ir3Instruction::ArrayPush { array, element });
                     fn_value_stack.push(array);
+                    // bd-9vouw.23: the element and its temporaries are dead.
+                    if fn_value_stack.iter().all(|register| *register <= array) {
+                        fn_register_high_water = fn_register_high_water.max(fn_reg);
+                        fn_reg = fn_reg.min(
+                            array
+                                .saturating_add(1)
+                                .max(fn_statement_register_floor)
+                                .max(fn_pinned_register_high)
+                                .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        );
+                    }
                 }
                 Ir1Op::ArraySlice => {
                     // Stack: [..., array, start_index] -> [..., sliced_array]
@@ -10257,6 +10290,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     ir3.instructions
                         .push(Ir3Instruction::SpreadIntoObject { target, source });
                     fn_value_stack.push(target);
+                    // bd-9vouw.23: the source and its temporaries are dead.
+                    if fn_value_stack.iter().all(|register| *register <= target) {
+                        fn_register_high_water = fn_register_high_water.max(fn_reg);
+                        fn_reg = fn_reg.min(
+                            target
+                                .saturating_add(1)
+                                .max(fn_statement_register_floor)
+                                .max(fn_pinned_register_high)
+                                .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        );
+                    }
                 }
                 Ir1Op::Throw => {
                     let value = pop_lowering_value(&mut fn_value_stack)?;
@@ -16152,8 +16196,16 @@ fn lower_expression_to_ir1_inner(
             let has_spread = elements
                 .iter()
                 .any(|elem| matches!(elem, Some(Expression::SpreadElement(_))));
+            // bd-9vouw.23: the batch path holds every element in its own
+            // register until NewArray, so a data-table literal with hundreds
+            // of elements overflowed the frame. Past a size, build it
+            // incrementally; ArrayPush lowering reuses each element's
+            // registers. Literals with holes keep the batch path, which makes
+            // them holes.
+            let large_without_holes =
+                elements.len() > MAX_BATCH_LITERAL_ENTRIES && elements.iter().all(Option::is_some);
 
-            if has_spread {
+            if has_spread || large_without_holes {
                 // With spreads, use incremental approach:
                 // 1. Create empty array
                 // 2. For each element: ArrayPush or SpreadIntoArray
@@ -16267,7 +16319,17 @@ fn lower_expression_to_ir1_inner(
             let has_incremental_definition = properties
                 .iter()
                 .any(|prop| prop.kind != ObjectPropertyKind::Data);
-            let needs_incremental = has_spread || has_incremental_definition;
+            // bd-9vouw.23: as for arrays, a large literal is built one entry
+            // at a time so its entries' registers are reused. A literal
+            // `__proto__:` entry sets the prototype, which the batch path
+            // handles, so such literals stay batched.
+            let large_plain = properties.len() > MAX_BATCH_LITERAL_ENTRIES
+                && !properties.iter().any(|prop| {
+                    !prop.computed
+                        && canonical_static_object_property_key(&prop.key)
+                            .is_ok_and(|key| key == "__proto__")
+                });
+            let needs_incremental = has_spread || has_incremental_definition || large_plain;
 
             if needs_incremental {
                 // With spreads/accessors, use incremental approach:
@@ -30041,6 +30103,12 @@ const MAX_REGISTER_RESIDENT_ROOT_LEXICALS: usize = 128;
 /// the 256-register QuickJS-lane frame.
 const MAX_REGISTER_RESIDENT_FUNCTION_LOCALS: usize = 96;
 
+/// bd-9vouw.23: array/object literals with more entries than this build
+/// incrementally (NewArray/NewObject of zero, then one entry at a time) so
+/// their entries' temporaries are reused. Smaller literals keep the batch
+/// lowering unchanged.
+const MAX_BATCH_LITERAL_ENTRIES: usize = 64;
+
 /// Source-name slot of a spilled non-lexical function-body local's
 /// identity-qualified runtime name (lexical ones keep their source name, as
 /// TDZ locals do). Only the binding id distinguishes them: nothing resolves a
@@ -33646,6 +33714,11 @@ mod tests {
         // caught. Allocation-only changes must remain byte-identical; an explicit IR
         // schema migration may re-bless the header and content hash while the instruction
         // body remains unchanged. These values include the bd-gqaa4 schema 0.14 header.
+        // let_decl/const_decl re-blessed for bd-9vouw.23 (26054b0eb): root bindings now
+        // get their registers before statement temporaries, so the binding and its
+        // initializer temporary swap registers 1 and 2 (3 bytes: LoadInt dst, Move
+        // dst/src; opcodes and order unchanged). This is a lowering change, not an
+        // arena/allocation one.
         let cases: Vec<(&str, Ir0Module, &str, &str)> = vec![
             (
                 "numeric_literal",
@@ -33671,8 +33744,8 @@ mod tests {
                     };
                     Ir0Module::from_syntax_tree(tree, "alien2_let.js")
                 },
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f7201000000000000000e0000000570617463680100000000000000000000000b736f757263655f686173680400000020d4fbfa63f3f11621663b6b1c12467f5da116d712dbe190e3e843a33cf29e059c0000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:107ac9b22a2541473e67022312443c69bd13f9a41d63ab44edbd1132c14ffb2c",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f7201000000000000000e0000000570617463680100000000000000000000000b736f757263655f686173680400000020d4fbfa63f3f11621663b6b1c12467f5da116d712dbe190e3e843a33cf29e059c0000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000002000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000001000000026f7005000000046d6f7665000000037372630100000000000000020700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:9ac8471c8bef60f92794235bee18dd36eba2fbd9b067e729f740f45dedd050ba",
             ),
             (
                 "const_decl",
@@ -33692,8 +33765,8 @@ mod tests {
                     };
                     Ir0Module::from_syntax_tree(tree, "alien2_const.js")
                 },
-                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f7201000000000000000e0000000570617463680100000000000000000000000b736f757263655f68617368040000002070f184bf7d762cae605ae8653fcefdc6f2dff14e6c0cb0cbbe841b4b3279953d0000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000001000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000002000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
-                "sha256:1dcc607898a83dbea0095116925e0538585789551603a5c58571d063826414b9",
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000030000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f7201000000000000000e0000000570617463680100000000000000000000000b736f757263655f68617368040000002070f184bf7d762cae605ae8653fcefdc6f2dff14e6c0cb0cbbe841b4b3279953d0000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000004070000000300000003647374010000000000000002000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000001000000026f7005000000046d6f7665000000037372630100000000000000020700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:4182bd586f0332fb692e9ac9e36ee7f74dd5aca70790a60e799ea7dbd6e69fa0",
             ),
         ];
 

@@ -159,12 +159,15 @@ impl Eraser<'_> {
                 cursor += 1;
                 continue;
             }
+            let member_start = cursor;
+            let mut type_only = false;
             while matches!(
                 self.text(cursor),
                 "public" | "private" | "protected" | "readonly" | "abstract" | "declare"
                     | "override" | "static" | "get" | "set" | "async"
-            ) && !matches!(self.text(cursor + 1), ":" | "=" | ";" | "(" | "?")
+            ) && !matches!(self.text(cursor + 1), ":" | "=" | ";" | "(" | "?" | "!" | "<")
             {
+                type_only |= matches!(self.text(cursor), "abstract" | "declare");
                 if matches!(self.text(cursor), "public" | "private" | "protected" | "readonly" | "override") {
                     self.mark(cursor, cursor + 1);
                 }
@@ -179,6 +182,10 @@ impl Eraser<'_> {
                 cursor += 1;
             }
             cursor = if self.text(cursor) == "[" {
+                // An index signature declares a type, not a computed key.
+                // Only `[name: Type]` qualifies; runtime conditionals, symbol
+                // accesses and key-producing calls must remain executable.
+                type_only |= self.class_index_signature(cursor);
                 match self.group_end(cursor) {
                     Some(end) => end,
                     None => return,
@@ -214,7 +221,17 @@ impl Eraser<'_> {
                     cursor = end;
                 }
                 if self.text(cursor) == "{" {
+                    // Never erase an implementation body, even when invalid
+                    // input prefixes it with abstract/declare. Leave those
+                    // keywords for the ordinary parser to reject.
                     cursor = self.group_end(cursor).unwrap_or(close);
+                } else if let Some(end) = self.class_declaration_end(cursor, close) {
+                    // Constructor/method overloads and abstract accessors have
+                    // no runtime slot, function object or argument evaluation.
+                    self.mark(member_start, end);
+                    cursor = end;
+                } else {
+                    return;
                 }
                 continue;
             }
@@ -232,6 +249,11 @@ impl Eraser<'_> {
                 self.mark(marker, end);
                 cursor = end;
             }
+            if type_only && let Some(end) = self.class_declaration_end(cursor, close) {
+                self.mark(member_start, end);
+                cursor = end;
+                continue;
+            }
             if self.text(cursor) == "=" {
                 cursor = self.initializer_end(cursor + 1, close, true);
             } else if cursor == marker {
@@ -243,11 +265,94 @@ impl Eraser<'_> {
         }
     }
 
+    fn class_index_signature(&self, open: usize) -> bool {
+        let Some(close) = self.pairs[open] else {
+            return false;
+        };
+        self.tokens.get(open + 1).is_some_and(|token| token.kind == Kind::Word)
+            && self.text(open + 2) == ":"
+            && self.type_end(open + 3, 0) == Some(close)
+    }
+
+    fn class_declaration_end(&self, cursor: usize, close: usize) -> Option<usize> {
+        if cursor > close {
+            return None;
+        }
+        if self.text(cursor) == ";" {
+            return Some(cursor + 1);
+        }
+        if cursor == close
+            || (self.newline_before(cursor)
+                && (self.tokens[cursor].kind != Kind::Punctuation
+                    || matches!(self.text(cursor), "[" | "*" | "#")))
+        {
+            Some(cursor)
+        } else {
+            None
+        }
+    }
+
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::tests::check;
+
+    #[test]
+    fn overload_signatures_are_erased_without_replacing_implementations() {
+        check("class C { ⟦constructor(value: number);⟧ constructor(value⟦: number | string⟧) { this.value = value; } }");
+        check("class C { ⟦run(value: number): number;⟧ ⟦run(value: string): string;⟧ run(value⟦: unknown⟧) { return value; } }");
+        check("class C { ⟦static choose<T>(value: T): T;⟧ static choose(value⟦: unknown⟧) { return value; } }");
+    }
+
+    #[test]
+    fn semicolonless_signatures_stop_at_the_next_member() {
+        check("class C { ⟦run(value: number): number⟧\nrun(value⟦: unknown⟧) { return value; } }");
+        check("class C { ⟦declare value: number⟧\nrun() { return 2; } }");
+        check("class C { ⟦abstract read(): number⟧ }");
+    }
+
+    #[test]
+    fn abstract_and_declared_members_create_no_runtime_properties() {
+        check("abstract class C { ⟦abstract run(value: number): number;⟧ ⟦abstract get size(): number;⟧ ⟦abstract set size(value: number);⟧ }");
+        check("class C { ⟦declare value: number;⟧ ⟦declare readonly missing?: string;⟧ ⟦declare static count: number;⟧ }");
+        check("abstract class C { ⟦protected abstract readonly value: {count: number};⟧ run() { return 1; } }");
+    }
+
+    #[test]
+    fn index_signatures_are_not_computed_runtime_keys() {
+        check("class C { ⟦[key: string]: number;⟧ ⟦readonly [key: symbol]: unknown;⟧ run() { return 1; } }");
+        check("class C { [Symbol.iterator]() { return iterator; } [key()]⟦: number⟧ = value; }");
+        check("class C { [(ready ? first : second)]⟦: number⟧ = value; }");
+    }
+
+    #[test]
+    fn contextual_modifier_names_with_bodies_remain_runtime_members() {
+        check("class C { abstract⟦<T>⟧(value⟦: T⟧)⟦: T⟧ { return value; } declare() { return 2; } }");
+        check("class C { abstract⟦: number⟧ = 1; declare⟦: number⟧ = 2; get readonly() { return 3; } }");
+        check("class C { ⟦public⟧ abstract() { return 1; } ⟦private⟧ declare() { return 2; } }");
+    }
+
+    #[test]
+    fn runtime_method_bodies_and_static_blocks_are_never_signature_lists() {
+        check("class C { run() { call(); nested.call(); } static { call(); } }");
+        check("class C { run()\n{ call(); } }");
+        check("const o = {run() { call(); }}; object.run();");
+    }
+
+    #[test]
+    fn invalid_type_only_bodies_and_initializers_are_retained_for_diagnostics() {
+        check("abstract class C { abstract run() { effect(); } }");
+        check("class C { declare value⟦: number⟧ = effect(); }");
+        check("abstract class C { abstract value⟦: number⟧ = effect(); }");
+    }
+
+    #[test]
+    fn type_only_computed_names_and_unicode_spans_are_erased_as_a_unit() {
+        check("class C { ⟦declare [Symbol.iterator]: () => Iterator<number>;⟧ }");
+        check("abstract class C { ⟦abstract 名称(値: 'é'):\n {名: string};⟧ }");
+        check("class C { ⟦run(...values: readonly [number, string]): number;⟧ run(...values⟦: unknown[]⟧) { return values.length; } }");
+    }
 
     #[test]
     fn generic_heritage_finds_the_body_after_nested_types() {

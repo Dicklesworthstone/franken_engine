@@ -19,6 +19,9 @@ impl InterpreterCore {
     /// receiver and callback provenance through the actual internal method.
     /// This uses the existing object/Proxy storage, not fabricated backing for
     /// function value carriers that do not implement ordinary properties yet.
+    /// `Date` and `Promise` get an own `prototype` (the realm intrinsic that
+    /// `Date.prototype` reads, bd-9vouw.34) before Reflect observes their
+    /// property storage.
     pub(super) fn reflect_property_builtin(
         &mut self,
         module: Option<&Ir3Module>,
@@ -27,6 +30,11 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let target_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let target = self.reflection_target_object(&target_value)?;
+        if let Value::BuiltinFunction(builtin) = &target_value
+            && let Some(name) = Self::materialized_global_prototype_name(builtin)
+        {
+            self.ensure_materialized_prototype_property(target, name)?;
+        }
         let input_key = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let is_set = matches!(operation, ReflectPropertyOperation::Set);
         let value = if is_set {
@@ -163,6 +171,35 @@ impl InterpreterCore {
         self.json_release_temporary(key_bytes);
         self.json_release_temporary(scratch);
         outcome
+    }
+
+    /// Materialize `C.prototype` as an own ES2020 data property (non-writable,
+    /// non-enumerable, non-configurable) on a materialized constructor's
+    /// property storage, pointing at the intrinsic the direct read returns.
+    fn ensure_materialized_prototype_property(
+        &mut self,
+        backing: ObjectId,
+        name: &'static str,
+    ) -> Result<(), InterpreterError> {
+        let key = RuntimePropertyKey::String(JsString::from("prototype"));
+        if self
+            .heap
+            .get(backing.0 as usize)
+            .is_some_and(|object| object.contains_own_runtime_property(&key))
+        {
+            return Ok(());
+        }
+        let prototype = self.ensure_builtin_prototype(name)?;
+        self.set_object_property(backing, "prototype".to_string(), Value::Object(prototype))?;
+        self.set_own_property_attributes(
+            backing,
+            &key,
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: false,
+            },
+        )
     }
 
     /// The ordinary data-property write path stores through an ObjectId, while

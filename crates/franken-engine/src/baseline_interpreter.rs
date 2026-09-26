@@ -35874,9 +35874,12 @@ impl InterpreterCore {
                 };
                 let mut found = -1i64;
                 for i in from..len {
-                    let element = self
-                        .array_index_value(arr_id, i)?
-                        .unwrap_or(Value::Undefined);
+                    // A hole is skipped (HasProperty is false), so
+                    // `[1, , 3].indexOf(undefined)` is -1; `includes` below
+                    // reads holes as undefined.
+                    let Some(element) = self.array_index_value(arr_id, i)? else {
+                        continue;
+                    };
                     if Self::values_equal(&element, &search) {
                         found = i64::try_from(i).unwrap_or(i64::MAX);
                         break;
@@ -36560,9 +36563,10 @@ impl InterpreterCore {
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let mut found = -1i64;
                 for index in (0..len).rev() {
-                    let element = self
-                        .array_index_value(arr_id, index)?
-                        .unwrap_or(Value::Undefined);
+                    // Holes are skipped, as in indexOf.
+                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                        continue;
+                    };
                     if Self::values_equal(&element, &search) {
                         found = i64::try_from(index).unwrap_or(i64::MAX);
                         break;

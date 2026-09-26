@@ -57,3 +57,15 @@ fn callbacks_skip_holes_and_reads_see_the_prototype() {
         "3,false,7",
     );
 }
+
+#[test]
+fn index_of_skips_holes_but_includes_reads_them() {
+    // indexOf/lastIndexOf test HasProperty first; includes reads every index
+    // with Get, so a hole is `undefined` only to includes.
+    check(
+        "var h = [1, , 3]; [h.indexOf(undefined), h.lastIndexOf(undefined), \
+         h.includes(undefined), [1, undefined, 3].indexOf(undefined), \
+         [1, undefined, 3].lastIndexOf(undefined), h.indexOf(3)].join()",
+        "-1,-1,true,1,1,2",
+    );
+}

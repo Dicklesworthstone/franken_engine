@@ -57,6 +57,7 @@ impl Eraser<'_> {
     }
 
     pub(super) fn erase_expression_types(&mut self) {
+        self.erase_function_overloads();
         let mut cursor = 0;
         let mut previous = None;
         let mut asserted = false;
@@ -122,6 +123,143 @@ impl Eraser<'_> {
             previous = Some(cursor);
             asserted = false;
             cursor += 1;
+        }
+    }
+
+    /// Overloads and ambient function declarations have no executable body.
+    /// Remove the complete declaration before processing expression suffixes,
+    /// so its name/generics cannot be mistaken for a generic call. The actual
+    /// implementation is left in place, preserving hoisting and identity.
+    fn erase_function_overloads(&mut self) {
+        let mut index = 0;
+        while index < self.tokens.len() {
+            if !self.removed[index]
+                && self.text(index) == "function"
+                && let Some((start, end)) = self.function_overload_span(index)
+            {
+                self.mark(start, end);
+                index = end;
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn function_overload_span(&self, function: usize) -> Option<(usize, usize)> {
+        if self.property_name(function) {
+            return None;
+        }
+        let mut start = function;
+        if start > 0 && self.text(start - 1) == "async" && !self.newline_before(start) {
+            start -= 1;
+        }
+        if start > 0 && self.text(start - 1) == "declare" {
+            start -= 1;
+        }
+        if start > 0 && self.text(start - 1) == "default" {
+            start -= 1;
+            if start == 0 || self.text(start - 1) != "export" {
+                return None;
+            }
+            start -= 1;
+        } else if start > 0 && self.text(start - 1) == "export" {
+            start -= 1;
+        }
+        if !self.function_declaration_site(start) {
+            return None;
+        }
+        // Anonymous expressions and generator declarations do not admit
+        // overload signatures. Do not turn malformed executable code into
+        // a successful empty statement by erasing either form.
+        let mut cursor = function + 1;
+        if self.tokens.get(cursor)?.kind != Kind::Word {
+            return None;
+        }
+        cursor += 1;
+        if self.text(cursor) == "<" {
+            cursor = self.angle_end(cursor)?;
+        }
+        if self.text(cursor) != "(" || !self.type_parameter_list(cursor, 0) {
+            return None;
+        }
+        let close = self.pairs[cursor]?;
+        // A destructuring default can contain effects even though the outer
+        // signature has no body. Such invalid overloads stay for diagnostics.
+        let mut parameter = cursor + 1;
+        while parameter < close {
+            if self.text(parameter) == "..." {
+                parameter += 1;
+            }
+            let binding_end = self.binding_end(parameter)?;
+            if self.tokens[parameter..binding_end].iter().any(|token| token.text == "=") {
+                return None;
+            }
+            parameter = binding_end;
+            if self.text(parameter) == "?" {
+                parameter += 1;
+            }
+            if self.text(parameter) == ":" {
+                parameter = self.type_end(parameter + 1, 0)?;
+            }
+            if parameter < close {
+                if self.text(parameter) != "," {
+                    return None;
+                }
+                parameter += 1;
+            }
+        }
+        cursor = close + 1;
+        if self.text(cursor) == ":" {
+            cursor = self.type_end(cursor + 1, 0)?;
+        }
+        if self.text(cursor) == ";" {
+            return Some((start, cursor + 1));
+        }
+        // A braced implementation on the following line is still a body.
+        // Other punctuation may continue malformed syntax and is not an
+        // automatic-semicolon boundary at which deleting code is safe.
+        if cursor == self.tokens.len()
+            || self.text(cursor) == "}"
+            || (self.newline_before(cursor)
+                && self.tokens[cursor].kind == Kind::Word)
+        {
+            Some((start, cursor))
+        } else {
+            None
+        }
+    }
+
+    fn function_declaration_site(&self, start: usize) -> bool {
+        if start == 0 {
+            return true;
+        }
+        match self.text(start - 1) {
+            ";" | "}" => true,
+            "{" => {
+                // The first statement in a function/block is a declaration
+                // site; the first property in an object/class is not. Look
+                // past a previously erased return type to the real `)`.
+                let mut before = start - 1;
+                while before > 0 && self.removed[before - 1] {
+                    before -= 1;
+                }
+                before == 0
+                    || matches!(
+                        self.text(before - 1),
+                        ")" | "=>" | ";" | "{" | "}" | "else" | "try" | "finally"
+                            | "do" | "static"
+                    )
+            }
+            _ => {
+                self.newline_before(start)
+                    && (self.tokens[start - 1].kind != Kind::Punctuation
+                        || matches!(self.text(start - 1), ")" | "]" | "++" | "--"))
+                    && !matches!(
+                        self.text(start - 1),
+                        "throw" | "new" | "delete" | "void" | "typeof" | "instanceof"
+                            | "in" | "of" | "await" | "yield" | "extends" | "case"
+                    )
+            }
         }
     }
 
@@ -291,6 +429,53 @@ impl Eraser<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::tests::check;
+
+    #[test]
+    fn free_function_overloads_leave_one_runtime_implementation() {
+        check("⟦function choose(value: number): number;⟧ ⟦function choose(value: string): string;⟧ function choose(value⟦: unknown⟧) { return value; }");
+        check("⟦function map<T extends {value: number}>(value: T): {result: T};⟧ function map(value) { return {result: value}; }");
+        check("⟦function run(...values: [number, string]): void;⟧ function run(...values) { effect(values); }");
+    }
+
+    #[test]
+    fn exported_and_ambient_functions_have_no_runtime_binding() {
+        check("⟦declare function external(value: number): string;⟧ use(external);");
+        check("⟦export declare function external<T>(value: T): T;⟧ export const value = 1;");
+        check("⟦export default function choose(value: number): number;⟧ export default function choose(value) { return value; }");
+        check("⟦async function load(value: number): Promise<number>;⟧ async function load(value) { return value; }");
+    }
+
+    #[test]
+    fn overload_boundaries_respect_newlines_and_implementation_bodies() {
+        check("⟦function choose(value: number): number⟧\nfunction choose(value⟦: unknown⟧)\n{ return value; }");
+        check("⟦function done(value?: number)⟧\nconst value = 1;");
+        check("⟦declare function done(): void⟧");
+        check("function outer()⟦: number⟧ { ⟦function nested(value: number): number;⟧ function nested(value) { return value; } return nested(1); }");
+        check("first()\n⟦function choose(value: number): number;⟧ function choose(value) { return value; }");
+    }
+
+    #[test]
+    fn overloads_preserve_receiver_types_destructuring_and_literal_bytes() {
+        check("⟦function run(this: {value: number}, {offset}: {offset: number}): number;⟧ function run(offset) { return this.value + offset; }");
+        check("⟦function 名称(値: 'é'):\n {名: string};⟧ const text = 'function f(x: T): U;'; // function f(x: T): U;");
+        check("const pattern = /function f(x: T): U;/; const text = `function f(x: T): U;`;");
+    }
+
+    #[test]
+    fn overloads_inside_template_callbacks_use_the_same_pass() {
+        check("const text = `${(() => { ⟦function f(x: number): number;⟧ function f(x⟦: number⟧) { return x; } return f(1); })()}`;");
+    }
+
+    #[test]
+    fn incomplete_expressions_and_effectful_signatures_are_not_erased() {
+        check("const value = function named(x: number): number;");
+        check("(function named(x: number): number); object.function(value);");
+        check("function broken(x = effect()): number;");
+        check("function broken({x = effect()}: {x: number}): number;");
+        check("function* broken(x: number): Iterator<number>;");
+        check("declare function broken() { effect(); }");
+        check("const value = { function broken(x: number): number; };");
+    }
 
     #[test]
     fn instantiation_expressions_preserve_callable_and_constructor_values() {

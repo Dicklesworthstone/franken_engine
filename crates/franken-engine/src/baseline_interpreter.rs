@@ -13882,7 +13882,27 @@ impl InterpreterCore {
             "__timestamp".to_string(),
             Value::Int(modified_millis),
         )?;
+        self.hide_internal_slots(date_id, &["__type", "__timestamp"])?;
         Ok(Value::Object(date_id))
+    }
+
+    /// Engine-internal slots stored as own properties (`__type`, collection
+    /// storage, a Date's time value, a Map/Set `size`) stay out of
+    /// Object.keys, for-in, JSON.stringify, spread and Object.assign, like the
+    /// internal slots they stand in for.
+    fn hide_internal_slots(
+        &mut self,
+        object_id: ObjectId,
+        keys: &[&str],
+    ) -> Result<(), InterpreterError> {
+        for key in keys {
+            self.set_own_property_attributes(
+                object_id,
+                &RuntimePropertyKey::String(JsString::from(*key)),
+                NON_ENUMERABLE_DATA_ATTRIBUTES,
+            )?;
+        }
+        Ok(())
     }
 
     fn fs_metadata_value(&mut self, metadata: FsMetadata) -> Result<Value, InterpreterError> {
@@ -73738,6 +73758,7 @@ impl InterpreterCore {
                     "__timestamp".to_string(),
                     Value::Float(Float64::new(millis)),
                 )?;
+                self.hide_internal_slots(date_id, &["__type", "__timestamp"])?;
                 Ok(Value::Object(date_id))
             }
             "builtin:ArrayBuffer" => {
@@ -75110,6 +75131,7 @@ impl InterpreterCore {
                     Value::Object(entries_id),
                 )?;
                 self.set_object_property(map_id, "size".to_string(), Value::Int(0))?;
+                self.hide_internal_slots(map_id, &["__type", "__entries", "size"])?;
 
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
@@ -75127,6 +75149,7 @@ impl InterpreterCore {
                 self.set_object_property(set_id, "__type".to_string(), Value::str("Set"))?;
                 self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
                 self.set_object_property(set_id, "size".to_string(), Value::Int(0))?;
+                self.hide_internal_slots(set_id, &["__type", "__values", "size"])?;
 
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
@@ -75149,6 +75172,7 @@ impl InterpreterCore {
                         "__type".to_string(),
                         Value::str("WeakMap"),
                     )?;
+                    self.hide_internal_slots(weakmap_id, &["__type"])?;
 
                     self.apply_memory_component_delta(0, MEMORY_ESTIMATE_MAP_ENTRY_BYTES)?;
                     self.weakmap_storage
@@ -75182,6 +75206,7 @@ impl InterpreterCore {
                     "__values".to_string(),
                     Value::Object(values_id),
                 )?;
+                self.hide_internal_slots(weakset_id, &["__type", "__values"])?;
 
                 // Note: In a full implementation, WeakSet would use weak references
                 if args.count > 0 {
@@ -75818,6 +75843,9 @@ impl InterpreterCore {
                 self.set_object_property(regexp_id, "source".to_string(), Value::str(pattern))?;
                 self.set_object_property(regexp_id, "flags".to_string(), Value::str(flags))?;
                 self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
+                // `lastIndex` is an own non-enumerable property; `source` and
+                // `flags` stand in for prototype accessors.
+                self.hide_internal_slots(regexp_id, &["__type", "source", "flags", "lastIndex"])?;
 
                 Ok(Value::Object(regexp_id))
             }
@@ -85303,6 +85331,7 @@ impl InterpreterCore {
                     Value::Object(entries_id),
                 )?;
                 self.set_object_property(object_id, "size".to_string(), Value::Int(0))?;
+                self.hide_internal_slots(object_id, &["__type", "__entries", "size"])?;
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
                     self.seed_map_entries_from_iterable(
@@ -85322,6 +85351,7 @@ impl InterpreterCore {
                     Value::Object(values_id),
                 )?;
                 self.set_object_property(object_id, "size".to_string(), Value::Int(0))?;
+                self.hide_internal_slots(object_id, &["__type", "__values", "size"])?;
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
                     self.seed_set_values_from_iterable(

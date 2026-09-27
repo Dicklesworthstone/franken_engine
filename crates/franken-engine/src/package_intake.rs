@@ -553,7 +553,7 @@ fn collect_top_level_require(
     if !matches!(callee.as_ref(), Expression::Identifier(name) if name == "require") {
         return;
     }
-    let location = SourceLocation::from(span.clone().unwrap_or_else(|| fallback_span.clone()));
+    let location = SourceLocation::from((*span).unwrap_or(*fallback_span));
     match arguments.as_slice() {
         [Expression::StringLiteral(specifier)] => {
             if let Some(specifier) = specifier.as_str() {

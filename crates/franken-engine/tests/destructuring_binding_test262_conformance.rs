@@ -280,11 +280,9 @@ fn run_conformance_suite() -> DestructuringReport {
 // closed (which would invalidate the cataloguing). Drift is filed under bd-7fi86.
 // ---------------------------------------------------------------------------
 
-const KNOWN_DESTRUCTURING_GAPS: &[&str] = &[
-    // bd-hld87: object-rest target not initialised to {} before collection;
-    // runtime faults with "expected object, got undefined".
-    "ES2020-13.3.3-object-rest",
-];
+// The object-rest gap (bd-hld87) closed: `var { a, ...rest } = { a: 1, b: 2,
+// c: 3 }` prints "1,2,3" (round 55, 2026-09-27, main a6e62beef).
+const KNOWN_DESTRUCTURING_GAPS: &[&str] = &[];
 
 // ---------------------------------------------------------------------------
 // Tests

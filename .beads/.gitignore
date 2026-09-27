@@ -22,3 +22,12 @@ last-touched
 # Merge artifacts (temporary files from 3-way merge)
 beads.base.jsonl
 beads.base.meta.json
+*.db-journal
+*.db-wal*
+*.vacuum-wal-cert*
+
+# Database files renamed aside during recovery (fixing-beads-problems promotion)
+*.db.bad_*
+*.db-shm.bad_*
+*.db.corrupt_backup
+recovery_*/

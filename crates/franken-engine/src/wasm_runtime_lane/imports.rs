@@ -155,7 +155,7 @@ fn source_bytes(source: &str, max: usize) -> Result<Cow<'_, [u8]>, WasmNativeLoa
     bytes
         .try_reserve_exact(length)
         .map_err(|_| WasmNativeLoadError::AllocationFailed { bytes: length })?;
-    for pair in hex.as_bytes().chunks_exact(2) {
+    for pair in hex.as_bytes().as_chunks::<2>().0 {
         let high = nibble(pair[0]).ok_or(WasmNativeLoadError::InvalidBinarySource)?;
         let low = nibble(pair[1]).ok_or(WasmNativeLoadError::InvalidBinarySource)?;
         bytes.push((high << 4) | low);

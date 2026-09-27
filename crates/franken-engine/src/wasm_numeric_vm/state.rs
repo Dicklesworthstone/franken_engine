@@ -405,13 +405,13 @@ impl ModuleState {
     }
 
     pub(super) fn validate_module(&self, vm: &WasmNumericVm) -> Result<(), WasmNumericVmError> {
-        if let Some(declared) = self.data_count {
-            if declared as usize != self.data.len() {
-                return Err(invalid(format!(
-                    "data count section declares {declared} segments, data section provides {}",
-                    self.data.len()
-                )));
-            }
+        if let Some(declared) = self.data_count
+            && declared as usize != self.data.len()
+        {
+            return Err(invalid(format!(
+                "data count section declares {declared} segments, data section provides {}",
+                self.data.len()
+            )));
         }
         self.tables.validate_functions(vm)?;
         if let Some(start) = self.start {

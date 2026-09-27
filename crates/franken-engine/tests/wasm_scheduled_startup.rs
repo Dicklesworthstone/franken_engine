@@ -202,7 +202,7 @@ fn run<'vm>(mut task: WasmStartupTask<'vm>, quanta: &[u64]) -> WasmNativeInstanc
                 assert!(next.instructions_executed() > before);
                 task = next;
             }
-            WasmStartupStep::Complete(instance) => return instance,
+            WasmStartupStep::Complete(instance) => return *instance,
         }
     }
     panic!("startup did not make bounded progress")
@@ -594,7 +594,7 @@ mod queue {
                 .expect("queued startup");
             match turn.outcome {
                 WasmTaskOutcome::Pending => {}
-                WasmTaskOutcome::Initialized(instance) => return (turn.task_id, instance),
+                WasmTaskOutcome::Initialized(instance) => return (turn.task_id, *instance),
                 other => panic!("unexpected initialization outcome: {other:?}"),
             }
         }

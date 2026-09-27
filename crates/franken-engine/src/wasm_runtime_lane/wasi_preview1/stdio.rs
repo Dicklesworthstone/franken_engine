@@ -240,7 +240,7 @@ fn prepare(
         .map_err(|_| IoFailure::Errno(NOMEM))?;
     let metadata = caller.read_memory(table, bytes)?;
     let mut length = 0_u32;
-    for record in metadata.chunks_exact(8) {
+    for record in metadata.as_chunks::<8>().0 {
         let address = u32::from_le_bytes([record[0], record[1], record[2], record[3]]);
         let width = u32::from_le_bytes([record[4], record[5], record[6], record[7]]);
         if u64::from(address) + u64::from(width) > size {

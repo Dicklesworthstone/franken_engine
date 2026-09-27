@@ -681,12 +681,12 @@ impl<'a> ModuleParser<'a> {
             for _ in 0..local_group_count {
                 let local_count = body_reader.read_u32_leb()? as usize;
                 let value_type = read_value_type(body_reader.read_u8()?)?;
-                let new_len = locals.len().checked_add(local_count).ok_or_else(|| {
+                let new_len = locals.len().checked_add(local_count).ok_or(
                     WasmNumericVmError::LocalLimitExceeded {
                         actual: usize::MAX,
                         max: self.limits.max_locals_per_call,
-                    }
-                })?;
+                    },
+                )?;
                 if new_len > self.limits.max_locals_per_call {
                     return Err(WasmNumericVmError::LocalLimitExceeded {
                         actual: new_len,

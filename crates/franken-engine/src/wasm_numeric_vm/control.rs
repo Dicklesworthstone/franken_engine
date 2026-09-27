@@ -494,7 +494,7 @@ impl Frame {
     }
 }
 
-fn finish(stack: &mut Vec<WasmBoundaryValue>, frame: &Frame) -> Result<(), WasmNumericVmError> {
+fn finish(stack: &[WasmBoundaryValue], frame: &Frame) -> Result<(), WasmNumericVmError> {
     if stack.len() != frame.height.saturating_add(frame.results) {
         return Err(invalid("validated control result stack changed shape"));
     }

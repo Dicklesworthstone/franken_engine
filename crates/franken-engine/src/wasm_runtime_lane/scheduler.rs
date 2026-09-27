@@ -178,7 +178,8 @@ impl<'call, 'vm> TaskWork<'call, 'vm> {
 #[derive(Debug)]
 pub enum WasmTaskOutcome<'vm> {
     /// Startup alone publishes an instance. Export results use Complete.
-    Initialized(WasmNativeInstance<'vm>),
+    /// Boxed: an instance is ~680 bytes and every other outcome is small.
+    Initialized(Box<WasmNativeInstance<'vm>>),
     /// A consumed command returns status/work, never an exited guest instance.
     Exited(WasmCommandExecution),
     Pending,
@@ -496,7 +497,8 @@ impl fmt::Debug for WasmStartupTask<'_> {
 #[must_use = "retain pending initialization or consume the completed instance"]
 pub enum WasmStartupStep<'vm> {
     Pending(WasmStartupTask<'vm>),
-    Complete(WasmNativeInstance<'vm>),
+    /// Boxed: an instance is ~680 bytes, a pending task 24.
+    Complete(Box<WasmNativeInstance<'vm>>),
 }
 
 impl<'vm> WasmStartupTask<'vm> {
@@ -532,7 +534,7 @@ impl<'vm> WasmStartupTask<'vm> {
         let (instructions, instance) = (self.advance)(work, context, policy)?;
         self.instructions = instructions;
         Ok(match instance {
-            Some(instance) => WasmStartupStep::Complete(instance),
+            Some(instance) => WasmStartupStep::Complete(Box::new(instance)),
             None => WasmStartupStep::Pending(self),
         })
     }

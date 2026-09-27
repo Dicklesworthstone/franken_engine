@@ -5752,6 +5752,25 @@ impl Default for PropertyAttributes {
     }
 }
 
+/// Writable, configurable, not enumerable: builtin data properties such as
+/// `Error.prototype.name` and an error's own `message` and `stack`.
+const NON_ENUMERABLE_DATA_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
+    writable: true,
+    enumerable: false,
+    configurable: true,
+};
+
+/// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3).
+const ERROR_PROTOTYPE_NAMES: [&str; 7] = [
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "EvalError",
+    "URIError",
+];
+
 /// A property descriptor as read by ES2020 6.2.5.5 ToPropertyDescriptor.
 /// `None` marks an absent field; a present `get`/`set` holds a callable or
 /// `undefined`.
@@ -49426,31 +49445,72 @@ impl InterpreterCore {
         name: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let message = self.error_message_from_args(name, args)?;
+        let message = self.error_message_from_args(args)?;
         let prototype = self.ensure_builtin_prototype(name)?;
         let error_id = self.alloc_object_with_prototype(Some(prototype))?;
-        self.initialize_error_like_object(error_id, name, message)?;
+        self.initialize_error_object(error_id, message)?;
 
         Ok(Value::Object(error_id))
     }
 
+    /// An engine-raised error named `name` (native faults, host errors). Its
+    /// prototype normally supplies `name`; an own non-enumerable `name` is
+    /// added only when the inherited one differs.
     fn initialize_error_like_object(
         &mut self,
         object_id: ObjectId,
         name: &str,
         message: String,
     ) -> Result<(), InterpreterError> {
+        let inherited = matches!(
+            self.chain_data_property(object_id, "name"),
+            Some(Value::Str(inherited)) if inherited.as_ref() == name
+        );
+        if !inherited {
+            self.set_object_property(object_id, "name".to_string(), Value::str(name))?;
+            self.set_own_property_attributes(
+                object_id,
+                &RuntimePropertyKey::String(JsString::from("name")),
+                NON_ENUMERABLE_DATA_ATTRIBUTES,
+            )?;
+        }
+        self.initialize_error_object(object_id, Some(message))
+    }
+
+    /// ES2020 19.5.1.1 steps 3-4: an own non-enumerable `message` when one was
+    /// given, plus V8's own non-enumerable `stack`. `name` stays inherited, so
+    /// `JSON.stringify(err)` is `{}` and a subclass's prototype `name` shows.
+    fn initialize_error_object(
+        &mut self,
+        object_id: ObjectId,
+        message: Option<String>,
+    ) -> Result<(), InterpreterError> {
+        if let Some(message) = &message {
+            self.set_object_property(
+                object_id,
+                "message".to_string(),
+                Value::str(message.as_str()),
+            )?;
+            self.set_own_property_attributes(
+                object_id,
+                &RuntimePropertyKey::String(JsString::from("message")),
+                NON_ENUMERABLE_DATA_ATTRIBUTES,
+            )?;
+        }
         // Like V8, `stack` starts with the `Name: message` summary above the
         // frames, so `console.error(err.stack)` shows what went wrong.
+        let name = match self.chain_data_property(object_id, "name") {
+            Some(Value::Str(name)) => name.to_string(),
+            _ => "Error".to_string(),
+        };
+        let message = message.unwrap_or_default();
         let header = if message.is_empty() {
-            name.to_string()
+            name
         } else if name.is_empty() {
-            message.clone()
+            message
         } else {
             format!("{name}: {message}")
         };
-        self.set_object_property(object_id, "name".to_string(), Value::str(name))?;
-        self.set_object_property(object_id, "message".to_string(), Value::str(message))?;
         let frames = self.format_stack_trace();
         let stack_trace = if frames.is_empty() {
             header
@@ -49458,7 +49518,11 @@ impl InterpreterCore {
             format!("{header}\n{frames}")
         };
         self.set_object_property(object_id, "stack".to_string(), Value::str(stack_trace))?;
-        Ok(())
+        self.set_own_property_attributes(
+            object_id,
+            &RuntimePropertyKey::String(JsString::from("stack")),
+            NON_ENUMERABLE_DATA_ATTRIBUTES,
+        )
     }
 
     fn alloc_iterator_result_object(
@@ -79854,13 +79918,13 @@ impl InterpreterCore {
         {
             return None;
         }
-        let object = self.heap.get(id.0 as usize)?;
-        let name = match object.properties.get("name") {
+        // `name` and `message` are usually inherited from the prototypes.
+        let name = match self.chain_data_property(id, "name") {
             None | Some(Value::Undefined) => "Error".to_string(),
             Some(Value::Str(s)) => s.to_string(),
             Some(other) => Self::value_to_primitive_string(other),
         };
-        let message = match object.properties.get("message") {
+        let message = match self.chain_data_property(id, "message") {
             None | Some(Value::Undefined) => String::new(),
             Some(Value::Str(s)) => s.to_string(),
             Some(other) => Self::value_to_primitive_string(other),
@@ -85165,6 +85229,20 @@ impl InterpreterCore {
         self.mutate_builtin_prototypes(|bp| {
             bp.insert(canonical.to_string(), prototype);
         });
+        if ERROR_PROTOTYPE_NAMES.contains(&canonical) {
+            // ES2020 19.5.3.2-3 / 19.5.6.3.2-3: `name` and `message` live on
+            // the prototypes, so instances inherit them and a subclass's
+            // `MyError.prototype.name` is not shadowed.
+            self.set_object_property(prototype, "name".to_string(), Value::str(canonical))?;
+            self.set_object_property(prototype, "message".to_string(), Value::str(""))?;
+            for key in ["name", "message"] {
+                self.set_own_property_attributes(
+                    prototype,
+                    &RuntimePropertyKey::String(JsString::from(key)),
+                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                )?;
+            }
+        }
         Ok(prototype)
     }
 
@@ -85213,8 +85291,8 @@ impl InterpreterCore {
         match builtin_name {
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => {
-                let message = self.error_message_from_args(builtin_name, args)?;
-                self.initialize_error_like_object(object_id, builtin_name, message)?;
+                let message = self.error_message_from_args(args)?;
+                self.initialize_error_object(object_id, message)?;
             }
             "Map" => {
                 let entries_id = self.alloc_object_with_prototype(None)?;
@@ -85259,25 +85337,20 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn error_message_from_args(
-        &self,
-        name: &str,
-        args: RegRange,
-    ) -> Result<String, InterpreterError> {
-        if args.count > 0 {
-            let msg_val = self.read_reg(args.start)?;
-            Ok(match msg_val {
-                Value::Str(s) => s.to_string(),
-                Value::Int(i) => i.to_string(),
-                Value::Float(f) => f.to_string(),
-                Value::Bool(b) => b.to_string(),
-                Value::Null => "null".to_string(),
-                Value::Undefined => "undefined".to_string(),
-                _ => name.to_string(),
-            })
-        } else {
-            Ok(String::new())
+    /// The `message` argument of an Error constructor: `None` when absent or
+    /// `undefined` (ES2020 19.5.1.1 step 3), else its string form. Objects
+    /// use the engine's own conversion (`[object Object]`, an array's join)
+    /// rather than running a guest `toString`.
+    fn error_message_from_args(&self, args: RegRange) -> Result<Option<String>, InterpreterError> {
+        if args.count == 0 {
+            return Ok(None);
         }
+        Ok(match self.read_reg(args.start)? {
+            Value::Undefined => None,
+            Value::Str(s) => Some(s.to_string()),
+            Value::Object(id) => Some(self.object_to_coerced_string(id)),
+            other => Some(self.value_to_string(&other)),
+        })
     }
 
     /// Rest-parameter binding (bd-zs4d5): if the callee declares a rest param at
@@ -119959,7 +120032,10 @@ mod function_prototype_call_apply_tests_current {
                 got: "number".to_string(),
             }
             .to_string();
-            assert_eq!(error.properties.get("name"), Some(&Value::str("TypeError")));
+            assert_eq!(
+                core.chain_data_property(*error_id, "name"),
+                Some(&Value::str("TypeError"))
+            );
             assert_eq!(error.properties.get("message"), Some(&Value::str(&message)));
             assert_eq!(
                 err,
@@ -137229,7 +137305,7 @@ mod tests {
         // Only the error object survives, not the partially parsed object/array.
         assert_eq!(core.heap_size(), heap_before + 1);
         assert_eq!(
-            core.heap[heap_before].properties.get("name"),
+            core.chain_data_property(ObjectId(heap_before as u32), "name"),
             Some(&Value::str("SyntaxError"))
         );
         assert_eq!(

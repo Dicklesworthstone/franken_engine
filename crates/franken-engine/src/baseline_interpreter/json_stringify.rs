@@ -707,7 +707,7 @@ mod tests {
             panic!("native JSON failure must materialize a guest error object");
         };
         assert_eq!(
-            core.heap[error.0 as usize].properties.get("name"),
+            core.chain_data_property(*error, "name"),
             Some(&Value::str("TypeError"))
         );
         assert_eq!(&core.pending_exception_label, label);

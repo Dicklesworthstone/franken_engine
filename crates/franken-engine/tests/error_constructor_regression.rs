@@ -202,3 +202,51 @@ fn stack_starts_with_name_and_message() {
         "0"
     );
 }
+
+/// ES2020 19.5: `name` and `message` live on the error prototypes, and an
+/// instance owns only a non-enumerable `message` (when one was passed) and
+/// `stack`. Instances used to own enumerable `name`/`message`/`stack`:
+/// - `JSON.stringify(err)` printed all three;
+/// - `Error.prototype.name` was undefined;
+/// - a subclass's `MyErr.prototype.name` was shadowed, so errors printed
+///   as `Error`.
+/// Expected values are what Node v22.2.0 prints.
+#[test]
+fn error_name_and_message_are_inherited_and_not_enumerable() {
+    assert_eq!(
+        eval_value(
+            r#"var e = new Error("m"); var keys = []; for (var k in e) keys.push(k);
+               [JSON.stringify(e), Object.keys(new TypeError("x")).length, e.hasOwnProperty("name"),
+                e.hasOwnProperty("message"), new Error().hasOwnProperty("message"),
+                JSON.stringify(new Error(undefined).message), keys.length].join("|")"#
+        ),
+        r#"{}|0|false|true|false|""|0"#
+    );
+    assert_eq!(
+        eval_value(
+            r#"[TypeError.prototype.name, JSON.stringify(Error.prototype.message),
+                RangeError.prototype.hasOwnProperty("name"),
+                Error.prototype.propertyIsEnumerable("name")].join("|")"#
+        ),
+        r#"TypeError|""|true|false"#
+    );
+    assert_eq!(
+        eval_value(
+            r#"function MyErr(m) { this.message = m; }
+               MyErr.prototype = Object.create(Error.prototype); MyErr.prototype.name = "MyErr";
+               class E2 extends Error {} E2.prototype.name = "E2";
+               var a = new MyErr("x"), b = new E2("y");
+               [a.name, String(a), a instanceof Error, b.name, String(b), b.message,
+                Object.keys(b).length].join("|")"#
+        ),
+        "MyErr|MyErr: x|true|E2|E2: y|y|0"
+    );
+    assert_eq!(
+        eval_value(
+            r#"var r; try { null.x; } catch (c) {
+                 r = [c.name, c instanceof TypeError, Object.keys(c).length,
+                      c.hasOwnProperty("name")].join("|"); } r"#
+        ),
+        "TypeError|true|0|false"
+    );
+}

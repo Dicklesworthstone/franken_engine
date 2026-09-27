@@ -736,7 +736,7 @@ mod tests {
                 panic!("exception expected");
             };
             assert_eq!(
-                core.heap[id.0 as usize].properties.get("name"),
+                core.chain_data_property(*id, "name"),
                 Some(&Value::str("SyntaxError"))
             );
             assert!(core.active_inline_callback_context_label.is_none());
@@ -938,7 +938,7 @@ mod tests {
             panic!("coercion must create a guest TypeError, not a SyntaxError");
         };
         assert_eq!(
-            core.heap[error.0 as usize].properties.get("name"),
+            core.chain_data_property(*error, "name"),
             Some(&Value::str("TypeError"))
         );
         assert_eq!(core.pending_exception_label, input_label);

@@ -1451,20 +1451,8 @@ impl InterpreterCore {
         constructor: Option<&str>,
         properties: &mut Vec<(InspectKey, InspectProperty)>,
     ) -> String {
-        let object = self.heap.get(id.0 as usize);
-        let read = |key: &str| {
-            object
-                .and_then(|object| object.properties.get(key))
-                .cloned()
-                .or_else(|| {
-                    let prototype = self.builtin_prototypes.get("Error")?;
-                    self.heap
-                        .get(prototype.0 as usize)?
-                        .properties
-                        .get(key)
-                        .cloned()
-                })
-        };
+        // Own or inherited data properties; accessors are not run.
+        let read = |key: &str| self.chain_data_property(id, key).cloned();
         let name = match read("name") {
             None | Some(Value::Undefined | Value::Null) => "Error".to_string(),
             Some(value) => self.value_to_string(&value),

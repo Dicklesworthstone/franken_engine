@@ -6,8 +6,8 @@
 //! produced by Node v22.2.0 on the identical source. Before the change:
 //! 10,001 zero-delay timers died with "event loop turn limit exceeded"; the
 //! heap-object cap had no flag; an 80k-token array literal failed with "token
-//! budget exceeded" far below the 1 MiB byte cap; and a 3,000-line program
-//! reported only its last 1,000 lines with exit 0 and no sign of the loss.
+//! budget exceeded" far below the 1 MiB byte cap; and the console transcript
+//! cap (1,000 lines on the deterministic profile) could not be raised.
 //! No-claim: this does not add garbage collection (bd-9vouw.57) and does not
 //! change the default instruction budget.
 
@@ -194,38 +194,29 @@ fn byte_cap_not_token_cap_bounds_ordinary_sources() {
 }
 
 #[test]
-fn console_rotation_is_never_silent_and_the_cap_is_configurable() {
+fn console_cap_is_configurable_and_recorded_for_replay() {
+    // Default overflow semantics are owned by the console-budget work
+    // (fail-closed instead of silent eviction); this bead only makes the cap
+    // an operator setting that strict replay reuses.
     let dir = scratch_dir("console");
     let source = "for (let i=0;i<3000;i++) console.log('line', i);\n";
-    let budget = ["--instruction-budget", "10000000"];
-
-    let (output, report) = run(&dir, "rotated", source, &budget);
-    assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let lines = console_lines(&report.expect("report"));
-    let marker = &lines[0];
-    assert!(
-        marker.starts_with("[frankenengine] ")
-            && marker.contains("earlier console entries were dropped"),
-        "a rotated transcript must lead with the drop marker, got {marker:?}"
-    );
-    let retained = lines.len() - 1;
-    assert!(retained < 3000);
-    assert!(
-        marker.starts_with(&format!("[frankenengine] {} earlier", 3000 - retained)),
-        "marker must count exactly the dropped entries: {marker:?}"
-    );
-    assert_eq!(lines.last().map(String::as_str), Some("line 2999"));
-
     let (output, report) = run(
         &dir,
         "full",
         source,
-        &[budget[0], budget[1], "--max-console-entries", "5000"],
+        &[
+            "--instruction-budget",
+            "10000000",
+            "--max-console-entries",
+            "5000",
+        ],
     );
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let lines = console_lines(&report.expect("report"));
+    let report = report.expect("report");
+    let lines = console_lines(&report);
     // node: 3000 lines, "line 0" .. "line 2999"
     assert_eq!(lines.len(), 3000);
     assert_eq!(lines[0], "line 0");
     assert_eq!(lines[2999], "line 2999");
+    assert_eq!(report["replay_input"]["max_console_entries"], 5000);
 }

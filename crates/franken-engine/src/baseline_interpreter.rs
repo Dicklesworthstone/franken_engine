@@ -37285,7 +37285,8 @@ impl InterpreterCore {
                     Some(value) => self.value_to_string(&value),
                 };
                 let mut active = BTreeSet::new();
-                Ok(Value::str(self.array_join_string(
+                Ok(Value::str(self.array_join_observable(
+                    module,
                     arr_id,
                     &separator,
                     &mut active,
@@ -37323,7 +37324,8 @@ impl InterpreterCore {
                             .is_some_and(|object| object.is_array)
                         {
                             let mut active = BTreeSet::new();
-                            Ok(Value::str(self.array_join_string(
+                            Ok(Value::str(self.array_join_observable(
+                                module,
                                 arr_id,
                                 ",",
                                 &mut active,
@@ -44493,6 +44495,121 @@ impl InterpreterCore {
                 self.write_reg_with_label(dst, Value::Str(result), label)?;
                 self.ip += 1;
             }
+            // bd-9vouw.37: loose equality between an object and a primitive
+            // converts the object with ToPrimitive (hint "default"), then
+            // compares (ES2020 7.2.14).
+            Ir3Instruction::Eq { dst, lhs, rhs } | Ir3Instruction::NotEq { dst, lhs, rhs } => {
+                let negate = matches!(*instruction, Ir3Instruction::NotEq { .. });
+                let operand_label = self.binary_operation_label(lhs, rhs)?;
+                self.clear_pending_hostcall_result_label();
+                let mut operands = [Value::Undefined, Value::Undefined];
+                for (slot, register) in operands.iter_mut().zip([lhs, rhs]) {
+                    *slot = if self.register_needs_observable_to_primitive(register) {
+                        match self.observable_to_primitive_operand(module, register, false) {
+                            Ok(value) => value,
+                            Err(error) => return self.route_reentrant_guest_error(module, error),
+                        }
+                    } else {
+                        self.read_reg(register)?
+                    };
+                }
+                let label = operand_label.join(
+                    &self
+                        .take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                );
+                let equal = Self::abstract_eq_values(&operands[0], &operands[1]);
+                self.write_reg_with_label(dst, Value::Bool(equal != negate), label)?;
+                self.ip += 1;
+            }
+            // bd-9vouw.37: numeric operators with an object operand. Each
+            // operand, left then right, converts through ToPrimitive with hint
+            // "number" (ES2020 12.6-12.12; Abstract Relational Comparison
+            // evaluates the left operand first too); the conversion methods'
+            // result labels join the operand labels.
+            ref numeric if Self::numeric_conversion_operands(numeric).is_some() => {
+                let (lhs, rhs) = Self::numeric_conversion_operands(numeric)
+                    .expect("guard checked the operator shape");
+                let operand_label = match rhs {
+                    Some(rhs) => self.binary_operation_label(lhs, rhs)?,
+                    None => self.unary_operation_label(lhs)?,
+                };
+                self.clear_pending_hostcall_result_label();
+                let left = match self.observable_to_numeric_primitive_operand(module, lhs) {
+                    Ok(value) => value,
+                    Err(error) => return self.route_reentrant_guest_error(module, error),
+                };
+                let right = match rhs {
+                    Some(rhs) => match self.observable_to_numeric_primitive_operand(module, rhs) {
+                        Ok(value) => Some(value),
+                        Err(error) => return self.route_reentrant_guest_error(module, error),
+                    },
+                    None => None,
+                };
+                let label = operand_label.join(
+                    &self
+                        .take_pending_hostcall_result_label()
+                        .unwrap_or(Label::Public),
+                );
+                let right = || right.clone().unwrap_or(Value::Undefined);
+                let (dst, result) = match numeric {
+                    Ir3Instruction::Sub { dst, .. } => {
+                        (*dst, self.eval_arith_operands(left, right(), "sub")?)
+                    }
+                    Ir3Instruction::Mul { dst, .. } => {
+                        (*dst, self.eval_arith_operands(left, right(), "mul")?)
+                    }
+                    Ir3Instruction::Div { dst, .. } => {
+                        (*dst, self.eval_div_operands(left, right())?)
+                    }
+                    Ir3Instruction::Mod { dst, .. } => {
+                        (*dst, self.eval_mod_operands(left, right())?)
+                    }
+                    Ir3Instruction::Exp { dst, .. } => {
+                        (*dst, self.eval_exp_operands(left, right())?)
+                    }
+                    Ir3Instruction::Lt { dst, .. } => {
+                        (*dst, self.eval_relational_operands(left, right(), "<")?)
+                    }
+                    Ir3Instruction::Lte { dst, .. } => {
+                        (*dst, self.eval_relational_operands(left, right(), "<=")?)
+                    }
+                    Ir3Instruction::Gt { dst, .. } => {
+                        (*dst, self.eval_relational_operands(left, right(), ">")?)
+                    }
+                    Ir3Instruction::Gte { dst, .. } => {
+                        (*dst, self.eval_relational_operands(left, right(), ">=")?)
+                    }
+                    Ir3Instruction::BitAnd { dst, .. } => {
+                        (*dst, self.eval_bitwise_operands(left, right(), "&")?)
+                    }
+                    Ir3Instruction::BitOr { dst, .. } => {
+                        (*dst, self.eval_bitwise_operands(left, right(), "|")?)
+                    }
+                    Ir3Instruction::BitXor { dst, .. } => {
+                        (*dst, self.eval_bitwise_operands(left, right(), "^")?)
+                    }
+                    Ir3Instruction::Shl { dst, .. } => {
+                        (*dst, self.eval_bitwise_operands(left, right(), "<<")?)
+                    }
+                    Ir3Instruction::Shr { dst, .. } => {
+                        (*dst, self.eval_bitwise_operands(left, right(), ">>")?)
+                    }
+                    Ir3Instruction::Ushr { dst, .. } => {
+                        (*dst, self.eval_bitwise_operands(left, right(), ">>>")?)
+                    }
+                    Ir3Instruction::UnaryNeg { dst, .. } => {
+                        (*dst, self.eval_unary_neg_operand(left)?)
+                    }
+                    Ir3Instruction::UnaryPlus { dst, .. } => {
+                        (*dst, self.eval_unary_plus_operand(left)?)
+                    }
+                    Ir3Instruction::BitNot { dst, .. } => (*dst, self.eval_bit_not_operand(left)?),
+                    _ => unreachable!("numeric_conversion_operands covers exactly these operators"),
+                };
+                self.write_reg_with_label(dst, result, label)?;
+                self.ip += 1;
+            }
             _ => unreachable!("non-reentrant opcode crossed the iterator/hostcall boundary"),
         }
         if let (Some(profiler), Some(profile_start)) = (&mut self.profiling_data, profile_start) {
@@ -44689,13 +44806,8 @@ impl InterpreterCore {
                     // bd-9vouw.37: an object operand of `+` needs the
                     // observable ToPrimitive, which only the Tier-R handler
                     // (reentrant path) performs.
-                    .filter(|compact| {
-                        compact.opcode != CompactTier1Opcode::Add
-                            || !(self
-                                .register_needs_observable_to_primitive(u32::from(compact.lhs))
-                                || self
-                                    .register_needs_observable_to_primitive(u32::from(compact.rhs)))
-                    })
+                    // bd-9vouw.37: likewise every numeric operator.
+                    .filter(|compact| !self.compact_operator_needs_to_primitive(compact))
             } else {
                 None
             };
@@ -44746,6 +44858,17 @@ impl InterpreterCore {
                 continue;
             }
 
+            // bd-9vouw.37: a numeric operator with an object operand runs its
+            // observable ToPrimitive on the reentrant path.
+            if instr
+                .as_ref()
+                .is_some_and(|source| self.numeric_operator_needs_to_primitive(source))
+            {
+                return Ok(DispatchOutcome::ReentrantInstruction {
+                    instruction_ip: self.ip,
+                    profile_start,
+                });
+            }
             match instr.expect("Tier-R dispatch owns the cloned source instruction") {
                 Ir3Instruction::LoadInt { dst, value } => {
                     let val = if value >= MIN_SAFE_INTEGER && value <= MAX_SAFE_INTEGER {
@@ -49154,8 +49277,10 @@ impl InterpreterCore {
     }
 
     fn eval_arith(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
-        let a = self.read_reg(lhs)?;
-        let b = self.read_reg(rhs)?;
+        self.eval_arith_operands(self.read_reg(lhs)?, self.read_reg(rhs)?, op)
+    }
+
+    fn eval_arith_operands(&self, a: Value, b: Value, op: &str) -> Result<Value, InterpreterError> {
         let bigint_op = if op == "sub" {
             bigint_ops::BigIntBinaryOp::Sub
         } else {
@@ -49203,8 +49328,10 @@ impl InterpreterCore {
     }
 
     fn eval_div(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
-        let a = self.read_reg(lhs)?;
-        let b = self.read_reg(rhs)?;
+        self.eval_div_operands(self.read_reg(lhs)?, self.read_reg(rhs)?)
+    }
+
+    fn eval_div_operands(&self, a: Value, b: Value) -> Result<Value, InterpreterError> {
         if let Some(result) = Self::bigint_operands(&a, &b, bigint_ops::BigIntBinaryOp::Div) {
             return result;
         }
@@ -49223,8 +49350,10 @@ impl InterpreterCore {
     }
 
     fn eval_mod(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
-        let a = self.read_reg(lhs)?;
-        let b = self.read_reg(rhs)?;
+        self.eval_mod_operands(self.read_reg(lhs)?, self.read_reg(rhs)?)
+    }
+
+    fn eval_mod_operands(&self, a: Value, b: Value) -> Result<Value, InterpreterError> {
         if let Some(result) = Self::bigint_operands(&a, &b, bigint_ops::BigIntBinaryOp::Rem) {
             return result;
         }
@@ -49260,8 +49389,10 @@ impl InterpreterCore {
     }
 
     fn eval_exp(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
-        let a = self.read_reg(lhs)?;
-        let b = self.read_reg(rhs)?;
+        self.eval_exp_operands(self.read_reg(lhs)?, self.read_reg(rhs)?)
+    }
+
+    fn eval_exp_operands(&self, a: Value, b: Value) -> Result<Value, InterpreterError> {
         if let Some(result) = Self::bigint_operands(&a, &b, bigint_ops::BigIntBinaryOp::Exp) {
             return result;
         }
@@ -49280,7 +49411,10 @@ impl InterpreterCore {
     }
 
     fn eval_unary_plus(&self, src: u32) -> Result<Value, InterpreterError> {
-        let value = self.read_reg(src)?;
+        self.eval_unary_plus_operand(self.read_reg(src)?)
+    }
+
+    fn eval_unary_plus_operand(&self, value: Value) -> Result<Value, InterpreterError> {
         match &value {
             Value::Int(n) => {
                 if *n >= MIN_SAFE_INTEGER && *n <= MAX_SAFE_INTEGER {
@@ -49302,7 +49436,10 @@ impl InterpreterCore {
     }
 
     fn eval_unary_neg(&self, src: u32) -> Result<Value, InterpreterError> {
-        let value = self.read_reg(src)?;
+        self.eval_unary_neg_operand(self.read_reg(src)?)
+    }
+
+    fn eval_unary_neg_operand(&self, value: Value) -> Result<Value, InterpreterError> {
         match &value {
             Value::Int(0) => Ok(Value::Float(Float64::new(-0.0))),
             Value::Int(n) => {
@@ -49354,7 +49491,10 @@ impl InterpreterCore {
     }
 
     fn eval_bit_not(&self, src: u32) -> Result<Value, InterpreterError> {
-        let value = self.read_reg(src)?;
+        self.eval_bit_not_operand(self.read_reg(src)?)
+    }
+
+    fn eval_bit_not_operand(&self, value: Value) -> Result<Value, InterpreterError> {
         if let Value::BigInt(digits) = &value {
             return Ok(Value::BigInt(Arc::from(bigint_ops::bitwise_not(digits))));
         }
@@ -49375,9 +49515,15 @@ impl InterpreterCore {
     }
 
     fn eval_relational(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
-        let a = self.read_reg(lhs)?;
-        let b = self.read_reg(rhs)?;
+        self.eval_relational_operands(self.read_reg(lhs)?, self.read_reg(rhs)?, op)
+    }
 
+    fn eval_relational_operands(
+        &self,
+        a: Value,
+        b: Value,
+        op: &str,
+    ) -> Result<Value, InterpreterError> {
         // String comparison: lexicographic over exact UTF-16 code units per
         // ES2020 7.2.13 IsLessThan (bd-rdnhc; previously the derived
         // code-point/byte order, which disagrees for astral content and
@@ -49475,8 +49621,15 @@ impl InterpreterCore {
     }
 
     fn eval_bitwise(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
-        let a = self.read_reg(lhs)?;
-        let b = self.read_reg(rhs)?;
+        self.eval_bitwise_operands(self.read_reg(lhs)?, self.read_reg(rhs)?, op)
+    }
+
+    fn eval_bitwise_operands(
+        &self,
+        a: Value,
+        b: Value,
+        op: &str,
+    ) -> Result<Value, InterpreterError> {
         if matches!(a, Value::BigInt(_)) || matches!(b, Value::BigInt(_)) {
             let bigint_op = match op {
                 "&" => bigint_ops::BigIntBinaryOp::And,
@@ -54768,10 +54921,148 @@ impl InterpreterCore {
     /// toString / valueOf / @@toPrimitive on itself or its prototype chain),
     /// which only the reentrant Tier-R path can run.
     fn register_needs_observable_to_primitive(&self, register: u32) -> bool {
+        // Borrowed peek: this runs ahead of every compact arithmetic op.
         // Functions convert through Function.prototype.toString or their own
         // `toString`/`valueOf`, which only the reentrant path can run.
-        self.read_reg(register)
-            .is_ok_and(|value| matches!(value, Value::Object(_)) || value.is_callable())
+        register < self.config.max_registers
+            && self
+                .registers
+                .get(self.register_base + register as usize)
+                .is_some_and(|value| matches!(value, Value::Object(_)) || value.is_callable())
+    }
+
+    /// bd-9vouw.37: operand registers of the numeric operators whose object
+    /// operands convert through ToPrimitive with hint "number" (ES2020
+    /// 12.6-12.12 ToNumeric / 7.2.13 Abstract Relational Comparison).
+    fn numeric_conversion_operands(instruction: &Ir3Instruction) -> Option<(u32, Option<u32>)> {
+        match instruction {
+            Ir3Instruction::Sub { lhs, rhs, .. }
+            | Ir3Instruction::Mul { lhs, rhs, .. }
+            | Ir3Instruction::Div { lhs, rhs, .. }
+            | Ir3Instruction::Mod { lhs, rhs, .. }
+            | Ir3Instruction::Exp { lhs, rhs, .. }
+            | Ir3Instruction::Lt { lhs, rhs, .. }
+            | Ir3Instruction::Lte { lhs, rhs, .. }
+            | Ir3Instruction::Gt { lhs, rhs, .. }
+            | Ir3Instruction::Gte { lhs, rhs, .. }
+            | Ir3Instruction::BitAnd { lhs, rhs, .. }
+            | Ir3Instruction::BitOr { lhs, rhs, .. }
+            | Ir3Instruction::BitXor { lhs, rhs, .. }
+            | Ir3Instruction::Shl { lhs, rhs, .. }
+            | Ir3Instruction::Shr { lhs, rhs, .. }
+            | Ir3Instruction::Ushr { lhs, rhs, .. } => Some((*lhs, Some(*rhs))),
+            Ir3Instruction::UnaryNeg { src, .. }
+            | Ir3Instruction::UnaryPlus { src, .. }
+            | Ir3Instruction::BitNot { src, .. } => Some((*src, None)),
+            _ => None,
+        }
+    }
+
+    /// ES2020 7.2.14 Abstract Equality converts an object operand with
+    /// ToPrimitive (hint "default") only when the other operand is a
+    /// non-nullish primitive; object == object is identity and null /
+    /// undefined never convert (bd-9vouw.37).
+    fn loose_equality_needs_to_primitive(&self, lhs: u32, rhs: u32) -> bool {
+        let peek = |register: u32| {
+            (register < self.config.max_registers)
+                .then(|| self.registers.get(self.register_base + register as usize))
+                .flatten()
+        };
+        let converts_against = |register: u32| {
+            matches!(
+                peek(register),
+                Some(
+                    Value::Str(_)
+                        | Value::Int(_)
+                        | Value::Float(_)
+                        | Value::Bool(_)
+                        | Value::BigInt(_)
+                        | Value::Symbol(_)
+                )
+            )
+        };
+        (self.register_needs_observable_to_primitive(lhs) && converts_against(rhs))
+            || (self.register_needs_observable_to_primitive(rhs) && converts_against(lhs))
+    }
+
+    /// Whether a numeric operator has an object operand, or a loose equality
+    /// compares an object with a primitive; only the reentrant Tier-R path can
+    /// run that conversion (bd-9vouw.37).
+    fn numeric_operator_needs_to_primitive(&self, instruction: &Ir3Instruction) -> bool {
+        if let Ir3Instruction::Eq { lhs, rhs, .. } | Ir3Instruction::NotEq { lhs, rhs, .. } =
+            instruction
+        {
+            return self.loose_equality_needs_to_primitive(*lhs, *rhs);
+        }
+        Self::numeric_conversion_operands(instruction).is_some_and(|(lhs, rhs)| {
+            self.register_needs_observable_to_primitive(lhs)
+                || rhs.is_some_and(|rhs| self.register_needs_observable_to_primitive(rhs))
+        })
+    }
+
+    /// Compact tier-1 counterpart of the operand-conversion checks for `+`
+    /// and the numeric operators (bd-9vouw.37). Unary cells keep their source
+    /// in `lhs`.
+    fn compact_operator_needs_to_primitive(&self, compact: &CompactTier1Instruction) -> bool {
+        use CompactTier1Opcode as Op;
+        let needs =
+            |register: u16| self.register_needs_observable_to_primitive(u32::from(register));
+        match compact.opcode {
+            Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Div
+            | Op::Mod
+            | Op::Exp
+            | Op::Lt
+            | Op::Lte
+            | Op::Gt
+            | Op::Gte
+            | Op::BitAnd
+            | Op::BitOr
+            | Op::BitXor
+            | Op::Shl
+            | Op::Shr
+            | Op::Ushr => needs(compact.lhs) || needs(compact.rhs),
+            Op::UnaryNeg | Op::UnaryPlus | Op::BitNot => needs(compact.lhs),
+            Op::Eq | Op::NotEq => self
+                .loose_equality_needs_to_primitive(u32::from(compact.lhs), u32::from(compact.rhs)),
+            _ => false,
+        }
+    }
+
+    /// ES2020 7.1.1 ToPrimitive with hint "number" for an operand register
+    /// (bd-9vouw.37). Objects with guest conversion hooks run them, joining
+    /// the methods' result label into `pending_hostcall_result_label`. An
+    /// engine Date converts to its time value (Date.prototype.valueOf); other
+    /// engine objects take their non-observable string form, which the
+    /// numeric operator then converts with ToNumber (`[5]` -> "5" -> 5,
+    /// `{}` -> "[object Object]" -> NaN).
+    fn observable_to_numeric_primitive_operand(
+        &mut self,
+        module: &Ir3Module,
+        register: u32,
+    ) -> Result<Value, InterpreterError> {
+        let value = self.read_reg(register)?;
+        if value.is_callable() {
+            // A function's own valueOf/toString, else Function.prototype.toString.
+            return self.coerce_runtime_primitive_with_hint(Some(module), value, "number");
+        }
+        let Value::Object(object_id) = value else {
+            return Ok(value);
+        };
+        if !self.object_has_user_conversion_hook(object_id) {
+            if let Some(object) = self.heap.get(object_id.0 as usize)
+                && matches!(object.properties.get("__type"), Some(Value::Str(kind)) if kind.as_ref() == "Date")
+            {
+                return Ok(match object.properties.get("__timestamp") {
+                    Some(time @ (Value::Float(_) | Value::Int(_))) => time.clone(),
+                    _ => Value::Float(f64::NAN.into()),
+                });
+            }
+            return self.engine_object_string_primitive(module, object_id);
+        }
+        self.coerce_runtime_primitive_with_hint(Some(module), value, "number")
     }
 
     /// ES2020 7.1.1 ToPrimitive for an operand register (hint "string" when
@@ -54794,15 +55085,33 @@ impl InterpreterCore {
             return Ok(value);
         };
         if !self.object_has_user_conversion_hook(object_id) {
-            // The engine's own prototypes convert without running guest
-            // code; keep their established string form (arrays join, plain
-            // objects "[object Object]").
-            return Ok(Value::Str(JsString::from(
-                self.object_to_coerced_string(object_id),
-            )));
+            return self.engine_object_string_primitive(module, object_id);
         }
         let hint = if prefer_string { "string" } else { "default" };
         self.coerce_runtime_primitive_with_hint(Some(module), value, hint)
+    }
+
+    /// String form of an object with no guest conversion hook: an array runs
+    /// Array.prototype.toString, i.e. the observable join, because its
+    /// elements may define toString (bd-9vouw.37); other engine objects keep
+    /// their established string form (plain objects "[object Object]").
+    fn engine_object_string_primitive(
+        &mut self,
+        module: &Ir3Module,
+        object_id: ObjectId,
+    ) -> Result<Value, InterpreterError> {
+        if self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| object.is_array)
+        {
+            let mut active = BTreeSet::new();
+            let joined = self.array_join_observable(module, object_id, ",", &mut active)?;
+            return Ok(Value::Str(JsString::from(joined)));
+        }
+        Ok(Value::Str(JsString::from(
+            self.object_to_coerced_string(object_id),
+        )))
     }
 
     /// Whether the object or its prototype chain defines a guest `toString` /
@@ -61291,20 +61600,9 @@ impl InterpreterCore {
             Value::Float(f) => Some(f.inner()),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             Value::Null => Some(0.0),
-            Value::Str(s) => {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    Some(0.0)
-                } else if trimmed.eq_ignore_ascii_case("infinity") {
-                    Some(f64::INFINITY)
-                } else if trimmed.eq_ignore_ascii_case("-infinity") {
-                    Some(f64::NEG_INFINITY)
-                } else if trimmed.eq_ignore_ascii_case("nan") {
-                    Some(f64::NAN)
-                } else {
-                    trimmed.parse::<f64>().ok()
-                }
-            }
+            // ES2020 7.1.4.1.1 StringToNumber: JS whitespace, 0x/0o/0b
+            // literals, and NaN (not a refusal) for anything else.
+            Value::Str(s) => Some(primitive_conversion::string_number(s)),
             Value::Undefined => Some(f64::NAN),
             Value::Object(_)
             | Value::Function(_)
@@ -81482,6 +81780,71 @@ impl InterpreterCore {
     /// `active` carries the ancestor chain of arrays currently being joined so
     /// a cyclic array renders `""` instead of recursing forever, and depth is
     /// bounded fail-closed at [`ARRAY_JOIN_MAX_DEPTH`] (bd-sxh8o.3).
+    /// Array.prototype.join with observable element conversion (bd-9vouw.37):
+    /// an element object that defines a guest toString / valueOf /
+    /// @@toPrimitive converts through ToPrimitive(hint "string") (ES2020
+    /// 23.1.3.13 step 7.c ToString). Nested arrays join recursively under the
+    /// same cycle guard and depth cap as [`Self::array_join_string`]; every
+    /// other element keeps its non-observable rendering.
+    fn array_join_observable(
+        &mut self,
+        module: &Ir3Module,
+        array_id: ObjectId,
+        separator: &str,
+        active: &mut BTreeSet<u32>,
+    ) -> Result<String, InterpreterError> {
+        if !active.insert(array_id.0) {
+            return Ok(String::new());
+        }
+        if active.len() > ARRAY_JOIN_MAX_DEPTH {
+            active.remove(&array_id.0);
+            return Ok(String::new());
+        }
+        let len = self.array_like_length(array_id)?;
+        let mut parts = Vec::with_capacity(len.min(4096));
+        for index in 0..len {
+            let element = self
+                .array_index_value(array_id, index)?
+                .unwrap_or(Value::Undefined);
+            let rendered = match element {
+                Value::Undefined | Value::Null => String::new(),
+                Value::Object(nested_id)
+                    if self
+                        .heap
+                        .get(nested_id.0 as usize)
+                        .is_some_and(|object| object.is_array)
+                        && !self.object_has_user_conversion_hook(nested_id) =>
+                {
+                    let joined = self.array_join_observable(module, nested_id, ",", active);
+                    match joined {
+                        Ok(joined) => joined,
+                        Err(error) => {
+                            active.remove(&array_id.0);
+                            return Err(error);
+                        }
+                    }
+                }
+                Value::Object(object_id) if self.object_has_user_conversion_hook(object_id) => {
+                    match self.coerce_runtime_primitive_with_hint(
+                        Some(module),
+                        Value::Object(object_id),
+                        "string",
+                    ) {
+                        Ok(primitive) => self.value_to_string(&primitive),
+                        Err(error) => {
+                            active.remove(&array_id.0);
+                            return Err(error);
+                        }
+                    }
+                }
+                other => self.value_to_string(&other),
+            };
+            parts.push(rendered);
+        }
+        active.remove(&array_id.0);
+        Ok(parts.join(separator))
+    }
+
     fn array_join_string(
         &self,
         array_id: ObjectId,
@@ -122127,74 +122490,77 @@ mod numeric_error_message_tests {
         core.mutate_registers(|r| {
             r.resize(4, Value::Undefined);
         });
+        // A Symbol operand is a TypeError for every numeric operator (ES2020
+        // 7.1.4 ToNumber). A non-numeric string used to be the example here,
+        // but StringToNumber gives NaN for it, not a TypeError.
         core.mutate_registers(|r| {
-            r[0] = Value::str("not-a-number");
+            r[0] = Value::Symbol(SymbolId(99));
             r[1] = Value::Int(1);
         });
 
         let arith_err = core
             .eval_arith(0, 1, "mul")
-            .expect_err("non-numeric string * int should remain a TypeError");
+            .expect_err("Symbol * int should remain a TypeError");
         assert_eq!(
             arith_err,
             InterpreterError::TypeError {
                 expected: "number".to_string(),
-                got: "string mul number".to_string(),
+                got: "symbol mul number".to_string(),
             }
         );
 
         let div_err = core
             .eval_div(0, 1)
-            .expect_err("non-numeric string / int should remain a TypeError");
+            .expect_err("Symbol / int should remain a TypeError");
         assert_eq!(
             div_err,
             InterpreterError::TypeError {
                 expected: "number".to_string(),
-                got: "string / number".to_string(),
+                got: "symbol / number".to_string(),
             }
         );
 
         let mod_err = core
             .eval_mod(0, 1)
-            .expect_err("non-numeric string % int should remain a TypeError");
+            .expect_err("Symbol % int should remain a TypeError");
         assert_eq!(
             mod_err,
             InterpreterError::TypeError {
                 expected: "number".to_string(),
-                got: "string % number".to_string(),
+                got: "symbol % number".to_string(),
             }
         );
 
         let exp_err = core
             .eval_exp(0, 1)
-            .expect_err("non-numeric string ** int should remain a TypeError");
+            .expect_err("Symbol ** int should remain a TypeError");
         assert_eq!(
             exp_err,
             InterpreterError::TypeError {
                 expected: "number".to_string(),
-                got: "string ** number".to_string(),
+                got: "symbol ** number".to_string(),
             }
         );
 
         let bitwise_err = core
             .eval_bitwise(0, 1, "&")
-            .expect_err("non-numeric string bitwise int should remain a TypeError");
+            .expect_err("Symbol bitwise int should remain a TypeError");
         assert_eq!(
             bitwise_err,
             InterpreterError::TypeError {
                 expected: "number".to_string(),
-                got: "string".to_string(),
+                got: "symbol".to_string(),
             }
         );
 
         let relational_err = core
             .eval_relational(0, 1, "<")
-            .expect_err("non-numeric string < int should remain a TypeError");
+            .expect_err("Symbol < int should remain a TypeError");
         assert_eq!(
             relational_err,
             InterpreterError::TypeError {
                 expected: "comparable primitive".to_string(),
-                got: "string < number".to_string(),
+                got: "symbol < number".to_string(),
             }
         );
     }

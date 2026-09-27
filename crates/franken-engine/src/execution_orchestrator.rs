@@ -3448,6 +3448,9 @@ impl ExecutionOrchestrator {
         quickjs_config.extension_id = Some(package.extension_id.clone());
         quickjs_config.cancellation_token = cancellation_token.cloned();
         quickjs_config.commonjs_entry = self.commonjs_entry();
+        // A required or imported module is parsed under the same options (and
+        // budgets) as the entry, not the parser's built-in defaults.
+        quickjs_config.module_parser_options = self.config.parser_options.clone();
         if let Some((root, canonical_root)) = module_root.as_ref() {
             quickjs_config.module_root = Some(root.clone());
             quickjs_config.canonical_module_root = canonical_root.clone();
@@ -3462,6 +3465,7 @@ impl ExecutionOrchestrator {
         v8_config.extension_id = Some(package.extension_id.clone());
         v8_config.cancellation_token = cancellation_token.cloned();
         v8_config.commonjs_entry = self.commonjs_entry();
+        v8_config.module_parser_options = self.config.parser_options.clone();
         if let Some((root, canonical_root)) = module_root {
             v8_config.module_root = Some(root);
             v8_config.canonical_module_root = canonical_root;

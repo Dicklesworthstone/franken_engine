@@ -2984,6 +2984,56 @@ fn commonjs_require_refuses_unexported_and_missing_packages_bd_4dme3() {
     }
 }
 
+/// A required module is parsed under the orchestrator's parser options, the
+/// ones the entry was parsed under, not the parser's built-in defaults: a
+/// dependency over the default 65,536-token budget fails under the default
+/// options and loads once the configured budget admits it (lodash, 121k
+/// tokens, was the motivating case).
+#[test]
+fn required_module_is_parsed_under_the_configured_parser_budget() {
+    let root = tempfile::tempdir().expect("module root tempdir");
+    // `0,` is two tokens: 40,000 elements put the dependency near 80,000
+    // tokens, over the 65,536 default and far under the raised budget.
+    let elements = vec!["0"; 40_000].join(",");
+    std::fs::write(
+        root.path().join("big.js"),
+        format!("module.exports = [{elements}];\n"),
+    )
+    .expect("large dependency");
+    let entry = root.path().join("app.js");
+    std::fs::write(&entry, "console.log(String(require('./big').length));\n").expect("entry");
+
+    let default_error = ExecutionOrchestrator::new(OrchestratorConfig {
+        commonjs_entry: true,
+        ..OrchestratorConfig::default()
+    })
+    .execute(&commonjs_entry_package(
+        root.path(),
+        &entry,
+        "ext-big-default",
+    ))
+    .expect_err("the default budget must refuse the large dependency");
+    let message = default_error.to_string();
+    assert!(
+        message.contains("big.js") && message.contains("BudgetExceeded"),
+        "the refusal must name the module and the budget, got: {message}"
+    );
+
+    let mut raised = OrchestratorConfig {
+        commonjs_entry: true,
+        ..OrchestratorConfig::default()
+    };
+    raised.parser_options.budget.max_token_count = 200_000;
+    let result = ExecutionOrchestrator::new(raised)
+        .execute(&commonjs_entry_package(
+            root.path(),
+            &entry,
+            "ext-big-raised",
+        ))
+        .unwrap_or_else(|error| panic!("a raised budget must admit the module: {error}"));
+    assert_eq!(console_lines(&result), ["40000"]);
+}
+
 /// A declared root widens containment only to itself: imports that escape the
 /// DECLARED root still fail closed, even when the target exists on disk.
 #[test]

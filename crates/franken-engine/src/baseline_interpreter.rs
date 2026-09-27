@@ -141,7 +141,7 @@ use crate::iterator_protocol::{
 use crate::js_string::JsString;
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::object_model::{SymbolId, WellKnownSymbol};
-use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+use crate::parser::{CanonicalEs2020Parser, ParseErrorCode, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 use crate::runtime_observability::{
     CapabilityDenialReason, RuntimeSecurityMetrics, RuntimeSecurityObservability,
@@ -8665,6 +8665,12 @@ pub struct InterpreterConfig {
     /// the authenticated CommonJS context.
     #[serde(default)]
     pub commonjs_entry: bool,
+    /// Parser options (mode and budgets) for every module this interpreter
+    /// loads at runtime (`require`, `import`). The orchestrator sets them to
+    /// the options the entry was parsed under, so a dependency is held to the
+    /// same budget as the program that requires it.
+    #[serde(default)]
+    pub module_parser_options: ParserOptions,
 }
 
 impl PartialEq for InterpreterConfig {
@@ -8681,6 +8687,7 @@ impl PartialEq for InterpreterConfig {
             && self.granted_capabilities == other.granted_capabilities
             && self.extension_id == other.extension_id
             && self.checkpoint_density == other.checkpoint_density
+            && self.module_parser_options == other.module_parser_options
         // Note: cancellation_token is intentionally excluded from comparison
     }
 }
@@ -8702,6 +8709,7 @@ impl InterpreterConfig {
             module_root: None,
             canonical_module_root: None,
             commonjs_entry: false,
+            module_parser_options: ParserOptions::default(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8723,6 +8731,7 @@ impl InterpreterConfig {
             module_root: None,
             canonical_module_root: None,
             commonjs_entry: false,
+            module_parser_options: ParserOptions::default(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8744,6 +8753,7 @@ impl InterpreterConfig {
             module_root: None,
             canonical_module_root: None,
             commonjs_entry: false,
+            module_parser_options: ParserOptions::default(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8765,6 +8775,7 @@ impl InterpreterConfig {
             module_root: None,
             canonical_module_root: None,
             commonjs_entry: false,
+            module_parser_options: ParserOptions::default(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -33566,7 +33577,11 @@ impl InterpreterCore {
             ParseGoal::Module
         };
         let syntax_tree = CanonicalEs2020Parser
-            .parse_with_options(parser_source, parse_goal, &ParserOptions::default())
+            .parse_with_options(
+                parser_source,
+                parse_goal,
+                &self.config.module_parser_options,
+            )
             .map_err(|error| InterpreterError::ModuleParseFailed {
                 specifier: resolved.to_string(),
                 error: error.to_string(),
@@ -33710,6 +33725,9 @@ impl InterpreterCore {
             // reports the real error; the goal chosen does not matter.
             return false;
         };
+        // Only a syntax refusal says the file needs module syntax. A file that
+        // exceeds the parse budget is not thereby an ES module: load it as
+        // CommonJS and let the loader report the budget error it hits.
         CanonicalEs2020Parser
             .parse_with_options(
                 ParserSource {
@@ -33717,9 +33735,14 @@ impl InterpreterCore {
                     text,
                 },
                 ParseGoal::Script,
-                &ParserOptions::default(),
+                &self.config.module_parser_options,
             )
-            .is_err()
+            .is_err_and(|error| {
+                !matches!(
+                    error.code,
+                    ParseErrorCode::BudgetExceeded | ParseErrorCode::SourceTooLarge
+                )
+            })
     }
 
     fn generated_function_owner(

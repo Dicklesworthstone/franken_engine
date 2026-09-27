@@ -94,6 +94,21 @@ pub struct ExecutionConfig {
     pub max_call_depth: usize,
     /// Maximum prototype-chain walk depth.
     pub max_prototype_chain_depth: u32,
+    /// Heap-object ceiling for both execution profiles. `None` keeps each
+    /// profile's containment default. The baseline heap is append-only until
+    /// live-object reclamation lands (bd-9vouw.57), so this counts total
+    /// allocations, not live objects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_heap_objects: Option<u32>,
+    /// Estimated-memory ceiling (bytes) for both execution profiles. `None`
+    /// keeps each profile's containment default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_memory_bytes: Option<u64>,
+    /// Console transcript capacity for both execution profiles. `None` keeps
+    /// each profile's default; a rotated transcript starts with a marker entry
+    /// naming how many earlier entries were dropped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_console_entries: Option<usize>,
 }
 
 impl Default for ExecutionConfig {
@@ -105,6 +120,9 @@ impl Default for ExecutionConfig {
             throughput_max_registers: 4096,
             max_call_depth: 256,
             max_prototype_chain_depth: 64,
+            max_heap_objects: None,
+            max_total_memory_bytes: None,
+            max_console_entries: None,
         }
     }
 }
@@ -514,6 +532,20 @@ impl RuntimeConfig {
                 section: s.to_string(),
                 field: "max_prototype_chain_depth".to_string(),
                 message: "must be > 0".to_string(),
+            });
+        }
+        if self.execution.max_heap_objects == Some(0) {
+            errors.push(ConfigValidationError {
+                section: s.to_string(),
+                field: "max_heap_objects".to_string(),
+                message: "must be > 0 when set".to_string(),
+            });
+        }
+        if self.execution.max_total_memory_bytes == Some(0) {
+            errors.push(ConfigValidationError {
+                section: s.to_string(),
+                field: "max_total_memory_bytes".to_string(),
+                message: "must be > 0 when set".to_string(),
             });
         }
     }
@@ -1135,6 +1167,51 @@ grace_period_ns = 1000000000
             );
         } else {
             panic!("expected ValidationFailed");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Memory-limit overrides (bd-9vouw.58)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn memory_limit_overrides_default_to_none_and_stay_off_the_wire() {
+        let execution = ExecutionConfig::default();
+        assert_eq!(execution.max_heap_objects, None);
+        assert_eq!(execution.max_total_memory_bytes, None);
+        assert_eq!(execution.max_console_entries, None);
+        // Unset overrides serialize to nothing, so configs written before the
+        // fields existed keep their exact bytes.
+        let json = serde_json::to_string(&execution).expect("serialize");
+        assert!(!json.contains("max_heap_objects"), "{json}");
+        assert!(!json.contains("max_total_memory_bytes"), "{json}");
+    }
+
+    #[test]
+    fn memory_limit_overrides_parse_from_toml() {
+        let toml_str = r#"
+[execution]
+max_heap_objects = 2000000
+max_total_memory_bytes = 1073741824
+max_console_entries = 50000
+"#;
+        let config = RuntimeConfig::from_toml(toml_str).expect("valid overrides");
+        assert_eq!(config.execution.max_heap_objects, Some(2_000_000));
+        assert_eq!(config.execution.max_total_memory_bytes, Some(1_073_741_824));
+        assert_eq!(config.execution.max_console_entries, Some(50_000));
+    }
+
+    #[test]
+    fn validation_rejects_zero_memory_limit_overrides() {
+        let mut config = RuntimeConfig::default();
+        config.execution.max_heap_objects = Some(0);
+        config.execution.max_total_memory_bytes = Some(0);
+        match config.validate() {
+            Err(ConfigError::ValidationFailed { errors }) => {
+                assert!(errors.iter().any(|e| e.field == "max_heap_objects"));
+                assert!(errors.iter().any(|e| e.field == "max_total_memory_bytes"));
+            }
+            other => panic!("expected ValidationFailed, got {other:?}"),
         }
     }
 

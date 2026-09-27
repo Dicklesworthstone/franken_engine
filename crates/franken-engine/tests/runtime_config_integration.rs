@@ -247,6 +247,9 @@ fn execution_config_json_serde_roundtrip() {
         throughput_max_registers: 32,
         max_call_depth: 8,
         max_prototype_chain_depth: 4,
+        max_heap_objects: Some(1_000),
+        max_total_memory_bytes: Some(1 << 20),
+        max_console_entries: Some(5),
     };
     let json = serde_json::to_string(&cfg).unwrap();
     let decoded: ExecutionConfig = serde_json::from_str(&json).unwrap();

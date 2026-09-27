@@ -12476,8 +12476,7 @@ const EXECUTION_LIMITS_HELP: &str =
   append-only until live-object reclamation lands, so this counts total
   allocations). --max-heap-bytes caps estimated memory (default 64 MiB /
   512 MiB). --max-console-entries sizes the console transcript (default
-  1000 / 10000); a rotated transcript starts with a marker naming how many
-  earlier entries were dropped. --max-source-bytes caps the source size
+  1000 / 10000). --max-source-bytes caps the source size
   (default 1 MiB); --max-parse-tokens caps tokens and defaults to the byte
   cap, so the byte cap is the binding parser limit.";
 

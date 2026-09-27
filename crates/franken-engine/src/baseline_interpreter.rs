@@ -52201,6 +52201,17 @@ impl InterpreterCore {
         }
     }
 
+    /// Set.prototype.add and Map.prototype.set store -0 as +0 (ES2020
+    /// 23.2.3.1 step 4, 23.1.3.9 step 5). Map keys round-trip through
+    /// [`Self::collection_key_repr`], which already maps -0 to `n:0`; Set
+    /// members are stored as values and need the conversion explicitly.
+    fn collection_canonical_member(value: Value) -> Value {
+        match value {
+            Value::Float(number) if number.inner() == 0.0 => Value::Int(0),
+            other => other,
+        }
+    }
+
     /// Invert [`Self::collection_key_repr`] for iteration.
     fn collection_key_from_repr(repr: &str) -> Value {
         let Some((tag, payload)) = repr.split_once(':') else {
@@ -52332,6 +52343,7 @@ impl InterpreterCore {
         set_id: ObjectId,
         value: Value,
     ) -> Result<Value, InterpreterError> {
+        let value = Self::collection_canonical_member(value);
         if let Some(values_id) = self.collection_storage_id(set_id, "Set", "__values") {
             let repr = Self::collection_key_repr(&value);
             let set_index = set_id.0 as usize;
@@ -79044,6 +79056,7 @@ impl InterpreterCore {
             let (value_str, stored) = if weak_values_only {
                 (Self::weakmap_object_key(value), Value::Bool(true))
             } else {
+                let value = Self::collection_canonical_member(value);
                 (Some(Self::collection_key_repr(&value)), value)
             };
             let Some(value_str) = value_str else {

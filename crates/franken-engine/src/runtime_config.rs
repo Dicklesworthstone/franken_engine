@@ -105,8 +105,7 @@ pub struct ExecutionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_total_memory_bytes: Option<u64>,
     /// Console transcript capacity for both execution profiles. `None` keeps
-    /// each profile's default; a rotated transcript starts with a marker entry
-    /// naming how many earlier entries were dropped.
+    /// each profile's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_console_entries: Option<usize>,
 }

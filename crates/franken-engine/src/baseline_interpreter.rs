@@ -266,6 +266,9 @@ const DEFAULT_V8_MAX_CONSOLE_ENTRIES: usize = 1_000_000;
 const DEFAULT_MAX_CONSOLE_BYTES: usize = 8 * 1024 * 1024;
 /// Default scope-chain depth budget for all interpreter profiles.
 const DEFAULT_MAX_SCOPE_DEPTH: u32 = 512;
+/// Floor of the event-loop turn cap; the cap otherwise equals the instruction
+/// budget (see `run_event_loop_until_idle_with_module`).
+const MIN_EVENT_LOOP_TURN_LIMIT: u64 = 10_000;
 
 /// Domain-separation tag for the HMAC preimage of a [`DecisionReceipt`]
 /// (bd-gn3mt). Mirrors the
@@ -9622,9 +9625,15 @@ impl InterpreterConfig {
             max_registers: config.deterministic_max_registers,
             max_call_depth: config.max_call_depth,
             max_string_size: 33_554_432,
-            max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
-            max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
-            max_console_entries: DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES,
+            max_heap_objects: config
+                .max_heap_objects
+                .unwrap_or(DEFAULT_QUICKJS_MAX_HEAP_OBJECTS),
+            max_total_memory_bytes: config
+                .max_total_memory_bytes
+                .unwrap_or(DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES),
+            max_console_entries: config
+                .max_console_entries
+                .unwrap_or(DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES),
             max_console_bytes: DEFAULT_MAX_CONSOLE_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
@@ -9646,9 +9655,15 @@ impl InterpreterConfig {
             max_registers: config.throughput_max_registers,
             max_call_depth: config.max_call_depth,
             max_string_size: 268_435_456,
-            max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
-            max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
-            max_console_entries: DEFAULT_V8_MAX_CONSOLE_ENTRIES,
+            max_heap_objects: config
+                .max_heap_objects
+                .unwrap_or(DEFAULT_V8_MAX_HEAP_OBJECTS),
+            max_total_memory_bytes: config
+                .max_total_memory_bytes
+                .unwrap_or(DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES),
+            max_console_entries: config
+                .max_console_entries
+                .unwrap_or(DEFAULT_V8_MAX_CONSOLE_ENTRIES),
             max_console_bytes: DEFAULT_MAX_CONSOLE_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
@@ -57088,11 +57103,19 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
-        const MAX_TURNS: u32 = 10_000; // Safety limit to prevent infinite loops
-        let mut turns = 0;
+        // Guest work in every turn already consumes the instruction budget, so
+        // this cap only bounds turns that run no guest code (engine-internal
+        // work). A fixed 10k cap killed ordinary programs with more than 10k
+        // timers or immediates (bd-9vouw.58); scale it with the budget the
+        // operator granted, keeping the old cap as the floor.
+        let max_turns = self
+            .config
+            .instruction_budget
+            .max(MIN_EVENT_LOOP_TURN_LIMIT);
+        let mut turns: u64 = 0;
 
         while (self.event_loop.has_pending_work() || !self.next_tick_queue.is_empty())
-            && turns < MAX_TURNS
+            && turns < max_turns
         {
             if self
                 .config
@@ -57165,14 +57188,14 @@ impl InterpreterCore {
             self.drain_runtime_checkpoint(module)?;
             self.raise_unhandled_rejection()?;
         }
-        if turns >= MAX_TURNS
+        if turns >= max_turns
             && self.event_loop.has_pending_work()
             && !(self.event_loop.microtasks.is_empty()
                 && self.only_unref_or_cancelled_timers_pending())
         {
             return Err(InterpreterError::InternalError {
                 details: format!(
-                    "event loop turn limit exceeded with ref'd work still pending ({MAX_TURNS} turns)"
+                    "event loop turn limit exceeded with ref'd work still pending ({max_turns} turns)"
                 ),
             });
         }

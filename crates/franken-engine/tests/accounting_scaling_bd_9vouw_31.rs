@@ -134,3 +134,40 @@ fn promise_history_does_not_make_promise_operations_quadratic_bd_9vouw_31() {
         |n| n.to_string(),
     );
 }
+
+#[test]
+fn generator_resumes_do_not_rederive_the_whole_estimate_bd_j9r60() {
+    // Every resume used to re-derive the full memory estimate, walking every
+    // heap object; each `next()` result object stays on the heap, so a
+    // for-of over a generator was O(iterations^2). Node v22.2.0 prints
+    // n*(n-1)/2.
+    assert_linear(
+        "gen_loop",
+        |n| {
+            format!(
+                "function* g(n){{ for (let i=0;i<n;i++) yield i }} let s=0; \
+                 for (const v of g({n})) s+=v; console.log(s);"
+            )
+        },
+        |n| (n * (n - 1) / 2).to_string(),
+    );
+}
+
+#[test]
+fn await_resumes_do_not_rederive_the_whole_estimate_bd_j9r60() {
+    // Every isolated async resumption re-derived the full memory estimate
+    // twice (setup and completion), walking every heap object; the awaited
+    // promises stay on the heap, so an await loop was O(iterations^2).
+    // Node v22.2.0 prints n.
+    assert_linear(
+        "await_chain",
+        |n| {
+            format!(
+                "async function f(x){{ await null; return x+1 }} \
+                 (async()=>{{ let s=0; for (let i=0;i<{n};i++){{ s = await f(s) }} \
+                 console.log(s) }})();"
+            )
+        },
+        |n| n.to_string(),
+    );
+}

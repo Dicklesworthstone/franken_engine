@@ -1837,14 +1837,111 @@ impl MicrotaskQueue {
 /// then by scheduled time, then by registration order.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MacrotaskQueue {
-    message_channel_tasks: BinaryHeap<MacrotaskHeapEntry>,
+    message_channel_tasks: MacrotaskLane,
     /// `setImmediate` tasks (bd-suwvw). Defaulted on deserialization so
     /// pre-existing serialized queues (which had no immediate lane) load.
     #[serde(default)]
-    immediate_tasks: BinaryHeap<MacrotaskHeapEntry>,
-    timer_tasks: BinaryHeap<MacrotaskHeapEntry>,
-    io_completion_tasks: BinaryHeap<MacrotaskHeapEntry>,
+    immediate_tasks: MacrotaskLane,
+    timer_tasks: MacrotaskLane,
+    io_completion_tasks: MacrotaskLane,
     next_registration_seq: u64,
+}
+
+/// One macrotask source lane with a running total of its tasks' label bytes
+/// (bd-j9r60).
+///
+/// The queue is charged to the interpreter's resident-memory estimate, which
+/// is re-read around every Promise and task operation. Summing every pending
+/// task's label on each read made N pending timers cost O(N) per operation.
+/// Serialized as the plain heap.
+#[derive(Debug, Clone, Default)]
+struct MacrotaskLane {
+    heap: BinaryHeap<MacrotaskHeapEntry>,
+    label_bytes: u64,
+}
+
+impl MacrotaskLane {
+    fn push(&mut self, entry: MacrotaskHeapEntry) {
+        self.label_bytes = self
+            .label_bytes
+            .saturating_add(estimate_label_memory_bytes(&entry.task.label));
+        self.heap.push(entry);
+    }
+
+    fn release(&mut self, task: &Macrotask) {
+        self.label_bytes = self
+            .label_bytes
+            .saturating_sub(estimate_label_memory_bytes(&task.label));
+    }
+
+    fn pop_ready(&mut self, current_time_ms: u64) -> Option<Macrotask> {
+        if self
+            .heap
+            .peek()
+            .is_some_and(|entry| entry.task.scheduled_at <= current_time_ms)
+        {
+            let task = self.heap.pop()?.task;
+            self.release(&task);
+            Some(task)
+        } else {
+            None
+        }
+    }
+
+    /// Entries are moved into a temporary vector and rebuilt into a heap so
+    /// cancellation neither clones retained labels nor violates heap order.
+    fn remove_registration(&mut self, registration_seq: u64) -> Option<Macrotask> {
+        let mut entries = std::mem::take(&mut self.heap).into_vec();
+        let removed = entries
+            .iter()
+            .position(|entry| entry.task.registration_seq == registration_seq)
+            .map(|index| entries.swap_remove(index).task);
+        self.heap = BinaryHeap::from(entries);
+        if let Some(task) = &removed {
+            self.release(task);
+        }
+        removed
+    }
+
+    fn memory_bytes(&self) -> u64 {
+        let bytes = estimate_vector_slot_bytes::<MacrotaskHeapEntry>(self.heap.len())
+            .saturating_add(self.label_bytes);
+        #[cfg(test)]
+        debug_assert_eq!(
+            bytes,
+            estimate_vector_slot_bytes::<MacrotaskHeapEntry>(self.heap.len()).saturating_add(
+                saturating_sum(
+                    self.heap
+                        .iter()
+                        .map(|entry| estimate_label_memory_bytes(&entry.task.label))
+                )
+            ),
+            "macrotask lane label total drifted from the walk (bd-j9r60)"
+        );
+        bytes
+    }
+}
+
+impl From<BinaryHeap<MacrotaskHeapEntry>> for MacrotaskLane {
+    fn from(heap: BinaryHeap<MacrotaskHeapEntry>) -> Self {
+        let label_bytes = saturating_sum(
+            heap.iter()
+                .map(|entry| estimate_label_memory_bytes(&entry.task.label)),
+        );
+        Self { heap, label_bytes }
+    }
+}
+
+impl Serialize for MacrotaskLane {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.heap.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MacrotaskLane {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        BinaryHeap::<MacrotaskHeapEntry>::deserialize(deserializer).map(Self::from)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1874,10 +1971,10 @@ impl PartialOrd for MacrotaskHeapEntry {
 impl MacrotaskQueue {
     pub fn new() -> Self {
         Self {
-            message_channel_tasks: BinaryHeap::new(),
-            immediate_tasks: BinaryHeap::new(),
-            timer_tasks: BinaryHeap::new(),
-            io_completion_tasks: BinaryHeap::new(),
+            message_channel_tasks: MacrotaskLane::default(),
+            immediate_tasks: MacrotaskLane::default(),
+            timer_tasks: MacrotaskLane::default(),
+            io_completion_tasks: MacrotaskLane::default(),
             next_registration_seq: 0,
         }
     }
@@ -1891,16 +1988,8 @@ impl MacrotaskQueue {
             &self.io_completion_tasks,
         ]
         .into_iter()
-        .fold(0u64, |total, tasks| {
-            total
-                .saturating_add(estimate_vector_slot_bytes::<MacrotaskHeapEntry>(
-                    tasks.len(),
-                ))
-                .saturating_add(saturating_sum(
-                    tasks
-                        .iter()
-                        .map(|entry| estimate_label_memory_bytes(&entry.task.label)),
-                ))
+        .fold(0u64, |total, lane| {
+            total.saturating_add(lane.memory_bytes())
         })
     }
 
@@ -1940,19 +2029,20 @@ impl MacrotaskQueue {
     /// Priority: source type (MessageChannel > Timer > IoCompletion),
     /// then earliest `scheduled_at`, then lowest `registration_seq`.
     pub fn dequeue_ready(&mut self, current_time_ms: u64) -> Option<Macrotask> {
-        Self::pop_ready_from(&mut self.message_channel_tasks, current_time_ms)
-            .or_else(|| Self::pop_ready_from(&mut self.immediate_tasks, current_time_ms))
-            .or_else(|| Self::pop_ready_from(&mut self.timer_tasks, current_time_ms))
-            .or_else(|| Self::pop_ready_from(&mut self.io_completion_tasks, current_time_ms))
+        self.message_channel_tasks
+            .pop_ready(current_time_ms)
+            .or_else(|| self.immediate_tasks.pop_ready(current_time_ms))
+            .or_else(|| self.timer_tasks.pop_ready(current_time_ms))
+            .or_else(|| self.io_completion_tasks.pop_ready(current_time_ms))
     }
 
     /// Find the earliest scheduled time of any pending macrotask.
     pub fn next_scheduled_time(&self) -> Option<u64> {
         [
-            self.message_channel_tasks.peek(),
-            self.immediate_tasks.peek(),
-            self.timer_tasks.peek(),
-            self.io_completion_tasks.peek(),
+            self.message_channel_tasks.heap.peek(),
+            self.immediate_tasks.heap.peek(),
+            self.timer_tasks.heap.peek(),
+            self.io_completion_tasks.heap.peek(),
         ]
         .into_iter()
         .flatten()
@@ -1962,18 +2052,18 @@ impl MacrotaskQueue {
 
     /// Check if there are pending macrotasks.
     pub fn is_empty(&self) -> bool {
-        self.message_channel_tasks.is_empty()
-            && self.immediate_tasks.is_empty()
-            && self.timer_tasks.is_empty()
-            && self.io_completion_tasks.is_empty()
+        self.message_channel_tasks.heap.is_empty()
+            && self.immediate_tasks.heap.is_empty()
+            && self.timer_tasks.heap.is_empty()
+            && self.io_completion_tasks.heap.is_empty()
     }
 
     /// Number of pending macrotasks.
     pub fn len(&self) -> usize {
-        self.message_channel_tasks.len()
-            + self.immediate_tasks.len()
-            + self.timer_tasks.len()
-            + self.io_completion_tasks.len()
+        self.message_channel_tasks.heap.len()
+            + self.immediate_tasks.heap.len()
+            + self.timer_tasks.heap.len()
+            + self.io_completion_tasks.heap.len()
     }
 
     /// Iterate every pending macrotask across all source lanes (bd-suwvw).
@@ -1981,10 +2071,11 @@ impl MacrotaskQueue {
     /// to decide whether only unref'd/cancelled timers remain.
     pub fn iter_pending(&self) -> impl Iterator<Item = &Macrotask> {
         self.message_channel_tasks
+            .heap
             .iter()
-            .chain(self.immediate_tasks.iter())
-            .chain(self.timer_tasks.iter())
-            .chain(self.io_completion_tasks.iter())
+            .chain(self.immediate_tasks.heap.iter())
+            .chain(self.timer_tasks.heap.iter())
+            .chain(self.io_completion_tasks.heap.iter())
             .map(|entry| &entry.task)
     }
 
@@ -1993,11 +2084,13 @@ impl MacrotaskQueue {
     /// Entries are moved into a temporary vector and rebuilt into a heap so
     /// cancellation neither clones retained labels nor violates heap order.
     pub(crate) fn cancel_registration(&mut self, registration_seq: u64) -> Option<Macrotask> {
-        Self::remove_registration_from(&mut self.message_channel_tasks, registration_seq)
-            .or_else(|| Self::remove_registration_from(&mut self.immediate_tasks, registration_seq))
-            .or_else(|| Self::remove_registration_from(&mut self.timer_tasks, registration_seq))
+        self.message_channel_tasks
+            .remove_registration(registration_seq)
+            .or_else(|| self.immediate_tasks.remove_registration(registration_seq))
+            .or_else(|| self.timer_tasks.remove_registration(registration_seq))
             .or_else(|| {
-                Self::remove_registration_from(&mut self.io_completion_tasks, registration_seq)
+                self.io_completion_tasks
+                    .remove_registration(registration_seq)
             })
     }
 
@@ -2014,43 +2107,13 @@ impl MacrotaskQueue {
         Some(task)
     }
 
-    fn tasks_for_source_mut(
-        &mut self,
-        source: MacrotaskSource,
-    ) -> &mut BinaryHeap<MacrotaskHeapEntry> {
+    fn tasks_for_source_mut(&mut self, source: MacrotaskSource) -> &mut MacrotaskLane {
         match source {
             MacrotaskSource::MessageChannel => &mut self.message_channel_tasks,
             MacrotaskSource::Immediate => &mut self.immediate_tasks,
             MacrotaskSource::Timer => &mut self.timer_tasks,
             MacrotaskSource::IoCompletion => &mut self.io_completion_tasks,
         }
-    }
-
-    fn pop_ready_from(
-        tasks: &mut BinaryHeap<MacrotaskHeapEntry>,
-        current_time_ms: u64,
-    ) -> Option<Macrotask> {
-        if tasks
-            .peek()
-            .is_some_and(|entry| entry.task.scheduled_at <= current_time_ms)
-        {
-            tasks.pop().map(|entry| entry.task)
-        } else {
-            None
-        }
-    }
-
-    fn remove_registration_from(
-        tasks: &mut BinaryHeap<MacrotaskHeapEntry>,
-        registration_seq: u64,
-    ) -> Option<Macrotask> {
-        let mut entries = std::mem::take(tasks).into_vec();
-        let removed = entries
-            .iter()
-            .position(|entry| entry.task.registration_seq == registration_seq)
-            .map(|index| entries.swap_remove(index).task);
-        *tasks = BinaryHeap::from(entries);
-        removed
     }
 }
 

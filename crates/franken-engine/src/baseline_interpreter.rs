@@ -57433,6 +57433,8 @@ impl InterpreterCore {
     fn drain_microtasks(&mut self, module: Option<&Ir3Module>) -> Result<(), InterpreterError> {
         let max_drain = 10_000u32;
         let mut drained = 0u32;
+        #[cfg(test)]
+        let entry_drift = self.memory_walk_drift();
 
         while drained < max_drain {
             // Collector safe point between microtasks (bd-9vouw.57).
@@ -57677,6 +57679,19 @@ impl InterpreterCore {
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         self.event_loop.microtasks.compact();
         self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
+        if drained == 0 {
+            // No next-tick callback or reaction ran, so only the compaction
+            // above changed state and its delta is exact. The event loop
+            // checkpoints after every macrotask; a whole-state reconcile
+            // here walked the heap once per timer (bd-j9r60).
+            #[cfg(test)]
+            debug_assert_eq!(
+                self.memory_walk_drift(),
+                entry_drift,
+                "an empty microtask checkpoint drifted from the full walk (bd-j9r60)"
+            );
+            return Ok(());
+        }
         // A reaction can mutate both Promise-owned queues and arbitrary
         // interpreter state (registers, heap, scopes, async continuations).
         // Reconcile the checkpoint from every resident owner instead of
@@ -91549,6 +91564,8 @@ mod active_builtin_regressions {
                 .expect("receiver label should be settable");
             core.set_register_label(2, Label::Public)
                 .expect("destination label should be settable");
+            core.sync_estimated_memory_bytes()
+                .expect("seeded pop registers should fit memory budget");
 
             let mut module = halted_test_module();
             module.instructions.insert(
@@ -122293,6 +122310,8 @@ mod event_loop_timer_microtask_tests {
         // the short-delay timer second (registration_seq = 1).
         core.event_loop.set_timeout(cb_long, 200, Label::Public);
         core.event_loop.set_timeout(cb_short, 50, Label::Public);
+        core.sync_estimated_memory_bytes()
+            .expect("seeded timers should fit memory budget");
 
         assert_eq!(
             core.event_loop.macrotasks.len(),
@@ -122879,6 +122898,9 @@ mod tests {
         let mut compact_core = quickjs_test_core();
         compact_core.set_reg(1, Value::BigInt(Arc::from("9007199254740993")));
         compact_core.set_reg(2, Value::BigInt(Arc::from("7")));
+        compact_core
+            .sync_estimated_memory_bytes()
+            .expect("seeded BigInt operands should fit memory budget");
         let compact = compact_core
             .execute_with_trace_handoff(&module, Some(&plan), TraceHandoff::RetainInCore)
             .expect("compact BigInt fallback");
@@ -122886,6 +122908,9 @@ mod tests {
         let mut baseline_core = quickjs_test_core();
         baseline_core.set_reg(1, Value::BigInt(Arc::from("9007199254740993")));
         baseline_core.set_reg(2, Value::BigInt(Arc::from("7")));
+        baseline_core
+            .sync_estimated_memory_bytes()
+            .expect("seeded BigInt operands should fit memory budget");
         let baseline = baseline_core.execute(&module).expect("baseline BigInt add");
 
         assert_execution_semantics_equal(&compact, &baseline);

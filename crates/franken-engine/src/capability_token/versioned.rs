@@ -181,19 +181,21 @@ impl VersionedCapabilityToken {
         }
         build_versioned_token(
             issuer_key,
-            legacy.audience.clone(),
-            legacy.capabilities.clone(),
-            legacy.nbf,
-            legacy.expiry,
-            legacy.epoch,
-            legacy.valid_from_epoch,
-            legacy.valid_until_epoch,
-            legacy
-                .checkpoint_binding
-                .as_ref()
-                .map(VersionedCheckpointRef::legacy),
-            legacy.revocation_freshness.clone(),
-            legacy.zone.clone(),
+            TokenGrant {
+                audience: legacy.audience.clone(),
+                capabilities: legacy.capabilities.clone(),
+                nbf: legacy.nbf,
+                expiry: legacy.expiry,
+                epoch: legacy.epoch,
+                valid_from_epoch: legacy.valid_from_epoch,
+                valid_until_epoch: legacy.valid_until_epoch,
+                checkpoint_binding: legacy
+                    .checkpoint_binding
+                    .as_ref()
+                    .map(VersionedCheckpointRef::legacy),
+                revocation_freshness: legacy.revocation_freshness.clone(),
+                zone: legacy.zone.clone(),
+            },
             Some(provenance),
         )
     }
@@ -301,16 +303,18 @@ impl VersionedTokenBuilder {
     pub fn build(self) -> Result<VersionedCapabilityToken, VersionedTokenError> {
         build_versioned_token(
             &self.issuer_key,
-            self.audience,
-            self.capabilities,
-            self.nbf,
-            self.expiry,
-            self.epoch,
-            self.valid_from_epoch,
-            self.valid_until_epoch,
-            self.checkpoint_binding,
-            self.revocation_freshness,
-            self.zone,
+            TokenGrant {
+                audience: self.audience,
+                capabilities: self.capabilities,
+                nbf: self.nbf,
+                expiry: self.expiry,
+                epoch: self.epoch,
+                valid_from_epoch: self.valid_from_epoch,
+                valid_until_epoch: self.valid_until_epoch,
+                checkpoint_binding: self.checkpoint_binding,
+                revocation_freshness: self.revocation_freshness,
+                zone: self.zone,
+            },
             None,
         )
     }
@@ -465,8 +469,9 @@ pub struct VersionedTokenEvent {
     pub trace_id: String,
 }
 
-fn build_versioned_token(
-    issuer_key: &SigningKey,
+/// The authority a versioned token grants: every signed field except the
+/// issuer and the legacy provenance.
+struct TokenGrant {
     audience: BTreeSet<PrincipalId>,
     capabilities: BTreeSet<RuntimeCapability>,
     nbf: DeterministicTimestamp,
@@ -477,8 +482,25 @@ fn build_versioned_token(
     checkpoint_binding: Option<VersionedCheckpointRef>,
     revocation_freshness: Option<RevocationFreshnessRef>,
     zone: String,
+}
+
+fn build_versioned_token(
+    issuer_key: &SigningKey,
+    grant: TokenGrant,
     legacy_provenance: Option<LegacyCapabilityTokenProvenance>,
 ) -> Result<VersionedCapabilityToken, VersionedTokenError> {
+    let TokenGrant {
+        audience,
+        capabilities,
+        nbf,
+        expiry,
+        epoch,
+        valid_from_epoch,
+        valid_until_epoch,
+        checkpoint_binding,
+        revocation_freshness,
+        zone,
+    } = grant;
     validate_token_fields(
         &audience,
         &capabilities,

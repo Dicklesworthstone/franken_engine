@@ -268,6 +268,14 @@ const DEFAULT_MAX_SCOPE_DEPTH: u32 = 512;
 /// Floor of the event-loop turn cap; the cap otherwise equals the instruction
 /// budget (see `run_event_loop_until_idle_with_module`).
 const MIN_EVENT_LOOP_TURN_LIMIT: u64 = 10_000;
+/// Epoch of the deterministic wall clock (2026-01-01T00:00:00Z). `Date.now()`
+/// and `new Date()` report this epoch plus the virtual time elapsed in the run.
+const DETERMINISTIC_EPOCH_MS: i64 = 1_767_225_600_000;
+/// Guest instructions per virtual millisecond. Synchronous work advances the
+/// virtual wall clock deterministically (so `Date.now()` deltas measure work
+/// and busy-waits terminate); firing a timer advances it to the timer's due
+/// time (bd-9vouw.59).
+const INSTRUCTIONS_PER_VIRTUAL_MS: u64 = 1_000;
 
 /// Domain-separation tag for the HMAC preimage of a [`DecisionReceipt`]
 /// (bd-gn3mt). Mirrors the
@@ -12462,6 +12470,9 @@ pub struct InterpreterCore {
     /// Exit status set by `process.exitCode = n` or `process.exit(n)`
     /// (bd-my9hk); `None` means the program never set one.
     process_exit_code: Option<i32>,
+    /// Instruction count already converted into virtual wall-clock time
+    /// (see [`INSTRUCTIONS_PER_VIRTUAL_MS`]).
+    virtual_clock_instruction_mark: u64,
     /// Profiling data collection (optional for performance measurements).
     profiling_data: Option<crate::profiling::Profiler>,
     /// Next timer ID for setTimeout/setInterval (monotonic for determinism).
@@ -13156,6 +13167,7 @@ impl InterpreterCore {
             console_output: Vec::new(),
             console_output_bytes: 0,
             process_exit_code: None,
+            virtual_clock_instruction_mark: 0,
             profiling_data: None,
             next_timer_id: 0,
             active_timers: BTreeMap::new(),
@@ -72504,6 +72516,31 @@ impl InterpreterCore {
         outcome
     }
 
+    /// Deterministic wall-clock reading in epoch milliseconds: the fixed
+    /// epoch plus the event loop's virtual time, after crediting guest work
+    /// since the previous reading (one virtual millisecond per
+    /// [`INSTRUCTIONS_PER_VIRTUAL_MS`] instructions). Advancing the shared
+    /// event-loop clock keeps readings monotonic and consistent with timer
+    /// due times (bd-9vouw.59).
+    fn virtual_wall_clock_ms(&mut self) -> f64 {
+        if self.instructions_executed < self.virtual_clock_instruction_mark {
+            // A reused core restarted its instruction counter.
+            self.virtual_clock_instruction_mark = self.instructions_executed;
+        }
+        let elapsed_ms = (self.instructions_executed - self.virtual_clock_instruction_mark)
+            / INSTRUCTIONS_PER_VIRTUAL_MS;
+        if elapsed_ms > 0 {
+            let now = self.event_loop.clock.now_ms();
+            self.event_loop
+                .clock
+                .advance_to(now.saturating_add(elapsed_ms));
+            self.virtual_clock_instruction_mark = self
+                .virtual_clock_instruction_mark
+                .saturating_add(elapsed_ms.saturating_mul(INSTRUCTIONS_PER_VIRTUAL_MS));
+        }
+        DETERMINISTIC_EPOCH_MS as f64 + self.event_loop.clock.now_ms() as f64
+    }
+
     fn deterministic_performance_now(&mut self) -> Value {
         const DETERMINISTIC_PERFORMANCE_BASE_TICK: u64 = 0;
 
@@ -75570,20 +75607,19 @@ impl InterpreterCore {
                 self.dispatch_console_hostcall_inner("console:warn", args, module)
             }
             "builtin:DateNow" => {
-                // Date.now implementation - returns deterministic timestamp in milliseconds
-                // Uses fixed epoch (2026-01-01T00:00:00Z) for deterministic replay
-                const DETERMINISTIC_EPOCH_MS: i64 = 1_767_225_600_000;
-
-                Ok(Value::Float(Float64::new(DETERMINISTIC_EPOCH_MS as f64)))
+                // Deterministic wall clock: the fixed epoch plus the run's
+                // virtual elapsed time (timers fired + guest work), so timer
+                // callbacks observe their delays and strict replay reproduces
+                // every reading (bd-9vouw.59).
+                Ok(Value::Float(Float64::new(self.virtual_wall_clock_ms())))
             }
             "builtin:PerformanceNow" => Ok(self.deterministic_performance_now()),
             "builtin:Date" => {
                 // Date() / new Date([ms]) constructor — returns a Date object.
-                // With no argument, uses a fixed epoch (2026-01-01T00:00:00Z) for
-                // deterministic replay. With an explicit millisecond argument
-                // (`new Date(0)`), honor it so `getTime()` round-trips (bd-cseei).
-                const DETERMINISTIC_EPOCH_MS: i64 = 1_767_225_600_000;
-
+                // With no argument, uses the deterministic wall clock (epoch
+                // plus virtual elapsed time, bd-9vouw.59). With an explicit
+                // millisecond argument (`new Date(0)`), honor it so
+                // `getTime()` round-trips (bd-cseei).
                 let millis = if args.count > 0 {
                     match self.read_reg(args.start)? {
                         Value::Int(i) => i as f64,
@@ -75594,7 +75630,7 @@ impl InterpreterCore {
                         _ => f64::NAN,
                     }
                 } else {
-                    DETERMINISTIC_EPOCH_MS as f64
+                    self.virtual_wall_clock_ms()
                 };
 
                 // Create a new Date object. Tag it with `__type:"Date"` so the

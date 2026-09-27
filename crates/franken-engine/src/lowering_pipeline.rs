@@ -11902,6 +11902,25 @@ fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
     });
 }
 
+/// An expression the parser could not recognise (`Expression::Raw`) throws a
+/// catchable SyntaxError when it is evaluated. It used to lower to a string
+/// holding its own source text (called if the text contained `(`), so
+/// unsupported syntax such as `this.#field` silently produced wrong values.
+/// Code that never evaluates the expression is unaffected.
+fn emit_unsupported_syntax_throw(ops: &mut Vec<Ir1Op>, source: &str) {
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(format!("unsupported expression syntax: {source}").into()),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:SyntaxError".to_string(),
+        arg_count: 1,
+    });
+    ops.push(Ir1Op::Throw);
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Undefined,
+    });
+}
+
 /// Resolve free-floating identifier loads in a function body that have no
 /// source-level binding.
 ///
@@ -13202,14 +13221,7 @@ fn lower_expression_to_ir1_inner(
                 delegate: *delegate,
             });
         }
-        Expression::Raw(raw) => {
-            ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::String(raw.clone().into()),
-            });
-            if raw.contains('(') {
-                ops.push(Ir1Op::Call { arg_count: 0 });
-            }
-        }
+        Expression::Raw(raw) => emit_unsupported_syntax_throw(ops, raw),
         Expression::SpreadElement(inner) => {
             // Spread in expression position: lower the inner expression.
             // The actual spreading (iteration into array/object/call) is
@@ -40082,48 +40094,94 @@ mod tests {
         assert_eq!(binding.kind, BindingKind::Const);
     }
 
-    // -- Raw expression with call --
+    // -- Raw (unrecognised) expressions fail closed --
+    //
+    // These two tests used to pin the old lowering: the source text became a
+    // string literal, called with no arguments when it contained `(`. That
+    // silently turned unsupported syntax into wrong values (`this.#p` was the
+    // string "this.#p"). Raw now lowers to a thrown SyntaxError and never to a
+    // call or a value derived from source text.
 
-    #[test]
-    fn lower_raw_expression_with_call_pattern() {
+    fn assert_raw_lowers_to_syntax_error_throw(raw: &str) {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
-                expression: Expression::Raw("console.log(42)".to_string()),
+                expression: Expression::Raw(raw.to_string()),
                 span: span(),
             })],
             span: span(),
         };
-        let ir0 = Ir0Module::from_syntax_tree(tree, "raw_call.js");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "raw.js");
         let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
+        let ops = &result.module.ops;
 
-        let has_call = result
-            .module
-            .ops
+        assert!(
+            !ops.iter().any(|op| matches!(op, Ir1Op::Call { .. })),
+            "raw `{raw}` must not be called"
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral { value: Ir1Literal::String(text) } if *text == raw
+            )),
+            "raw `{raw}` must not become a value"
+        );
+        let throw_at = ops
             .iter()
-            .any(|op| matches!(op, Ir1Op::Call { .. }));
-        assert!(has_call);
+            .position(|op| matches!(op, Ir1Op::Throw))
+            .expect("raw expression must throw");
+        assert!(
+            matches!(
+                &ops[throw_at - 1],
+                Ir1Op::HostCall { capability, arg_count: 1 } if capability == "builtin:SyntaxError"
+            ),
+            "the thrown value must be a SyntaxError"
+        );
+        assert!(matches!(
+            &ops[throw_at - 2],
+            Ir1Op::LoadLiteral { value: Ir1Literal::String(text) }
+                if *text == format!("unsupported expression syntax: {raw}").as_str()
+        ));
     }
 
     #[test]
-    fn lower_raw_expression_without_call_pattern() {
-        let tree = SyntaxTree {
-            goal: ParseGoal::Script,
-            body: vec![Statement::Expression(ExpressionStatement {
-                expression: Expression::Raw("console".to_string()),
-                span: span(),
-            })],
-            span: span(),
-        };
-        let ir0 = Ir0Module::from_syntax_tree(tree, "raw_no_call.js");
-        let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
+    fn raw_expression_with_call_text_throws_instead_of_calling() {
+        assert_raw_lowers_to_syntax_error_throw("console.log(42)");
+    }
 
-        let has_call = result
-            .module
-            .ops
-            .iter()
-            .any(|op| matches!(op, Ir1Op::Call { .. }));
-        assert!(!has_call);
+    #[test]
+    fn raw_expression_throws_instead_of_yielding_its_source_text() {
+        assert_raw_lowers_to_syntax_error_throw("console");
+    }
+
+    fn raw_fail_closed_eval(source: &str) -> String {
+        let mut engine = crate::HybridRouter::default();
+        match engine.eval(source) {
+            Ok(outcome) => outcome.value,
+            Err(err) => format!("ERR:{err}"),
+        }
+    }
+
+    #[test]
+    fn unsupported_private_member_access_throws_a_catchable_syntax_error() {
+        // Private class members are not implemented. `this.#p` used to
+        // evaluate to the string "this.#p"; it must now throw (Node prints 1,
+        // so this pins the refusal, not parity).
+        assert_eq!(
+            raw_fail_closed_eval(
+                "class A { get p() { return this.#p; } } \
+                 let r; try { r = new A().p; } catch (e) { r = e.name + ':' + e.message; } r"
+            ),
+            "SyntaxError:unsupported expression syntax: this.#p"
+        );
+    }
+
+    #[test]
+    fn unevaluated_unsupported_expression_does_not_fail_the_program() {
+        assert_eq!(
+            raw_fail_closed_eval("function never() { return this.#q; } 'ok'"),
+            "ok"
+        );
     }
 
     // -- Full pipeline with imports/exports --

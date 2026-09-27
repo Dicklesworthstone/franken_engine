@@ -52128,48 +52128,96 @@ impl InterpreterCore {
         Value::str(tag)
     }
 
-    /// Canonical string key for a Map key / Set value (bd-juodx). Mirrors the
-    /// representation used by the `builtin:Map*`/`Set*` hostcall impls so the
-    /// member-access path and the detached hostcall path agree.
+    /// Storage key for a Map key / Set value (bd-juodx). Every Map/Set path,
+    /// including the `builtin:Map*`/`Set*` hostcalls, keys storage through
+    /// this one function.
+    ///
+    /// The encoding is injective over SameValueZero classes:
+    /// - `-0` and `+0` share `n:0`, and `1` and `1.0` share `n:1`;
+    /// - Symbols, functions, closures, generators and Promises key by identity;
+    /// - BigInts key by value;
+    /// - strings with lone surrogates key by their exact UTF-16 code units.
+    ///
+    /// [`Self::collection_key_from_repr`] inverts it, so Map iteration returns
+    /// the original keys.
     fn collection_key_repr(value: &Value) -> String {
         match value {
-            Value::Str(s) => format!("s:{}", s),
-            Value::Int(i) => format!("n:{}", i),
+            Value::Str(s) => match s.as_str() {
+                Some(text) => format!("s:{text}"),
+                None => {
+                    let units: Vec<String> =
+                        s.encode_utf16().map(|unit| format!("{unit:04x}")).collect();
+                    format!("u:{}", units.join(","))
+                }
+            },
+            Value::Int(i) => format!("n:{i}"),
+            Value::Float(f) if f.inner() == 0.0 => "n:0".to_string(),
             Value::Float(f) => format!("n:{}", f.inner()),
-            Value::Bool(b) => format!("b:{}", b),
+            Value::Bool(b) => format!("b:{b}"),
             Value::Null => "null".to_string(),
             Value::Undefined => "undefined".to_string(),
             Value::Object(id) => format!("o:{}", id.0),
-            _ => "other".to_string(),
+            Value::BigInt(digits) => format!("B:{digits}"),
+            Value::Symbol(symbol) => format!("y:{}", symbol.0),
+            Value::Function(index) => format!("F:{index}"),
+            Value::Closure(index) => format!("c:{index}"),
+            Value::Iterator(index) => format!("i:{index}"),
+            Value::GeneratorFunction(index) => format!("gf:{index}"),
+            Value::Generator(index) => format!("g:{index}"),
+            Value::AsyncFunction(index) => format!("af:{index}"),
+            Value::AsyncFunctionObject(index) => format!("ao:{index}"),
+            Value::AsyncGeneratorFunction(index) => format!("agf:{index}"),
+            Value::AsyncGeneratorObject(index) => format!("ag:{index}"),
+            Value::Promise(index) => format!("p:{index}"),
+            Value::BuiltinFunction(builtin) => serde_json::to_string(builtin)
+                .map(|json| format!("bf:{json}"))
+                .unwrap_or_else(|_| "other".to_string()),
+            // Accessor records are internal descriptor payloads, never
+            // JavaScript values.
+            Value::Accessor { .. } => "other".to_string(),
         }
     }
 
-    /// Invert [`Self::collection_key_repr`] for iteration. Every key kind the
-    /// repr encodes losslessly comes back exactly; keys stored as `"other"`
-    /// (functions, Symbols) are not recoverable from this storage model and
-    /// iterate as `undefined`.
+    /// Invert [`Self::collection_key_repr`] for iteration.
     fn collection_key_from_repr(repr: &str) -> Value {
-        if let Some(text) = repr.strip_prefix("s:") {
-            return Value::str(text);
-        }
-        if let Some(number) = repr.strip_prefix("n:") {
-            return match number.parse::<i64>() {
-                Ok(int) => Value::Int(int),
-                Err(_) => js_number_to_value(number.parse::<f64>().unwrap_or(f64::NAN)),
+        let Some((tag, payload)) = repr.split_once(':') else {
+            return match repr {
+                "null" => Value::Null,
+                _ => Value::Undefined,
             };
-        }
-        if let Some(id) = repr
-            .strip_prefix("o:")
-            .and_then(|id| id.parse::<u32>().ok())
-        {
-            return Value::Object(ObjectId(id));
-        }
-        match repr {
-            "b:true" => Value::Bool(true),
-            "b:false" => Value::Bool(false),
-            "null" => Value::Null,
-            _ => Value::Undefined,
-        }
+        };
+        let index = || payload.parse::<u32>().ok();
+        let decoded = match tag {
+            "s" => Some(Value::str(payload)),
+            "u" => payload
+                .split(',')
+                .map(|unit| u16::from_str_radix(unit, 16).ok())
+                .collect::<Option<Vec<u16>>>()
+                .map(|units| Value::Str(JsString::from_code_units(&units))),
+            "n" => Some(match payload.parse::<i64>() {
+                Ok(int) => Value::Int(int),
+                Err(_) => js_number_to_value(payload.parse::<f64>().unwrap_or(f64::NAN)),
+            }),
+            "b" => Some(Value::Bool(payload == "true")),
+            "o" => index().map(|id| Value::Object(ObjectId(id))),
+            "B" => Some(Value::BigInt(Arc::from(payload))),
+            "y" => index().map(|id| Value::Symbol(SymbolId(id))),
+            "F" => index().map(Value::Function),
+            "c" => index().map(Value::Closure),
+            "i" => index().map(Value::Iterator),
+            "gf" => index().map(Value::GeneratorFunction),
+            "g" => index().map(Value::Generator),
+            "af" => index().map(Value::AsyncFunction),
+            "ao" => index().map(Value::AsyncFunctionObject),
+            "agf" => index().map(Value::AsyncGeneratorFunction),
+            "ag" => index().map(Value::AsyncGeneratorObject),
+            "p" => index().map(Value::Promise),
+            "bf" => serde_json::from_str(payload)
+                .ok()
+                .map(Value::BuiltinFunction),
+            _ => None,
+        };
+        decoded.unwrap_or(Value::Undefined)
     }
 
     /// Iteration snapshot of a Map (`[key, value]` pairs) or a Set (values),
@@ -53431,7 +53479,9 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         // Recheck existence per key: an earlier getter may delete a later
         // property, even though that key remains in the ownKeys snapshot.
+        // CopyDataProperties and Object.assign copy only [[Enumerable]] keys.
         Ok(object.contains_own_runtime_property(key)
+            && object.own_property_attributes(key).enumerable
             && match key {
                 RuntimePropertyKey::String(name) => {
                     self.writable_own_runtime_property_visible(object_id, name)
@@ -75316,17 +75366,7 @@ impl InterpreterCore {
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
                     if let Some(Value::Object(entries_id)) = map_obj.properties.get("__entries") {
                         if let Some(entries_obj) = self.heap.get(entries_id.0 as usize) {
-                            // Use the same key representation as set()
-                            let key_str = match key {
-                                Value::Str(s) => format!("s:{}", s),
-                                Value::Int(i) => format!("n:{}", i),
-                                Value::Float(f) => format!("n:{}", f.inner()),
-                                Value::Bool(b) => format!("b:{}", b),
-                                Value::Null => "null".to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                Value::Object(id) => format!("o:{}", id.0),
-                                _ => "other".to_string(),
-                            };
+                            let key_str = Self::collection_key_repr(&key);
 
                             if let Some(value) = entries_obj.properties.get(&key_str) {
                                 return Ok(value.clone());
@@ -75386,17 +75426,7 @@ impl InterpreterCore {
                 if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
                     if let Some(Value::Object(values_id)) = set_obj.properties.get("__values") {
                         if let Some(values_obj) = self.heap.get(values_id.0 as usize) {
-                            // Use the same value representation as add()
-                            let value_str = match value {
-                                Value::Str(s) => format!("s:{}", s),
-                                Value::Int(i) => format!("n:{}", i),
-                                Value::Float(f) => format!("n:{}", f.inner()),
-                                Value::Bool(b) => format!("b:{}", b),
-                                Value::Null => "null".to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                Value::Object(id) => format!("o:{}", id.0),
-                                _ => "other".to_string(),
-                            };
+                            let value_str = Self::collection_key_repr(&value);
 
                             if values_obj.properties.contains_key(&value_str) {
                                 return Ok(Value::Bool(true));
@@ -75434,17 +75464,7 @@ impl InterpreterCore {
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
                     if let Some(Value::Object(entries_id)) = map_obj.properties.get("__entries") {
                         if let Some(entries_obj) = self.heap.get(entries_id.0 as usize) {
-                            // Use the same key representation as set()
-                            let key_str = match key {
-                                Value::Str(s) => format!("s:{}", s),
-                                Value::Int(i) => format!("n:{}", i),
-                                Value::Float(f) => format!("n:{}", f.inner()),
-                                Value::Bool(b) => format!("b:{}", b),
-                                Value::Null => "null".to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                Value::Object(id) => format!("o:{}", id.0),
-                                _ => "other".to_string(),
-                            };
+                            let key_str = Self::collection_key_repr(&key);
 
                             if entries_obj.properties.contains_key(&key_str) {
                                 return Ok(Value::Bool(true));
@@ -78925,19 +78945,6 @@ impl InterpreterCore {
         }
     }
 
-    fn collection_storage_key(value: &Value) -> String {
-        match value {
-            Value::Str(text) => format!("s:{text}"),
-            Value::Int(number) => format!("n:{number}"),
-            Value::Float(number) => format!("n:{}", number.inner()),
-            Value::Bool(boolean) => format!("b:{boolean}"),
-            Value::Null => "null".to_string(),
-            Value::Undefined => "undefined".to_string(),
-            Value::Object(object_id) => format!("o:{}", object_id.0),
-            _ => "other".to_string(),
-        }
-    }
-
     fn increment_collection_size(&mut self, collection_id: ObjectId) {
         let collection_index = collection_id.0 as usize;
         self.mutate_heap(|heap| {
@@ -78971,7 +78978,7 @@ impl InterpreterCore {
             let key_str = if weak_keys_only {
                 Self::weakmap_object_key(key)
             } else {
-                Some(Self::collection_storage_key(&key))
+                Some(Self::collection_key_repr(&key))
             };
             let Some(key_str) = key_str else {
                 continue;
@@ -79014,7 +79021,7 @@ impl InterpreterCore {
             let (value_str, stored) = if weak_values_only {
                 (Self::weakmap_object_key(value), Value::Bool(true))
             } else {
-                (Some(Self::collection_storage_key(&value)), value)
+                (Some(Self::collection_key_repr(&value)), value)
             };
             let Some(value_str) = value_str else {
                 continue;

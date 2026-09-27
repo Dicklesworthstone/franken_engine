@@ -67,6 +67,22 @@ fn enumeration_and_copies_skip_builtin_state() {
     );
 }
 
+/// `Object.assign` and object spread copy only enumerable own properties
+/// (CopyDataProperties). The copy path ignored `enumerable: false` from
+/// `Object.defineProperty`, for string and symbol keys alike.
+#[test]
+fn copies_skip_user_defined_non_enumerable_properties() {
+    check(
+        "var o = Object.defineProperty({ a: 1 }, 'hidden', { value: 2, enumerable: false }); \
+         var sym = Symbol('s'); Object.defineProperty(o, sym, { value: 3, enumerable: false }); \
+         var c = Object.assign({}, o), sp = { ...o }; \
+         [Object.keys(c).join(), Object.keys(sp).join(), 'hidden' in c, 'hidden' in sp, \
+          Object.getOwnPropertySymbols(c).length, \
+          Object.getOwnPropertySymbols(sp).length].join('|')",
+        "a|a|false|false|0|0",
+    );
+}
+
 #[test]
 fn builtin_objects_still_work() {
     check(

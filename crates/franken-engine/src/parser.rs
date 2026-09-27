@@ -2279,6 +2279,38 @@ fn merge_logical_lines_requires_continuation(
     )
 }
 
+/// Whether `line` starts with an operator that can only continue an
+/// expression, never begin a statement: `|| b`, `&& b`, `?? b`, `? a : b`,
+/// `: b`, `, b`, `* b`, `% b`, `| b`, `& b`, `^ b`, `= b`, `!= b`. ECMAScript
+/// inserts no semicolon before such a token, so the line continues the
+/// previous one (the leading-operator layout formatters emit for long
+/// conditions and ternaries). `+`/`-` also continue (`a\n- b` is `a - b`)
+/// unless doubled (`++`/`--` after a newline start a new statement); they are
+/// reported separately because, unlike the others, they can begin a
+/// statement after a block.
+fn line_starts_with_continuation_operator(line: &str) -> Option<LeadingOperator> {
+    let bytes = line.as_bytes();
+    let first = *bytes.first()?;
+    let second = bytes.get(1).copied();
+    match first {
+        b'|' | b'&' | b'?' | b':' | b',' | b'*' | b'%' | b'^' | b'=' => {
+            Some(LeadingOperator::BinaryOnly)
+        }
+        b'!' if second == Some(b'=') => Some(LeadingOperator::BinaryOnly),
+        b'+' | b'-' if second != Some(first) => Some(LeadingOperator::UnaryOrBinary),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeadingOperator {
+    /// Cannot begin an expression, so the line always continues.
+    BinaryOnly,
+    /// `+`/`-`: continues an expression, but begins a new statement after a
+    /// block (`if (x) {}\n-1`).
+    UnaryOrBinary,
+}
+
 /// Replace comment bytes with spaces so the line-merge and statement-segment
 /// passes never observe comment characters. ECMAScript line terminators are
 /// preserved for line/column accuracy, and every blanked character emits exactly `len_utf8()`
@@ -2741,6 +2773,18 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 && result
                     .last()
                     .is_some_and(|prev: &LogicalLine| !prev.text.ends_with(';'));
+            // Likewise a line STARTING with an operator that cannot begin a
+            // statement continues the previous expression (`cond\n  ? a\n  : b`,
+            // `a\n  || b`, comma-first declarations). A leading `+`/`-` does
+            // not continue a statement that ended with a block.
+            let operator_continues_previous = line_starts_with_continuation_operator(trimmed_line)
+                .is_some_and(|operator| {
+                    result.last().is_some_and(|prev: &LogicalLine| {
+                        !prev.text.ends_with(';')
+                            && (operator == LeadingOperator::BinaryOnly
+                                || !prev.text.ends_with('}'))
+                    })
+                });
             // A physical newline cannot terminate a try/catch/finally or
             // if/else statement between its clauses. Rejoin only a matching
             // compound statement, preserving the existing source-offset map.
@@ -2768,7 +2812,11 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     };
                     statement_header_awaits_body(strip_leading_labels(previous).trim())
                 });
-            if dot_continues_previous || block_clause_continues_previous || brace_continues_header {
+            if dot_continues_previous
+                || operator_continues_previous
+                || block_clause_continues_previous
+                || brace_continues_header
+            {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;
                 current_source_boundaries = prev.source_boundaries;
@@ -5544,6 +5592,12 @@ fn try_parse_assignment(
             i += 1;
             continue;
         }
+        if b == b'/'
+            && let Some(len) = regex_literal_len_at(expr, i)
+        {
+            i += len;
+            continue;
+        }
         match b {
             b'\'' | b'"' | b'`' => {
                 quotes.open(b);
@@ -8167,6 +8221,29 @@ fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
     } else {
         None
     }
+}
+
+/// Byte length of the regex literal at `expr[slash..]` when that slash sits
+/// where an expression can begin (at the start, after an operator or opening
+/// bracket, or after a keyword such as `return`) and so opens a regex rather
+/// than dividing. Operator scanners skip the literal, so the `=` in `/a=b/` or
+/// `/=/g` is never mistaken for an assignment.
+fn regex_literal_len_at(expr: &str, slash: usize) -> Option<usize> {
+    let before = expr[..slash].trim_end();
+    let identifier_start = before
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '$'))
+        .map_or(0, |(index, ch)| index + ch.len_utf8());
+    // No next-character check: in expression position `/=` opens a regex too.
+    if !merge_logical_lines_slash_starts_regex(
+        before.chars().next_back(),
+        &before[identifier_start..],
+        None,
+    ) {
+        return None;
+    }
+    leading_regexp_literal(&expr[slash..]).map(|(end, _, _)| end)
 }
 
 /// Return the byte end and components of a regex literal at the start of `input`.
@@ -16851,6 +16928,84 @@ mod tests {
     fn parse_script_with_regex_brace_before_block_keeps_two_statements() {
         let tree = parse_script("var r = /{/;\nif (x) {\n  y;\n}");
         assert_eq!(tree.body.len(), 2);
+    }
+
+    #[test]
+    fn merge_logical_lines_continues_lines_that_start_with_an_operator() {
+        // Leading-operator layout: ternaries, logical chains, comma-first.
+        let lines = merge_logical_lines(
+            "var v = ok\n  ? \"yes\"\n  : \"no\";\nvar a = x\n  || y\n  && z\nvar b = 1\n  , c = 2;",
+        );
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "var v = ok ? \"yes\" : \"no\";",
+                "var a = x || y && z",
+                "var b = 1 , c = 2;"
+            ]
+        );
+        assert_eq!((lines[0].start_line, lines[0].end_line), (1, 3));
+
+        // `++`/`--` after a newline start a statement; a leading `-` does not
+        // continue a statement that ended with a block; nothing continues
+        // past an explicit `;`.
+        let lines = merge_logical_lines("a\n++b\nif (x) {}\n-1\nc;\n|| d");
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(texts, ["a", "++b", "if (x) {}", "-1", "c;", "|| d"]);
+
+        // A leading `-` does continue an ordinary expression: `a\n- b` is `a - b`.
+        let lines = merge_logical_lines("var d = a\n  - b;");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "var d = a - b;");
+    }
+
+    #[test]
+    fn parse_script_accepts_leading_operator_continuations() {
+        let tree = parse_script(
+            "var value = !flags && isNumber(val)\n\t? Number(val)\n\t: val;\nif (\n  o === Object.prototype\n  || o === Number.prototype\n) { o = {}; }",
+        );
+        assert_eq!(tree.body.len(), 2);
+    }
+
+    #[test]
+    fn regex_literals_containing_equals_are_not_assignments() {
+        for source in [
+            "var r = /a=b/;",
+            "var s = \"x=\".replace(/=/g, \"-\");",
+            "var t = (/^--.+=/).test(arg);",
+            "var m = arg.match(/^--([^=]+)=([\\s\\S]*)$/);",
+            "if (/=/.test(s)) { x = 1; }",
+        ] {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(tree.body.len(), 1, "{source}");
+        }
+
+        // Division and `/=` in operand position are still operators.
+        let tree = parse_script("x /= 2;");
+        let Statement::Expression(statement) = &tree.body[0] else {
+            panic!("expected an expression statement");
+        };
+        assert!(matches!(
+            statement.expression,
+            Expression::Assignment {
+                operator: AssignmentOperator::DivideAssign,
+                ..
+            }
+        ));
+        let tree = parse_script("y = a / b / c;");
+        let Statement::Expression(statement) = &tree.body[0] else {
+            panic!("expected an expression statement");
+        };
+        assert!(matches!(
+            statement.expression,
+            Expression::Assignment {
+                operator: AssignmentOperator::Assign,
+                ..
+            }
+        ));
     }
 
     #[test]

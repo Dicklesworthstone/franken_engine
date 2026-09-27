@@ -40640,6 +40640,12 @@ impl InterpreterCore {
 
         let failure_label = Self::terminal_async_failure_label(&settlement_label);
         let async_function_count_before_run = self.async_functions.len();
+        // bd-j9r60: the setup transfer below is accounted as one delta.
+        let setup_transfer_bytes = self
+            .activation_transfer_memory_bytes()
+            .saturating_add(self.async_function_memory_bytes_at(async_function_id));
+        #[cfg(test)]
+        let setup_drift = self.memory_walk_drift();
         let activation = self
             .closures
             .replace_activation(
@@ -40672,10 +40678,31 @@ impl InterpreterCore {
         self.install_generator_execution(activation);
         let initial_async_ids = Self::async_function_ids_in_call_stack(&self.call_stack, 0);
 
-        let result = self.sync_estimated_memory_bytes().and_then(|_| {
-            self.resume_async_function_after_await(resumption_context, settled, settlement_label)
+        let result = self
+            .apply_memory_component_delta(
+                setup_transfer_bytes,
+                self.activation_transfer_memory_bytes()
+                    .saturating_add(self.async_function_memory_bytes_at(async_function_id)),
+            )
+            .and_then(|_| {
+                #[cfg(test)]
+                debug_assert_eq!(
+                    self.memory_walk_drift(),
+                    setup_drift,
+                    "async resume setup transfer drifted from the full walk (bd-j9r60)"
+                );
+                self.resume_async_function_after_await(
+                    resumption_context,
+                    settled,
+                    settlement_label,
+                )
                 .and_then(|()| self.continue_resumed_async_function(Some(owner_module.as_ref())))
-        });
+            });
+        // bd-j9r60: the completion transfer below (caller reinstalled, the
+        // continuation parked or dropped) is accounted as one delta.
+        let completion_live_bytes = self.activation_transfer_memory_bytes();
+        #[cfg(test)]
+        let completion_drift = self.memory_walk_drift();
         let mut continuation_execution = self.take_generator_execution();
         continuation_execution.contained_codegen_grant = contained_codegen_grant;
         let mut continuation = Some(continuation_execution);
@@ -40729,19 +40756,26 @@ impl InterpreterCore {
         self.generator_resume_dst = caller_generator_resume_dst;
         self.generator_result_label = caller_generator_result_label;
 
-        if result.is_ok()
-            && let Some(suspended_id) = suspended_async_id
-        {
+        let parked_async_id = suspended_async_id.filter(|_| result.is_ok());
+        let parked_previous_bytes =
+            parked_async_id.map_or(0, |id| self.async_function_memory_bytes_at(id));
+        if let Some(suspended_id) = parked_async_id {
             self.closures.replace_activation(
                 &mut self.async_functions[suspended_id as usize].isolated_execution,
                 continuation.take(),
             );
         }
         drop(continuation);
+        let completion_previous_bytes = completion_live_bytes.saturating_add(parked_previous_bytes);
+        let completion_next_bytes = self.activation_transfer_memory_bytes().saturating_add(
+            parked_async_id.map_or(0, |id| self.async_function_memory_bytes_at(id)),
+        );
 
         match result {
             Ok(()) => {
-                if let Err(error) = self.sync_estimated_memory_bytes() {
+                if let Err(error) = self
+                    .apply_memory_component_delta(completion_previous_bytes, completion_next_bytes)
+                {
                     let mut abandoned_async_ids = active_async_ids.clone();
                     let retained_async_ids = suspended_async_id
                         .and_then(|suspended_id| {
@@ -40764,9 +40798,27 @@ impl InterpreterCore {
                     );
                     return Err(error);
                 }
+                #[cfg(test)]
+                debug_assert_eq!(
+                    self.memory_walk_drift(),
+                    completion_drift,
+                    "async resume completion transfer drifted from the full walk (bd-j9r60)"
+                );
                 Ok(())
             }
             Err(error) => {
+                // The run already failed and its continuation was dropped;
+                // account the transfer without raising a second refusal.
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(completion_previous_bytes)
+                    .saturating_add(completion_next_bytes);
+                #[cfg(test)]
+                debug_assert_eq!(
+                    self.memory_walk_drift(),
+                    completion_drift,
+                    "async resume failure transfer drifted from the full walk (bd-j9r60)"
+                );
                 self.terminally_reject_abandoned_async_functions(&active_async_ids, failure_label);
                 Err(error)
             }
@@ -42960,6 +43012,61 @@ impl InterpreterCore {
         Ok(Some((published_promise, result_label, suspended_async_id)))
     }
 
+    /// Memory components a generator activation transfer moves between the
+    /// live execution state, the generator's suspended slot and the
+    /// temporarily suspended caller (bd-j9r60): registers and their labels,
+    /// the scope chain, the call stack with its abrupt-completion slots, the
+    /// yield* delegation, the one generator object and
+    /// `temporarily_suspended_execution_bytes`. Every other component is
+    /// untouched by the transfer, so bracketing it with this sum replaces a
+    /// whole-state re-derivation, which walks every heap object and made
+    /// each resume O(iterations so far).
+    fn generator_transfer_memory_bytes(&self, generator_index: usize) -> u64 {
+        self.activation_transfer_memory_bytes().saturating_add(
+            self.generators
+                .get(generator_index)
+                .map_or(0, Self::estimate_generator_bytes),
+        )
+    }
+
+    /// The live-execution side of an activation transfer (see
+    /// [`Self::generator_transfer_memory_bytes`]), shared by generator and
+    /// isolated async resumptions.
+    fn activation_transfer_memory_bytes(&self) -> u64 {
+        self.registers_memory_bytes()
+            .saturating_add(self.register_context_labels_memory_bytes())
+            .saturating_add(self.scope_chain_memory_bytes())
+            .saturating_add(self.call_stack_memory_bytes())
+            .saturating_add(self.generator_delegation_memory_bytes())
+            .saturating_add(self.temporarily_suspended_execution_bytes)
+    }
+
+    fn async_function_memory_bytes_at(&self, async_function_id: u32) -> u64 {
+        self.async_functions
+            .get(async_function_id as usize)
+            .map_or(0, Self::estimate_async_function_bytes)
+    }
+
+    /// Unit-test oracle for a transfer bracket: the incremental estimate's
+    /// distance from the full walk must be the same after the bracket as
+    /// before it, i.e. the bracket itself introduced no drift (bd-j9r60).
+    #[cfg(test)]
+    fn memory_walk_drift(&self) -> i128 {
+        i128::from(self.estimated_memory_bytes)
+            - i128::from(self.recompute_base_estimated_memory_bytes_by_walk())
+    }
+
+    fn apply_generator_transfer_delta(
+        &mut self,
+        generator_index: usize,
+        previous_transfer_bytes: u64,
+    ) -> Result<u64, InterpreterError> {
+        self.apply_memory_component_delta(
+            previous_transfer_bytes,
+            self.generator_transfer_memory_bytes(generator_index),
+        )
+    }
+
     fn install_generator_execution(&mut self, execution: GeneratorExecutionSnapshot) {
         self.before_seed_surface_write();
         self.registers.value = execution.registers;
@@ -43348,6 +43455,10 @@ impl InterpreterCore {
         }
 
         let mut start_heap_checkpoint = None;
+        // bd-j9r60: the setup transfer below is accounted as one delta.
+        let setup_transfer_bytes = self.generator_transfer_memory_bytes(generator_index);
+        #[cfg(test)]
+        let setup_drift = self.memory_walk_drift();
         let (activation, resume_dst) = if phase == GeneratorPhase::SuspendedStart {
             let invocation = self.generators[generator_index]
                 .invocation
@@ -43423,7 +43534,13 @@ impl InterpreterCore {
         self.install_generator_execution(activation);
 
         let setup_result = (|| -> Result<(), InterpreterError> {
-            self.sync_estimated_memory_bytes()?;
+            self.apply_generator_transfer_delta(generator_index, setup_transfer_bytes)?;
+            #[cfg(test)]
+            debug_assert_eq!(
+                self.memory_walk_drift(),
+                setup_drift,
+                "generator setup transfer drifted from the full walk (bd-j9r60)"
+            );
             if phase == GeneratorPhase::SuspendedYield
                 && (resume_kind == GeneratorResumeKind::Next || self.generator_delegation.is_some())
                 && let Some(resume_dst) = resume_dst
@@ -43461,7 +43578,24 @@ impl InterpreterCore {
             return Err(error);
         }
         if phase == GeneratorPhase::SuspendedStart {
-            self.generators[generator_index].invocation = None;
+            // The started activation now owns the arguments; release the
+            // retained invocation as its own delta (bd-j9r60).
+            #[cfg(test)]
+            let start_drift = self.memory_walk_drift();
+            let released_invocation_bytes = self.generators[generator_index]
+                .invocation
+                .take()
+                .as_ref()
+                .map_or(0, Self::estimate_generator_invocation_bytes);
+            self.estimated_memory_bytes = self
+                .estimated_memory_bytes
+                .saturating_sub(released_invocation_bytes);
+            #[cfg(test)]
+            debug_assert_eq!(
+                self.memory_walk_drift(),
+                start_drift,
+                "generator invocation release drifted from the full walk (bd-j9r60)"
+            );
         }
 
         let previous_foreign_call_depth = self.active_foreign_module_call_depth;
@@ -43508,6 +43642,11 @@ impl InterpreterCore {
             self.run_loop_labeled(owner_module.as_ref())
         })();
         self.active_foreign_module_call_depth = previous_foreign_call_depth;
+        // bd-j9r60: the completion transfer below is accounted as one delta
+        // on the yield and return paths.
+        let completion_transfer_bytes = self.generator_transfer_memory_bytes(generator_index);
+        #[cfg(test)]
+        let completion_drift = self.memory_walk_drift();
         let yielded = std::mem::replace(&mut self.generator_yielded, false);
         let yielded_resume_dst = self.generator_resume_dst.take();
         let yielded_label = std::mem::replace(&mut self.generator_result_label, Label::Public);
@@ -43540,7 +43679,13 @@ impl InterpreterCore {
                     .replace_activation(&mut generator.execution, Some(activation));
                 generator.resume_dst = yielded_resume_dst;
                 generator.phase = GeneratorPhase::SuspendedYield;
-                self.sync_estimated_memory_bytes()?;
+                self.apply_generator_transfer_delta(generator_index, completion_transfer_bytes)?;
+                #[cfg(test)]
+                debug_assert_eq!(
+                    self.memory_walk_drift(),
+                    completion_drift,
+                    "generator yield transfer drifted from the full walk (bd-j9r60)"
+                );
                 Ok((yielded_value.value, yielded_label))
             }
             Ok(return_value) => {
@@ -43549,7 +43694,13 @@ impl InterpreterCore {
                     .replace_activation(&mut generator.execution, None);
                 generator.resume_dst = None;
                 generator.phase = GeneratorPhase::Completed;
-                self.sync_estimated_memory_bytes()?;
+                self.apply_generator_transfer_delta(generator_index, completion_transfer_bytes)?;
+                #[cfg(test)]
+                debug_assert_eq!(
+                    self.memory_walk_drift(),
+                    completion_drift,
+                    "generator return transfer drifted from the full walk (bd-j9r60)"
+                );
                 Ok((
                     self.generator_result_object(return_value.value, true)?,
                     return_value.label,
@@ -65300,6 +65451,21 @@ impl InterpreterCore {
         let mut isolated_async_execution_owner = None;
         let mut abandoned_async_ids = Vec::new();
         let mut abandoned_async_label = Label::Public;
+        // bd-j9r60: a parked async callee's activation moves into its async
+        // function object and the caller is restored without accounting. That
+        // transfer is charged below as one delta over the live activation and
+        // the one receiving async object, not by re-deriving the estimate.
+        let rehome_async_id =
+            foreign_async_index
+                .filter(|_| result.is_ok())
+                .and_then(|async_index| {
+                    self.suspended_async_function_id_in_call_stack(&self.call_stack, async_index)
+                });
+        let rehome_previous_bytes = self.active_module_execution_memory_bytes().saturating_add(
+            rehome_async_id.map_or(0, |id| self.async_function_memory_bytes_at(id)),
+        );
+        #[cfg(test)]
+        let rehome_drift = self.memory_walk_drift();
         if let Some(async_index) = foreign_async_index {
             if result.is_ok() {
                 // A pending `await` exits with the async callee's register base
@@ -65367,7 +65533,31 @@ impl InterpreterCore {
                 abandoned_async_label,
             );
         }
-        if isolated_async_execution_rehomed && let Err(error) = self.sync_estimated_memory_bytes() {
+        let rehome_result = if isolated_async_execution_rehomed {
+            let rehome_next_bytes = self.active_module_execution_memory_bytes().saturating_add(
+                rehome_async_id.map_or(0, |id| self.async_function_memory_bytes_at(id)),
+            );
+            let applied =
+                self.apply_memory_component_delta(rehome_previous_bytes, rehome_next_bytes);
+            // The wrapper reservation released above is the only unwalked
+            // charge that changed since `rehome_drift`.
+            #[cfg(test)]
+            if applied.is_ok() {
+                debug_assert_eq!(
+                    self.memory_walk_drift(),
+                    rehome_drift
+                        - i128::from(
+                            transient_execution_bytes
+                                .saturating_add(remaining_label_transport_bytes)
+                        ),
+                    "async rehome transfer drifted from the full walk (bd-j9r60)"
+                );
+            }
+            applied
+        } else {
+            Ok(0)
+        };
+        if let Err(error) = rehome_result {
             let mut abandoned_async_ids = self.async_function_ids_created_since(
                 foreign_async_index
                     .expect("rehomed foreign async execution has a published object"),
@@ -134530,6 +134720,8 @@ mod tests {
                 phase: GeneratorPhase::SuspendedStart,
             });
         }
+        core.sync_estimated_memory_bytes()
+            .expect("seed generator objects should fit memory budget");
 
         let (_, first_label) = core
             .generator_next(&module, 0, Value::Undefined, Label::Public)
@@ -134591,6 +134783,8 @@ mod tests {
             resume_dst: None,
             phase: GeneratorPhase::SuspendedStart,
         });
+        core.sync_estimated_memory_bytes()
+            .expect("seed generator object should fit memory budget");
 
         core.generator_next(&module, 0, Value::Undefined, Label::Public)
             .expect("first resume should create a suspended activation");
@@ -134660,6 +134854,8 @@ mod tests {
             resume_dst: None,
             phase: GeneratorPhase::SuspendedStart,
         });
+        core.sync_estimated_memory_bytes()
+            .expect("seed generator object should fit memory budget");
 
         let (_, yield_label) = core
             .generator_next(&module, 0, Value::Undefined, Label::Public)

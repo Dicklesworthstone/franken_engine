@@ -5118,16 +5118,14 @@ mod date_math {
 fn static_hostcall_name(tag: &str) -> Option<&'static str> {
     slot0_static_member_name(tag)
         .or_else(|| {
-            GLOBAL_FUNCTION_VALUES
-                .iter()
-                .copied()
-                .find(|name| crate::lowering_pipeline::global_function_capability(name) == Some(tag))
+            GLOBAL_FUNCTION_VALUES.iter().copied().find(|name| {
+                crate::lowering_pipeline::global_function_capability(name) == Some(tag)
+            })
         })
         .or_else(|| {
-            REFLECT_MEMBERS
-                .iter()
-                .copied()
-                .find(|member| crate::lowering_pipeline::reflect_member_capability(member) == Some(tag))
+            REFLECT_MEMBERS.iter().copied().find(|member| {
+                crate::lowering_pipeline::reflect_member_capability(member) == Some(tag)
+            })
         })
 }
 
@@ -32773,7 +32771,10 @@ impl InterpreterCore {
             .iter()
             .filter_map(|member| {
                 crate::lowering_pipeline::reflect_member_capability(member).map(|tag| {
-                    (*member, Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)))
+                    (
+                        *member,
+                        Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+                    )
                 })
             })
             .collect();

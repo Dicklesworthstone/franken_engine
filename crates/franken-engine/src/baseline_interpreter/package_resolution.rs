@@ -159,6 +159,8 @@ struct PackageManifest {
     main: Option<serde_json::Value>,
     #[serde(default)]
     exports: Option<PackageExports>,
+    #[serde(default)]
+    imports: Option<PackageExports>,
 }
 
 impl PackageManifest {
@@ -172,8 +174,10 @@ impl PackageManifest {
 
 /// How one `exports` target resolved. Node distinguishes an explicit `null`
 /// (the subpath is excluded; stop) from no matching condition (try the next).
+#[derive(Debug, PartialEq, Eq)]
 enum ExportsTargetResolution {
     Found(PathBuf),
+    Package(String),
     Excluded,
     NoMatch,
 }
@@ -235,6 +239,37 @@ fn pattern_key_precedes(candidate: &str, incumbent: &str) -> bool {
     }
 }
 
+/// Shared exact/pattern selection for package imports and exports. Lifetimes
+/// distinguish a borrowed manifest target from a capture in the request.
+fn package_mapping_target<'a, 'b>(
+    entries: &'a [(String, PackageExports)],
+    subpath: &'b str,
+) -> Option<(&'a PackageExports, Option<&'b str>)> {
+    let exact = entries.iter().find(|(key, _)| key == subpath && !key.contains('*'));
+    if let Some((_, target)) = exact {
+        return Some((target, None));
+    }
+    let mut best: Option<(&str, &PackageExports, &str)> = None;
+    for (key, target) in entries {
+        let Some(star) = key.find('*') else {
+            continue;
+        };
+        let (prefix, suffix) = (&key[..star], &key[star + 1..]);
+        if suffix.contains('*')
+            || !subpath.starts_with(prefix)
+            || subpath == prefix
+            || !(suffix.is_empty()
+                || (subpath.ends_with(suffix) && subpath.len() >= key.len()))
+        {
+            continue;
+        }
+        if best.is_none_or(|(best_key, ..)| pattern_key_precedes(key, best_key)) {
+            best = Some((key, target, &subpath[prefix.len()..subpath.len() - suffix.len()]));
+        }
+    }
+    best.map(|(_, target, capture)| (target, Some(capture)))
+}
+
 /// Node's PACKAGE_EXPORTS_RESOLVE for a CommonJS `require`: map `subpath`
 /// (`.` or `./x`) through `exports` to a path inside `package_dir`.
 fn resolve_package_exports(
@@ -255,45 +290,13 @@ fn resolve_package_exports(
     let (target, pattern_match) = match subpath_entries {
         None if subpath == "." => (exports, None),
         None => return Err(not_exported()),
-        Some(entries) => {
-            let exact = entries
-                .iter()
-                .find(|(key, _)| key == subpath && !key.contains('*'));
-            if let Some((_, target)) = exact {
-                (target, None)
-            } else {
-                let mut best: Option<(&str, &PackageExports, &str)> = None;
-                for (key, target) in entries {
-                    let Some(star) = key.find('*') else {
-                        continue;
-                    };
-                    let (prefix, suffix) = (&key[..star], &key[star + 1..]);
-                    if suffix.contains('*')
-                        || !subpath.starts_with(prefix)
-                        || subpath == prefix
-                        || !(suffix.is_empty()
-                            || (subpath.ends_with(suffix) && subpath.len() >= key.len()))
-                    {
-                        continue;
-                    }
-                    if best.is_none_or(|(best_key, ..)| pattern_key_precedes(key, best_key)) {
-                        best = Some((
-                            key,
-                            target,
-                            &subpath[prefix.len()..subpath.len() - suffix.len()],
-                        ));
-                    }
-                }
-                let Some((_, target, pattern_match)) = best else {
-                    return Err(not_exported());
-                };
-                (target, Some(pattern_match))
-            }
-        }
+        Some(entries) => package_mapping_target(entries, subpath).ok_or_else(not_exported)?,
     };
-    match resolve_package_target(package_dir, target, pattern_match)? {
+    match resolve_package_target(package_dir, target, pattern_match, false)? {
         ExportsTargetResolution::Found(path) => Ok(path),
-        ExportsTargetResolution::Excluded | ExportsTargetResolution::NoMatch => Err(not_exported()),
+        ExportsTargetResolution::Package(_)
+        | ExportsTargetResolution::Excluded
+        | ExportsTargetResolution::NoMatch => Err(not_exported()),
     }
 }
 
@@ -302,32 +305,32 @@ fn resolve_package_target(
     package_dir: &Path,
     target: &PackageExports,
     pattern_match: Option<&str>,
+    imports: bool,
 ) -> Result<ExportsTargetResolution, String> {
     match target {
         PackageExports::Target(target) => {
-            let Some(relative) = target.strip_prefix("./") else {
-                return Err(format!(
-                    "has an \"exports\" target `{target}` that does not start with \"./\""
-                ));
-            };
             let expanded = match pattern_match {
-                Some(pattern_match) => relative.replace('*', pattern_match),
-                None => relative.to_string(),
+                Some(capture) => target.replace('*', capture),
+                None => target.to_string(),
             };
-            if expanded.split(['/', '\\']).any(|segment| {
-                segment.is_empty()
-                    || segment == "."
-                    || segment == ".."
-                    || segment.eq_ignore_ascii_case("node_modules")
-            }) {
-                return Err(format!(
-                    "has an \"exports\" target `./{expanded}` that leaves the package"
-                ));
+            if let Some(relative) = expanded.strip_prefix("./") {
+                return package_relative_target(package_dir, relative)
+                    .map(ExportsTargetResolution::Found);
             }
-            Ok(ExportsTargetResolution::Found(package_dir.join(expanded)))
+            // Private imports may redirect to another package, but not to an
+            // absolute path, a URL, or a relative path outside this package.
+            // A missing selected package/file does not select another entry.
+            if imports
+                && !expanded.starts_with(['/', '.'])
+                && !expanded.contains([':', '\\'])
+                && split_package_specifier(&expanded).is_some()
+            {
+                return Ok(ExportsTargetResolution::Package(expanded));
+            }
+            Err(format!("has an invalid package target `{expanded}`"))
         }
         PackageExports::Null => Ok(ExportsTargetResolution::Excluded),
-        PackageExports::Invalid => Err("has an invalid \"exports\" target".to_string()),
+        PackageExports::Invalid => Err("has an invalid package target".to_string()),
         PackageExports::Map(conditions) => {
             for (condition, value) in conditions {
                 if condition != "default"
@@ -335,7 +338,7 @@ fn resolve_package_target(
                 {
                     continue;
                 }
-                match resolve_package_target(package_dir, value, pattern_match)? {
+                match resolve_package_target(package_dir, value, pattern_match, imports)? {
                     ExportsTargetResolution::NoMatch => continue,
                     resolved => return Ok(resolved),
                 }
@@ -345,14 +348,73 @@ fn resolve_package_target(
         PackageExports::Alternatives(alternatives) => {
             let mut last_error = None;
             for alternative in alternatives {
-                match resolve_package_target(package_dir, alternative, pattern_match) {
+                match resolve_package_target(package_dir, alternative, pattern_match, imports) {
                     Ok(ExportsTargetResolution::NoMatch) => {}
+                    Ok(ExportsTargetResolution::Excluded) => last_error = None,
                     Ok(resolved) => return Ok(resolved),
                     Err(error) => last_error = Some(error),
                 }
             }
             last_error.map_or(Ok(ExportsTargetResolution::Excluded), Err)
         }
+    }
+}
+
+/// Convert a relative target's URL path to a file path. Decode once, after
+/// separating query/fragment. Refuse encoded separators and traversal before
+/// joining; the caller still enforces canonical module-root containment.
+fn package_relative_target(package_dir: &Path, relative: &str) -> Result<PathBuf, String> {
+    let invalid = || format!("has an invalid or escaping package target `./{relative}`");
+    let pathname = relative.split(['?', '#']).next().unwrap_or(relative);
+    let bytes = pathname.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] == b'%' {
+            let high = bytes.get(cursor + 1).and_then(|byte| (*byte as char).to_digit(16));
+            let low = bytes.get(cursor + 2).and_then(|byte| (*byte as char).to_digit(16));
+            let (Some(high), Some(low)) = (high, low) else {
+                return Err(invalid());
+            };
+            let byte = ((high << 4) | low) as u8;
+            if matches!(byte, b'/' | b'\\' | 0) {
+                return Err(invalid());
+            }
+            decoded.push(byte);
+            cursor += 3;
+        } else {
+            decoded.push(bytes[cursor]);
+            cursor += 1;
+        }
+    }
+    let decoded = String::from_utf8(decoded).map_err(|_| invalid())?;
+    if decoded.contains('\\') || decoded.as_bytes().contains(&0)
+        || decoded.split('/').any(|segment| {
+            segment.is_empty() || matches!(segment, "." | "..")
+                || segment.eq_ignore_ascii_case("node_modules")
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(package_dir.join(decoded))
+}
+
+fn resolve_package_imports_target(
+    package_dir: &Path,
+    specifier: &str,
+    imports: &PackageExports,
+) -> Result<ExportsTargetResolution, String> {
+    let undefined = || format!("package import `{specifier}` is not defined");
+    if specifier == "#" || specifier.starts_with("#/") || specifier.ends_with('/') {
+        return Err(format!("invalid package import specifier `{specifier}`"));
+    }
+    let PackageExports::Map(entries) = imports else {
+        return Err(undefined());
+    };
+    let (target, capture) = package_mapping_target(entries, specifier).ok_or_else(undefined)?;
+    match resolve_package_target(package_dir, target, capture, true)? {
+        ExportsTargetResolution::Excluded | ExportsTargetResolution::NoMatch => Err(undefined()),
+        resolved => Ok(resolved),
     }
 }
 
@@ -402,9 +464,6 @@ impl InterpreterCore {
                 ModuleResolutionFailureReason::BareSpecifiersNotSupported,
             ));
         };
-        let Some((name, subpath)) = split_package_specifier(specifier) else {
-            return Err(failed(ModuleResolutionFailureReason::MalformedSpecifier));
-        };
         let start = self
             .current_module_specifier
             .as_deref()
@@ -412,10 +471,53 @@ impl InterpreterCore {
             .and_then(|dir| dir.canonicalize().ok())
             .filter(|dir| dir.starts_with(&root))
             .unwrap_or_else(|| root.clone());
+        if specifier.starts_with('#')
+            && let Some((scope, manifest)) = self.require_package_scope(specifier, &start, &root)?
+            && let Some(imports) = manifest.imports.as_ref()
+        {
+            let target = resolve_package_imports_target(&scope, specifier, imports)
+                .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason)))?;
+            return match target {
+                ExportsTargetResolution::Found(path) if path.is_file() => Ok(path),
+                ExportsTargetResolution::Package(target) => {
+                    self.resolve_named_require_from(&target, &scope, &root).map_err(|error| {
+                        // Keep the source-level alias in the outward diagnostic.
+                        failed(ModuleResolutionFailureReason::Other(format!(
+                            "package import `{specifier}` targeting `{target}`: {error}"
+                        )))
+                    })
+                }
+                _ => Err(failed(ModuleResolutionFailureReason::ModuleNotFound)),
+            };
+        }
+        self.resolve_named_require_from(specifier, &start, &root)
+    }
+
+    /// External imports targets resolve from their owning package, not from a
+    /// potentially deeper requiring file. This is also the ordinary bare-name
+    /// path; aliases do not fork package lookup or mutate the executing module.
+    fn resolve_named_require_from(
+        &self,
+        specifier: &str,
+        start: &Path,
+        root: &Path,
+    ) -> Result<PathBuf, InterpreterError> {
+        let failed = |reason| InterpreterError::ModuleResolutionFailed {
+            specifier: specifier.to_string(),
+            reason,
+        };
+        if specifier.starts_with("node:") || NODE_CORE_MODULE_NAMES.contains(&specifier) {
+            return Err(failed(ModuleResolutionFailureReason::Other(format!(
+                "`{specifier}` is a Node core module without a runtime module object"
+            ))));
+        }
+        let Some((name, subpath)) = split_package_specifier(specifier) else {
+            return Err(failed(ModuleResolutionFailureReason::MalformedSpecifier));
+        };
         // Self references precede node_modules and are limited to the nearest
         // package scope. An unexported self subpath must not fall through to
         // an installed package of the same name.
-        if let Some((scope, manifest)) = self.require_package_scope(specifier, &start, &root)?
+        if let Some((scope, manifest)) = self.require_package_scope(specifier, start, root)?
             && manifest.name.as_ref().and_then(serde_json::Value::as_str) == Some(name)
             && let Some(exports) = manifest.exports.as_ref()
         {
@@ -432,7 +534,7 @@ impl InterpreterCore {
             };
         }
         for dir in start.ancestors() {
-            if !dir.starts_with(&root) {
+            if !dir.starts_with(root) {
                 break;
             }
             if dir.file_name().is_some_and(|name| name == "node_modules") {
@@ -648,5 +750,96 @@ mod tests {
             source,
             "module.exports = JSON.parse(\"{\\\"a\\\":\\\"x\\u2028y\\\"}\");\n"
         );
+    }
+
+    fn import_target(json: &str, specifier: &str) -> Result<ExportsTargetResolution, String> {
+        resolve_package_imports_target(Path::new("/pkg"), specifier, &exports(json))
+    }
+
+    #[test]
+    fn imports_select_exact_keys_and_most_specific_patterns() {
+        let map = r##"{
+            "#x/*": "./general/*.cjs",
+            "#x/*.json": "./data/*.json",
+            "#x/special/*": "./special/*.cjs",
+            "#x/exact": "./exact.cjs",
+            "#x/private/*": null
+        }"##;
+        for (request, target) in [
+            ("#x/exact", "/pkg/exact.cjs"),
+            ("#x/a.json", "/pkg/data/a.json"),
+            ("#x/special/a", "/pkg/special/a.cjs"),
+            ("#x/a", "/pkg/general/a.cjs"),
+        ] {
+            assert_eq!(import_target(map, request), Ok(ExportsTargetResolution::Found(target.into())));
+        }
+        assert!(import_target(map, "#x/private/secret").is_err());
+        assert!(import_target(map, "#missing").is_err());
+    }
+
+    #[test]
+    fn imports_conditions_and_array_alternatives_share_exports_semantics() {
+        assert_eq!(
+            import_target(r##"{"#x":{"default":"./first.cjs","require":"./second.cjs"}}"##, "#x"),
+            Ok(ExportsTargetResolution::Found("/pkg/first.cjs".into()))
+        );
+        assert_eq!(
+            import_target(r##"{"#x":[null,"../invalid",{"browser":"./wrong.cjs"},{"node":{"require":"./right.cjs"}}]}"##, "#x"),
+            Ok(ExportsTargetResolution::Found("/pkg/right.cjs".into()))
+        );
+        assert_eq!(resolve(r#"[null,"./right.cjs"]"#, "."), Ok("/pkg/right.cjs".into()));
+        assert!(import_target(r##"{"#x":[]}"##, "#x").is_err());
+        assert!(import_target(r##"{"#x":{"browser":"./wrong.cjs"}}"##, "#x").is_err());
+    }
+
+    #[test]
+    fn only_imports_can_select_external_package_targets() {
+        assert_eq!(
+            import_target(r##"{"#dep/*":"@scope/dependency/*"}"##, "#dep/feature"),
+            Ok(ExportsTargetResolution::Package("@scope/dependency/feature".to_string()))
+        );
+        // Target selection does not examine the filesystem or try fallbacks
+        // after selecting a syntactically valid but possibly absent package.
+        assert_eq!(
+            import_target(r##"{"#dep":["missing-package","./fallback.cjs"]}"##, "#dep"),
+            Ok(ExportsTargetResolution::Package("missing-package".to_string()))
+        );
+        assert!(resolve(r#""@scope/dependency/feature""#, ".").is_err());
+        assert!(import_target(r##"{"#x":"node:path"}"##, "#x").is_err());
+    }
+
+    #[test]
+    fn package_url_paths_decode_once_and_drop_query_and_fragment() {
+        for (url_path, file) in [
+            ("lib/%76alue.cjs?query#fragment", "/pkg/lib/value.cjs"),
+            ("lib/%C3%A9.cjs", "/pkg/lib/é.cjs"),
+            ("lib/%252e.cjs", "/pkg/lib/%2e.cjs"),
+            ("lib/a%23b.cjs", "/pkg/lib/a#b.cjs"),
+        ] {
+            assert_eq!(package_relative_target(Path::new("/pkg"), url_path), Ok(file.into()));
+        }
+    }
+
+    #[test]
+    fn package_url_targets_refuse_encoded_traversal_separators_and_invalid_utf8() {
+        for target in [
+            "../escape.cjs", "%2e%2e/escape.cjs", ".%2e/escape.cjs", "%2e./escape.cjs",
+            "node_modules/x.cjs", "%6eode_modules/x.cjs", "x%2fy.cjs", "x%5cy.cjs",
+            "x\\y.cjs", "%ff.cjs", "%00.cjs", "%zz.cjs", "%", "",
+        ] {
+            assert!(package_relative_target(Path::new("/pkg"), target).is_err(), "{target}");
+        }
+        assert!(import_target(r##"{"#x":"../escape.cjs"}"##, "#x").is_err());
+        assert!(import_target(r##"{"#x":"file:///tmp/escape.cjs"}"##, "#x").is_err());
+    }
+
+    #[test]
+    fn invalid_private_names_and_non_object_maps_cannot_select_targets() {
+        for request in ["#", "#/x", "#x/"] {
+            assert!(import_target(r##"{"#*":"./*.cjs"}"##, request).is_err());
+        }
+        for map in ["null", "5", r#""./value.cjs""#, "[]"] {
+            assert!(import_target(map, "#x").is_err());
+        }
     }
 }

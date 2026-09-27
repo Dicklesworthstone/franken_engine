@@ -32,6 +32,10 @@ use crate::security_epoch::SecurityEpoch;
 const MILLION: i64 = 1_000_000;
 const UNIFIED_ACTION_BLOCK_THRESHOLD_MILLIONTHS: i64 = 800_000;
 const WITNESS_CONFIDENCE_FLOOR_MILLIONTHS: i64 = 900_000;
+/// Operations at or above this suspicion are security-relevant; only they feed
+/// the burst-rate signal (bd-9vouw.60). Ordinary allocations, calls, and
+/// property reads are not a burst no matter how many a program performs.
+const SUSPICIOUS_OPERATION_FLOOR_MILLIONTHS: i64 = 500_000;
 const TRUST_LEVEL_METADATA_KEYS: &[&str] = &[
     "capability_witness.trust_level",
     "guardplane.trust_level",
@@ -131,6 +135,10 @@ pub struct GuardplaneExtensionContext {
     pub metadata: BTreeMap<String, String>,
     pub trust_level: GuardplaneTrustLevel,
     pub witness_confidence_millionths: i64,
+    /// Whether the metadata declared a witness confidence at all. A missing
+    /// confidence is not a zero confidence (bd-9vouw.60).
+    #[serde(default)]
+    pub witness_confidence_declared: bool,
     pub required_capabilities: BTreeSet<String>,
     pub denied_capabilities: BTreeSet<String>,
     pub diagnostics: Vec<GuardplaneDiagnosticRecord>,
@@ -158,7 +166,7 @@ impl GuardplaneExtensionContext {
             })
             .unwrap_or(GuardplaneTrustLevel::Unknown);
 
-        let witness_confidence_millionths = metadata_lookup_with_key(
+        let declared_witness_confidence = metadata_lookup_with_key(
             &metadata,
             &[
                 "capability_witness.confidence_millionths",
@@ -183,10 +191,13 @@ impl GuardplaneExtensionContext {
                     value,
                     "failed to parse witness confidence",
                 ));
-                None
+                // Fail closed: a malformed confidence counts as declared
+                // with zero confidence, not as absent.
+                Some(0)
             }
-        })
-        .unwrap_or(0);
+        });
+        let witness_confidence_declared = declared_witness_confidence.is_some();
+        let witness_confidence_millionths = declared_witness_confidence.unwrap_or(0);
 
         let required_capabilities = parse_capability_csv(
             metadata_lookup(
@@ -215,6 +226,7 @@ impl GuardplaneExtensionContext {
             metadata,
             trust_level,
             witness_confidence_millionths,
+            witness_confidence_declared,
             required_capabilities,
             denied_capabilities,
             diagnostics,
@@ -309,7 +321,12 @@ impl GuardplaneOperation {
     fn suspicion_millionths(&self) -> i64 {
         match self {
             Self::PropertyAccess { key } => match key.as_str() {
-                "__proto__" | "prototype" | "constructor" => 850_000,
+                "__proto__" => 850_000,
+                // Ubiquitous in benign code (`Array.prototype.slice.call`,
+                // `x.constructor === Array`); the escape that abuses them
+                // (`constructor.constructor(src)()`) is caught at its
+                // Function-constructor call (bd-9vouw.60).
+                "prototype" | "constructor" => 300_000,
                 "globalThis" | "process" | "require" | "module" => 700_000,
                 _ if key.starts_with('_') => 200_000,
                 _ => 75_000,
@@ -318,9 +335,12 @@ impl GuardplaneOperation {
                 callee_name,
                 arg_count,
             } => {
-                let base: i64 = match callee_name.as_deref() {
-                    Some("eval") | Some("Function") => 900_000,
-                    Some(name) if name.contains("eval") || name.contains("constructor") => 700_000,
+                // Match the called function's own name exactly: substring
+                // matching flagged benign names such as `retrieval` or
+                // `evaluateRow` as eval (bd-9vouw.60).
+                let base: i64 = match callee_name.as_deref().map(callee_simple_name) {
+                    Some("eval" | "Function" | "GeneratorFunction" | "AsyncFunction") => 900_000,
+                    Some("constructor") => 700_000,
                     Some(_) => 125_000,
                     None => 250_000,
                 };
@@ -337,11 +357,13 @@ impl GuardplaneOperation {
                     AllocKind::Array => 100_000,
                     AllocKind::Function => 175_000,
                     AllocKind::Closure => 300_000,
-                    AllocKind::RegExp => 450_000,
+                    AllocKind::RegExp => 250_000,
                 };
+                // Size matters only at scale: a 40-element literal is not an
+                // anomaly, a million-element allocation is (bd-9vouw.60).
                 let size_penalty = i64::try_from(*size_hint)
                     .unwrap_or(i64::MAX)
-                    .saturating_mul(15_000);
+                    .saturating_mul(1_000);
                 base.saturating_add(size_penalty).clamp(0, MILLION)
             }
             Self::Import { specifier } => {
@@ -359,14 +381,20 @@ impl GuardplaneOperation {
         }
     }
 
-    fn rate_millionths(&self, operation_index: u64) -> i64 {
+    /// Deterministic rate proxy. `suspicious_index` counts security-relevant
+    /// operations so far (0 for an ordinary operation): the burst penalty
+    /// grows only with repeated suspicious operations, never with the
+    /// program's ordinary work (bd-9vouw.60).
+    fn rate_millionths(&self, suspicious_index: u64) -> i64 {
         let base: i64 = match self {
             Self::PropertyAccess { .. } => 40_000_000,
             Self::Call { .. } => 65_000_000,
             Self::Allocation { .. } => 55_000_000,
-            Self::Import { .. } => 120_000_000,
+            // Relative imports are ordinary; a suspicious specifier carries
+            // its own signal through `suspicion_millionths`.
+            Self::Import { .. } => 60_000_000,
         };
-        let burst_penalty = i64::try_from(operation_index.saturating_sub(1))
+        let burst_penalty = i64::try_from(suspicious_index.saturating_sub(1))
             .unwrap_or(i64::MAX)
             .saturating_mul(25_000_000);
         base.saturating_add(burst_penalty).clamp(0, 600_000_000)
@@ -418,6 +446,8 @@ struct GuardplaneAdapterState {
     unified_guardrail_registry: GuardrailRegistry,
     thresholds: ContainmentThresholds,
     operation_count: u64,
+    /// Operations at or above [`SUSPICIOUS_OPERATION_FLOOR_MILLIONTHS`].
+    suspicious_operation_count: u64,
     decisions: Vec<GuardplaneDecisionRecord>,
     diagnostics: Vec<GuardplaneDiagnosticRecord>,
 }
@@ -487,6 +517,7 @@ impl GuardplaneAdapter {
                 unified_guardrail_registry,
                 thresholds: ContainmentThresholds::default(),
                 operation_count: 0,
+                suspicious_operation_count: 0,
                 decisions: Vec::new(),
                 diagnostics: Vec::new(),
             }),
@@ -541,8 +572,17 @@ impl GuardplaneAdapter {
     ) -> HookAction {
         let mut state = self.lock_state("evaluate_operation");
         state.operation_count = state.operation_count.saturating_add(1);
+        let suspicious_index = if operation.suspicion_millionths()
+            >= SUSPICIOUS_OPERATION_FLOOR_MILLIONTHS
+        {
+            state.suspicious_operation_count = state.suspicious_operation_count.saturating_add(1);
+            state.suspicious_operation_count
+        } else {
+            0
+        };
+        let first_observation = state.operation_count == 1;
 
-        let evidence = self.build_evidence(&operation, state.operation_count);
+        let evidence = self.build_evidence(&operation, suspicious_index, first_observation);
 
         // Legacy decision path (maintained for compatibility)
         let update = state.updater.update(&evidence);
@@ -609,15 +649,32 @@ impl GuardplaneAdapter {
         final_action
     }
 
-    fn build_evidence(&self, operation: &GuardplaneOperation, operation_index: u64) -> Evidence {
+    /// Evidence for one hooked operation. The extension's static context
+    /// (trust level, declared witness confidence) is one observation, made
+    /// with the first operation; re-adding it to every later operation counted
+    /// the same metadata as fresh evidence each time and drove any program to
+    /// suspension within a few operations (bd-9vouw.60). Later operations
+    /// carry only their own signal: suspicion, capability use, and the
+    /// suspicious-operation burst rate.
+    fn build_evidence(
+        &self,
+        operation: &GuardplaneOperation,
+        suspicious_index: u64,
+        first_observation: bool,
+    ) -> Evidence {
         let suspicion_millionths = operation.suspicion_millionths();
-        let trust_penalty_millionths = self.effective_trust_penalty_millionths();
-        let confidence_penalty_millionths = if self.context.witness_declared() {
-            (WITNESS_CONFIDENCE_FLOOR_MILLIONTHS - self.context.witness_confidence_millionths)
-                .max(0)
+        let trust_penalty_millionths = if first_observation {
+            self.effective_trust_penalty_millionths()
         } else {
             0
         };
+        let confidence_penalty_millionths =
+            if first_observation && self.context.witness_confidence_declared {
+                (WITNESS_CONFIDENCE_FLOOR_MILLIONTHS - self.context.witness_confidence_millionths)
+                    .max(0)
+            } else {
+                0
+            };
         let capability_penalty_millionths =
             self.capability_penalty_millionths(operation.capability_label());
 
@@ -635,7 +692,7 @@ impl GuardplaneAdapter {
 
         Evidence {
             extension_id: self.context.extension_id.clone(),
-            hostcall_rate_millionths: operation.rate_millionths(operation_index),
+            hostcall_rate_millionths: operation.rate_millionths(suspicious_index),
             distinct_capabilities: self.context.distinct_capability_count(),
             resource_score_millionths,
             timing_anomaly_millionths,
@@ -669,10 +726,13 @@ impl GuardplaneAdapter {
             return base;
         }
 
+        // Confidence above 0.6 earns credit; confidence below it earns none
+        // (it used to go negative and raise the penalty, bd-9vouw.60).
         let confidence_credit = self
             .context
             .witness_confidence_millionths
-            .saturating_sub(600_000);
+            .saturating_sub(600_000)
+            .max(0);
         base.saturating_sub(confidence_credit)
     }
 }
@@ -743,6 +803,11 @@ fn parse_boolish(raw: &str) -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+/// Last segment of a possibly qualified callee name (`a.b.eval` -> `eval`).
+fn callee_simple_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
 }
 
 fn is_runtime_capability_label(capability_label: &str) -> bool {
@@ -1175,5 +1240,230 @@ mod tests {
             diagnostic.code == "guardplane.state_lock_poisoned"
                 && diagnostic.metadata_value == "summary"
         }));
+    }
+
+    // -----------------------------------------------------------------------
+    // Calibration (bd-9vouw.60): ordinary JavaScript must not read as attack
+    // evidence; security-relevant operations must still escalate.
+    // -----------------------------------------------------------------------
+
+    /// The metadata `frankenctl agent-sandbox` derives for a manifest that
+    /// grants file reads: hooks forced on, default `provisional` trust,
+    /// required capabilities surfaced, no witness confidence declared.
+    fn agent_sandbox_adapter() -> GuardplaneAdapter {
+        adapter_with_metadata(&[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("guardplane.trust_level", "provisional"),
+            (
+                "capability_witness.required_capabilities",
+                "fs_read,console,builtin,timer",
+            ),
+        ])
+    }
+
+    fn named_call(name: &str) -> FunctionRef {
+        FunctionRef::Function {
+            function_index: 1,
+            name: Some(name.to_string()),
+        }
+    }
+
+    /// One round of ordinary work: literals, closures, prototype-aware
+    /// property reads, and named calls, including names that merely contain
+    /// "eval".
+    fn ordinary_round(adapter: &GuardplaneAdapter, step: u64) -> Vec<HookAction> {
+        let ctx = test_hook_context(step);
+        vec![
+            adapter.pre_allocation(&ctx, AllocKind::Object, 4),
+            adapter.pre_allocation(&ctx, AllocKind::Array, 40),
+            adapter.pre_allocation(&ctx, AllocKind::Function, 0),
+            adapter.pre_allocation(&ctx, AllocKind::Closure, 0),
+            adapter.pre_allocation(&ctx, AllocKind::RegExp, 12),
+            adapter.pre_property_access(&ctx, &ObjectId(3), &"prototype".to_string()),
+            adapter.pre_property_access(&ctx, &ObjectId(3), &"constructor".to_string()),
+            adapter.pre_property_access(&ctx, &ObjectId(3), &"length".to_string()),
+            adapter.pre_call(&ctx, &named_call("map"), &[Value::Int(1), Value::Int(2)]),
+            adapter.pre_call(&ctx, &named_call("retrieval"), &[]),
+            adapter.pre_call(&ctx, &named_call("evaluateRow"), &[Value::Int(1)]),
+            adapter.pre_import(&ctx, "./lib/util.js"),
+        ]
+    }
+
+    #[test]
+    fn ordinary_operation_stream_under_agent_sandbox_metadata_is_never_contained() {
+        let adapter = agent_sandbox_adapter();
+        for step in 1..=200 {
+            for action in ordinary_round(&adapter, step) {
+                assert!(
+                    hook_action_rank(&action) < hook_action_rank(&HookAction::Suspend),
+                    "ordinary operation contained at step {step}: {action:?}"
+                );
+            }
+        }
+        assert_eq!(adapter.summary().decision_count, 200 * 12);
+    }
+
+    #[test]
+    fn static_context_is_one_observation_not_per_operation_evidence() {
+        let adapter = adapter_with_metadata(&[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("capability_witness.trust_level", "suspicious"),
+            ("capability_witness.confidence_millionths", "150000"),
+        ]);
+        let ctx = test_hook_context(1);
+        adapter.pre_property_access(&ctx, &ObjectId(1), &"value".to_string());
+        let after_first = adapter
+            .summary()
+            .last_log_likelihood_ratio_millionths
+            .expect("first decision recorded");
+        for step in 2..=100 {
+            adapter.pre_property_access(
+                &test_hook_context(step),
+                &ObjectId(1),
+                &"value".to_string(),
+            );
+        }
+        assert_eq!(
+            adapter.summary().last_log_likelihood_ratio_millionths,
+            Some(after_first),
+            "ordinary reads after the first must not re-count the static context"
+        );
+    }
+
+    #[test]
+    fn missing_witness_confidence_is_not_zero_confidence() {
+        let undeclared =
+            context_with_metadata(&[("capability_witness.required_capabilities", "fs_read")]);
+        assert!(!undeclared.witness_confidence_declared);
+        let declared_zero = context_with_metadata(&[
+            ("capability_witness.required_capabilities", "fs_read"),
+            ("capability_witness.confidence_millionths", "0"),
+        ]);
+        assert!(declared_zero.witness_confidence_declared);
+        // Malformed confidence fails closed as a declared zero, not absent.
+        let malformed = context_with_metadata(&[
+            ("capability_witness.required_capabilities", "fs_read"),
+            ("capability_witness.confidence_millionths", "not-a-number"),
+        ]);
+        assert!(malformed.witness_confidence_declared);
+        assert_eq!(malformed.witness_confidence_millionths, 0);
+
+        let operation = GuardplaneOperation::PropertyAccess {
+            key: "value".to_string(),
+        };
+        let evidence_for = |context: GuardplaneExtensionContext| {
+            GuardplaneAdapter::from_runtime_config(
+                context,
+                LossMatrix::balanced(),
+                &RuntimeConfig::default(),
+                SecurityEpoch::from_raw(1),
+            )
+            .build_evidence(&operation, 0, true)
+        };
+        let undeclared_evidence = evidence_for(undeclared);
+        let declared_zero_evidence = evidence_for(declared_zero);
+        assert!(
+            undeclared_evidence.timing_anomaly_millionths
+                < declared_zero_evidence.timing_anomaly_millionths,
+            "only a declared low confidence may add confidence penalty"
+        );
+    }
+
+    #[test]
+    fn low_witness_confidence_earns_no_credit_and_no_extra_penalty() {
+        for confidence in ["0", "300000", "600000"] {
+            let adapter = adapter_with_metadata(&[
+                ("capability_witness.trust_level", "provisional"),
+                ("capability_witness.required_capabilities", "fs_read"),
+                ("capability_witness.confidence_millionths", confidence),
+            ]);
+            assert_eq!(
+                adapter.effective_trust_penalty_millionths(),
+                GuardplaneTrustLevel::Provisional.risk_penalty_millionths(),
+                "confidence {confidence} must not raise the trust penalty"
+            );
+        }
+        let confident = adapter_with_metadata(&[
+            ("capability_witness.trust_level", "provisional"),
+            ("capability_witness.required_capabilities", "fs_read"),
+            ("capability_witness.confidence_millionths", "700000"),
+        ]);
+        assert!(
+            confident.effective_trust_penalty_millionths()
+                < GuardplaneTrustLevel::Provisional.risk_penalty_millionths()
+        );
+    }
+
+    #[test]
+    fn callee_names_match_exactly_not_by_substring() {
+        let suspicion = |name: &str| {
+            GuardplaneOperation::Call {
+                callee_name: Some(name.to_string()),
+                arg_count: 0,
+            }
+            .suspicion_millionths()
+        };
+        for benign in ["retrieval", "evaluateRow", "medieval", "constructorName"] {
+            assert!(
+                suspicion(benign) < SUSPICIOUS_OPERATION_FLOOR_MILLIONTHS,
+                "{benign} is an ordinary function name"
+            );
+        }
+        for dangerous in ["eval", "Function", "globalThis.eval", "AsyncFunction"] {
+            assert!(
+                suspicion(dangerous) >= SUSPICIOUS_OPERATION_FLOOR_MILLIONTHS,
+                "{dangerous} must stay security-relevant"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_code_generation_is_contained_even_after_ordinary_work() {
+        for name in ["Function", "eval"] {
+            let adapter = agent_sandbox_adapter();
+            for step in 1..=50 {
+                ordinary_round(&adapter, step);
+            }
+            let action = adapter.pre_call(
+                &test_hook_context(51),
+                &named_call(name),
+                &[Value::str("return this".to_string())],
+            );
+            assert!(
+                hook_action_rank(&action) >= hook_action_rank(&HookAction::Suspend),
+                "{name} code generation after ordinary work must be contained, got {action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn prototype_pollution_access_is_contained_even_after_ordinary_work() {
+        let adapter = agent_sandbox_adapter();
+        for step in 1..=50 {
+            ordinary_round(&adapter, step);
+        }
+        let action = adapter.pre_property_access(
+            &test_hook_context(51),
+            &ObjectId(9),
+            &"__proto__".to_string(),
+        );
+        assert!(
+            hook_action_rank(&action) >= hook_action_rank(&HookAction::Suspend),
+            "__proto__ access must be contained, got {action:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_suspicious_operations_still_raise_the_burst_rate() {
+        let operation = GuardplaneOperation::Import {
+            specifier: "node:child_process".to_string(),
+        };
+        assert!(operation.rate_millionths(5) > operation.rate_millionths(1));
+        // An ordinary operation (suspicious index 0) never carries a burst.
+        let ordinary = GuardplaneOperation::Allocation {
+            kind: AllocKind::Object,
+            size_hint: 1,
+        };
+        assert_eq!(ordinary.rate_millionths(0), ordinary.rate_millionths(1));
     }
 }

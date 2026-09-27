@@ -3,12 +3,12 @@
 //! recorded so strict replay re-executes under the same limits.
 //!
 //! Each case runs through the real `frankenctl` binary. Expected outputs were
-//! produced by Node v22.2.0 on the identical source. Before the change:
-//! 10,001 zero-delay timers died with "event loop turn limit exceeded"; the
-//! heap-object cap had no flag; and a 3,000-line program reported only its
-//! last 1,000 lines with exit 0 and no sign of the loss. The parser token
-//! budget and the event-loop turn cap are main's (`run --parser-max-tokens`,
-//! f00c4b425); the token case here checks that flag composes with these.
+//! produced by Node v22.2.0 on the identical source. Before this change the
+//! heap-object cap had no flag and the console transcript cap (1,000 lines on
+//! the deterministic profile) could not be raised. The event-loop turn cap
+//! (10,001 zero-delay timers) and the parser token budget are main's
+//! (f00c4b425, `run --parser-max-tokens`); the cases here check that they
+//! compose with these limits.
 //! No-claim: this does not change the default instruction budget.
 
 use std::fs;
@@ -207,38 +207,29 @@ fn token_budget_binds_by_default_and_the_run_flag_raises_it() {
 }
 
 #[test]
-fn console_rotation_is_never_silent_and_the_cap_is_configurable() {
+fn console_cap_is_configurable_and_recorded_for_replay() {
+    // Default overflow semantics are owned by the console-budget work
+    // (fail-closed instead of silent eviction); this bead only makes the cap
+    // an operator setting that strict replay reuses.
     let dir = scratch_dir("console");
     let source = "for (let i=0;i<3000;i++) console.log('line', i);\n";
-    let budget = ["--instruction-budget", "10000000"];
-
-    let (output, report) = run(&dir, "rotated", source, &budget);
-    assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let lines = console_lines(&report.expect("report"));
-    let marker = &lines[0];
-    assert!(
-        marker.starts_with("[frankenengine] ")
-            && marker.contains("earlier console entries were dropped"),
-        "a rotated transcript must lead with the drop marker, got {marker:?}"
-    );
-    let retained = lines.len() - 1;
-    assert!(retained < 3000);
-    assert!(
-        marker.starts_with(&format!("[frankenengine] {} earlier", 3000 - retained)),
-        "marker must count exactly the dropped entries: {marker:?}"
-    );
-    assert_eq!(lines.last().map(String::as_str), Some("line 2999"));
-
     let (output, report) = run(
         &dir,
         "full",
         source,
-        &[budget[0], budget[1], "--max-console-entries", "5000"],
+        &[
+            "--instruction-budget",
+            "10000000",
+            "--max-console-entries",
+            "5000",
+        ],
     );
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    let lines = console_lines(&report.expect("report"));
+    let report = report.expect("report");
+    let lines = console_lines(&report);
     // node: 3000 lines, "line 0" .. "line 2999"
     assert_eq!(lines.len(), 3000);
     assert_eq!(lines[0], "line 0");
     assert_eq!(lines[2999], "line 2999");
+    assert_eq!(report["replay_input"]["max_console_entries"], 5000);
 }

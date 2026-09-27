@@ -9622,9 +9622,15 @@ impl InterpreterConfig {
             max_registers: config.deterministic_max_registers,
             max_call_depth: config.max_call_depth,
             max_string_size: 33_554_432,
-            max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
-            max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
-            max_console_entries: DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES,
+            max_heap_objects: config
+                .max_heap_objects
+                .unwrap_or(DEFAULT_QUICKJS_MAX_HEAP_OBJECTS),
+            max_total_memory_bytes: config
+                .max_total_memory_bytes
+                .unwrap_or(DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES),
+            max_console_entries: config
+                .max_console_entries
+                .unwrap_or(DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES),
             max_console_bytes: DEFAULT_MAX_CONSOLE_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
@@ -9646,9 +9652,15 @@ impl InterpreterConfig {
             max_registers: config.throughput_max_registers,
             max_call_depth: config.max_call_depth,
             max_string_size: 268_435_456,
-            max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
-            max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
-            max_console_entries: DEFAULT_V8_MAX_CONSOLE_ENTRIES,
+            max_heap_objects: config
+                .max_heap_objects
+                .unwrap_or(DEFAULT_V8_MAX_HEAP_OBJECTS),
+            max_total_memory_bytes: config
+                .max_total_memory_bytes
+                .unwrap_or(DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES),
+            max_console_entries: config
+                .max_console_entries
+                .unwrap_or(DEFAULT_V8_MAX_CONSOLE_ENTRIES),
             max_console_bytes: DEFAULT_MAX_CONSOLE_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,

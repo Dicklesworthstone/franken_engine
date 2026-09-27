@@ -382,6 +382,8 @@ struct RunArgs {
     /// tokens); the override is bounded by [`MAX_RUN_PARSER_TOKEN_COUNT`],
     /// applies to required modules too, and is recorded for exact replay.
     parser_max_token_count: Option<u64>,
+    /// Heap, console, and parser limit overrides (bd-9vouw.58).
+    limits: ExecutionLimitOverrides,
 }
 
 /// Upper bound for `frankenctl run --parser-max-tokens`. The source-byte
@@ -393,6 +395,84 @@ const MAX_RUN_PARSER_TOKEN_COUNT: u64 = 1 << 24;
 /// stays a typed fail-closed error at any value; this bound only keeps an
 /// operator typo from turning a containment budget into an unbounded run.
 const MAX_RUN_INSTRUCTION_BUDGET: u64 = 10_000_000_000;
+/// Upper bound for `--max-heap-bytes` (64 GiB): a typo guard, like
+/// [`MAX_RUN_INSTRUCTION_BUDGET`].
+const MAX_RUN_HEAP_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+/// Upper bound for `--max-console-entries`.
+const MAX_RUN_CONSOLE_ENTRIES: u64 = 100_000_000;
+/// Upper bound for `--max-source-bytes` (256 MiB).
+const MAX_RUN_SOURCE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Resource-limit overrides shared by `run`, `agent-sandbox`, and strict
+/// replay (bd-9vouw.58). `None` keeps the containment default. `run` records
+/// every override in the report's replay input, so strict replay re-executes
+/// under the limits the run had; unset overrides serialize to nothing and
+/// earlier reports keep their exact bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct ExecutionLimitOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_heap_objects: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_heap_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_console_entries: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_source_bytes: Option<u64>,
+}
+
+impl ExecutionLimitOverrides {
+    /// Consume the limit flag at `args[*index]` (and its value). Returns
+    /// `Ok(false)` when the flag is not a limit flag.
+    fn parse_flag(&mut self, args: &[String], index: &mut usize) -> Result<bool, String> {
+        let flag = args[*index].as_str();
+        let bounded = |value: u64, max: u64| {
+            if value > max {
+                Err(format!("{flag} must be at most {max}"))
+            } else {
+                Ok(value)
+            }
+        };
+        match flag {
+            "--max-heap-objects" => {
+                let value = parse_positive_u64(&next_arg(args, index, flag)?, flag)?;
+                let value = bounded(value, u64::from(u32::MAX))?;
+                self.max_heap_objects = Some(u32::try_from(value).unwrap_or(u32::MAX));
+            }
+            "--max-heap-bytes" => {
+                let value = parse_positive_u64(&next_arg(args, index, flag)?, flag)?;
+                self.max_heap_bytes = Some(bounded(value, MAX_RUN_HEAP_BYTES)?);
+            }
+            "--max-console-entries" => {
+                let value = parse_positive_u64(&next_arg(args, index, flag)?, flag)?;
+                let value = bounded(value, MAX_RUN_CONSOLE_ENTRIES)?;
+                self.max_console_entries = Some(usize::try_from(value).unwrap_or(usize::MAX));
+            }
+            "--max-source-bytes" => {
+                let value = parse_positive_u64(&next_arg(args, index, flag)?, flag)?;
+                self.max_source_bytes = Some(bounded(value, MAX_RUN_SOURCE_BYTES)?);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn apply_to_runtime_config(&self, runtime_config: &mut RuntimeConfig) {
+        runtime_config.execution.max_heap_objects = self.max_heap_objects;
+        runtime_config.execution.max_total_memory_bytes = self.max_heap_bytes;
+        runtime_config.execution.max_console_entries = self.max_console_entries;
+    }
+
+    /// Parser options for a CLI execution: the library defaults with the
+    /// `--max-source-bytes` override. The token budget keeps its default;
+    /// `run --parser-max-tokens` raises it.
+    fn parser_options(&self) -> ParserOptions {
+        let mut options = ParserOptions::default();
+        if let Some(max_source_bytes) = self.max_source_bytes {
+            options.budget.max_source_bytes = max_source_bytes;
+        }
+        options
+    }
+}
 
 /// `frankenctl agent-sandbox` (bd-fqlfw.8.5): run agent-generated code under
 /// a manifest-declared tool authority and hand back the certificate bundle.
@@ -410,6 +490,11 @@ struct AgentSandboxArgs {
     certificate_out: Option<PathBuf>,
     /// Override the execution-cell close budget for policy testing.
     cell_close_budget_ms: Option<u64>,
+    /// Interpreter instruction budget override (bd-9vouw.58); same bound and
+    /// semantics as `run --instruction-budget`.
+    instruction_budget: Option<u64>,
+    /// Heap, console, and parser limit overrides (bd-9vouw.58).
+    limits: ExecutionLimitOverrides,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1019,6 +1104,9 @@ struct RunReplayInput {
     /// for default-budget runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parser_max_token_count: Option<u64>,
+    /// Limit overrides used by the run (bd-9vouw.58); absent when unset.
+    #[serde(flatten)]
+    limits: ExecutionLimitOverrides,
     ir3_hash: String,
     randomness_transcript: NondeterminismTrace,
     unsigned_execution_content: UnsignedExecutionContent,
@@ -2269,6 +2357,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut cell_close_budget_ms: Option<u64> = None;
     let mut instruction_budget: Option<u64> = None;
     let mut parser_max_token_count: Option<u64> = None;
+    let mut limits = ExecutionLimitOverrides::default();
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2278,16 +2367,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
             "--instruction-budget" => {
-                let budget = parse_positive_u64(
-                    &next_arg(args, &mut index, "--instruction-budget")?,
-                    "--instruction-budget",
-                )?;
-                if budget > MAX_RUN_INSTRUCTION_BUDGET {
-                    return Err(format!(
-                        "--instruction-budget must be at most {MAX_RUN_INSTRUCTION_BUDGET}"
-                    ));
-                }
-                instruction_budget = Some(budget);
+                instruction_budget = Some(parse_instruction_budget_flag(args, &mut index)?);
             }
             "--parser-max-tokens" => {
                 let tokens = parse_positive_u64(
@@ -2340,7 +2420,11 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--emit-trace" => {
                 emit_trace = Some(PathBuf::from(next_arg(args, &mut index, "--emit-trace")?));
             }
-            flag => return Err(format!("unknown run flag `{flag}`")),
+            flag => {
+                if !limits.parse_flag(args, &mut index)? {
+                    return Err(format!("unknown run flag `{flag}`"));
+                }
+            }
         }
         index += 1;
     }
@@ -2368,18 +2452,23 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         cell_close_budget_ms,
         instruction_budget,
         parser_max_token_count,
+        limits,
     }))
 }
 
 /// Runtime configuration for `frankenctl run` and its strict replay. Both
 /// execution profiles receive the same override so adaptive lane selection
 /// cannot change the effective budget between a run and its replay.
-fn run_runtime_config(instruction_budget: Option<u64>) -> RuntimeConfig {
+fn run_runtime_config(
+    instruction_budget: Option<u64>,
+    limits: &ExecutionLimitOverrides,
+) -> RuntimeConfig {
     let mut runtime_config = RuntimeConfig::default();
     if let Some(budget) = instruction_budget {
         runtime_config.execution.deterministic_budget = budget;
         runtime_config.execution.throughput_budget = budget;
     }
+    limits.apply_to_runtime_config(&mut runtime_config);
     runtime_config
 }
 
@@ -2396,6 +2485,8 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut purpose: Option<String> = None;
     let mut certificate_out: Option<PathBuf> = None;
     let mut cell_close_budget_ms: Option<u64> = None;
+    let mut instruction_budget: Option<u64> = None;
+    let mut limits = ExecutionLimitOverrides::default();
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2427,7 +2518,14 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
                     "--cell-close-budget-ms",
                 )?);
             }
-            flag => return Err(format!("unknown agent-sandbox flag `{flag}`")),
+            "--instruction-budget" => {
+                instruction_budget = Some(parse_instruction_budget_flag(args, &mut index)?);
+            }
+            flag => {
+                if !limits.parse_flag(args, &mut index)? {
+                    return Err(format!("unknown agent-sandbox flag `{flag}`"));
+                }
+            }
         }
         index += 1;
     }
@@ -2448,7 +2546,24 @@ fn parse_agent_sandbox_command(args: &[String]) -> Result<CommandSpec, String> {
         purpose,
         certificate_out,
         cell_close_budget_ms,
+        instruction_budget,
+        limits,
     }))
+}
+
+/// Parse the value of `--instruction-budget` at `args[*index]`, bounded by
+/// [`MAX_RUN_INSTRUCTION_BUDGET`].
+fn parse_instruction_budget_flag(args: &[String], index: &mut usize) -> Result<u64, String> {
+    let budget = parse_positive_u64(
+        &next_arg(args, index, "--instruction-budget")?,
+        "--instruction-budget",
+    )?;
+    if budget > MAX_RUN_INSTRUCTION_BUDGET {
+        return Err(format!(
+            "--instruction-budget must be at most {MAX_RUN_INSTRUCTION_BUDGET}"
+        ));
+    }
+    Ok(budget)
 }
 
 fn parse_explain_command(args: &[String]) -> Result<CommandSpec, String> {
@@ -4410,6 +4525,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let mut orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
         trace_id_prefix: "frankenctl-run".to_string(),
+        parser_options: args.limits.parser_options(),
         ..OrchestratorConfig::default()
     };
     if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
@@ -4428,7 +4544,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?;
     let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_config_and_authority(
         orchestrator_config,
-        run_runtime_config(args.instruction_budget),
+        run_runtime_config(args.instruction_budget, &args.limits),
         AmbientAuthorityGrant::DenyAll,
         evidence_authority,
     )
@@ -4536,6 +4652,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         cell_close_budget_ms: replay_cell_close_budget_ms,
         instruction_budget: args.instruction_budget,
         parser_max_token_count: args.parser_max_token_count,
+        limits: args.limits,
         ir3_hash: result.ir4_witness.executed_ir3_hash.to_hex(),
         randomness_transcript: result.nondeterminism_trace.clone(),
         unsigned_execution_content,
@@ -4759,6 +4876,7 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
     let mut orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
         trace_id_prefix: "frankenctl-agent-sandbox".to_string(),
+        parser_options: args.limits.parser_options(),
         ..OrchestratorConfig::default()
     };
     if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
@@ -4771,8 +4889,10 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
         None,
     )
     .map_err(|error| format!("failed to initialize runtime evidence authority: {error}"))?;
-    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_authority(
+    let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_config_and_authority(
         orchestrator_config,
+        run_runtime_config(args.instruction_budget, &args.limits),
+        AmbientAuthorityGrant::DenyAll,
         evidence_authority,
     )
     .map_err(|error| format!("failed to initialize execution orchestrator: {error}"))?;
@@ -9028,6 +9148,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         policy_id: input.policy_id.clone(),
         epoch: SecurityEpoch::from_raw(input.policy_epoch),
         cell_close_budget_ms: input.cell_close_budget_ms,
+        parser_options: input.limits.parser_options(),
         ..OrchestratorConfig::default()
     };
     if let Some(tokens) = input.parser_max_token_count {
@@ -9042,7 +9163,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     .map_err(|error| format!("failed to initialize replay evidence authority: {error}"))?;
     let mut orchestrator = ExecutionOrchestrator::try_new_with_runtime_config_and_authority(
         orchestrator_config,
-        run_runtime_config(input.instruction_budget),
+        run_runtime_config(input.instruction_budget, &input.limits),
         AmbientAuthorityGrant::DenyAll,
         evidence_authority,
     )
@@ -12363,6 +12484,18 @@ fn check_usage() -> String {
     .join("\n")
 }
 
+/// Shared help text for the limit flags of `run` and `agent-sandbox`
+/// (bd-9vouw.58).
+const EXECUTION_LIMITS_HELP: &str =
+    "  Limit flags (all optional, all recorded in the report's replay input):
+  --max-heap-objects caps live heap objects (default 100000 on the
+  deterministic profile, 1000000 on the throughput profile).
+  --max-heap-bytes caps estimated memory (default 64 MiB / 512 MiB).
+  --max-console-entries sizes the console transcript (default 1000 /
+  10000); a rotated transcript starts with a marker naming how many
+  earlier entries were dropped. --max-source-bytes caps the source size
+  (default 1 MiB).";
+
 fn run_usage() -> String {
     [
         "run usage:",
@@ -12370,7 +12503,8 @@ fn run_usage() -> String {
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
-        "      [--instruction-budget <n>] [--parser-max-tokens <n>]",
+        "      [--instruction-budget <n>] [--parser-max-tokens <n>] [--max-heap-objects <n>]",
+        "      [--max-heap-bytes <n>] [--max-console-entries <n>] [--max-source-bytes <n>]",
         "",
         "  --instruction-budget overrides the interpreter instruction budget (default",
         "  100000, at most 10000000000). Exhaustion still fails closed; the value is",
@@ -12380,6 +12514,8 @@ fn run_usage() -> String {
         "  and required modules (default 65536, at most 16777216; lodash.js needs",
         "  121349). Exhaustion still fails closed; the value is recorded in the",
         "  report's replay input so strict replay reuses it.",
+        "",
+        EXECUTION_LIMITS_HELP,
         "",
         "  --emit-trace writes the run's recorded nondeterminism trace — the",
         "  exact input `frankenctl replay debug --trace` consumes, enabling",
@@ -12406,7 +12542,8 @@ fn agent_sandbox_usage() -> String {
         "  frankenctl agent-sandbox --manifest <agent_sandbox_manifest.json> --input <generated.js>",
         "      [--goal script|module] [--out <report.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
-        "      [--cell-close-budget-ms <n>]",
+        "      [--cell-close-budget-ms <n>] [--instruction-budget <n>] [--max-heap-objects <n>]",
+        "      [--max-heap-bytes <n>] [--max-console-entries <n>] [--max-source-bytes <n>]",
         "",
         "  Runs AI-agent-generated code under the tool authority the manifest",
         "  declares (franken-engine.agent-sandbox-manifest.v1): each tool grant",
@@ -12428,6 +12565,10 @@ fn agent_sandbox_usage() -> String {
         "",
         "  A post-evidence lifecycle failure exits 2 and emits the same",
         "  structured, explicitly uncommitted exact-chain failure report as run.",
+        "",
+        "  --instruction-budget overrides the interpreter instruction budget",
+        "  (default 100000, at most 10000000000).",
+        EXECUTION_LIMITS_HELP,
     ]
     .join("\n")
 }
@@ -13136,6 +13277,143 @@ mod tests {
         let error = parse_command(&args)
             .expect_err("certificate out without data contract must fail closed");
         assert!(error.contains("--certificate-out requires --data-contract"));
+    }
+
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_run_command_accepts_execution_limit_flags() {
+        let args = strings(&[
+            "run",
+            "--input",
+            "big.js",
+            "--extension-id",
+            "ext",
+            "--max-heap-objects",
+            "2000000",
+            "--max-heap-bytes",
+            "1073741824",
+            "--max-console-entries",
+            "50000",
+            "--max-source-bytes",
+            "4194304",
+            "--parser-max-tokens",
+            "300000",
+        ]);
+        match parse_command(&args).expect("limit flags should parse") {
+            CommandSpec::Run(spec) => {
+                assert_eq!(
+                    spec.limits,
+                    ExecutionLimitOverrides {
+                        max_heap_objects: Some(2_000_000),
+                        max_heap_bytes: Some(1_073_741_824),
+                        max_console_entries: Some(50_000),
+                        max_source_bytes: Some(4_194_304),
+                    }
+                );
+                assert_eq!(spec.parser_max_token_count, Some(300_000));
+                let mut runtime_config = RuntimeConfig::default();
+                spec.limits.apply_to_runtime_config(&mut runtime_config);
+                assert_eq!(runtime_config.execution.max_heap_objects, Some(2_000_000));
+                assert_eq!(
+                    runtime_config.execution.max_total_memory_bytes,
+                    Some(1_073_741_824)
+                );
+                assert_eq!(runtime_config.execution.max_console_entries, Some(50_000));
+                let options = spec.limits.parser_options();
+                assert_eq!(options.budget.max_source_bytes, 4_194_304);
+                assert_eq!(
+                    options.budget.max_token_count,
+                    ParserOptions::default().budget.max_token_count
+                );
+            }
+            other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn execution_limit_flags_reject_zero_and_out_of_range_values() {
+        for (flag, value) in [
+            ("--max-heap-objects", "0"),
+            ("--max-heap-objects", "4294967296"),
+            ("--max-heap-bytes", "0"),
+            ("--max-heap-bytes", "68719476737"),
+            ("--max-console-entries", "0"),
+            ("--max-source-bytes", "0"),
+        ] {
+            let args = strings(&[
+                "run",
+                "--input",
+                "a.js",
+                "--extension-id",
+                "ext",
+                flag,
+                value,
+            ]);
+            let error =
+                parse_command(&args).expect_err("zero or out-of-range limit must be rejected");
+            assert!(error.contains(flag), "{flag}={value}: {error}");
+        }
+    }
+
+    #[test]
+    fn cli_parser_options_raise_only_the_byte_budget() {
+        // --max-source-bytes raises the byte cap alone; the token budget keeps
+        // the library default, which `run --parser-max-tokens` raises.
+        let defaults = ParserOptions::default();
+        let options = ExecutionLimitOverrides::default().parser_options();
+        assert_eq!(
+            options.budget.max_source_bytes,
+            defaults.budget.max_source_bytes
+        );
+        assert_eq!(
+            options.budget.max_token_count,
+            defaults.budget.max_token_count
+        );
+        let raised = ExecutionLimitOverrides {
+            max_source_bytes: Some(8 << 20),
+            ..ExecutionLimitOverrides::default()
+        }
+        .parser_options();
+        assert_eq!(raised.budget.max_source_bytes, 8 << 20);
+        assert_eq!(
+            raised.budget.max_token_count,
+            defaults.budget.max_token_count
+        );
+    }
+
+    #[test]
+    fn execution_limit_overrides_stay_off_the_replay_wire_when_unset() {
+        let json = serde_json::to_string(&ExecutionLimitOverrides::default()).expect("serialize");
+        assert_eq!(json, "{}");
+        let decoded: ExecutionLimitOverrides =
+            serde_json::from_str(r#"{"max_heap_objects":7}"#).expect("deserialize");
+        assert_eq!(decoded.max_heap_objects, Some(7));
+        assert_eq!(decoded.max_source_bytes, None);
+    }
+
+    #[test]
+    fn parse_agent_sandbox_command_accepts_budget_and_limit_flags() {
+        let args = strings(&[
+            "agent-sandbox",
+            "--manifest",
+            "manifest.json",
+            "--input",
+            "generated.js",
+            "--instruction-budget",
+            "5000000",
+            "--max-heap-objects",
+            "500000",
+        ]);
+        match parse_command(&args).expect("agent-sandbox limit flags should parse") {
+            CommandSpec::AgentSandbox(spec) => {
+                assert_eq!(spec.instruction_budget, Some(5_000_000));
+                assert_eq!(spec.limits.max_heap_objects, Some(500_000));
+            }
+            other => panic!("expected agent-sandbox command, got {other:?}"),
+        }
     }
 
     #[test]

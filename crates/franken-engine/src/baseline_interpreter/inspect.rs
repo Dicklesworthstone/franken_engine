@@ -521,7 +521,9 @@ impl InterpreterCore {
         value: &Value,
         path: &mut Vec<u32>,
     ) -> Result<Option<String>, InterpreterError> {
-        self.json_charge_work()?;
+        if matches!(value, Value::Object(_)) {
+            self.json_charge_work()?;
+        }
         Ok(Some(match value {
             Value::Null => "null".to_string(),
             Value::Bool(value) => value.to_string(),
@@ -589,7 +591,13 @@ impl InterpreterCore {
         value: &Value,
         recurse_times: i64,
     ) -> Result<String, InterpreterError> {
-        self.json_charge_work()?;
+        // Containers are charged as native work (their cost grows with their
+        // size); primitives are O(1) and were already charged by the
+        // confidentiality walk, so logging them keeps instruction counts
+        // unchanged.
+        if matches!(value, Value::Object(_) | Value::Promise(_)) {
+            self.json_charge_work()?;
+        }
         match value {
             Value::Undefined => Ok("undefined".to_string()),
             Value::Null => Ok("null".to_string()),

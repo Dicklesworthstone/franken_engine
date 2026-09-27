@@ -25677,7 +25677,13 @@ fn reflect_builtin_call_capability(
         false => well_formed_static_name(property)?,
         true => well_formed_string_literal(property)?,
     };
-    match method {
+    reflect_member_capability(method)
+}
+
+/// The native hostcall behind `Reflect.<member>`, shared by the direct-call
+/// interception above and the first-class `Reflect` object.
+pub(crate) fn reflect_member_capability(member: &str) -> Option<&'static str> {
+    match member {
         "has" => Some("builtin:ReflectHas"),
         "get" => Some("builtin:ReflectGet"),
         "set" => Some("builtin:ReflectSet"),

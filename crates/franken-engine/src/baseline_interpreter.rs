@@ -5116,13 +5116,36 @@ mod date_math {
 }
 
 fn static_hostcall_name(tag: &str) -> Option<&'static str> {
-    slot0_static_member_name(tag).or_else(|| {
-        GLOBAL_FUNCTION_VALUES
-            .iter()
-            .copied()
-            .find(|name| crate::lowering_pipeline::global_function_capability(name) == Some(tag))
-    })
+    slot0_static_member_name(tag)
+        .or_else(|| {
+            GLOBAL_FUNCTION_VALUES
+                .iter()
+                .copied()
+                .find(|name| crate::lowering_pipeline::global_function_capability(name) == Some(tag))
+        })
+        .or_else(|| {
+            REFLECT_MEMBERS
+                .iter()
+                .copied()
+                .find(|member| crate::lowering_pipeline::reflect_member_capability(member) == Some(tag))
+        })
 }
+
+/// `Reflect` members installed on the first-class `Reflect` object; each is
+/// the hostcall the lowering routes a direct `Reflect.<member>(...)` call to.
+const REFLECT_MEMBERS: [&str; 11] = [
+    "apply",
+    "construct",
+    "deleteProperty",
+    "get",
+    "getPrototypeOf",
+    "has",
+    "isExtensible",
+    "ownKeys",
+    "preventExtensions",
+    "set",
+    "setPrototypeOf",
+];
 
 /// The `'static` spelling of a first-class static builtin tag, or `None` if
 /// the shared lowering tables cannot produce it.
@@ -5138,6 +5161,11 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
             GLOBAL_FUNCTION_VALUES
                 .iter()
                 .filter_map(|name| crate::lowering_pipeline::global_function_capability(name)),
+        )
+        .chain(
+            REFLECT_MEMBERS
+                .iter()
+                .filter_map(|member| crate::lowering_pipeline::reflect_member_capability(member)),
         )
         .find(|candidate| *candidate == tag)
 }
@@ -32737,6 +32765,27 @@ impl InterpreterCore {
             ),
         ])?;
         self.inject_runtime_global_binding("JSON", Value::Object(json))?;
+        // `Reflect` as a first-class namespace object, like `JSON`: direct
+        // `Reflect.get(o, k)` calls stay intercepted at lowering, and the
+        // object's members are the same hostcalls, so `typeof Reflect`,
+        // `const { ownKeys } = Reflect` and `Reflect.apply.call(...)` work.
+        let reflect_members: Vec<(&str, Value)> = REFLECT_MEMBERS
+            .iter()
+            .filter_map(|member| {
+                crate::lowering_pipeline::reflect_member_capability(member).map(|tag| {
+                    (*member, Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)))
+                })
+            })
+            .collect();
+        let reflect = self.alloc_object_with_properties(&reflect_members)?;
+        for member in REFLECT_MEMBERS {
+            self.set_own_property_attributes(
+                reflect,
+                &RuntimePropertyKey::String(JsString::from(member)),
+                NON_ENUMERABLE_DATA_ATTRIBUTES,
+            )?;
+        }
+        self.inject_runtime_global_binding("Reflect", Value::Object(reflect))?;
 
         Ok(())
     }

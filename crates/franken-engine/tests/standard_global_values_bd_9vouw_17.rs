@@ -178,3 +178,28 @@ fn test262_sta_prelude_shape_runs() {
         "Test262Error: boom",
     );
 }
+
+/// `Reflect` is a first-class namespace object, like `JSON` and `Math`.
+/// `typeof Reflect` was "undefined" and `var R = Reflect` threw
+/// "Reflect is not defined": only the direct `Reflect.m(...)` call shape
+/// worked, because the lowering intercepts it. Feature checks
+/// (`typeof Reflect !== 'undefined'`) and destructuring (`const { ownKeys } =
+/// Reflect`) failed.
+#[test]
+fn reflect_is_a_first_class_namespace_object() {
+    check(
+        "var R = Reflect; var { ownKeys, has } = Reflect; \
+         var o = { a: 1, [Symbol.iterator]: 2 }; \
+         [typeof Reflect, typeof R.get, R.get(o, 'a'), has(o, 'a'), ownKeys(o).length, \
+          R.apply(Math.max, null, [1, 3, 2]), Object.keys(Reflect).length, \
+          typeof Reflect.construct].join('|')",
+        "object|function|1|true|2|3|0|function",
+    );
+    check(
+        "function F(x) { this.x = x; } \
+         var c = [Reflect.construct].map(function (f) { return f(F, [7]).x; }); \
+         [c[0], Reflect.apply.call(null, Math.min, null, [4, 2]), \
+          Reflect.getPrototypeOf([]) === Array.prototype].join('|')",
+        "7|2|true",
+    );
+}

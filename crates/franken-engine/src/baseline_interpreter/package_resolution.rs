@@ -154,6 +154,8 @@ impl<'de> Deserialize<'de> for PackageExports {
 #[derive(Debug, Default, Deserialize)]
 struct PackageManifest {
     #[serde(default)]
+    name: Option<serde_json::Value>,
+    #[serde(default)]
     main: Option<serde_json::Value>,
     #[serde(default)]
     exports: Option<PackageExports>,
@@ -410,6 +412,25 @@ impl InterpreterCore {
             .and_then(|dir| dir.canonicalize().ok())
             .filter(|dir| dir.starts_with(&root))
             .unwrap_or_else(|| root.clone());
+        // Self references precede node_modules and are limited to the nearest
+        // package scope. An unexported self subpath must not fall through to
+        // an installed package of the same name.
+        if let Some((scope, manifest)) = self.require_package_scope(specifier, &start, &root)?
+            && manifest.name.as_ref().and_then(serde_json::Value::as_str) == Some(name)
+            && let Some(exports) = manifest.exports.as_ref()
+        {
+            let target = resolve_package_exports(&scope, &format!(".{subpath}"), exports)
+                .map_err(|reason| {
+                    failed(ModuleResolutionFailureReason::Other(format!(
+                        "package `{name}` {reason}"
+                    )))
+                })?;
+            return if target.is_file() {
+                Ok(target)
+            } else {
+                Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
+            };
+        }
         for dir in start.ancestors() {
             if !dir.starts_with(&root) {
                 break;
@@ -447,6 +468,40 @@ impl InterpreterCore {
             }
         }
         Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
+    }
+
+    /// The nearest package.json owns both self references and private imports.
+    /// A dependency without a manifest cannot inherit its consumer's scope
+    /// across node_modules. The configured module root is also a hard stop.
+    fn require_package_scope(
+        &self,
+        specifier: &str,
+        start: &Path,
+        root: &Path,
+    ) -> Result<Option<(PathBuf, PackageManifest)>, InterpreterError> {
+        for directory in start.ancestors() {
+            if !directory.starts_with(root)
+                || directory.file_name().is_some_and(|name| name == "node_modules")
+            {
+                break;
+            }
+            let path = directory.join("package.json");
+            if !path.is_file() {
+                continue;
+            }
+            // Do not read a manifest symlink outside the host's module root.
+            self.canonicalize_module_candidate(specifier, &path)?;
+            let manifest = read_package_manifest(directory).map_err(|reason| {
+                InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                }
+            })?;
+            // A manifest with no name/exports still closes the scope; never
+            // search an outer package just because this one cannot resolve X.
+            return Ok(manifest.map(|manifest| (directory.to_path_buf(), manifest)));
+        }
+        Ok(None)
     }
 
     /// Node's LOAD_AS_DIRECTORY step for a package.json `main`: the file it

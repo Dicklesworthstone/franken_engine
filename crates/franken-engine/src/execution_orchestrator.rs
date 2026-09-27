@@ -2802,7 +2802,29 @@ impl ExecutionOrchestrator {
                         })
                         .collect()
                 };
-            let (routed, guardplane_report) = execution?;
+            let (routed, guardplane_report) = match execution {
+                Ok(executed) => executed,
+                Err(primary_error) => {
+                    // bd-9vouw.61: a run the capability membrane stopped must
+                    // leave a signed, chained record of what was denied, not
+                    // only a stderr line. Evidence construction failure never
+                    // masks the denial itself.
+                    let mut failure = PendingPostCellFailure::from(primary_error);
+                    match self.capability_denial_evidence(
+                        &trace_id,
+                        &decision_id,
+                        package,
+                        &failure.primary_error,
+                    ) {
+                        Ok(Some(evidence)) => {
+                            failure.uncommitted_evidence_chain = Some(Box::new(evidence));
+                        }
+                        Ok(None) => {}
+                        Err(evidence_error) => failure.additional_errors.push(evidence_error),
+                    }
+                    return Err(failure);
+                }
+            };
             #[cfg(test)]
             if std::mem::take(&mut self.cancel_after_execution_override) {
                 let cancellation = self
@@ -3178,6 +3200,63 @@ impl ExecutionOrchestrator {
             });
         }
         self.ledger.emit_chained_batch(entries, receipt)
+    }
+
+    /// Signed evidence for a run the capability membrane terminated
+    /// (bd-9vouw.61). The entry names the denied capability and the
+    /// extension, chains onto the ledger head like any run's evidence batch,
+    /// and is validated against the ledger before it is returned, so the
+    /// failure report carries a verifiable record rather than a stderr line.
+    /// Returns `None` for failures that are not capability denials.
+    fn capability_denial_evidence(
+        &self,
+        trace_id: &str,
+        decision_id: &str,
+        package: &ExtensionPackage,
+        error: &OrchestratorError,
+    ) -> Result<Option<UncommittedEvidenceChainEvidence>, OrchestratorError> {
+        let OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }) =
+            error.primary_error()
+        else {
+            return Ok(None);
+        };
+        let entry = EvidenceEntryBuilder::new_with_authority(
+            trace_id,
+            format!("{decision_id}:capability-denied"),
+            &self.config.policy_id,
+            self.config.epoch,
+            DecisionType::SecurityAction,
+            &self.evidence_signing_authority,
+        )
+        .timestamp_ns(0)
+        .candidate(CandidateAction::new(
+            format!("{:?}", ContainmentAction::Terminate),
+            0,
+        ))
+        .chosen(ChosenAction {
+            action_name: format!("{}", ContainmentAction::Terminate),
+            expected_loss_millionths: 0,
+            rationale: format!(
+                "capability_denied capability={capability} extension_id={}",
+                package.extension_id
+            ),
+        })
+        .meta("outcome", "capability_denied")
+        .meta("denied_capability", capability.clone())
+        .meta("extension_id", package.extension_id.clone())
+        .build()?;
+        let entries = vec![entry];
+        let receipt = EvidenceChainReceipt::issue_with_authority(
+            self.evidence_ledger_id().to_string(),
+            self.ledger.evidence_chain_next_sequence(),
+            self.ledger.evidence_chain_head(),
+            &entries,
+            &self.evidence_signing_authority,
+        )?;
+        self.ledger.validate_chained_batch(&entries, &receipt)?;
+        Ok(Some(self.build_uncommitted_evidence_chain_evidence(
+            entries, receipt, None, None,
+        )))
     }
 
     fn build_uncommitted_evidence_chain_evidence(
@@ -5730,6 +5809,64 @@ mod tests {
             .execute(&allowed_package)
             .expect("declared package hostcall capability should be granted");
         assert_eq!(result.execution_value, "undefined");
+    }
+
+    #[test]
+    fn capability_denial_leaves_signed_chained_evidence_bd_9vouw_61() {
+        let source = r#""hostcall<\"net.write\">";"#;
+        let mut package = package_with_source(source);
+        package.capabilities = execution_capabilities();
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+
+        let error = orchestrator
+            .execute(&package)
+            .expect_err("an undeclared hostcall must be denied");
+        assert!(matches!(
+            error.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                if capability == "net.write"
+        ));
+        let evidence = error
+            .uncommitted_evidence_chain()
+            .expect("a capability denial must carry signed evidence");
+        let entries = &evidence.artifact.entries;
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(
+            entry.metadata.get("outcome").map(String::as_str),
+            Some("capability_denied")
+        );
+        assert_eq!(
+            entry.metadata.get("denied_capability").map(String::as_str),
+            Some("net.write")
+        );
+        assert_eq!(
+            entry.chosen_action.action_name,
+            format!("{}", ContainmentAction::Terminate)
+        );
+        let lifecycle = error
+            .post_cell_failure()
+            .expect("denials are post-cell failures");
+        evidence
+            .verify_with_context(
+                &orchestrator.evidence_verification_identity(),
+                orchestrator.evidence_chain_instance_id(),
+                orchestrator.evidence_ledger_id(),
+                &lifecycle.cleanup.trace_id,
+                orchestrator.ledger().evidence_chain_next_sequence(),
+                orchestrator.ledger().evidence_chain_head(),
+            )
+            .expect("denial evidence must verify against the orchestrator's identity and chain");
+
+        // Failures that are not capability denials carry no denial evidence.
+        let thrown = orchestrator
+            .execute(&package_with_source(r#"throw "not a denial";"#))
+            .expect_err("an uncaught throw fails");
+        assert!(thrown.uncommitted_evidence_chain().is_none_or(|chain| {
+            chain.artifact.entries.iter().all(|entry| {
+                entry.metadata.get("outcome").map(String::as_str) != Some("capability_denied")
+            })
+        }));
     }
 
     fn package_with_source(source: &str) -> ExtensionPackage {

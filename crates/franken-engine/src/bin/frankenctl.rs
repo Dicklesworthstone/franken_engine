@@ -6843,6 +6843,11 @@ fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
             | InterpreterError::ModuleLoweringFailed { .. }
             | InterpreterError::ModuleEvaluationFailed { .. },
         ) => Some("unsupported_runtime_module_resolution"),
+        // bd-9vouw.61: the capability membrane terminated the run; the failure
+        // report carries the signed denial evidence.
+        OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { .. }) => {
+            Some("capability_denied")
+        }
         _ => None,
     }
 }

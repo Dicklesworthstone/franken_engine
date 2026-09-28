@@ -33,6 +33,14 @@ fn run(source: &str, stress_interval: Option<u64>) -> Run {
 /// `None` when the source does not parse or lower (e.g. a probe that the
 /// capability policy rejects at lowering).
 fn try_run(source: &str, stress_interval: Option<u64>) -> Option<Run> {
+    try_run_with_object_budget(source, stress_interval, None)
+}
+
+fn try_run_with_object_budget(
+    source: &str,
+    stress_interval: Option<u64>,
+    max_heap_objects: Option<u32>,
+) -> Option<Run> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -51,6 +59,9 @@ fn try_run(source: &str, stress_interval: Option<u64>) -> Option<Run> {
     .ir3;
     let mut config = InterpreterConfig::quickjs_defaults();
     config.instruction_budget = 1_000_000_000;
+    if let Some(max_heap_objects) = max_heap_objects {
+        config.max_heap_objects = max_heap_objects;
+    }
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -198,6 +209,107 @@ fn event_loop_garbage_completes_past_the_object_budget() {
 /// every structure must read back intact.
 const CHURN: &str = "for (let i = 0; i < 300000; i++) { const g = { i }; }";
 
+/// Promise programs that hold promises, resolving functions, queued jobs and
+/// suspended async code across a top-level churn of 300,000 garbage objects
+/// (the `CHURN` placeholder). A settled promise may be reclaimed only when
+/// nothing reachable names it. Expected lines are Node v22.2.0's.
+const PROMISE_CASES: &[(&str, &str)] = &[
+    (
+        "const p = Promise.resolve({ v: 3 }); CHURN p.then(o => console.log(o.v));",
+        "3",
+    ),
+    (
+        "let res; new Promise(r => { res = r; }); res({ v: 1 }); CHURN res({ v: 2 }); \
+         console.log('ok');",
+        "ok",
+    ),
+    (
+        "const ps = []; for (let i = 0; i < 20; i++) ps.push(Promise.resolve({ i })); CHURN \
+         Promise.all(ps).then(a => console.log(a.reduce((s, o) => s + o.i, 0)));",
+        "190",
+    ),
+    (
+        "async function f(i) { return { i }; } (async () => { let s = 0; \
+         for (let i = 0; i < 2000; i++) { s += (await f(i)).i; } console.log(s); })(); CHURN",
+        "1999000",
+    ),
+    (
+        "const p = new Promise(r => setTimeout(() => r({ v: 8 }), 0)); CHURN \
+         p.then(o => console.log(o.v));",
+        "8",
+    ),
+    (
+        "async function* g() { for (let i = 0; i < 3; i++) yield { i }; } const gen = g(); \
+         const first = gen.next(); CHURN (async () => { let s = (await first).value.i; \
+         for await (const o of gen) s += o.i; console.log(s); })();",
+        "3",
+    ),
+    (
+        "const p = Promise.reject({ e: 5 }); CHURN p.catch(e => console.log(e.e));",
+        "5",
+    ),
+    (
+        "const t = { then(r) { r({ v: 12 }); } }; const p = Promise.resolve(t); CHURN \
+         p.then(o => console.log(o.v));",
+        "12",
+    ),
+    (
+        "const p = Promise.resolve({ n: 1 }).then(o => ({ n: o.n + 1 })); CHURN \
+         p.then(o => ({ n: o.n * 10 })).then(o => console.log(o.n));",
+        "20",
+    ),
+    (
+        "const holder = { p: Promise.resolve({ v: 21 }) }; CHURN \
+         holder.p.then(o => console.log(o.v));",
+        "21",
+    ),
+];
+
+fn promise_case_sources() -> impl Iterator<Item = (String, &'static str)> {
+    PROMISE_CASES
+        .iter()
+        .map(|(source, node)| (source.replace("CHURN", CHURN), *node))
+}
+
+fn console_lines(run: &Run, source: &str) -> Vec<String> {
+    run.result
+        .as_ref()
+        .unwrap_or_else(|error| panic!("`{source}` failed: {error:?}"))
+        .console_output
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect()
+}
+
+#[test]
+fn promises_survive_collection_until_unreachable() {
+    for (source, node) in promise_case_sources() {
+        let run = run(&source, None);
+        assert_eq!(console_lines(&run, &source), vec![node], "{source}");
+        assert!(run.gc.collections > 0, "no collection ran: {source}");
+    }
+}
+
+/// Settled promise values used to be roots, so an await loop kept every
+/// awaited value alive: 1,000,000 awaits of `{ i }` died at 87,213 live
+/// objects under the default budget. Settled promises nothing names are now
+/// reclaimed with their values.
+#[test]
+fn await_loop_completes_past_the_object_budget() {
+    let source = "async function f(i) { return { i }; } (async () => { let s = 0; \
+                  for (let i = 0; i < 10000; i++) { s += (await f(i)).i; } console.log(s); })();";
+    let run = try_run_with_object_budget(source, None, Some(3000)).expect("lowers");
+    assert_eq!(console_lines(&run, source), vec!["49995000"]);
+    // 10,000 awaited values cannot fit a 3,000-object budget unless at
+    // least 7,000 settled promises (and their values) were reclaimed; the
+    // ones settled after the last collection legitimately remain.
+    assert!(
+        run.gc.reclaimed_promises >= 7_000,
+        "reclaimed only {} promises",
+        run.gc.reclaimed_promises
+    );
+}
+
 fn reachable_cases() -> Vec<(String, &'static str)> {
     let cases: &[(&str, &str, &str)] = &[
         (
@@ -316,11 +428,16 @@ fn stress_collection_preserves_results_and_console_output() {
         .iter()
         .map(|case| case["source"].as_str().expect("source").to_string())
         .collect();
-    sources.extend(reachable_cases().into_iter().map(|(source, _)| {
-        // The stress run collects at every safe point; a short churn keeps
-        // the O(live) cost per instruction manageable.
-        source.replace("300000", "200")
-    }));
+    sources.extend(
+        reachable_cases()
+            .into_iter()
+            .chain(promise_case_sources())
+            .map(|(source, _)| {
+                // The stress run collects at every safe point; a short churn
+                // keeps the O(live) cost per instruction manageable.
+                source.replace("300000", "200")
+            }),
+    );
     let mut compared = 0;
     let mut collections_by_interval = [0u64; 3];
     for source in &sources {
@@ -358,8 +475,9 @@ fn stress_collection_preserves_results_and_console_output() {
             compared += 1;
         }
     }
-    // 50 probes (a few are rejected at lowering) plus 15 reachability cases.
-    assert!(compared >= 3 * 55, "compared only {compared} runs");
+    // 50 probes (a few are rejected at lowering), 15 reachability cases and
+    // 10 promise cases.
+    assert!(compared >= 3 * 65, "compared only {compared} runs");
     assert!(
         collections_by_interval.iter().all(|total| *total > 0),
         "a stress interval never collected: {collections_by_interval:?}"

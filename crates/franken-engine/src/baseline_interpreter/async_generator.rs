@@ -94,6 +94,13 @@ impl AsyncGeneratorObject {
             visit(&awaited.value);
         }
     }
+
+    /// Visit the promise of every queued request (collector roots).
+    pub(super) fn for_each_promise(&self, mut visit: impl FnMut(PromiseHandle)) {
+        for request in &self.requests {
+            visit(request.promise);
+        }
+    }
 }
 
 impl AsyncGeneratorRuntime {
@@ -103,6 +110,20 @@ impl AsyncGeneratorRuntime {
         for continuation in self.continuations.values() {
             if let Some(value) = &continuation.exact_value {
                 visit(value);
+            }
+        }
+    }
+
+    /// Visit every promise a pending await continuation is keyed by or owns
+    /// (collector roots).
+    pub(super) fn for_each_promise(&self, mut visit: impl FnMut(PromiseHandle)) {
+        for (key, continuation) in &self.continuations {
+            visit(PromiseHandle(*key));
+            if let Some(ticket) = continuation.ticket {
+                visit(ticket);
+            }
+            if let Some(source) = continuation.owned_source {
+                visit(source);
             }
         }
     }

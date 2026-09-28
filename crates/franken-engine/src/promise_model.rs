@@ -198,6 +198,13 @@ pub struct PromiseReaction {
 // Promise record
 // ---------------------------------------------------------------------------
 
+/// One outgoing reference of a promise record, for the collector.
+pub(crate) enum PromiseEdge<'a> {
+    Value(&'a JsValue),
+    Handler(ClosureHandle),
+    Promise(PromiseHandle),
+}
+
 /// A single Promise's full state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromiseRecord {
@@ -709,28 +716,65 @@ impl PromiseStore {
         }
     }
 
-    /// Visit every reaction handler a pending promise holds (collector
-    /// roots, bd-9vouw.57).
-    pub(crate) fn for_each_handler(&self, mut visit: impl FnMut(ClosureHandle)) {
+    /// Number of promise slots, vacated or not: the next handle.
+    pub(crate) fn slot_count(&self) -> usize {
+        self.promises.slots.len()
+    }
+
+    /// Collector roots (bd-9vouw.57): every pending promise, since a
+    /// resolving function or a queued job may still settle it, and every
+    /// rejection awaiting the unhandled-rejection check.
+    pub(crate) fn for_each_root(&self, mut visit: impl FnMut(PromiseHandle)) {
         for record in self.promises.slots.iter().flatten() {
-            for reaction in &record.reactions {
-                if let Some(handler) = reaction.handler {
-                    visit(handler);
-                }
+            if record.state == PromiseState::Pending {
+                visit(record.handle);
             }
+        }
+        for handle in &self.pending_unhandled_rejections {
+            visit(*handle);
         }
     }
 
-    /// Visit every value a promise record holds: the settled value or
-    /// reason. Reactions hold closure handles only. The baseline
-    /// interpreter's collector treats these values as roots (bd-9vouw.57).
-    pub(crate) fn for_each_value(&self, mut visit: impl FnMut(&JsValue)) {
-        for record in self.promises.slots.iter().flatten() {
-            match &record.state {
-                PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => visit(value),
-                PromiseState::Pending => {}
+    /// What one reachable promise keeps alive: its settled value or reason,
+    /// and each reaction's handler and derived promise.
+    pub(crate) fn for_each_edge(
+        &self,
+        handle: PromiseHandle,
+        mut visit: impl FnMut(PromiseEdge<'_>),
+    ) {
+        let Ok(record) = self.get(handle) else {
+            return;
+        };
+        match &record.state {
+            PromiseState::Fulfilled(settled) | PromiseState::Rejected(settled) => {
+                visit(PromiseEdge::Value(settled));
+            }
+            PromiseState::Pending => {}
+        }
+        for reaction in &record.reactions {
+            if let Some(handler) = reaction.handler {
+                visit(PromiseEdge::Handler(handler));
+            }
+            visit(PromiseEdge::Promise(reaction.result_promise));
+        }
+    }
+
+    /// Collector: vacate every settled promise that `keep` rejects and
+    /// return how many were vacated. Pending promises are never vacated.
+    /// Handles are not reused, so a stale handle fails with
+    /// `InvalidHandle` instead of naming another promise.
+    pub(crate) fn reclaim_settled(&mut self, mut keep: impl FnMut(PromiseHandle) -> bool) -> u64 {
+        let mut reclaimed = 0;
+        for index in 0..self.promises.slots.len() {
+            let settled = self.promises.slots[index]
+                .as_ref()
+                .is_some_and(|record| record.state != PromiseState::Pending);
+            if settled && !keep(PromiseHandle(index as u32)) {
+                self.promises.take(index);
+                reclaimed += 1;
             }
         }
+        reclaimed
     }
 
     /// Deterministic resident-memory estimate for every Promise-owned record,
@@ -1580,6 +1624,18 @@ impl MicrotaskQueue {
             cursor: 0,
             enqueue_count: 0,
             witness: WitnessLog::new(),
+        }
+    }
+
+    /// Visit every promise a queued microtask will settle or resolve
+    /// (collector roots, bd-9vouw.57).
+    pub(crate) fn for_each_promise(&self, mut visit: impl FnMut(PromiseHandle)) {
+        for task in self.tasks.slots.iter().flatten() {
+            match task {
+                Microtask::PromiseReaction { result_promise, .. }
+                | Microtask::PromiseRejection { result_promise, .. } => visit(*result_promise),
+                Microtask::ResolveThenable { promise, .. } => visit(*promise),
+            }
         }
     }
 

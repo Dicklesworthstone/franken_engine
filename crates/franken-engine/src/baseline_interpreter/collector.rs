@@ -45,6 +45,7 @@ use std::collections::HashSet;
 
 use super::*;
 use crate::object_model::JsValue;
+use crate::promise_model::PromiseEdge;
 
 /// Collection totals over one interpreter's lifetime.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +60,8 @@ pub struct GcStats {
     pub reclaimed_bytes: u64,
     /// Closures whose captured environments were released.
     pub reclaimed_closures: u64,
+    /// Settled promises whose records were vacated.
+    pub reclaimed_promises: u64,
 }
 
 /// Collector state carried by `InterpreterCore`.
@@ -80,9 +83,10 @@ pub(super) struct GcState {
     /// Set while a top-level CommonJS entry is being evaluated, until
     /// `evaluate_cjs_ir3` arms its run loop.
     cjs_entry_pending: bool,
-    /// Objects referenced by state that a Rust caller holds across the armed
-    /// run loop (the CommonJS entry's saved caller execution). Roots.
-    pinned: Vec<ObjectId>,
+    /// Objects, closures and promises referenced by state that a Rust caller
+    /// holds across the armed run loop (the CommonJS entry's saved caller
+    /// execution). Roots.
+    pinned: Vec<Value>,
     /// Set while the event loop runs after the top-level script: collection
     /// may run between jobs whenever no run loop is active.
     event_loop_armed: bool,
@@ -148,17 +152,21 @@ struct GcMarker {
     stack: Vec<u32>,
     closures: ChunkedMarks,
     closure_stack: Vec<u32>,
+    promises: ChunkedMarks,
+    promise_stack: Vec<u32>,
     visited_frames: HashSet<usize>,
     visited_cells: HashSet<usize>,
 }
 
 impl GcMarker {
-    fn new(heap_len: usize, closures_len: usize) -> Self {
+    fn new(heap_len: usize, closures_len: usize, promises_len: usize) -> Self {
         Self {
             objects: ChunkedMarks::new(heap_len),
             stack: Vec::new(),
             closures: ChunkedMarks::new(closures_len),
             closure_stack: Vec::new(),
+            promises: ChunkedMarks::new(promises_len),
+            promise_stack: Vec::new(),
             visited_frames: HashSet::new(),
             visited_cells: HashSet::new(),
         }
@@ -169,6 +177,14 @@ impl GcMarker {
     fn closure(&mut self, id: u32) {
         if self.closures.mark(id as usize) {
             self.closure_stack.push(id);
+        }
+    }
+
+    /// Promise-store handles: `Value::Promise` and the engine tables that
+    /// name a promise.
+    fn promise(&mut self, handle: u32) {
+        if self.promises.mark(handle as usize) {
+            self.promise_stack.push(handle);
         }
     }
 
@@ -196,7 +212,17 @@ impl GcMarker {
             Value::Object(id) => self.object(*id),
             Value::BuiltinFunction(builtin) => {
                 if let Some(bound) = builtin.bound_object {
-                    self.object(ObjectId(bound));
+                    // A resolve/reject capability binds its promise handle
+                    // (`make_promise_capability`); every other kind binds an
+                    // object.
+                    if matches!(
+                        builtin.kind,
+                        BuiltinFunctionKind::PromiseResolve | BuiltinFunctionKind::PromiseReject
+                    ) {
+                        self.promise(bound);
+                    } else {
+                        self.object(ObjectId(bound));
+                    }
                 }
             }
             Value::Accessor { get, set } => {
@@ -211,8 +237,9 @@ impl GcMarker {
             | Value::GeneratorFunction(id)
             | Value::AsyncFunction(id)
             | Value::AsyncGeneratorFunction(id) => self.closure(*id),
-            // Generators, iterators, async objects and promises index tables
-            // whose entries are all roots.
+            Value::Promise(handle) => self.promise(*handle),
+            // Generators, iterators and async objects index tables whose
+            // entries are all roots.
             Value::Undefined
             | Value::Null
             | Value::Bool(_)
@@ -225,7 +252,6 @@ impl GcMarker {
             | Value::Generator(_)
             | Value::AsyncFunctionObject(_)
             | Value::AsyncGeneratorObject(_)
-            | Value::Promise(_)
             | Value::Symbol(_) => {}
         }
     }
@@ -479,9 +505,14 @@ impl GcMarker {
             saved_registers,
             saved_register_labels: _,
             saved_register_base: _,
-            phase: _,
-            result_promise: _,
+            phase,
+            result_promise,
         } = function;
+        // A running or suspended async function still settles its result
+        // promise; a completed one never reads it again.
+        if !matches!(phase, AsyncFunctionPhase::Completed) {
+            self.promise(*result_promise);
+        }
         if let Some(execution) = isolated_execution {
             self.generator_execution(execution);
         }
@@ -492,6 +523,13 @@ impl GcMarker {
     }
 
     fn combinator(&mut self, state: &PromiseCombinatorState) {
+        let result_promise = match state {
+            PromiseCombinatorState::All(tracker) => tracker.result_promise,
+            PromiseCombinatorState::AllSettled(tracker) => tracker.result_promise,
+            PromiseCombinatorState::Race(tracker) => tracker.result_promise,
+            PromiseCombinatorState::Any(tracker) => tracker.result_promise,
+        };
+        self.promise(result_promise.0);
         match state {
             PromiseCombinatorState::All(tracker) => {
                 tracker
@@ -596,9 +634,19 @@ impl InterpreterCore {
         if !std::mem::take(&mut self.gc.cjs_entry_pending) {
             return None;
         }
-        let mut marker = GcMarker::new(self.heap.len(), self.closures.len());
+        let mut marker = GcMarker::new(
+            self.heap.len(),
+            self.closures.len(),
+            self.promise_store.slot_count(),
+        );
         marker.module_execution(caller);
-        let pinned: Vec<ObjectId> = marker.stack.iter().map(|id| ObjectId(*id)).collect();
+        let pinned: Vec<Value> = marker
+            .stack
+            .iter()
+            .map(|id| Value::Object(ObjectId(*id)))
+            .chain(marker.closure_stack.iter().map(|id| Value::Closure(*id)))
+            .chain(marker.promise_stack.iter().map(|id| Value::Promise(*id)))
+            .collect();
         let previous = self.gc_arm_top_level();
         self.gc.pinned = pinned;
         Some(previous)
@@ -646,7 +694,11 @@ impl InterpreterCore {
 
     /// One stop-the-world mark-sweep over the heap.
     fn collect_garbage(&mut self) -> Result<(), GcSkip> {
-        let mut marker = GcMarker::new(self.heap.len(), self.closures.len());
+        let mut marker = GcMarker::new(
+            self.heap.len(),
+            self.closures.len(),
+            self.promise_store.slot_count(),
+        );
         self.gc_mark_roots(&mut marker)?;
         self.gc_drain(&mut marker);
         self.gc_mark_ephemerons(&mut marker);
@@ -720,6 +772,16 @@ impl InterpreterCore {
             reclaimed_bytes = reclaimed_bytes.saturating_add(released);
         }
 
+        // Settled promises nothing reachable names: vacate their records
+        // (values and reactions). Pending promises are roots.
+        let before = self.promise_runtime_memory_bytes();
+        let reclaimed_promises = self
+            .promise_store
+            .reclaim_settled(|handle| marker.promises.is_marked(handle.0 as usize));
+        let released = before.saturating_sub(self.promise_runtime_memory_bytes());
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+        reclaimed_bytes = reclaimed_bytes.saturating_add(released);
+
         #[cfg(debug_assertions)]
         debug_assert_eq!(
             self.estimated_memory_bytes
@@ -733,6 +795,7 @@ impl InterpreterCore {
         stats.reclaimed_objects = stats.reclaimed_objects.saturating_add(reclaimed_objects);
         stats.reclaimed_bytes = stats.reclaimed_bytes.saturating_add(reclaimed_bytes);
         stats.reclaimed_closures = stats.reclaimed_closures.saturating_add(reclaimed_closures);
+        stats.reclaimed_promises = stats.reclaimed_promises.saturating_add(reclaimed_promises);
 
         // Next trigger: halfway between the surviving live set and the
         // budget, so collection cost stays proportional to allocation.
@@ -750,6 +813,17 @@ impl InterpreterCore {
         loop {
             if let Some(closure) = marker.closure_stack.pop() {
                 self.gc_trace_closure(marker, closure);
+                continue;
+            }
+            if let Some(promise) = marker.promise_stack.pop() {
+                self.promise_store.for_each_edge(
+                    crate::promise_model::PromiseHandle(promise),
+                    |edge| match edge {
+                        PromiseEdge::Value(value) => marker.js_value(value),
+                        PromiseEdge::Handler(handler) => marker.handler(handler),
+                        PromiseEdge::Promise(derived) => marker.promise(derived.0),
+                    },
+                );
                 continue;
             }
             let Some(index) = marker.stack.pop() else {
@@ -954,8 +1028,8 @@ impl InterpreterCore {
             generator_result_label: _,
             generator_delegation: _,
             async_functions,
-            async_resumption_contexts: _,
-            top_level_await_resumption_contexts: _,
+            async_resumption_contexts,
+            top_level_await_resumption_contexts,
             top_level_await_outcome,
             async_generators,
             async_generator_runtime,
@@ -1012,11 +1086,11 @@ impl InterpreterCore {
             next_writable_tick_sequence: _,
             next_writable_completion_token: _,
             promise_combinators,
-            // Watchers name combinator ids and indices only.
-            promise_combinator_watchers: _,
+            // Keyed by the promises they watch.
+            promise_combinator_watchers,
             next_promise_combinator_id: _,
             module_state,
-            pending_async_module_import: _,
+            pending_async_module_import,
             pending_cyclic_import_binding: _,
             active_cjs_context,
             current_module_specifier: _,
@@ -1159,7 +1233,7 @@ impl InterpreterCore {
         }
 
         // Objects and values a Rust caller holds across an armed phase.
-        self.gc.pinned.iter().for_each(|id| m.object(*id));
+        self.gc.pinned.iter().for_each(|value| m.value(value));
         self.gc
             .pinned_values
             .iter()
@@ -1187,8 +1261,26 @@ impl InterpreterCore {
         async_generator_runtime.for_each_value(|value| m.value(value));
 
         // Promises and queued work, including the handlers they will call.
-        promise_store.for_each_value(|value| m.js_value(value));
-        promise_store.for_each_handler(|handler| m.handler(handler));
+        // A settled promise is kept only when something reachable names it;
+        // its value is traced from the promise.
+        promise_store.for_each_root(|handle| m.promise(handle.0));
+        event_loop
+            .microtasks
+            .for_each_promise(|handle| m.promise(handle.0));
+        async_resumption_contexts
+            .keys()
+            .chain(top_level_await_resumption_contexts.keys())
+            .for_each(|handle| m.promise(*handle));
+        promise_combinator_watchers
+            .keys()
+            .for_each(|handle| m.promise(handle.0));
+        if let Some((_, handle)) = pending_async_module_import {
+            m.promise(handle.0);
+        }
+        for generator in async_generators {
+            generator.for_each_promise(|handle| m.promise(handle.0));
+        }
+        async_generator_runtime.for_each_promise(|handle| m.promise(handle.0));
         event_loop
             .microtasks
             .for_each_value(|value| m.js_value(value));
@@ -1223,7 +1315,10 @@ impl InterpreterCore {
                     m.value(callback);
                     args.iter().for_each(|value| m.value(value));
                 }
-                PendingTimerTaskKind::PromiseResolve { value, .. } => m.js_value(value),
+                PendingTimerTaskKind::PromiseResolve { promise, value, .. } => {
+                    m.promise(promise.0);
+                    m.js_value(value);
+                }
             }
         }
 
@@ -1239,9 +1334,12 @@ impl InterpreterCore {
             m.object(state.target);
             m.value(&state.original_listener);
         }
-        event_promise_waiters
-            .keys()
-            .for_each(|emitter| m.object(*emitter));
+        for (emitter, waiters) in event_promise_waiters {
+            m.object(*emitter);
+            for record in waiters.values().flatten() {
+                m.promise(record.promise.0);
+            }
+        }
 
         // Modules.
         for record in module_state.modules.values() {
@@ -1252,6 +1350,9 @@ impl InterpreterCore {
             }
             if let Some(execution) = &record.async_execution {
                 m.module_execution(execution);
+            }
+            if let Some(handle) = record.evaluation_promise {
+                m.promise(handle.0);
             }
         }
         if let Some(context) = active_cjs_context {

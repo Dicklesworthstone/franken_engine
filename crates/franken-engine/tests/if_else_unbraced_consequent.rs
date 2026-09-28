@@ -106,3 +106,26 @@ fn unbraced_consequents_run_when_their_branch_is_taken() {
         );
     }
 }
+
+/// An `else` binds to the nearest unmatched `if` (ES2020 13.6): with an
+/// unbraced nested `if` in the consequent, the first `else` is the inner
+/// one's. And `return` / `throw` written directly against their operand, as
+/// minifiers emit them (`return'x'`, `return[1]`, `return{a:1}`, `return!0`,
+/// `return-1`, `return/a+/.test(s)`, `throw"e"`), are statements; they fell
+/// through to expression parsing and threw "unsupported expression syntax"
+/// when the function ran. Expected string is Node v22.2.0's output.
+#[test]
+fn dangling_else_and_keyword_adjacent_operands() {
+    let source = r#"function f(){return'x'} function g(){return"y"} function h(){return[1]} function k(){return{a:1}} function n(){return!0} function m(){return-1} function r(){return/a+/.test('aa')} function t(){return`t${1}`}
+let e; try { (function(){throw"boom"})(); } catch (x) { e = x; }
+var a = 0; if (1) if (0) a = 1; else a = 2;
+var b = 0; if (0) if (1) b = 1; else b = 2; else b = 3;
+var c = 0; if (1) if (1) c = 1; else c = 2; else c = 3;
+const o = { if: 5 }; var d = 0; if (1) d = o.if; else d = 9;
+[f(), g(), h()[0], k().a, n(), m(), r(), t(), e, a, b, c, d].join(' ');"#;
+    assert_eq!(
+        eval_to_string(source),
+        "x y 1 1 true -1 true t1 boom 2 3 1 5",
+        "must match Node v22.2.0"
+    );
+}

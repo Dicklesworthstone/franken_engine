@@ -1313,6 +1313,12 @@ pub enum MethodKind {
     Method,
     Get,
     Set,
+    /// ES2022 public field `[static] key [= initializer]`. Its `params` are
+    /// empty and its `body` is `return initializer;` (empty without an
+    /// initializer): the initializer runs as a method of the class, with the
+    /// instance (or, static, the constructor) as `this`. Every analysis that
+    /// walks method keys and bodies therefore sees field initializers too.
+    Field,
 }
 
 /// Property definition kind inside an object literal.

@@ -103,3 +103,24 @@ fn string_method_arguments_reject_symbols() {
         "Symbol(x) abzz true 1a1"
     );
 }
+
+#[test]
+fn object_from_entries_iterates_its_argument() {
+    // It read any object as array-like, so a Map or Set gave `{}`, a
+    // generator threw, an array-like `{length: 1, 0: [...]}` (not iterable)
+    // was accepted and a missing argument returned undefined.
+    let source = "function t(f) { try { return JSON.stringify(f()); } catch (e) { \
+                  return e instanceof TypeError ? 'TypeError' : 'other:' + e; } }\n\
+                  [t(() => Object.fromEntries(new Map([['a', 1], ['b', 2]]))), \
+                  t(() => Object.fromEntries([['x', 1], ['y', 2]])), \
+                  t(() => Object.fromEntries((function* () { yield ['g', 7]; })())), \
+                  t(() => Object.fromEntries(new Set([['s', 3]]))), \
+                  t(() => Object.fromEntries()), t(() => Object.fromEntries(null)), \
+                  t(() => Object.fromEntries({length: 1, 0: ['z', 1]})), \
+                  t(() => Object.fromEntries([1]))].join(' | ');";
+    assert_eq!(
+        eval(source),
+        "{\"a\":1,\"b\":2} | {\"x\":1,\"y\":2} | {\"g\":7} | {\"s\":3} | TypeError | TypeError | \
+         TypeError | TypeError"
+    );
+}

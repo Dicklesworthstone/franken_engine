@@ -12712,19 +12712,6 @@ fn lower_optional_member_spread_call_to_reflect_apply(
     Ok(())
 }
 
-/// Span-recording wrapper around [`lower_expression_to_ir1_inner`]
-/// (bd-fqlfw.1.5).
-///
-/// Captures the parse-time span of the four spanned expression variants
-/// (bd-fqlfw.1.1: `Call` / `OptionalCall` / `Member` / `OptionalMember`) and
-/// records the half-open IR1 op-index range their lowering emitted into
-/// `span_table`. Recursive expression lowering re-enters through this
-/// wrapper, so every nesting depth records its own (narrower) range;
-/// `lower_ir1_to_ir2` applies narrowest-range-wins when stamping
-/// `Ir2Op::span`. Function-body lowering passes a throwaway table because
-/// body ops embed inside a single `DeclareFunction` op and never become
-/// module-level IR2 ops.
-#[allow(clippy::too_many_arguments)]
 /// One member or call link of an optional chain (ES2020 12.3.9).
 #[derive(Clone, Copy)]
 enum OptionalChainLink<'a> {
@@ -13026,6 +13013,19 @@ fn try_lower_optional_chain_to_ir1(
     Ok(true)
 }
 
+/// Span-recording wrapper around [`lower_expression_to_ir1_inner`]
+/// (bd-fqlfw.1.5).
+///
+/// Captures the parse-time span of the four spanned expression variants
+/// (bd-fqlfw.1.1: `Call` / `OptionalCall` / `Member` / `OptionalMember`) and
+/// records the half-open IR1 op-index range their lowering emitted into
+/// `span_table`. Recursive expression lowering re-enters through this
+/// wrapper, so every nesting depth records its own (narrower) range;
+/// `lower_ir1_to_ir2` applies narrowest-range-wins when stamping
+/// `Ir2Op::span`. Function-body lowering passes a throwaway table because
+/// body ops embed inside a single `DeclareFunction` op and never become
+/// module-level IR2 ops.
+#[allow(clippy::too_many_arguments)]
 fn lower_expression_to_ir1(
     expression: &Expression,
     ops: &mut Vec<Ir1Op>,

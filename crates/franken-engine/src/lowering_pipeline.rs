@@ -31116,13 +31116,13 @@ fn short_lived_local_release_points(
             },
             Ir1Op::LoadBinding { binding_id }
             | Ir1Op::StoreBinding { binding_id }
-            | Ir1Op::InitializeBinding { binding_id } => {
-                if index_of.contains_key(binding_id) {
-                    reference_spans
-                        .entry(*binding_id)
-                        .and_modify(|(_, last)| *last = index)
-                        .or_insert((index, index));
-                }
+            | Ir1Op::InitializeBinding { binding_id }
+                if index_of.contains_key(binding_id) =>
+            {
+                reference_spans
+                    .entry(*binding_id)
+                    .and_modify(|(_, last)| *last = index)
+                    .or_insert((index, index));
             }
             _ => {}
         }

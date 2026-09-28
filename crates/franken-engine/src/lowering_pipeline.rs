@@ -6700,9 +6700,13 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
 
-                // Set Child.prototype.__proto__ = Parent.prototype
-                ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static("__proto__".into()),
+                // Child.prototype inherits from Parent.prototype. An internal
+                // hostcall rather than a `__proto__` store: the link is class
+                // machinery, and a guest-visible `__proto__` write made the
+                // agent-sandbox firewall suspend every `extends` (bd-9vouw.60).
+                ops.push(Ir1Op::HostCall {
+                    capability: CLASS_PROTOTYPE_LINK_CAPABILITY.to_string(),
+                    arg_count: 2,
                 });
                 ops.push(Ir1Op::Discard);
             }
@@ -18152,8 +18156,9 @@ fn lower_expression_to_ir1_inner(
                         key: Ir1PropertyKey::Static("prototype".into()),
                     });
                 }
-                ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static("__proto__".into()),
+                ops.push(Ir1Op::HostCall {
+                    capability: CLASS_PROTOTYPE_LINK_CAPABILITY.to_string(),
+                    arg_count: 2,
                 });
                 ops.push(Ir1Op::Discard);
             }
@@ -18415,6 +18420,10 @@ fn function_reads_arguments(
 /// Internal intrinsic that clears `enumerable` on a class's own members.
 pub(crate) const CLASS_MEMBERS_NON_ENUMERABLE_CAPABILITY: &str =
     "builtin:ClassMembersNonEnumerable";
+/// Internal hostcall linking a derived class's prototype object to its
+/// superclass prototype (args: prototype, parent prototype); see
+/// `builtin:ClassPrototypeLink` in the interpreter.
+pub(crate) const CLASS_PROTOTYPE_LINK_CAPABILITY: &str = "builtin:ClassPrototypeLink";
 
 /// ES2020 14.6.13 ClassDefinitionEvaluation defines class methods and
 /// accessors with `enumerable: false`. They are installed by the same

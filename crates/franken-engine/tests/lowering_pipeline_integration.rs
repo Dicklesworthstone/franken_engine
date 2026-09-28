@@ -867,8 +867,11 @@ fn ir1_to_ir2_classifies_import_as_read_effect() {
 #[test]
 fn ir1_to_ir2_flow_annotation_for_secret_string() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "secret_test.js");
-    ir1.ops.push(Ir1Op::LoadLiteral {
-        value: Ir1Literal::String("my_secret_token".to_string().into()),
+    // bd-9vouw.19: the secret is an entropy read (RandomRead result contract:
+    // Secret); a literal's text is not a label source.
+    ir1.ops.push(Ir1Op::HostCall {
+        capability: "random_read".to_string(),
+        arg_count: 0,
     });
     ir1.ops.push(Ir1Op::HostCall {
         capability: "hostcall.invoke".to_string(),
@@ -881,7 +884,9 @@ fn ir1_to_ir2_flow_annotation_for_secret_string() {
         .module
         .ops
         .iter()
-        .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+        .find(|op| {
+            matches!(&op.inner, Ir1Op::HostCall { capability, .. } if capability == "hostcall.invoke")
+        })
         .expect("should have hostcall op");
 
     let flow = call_op
@@ -1768,7 +1773,10 @@ fn await_chain_through_pipeline() {
 }
 
 #[test]
-fn secret_data_in_module_export_requires_declassification() {
+/// bd-9vouw.19: a literal's text is not a label source. This test used to
+/// pin the removed keyword heuristic (an exported "API_KEY_value" literal was
+/// labeled Secret); it now pins the opposite.
+fn keyword_literals_in_module_exports_are_not_secret_bd_9vouw_19() {
     let tree = SyntaxTree {
         goal: ParseGoal::Module,
         body: vec![
@@ -1796,12 +1804,11 @@ fn secret_data_in_module_export_requires_declassification() {
             Ir1Op::LoadLiteral { value: Ir1Literal::String(s) } if s.to_ascii_lowercase().contains("api_key")
         )
     });
-    // The api_key literal itself is pure, but it should be labeled Secret
     let op = secret_op.expect("should find an op containing api_key");
     // Pure ops with no capability don't get flow annotations in all cases;
-    // the data label inference happens at IR2 level.
+    // when one is present it must not carry a label from the literal's text.
     if let Some(flow) = &op.flow {
-        assert_eq!(flow.data_label, Label::Secret);
+        assert_eq!(flow.data_label, Label::Public);
     }
 }
 

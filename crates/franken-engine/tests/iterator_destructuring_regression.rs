@@ -693,10 +693,13 @@ fn redefining_an_in_bounds_index_keeps_length_and_getter_laziness() {
 
 #[test]
 fn builtin_membership_observation_preserves_secret_label_at_real_egress() {
+    // bd-9vouw.19: the secret operand in these fixtures is an entropy read
+    // (RandomRead result contract: Secret), not a keyword literal.
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"membership-flow"), "membership-flow");
     ir1.ops = vec![
-        Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret material".into()),
+        Ir1Op::HostCall {
+            capability: "random_read".into(),
+            arg_count: 0,
         },
         Ir1Op::HostCall {
             capability: "builtin:instanceof:TypeError".into(),
@@ -733,8 +736,9 @@ fn unrecognized_membership_intrinsics_do_not_inherit_internal_clearance() {
             "unknown-membership",
         );
         ir1.ops = vec![
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("secret material".into()),
+            Ir1Op::HostCall {
+                capability: "random_read".into(),
+                arg_count: 0,
             },
             Ir1Op::HostCall {
                 capability: capability.into(),
@@ -772,8 +776,9 @@ fn sync_iteration_and_yield_do_not_launder_secret_operands() {
         ],
     ] {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"iterator-flow"), "iterator-flow");
-        ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret material".into()),
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "random_read".into(),
+            arg_count: 0,
         });
         ir1.ops.extend(operations);
         let ir2 = lower_ir1_to_ir2(&ir1).expect("flow inference").module;

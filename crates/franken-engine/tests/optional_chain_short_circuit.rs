@@ -1,0 +1,69 @@
+//! ES2020 12.3.9: an optional link short-circuits the whole rest of its chain.
+//!
+//! FrankenEngine desugared each `?.` on its own, so the links after it still
+//! ran on `undefined`: `o.x?.y.z`, `o.a?.b.c()`, `o.a?.['b'].c` and
+//! `o.f?.().x` threw TypeError when `o.x` / `o.a` / `o.f` was nullish (Node:
+//! undefined). `o.m?.()` called the method with `this` undefined, and
+//! `delete o?.a` answered true without deleting. Parentheses still end a
+//! chain: `(o.x?.y).z` throws. Expected strings are Node v22.2.0's output.
+//!
+//! No-claim: a parenthesized optional chain used as a callee, `(a?.b)()`,
+//! still short-circuits like `a?.b()` instead of throwing when `a` is
+//! nullish.
+
+use frankenengine_engine::HybridRouter;
+
+fn eval(source: &str) -> String {
+    HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}\nsource: {source}"))
+        .value
+}
+
+const SETUP: &str = "function t(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\n\
+                     var o = {v: 3, m() { return this && this.v; }};\n\
+                     var deep = {x: {y: {z: 5}}, a: {b: {c() { return this.v; }, v: 9}}};\n";
+
+#[test]
+fn optional_links_short_circuit_the_rest_of_the_chain() {
+    let source = format!(
+        "{SETUP}[t(() => o.x?.y.z), t(() => deep.x?.y.z), t(() => o.a?.b.c()), \
+         t(() => deep.a?.b.c()), t(() => o.a?.['b'].c), t(() => o.a?.b[0]), \
+         t(() => o.f?.().x), t(() => o.g?.()?.x), t(() => (o.x?.y).z)].join(',');"
+    );
+    assert_eq!(
+        eval(&source),
+        "undefined,5,undefined,9,undefined,undefined,undefined,undefined,TypeError"
+    );
+}
+
+#[test]
+fn optional_method_calls_keep_their_receiver() {
+    let source =
+        format!("{SETUP}[t(() => o.m?.()), t(() => o['m']?.()), t(() => o.n?.())].join(',');");
+    assert_eq!(eval(&source), "3,3,undefined");
+}
+
+#[test]
+fn delete_through_an_optional_chain_deletes_or_short_circuits() {
+    assert_eq!(
+        eval(
+            "var d1 = {a: {b: 1}}; var d2 = {a: {b: 1}}; var n = null;\n\
+             [delete d1?.a, JSON.stringify(d1), delete d2?.a?.b, JSON.stringify(d2), \
+             delete n?.a, delete n?.a.b].join(',');"
+        ),
+        "true,{},true,{\"a\":{}},true,true"
+    );
+}
+
+#[test]
+fn short_circuited_arguments_are_not_evaluated_and_the_base_is_read_once() {
+    assert_eq!(
+        eval(
+            "var n = null; var c = 0; n?.f(c++); n?.a.b(c++);\n\
+             var k = 0; var o2 = {get p() { k++; return {q: 1}; }}; o2.p?.q; o2.p?.q.r;\n\
+             c + ' ' + k;"
+        ),
+        "0 2"
+    );
+}

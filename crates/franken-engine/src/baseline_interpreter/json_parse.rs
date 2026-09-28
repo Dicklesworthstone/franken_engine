@@ -6,6 +6,16 @@
 
 use super::*;
 
+/// Which edges a reachable-label walk follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReachableEdges {
+    /// Data properties reached through `properties.values()`: what JSON
+    /// serialization and the other data consumers read.
+    Data,
+    /// Everything `util.inspect` can print (console sinks).
+    Inspect,
+}
+
 impl InterpreterCore {
     pub(super) fn json_parse_builtin(
         &mut self,
@@ -250,6 +260,80 @@ impl InterpreterCore {
         &mut self,
         value: &Value,
     ) -> Result<(), InterpreterError> {
+        self.observe_reachable_value(value, ReachableEdges::Data)
+    }
+
+    /// The console sink's walk (bd-39iih): console output is `util.inspect`,
+    /// which prints more than the data edges JSON follows.
+    pub(super) fn console_observe_reachable_value(
+        &mut self,
+        value: &Value,
+    ) -> Result<(), InterpreterError> {
+        self.observe_reachable_value(value, ReachableEdges::Inspect)
+    }
+
+    /// Objects one step from `object` along `edges`.
+    fn reachable_children(&self, object: ObjectId, edges: ReachableEdges) -> Vec<ObjectId> {
+        let Some(heap_object) = self.heap.get(object.0 as usize) else {
+            return Vec::new();
+        };
+        let object_id = |value: &Value| match value {
+            Value::Object(id) => Some(*id),
+            _ => None,
+        };
+        match edges {
+            ReachableEdges::Data => heap_object
+                .properties
+                .values()
+                .filter_map(object_id)
+                .collect(),
+            ReachableEdges::Inspect => {
+                // Every property inspect can print: string-keyed data in both
+                // key forms and Symbol-keyed data (a separate sidecar that
+                // `values()` skips). Accessors print as [Getter]/[Setter].
+                let mut children: Vec<ObjectId> = heap_object
+                    .properties
+                    .all_data_values()
+                    .filter_map(object_id)
+                    .collect();
+                children.extend(
+                    heap_object
+                        .properties
+                        .baseline_symbol_properties()
+                        .filter_map(|(_, property)| match property {
+                            BaselineSymbolProperty::Data(value) => object_id(value),
+                            BaselineSymbolProperty::Accessor { .. } => None,
+                        }),
+                );
+                // Map keys are storage-key reprs, not values
+                // (`collection_key_repr`); inspect prints the key objects.
+                if let Some(storage_id) = self.collection_storage_id(object, "Map", "__entries")
+                    && let Some(storage) = self.heap.get(storage_id.0 as usize)
+                {
+                    children.extend(
+                        storage
+                            .properties
+                            .keys()
+                            .filter_map(|repr| object_id(&Self::collection_key_from_repr(repr))),
+                    );
+                }
+                // An error's message and name print through the prototype
+                // chain (`chain_data_property`).
+                if self.inspect_is_error(object)
+                    && let Some(prototype) = heap_object.prototype
+                {
+                    children.push(prototype);
+                }
+                children
+            }
+        }
+    }
+
+    fn observe_reachable_value(
+        &mut self,
+        value: &Value,
+        edges: ReachableEdges,
+    ) -> Result<(), InterpreterError> {
         let Value::Object(root) = value else {
             return Ok(());
         };
@@ -282,25 +366,15 @@ impl InterpreterCore {
                     let label = label.clone();
                     self.json_observe_label(label)?;
                 }
-                let count = self.heap.get(object.0 as usize).map_or(0, |object| {
-                    object
-                        .properties
-                        .values()
-                        .filter(|value| matches!(value, Value::Object(_)))
-                        .count()
-                });
-                let bytes = (count as u64).saturating_mul(std::mem::size_of::<ObjectId>() as u64);
+                let children = self.reachable_children(object, edges);
+                let bytes =
+                    (children.len() as u64).saturating_mul(std::mem::size_of::<ObjectId>() as u64);
                 self.json_reserve_temporary(bytes)?;
                 charged += bytes;
-                pending.try_reserve_exact(count).map_err(|_| {
+                pending.try_reserve_exact(children.len()).map_err(|_| {
                     self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
                 })?;
-                if let Some(object) = self.heap.get(object.0 as usize) {
-                    pending.extend(object.properties.values().filter_map(|value| match value {
-                        Value::Object(id) => Some(*id),
-                        _ => None,
-                    }));
-                }
+                pending.extend(children);
             }
             Ok(())
         })();

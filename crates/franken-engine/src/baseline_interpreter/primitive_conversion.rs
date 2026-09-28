@@ -187,7 +187,7 @@ impl InterpreterCore {
             self.json_charge_work()?;
             for offset in 0..args.count {
                 let value = self.builtin_arg(args, offset)?.unwrap_or(Value::Undefined);
-                self.json_observe_reachable_value(&value)?;
+                self.console_observe_reachable_value(&value)?;
             }
             let label = self.json_parse_context_label()?;
             if !label.can_flow_to(&Label::Internal) {
@@ -459,4 +459,134 @@ fn integer_prefix(text: &str, radix: u32) -> (f64, usize) {
         significant += 1;
     }
     (significant as f64 * 2_f64.powi(shift as i32), count)
+}
+
+#[cfg(test)]
+mod console_confidentiality_tests {
+    //! bd-39iih: the console sink's runtime label walk must reach everything
+    //! `util.inspect` prints, not only the data edges JSON follows. The heap
+    //! is built directly so a runtime-only Secret label is in play (the
+    //! lowering refuses statically labeled cases before execution).
+
+    use super::*;
+
+    fn core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Console,
+        ]
+        .into_iter()
+        .collect();
+        InterpreterCore::new(config, "console-ifc")
+    }
+
+    fn object(core: &mut InterpreterCore, prototype: Option<ObjectId>) -> ObjectId {
+        core.alloc_object_with_prototype(prototype)
+            .expect("allocate object")
+    }
+
+    fn secret(core: &mut InterpreterCore, prototype: Option<ObjectId>) -> ObjectId {
+        let id = object(core, prototype);
+        core.join_direct_object_mutation_label(id, &Label::Secret)
+            .expect("label object");
+        id
+    }
+
+    fn console_allows(core: &mut InterpreterCore, root: ObjectId) -> bool {
+        core.set_reg(0, Value::Object(root));
+        match core.check_console_confidentiality(RegRange { start: 0, count: 1 }, "console:log") {
+            Ok(()) => true,
+            Err(InterpreterError::CapabilityDenied { .. }) => false,
+            Err(other) => panic!("unexpected console check failure: {other:?}"),
+        }
+    }
+
+    fn map_with_key(core: &mut InterpreterCore, key: ObjectId) -> ObjectId {
+        let map = object(core, None);
+        let storage = object(core, None);
+        core.set_object_property(map, "__type".to_string(), Value::str("Map"))
+            .expect("map tag");
+        core.set_object_property(map, "__entries".to_string(), Value::Object(storage))
+            .expect("map storage");
+        core.set_object_property(map, "size".to_string(), Value::Int(0))
+            .expect("map size");
+        core.map_collection_set(map, Value::Object(key), Value::Int(1))
+            .expect("map set");
+        map
+    }
+
+    #[test]
+    fn console_walk_reaches_what_inspect_prints() {
+        // Controls: no Secret anywhere passes; Secret under an ordinary key
+        // is refused (the data edge JSON already follows).
+        let mut c = core();
+        let public_inner = object(&mut c, None);
+        let outer = object(&mut c, None);
+        c.set_object_property(outer, "a".to_string(), Value::Object(public_inner))
+            .expect("property");
+        assert!(
+            console_allows(&mut c, outer),
+            "all-public object must print"
+        );
+
+        let mut c = core();
+        let inner = secret(&mut c, None);
+        let outer = object(&mut c, None);
+        c.set_object_property(outer, "a".to_string(), Value::Object(inner))
+            .expect("property");
+        assert!(
+            !console_allows(&mut c, outer),
+            "ordinary key must be refused"
+        );
+
+        // Symbol-keyed property (a sidecar `values()` does not visit).
+        let mut c = core();
+        let inner = secret(&mut c, None);
+        let outer = object(&mut c, None);
+        c.mutate_heap(|heap| {
+            heap[outer.0 as usize]
+                .properties
+                .insert_baseline_symbol_property(
+                    CoreSymbolId(7),
+                    BaselineSymbolProperty::Data(Value::Object(inner)),
+                );
+        });
+        assert!(
+            !console_allows(&mut c, outer),
+            "Symbol-keyed Secret printed"
+        );
+
+        // Map key (stored as a key repr, not a value).
+        let mut c = core();
+        let inner = secret(&mut c, None);
+        let map = map_with_key(&mut c, inner);
+        assert!(!console_allows(&mut c, map), "Secret Map key printed");
+        let mut c = core();
+        let inner = object(&mut c, None);
+        let map = map_with_key(&mut c, inner);
+        assert!(console_allows(&mut c, map), "public Map key must print");
+
+        // Error whose message is inherited from a Secret prototype.
+        let mut c = core();
+        let error_prototype = c
+            .ensure_builtin_prototype("Error")
+            .expect("Error.prototype");
+        let secret_prototype = secret(&mut c, Some(error_prototype));
+        let error = object(&mut c, Some(secret_prototype));
+        assert!(
+            !console_allows(&mut c, error),
+            "inherited Secret error field printed"
+        );
+        // A non-error object's prototype is not printed: no over-taint.
+        let mut c = core();
+        let secret_prototype = secret(&mut c, None);
+        let plain = object(&mut c, Some(secret_prototype));
+        assert!(
+            console_allows(&mut c, plain),
+            "non-error prototype over-tainted"
+        );
+    }
 }

@@ -1063,7 +1063,7 @@ impl InterpreterCore {
         None
     }
 
-    fn inspect_is_error(&self, id: ObjectId) -> bool {
+    pub(super) fn inspect_is_error(&self, id: ObjectId) -> bool {
         self.builtin_prototypes
             .get("Error")
             .is_some_and(|prototype| {

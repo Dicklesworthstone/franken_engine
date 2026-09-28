@@ -11364,7 +11364,23 @@ fn parse_class_parts(
         )
     })?;
 
-    let methods = parse_class_body(body_src, span, context)?;
+    let mut methods = parse_class_body(body_src, span, context)?;
+    // A derived class with instance fields but no constructor gets the
+    // implicit `constructor(...args) { super(...args); }` (ES2022 15.7.14
+    // step 10.a) as real code: the fields initialize when its super() returns,
+    // which the engine's forwarding default constructor never runs.
+    if super_class.is_some()
+        && !methods
+            .iter()
+            .any(|method| method.kind == MethodKind::Constructor)
+        && methods
+            .iter()
+            .any(|method| method.kind == MethodKind::Field && !method.is_static)
+    {
+        let mut implicit =
+            parse_class_body("constructor(...args) { super(...args); }", span, context)?;
+        methods.splice(0..0, implicit.drain(..));
+    }
 
     Ok((name, super_class, methods))
 }
@@ -11417,22 +11433,53 @@ fn parse_class_body(
 
     // Split on top-level method boundaries.  Each method looks like:
     // [static] [get|set] name(...) { ... }
-    // We scan for `}` at brace_depth==0 to find method boundaries.
-    let segments = split_class_members(body);
-    for segment in segments {
+    // We scan for `}` at brace_depth==0 to find method boundaries. A field
+    // segment may carry further elements after a line break (ASI) or have
+    // been cut at a `}` inside its initializer; both are repaired below, so
+    // the segments are processed as a queue of slices of `body`.
+    let mut pending: std::collections::VecDeque<&str> = split_class_members(body).into();
+    while let Some(segment) = pending.pop_front() {
         let segment = segment.trim();
         if segment.is_empty() || segment == ";" {
             continue;
         }
-        let is_static = segment.starts_with("static ");
-        let rest = if is_static {
-            segment
-                .strip_prefix("static ")
-                .unwrap_or(segment)
-                .trim_start()
+        let static_prefix = segment
+            .strip_prefix("static ")
+            .map(str::trim_start)
+            .filter(|after| !after.is_empty() && !after.starts_with(['=', ';']));
+        let is_static = static_prefix.is_some();
+        let mut rest = static_prefix.unwrap_or(segment);
+
+        // ES2022 public fields: `[static] key [= initializer]`. A key is
+        // followed by `=`, `;` or nothing; a method's by its parameter list.
+        let field_key_end = if rest.starts_with('[') {
+            extract_balanced(rest, '[', ']').map_or(0, |(_, after)| rest.len() - after.len())
         } else {
-            segment
+            0
         };
+        if !rest.starts_with('#') && class_member_is_field(&rest[field_key_end..]) {
+            // `x = {a: 1}.a` was cut after the object literal's `}`: glue
+            // continuation segments back on.
+            while let Some(next) = pending.front()
+                && class_field_continues_with(next)
+            {
+                let end = subslice_offset(body, next) + next.len();
+                rest = body[subslice_offset(body, rest)..end].trim();
+                pending.pop_front();
+            }
+            let (field, remainder) = split_class_field_asi(rest);
+            if let Some(remainder) = remainder {
+                pending.push_front(remainder);
+            }
+            methods.push(parse_class_field(
+                field,
+                is_static,
+                field_key_end,
+                span,
+                context,
+            )?);
+            continue;
+        }
 
         // Method modifiers (ES2020 14.4-14.7): `async m(){}`, `*m(){}`,
         // `async *m(){}`. `async(){}` names a method `async`.
@@ -11471,16 +11518,16 @@ fn parse_class_body(
         } else {
             0
         };
-        // ES2022 class fields (`x = 1;`, `static s;`, `h = () => {}`) and
-        // private names (`#x`) have no representation in this AST yet. They
-        // used to be dropped silently, so `new A().x` read `undefined` and
-        // `this.#x` became the string "this.#x": refuse them instead of
-        // producing a wrong answer.
+        // Private names (`#x`, `#m() {}`) have no representation in this AST
+        // yet. They used to be dropped silently (`this.#x` became the string
+        // "this.#x"): refuse them instead of producing a wrong answer. A
+        // field reached only after a get/set/async/`*` prefix (`get = 1` is
+        // a field named "get" and was handled above) is malformed.
         if rest.starts_with('#') || class_member_is_field(&rest[key_end..]) {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 format!(
-                    "class fields and private names are not supported yet: `{}`",
+                    "class private names are not supported yet: `{}`",
                     segment.trim()
                 ),
                 context.source_label.to_string(),
@@ -11580,6 +11627,200 @@ fn parse_class_body(
     }
 
     Ok(methods)
+}
+
+/// Byte offset of `part` inside `whole`; `part` must be a subslice of it.
+fn subslice_offset(whole: &str, part: &str) -> usize {
+    (part.as_ptr() as usize).saturating_sub(whole.as_ptr() as usize)
+}
+
+/// Whether a class-body segment continues the previous field's initializer
+/// rather than starting a new element: `split_class_members` cuts after every
+/// top-level `}`, so `x = {a: 1}.a` or `f = function () {}.bind(this)` arrive
+/// as two segments.
+fn class_field_continues_with(next: &str) -> bool {
+    let next = next.trim_start();
+    next.starts_with([
+        '.', '(', '[', '?', ',', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '`',
+    ]) || (next.starts_with('=') && !next.starts_with("=>"))
+        || (next.starts_with('!') && next.starts_with("!="))
+        || starts_with_keyword(next, "in")
+        || starts_with_keyword(next, "instanceof")
+}
+
+/// Split a field declaration from any class elements that follow it after a
+/// line break with no `;` (ES2020 11.9.1 ASI: `x = 1\n y = 2\n m() {}`). A
+/// line break ends the field when the text before it can end an expression
+/// and the next line starts a new element; `x = a\n (b)`, `x = a\n [k]` and
+/// `x = a +\n b` continue it, as in JavaScript. A field with no initializer
+/// yet (`plain\n [k] = 2`) ends at the line break unless `=` follows.
+fn split_class_field_asi(text: &str) -> (&str, Option<&str>) {
+    let mut depth = 0usize;
+    let mut quotes = QuoteState::default();
+    let mut has_initializer = false;
+    for (index, ch) in text.char_indices() {
+        if quotes.active() {
+            quotes.advance_char(ch);
+            continue;
+        }
+        if ch == '/' && quotes.open_regex_at(text, index) {
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => {
+                quotes.open_char(ch);
+            }
+            '(' | '[' | '{' => depth = depth.saturating_add(1),
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            '=' if depth == 0 => has_initializer = true,
+            '\n' if depth == 0 && !has_initializer => {
+                let head = text[..index].trim_end();
+                let tail = text[index + 1..].trim_start();
+                if !head.is_empty() && !tail.is_empty() && !tail.starts_with('=') {
+                    return (head, Some(tail));
+                }
+            }
+            '\n' if depth == 0 => {
+                let head = text[..index].trim_end();
+                let tail = text[index + 1..].trim_start();
+                let head_is_complete = !head.is_empty()
+                    && !head.ends_with([
+                        '=', '+', '-', '*', '/', '%', '&', '|', '^', '!', '~', '<', '>', '?', ':',
+                        ',', '.', '(', '[', '{',
+                    ])
+                    || head.ends_with("++")
+                    || head.ends_with("--");
+                let tail_starts_element = tail.chars().next().is_some_and(|c| {
+                    c.is_alphanumeric() || matches!(c, '_' | '$' | '#' | '*' | '\'' | '"')
+                }) && !starts_with_keyword(tail, "in")
+                    && !starts_with_keyword(tail, "instanceof");
+                if head_is_complete && tail_starts_element {
+                    return (head, Some(tail));
+                }
+            }
+            _ => {}
+        }
+    }
+    (text, None)
+}
+
+/// Parse one public field `key [= initializer][;]` (ES2022 15.7.10
+/// ClassFieldDefinition) into a [`MethodKind::Field`] member whose body is
+/// `return initializer;`. The initializer is strict code with a
+/// [[HomeObject]] (`super.x` is allowed); `this` is the instance, or the
+/// class for a static field. `key_end` is the length of a leading computed
+/// key `[expr]`, else 0.
+fn parse_class_field(
+    text: &str,
+    is_static: bool,
+    key_end: usize,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<MethodDefinition> {
+    let text = text.trim();
+    let text = text.strip_suffix(';').unwrap_or(text).trim_end();
+    let malformed = |context: &ParseExecutionContext<'_>| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("malformed class field: `{text}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
+    let computed = key_end > 0;
+    let (key_src, after_key) = if computed {
+        (&text[1..key_end - 1], &text[key_end..])
+    } else {
+        let key_len = match text.chars().next() {
+            Some(quote @ ('\'' | '"')) => text[1..]
+                .find(quote)
+                .map(|close| close + 2)
+                .ok_or_else(|| malformed(context))?,
+            _ => text
+                .find(['=', ' ', '\t', '\n', '\r'])
+                .unwrap_or(text.len()),
+        };
+        (&text[..key_len], &text[key_len..])
+    };
+    let after_key = after_key.trim_start();
+    let initializer = if after_key.is_empty() {
+        None
+    } else if let Some(value) = after_key
+        .strip_prefix('=')
+        .filter(|value| !value.starts_with(['=', '>']))
+    {
+        Some(value.trim())
+    } else {
+        return Err(malformed(context));
+    };
+
+    let saved_super_property_allowed = context.super_property_allowed;
+    context.super_property_allowed = true;
+    let parsed = with_function_strict_mode("", true, context, |context| {
+        let key = if computed {
+            parse_expression(key_src.trim(), span, context, 1)?
+        } else {
+            parse_contextual_static_property_key(
+                key_src,
+                span,
+                context,
+                LegacyDecimalEscapeMode::Reject,
+                "class-method",
+            )?
+        };
+        let value = match initializer {
+            Some(source) if !source.is_empty() => Some(parse_expression(source, span, context, 1)?),
+            Some(_) => return Err(malformed(context)),
+            None => None,
+        };
+        Ok((key, value))
+    });
+    context.super_property_allowed = saved_super_property_allowed;
+    let (key, value) = parsed?;
+
+    // ES2022 15.7.1 early errors: no field named "constructor", and no
+    // static field named "prototype".
+    let static_name = match &key {
+        Expression::Identifier(name) => Some(name.as_str()),
+        Expression::StringLiteral(name) => name.as_str(),
+        _ => None,
+    };
+    if !computed
+        && let Some(name) = static_name
+        && (name == "constructor" || (is_static && name == "prototype"))
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!(
+                "classes may not have a {}field named '{name}'",
+                if is_static { "static " } else { "" }
+            ),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+
+    Ok(MethodDefinition {
+        key,
+        kind: MethodKind::Field,
+        params: Vec::new(),
+        body: BlockStatement {
+            body: value
+                .map(|argument| {
+                    vec![Statement::Return(ReturnStatement {
+                        argument: Some(argument),
+                        span: span.clone(),
+                    })]
+                })
+                .unwrap_or_default(),
+            span: span.clone(),
+        },
+        is_static,
+        computed,
+        span: span.clone(),
+        is_async: false,
+        is_generator: false,
+    })
 }
 
 /// Whether a class member, starting at its key (or just past a computed key),

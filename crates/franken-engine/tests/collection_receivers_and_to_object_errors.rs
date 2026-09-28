@@ -7,6 +7,8 @@
 //! `Object.assign(null)`: each is a TypeError in Node. Six Test262 sample
 //! failures (Set.prototype.has/clear this-not-object and missing [[SetData]],
 //! Object.keys 15.2.3.14-1-5, Object.assign Target-Undefined) are this.
+//! String methods' search and fill arguments go through ToString, which
+//! throws for a Symbol; FrankenEngine searched for `"Symbol()"` instead.
 //! Expected strings are Node v22.2.0's output for the same source.
 //!
 //! No-claim: string arguments still give `[]` from Object.keys/values/entries
@@ -76,5 +78,28 @@ fn object_keys_values_entries_and_assign_apply_to_object() {
              Object.entries({q: 3}).join();"
         ),
         "ab {\"x\":1,\"y\":2} q,3"
+    );
+}
+
+#[test]
+fn string_method_arguments_reject_symbols() {
+    let source = format!(
+        "{PROBE}[\
+         t(() => 'a'.endsWith(Symbol())),\
+         t(() => 'a'.startsWith(Symbol())),\
+         t(() => 'a'.includes(Symbol())),\
+         t(() => 'a'.indexOf(Symbol())),\
+         t(() => 'a'.lastIndexOf(Symbol())),\
+         t(() => 'a'.padEnd(5, Symbol())),\
+         t(() => 'a'.padStart(5, Symbol()))\
+         ].join(',');"
+    );
+    assert_eq!(eval(&source), ["TypeError"; 7].join(","));
+    assert_eq!(
+        eval(
+            "String(Symbol('x')) + ' ' + 'ab'.padEnd(4, 'z') + ' ' + 'abc'.includes('b') + \
+             ' ' + 'a1'.padStart(3, 1);"
+        ),
+        "Symbol(x) abzz true 1a1"
     );
 }

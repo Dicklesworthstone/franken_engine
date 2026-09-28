@@ -47,9 +47,9 @@ const PACKAGES: &[Package] = &[
         file: "minimist-1.2.8/index.js",
         usage: "const a = m(['-x', '3', '-y4', '-n5', '-abc', '--beep=boop', 'foo', 'bar', '--no-z']); console.log(JSON.stringify(a));",
         node_output: r#"{"_":["foo","bar"],"x":3,"y":4,"n":5,"a":true,"b":true,"c":true,"beep":"boop","z":false}"#,
-        // Parses since the `?:`-branch assignment fix; `parseArgs` then needs
-        // more than the 256-register QuickJS-lane frame.
-        expect: Expect::KnownFailure("out of bounds (max 256)"),
+        expect: Expect::Passes(
+            r#"{"_":["foo","bar"],"x":3,"y":4,"n":5,"a":true,"b":true,"c":true,"beep":"boop","z":false}"#,
+        ),
     },
     Package {
         name: "dayjs",

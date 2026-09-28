@@ -10066,7 +10066,7 @@ fn parse_if_statement(
     };
 
     reject_declaration_in_statement_position(
-        consequent_src,
+        &consequent_src,
         StatementPosition::If,
         &span,
         context,
@@ -10076,7 +10076,7 @@ fn parse_if_statement(
     let alternate = if let Some(alt_src) = alternate_src {
         if !alt_src.is_empty() {
             reject_declaration_in_statement_position(
-                alt_src,
+                &alt_src,
                 StatementPosition::If,
                 &span,
                 context,

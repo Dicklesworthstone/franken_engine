@@ -346,11 +346,14 @@ fn bound_hash_and_hmac_aliases_support_fluent_identity_chains() {
 }
 
 #[test]
-fn hmac_secret_literal_remains_fail_closed_pending_authenticator_egress_contract() {
+fn hmac_secret_key_remains_fail_closed_pending_authenticator_egress_contract() {
+    // bd-9vouw.19: the key is an entropy read (RandomRead: Secret); a literal
+    // key's text is not a label source.
     let error = eval_error(
         r#"
         const crypto = require('crypto');
-        console.log(crypto.createHmac('sha1', 'secret').update('message').digest('hex'));
+        const key = crypto.randomBytes(16);
+        console.log(crypto.createHmac('sha1', key).update('message').digest('hex'));
         "#,
     );
     assert!(error.contains("unauthorized flow detected"));
@@ -641,12 +644,14 @@ fn aes_cbc_ctr_gcm_and_bad_padding_match_node() {
 }
 
 #[test]
-fn secret_markers_remain_fail_closed_across_kdf_and_cipher_egress() {
+fn secret_inputs_remain_fail_closed_across_kdf_and_cipher_egress() {
+    // bd-9vouw.19: each secret input (password, plaintext) is an entropy read;
+    // a literal's text is not a label source.
     for source in [
-        "const c=require('crypto'); console.log(c.pbkdf2Sync('password','salt',10,8,'sha256').toString('hex'));",
-        "const c=require('crypto'); console.log(c.scryptSync('password','salt',8).toString('hex'));",
-        "const c=require('crypto'); const x=c.createCipheriv('aes-256-cbc',Buffer.alloc(32,1),Buffer.alloc(16,2)); console.log(Buffer.concat([x.update('secret message'),x.final()]).toString('hex'));",
-        "const c=require('crypto'); const x=c.createCipheriv('aes-256-gcm',Buffer.alloc(32,1),Buffer.alloc(12,2)); x.update('secret payload'); x.final(); console.log(x.getAuthTag().toString('hex'));",
+        "const c=require('crypto'); const pw=c.randomBytes(8); console.log(c.pbkdf2Sync(pw,'salt',10,8,'sha256').toString('hex'));",
+        "const c=require('crypto'); const pw=c.randomBytes(8); console.log(c.scryptSync(pw,'salt',8).toString('hex'));",
+        "const c=require('crypto'); const m=c.randomBytes(16); const x=c.createCipheriv('aes-256-cbc',Buffer.alloc(32,1),Buffer.alloc(16,2)); console.log(Buffer.concat([x.update(m),x.final()]).toString('hex'));",
+        "const c=require('crypto'); const m=c.randomBytes(16); const x=c.createCipheriv('aes-256-gcm',Buffer.alloc(32,1),Buffer.alloc(12,2)); x.update(m); x.final(); console.log(x.getAuthTag().toString('hex'));",
     ] {
         let error = eval_error(source);
         assert!(

@@ -131,33 +131,40 @@ fn benign_programs_lower_and_match_node_output_bd_9vouw_1() {
     }
 }
 
+/// bd-9vouw.19: a literal's text is not a label source, so the secret in
+/// these programs is an entropy read (`crypto.randomUUID()`, RandomRead result
+/// contract: Secret). Native crypto hostcalls raise the program ceiling to
+/// TopSecret, so a secret that crosses a fail-high operation (an unsummarized
+/// call, a nested body's captures, a guest callback) arrives as TopSecret; a
+/// direct flow arrives as Secret. Either way it must not reach the console.
+/// The aliased form is the authenticated one; inline
+/// `require('crypto').randomUUID()` is refused earlier, at the ambient gate.
+const SECRET: &str = "const crypto = require('crypto'); const secret = crypto.randomUUID(); ";
+
+fn assert_secret_denied(name: &str, program: &str, expected_source: Label) {
+    assert_denied(name, &format!("{SECRET}{program}"), expected_source);
+}
+
 #[test]
-fn secret_literal_still_cannot_reach_console_through_unsummarized_calls_bd_9vouw_1() {
-    // The ceiling is Secret here (sensitive-keyword literal), so every
-    // fail-high result is bounded at Secret, which still cannot flow to the
-    // Internal console sink. A fix that simply dropped fail-high labels would
-    // let these through.
-    assert_denied(
+fn secret_still_cannot_reach_console_through_unsummarized_calls_bd_9vouw_1() {
+    // A fix that simply dropped fail-high labels would let these through.
+    assert_secret_denied(
         "secret_through_returned_closure",
-        "function mk(){ return (x) => x } const f = mk(); console.log(f('secret-token'));",
-        Label::Secret,
+        "function mk(){ return (x) => x } const f = mk(); console.log(f(secret));",
+        Label::TopSecret,
     );
-    assert_denied(
+    assert_secret_denied(
         "secret_through_builtin_on_global",
-        "const s = 'secret-token'; console.log(Math.max(s.length, 1));",
-        Label::Secret,
+        "const s = secret; console.log(Math.max(s.length, 1));",
+        Label::TopSecret,
     );
-    assert_denied(
+    assert_secret_denied(
         "secret_through_recursion",
-        "function echo(n, v){ return n === 0 ? v : echo(n - 1, v) } console.log(echo(3, 'api_key=1'));",
-        Label::Secret,
+        "function echo(n, v){ return n === 0 ? v : echo(n - 1, v) } console.log(echo(3, secret));",
+        Label::TopSecret,
     );
-    // Direct flows are unaffected by the ceiling.
-    assert_denied(
-        "direct_secret_literal",
-        "console.log('secret-token');",
-        Label::Secret,
-    );
+    // Direct flows carry the source's own label.
+    assert_secret_denied("direct_secret", "console.log(secret);", Label::Secret);
 }
 
 #[test]
@@ -168,41 +175,41 @@ fn secret_entering_a_nested_body_cannot_reach_its_sinks_bd_9vouw_1() {
     // The first three shapes leaked before bd-9vouw.1 too (unknown bindings
     // defaulted to Internal); the method/builtin shapes leaked only after the
     // first ceiling fix (b32c1e573) clamped nested bodies to their own ops.
-    for (name, source) in [
+    for (name, program) in [
         (
             "captured_secret_in_declared_function",
-            "const t = 'secret-token'; function g(){ console.log(t) } g();",
+            "const t = secret; function g(){ console.log(t) } g();",
         ),
         (
             "captured_secret_through_local_copy",
-            "const t = 'secret-token'; const g = () => { const u = t; console.log(u) }; g();",
+            "const t = secret; const g = () => { const u = t; console.log(u) }; g();",
         ),
         (
             "secret_parameter",
-            "function g(t){ console.log(t) } g('secret-token');",
+            "function g(t){ console.log(t) } g(secret);",
         ),
         (
             "method_on_captured_secret",
-            "const t = 'secret-token'; function g(){ console.log(t.toUpperCase()) } g();",
+            "const t = secret; function g(){ console.log(t.toUpperCase()) } g();",
         ),
         (
             "builtin_over_captured_secret",
-            "const t = 'secret-token'; function g(){ console.log(String(t)) } g();",
+            "const t = secret; function g(){ console.log(String(t)) } g();",
         ),
         (
             "method_on_secret_parameter",
-            "function g(x){ console.log(x.slice(0)) } g('secret-token');",
+            "function g(x){ console.log(x.slice(0)) } g(secret);",
         ),
         (
             "secret_returned_by_inner_closure",
-            "function g(x){ const h = () => x; console.log(h()) } g('secret-token');",
+            "function g(x){ const h = () => x; console.log(h()) } g(secret);",
         ),
         (
             "captured_secret_read_before_local_reassignment",
-            "let t = 'secret-token'; function g(){ console.log(t); t = 'x' } g();",
+            "let t = secret; function g(){ console.log(t); t = 'x' } g();",
         ),
     ] {
-        assert_denied(name, source, Label::Secret);
+        assert_secret_denied(name, program, Label::TopSecret);
     }
 }
 
@@ -213,15 +220,15 @@ fn callbacks_handed_to_engine_methods_cannot_launder_secrets_bd_zk58q() {
     // guest callback, so a secret thrown (or returned) by the callback left
     // the call labeled Internal. Such calls now fail high, bounded by the
     // program ceiling.
-    assert_denied(
+    assert_secret_denied(
         "secret_thrown_from_buffer_map_callback",
-        "try { Buffer.from('x').map(v => { throw 'secret-token' }) } catch (e) { console.log(e) }",
-        Label::Secret,
+        "try { Buffer.from('x').map(v => { throw secret }) } catch (e) { console.log(e) }",
+        Label::TopSecret,
     );
-    assert_denied(
+    assert_secret_denied(
         "secret_returned_through_replace_callback",
-        "console.log('abc'.replace(/a/, () => 'secret-token'));",
-        Label::Secret,
+        "console.log('abc'.replace(/a/, () => secret));",
+        Label::TopSecret,
     );
 }
 
@@ -231,20 +238,20 @@ fn guest_conversion_methods_cannot_launder_secrets_bd_9vouw_37() {
     // runtime. The static gate already refuses these flows (an object whose
     // method returns a secret fails high); pin that so the runtime change
     // cannot open a laundering path through operators.
-    assert_denied(
+    assert_secret_denied(
         "secret_from_to_string_in_concat",
-        "const o = { toString(){ return 'secret-token' } }; console.log('' + o);",
-        Label::Secret,
+        "const o = { toString(){ return secret } }; console.log('' + o);",
+        Label::TopSecret,
     );
-    assert_denied(
+    assert_secret_denied(
         "secret_from_value_of_in_sum",
-        "const o = { valueOf(){ return 'secret-token' } }; console.log(o + 1);",
-        Label::Secret,
+        "const o = { valueOf(){ return secret } }; console.log(o + 1);",
+        Label::TopSecret,
     );
-    assert_denied(
+    assert_secret_denied(
         "secret_from_to_string_in_template",
-        "const o = { toString(){ return 'secret-token' } }; console.log(`${o}`);",
-        Label::Secret,
+        "const o = { toString(){ return secret } }; console.log(`${o}`);",
+        Label::TopSecret,
     );
 }
 

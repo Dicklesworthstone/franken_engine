@@ -62551,29 +62551,24 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         source: Value,
     ) -> Result<Value, InterpreterError> {
-        let target_id = self.alloc_object_with_prototype(None)?;
-        match source {
-            Value::Object(entries_id) => {
-                let length = self.array_like_length(entries_id)?;
-                for index in 0..length {
-                    if let Some(entry) = self.array_index_value(entries_id, index)? {
-                        self.set_object_from_entry_pair(target_id, entry)?;
-                    }
-                }
-            }
-            Value::Iterator(handle) => {
-                while let Some(entry) =
-                    self.advance_for_of_iterator(module, Value::Iterator(handle))?
-                {
-                    self.set_object_from_entry_pair(target_id, entry)?;
-                }
-            }
-            other => {
+        // ES2020 19.1.2.7: `iterable` goes through the iteration protocol
+        // (arrays, Map, Set, generators, user iterables). An object used to be
+        // read as array-like, so `Object.fromEntries(new Map(...))` gave `{}`
+        // (a Map has no `length`).
+        let type_name = source.type_name();
+        let iterator = match source {
+            Value::Iterator(_) => source,
+            Value::Undefined | Value::Null => {
                 return Err(InterpreterError::TypeError {
                     expected: "iterable entries object".to_string(),
-                    got: other.type_name().to_string(),
+                    got: type_name.to_string(),
                 });
             }
+            other => self.init_for_of_iterator(module, other)?,
+        };
+        let target_id = self.alloc_object_with_prototype(None)?;
+        while let Some(entry) = self.advance_for_of_iterator(module, iterator.clone())? {
+            self.set_object_from_entry_pair(target_id, entry)?;
         }
         Ok(Value::Object(target_id))
     }
@@ -75541,10 +75536,12 @@ impl InterpreterCore {
                 }
             }
             "builtin:ObjectFromEntries" => {
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-                let source = self.read_reg(args.start)?;
+                // A missing iterable is undefined, which is not iterable.
+                let source = if args.count == 0 {
+                    Value::Undefined
+                } else {
+                    self.read_reg(args.start)?
+                };
                 self.object_from_entries_value(module, source)
             }
             "builtin:ObjectAssign" => {

@@ -978,14 +978,16 @@ fn cancelled_property_calls_propagate_cancellation_and_release_scratch() {
 #[test]
 fn property_canonicalization_does_not_lower_real_sink_clearance() {
     use frankenengine_engine::hash_tiers::ContentHash;
-    use frankenengine_engine::ir_contract::{Ir1Literal, Ir1Module, Ir1Op};
+    use frankenengine_engine::ir_contract::{Ir1Module, Ir1Op};
     use frankenengine_engine::lowering_pipeline::lower_ir1_to_ir2;
 
     for sink in ["net:request", "fs:write", "console:log"] {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"reflect-flow"), "reflect-flow.js");
         ir1.ops = vec![
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_secret_token".into()),
+            // bd-9vouw.19: the secret is an entropy read (RandomRead: Secret).
+            Ir1Op::HostCall {
+                capability: "random_read".into(),
+                arg_count: 0,
             },
             Ir1Op::HostCall {
                 capability: "builtin:ToPropertyKey".into(),
@@ -1317,8 +1319,10 @@ fn proxy_factory_clearance_is_exact_and_does_not_declassify_returned_objects() {
             Ir1Op::LoadLiteral {
                 value: Ir1Literal::String("payload".into()),
             },
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_secret_token".into()),
+            // bd-9vouw.19: the secret is an entropy read (RandomRead: Secret).
+            Ir1Op::HostCall {
+                capability: "random_read".into(),
+                arg_count: 0,
             },
             Ir1Op::NewObject { count: 1 },
             Ir1Op::HostCall {

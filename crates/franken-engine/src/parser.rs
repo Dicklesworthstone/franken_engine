@@ -10852,6 +10852,11 @@ fn parse_throw_statement(
     Ok(Statement::Throw(ThrowStatement { argument, span }))
 }
 
+/// Synthetic parameter of a catch clause whose parameter is a destructuring
+/// pattern; the block's first statement destructures it. Like the `__seq_*`
+/// parameters it shadows a same-named outer binding inside the block only.
+const CATCH_PATTERN_PARAMETER: &str = "__catch_parameter";
+
 fn parse_try_catch_statement(
     statement: &str,
     goal: ParseGoal,
@@ -10883,6 +10888,7 @@ fn parse_try_catch_statement(
     // Parse optional catch clause.
     let (handler, rest) = if rest.starts_with("catch") {
         let after_catch = rest.strip_prefix("catch").unwrap_or(rest).trim_start();
+        let mut destructured_parameter = None;
         let (param, after_param) = if after_catch.starts_with('(') {
             let (p, r) = extract_balanced(after_catch, '(', ')').ok_or_else(|| {
                 ParseError::new(
@@ -10901,8 +10907,19 @@ fn parse_try_catch_statement(
                     Some(span.clone()),
                 ));
             }
-            parse_binding_pattern(parameter, &span, context)?;
-            (Some(parameter.to_string()), r)
+            match parse_binding_pattern(parameter, &span, context)? {
+                BindingPattern::Identifier(_) => (Some(parameter.to_string()), r),
+                // ES2020 13.15.7: `catch ({ m })` / `catch ([a, b])` bind the
+                // pattern's names from the thrown value (a TypeError for null
+                // or undefined). The clause binds a synthetic parameter and the
+                // block starts with `let <pattern> = <parameter>;`, which has
+                // the same scoping: a pattern name redeclared in the block is
+                // an early error either way (13.15.1).
+                _ => {
+                    destructured_parameter = Some(parameter);
+                    (Some(CATCH_PATTERN_PARAMETER.to_string()), r)
+                }
+            }
         } else {
             (None, after_catch)
         };
@@ -10915,7 +10932,13 @@ fn parse_try_catch_statement(
                 Some(span.clone()),
             )
         })?;
-        let catch_body = parse_body_statements(catch_inner, goal, &span, context)?;
+        let mut catch_body = parse_body_statements(catch_inner, goal, &span, context)?;
+        if let Some(pattern) = destructured_parameter {
+            let binding = format!("let {pattern} = {CATCH_PATTERN_PARAMETER};");
+            let mut prologue = parse_body_statements(&binding, goal, &span, context)?;
+            prologue.append(&mut catch_body);
+            catch_body = prologue;
+        }
         (
             Some(CatchClause {
                 parameter: param,

@@ -747,3 +747,113 @@ fn same_content_different_goals_produce_different_trees() {
     // Goals differ so canonical representations should differ
     assert_ne!(script.canonical_bytes(), module.canonical_bytes());
 }
+
+// ---------------------------------------------------------------------------
+// Assignments inside conditional branches (dayjs UMD header)
+// ---------------------------------------------------------------------------
+
+fn expression_statement(source: &str) -> Expression {
+    let tree = parser()
+        .parse(source, ParseGoal::Script)
+        .unwrap_or_else(|error| panic!("{source}: {error}"));
+    assert_eq!(tree.body.len(), 1, "{source}");
+    let Statement::Expression(statement) = &tree.body[0] else {
+        panic!("{source}: expected an expression statement");
+    };
+    statement.expression.clone()
+}
+
+#[test]
+fn assignments_inside_conditional_branches_belong_to_the_branch() {
+    // An `=` in either branch is that branch's assignment. `c ? m.x = 1 : 0`
+    // used to parse as `(c ? m.x) = (1 : 0)` and `c ? 0 : m.x = 2` failed with
+    // "invalid assignment target".
+    let Expression::Conditional {
+        consequent,
+        alternate,
+        ..
+    } = expression_statement("c ? m.x = 1 : 0;")
+    else {
+        panic!("expected a conditional");
+    };
+    assert!(matches!(*consequent, Expression::Assignment { .. }));
+    assert!(!matches!(*alternate, Expression::Raw(_)));
+    let Expression::Conditional { alternate, .. } = expression_statement("c ? 0 : m.x = 2;") else {
+        panic!("expected a conditional");
+    };
+    assert!(matches!(*alternate, Expression::Assignment { .. }));
+
+    // dayjs's UMD header (dayjs.min.js 1.11.13), which failed at 1:1.
+    expression_statement(
+        "!function(t,e){\"object\"==typeof exports&&\"undefined\"!=typeof module?module.exports=e():\"function\"==typeof define&&define.amd?define(e):(t=\"undefined\"!=typeof globalThis?globalThis:t||self).dayjs=e()}(this,(function(){}));",
+    );
+
+    // An assignment whose value is a conditional is still an assignment, `??`
+    // is not a conditional `?`, and a `?` inside a regex literal is not an
+    // operator.
+    for source in [
+        "r = c ? 1 : 2;",
+        "r = x ?? y ? 1 : 2;",
+        "r = /a?/.test(s) ? 1 : 2;",
+    ] {
+        let Expression::Assignment { right, .. } = expression_statement(source) else {
+            panic!("{source}: expected an assignment");
+        };
+        let Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } = *right
+        else {
+            panic!("{source}: expected a conditional value");
+        };
+        for part in [&*test, &*consequent, &*alternate] {
+            assert!(!matches!(part, Expression::Raw(_)), "{source}: {part:?}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Class fields and private names (bd-9vouw.64): refused, never dropped
+// ---------------------------------------------------------------------------
+
+#[test]
+fn class_fields_and_private_names_are_refused_not_dropped() {
+    for source in [
+        "class A { y = 2; }",
+        "class A { y = 2; m() { return 1; } }",
+        "class A { static s = 3; }",
+        "class A { x }",
+        "class A { a = 1\n b = 2 }",
+        "class A { handler = () => { return 1; }; }",
+        "class A { 'q' = 1; }",
+        "class A { [k] = 1; }",
+        "class A { get = 1; }",
+        "class A { #x = 1; get x() { return this.#x; } }",
+        "class A { #m() {} }",
+        "class A { static #s() {} }",
+    ] {
+        let error = parser().parse(source, ParseGoal::Script).expect_err(source);
+        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+        assert!(
+            error
+                .message
+                .contains("class fields and private names are not supported yet"),
+            "{source}: {}",
+            error.message
+        );
+    }
+
+    // Methods, accessors, default parameters, string and computed keys and
+    // stray `;` separators still parse, with every member kept.
+    let tree = parser()
+        .parse(
+            "class B { constructor(a = 1) { this.a = a; }; get v() { return 1; } set v(x) {}; static s() {} 'q'() {} [k](y) {} async m() {} *g() {} }",
+            ParseGoal::Script,
+        )
+        .expect("a methods-only class parses");
+    let Statement::ClassDeclaration(class) = &tree.body[0] else {
+        panic!("expected a class declaration");
+    };
+    assert_eq!(class.body.len(), 8);
+}

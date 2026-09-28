@@ -5640,6 +5640,13 @@ fn try_parse_assignment(
             i += 1;
             continue;
         }
+        // A conditional `?` ahead of any assignment operator makes this a
+        // ConditionalExpression: an `=` after it belongs to a branch
+        // (`c ? m.x = 1 : 0`, `c ? 0 : m.x = 2`), never to this level, and an
+        // assignment target cannot contain a bare `?`.
+        if is_conditional_question_at(bytes, i) {
+            return None;
+        }
         // Try matching assignment operators (must check longer ones first).
         if let Some((op, len)) = match_assignment_operator_at(bytes, i) {
             // Avoid matching == or === as assignment.
@@ -5676,6 +5683,21 @@ fn try_parse_assignment(
         i += 1;
     }
     None
+}
+
+/// Whether the `?` at byte `i` (at depth 0, outside strings) is the
+/// conditional operator: not either `?` of `??`/`??=`, and not the `?.` of
+/// optional chaining (`a?.5:1` is still a conditional, since `?.` followed by
+/// a digit is not optional chaining).
+fn is_conditional_question_at(bytes: &[u8], i: usize) -> bool {
+    if bytes.get(i) != Some(&b'?') || (i > 0 && bytes[i - 1] == b'?') {
+        return false;
+    }
+    match bytes.get(i + 1) {
+        None | Some(b'?') => false,
+        Some(b'.') => bytes.get(i + 2).is_some_and(u8::is_ascii_digit),
+        Some(_) => true,
+    }
 }
 
 /// Match an assignment operator at byte position `i`. Returns (operator, byte_length).
@@ -5759,6 +5781,12 @@ fn try_parse_conditional(
             i += 1;
             continue;
         }
+        if b == b'/'
+            && let Some(len) = regex_literal_len_at(expr, i)
+        {
+            i += len;
+            continue;
+        }
         match b {
             b'\'' | b'"' | b'`' => {
                 quotes.open(b);
@@ -5801,7 +5829,7 @@ fn try_parse_conditional(
             i += 1;
             continue;
         }
-        if b == b'?' && i + 1 < bytes.len() && bytes[i + 1] != b'.' && bytes[i + 1] != b'?' {
+        if is_conditional_question_at(bytes, i) {
             // Found ternary `?`. Now find the matching `:` at the same depth.
             let test_src = expr[..i].trim();
             let rest = &expr[i + 1..];
@@ -10773,6 +10801,22 @@ fn parse_class_body(
         } else {
             0
         };
+        // ES2022 class fields (`x = 1;`, `static s;`, `h = () => {}`) and
+        // private names (`#x`) have no representation in this AST yet. They
+        // used to be dropped silently, so `new A().x` read `undefined` and
+        // `this.#x` became the string "this.#x": refuse them instead of
+        // producing a wrong answer.
+        if rest.starts_with('#') || class_member_is_field(&rest[key_end..]) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!(
+                    "class fields and private names are not supported yet: `{}`",
+                    segment.trim()
+                ),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         let paren_idx = rest[key_end..]
             .find('(')
             .map(|index| index + key_end)
@@ -10867,6 +10911,22 @@ fn parse_class_body(
     Ok(methods)
 }
 
+/// Whether a class member, starting at its key (or just past a computed key),
+/// declares a field rather than a method: a method's key is followed by its
+/// parameter list, a field's by `=`, `;`, or nothing at all.
+fn class_member_is_field(member: &str) -> bool {
+    let member = member.trim_start();
+    let after_key = match member.chars().next() {
+        Some(quote @ ('\'' | '"')) => member[1..]
+            .find(quote)
+            .map_or("", |close| &member[close + 2..]),
+        _ => member,
+    };
+    after_key
+        .find(['(', '=', ';', '{'])
+        .is_none_or(|index| matches!(after_key.as_bytes()[index], b'=' | b';'))
+}
+
 /// Split class body into individual method segments.
 fn split_class_members(body: &str) -> Vec<&str> {
     let mut segments = Vec::with_capacity(8);
@@ -10898,7 +10958,9 @@ fn split_class_members(body: &str) -> Vec<&str> {
                 }
             }
             ';' if brace_depth == 0 && paren_depth == 0 => {
-                // Semicolons between methods — skip.
+                // A `;` ends a field declaration or separates methods; keep
+                // the text so `parse_class_body` sees (and refuses) fields.
+                segments.push(&body[start..=i]);
                 start = i + 1;
             }
             _ => {}

@@ -14736,6 +14736,34 @@ fn lower_expression_to_ir1_inner(
             span,
         } => {
             if matches!(callee.as_ref(), Expression::Super) {
+                // `super(...args)`: ConstructSuper takes a fixed argument
+                // count and a `SpreadElement` evaluates only to its inner
+                // value, so the spread array arrived as ONE argument. Build
+                // the argument list as an array (ArrayLiteral expands spreads)
+                // and construct the parent through
+                // `builtin:ConstructSuperSpread`, which also binds `this`.
+                if arguments
+                    .iter()
+                    .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+                {
+                    let argument_list =
+                        Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+                    lower_expression_to_ir1(
+                        &argument_list,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ConstructSuperSpread".to_string(),
+                        arg_count: 1,
+                    });
+                    return Ok(());
+                }
                 for argument in arguments {
                     lower_expression_to_ir1(
                         argument,

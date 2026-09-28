@@ -8112,6 +8112,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     value_stack.pop().unwrap_or(0)
                 };
                 ir3.instructions.push(Ir3Instruction::Return { value });
+                // A return or throw ends its statement as a Pop does: its
+                // operand and temporaries are dead (bd-9vouw.23).
+                if value_stack.is_empty() {
+                    register_high_water = register_high_water.max(register_cursor);
+                    register_cursor = statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers));
+                }
             }
             Ir1Op::Discard => {
                 // Pure discard: drop the value WITHOUT recording it as the
@@ -8758,6 +8766,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             Ir1Op::Throw => {
                 let value = pop_lowering_value(&mut value_stack)?;
                 ir3.instructions.push(Ir3Instruction::Throw { value });
+                if value_stack.is_empty() {
+                    register_high_water = register_high_water.max(register_cursor);
+                    register_cursor = statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers));
+                }
             }
             Ir1Op::LoadThis => {
                 let dst = alloc_register(&mut register_cursor);
@@ -9577,15 +9591,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             .copied()
             .collect::<BTreeSet<_>>();
         runtime_local_binding_ids.extend(child_capture_id_to_name.keys().copied());
-        // bd-9vouw.23: every other local pins a frame register for the whole
-        // body. A body with more locals than a frame holds failed at runtime
-        // ("register N out of bounds"); bundler output wraps a whole program
-        // in one such function. Past a budget, the earliest-numbered locals
-        // stay in registers and the rest take the identity-named
-        // function-entry scope route that captured and TDZ locals already
-        // use. Only bindings reached through plain load/store/assign/declare
-        // ops are candidates. Per-iteration loop bindings always stay in
-        // registers.
+        // bd-9vouw.23: every other local that is not short-lived (below) pins
+        // a frame register for the whole body. A body with more locals than
+        // a frame holds failed at runtime ("register N out of bounds");
+        // bundler output wraps a whole program in one such function. Past a
+        // budget, the earliest-numbered locals stay in registers and the
+        // rest take the identity-named function-entry scope route that
+        // captured and TDZ locals already use. Only bindings reached through
+        // plain load/store/assign/declare ops are candidates. Per-iteration
+        // loop bindings always stay in registers.
         let per_iteration_binding_ids = body_ops
             .iter()
             .filter_map(|op| match op {
@@ -9611,6 +9625,43 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     && !runtime_global_id_to_name.contains_key(binding_id)
                     && !runtime_local_binding_ids.contains(binding_id)
             })
+            .collect::<BTreeSet<_>>();
+        // Locals written before every read (expression temporaries such as
+        // method receivers and `?:` results, and most initialized locals)
+        // hold a register only while in use, so they neither count toward
+        // the resident budget nor spill. Compound-assigned, declared-function,
+        // per-iteration and exported bindings keep their pinned register.
+        let other_reference_ids = body_ops
+            .iter()
+            .filter_map(|op| match op {
+                Ir1Op::AssignOp { binding_id, .. }
+                | Ir1Op::DeclareFunction { binding_id, .. }
+                | Ir1Op::CreatePerIterationBinding { binding_id, .. }
+                | Ir1Op::ExportBinding { binding_id, .. } => Some(*binding_id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let fn_short_lived_locals = short_lived_local_release_points(
+            body_ops,
+            &register_local_ids
+                .iter()
+                .filter(|binding_id| {
+                    !other_reference_ids.contains(binding_id)
+                        && !per_iteration_binding_ids.contains(binding_id)
+                })
+                .copied()
+                .collect(),
+        );
+        let mut fn_local_releases = BTreeMap::<usize, Vec<BindingId>>::new();
+        for (binding_id, last_use) in &fn_short_lived_locals {
+            fn_local_releases
+                .entry(last_use.saturating_add(1))
+                .or_default()
+                .push(*binding_id);
+        }
+        let register_local_ids = register_local_ids
+            .into_iter()
+            .filter(|binding_id| !fn_short_lived_locals.contains_key(binding_id))
             .collect::<BTreeSet<_>>();
         let spills_locals = register_local_ids.len() > MAX_REGISTER_RESIDENT_FUNCTION_LOCALS;
         let spilled_local_names = if spills_locals {
@@ -9716,7 +9767,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         let mut fn_live_status_registers = BTreeSet::<Reg>::new();
         let mut fn_pinned_register_high: Reg = fn_reg;
         let mut fn_register_high_water: Reg = fn_reg;
-        for ir2_op in &annotated_body_ops {
+        if annotated_body_ops.len() != body_ops.len() {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "annotated function body does not match its IR1 ops",
+            });
+        }
+        for (op_index, ir2_op) in annotated_body_ops.iter().enumerate() {
+            // A short-lived local's register is free once its last reference
+            // (the previous op) has been lowered.
+            for binding_id in fn_local_releases.get(&op_index).into_iter().flatten() {
+                if let Some(register) = fn_binding_regs.get(binding_id) {
+                    fn_live_status_registers.remove(register);
+                }
+            }
             if fn_value_stack.is_empty() && fn_live_status_registers.is_empty() {
                 fn_statement_register_floor = fn_reg;
             }
@@ -9790,13 +9853,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         });
                         fn_value_stack.push(dst);
                     } else {
-                        let src = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
-                            alloc_pinned_register(
-                                &mut fn_reg,
-                                &mut fn_pinned_register_high,
-                                &mut fn_register_high_water,
-                            )
-                        });
+                        let src = function_local_register(
+                            *binding_id,
+                            &mut fn_binding_regs,
+                            &fn_short_lived_locals,
+                            &mut fn_live_status_registers,
+                            &mut fn_reg,
+                            &mut fn_pinned_register_high,
+                            &mut fn_register_high_water,
+                        );
                         let dst = alloc_register(&mut fn_reg);
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
                         fn_value_stack.push(dst);
@@ -9864,13 +9929,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         fn_value_stack.push(src);
                         continue;
                     }
-                    let dst = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(
-                            &mut fn_reg,
-                            &mut fn_pinned_register_high,
-                            &mut fn_register_high_water,
-                        )
-                    });
+                    let dst = function_local_register(
+                        *binding_id,
+                        &mut fn_binding_regs,
+                        &fn_short_lived_locals,
+                        &mut fn_live_status_registers,
+                        &mut fn_reg,
+                        &mut fn_pinned_register_high,
+                        &mut fn_register_high_water,
+                    );
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     fn_value_stack.push(dst);
                 }
@@ -9912,13 +9979,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         fn_value_stack.push(src);
                         continue;
                     }
-                    let dst = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(
-                            &mut fn_reg,
-                            &mut fn_pinned_register_high,
-                            &mut fn_register_high_water,
-                        )
-                    });
+                    let dst = function_local_register(
+                        *binding_id,
+                        &mut fn_binding_regs,
+                        &fn_short_lived_locals,
+                        &mut fn_live_status_registers,
+                        &mut fn_reg,
+                        &mut fn_pinned_register_high,
+                        &mut fn_register_high_water,
+                    );
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     fn_value_stack.push(dst);
@@ -10025,6 +10094,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         value
                     };
                     ir3.instructions.push(Ir3Instruction::Return { value });
+                    // A return or throw ends its statement as a Pop does: its
+                    // operand and temporaries are dead.
+                    if fn_value_stack.is_empty() {
+                        fn_register_high_water = fn_register_high_water.max(fn_reg);
+                        fn_reg = fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers));
+                    }
                 }
                 Ir1Op::Call { arg_count } => {
                     let count = *arg_count as usize;
@@ -10456,6 +10533,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 Ir1Op::Throw => {
                     let value = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Throw { value });
+                    if fn_value_stack.is_empty() {
+                        fn_register_high_water = fn_register_high_water.max(fn_reg);
+                        fn_reg = fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers));
+                    }
                 }
                 // Nested function definitions inside function bodies.
                 Ir1Op::DeclareFunction {
@@ -30432,10 +30515,234 @@ const MAX_BATCH_LITERAL_ENTRIES: usize = 64;
 /// route instead).
 const SPILLED_FUNCTION_LOCAL_NAME: &str = "spilled-local";
 
+/// Upper bound on dataflow passes in `short_lived_local_release_points`;
+/// past it every local keeps its pinned register.
+const MAX_LOCAL_ASSIGNMENT_PASSES: usize = 64;
+
+/// bd-9vouw.23: function locals that need a register only while they are in
+/// use. Each candidate (register resident, reached only through
+/// Load/Store/InitializeBinding) qualifies when every read follows a write on
+/// every path from function entry. That is a forward must-analysis over the
+/// body's labels and jumps; `BeginTry` passes its entry state to the catch
+/// and finally handlers, since every protected op's state contains it.
+/// A qualifying local never reads the frame's initial `undefined`, so a
+/// reusable statement register serves it. The register stays reserved from
+/// the first reference to the last. It is also reserved through the back
+/// edge of every loop that starts after the first reference and before the
+/// last, because a value written before such a loop is read inside it.
+/// A loop that starts after the first reference cannot carry a value from
+/// one iteration to the next: the loop head does not have the local
+/// assigned, so each iteration writes it before reading it.
+/// Returns the release point of each qualifying local: the op index after
+/// which its register is free.
+fn short_lived_local_release_points(
+    body_ops: &[Ir1Op],
+    candidates: &BTreeSet<BindingId>,
+) -> BTreeMap<BindingId, usize> {
+    fn flow_into(states: &mut BTreeMap<u32, Vec<u64>>, label: u32, state: &[u64]) -> bool {
+        match states.get_mut(&label) {
+            None => {
+                states.insert(label, state.to_vec());
+                true
+            }
+            Some(existing) => {
+                let mut changed = false;
+                for (word, incoming) in existing.iter_mut().zip(state) {
+                    let met = *word & incoming;
+                    changed |= met != *word;
+                    *word = met;
+                }
+                changed
+            }
+        }
+    }
+    fn has(state: &[u64], index: usize) -> bool {
+        state[index / 64] & (1 << (index % 64)) != 0
+    }
+
+    if candidates.is_empty() {
+        return BTreeMap::new();
+    }
+    let index_of = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, binding_id)| (*binding_id, index))
+        .collect::<BTreeMap<_, _>>();
+    let words = candidates.len().div_ceil(64);
+    let label_positions = body_ops
+        .iter()
+        .enumerate()
+        .filter_map(|(index, op)| match op {
+            Ir1Op::Label { id } => Some((*id, index)),
+            _ => None,
+        })
+        .collect::<BTreeMap<u32, usize>>();
+
+    let mut label_states = BTreeMap::<u32, Vec<u64>>::new();
+    let mut read_before_write = vec![0u64; words];
+    let mut converged = false;
+    for _ in 0..MAX_LOCAL_ASSIGNMENT_PASSES {
+        let mut changed = false;
+        // `None`: unreachable by fallthrough (after a jump, return or throw).
+        let mut state = Some(vec![0u64; words]);
+        for op in body_ops {
+            match op {
+                Ir1Op::Label { id } => {
+                    state = match (state, label_states.get(id)) {
+                        (Some(mut current), Some(incoming)) => {
+                            for (word, other) in current.iter_mut().zip(incoming) {
+                                *word &= other;
+                            }
+                            Some(current)
+                        }
+                        (current, None) => current,
+                        (None, Some(incoming)) => Some(incoming.clone()),
+                    };
+                }
+                Ir1Op::LoadBinding { binding_id } => {
+                    if let (Some(current), Some(&index)) = (&state, index_of.get(binding_id))
+                        && !has(current, index)
+                    {
+                        read_before_write[index / 64] |= 1 << (index % 64);
+                    }
+                }
+                Ir1Op::StoreBinding { binding_id } | Ir1Op::InitializeBinding { binding_id } => {
+                    if let (Some(current), Some(&index)) = (&mut state, index_of.get(binding_id)) {
+                        current[index / 64] |= 1 << (index % 64);
+                    }
+                }
+                Ir1Op::Jump { label_id } => {
+                    if let Some(current) = &state {
+                        changed |= flow_into(&mut label_states, *label_id, current);
+                    }
+                    state = None;
+                }
+                Ir1Op::JumpIfFalsy { label_id }
+                | Ir1Op::JumpIfFalsyConsume { label_id }
+                | Ir1Op::JumpIfTruthy { label_id }
+                | Ir1Op::JumpIfNullish { label_id }
+                | Ir1Op::ForInNext {
+                    done_label: label_id,
+                }
+                | Ir1Op::ForOfNext {
+                    done_label: label_id,
+                } => {
+                    if let Some(current) = &state {
+                        changed |= flow_into(&mut label_states, *label_id, current);
+                    }
+                }
+                Ir1Op::BeginTry {
+                    catch_label,
+                    finally_label,
+                } => {
+                    if let Some(current) = &state {
+                        changed |= flow_into(&mut label_states, *catch_label, current);
+                        if let Some(finally_label) = finally_label {
+                            changed |= flow_into(&mut label_states, *finally_label, current);
+                        }
+                    }
+                }
+                Ir1Op::Return | Ir1Op::Throw => state = None,
+                _ => {}
+            }
+        }
+        if !changed {
+            converged = true;
+            break;
+        }
+    }
+    if !converged {
+        return BTreeMap::new();
+    }
+
+    let mut back_edges = Vec::<(usize, usize)>::new();
+    let mut reference_spans = BTreeMap::<BindingId, (usize, usize)>::new();
+    for (index, op) in body_ops.iter().enumerate() {
+        match op {
+            Ir1Op::Jump { label_id }
+            | Ir1Op::JumpIfFalsy { label_id }
+            | Ir1Op::JumpIfFalsyConsume { label_id }
+            | Ir1Op::JumpIfTruthy { label_id }
+            | Ir1Op::JumpIfNullish { label_id }
+            | Ir1Op::ForInNext {
+                done_label: label_id,
+            }
+            | Ir1Op::ForOfNext {
+                done_label: label_id,
+            } => match label_positions.get(label_id) {
+                Some(&target) if target < index => back_edges.push((target, index)),
+                Some(_) => {}
+                // A jump out of the body: no sound loop structure to reason
+                // about, so keep every local pinned.
+                None => return BTreeMap::new(),
+            },
+            Ir1Op::LoadBinding { binding_id }
+            | Ir1Op::StoreBinding { binding_id }
+            | Ir1Op::InitializeBinding { binding_id } => {
+                if index_of.contains_key(binding_id) {
+                    reference_spans
+                        .entry(*binding_id)
+                        .and_modify(|(_, last)| *last = index)
+                        .or_insert((index, index));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    reference_spans
+        .into_iter()
+        .filter(|(binding_id, _)| {
+            let index = index_of[binding_id];
+            read_before_write[index / 64] & (1 << (index % 64)) == 0
+        })
+        .map(|(binding_id, (first, mut last))| {
+            loop {
+                let mut widened = false;
+                for &(loop_head, back_edge) in &back_edges {
+                    if first < loop_head && loop_head <= last && back_edge > last {
+                        last = back_edge;
+                        widened = true;
+                    }
+                }
+                if !widened {
+                    break (binding_id, last);
+                }
+            }
+        })
+        .collect()
+}
+
+/// bd-9vouw.23: register of a register-resident function local, allocated at
+/// its first reference. A short-lived local takes the next statement register
+/// and stays in the live set (which statement-boundary rewinds never go
+/// below) until its release point; every other local pins a fresh register
+/// for the rest of the body.
+fn function_local_register(
+    binding_id: BindingId,
+    binding_registers: &mut BTreeMap<BindingId, Reg>,
+    short_lived_locals: &BTreeMap<BindingId, usize>,
+    live_registers: &mut BTreeSet<Reg>,
+    cursor: &mut Reg,
+    pinned_high: &mut Reg,
+    high_water: &mut Reg,
+) -> Reg {
+    *binding_registers.entry(binding_id).or_insert_with(|| {
+        if short_lived_locals.contains_key(&binding_id) {
+            let register = alloc_register(cursor);
+            live_registers.insert(register);
+            register
+        } else {
+            alloc_pinned_register(cursor, pinned_high, high_water)
+        }
+    })
+}
+
 /// bd-9vouw.23: lowest register a statement-boundary rewind may return to
-/// while name-status slots are live (resolved before an assignment's RHS,
-/// consumed by its put). Pinning them instead cost one register per
-/// assignment to an undeclared name for the rest of the body.
+/// while name-status slots or short-lived locals are live (a status slot is
+/// resolved before an assignment's RHS and consumed by its put). Pinning
+/// them instead cost one register per assignment to an undeclared name, or
+/// per expression temporary, for the rest of the body.
 fn live_status_register_ceiling(live: &BTreeSet<Reg>) -> Reg {
     live.last().map_or(0, |register| register.saturating_add(1))
 }

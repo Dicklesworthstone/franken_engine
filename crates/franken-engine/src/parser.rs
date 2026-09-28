@@ -10457,6 +10457,11 @@ fn try_parse_for_in_of(
 
     let binding = match parse_binding_pattern(binding_src, span, context) {
         Ok(pat) => pat,
+        // Without two top-level `;` the header can only be for-in/of, so the
+        // binding's own error (an early error such as `[...x = 1]` or strict
+        // `var arguments`) is the diagnosis; falling back reported "for
+        // statement header must have three semicolon-separated parts".
+        Err(error) if split_for_header(header).is_none() => return Err(error),
         Err(_) => return Ok(None),
     };
 

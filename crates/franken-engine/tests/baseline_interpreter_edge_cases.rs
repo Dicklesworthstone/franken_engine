@@ -727,8 +727,9 @@ fn sub_type_error() {
         ],
         vec!["hello".into()],
     );
-    let err = quickjs_execute(&m).unwrap_err();
-    assert!(matches!(err, InterpreterError::TypeError { .. }));
+    // JS semantics: "hello" converts to NaN, so "hello" - 1 = NaN
+    let result = quickjs_execute(&m).unwrap();
+    assert!(matches!(result.value, Value::Float(value) if value.inner().is_nan()));
 }
 
 #[test]

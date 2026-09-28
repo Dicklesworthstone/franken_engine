@@ -1737,3 +1737,22 @@ fn nonextensibility_preserves_secret_mutation_through_public_alias() {
         );
     }
 }
+
+/// ES2020 26.1.3 / 26.1.7: Reflect.defineProperty and
+/// Reflect.getOwnPropertyDescriptor were missing ("expected function, got
+/// undefined"). defineProperty answers whether the definition succeeded (a
+/// frozen target answers false instead of throwing); both refuse a
+/// non-object target with a TypeError. Expected line is Node v22.2.0's.
+#[test]
+fn reflect_define_property_and_get_own_property_descriptor() {
+    assert_output(
+        "const o = {}; const frozen = Object.freeze({});\n\
+         let t1; try { Reflect.getOwnPropertyDescriptor(1, 'x'); t1 = 'no'; } catch (e) { t1 = e instanceof TypeError; }\n\
+         let t2; try { Reflect.defineProperty(1, 'x', {}); t2 = 'no'; } catch (e) { t2 = e instanceof TypeError; }\n\
+         const d = Reflect.getOwnPropertyDescriptor({ a: 1 }, 'a');\n\
+         console.log([Reflect.defineProperty(o, 'b', { value: 2 }), o.b, Reflect.defineProperty(frozen, 'z', { value: 1 }), 'z' in frozen, JSON.stringify(d), Reflect.getOwnPropertyDescriptor({}, 'nope'), t1, t2, Reflect.defineProperty.length, Reflect.getOwnPropertyDescriptor.length].join(' '));",
+        &[
+            "true 2 false false {\"value\":1,\"writable\":true,\"enumerable\":true,\"configurable\":true}  true true 3 2",
+        ],
+    );
+}

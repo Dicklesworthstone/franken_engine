@@ -2928,7 +2928,10 @@ mod tests {
             assert_eq!(prepare_error, one_shot_error);
         }
 
-        let source = "var n=0; var i=0; while(i<100){ var obj={a:i}; n=n+1; i=i+1; } n;";
+        // Retained objects: the budget bounds live objects, and unreachable
+        // ones are reclaimed (bd-9vouw.57).
+        let source =
+            "var keep=[]; var n=0; var i=0; while(i<100){ keep.push({a:i}); n=n+1; i=i+1; } n;";
         let prepared = HybridRouter::prepare_eval(source).expect("prepare object loop");
         let tight_budget = EngineMemoryBudget {
             max_heap_objects: 30,

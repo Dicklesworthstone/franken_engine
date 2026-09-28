@@ -75,6 +75,39 @@ pub(super) struct AsyncGeneratorRuntime {
     pub(super) continuations: BTreeMap<u32, AsyncGeneratorContinuation>,
 }
 
+impl AsyncGeneratorObject {
+    /// Visit every value this generator's queue holds (collector roots,
+    /// bd-9vouw.57). The activation itself lives in the generator store.
+    pub(super) fn for_each_value(&self, mut visit: impl FnMut(&Value)) {
+        let Self {
+            generator_id: _,
+            phase: _,
+            requests,
+            awaited,
+            awaited_kind: _,
+            delegation: _,
+        } = self;
+        for request in requests {
+            visit(&request.argument);
+        }
+        if let Some(awaited) = awaited {
+            visit(&awaited.value);
+        }
+    }
+}
+
+impl AsyncGeneratorRuntime {
+    /// Visit every value a pending await continuation retains (collector
+    /// roots, bd-9vouw.57).
+    pub(super) fn for_each_value(&self, mut visit: impl FnMut(&Value)) {
+        for continuation in self.continuations.values() {
+            if let Some(value) = &continuation.exact_value {
+                visit(value);
+            }
+        }
+    }
+}
+
 impl InterpreterCore {
     pub(super) fn create_async_generator(
         &mut self,

@@ -3965,8 +3965,10 @@ mod tests {
         // bd-fqlfw.2.11.3: the same corpus-shaped object loop fails closed on
         // the containment default but completes once the heap-object budget is
         // raised, and the override is recorded in the receipt diagnostics.
-        const OBJECT_LOOP: &str = "var n=0; var i=0; \
-             while(i<110000){ var obj={a:i,b:i+1}; n=n+1; i=i+1; } \
+        // The loop retains every object: the budget bounds live objects, and
+        // unreachable ones are reclaimed (bd-9vouw.57).
+        const OBJECT_LOOP: &str = "var keep=[]; var n=0; var i=0; \
+             while(i<110000){ keep.push({a:i,b:i+1}); n=n+1; i=i+1; } \
              console.log(n);";
 
         let without = run_franken_engine_backend(OBJECT_LOOP, Some(2_000_000_000), None).receipt;

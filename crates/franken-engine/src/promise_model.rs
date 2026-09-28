@@ -709,6 +709,18 @@ impl PromiseStore {
         }
     }
 
+    /// Visit every value a promise record holds: the settled value or
+    /// reason. Reactions hold closure handles only. The baseline
+    /// interpreter's collector treats these values as roots (bd-9vouw.57).
+    pub(crate) fn for_each_value(&self, mut visit: impl FnMut(&JsValue)) {
+        for record in self.promises.slots.iter().flatten() {
+            match &record.state {
+                PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => visit(value),
+                PromiseState::Pending => {}
+            }
+        }
+    }
+
     /// Deterministic resident-memory estimate for every Promise-owned record,
     /// reaction, label, settled payload, and replay witness, read from the
     /// running totals (bd-9vouw.31). Unit-test builds assert it against
@@ -1556,6 +1568,18 @@ impl MicrotaskQueue {
             cursor: 0,
             enqueue_count: 0,
             witness: WitnessLog::new(),
+        }
+    }
+
+    /// Visit every value a queued microtask carries (collector roots,
+    /// bd-9vouw.57).
+    pub(crate) fn for_each_value(&self, mut visit: impl FnMut(&JsValue)) {
+        for task in self.tasks.slots.iter().flatten() {
+            match task {
+                Microtask::PromiseReaction { argument, .. } => visit(argument),
+                Microtask::PromiseRejection { reason, .. } => visit(reason),
+                Microtask::ResolveThenable { thenable, .. } => visit(thenable),
+            }
         }
     }
 

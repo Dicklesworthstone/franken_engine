@@ -75,6 +75,7 @@ use zeroize::Zeroizing;
 mod array_from;
 mod async_generator;
 mod bigint_ops;
+mod collector;
 mod inspect;
 mod json_parse;
 mod json_stringify;
@@ -85,6 +86,7 @@ mod reflect_invocation;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
+pub use collector::GcStats;
 use object_integrity::ObjectIntegrityOperation;
 use primitive_conversion::PrimitiveConversion;
 use reflect_invocation::ReflectPropertyOperation;
@@ -5712,6 +5714,150 @@ fn property_resolution_found_payload(
     payload
 }
 
+/// The interpreter heap. `ObjectId(n)` names slot `n`; the collector
+/// (bd-9vouw.57) empties the slot of an unreachable object.
+///
+/// Slot ids are never reused. A missed GC root therefore shows up as a
+/// missing object (`get` returns `None`, indexing panics and names the id),
+/// never as silent aliasing of a newer object. A reclaimed slot costs one
+/// pointer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Heap {
+    slots: Vec<Option<Box<HeapObject>>>,
+    live: usize,
+}
+
+impl Heap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of slots ever allocated: the next `ObjectId` is `len()`.
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    /// Number of objects that have not been reclaimed.
+    pub fn live_len(&self) -> usize {
+        self.live
+    }
+
+    pub fn get(&self, index: usize) -> Option<&HeapObject> {
+        self.slots.get(index)?.as_deref()
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut HeapObject> {
+        self.slots.get_mut(index)?.as_deref_mut()
+    }
+
+    pub fn push(&mut self, object: HeapObject) {
+        self.slots.push(Some(Box::new(object)));
+        self.live += 1;
+    }
+
+    /// Remove the last slot, returning its object if it was live.
+    pub fn pop(&mut self) -> Option<HeapObject> {
+        let object = self.slots.pop()??;
+        self.live -= 1;
+        Some(*object)
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.slots.len() {
+            let removed_live = self.slots[len..]
+                .iter()
+                .filter(|slot| slot.is_some())
+                .count();
+            self.slots.truncate(len);
+            self.live -= removed_live;
+        }
+    }
+
+    /// Live objects in id order (reclaimed slots are skipped).
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &HeapObject> {
+        self.slots.iter().filter_map(|slot| slot.as_deref())
+    }
+
+    /// Live objects with their slot index.
+    pub fn iter_live(&self) -> impl Iterator<Item = (usize, &HeapObject)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| slot.as_deref().map(|object| (index, object)))
+    }
+
+    pub fn is_reclaimed(&self, index: usize) -> bool {
+        matches!(self.slots.get(index), Some(None))
+    }
+
+    /// Empty slot `index` and return its object.
+    fn reclaim(&mut self, index: usize) -> Option<Box<HeapObject>> {
+        let object = self.slots.get_mut(index)?.take()?;
+        self.live -= 1;
+        Some(object)
+    }
+}
+
+impl From<Vec<HeapObject>> for Heap {
+    fn from(objects: Vec<HeapObject>) -> Self {
+        let live = objects.len();
+        Self {
+            slots: objects
+                .into_iter()
+                .map(|object| Some(Box::new(object)))
+                .collect(),
+            live,
+        }
+    }
+}
+
+/// Serializes like the `Vec<HeapObject>` it replaced: one array element per
+/// slot, with `null` for a reclaimed slot.
+impl Serialize for Heap {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.slots.iter().map(|slot| slot.as_deref()))
+    }
+}
+
+/// A heap equals the object list it holds when no slot is reclaimed.
+impl PartialEq<Vec<HeapObject>> for Heap {
+    fn eq(&self, other: &Vec<HeapObject>) -> bool {
+        self.slots.len() == other.len()
+            && self
+                .slots
+                .iter()
+                .zip(other)
+                .all(|(slot, object)| slot.as_deref() == Some(object))
+    }
+}
+
+impl std::ops::Index<usize> for Heap {
+    type Output = HeapObject;
+
+    fn index(&self, index: usize) -> &HeapObject {
+        match self.slots.get(index) {
+            Some(Some(object)) => object,
+            Some(None) => panic!("use of reclaimed heap object {index}"),
+            None => panic!("heap object {index} out of bounds ({})", self.slots.len()),
+        }
+    }
+}
+
+impl std::ops::IndexMut<usize> for Heap {
+    fn index_mut(&mut self, index: usize) -> &mut HeapObject {
+        let len = self.slots.len();
+        match self.slots.get_mut(index) {
+            Some(Some(object)) => object,
+            Some(None) => panic!("use of reclaimed heap object {index}"),
+            None => panic!("heap object {index} out of bounds ({len})"),
+        }
+    }
+}
+
 /// A heap-allocated object with string-keyed properties.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeapObject {
@@ -10008,7 +10154,7 @@ pub enum ExecutionSeed {
     },
     Materialized {
         registers: Vec<Value>,
-        heap: Vec<HeapObject>,
+        heap: Heap,
         function_prototypes: BTreeMap<(ContentHash, u32), ObjectId>,
         builtin_prototypes: BTreeMap<String, ObjectId>,
         symbol_state: RuntimeSymbolState,
@@ -11207,7 +11353,7 @@ pub struct InterpreterCore {
     /// Call stack.
     call_stack: Vec<CallFrame>,
     /// Object heap. SEED-SURFACE.
-    heap: SeedTrackedField<Vec<HeapObject>>,
+    heap: SeedTrackedField<Heap>,
     /// Approximate live non-seed memory tracked for fail-closed budget enforcement.
     /// Live execution-seed reservations are held separately in
     /// `execution_seed_reservation_ledger` and joined at every admission gate.
@@ -11731,6 +11877,8 @@ pub struct InterpreterCore {
     jit_hot_threshold: u64,
     /// Cold function eviction counter to implement decay policy.
     jit_eviction_counter: u64,
+    /// Reclaiming collector state (bd-9vouw.57).
+    gc: collector::GcState,
 }
 
 impl Drop for InterpreterCore {
@@ -12199,7 +12347,7 @@ impl InterpreterCore {
             timer_effect_authority: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             call_stack: Vec::new(),
-            heap: SeedTrackedField::new(Vec::new()),
+            heap: SeedTrackedField::new(Heap::new()),
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
             json_parse_temporary_bytes: 0,
@@ -12369,6 +12517,7 @@ impl InterpreterCore {
             jit_loop_iteration_counts: LoopIterationCounters::default(),
             jit_hot_threshold: 10_000, // Default threshold
             jit_eviction_counter: 0,
+            gc: collector::GcState::default(),
         }
     }
 
@@ -29999,7 +30148,7 @@ impl InterpreterCore {
         f(&mut self.registers.value)
     }
 
-    pub(crate) fn mutate_heap<R>(&mut self, f: impl FnOnce(&mut Vec<HeapObject>) -> R) -> R {
+    pub(crate) fn mutate_heap<R>(&mut self, f: impl FnOnce(&mut Heap) -> R) -> R {
         self.before_seed_surface_write();
         f(&mut self.heap.value)
     }
@@ -30138,7 +30287,7 @@ impl InterpreterCore {
                         validate_symbol_value(symbol_state, value)
                             .map_err(|details| InterpreterError::InternalError { details })?;
                     }
-                    for object in heap {
+                    for object in heap.iter() {
                         validate_heap_symbol_references(symbol_state, object)
                             .map_err(|details| InterpreterError::InternalError { details })?;
                     }
@@ -31554,11 +31703,11 @@ impl InterpreterCore {
                     }),
             ))
             .saturating_add(
-                u64::try_from(self.heap.len())
+                u64::try_from(self.heap.live_len())
                     .unwrap_or(u64::MAX)
                     .saturating_mul(std::mem::size_of::<CapturedHeapState>() as u64),
             )
-            .saturating_add(Self::saturating_sum(self.heap.iter().enumerate().map(
+            .saturating_add(Self::saturating_sum(self.heap.iter_live().map(
                 |(index, object)| {
                     Self::estimate_heap_object_bytes(object).saturating_add(
                         heap_label_sources
@@ -31596,8 +31745,7 @@ impl InterpreterCore {
 
         let heap: Vec<CapturedHeapState> = self
             .heap
-            .iter()
-            .enumerate()
+            .iter_live()
             .map(|(index, object)| CapturedHeapState {
                 object_id: ObjectId(index as u32),
                 object: object.clone(),
@@ -31824,17 +31972,21 @@ impl InterpreterCore {
                 .entry_module_specifier
                 .clone()
                 .unwrap_or_else(|| module.header.source_label.clone());
-            self.evaluate_cjs_ir3(module, &entry)
-                .map(|()| LabeledReturn {
-                    value: Value::Undefined,
-                    label: Label::Public,
-                })
+            self.gc_set_cjs_entry_pending(true);
+            let result = self.evaluate_cjs_ir3(module, &entry);
+            self.gc_set_cjs_entry_pending(false);
+            result.map(|()| LabeledReturn {
+                value: Value::Undefined,
+                label: Label::Public,
+            })
         } else {
             let previous_compact_tier1 = std::mem::replace(
                 &mut self.top_level_compact_tier1,
                 compact_tier1.map(|program| (Self::module_address(module), program.clone())),
             );
+            let previous_gc_depth = self.gc_arm_top_level();
             let result = self.run_loop_labeled_with_compact_tier1(module, compact_tier1);
+            self.gc_restore_safe_depth(previous_gc_depth);
             self.top_level_compact_tier1 = previous_compact_tier1;
             result
         };
@@ -38935,7 +39087,11 @@ impl InterpreterCore {
             record.cjs_module_object = Some(cjs_context.module_object);
         }
         self.active_cjs_context = Some(cjs_context.clone());
+        let gc_armed = self.gc_arm_cjs_entry(&snapshot);
         let eval_outcome = self.run_nested_module_execution(module);
+        if let Some(previous) = gc_armed {
+            self.gc_restore_safe_depth(previous);
+        }
         let finalize_outcome = if eval_outcome.is_ok() {
             self.finalize_cjs_exports(&cjs_context)
         } else {
@@ -43573,6 +43729,20 @@ impl InterpreterCore {
         compact_tier1: Option<&CompactTier1Program>,
         trampoline: &[Ir3Instruction],
     ) -> Result<LabeledReturn, InterpreterError> {
+        // The collector may run only in the top-level script's own loop; see
+        // `collector::GcState::safe_depth`.
+        self.gc_enter_run_loop();
+        let result = self.run_loop_labeled_with_trampoline_inner(module, compact_tier1, trampoline);
+        self.gc_exit_run_loop();
+        result
+    }
+
+    fn run_loop_labeled_with_trampoline_inner(
+        &mut self,
+        module: &Ir3Module,
+        compact_tier1: Option<&CompactTier1Program>,
+        trampoline: &[Ir3Instruction],
+    ) -> Result<LabeledReturn, InterpreterError> {
         // Initialize CheckpointGuard if cancellation token is provided
         let mut checkpoint_guard = if let Some(ref token) = self.config.cancellation_token {
             Some(CheckpointGuard::new(
@@ -43685,6 +43855,12 @@ impl InterpreterCore {
         checkpoint_guard: &mut Option<CheckpointGuard>,
     ) -> Result<DispatchOutcome, InterpreterError> {
         loop {
+            // Collector safe point (bd-9vouw.57): every live value is in
+            // interpreter state here, before this iteration moves anything
+            // into Rust locals.
+            if self.gc_safe_point_due() {
+                self.gc_safe_point();
+            }
             // Retire the handoff even on EOF, implicit return, or budget refusal.
             // Only this iteration's adjacent InitBinding may consume it.
             let pending_cyclic_import_binding = self.pending_cyclic_import_binding.take();
@@ -56910,7 +57086,7 @@ impl InterpreterCore {
         if !is_last {
             return;
         }
-        if let Some(object) = self.mutate_heap(Vec::pop) {
+        if let Some(object) = self.mutate_heap(Heap::pop) {
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
                 .saturating_sub(Self::estimate_heap_object_bytes(&object));
@@ -79895,7 +80071,7 @@ impl InterpreterCore {
     /// `ObjectId` slots directly via `interpreter.heap.insert(id, obj)`
     /// (map-style, on a heap that used to be pre-populated) or `heap.push(obj)`
     /// assuming a fixed starting length. `heap` is now a
-    /// `SeedTrackedField<Vec<HeapObject>>` that starts empty with no `DerefMut`,
+    /// `SeedTrackedField<Heap>` that starts empty with no `DerefMut`,
     /// so writes route through `mutate_heap`. This grows the vector with default
     /// objects up to `index` and places `object` at that slot, so
     /// `Value::Object(ObjectId(index))` resolves to it — preserving the legacy
@@ -79903,8 +80079,8 @@ impl InterpreterCore {
     #[cfg(test)]
     fn set_heap_object_at(&mut self, index: usize, object: HeapObject) {
         self.mutate_heap(|heap| {
-            if index >= heap.len() {
-                heap.resize_with(index + 1, HeapObject::default);
+            while index >= heap.len() {
+                heap.push(HeapObject::default());
             }
             heap[index] = object;
         });
@@ -81162,7 +81338,7 @@ impl InterpreterCore {
 
     fn estimate_seed_surface_active_bytes(
         registers: &[Value],
-        heap: &[HeapObject],
+        heap: &Heap,
         symbol_state: &RuntimeSymbolState,
     ) -> u64 {
         Self::saturating_sum(registers.iter().map(Self::estimate_value_bytes))
@@ -83069,8 +83245,9 @@ impl InterpreterCore {
             .saturating_sub(Self::estimate_event_listener_record_bytes(event, record));
     }
 
+    /// Live (unreclaimed) heap objects: what the heap-object budget counts.
     fn heap_object_count_u32(&self) -> u32 {
-        u32::try_from(self.heap.len()).unwrap_or(u32::MAX)
+        u32::try_from(self.heap.live_len()).unwrap_or(u32::MAX)
     }
 
     fn memory_request_exceeds_budget(&self, requested_base_bytes: u64, max_bytes: u64) -> bool {

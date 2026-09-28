@@ -88987,6 +88987,10 @@ impl InterpreterCore {
             Self::collection_prototype_method("WeakMap", key).map(Value::BuiltinFunction);
         let weakset_method =
             Self::collection_prototype_method("WeakSet", key).map(Value::BuiltinFunction);
+        // `DataView.prototype.getFloat64` etc.: the accessors instances
+        // already expose, served from the canonical prototype too.
+        let data_view_method =
+            Self::collection_prototype_method("DataView", key).map(Value::BuiltinFunction);
         if array_method.is_none()
             && string_method.is_none()
             && number_method.is_none()
@@ -88998,6 +89002,7 @@ impl InterpreterCore {
             && promise_method.is_none()
             && weakmap_method.is_none()
             && weakset_method.is_none()
+            && data_view_method.is_none()
         {
             return None;
         }
@@ -89024,6 +89029,7 @@ impl InterpreterCore {
                 Some("Promise") => return promise_method,
                 Some("WeakMap") => return weakmap_method,
                 Some("WeakSet") => return weakset_method,
+                Some("DataView") => return data_view_method,
                 _ => {}
             }
             current = self.observable_prototype_of(id);

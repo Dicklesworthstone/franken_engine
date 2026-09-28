@@ -56,6 +56,7 @@ fn try_run(source: &str, stress_interval: Option<u64>) -> Option<Run> {
         RuntimeCapability::HeapAllocate,
         RuntimeCapability::Builtin,
         RuntimeCapability::Console,
+        RuntimeCapability::Timer,
     ]
     .into_iter()
     .collect();
@@ -149,6 +150,46 @@ fn closure_garbage_loops_complete_past_the_byte_budget() {
             run.gc.reclaimed_closures >= 50_000,
             "reclaimed only {} closures: {source}",
             run.gc.reclaimed_closures
+        );
+    }
+}
+
+/// Work done after the script, in timer and promise callbacks: each callback
+/// allocates 1,000 short-lived objects, 300,000 in total (3x the budget).
+/// Collection runs between event-loop jobs.
+const EVENT_LOOP_LOOPS: &[(&str, &str)] = &[
+    (
+        "let s = 0; function step(n) { for (let j = 0; j < 1000; j++) { const o = { j }; \
+         s += o.j & 1; } if (n > 1) { setTimeout(() => step(n - 1), 0); } else { console.log(s); } } \
+         step(300);",
+        "150000",
+    ),
+    (
+        "let s = 0; let p = Promise.resolve(); for (let k = 0; k < 300; k++) { \
+         p = p.then(() => { for (let j = 0; j < 1000; j++) { const o = { j }; s += o.j & 1; } }); } \
+         p.then(() => console.log(s));",
+        "150000",
+    ),
+];
+
+#[test]
+fn event_loop_garbage_completes_past_the_object_budget() {
+    for (source, node) in EVENT_LOOP_LOOPS {
+        let run = run(source, None);
+        let result = run
+            .result
+            .as_ref()
+            .unwrap_or_else(|error| panic!("`{source}` failed: {error:?}"));
+        let printed: Vec<&str> = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(printed, vec![*node], "{source}");
+        assert!(
+            run.gc.reclaimed_objects >= 150_000,
+            "reclaimed only {} objects: {source}",
+            run.gc.reclaimed_objects
         );
     }
 }

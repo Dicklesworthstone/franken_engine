@@ -9,11 +9,16 @@
 //!   that empties the slot of every unmarked object (`Heap::reclaim`).
 //! - Slot ids are never reused. A missed root therefore surfaces as a missing
 //!   object, never as another object's identity.
-//! - Collection runs only at a safe point: the top of the dispatch loop of the
-//!   top-level script's own run loop. There, every live value sits in
-//!   interpreter state. Nested run loops (callbacks, generator bodies, isolated
-//!   calls) hold caller state in Rust locals, so no collection runs while one
-//!   is active.
+//! - Collection runs only at a safe point, where every live value sits in
+//!   interpreter state. The first safe point is the top of the dispatch loop
+//!   of the top-level script's own run loop.
+//! - The second safe point is between event-loop jobs (turns, microtasks,
+//!   nextTick callbacks) after the script, while no run loop is active. The
+//!   script's completion value, held by the caller across that phase, is
+//!   pinned.
+//! - Nested run loops (callbacks, generator bodies, isolated calls) hold
+//!   caller state in Rust locals, so no collection runs while one is active.
+//!   A single callback that allocates past the budget still fails.
 //! - Collection is also skipped while host I/O subsystems (streams, sockets,
 //!   http, child processes, URL/crypto objects) hold state. The allocation
 //!   budget then fails exactly as before.
@@ -72,6 +77,12 @@ pub(super) struct GcState {
     /// Objects referenced by state that a Rust caller holds across the armed
     /// run loop (the CommonJS entry's saved caller execution). Roots.
     pinned: Vec<ObjectId>,
+    /// Set while the event loop runs after the top-level script: collection
+    /// may run between jobs whenever no run loop is active.
+    event_loop_armed: bool,
+    /// Values a Rust caller holds across the event-loop phase (the script's
+    /// completion value). Roots.
+    pinned_values: Vec<Value>,
     /// Planted negative for the root-coverage tests: skip the registers,
     /// call frames, scope chain and realm globals.
     #[cfg(test)]
@@ -500,6 +511,32 @@ impl InterpreterCore {
     pub(super) fn gc_restore_safe_depth(&mut self, previous: Option<u32>) {
         self.gc.safe_depth = previous;
         self.gc.pinned.clear();
+    }
+
+    /// Allow collection between event-loop jobs, pinning the values the
+    /// caller holds until `gc_disarm_event_loop`.
+    pub(super) fn gc_arm_event_loop(&mut self, pinned: Option<Value>) {
+        self.gc.event_loop_armed = true;
+        self.gc.pinned_values = pinned.into_iter().collect();
+    }
+
+    pub(super) fn gc_disarm_event_loop(&mut self) {
+        self.gc.event_loop_armed = false;
+        self.gc.pinned_values.clear();
+    }
+
+    /// Safe point between event-loop jobs (turns, microtasks, nextTick
+    /// callbacks). Valid only with no run loop active: every job's state is
+    /// then in interpreter tables, and the drivers hold only counters.
+    pub(super) fn gc_event_loop_safe_point(&mut self) {
+        if self.gc.event_loop_armed
+            && self.gc.run_loop_depth == 0
+            && (self.heap.live_len() >= self.gc.trigger_objects
+                || self.estimated_memory_bytes >= self.gc.trigger_bytes
+                || self.gc.stress_interval.is_some())
+        {
+            self.gc_safe_point();
+        }
     }
 
     /// Mark the next `evaluate_cjs_ir3` as the top-level CommonJS entry.
@@ -1057,8 +1094,12 @@ impl InterpreterCore {
             }
         }
 
-        // Objects a Rust caller holds across the armed run loop.
+        // Objects and values a Rust caller holds across an armed phase.
         self.gc.pinned.iter().for_each(|id| m.object(*id));
+        self.gc
+            .pinned_values
+            .iter()
+            .for_each(|value| m.value(value));
 
         // Intrinsics.
         function_prototypes.values().for_each(|id| m.object(*id));
@@ -1266,6 +1307,57 @@ mod tests {
             core.heap.is_reclaimed(garbage.0 as usize),
             "garbage survived"
         );
+    }
+
+    /// The script's completion value is held by the caller across the
+    /// event-loop phase. 300 timer callbacks allocate 300,000 objects in
+    /// total (collections run between them) and reuse register windows, so
+    /// the pin is what keeps the completion alive.
+    #[test]
+    fn completion_value_survives_event_loop_collection() {
+        let source = "let n = 300; function tick() { for (let i = 0; i < 1000; i++) { const g = { i }; } \
+                      n = n - 1; if (n > 0) { setTimeout(tick, 0); } } setTimeout(tick, 0); \
+                      ({ v: 9 })";
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "gc-unit.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "gc-unit.js"),
+            &LoweringContext::new("gc-trace", "gc-decision", "gc-policy"),
+        )
+        .expect("lower")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+            RuntimeCapability::Timer,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "gc-unit");
+        let result = core.execute(&module).expect("execute");
+        assert!(
+            core.gc_stats().collections > 0,
+            "no event-loop collection ran"
+        );
+        let Value::Object(id) = result.value else {
+            panic!("completion is not an object: {:?}", result.value);
+        };
+        let object = core
+            .heap
+            .get(id.0 as usize)
+            .expect("completion value was reclaimed");
+        assert_eq!(object.properties.get("v"), Some(&Value::Int(9)));
     }
 
     /// Reclaimed slots cost one pointer, not a whole object.

@@ -31984,6 +31984,40 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// The entry's first-tick checkpoint and then the event loop, run
+    /// after the top-level script completed (`script_ok`) or failed.
+    fn drain_after_top_level(
+        &mut self,
+        module: &Ir3Module,
+        script_ok: bool,
+    ) -> Result<(), InterpreterError> {
+        // Writable completion callbacks occupy Node's internal stream-tick
+        // checkpoint ahead of Promise/nextTick work and Immediate macrotasks.
+        let checkpoint_error = self.drain_runtime_checkpoint(Some(module)).err();
+        if checkpoint_error
+            .as_ref()
+            .is_some_and(|error| Self::js_catchable_error_name(error).is_none())
+        {
+            return Err(checkpoint_error.expect("non-catchable checkpoint error was checked"));
+        }
+        // The end of the entry's first tick: a rejection nothing handled by
+        // now fails the program before any timer runs, as in Node.
+        if script_ok && checkpoint_error.is_none() {
+            self.raise_unhandled_rejection()?;
+        }
+
+        // Run the event loop until all pending work is complete
+        // (macrotasks like timers, with microtask draining after each).
+        let event_loop_error = self
+            .run_event_loop_until_idle_with_module(Some(module))
+            .err();
+
+        match checkpoint_error.or(event_loop_error) {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     fn run_top_level_execution(
         &mut self,
         module: &Ir3Module,
@@ -32031,30 +32065,16 @@ impl InterpreterCore {
         }
         let suspended_at_top_level_await = !self.top_level_await_resumption_contexts.is_empty();
 
-        // Writable completion callbacks occupy Node's internal stream-tick
-        // checkpoint ahead of Promise/nextTick work and Immediate macrotasks.
-        let checkpoint_error = self.drain_runtime_checkpoint(Some(module)).err();
-        if checkpoint_error
+        // The collector may run between event-loop jobs (bd-9vouw.57). The
+        // script's completion value is held in `result` across that phase.
+        let completion = result
             .as_ref()
-            .is_some_and(|error| Self::js_catchable_error_name(error).is_none())
-        {
-            return Err(checkpoint_error.expect("non-catchable checkpoint error was checked"));
-        }
-        // The end of the entry's first tick: a rejection nothing handled by
-        // now fails the program before any timer runs, as in Node.
-        if result.is_ok() && checkpoint_error.is_none() {
-            self.raise_unhandled_rejection()?;
-        }
-
-        // Run the event loop until all pending work is complete
-        // (macrotasks like timers, with microtask draining after each).
-        let event_loop_error = self
-            .run_event_loop_until_idle_with_module(Some(module))
-            .err();
-
-        if let Some(error) = checkpoint_error.or(event_loop_error) {
-            return Err(error);
-        }
+            .ok()
+            .map(|completion| completion.value.clone());
+        self.gc_arm_event_loop(completion);
+        let drained = self.drain_after_top_level(module, result.is_ok());
+        self.gc_disarm_event_loop();
+        drained?;
 
         if let Some(resumed_outcome) = self.take_top_level_await_outcome() {
             return resumed_outcome;
@@ -55696,6 +55716,8 @@ impl InterpreterCore {
                 break;
             }
 
+            // Collector safe point between event-loop turns (bd-9vouw.57).
+            self.gc_event_loop_safe_point();
             turns += 1;
 
             // Phase 1: Execute one macrotask (if ready)
@@ -56215,6 +56237,8 @@ impl InterpreterCore {
         max_drain: u32,
     ) -> Result<(), InterpreterError> {
         while *drained < max_drain {
+            // Collector safe point between nextTick callbacks (bd-9vouw.57).
+            self.gc_event_loop_safe_point();
             let previous_bytes = self.next_tick_queue_memory_bytes();
             let Some(task) = self.next_tick_queue.pop_front() else {
                 break;
@@ -56241,6 +56265,8 @@ impl InterpreterCore {
         let mut drained = 0u32;
 
         while drained < max_drain {
+            // Collector safe point between microtasks (bd-9vouw.57).
+            self.gc_event_loop_safe_point();
             // bd-8nrud: Node ordering — the next-tick queue drains completely
             // before every Promise microtask, including ticks enqueued by the
             // microtask executed on the previous iteration.

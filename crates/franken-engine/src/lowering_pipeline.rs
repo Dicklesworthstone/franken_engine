@@ -6979,6 +6979,11 @@ fn lower_switch_to_ir1(
     ops.push(Ir1Op::StoreBinding {
         binding_id: discriminant_binding,
     });
+    // The stored value is not the switch's completion value: discard it
+    // without touching script completion. Left on the lowering value stack,
+    // it disabled statement-boundary register reuse for the rest of the body
+    // (bd-9vouw.23).
+    ops.push(Ir1Op::Discard);
 
     let end_label = alloc_label(label_counter);
     let case_labels: Vec<u32> = (0..switch_stmt.cases.len())
@@ -9858,6 +9863,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             &mut fn_binding_regs,
                             &fn_short_lived_locals,
                             &mut fn_live_status_registers,
+                            &fn_value_stack,
                             &mut fn_reg,
                             &mut fn_pinned_register_high,
                             &mut fn_register_high_water,
@@ -9934,6 +9940,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut fn_binding_regs,
                         &fn_short_lived_locals,
                         &mut fn_live_status_registers,
+                        &fn_value_stack,
                         &mut fn_reg,
                         &mut fn_pinned_register_high,
                         &mut fn_register_high_water,
@@ -9984,6 +9991,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut fn_binding_regs,
                         &fn_short_lived_locals,
                         &mut fn_live_status_registers,
+                        &fn_value_stack,
                         &mut fn_reg,
                         &mut fn_pinned_register_high,
                         &mut fn_register_high_water,
@@ -30714,22 +30722,32 @@ fn short_lived_local_release_points(
 }
 
 /// bd-9vouw.23: register of a register-resident function local, allocated at
-/// its first reference. A short-lived local takes the next statement register
-/// and stays in the live set (which statement-boundary rewinds never go
-/// below) until its release point; every other local pins a fresh register
-/// for the rest of the body.
+/// its first reference. A short-lived local takes the lowest register above
+/// the pinned region that holds nothing live (not in the live set, not on the
+/// value stack) and stays in the live set, which statement-boundary rewinds
+/// never go below, until its release point. Taking the next statement
+/// register instead placed each local above its own statement's temporaries,
+/// so locals live across many statements (a `var` in an inlined `finally`
+/// copy) ratcheted the frame by a statement's width each. Every other local
+/// pins a fresh register for the rest of the body.
+#[allow(clippy::too_many_arguments)]
 fn function_local_register(
     binding_id: BindingId,
     binding_registers: &mut BTreeMap<BindingId, Reg>,
     short_lived_locals: &BTreeMap<BindingId, usize>,
     live_registers: &mut BTreeSet<Reg>,
+    value_stack: &[Reg],
     cursor: &mut Reg,
     pinned_high: &mut Reg,
     high_water: &mut Reg,
 ) -> Reg {
     *binding_registers.entry(binding_id).or_insert_with(|| {
         if short_lived_locals.contains_key(&binding_id) {
-            let register = alloc_register(cursor);
+            let register = (*pinned_high..*cursor)
+                .find(|register| {
+                    !live_registers.contains(register) && !value_stack.contains(register)
+                })
+                .unwrap_or_else(|| alloc_register(cursor));
             live_registers.insert(register);
             register
         } else {

@@ -26506,6 +26506,8 @@ pub(crate) fn reflect_member_capability(member: &str) -> Option<&'static str> {
         "setPrototypeOf" => Some("builtin:ReflectSetPrototypeOf"),
         "isExtensible" => Some("builtin:ReflectIsExtensible"),
         "preventExtensions" => Some("builtin:ReflectPreventExtensions"),
+        "defineProperty" => Some("builtin:ReflectDefineProperty"),
+        "getOwnPropertyDescriptor" => Some("builtin:ReflectGetOwnPropertyDescriptor"),
         _ => None,
     }
 }

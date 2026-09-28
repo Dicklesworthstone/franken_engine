@@ -52494,7 +52494,13 @@ impl InterpreterCore {
             return Ok(Value::BuiltinFunction(builtin));
         }
 
-        if let Some(builtin) = Self::object_prototype_method(key_text) {
+        // Object.prototype's methods only reach objects whose chain reaches
+        // Object.prototype: `Object.create(null)` dictionaries have no
+        // `toString` / `hasOwnProperty` (a key like "toString" read a builtin
+        // function), matching the `in` check's rule.
+        if self.chain_reaches_object_prototype(object_id)
+            && let Some(builtin) = Self::object_prototype_method(key_text)
+        {
             return Ok(Value::BuiltinFunction(builtin));
         }
 

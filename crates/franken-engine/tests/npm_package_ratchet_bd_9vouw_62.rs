@@ -56,8 +56,10 @@ const PACKAGES: &[Package] = &[
         file: "dayjs-1.11.13/dayjs.min.js",
         usage: "const d = m('2020-01-31T12:00:00Z'); console.log(d.valueOf(), d.add(1, 'day').toISOString(), d.isValid(), m('invalid').isValid());",
         node_output: "1580472000000 2020-02-01T12:00:00.000Z true false",
-        // The minified UMD bundle is refused by the parser.
-        expect: Expect::KnownFailure("invalid assignment target"),
+        // Parses since 6a1955fc0 (`=` in a `?:` branch); its UMD header's
+        // `globalThis` fallback is refused at lowering as ambient authority
+        // (effect runtime.global).
+        expect: Expect::KnownFailure("globalThis"),
     },
 ];
 

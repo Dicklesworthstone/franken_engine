@@ -13,8 +13,8 @@ use std::sync::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 
 use crate::baseline_interpreter::{
-    AllocKind, ChallengeToken, FunctionRef, HookAction, HookContext, InterpreterHook, ObjectRef,
-    PropertyKey, Value,
+    AllocKind, ChallengeToken, FunctionRef, HookAction, HookContext, HookPropertyKey,
+    HookPropertyKeyCompatibilityError, InterpreterHook, ObjectRef, PropertyKey, Value,
 };
 use crate::bayesian_posterior::{BayesianPosteriorUpdater, Evidence, Posterior, RiskState};
 use crate::eprocess_guardrail::{
@@ -289,6 +289,13 @@ pub enum GuardplaneOperation {
     PropertyAccess {
         key: String,
     },
+    /// A Symbol-keyed property access (`obj[Symbol.iterator]`, spread,
+    /// destructuring). Recorded by symbol identity so it never reads as a
+    /// string key (bd-9vouw.60: the string-only hook refused these and
+    /// stopped benign destructuring).
+    SymbolPropertyAccess {
+        symbol_id: u32,
+    },
     Call {
         callee_name: Option<String>,
         arg_count: usize,
@@ -305,7 +312,7 @@ pub enum GuardplaneOperation {
 impl GuardplaneOperation {
     fn capability_label(&self) -> &'static str {
         match self {
-            Self::PropertyAccess { .. } => "object.property",
+            Self::PropertyAccess { .. } | Self::SymbolPropertyAccess { .. } => "object.property",
             Self::Call { .. } => "function.call",
             Self::Allocation { kind, .. } => match kind {
                 AllocKind::Object => "alloc.object",
@@ -331,6 +338,7 @@ impl GuardplaneOperation {
                 _ if key.starts_with('_') => 200_000,
                 _ => 75_000,
             },
+            Self::SymbolPropertyAccess { .. } => 75_000,
             Self::Call {
                 callee_name,
                 arg_count,
@@ -387,7 +395,7 @@ impl GuardplaneOperation {
     /// program's ordinary work (bd-9vouw.60).
     fn rate_millionths(&self, suspicious_index: u64) -> i64 {
         let base: i64 = match self {
-            Self::PropertyAccess { .. } => 40_000_000,
+            Self::PropertyAccess { .. } | Self::SymbolPropertyAccess { .. } => 40_000_000,
             Self::Call { .. } => 65_000_000,
             Self::Allocation { .. } => 55_000_000,
             // Relative imports are ordinary; a suspicious specifier carries
@@ -402,7 +410,7 @@ impl GuardplaneOperation {
 
     fn label(&self) -> &'static str {
         match self {
-            Self::PropertyAccess { .. } => "property_access",
+            Self::PropertyAccess { .. } | Self::SymbolPropertyAccess { .. } => "property_access",
             Self::Call { .. } => "call",
             Self::Allocation { .. } => "allocation",
             Self::Import { .. } => "import",
@@ -679,8 +687,20 @@ impl GuardplaneAdapter {
         let resource_score_millionths =
             (suspicion_millionths / 2 + capability_penalty_millionths / 3).clamp(0, MILLION);
         let timing_anomaly_millionths = suspicion_millionths.clamp(0, MILLION);
+        // Only a security-relevant operation adds its suspicion to the denial
+        // channel. A quarter of ANY operation's suspicion used to land here,
+        // and closures, RegExps and `prototype` reads (300k) crossed the 5%
+        // benign denial ceiling, so benign programs were sandboxed within
+        // their first statements (bd-9vouw.60). Below the floor an
+        // operation's evidence is neutral on every channel.
+        let suspicious_denial_millionths =
+            if suspicion_millionths >= SUSPICIOUS_OPERATION_FLOOR_MILLIONTHS {
+                suspicion_millionths / 4
+            } else {
+                0
+            };
         let denial_rate_millionths =
-            (capability_penalty_millionths + suspicion_millionths / 4).clamp(0, MILLION);
+            (capability_penalty_millionths + suspicious_denial_millionths).clamp(0, MILLION);
 
         Evidence {
             extension_id: self.context.extension_id.clone(),
@@ -770,6 +790,30 @@ impl InterpreterHook for GuardplaneAdapter {
             ctx,
             GuardplaneOperation::PropertyAccess { key: key.clone() },
         )
+    }
+
+    /// Symbol keys are judged as their own operation (bd-9vouw.60): the
+    /// default adapter refused them for this string-only hook, which failed
+    /// every sandboxed program that spreads, destructures or iterates. A
+    /// non-well-formed string key still takes the default fail-closed path.
+    fn pre_property_access_typed(
+        &self,
+        ctx: &HookContext,
+        target: &ObjectRef,
+        key: &HookPropertyKey,
+    ) -> Result<HookAction, HookPropertyKeyCompatibilityError> {
+        match key {
+            HookPropertyKey::Symbol(symbol) => Ok(self.evaluate_operation(
+                ctx,
+                GuardplaneOperation::SymbolPropertyAccess {
+                    symbol_id: symbol.0,
+                },
+            )),
+            HookPropertyKey::String(_) => {
+                let legacy_key = key.to_legacy_property_key()?;
+                Ok(self.pre_property_access(ctx, target, &legacy_key))
+            }
+        }
     }
 
     fn pre_call(&self, ctx: &HookContext, callee: &FunctionRef, args: &[Value]) -> HookAction {
@@ -1329,6 +1373,40 @@ mod tests {
             }
         }
         assert_eq!(adapter.summary().decision_count, 200 * 11);
+    }
+
+    #[test]
+    fn symbol_keyed_access_is_judged_not_refused() {
+        // The string-only default adapter refused Symbol keys, which failed
+        // every sandboxed spread or destructuring. The guardplane judges them
+        // as ordinary property reads and records the symbol identity.
+        let adapter = agent_sandbox_adapter();
+        let action = adapter
+            .pre_property_access_typed(
+                &test_hook_context(1),
+                &ObjectId(3),
+                &HookPropertyKey::Symbol(crate::object_model::SymbolId(7)),
+            )
+            .expect("a Symbol key is judged, not refused");
+        assert_eq!(action, HookAction::Allow);
+        assert_eq!(
+            adapter.decision_records()[0].operation,
+            GuardplaneOperation::SymbolPropertyAccess { symbol_id: 7 }
+        );
+        // A string key still takes the string path.
+        adapter
+            .pre_property_access_typed(
+                &test_hook_context(2),
+                &ObjectId(3),
+                &HookPropertyKey::String(crate::js_string::JsString::from("__proto__")),
+            )
+            .expect("a well-formed string key is judged");
+        assert_eq!(
+            adapter.decision_records()[1].operation,
+            GuardplaneOperation::PropertyAccess {
+                key: "__proto__".to_string()
+            }
+        );
     }
 
     #[test]

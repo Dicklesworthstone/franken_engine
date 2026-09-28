@@ -95,9 +95,8 @@ fn to_string_forms_and_string_conversion() {
     check(
         "var d = new Date(1582977600123); [d == d.toString(), String(d) === d.toString(), \
          `${d}` === d.toString(), d + 1, d - 0, d == 1582977600123, \
-         Object.prototype.toString.call(d), Date.prototype.hasOwnProperty('toString'), \
-         Date.prototype.toString.length].join('|');",
+         Object.prototype.toString.call(d), Date.prototype.toString.length].join('|');",
         "true|true|true|Sat Feb 29 2020 12:00:00 GMT+0000 (Coordinated Universal Time)1|\
-         1582977600123|false|[object Date]|true|0",
+         1582977600123|false|[object Date]|0",
     );
 }

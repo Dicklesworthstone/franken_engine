@@ -69,3 +69,29 @@ fn a_real_own_property_still_wins_over_the_virtual_builtin() {
                   r + ' ' + [1, 2].includes(2);";
     assert_eq!(eval(source), "7 false true includes true");
 }
+
+/// ES2020 20.2.1 / 17: Math's value properties exist (E, LN2, LN10, LOG2E,
+/// LOG10E, SQRT1_2 and SQRT2 were undefined) and are read-only; the function
+/// members of Math, JSON, Promise and Date are non-enumerable, so
+/// `Object.keys(Math)` is empty (it listed 31 names) and `for...in` visits
+/// nothing. A sloppy write to Math.PI is ignored; a strict one throws.
+#[test]
+fn namespace_members_have_builtin_attributes_and_math_has_its_constants() {
+    let source = r#"const d = (o, k) => { const x = Object.getOwnPropertyDescriptor(o, k); return x === undefined ? 'none' : [typeof x.value, x.writable, x.enumerable, x.configurable].join(':'); };
+let visited = 0; for (const k in Math) visited++;
+const r = [Math.E, Math.LN2, Math.LN10, Math.LOG2E, Math.LOG10E, Math.SQRT1_2, Math.SQRT2, Math.PI].join(',') + ' ' +
+  [d(Math, 'PI'), d(Math, 'SQRT2'), d(Math, 'max'), d(JSON, 'parse'), d(Promise, 'all'), d(Date, 'now'),
+   Object.keys(Math).length, Object.keys(JSON).length, Object.keys(Promise).length, Object.keys(Date).length, visited,
+   JSON.stringify(Math), Math.max(1, 2), JSON.parse('[1]')[0]].join(' ');
+Math.PI = 3;
+let strict; try { (function () { 'use strict'; Math.E = 1; })(); strict = 'no throw'; } catch (e) { strict = e instanceof TypeError; }
+r + ' ' + Math.PI + ' ' + strict + ' ' + Math.E;"#;
+    assert_eq!(
+        eval(source),
+        "2.718281828459045,0.6931471805599453,2.302585092994046,1.4426950408889634,\
+         0.4342944819032518,0.7071067811865476,1.4142135623730951,3.141592653589793 \
+         number:false:false:false number:false:false:false function:true:false:true \
+         function:true:false:true function:true:false:true function:true:false:true 0 0 0 0 0 {} 2 1 \
+         3.141592653589793 true 2.718281828459045"
+    );
+}

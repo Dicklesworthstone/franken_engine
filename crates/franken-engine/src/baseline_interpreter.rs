@@ -3212,6 +3212,12 @@ pub enum BuiltinFunctionKind {
     /// BigUint64); the method name travels in `module_specifier` (one of
     /// [`DATA_VIEW_METHODS`]). Append only.
     DataViewMethod,
+    /// `RegExp.prototype.toString` (ES2020 21.2.5.14). Append only.
+    RegExpPrototypeToString,
+    /// `%TypedArray%.prototype` map / filter / reverse / sort (ES2020
+    /// 22.2.3); the method name travels in `module_specifier` (one of
+    /// [`TYPED_ARRAY_METHODS`]). Append only.
+    TypedArrayMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4883,7 +4889,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::DateParse => "parse",
             BuiltinFunctionKind::TimersPromisesIntervalNext => "next",
             BuiltinFunctionKind::TimersPromisesIntervalReturn => "return",
-            BuiltinFunctionKind::FunctionPrototypeToString => "toString",
+            BuiltinFunctionKind::FunctionPrototypeToString
+            | BuiltinFunctionKind::RegExpPrototypeToString => "toString",
             BuiltinFunctionKind::WeakSetMethod => ["add", "has", "delete"]
                 .iter()
                 .copied()
@@ -4894,6 +4901,11 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or("weakMapMethod"),
+            BuiltinFunctionKind::TypedArrayMethod => TYPED_ARRAY_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("typedArrayMethod"),
             BuiltinFunctionKind::DataViewMethod => DATA_VIEW_METHODS
                 .iter()
                 .copied()
@@ -5067,7 +5079,8 @@ impl BuiltinFunction {
             | K::TypedArraySet
             | K::TypedArraySlice
             | K::TypedArraySubarray
-            | K::TypedArrayValues => "TypedArray.prototype",
+            | K::TypedArrayValues
+            | K::TypedArrayMethod => "TypedArray.prototype",
             K::DataViewGetInt32
             | K::DataViewGetUint32
             | K::DataViewGetUint8
@@ -5084,7 +5097,9 @@ impl BuiltinFunction {
             | K::FunctionPrototypeBind
             | K::FunctionPrototypeCall
             | K::FunctionPrototypeToString => "Function.prototype",
-            K::RegExpPrototypeExec | K::RegExpTest => "RegExp.prototype",
+            K::RegExpPrototypeExec | K::RegExpTest | K::RegExpPrototypeToString => {
+                "RegExp.prototype"
+            }
             K::DateNow | K::DateParse | K::DateUtc => "Date",
             K::DateGetTime | K::DatePrototypeMethod => "Date.prototype",
             K::SymbolPrototypeToString => "Symbol.prototype",
@@ -5853,6 +5868,14 @@ enum DataViewIntegerKind {
     BigUint64,
 }
 
+/// `%TypedArray%.prototype` methods served by
+/// [`BuiltinFunctionKind::TypedArrayMethod`]: the ones that must build a
+/// typed array of the receiver's kind or reorder its elements in place. The
+/// read-only and callback methods (join, indexOf, forEach, reduce, ...) are
+/// the generic `Array.prototype` builtins, which read typed arrays through
+/// `array_like_length` / `array_index_value`.
+const TYPED_ARRAY_METHODS: [&str; 4] = ["map", "filter", "reverse", "sort"];
+
 /// DataView accessors served by [`BuiltinFunctionKind::DataViewMethod`].
 const DATA_VIEW_METHODS: [&str; 14] = [
     "getInt8",
@@ -6337,6 +6360,14 @@ const FUNCTION_NAME_LENGTH_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
     writable: false,
     enumerable: false,
     configurable: true,
+};
+
+/// Not writable, not enumerable, not configurable: the value properties of
+/// the builtin namespaces and constructors (`Math.PI`, ES2020 20.2.1).
+const READ_ONLY_VALUE_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
+    writable: false,
+    enumerable: false,
+    configurable: false,
 };
 
 /// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3).
@@ -31109,7 +31140,12 @@ impl InterpreterCore {
                 .module_specifier
                 .0
                 .as_deref()
-                .is_some_and(|name| name.starts_with("set")));
+                .is_some_and(|name| name.starts_with("set")))
+            || (builtin.kind == Kind::TypedArrayMethod
+                && matches!(
+                    builtin.module_specifier.0.as_deref(),
+                    Some("reverse" | "sort")
+                ));
         if mutates_receiver && let Value::Object(object_id) = receiver {
             self.join_binary_storage_label(*object_id, label)?;
         }
@@ -32995,13 +33031,14 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::promise_any()),
             ),
         ])?;
+        self.mark_builtin_members_non_enumerable(properties)?;
         Ok(Value::BuiltinFunction(
             BuiltinFunction::promise_constructor(properties),
         ))
     }
 
     fn alloc_math_global(&mut self) -> Result<Value, InterpreterError> {
-        Ok(Value::Object(self.alloc_object_with_properties(&[
+        let math = self.alloc_object_with_properties(&[
             (
                 "abs",
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAbs)),
@@ -33122,8 +33159,68 @@ impl InterpreterCore {
                 "atanh",
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAtanh)),
             ),
-            ("PI", Value::Float(Float64::new(std::f64::consts::PI))),
-        ])?))
+        ])?;
+        self.mark_builtin_members_non_enumerable(math)?;
+        // ES2020 20.2.1 value properties.
+        for (name, value) in [
+            ("E", std::f64::consts::E),
+            ("LN10", std::f64::consts::LN_10),
+            ("LN2", std::f64::consts::LN_2),
+            ("LOG10E", std::f64::consts::LOG10_E),
+            ("LOG2E", std::f64::consts::LOG2_E),
+            ("PI", std::f64::consts::PI),
+            ("SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
+            ("SQRT2", std::f64::consts::SQRT_2),
+        ] {
+            self.set_object_property(math, name.to_string(), Value::Float(Float64::new(value)))?;
+            self.set_own_property_attributes(
+                math,
+                &RuntimePropertyKey::String(JsString::from(name)),
+                READ_ONLY_VALUE_ATTRIBUTES,
+            )?;
+        }
+        self.set_object_runtime_property(
+            math,
+            RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+            Value::str("Math"),
+        )?;
+        self.set_own_property_attributes(
+            math,
+            &RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+            },
+        )?;
+        Ok(Value::Object(math))
+    }
+
+    /// The function-valued members of a builtin namespace or constructor
+    /// (`Math.max`, `JSON.parse`, `Promise.all`, `Date.now`) are
+    /// { writable, !enumerable, configurable } (ES2020 17). Created by
+    /// ordinary assignment they were enumerable, so `Object.keys(Math)` listed
+    /// 31 names and `for (k in Math)` visited them (Node: none).
+    fn mark_builtin_members_non_enumerable(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let keys: Vec<JsString> = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .properties
+            .keys()
+            .map(|key| JsString::from(key.as_str()))
+            .collect();
+        for key in keys {
+            self.set_own_property_attributes(
+                object_id,
+                &RuntimePropertyKey::String(key),
+                NON_ENUMERABLE_DATA_ATTRIBUTES,
+            )?;
+        }
+        Ok(())
     }
 
     fn alloc_date_global(&mut self) -> Result<Value, InterpreterError> {
@@ -33141,6 +33238,7 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateParse)),
             ),
         ])?;
+        self.mark_builtin_members_non_enumerable(properties)?;
         Ok(Value::BuiltinFunction(BuiltinFunction::date_constructor(
             properties,
         )))
@@ -33501,6 +33599,21 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonStringify")),
             ),
         ])?;
+        self.mark_builtin_members_non_enumerable(json)?;
+        self.set_object_runtime_property(
+            json,
+            RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+            Value::str("JSON"),
+        )?;
+        self.set_own_property_attributes(
+            json,
+            &RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+            },
+        )?;
         self.inject_runtime_global_binding("JSON", Value::Object(json))?;
         // `Reflect` as a first-class namespace object, like `JSON`: direct
         // `Reflect.get(o, k)` calls stay intercepted at lowering, and the
@@ -36135,6 +36248,16 @@ impl InterpreterCore {
             BuiltinFunctionKind::RegExpPrototypeExec => {
                 let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.regexp_prototype_exec(receiver.unwrap_or(Value::Undefined), &input)
+            }
+            BuiltinFunctionKind::RegExpPrototypeToString => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                match self.regexp_source_flags_from_value(&receiver) {
+                    Some((source, flags)) => Ok(Value::str(Self::regexp_display(&source, &flags))),
+                    None => Err(InterpreterError::TypeError {
+                        expected: "RegExp receiver for RegExp.prototype.toString".to_string(),
+                        got: receiver.type_name().to_string(),
+                    }),
+                }
             }
             BuiltinFunctionKind::WeakMapMethod => {
                 let method = builtin
@@ -38974,6 +39097,15 @@ impl InterpreterCore {
                 args,
                 DataViewIntegerKind::Uint32,
             ),
+            BuiltinFunctionKind::TypedArrayMethod => {
+                let method = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.typed_array_method(module, &method, receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::DataViewMethod => {
                 let name = builtin.module_specifier.0.as_deref().unwrap_or_default();
                 let Some((kind, setter)) = DataViewIntegerKind::from_method_name(name) else {
@@ -51697,6 +51829,14 @@ impl InterpreterCore {
         }
     }
 
+    /// `/source/flags` (ES2020 21.2.5.14); an empty pattern renders as
+    /// `(?:)` so the result is not a `//` comment (21.2.3.2.4
+    /// EscapeRegExpPattern).
+    fn regexp_display(source: &str, flags: &str) -> String {
+        let source = if source.is_empty() { "(?:)" } else { source };
+        format!("/{source}/{flags}")
+    }
+
     fn regexp_source_flags_from_object(&self, object_id: ObjectId) -> Option<(String, String)> {
         let object = self.heap.get(object_id.0 as usize)?;
         if !matches!(
@@ -53135,6 +53275,9 @@ impl InterpreterCore {
             ("RegExp", "exec") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::RegExpPrototypeExec,
             )),
+            ("RegExp", "toString") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::RegExpPrototypeToString,
+            )),
             ("WeakSet", method @ ("add" | "has" | "delete")) => Some(BuiltinFunction {
                 kind: BuiltinFunctionKind::WeakSetMethod,
                 module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
@@ -53175,10 +53318,20 @@ impl InterpreterCore {
             "entries" => Some(BuiltinFunction::typed_array_entries()),
             "keys" => Some(BuiltinFunction::typed_array_keys()),
             "values" => Some(BuiltinFunction::typed_array_values()),
-            "map" | "filter" | "reduce" | "reduceRight" | "forEach" | "find" | "findIndex"
-            | "includes" | "indexOf" | "lastIndexOf" | "reverse" | "sort" | "join" | "toString" => {
-                Some(BuiltinFunction::typed_array_unsupported_method())
-            }
+            method if TYPED_ARRAY_METHODS.contains(&method) => Some(BuiltinFunction {
+                kind: BuiltinFunctionKind::TypedArrayMethod,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                iterator_handle: None,
+                bound_object: None,
+            }),
+            // ES2020 22.2.3: these behave as their Array.prototype namesakes
+            // over the typed array's elements (%TypedArray%.prototype.toString
+            // is Array.prototype.toString itself). Every one of them used to
+            // throw "unsupported TypedArray method".
+            "join" | "toString" | "indexOf" | "lastIndexOf" | "includes" | "at" | "forEach"
+            | "reduce" | "reduceRight" | "find" | "findIndex" | "findLast" | "findLastIndex"
+            | "some" | "every" => Self::array_prototype_method(key),
+            "toLocaleString" => Some(BuiltinFunction::typed_array_unsupported_method()),
             _ => None,
         }
     }
@@ -53310,10 +53463,37 @@ impl InterpreterCore {
         let Value::Object(object_id) = receiver else {
             return Value::str(Self::value_to_object_to_string_tag(receiver));
         };
+        if let Some(tag) = self.data_to_string_tag(*object_id) {
+            return Value::str(format!("[object {tag}]"));
+        }
         Value::str(format!(
             "[object {}]",
             self.object_to_string_tag(*object_id)
         ))
+    }
+
+    /// ES2020 19.1.3.6 steps 15-16: a String-valued @@toStringTag found on
+    /// the object or its prototype chain replaces the builtinTag (`Math`,
+    /// `JSON`, transpiled ES modules' `Symbol.toStringTag: 'Module'`, a
+    /// class's own `static [Symbol.toStringTag] = ...`). It was ignored, so
+    /// `String(Math)` was "[object Object]". Only data properties are read:
+    /// an accessor would need a guest call, and keeps the builtinTag.
+    fn data_to_string_tag(&self, object_id: ObjectId) -> Option<String> {
+        let to_string_tag = core_symbol_id(WellKnownSymbol::ToStringTag.id());
+        let mut current = Some(object_id);
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let id = current?;
+            let object = self.heap.get(id.0 as usize)?;
+            match object.properties.baseline_symbol_property(to_string_tag) {
+                Some(BaselineSymbolProperty::Data(Value::Str(tag))) => {
+                    return Some(tag.to_string());
+                }
+                Some(_) => return None,
+                None => {}
+            }
+            current = self.observable_prototype_of(id);
+        }
+        None
     }
 
     /// ES2020 19.1.3.6: the builtinTag of an object from its internal slots
@@ -53324,8 +53504,9 @@ impl InterpreterCore {
     /// `Object.prototype.toString.call(d) === '[object Date]'` failed and
     /// isPlainObject-style checks accepted Dates and Maps. Error objects have
     /// no [[ErrorData]] brand here, so an Error is an object whose prototype
-    /// chain reaches a built-in Error prototype. Not modelled: a guest-defined
-    /// @@toStringTag getter, Arguments, JSON and Math.
+    /// chain reaches a built-in Error prototype. A data @@toStringTag takes
+    /// precedence ([`Self::data_to_string_tag`]). Not modelled: a guest-defined
+    /// @@toStringTag getter and Arguments.
     fn object_to_string_tag(&self, object_id: ObjectId) -> &'static str {
         let Some(object) = self.heap.get(object_id.0 as usize) else {
             return "Object";
@@ -59414,6 +59595,111 @@ impl InterpreterCore {
             })??;
         }
         Ok(Value::Object(target_id))
+    }
+
+    /// ES2020 22.2.3.19 map / 22.2.3.9 filter: a new typed array of the
+    /// receiver's kind holding the callback results (map) or the elements the
+    /// callback accepts (filter); the callback sees (element, index, typed
+    /// array). 22.2.3.22 reverse and 22.2.3.26 sort reorder the elements in
+    /// place and return the receiver. Without a comparator, sort orders
+    /// numerically (BigInts by value, -0 before +0, NaN last), not by the
+    /// string order Array.prototype.sort uses; a comparator runs over a copy
+    /// that is written back, so an abrupt comparator leaves the array intact.
+    fn typed_array_method(
+        &mut self,
+        module: &Ir3Module,
+        method: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (target_id, view) = self.typed_array_receiver_view(receiver, method)?;
+        let values = self.typed_array_values_in_range(&view, 0, view.length)?;
+        let reordered = match method {
+            "map" | "filter" => {
+                let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                if !callback.is_callable() {
+                    return Err(InterpreterError::TypeError {
+                        expected: format!("callable callback for TypedArray.prototype.{method}"),
+                        got: callback.type_name().to_string(),
+                    });
+                }
+                let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let mut results = Vec::with_capacity(values.len());
+                for (index, element) in values.into_iter().enumerate() {
+                    let result = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element.clone(),
+                        index,
+                        target_id,
+                    )?;
+                    if method == "map" {
+                        results.push(result);
+                    } else if result.is_truthy() {
+                        results.push(element);
+                    }
+                }
+                let created = self.alloc_typed_array_from_values(view.kind, &results)?;
+                return Ok(Value::Object(created));
+            }
+            "reverse" => {
+                let mut values = values;
+                values.reverse();
+                values
+            }
+            "sort" => {
+                let comparator = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                if matches!(comparator, Value::Undefined) {
+                    let mut values = values;
+                    values.sort_by(Self::typed_array_default_order);
+                    values
+                } else if comparator.is_callable() {
+                    self.merge_sort_with_comparator(module, &comparator, values)?
+                } else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "comparator function or undefined for TypedArray.prototype.sort"
+                            .to_string(),
+                        got: comparator.type_name().to_string(),
+                    });
+                }
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "TypedArray.prototype method".to_string(),
+                    got: other.to_string(),
+                });
+            }
+        };
+        self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
+            for (index, value) in reordered.iter().enumerate() {
+                Self::write_typed_array_element_bytes_at_offset(
+                    view.kind,
+                    view.byte_offset,
+                    bytes,
+                    index,
+                    value,
+                )?;
+            }
+            Ok(())
+        })??;
+        Ok(Value::Object(target_id))
+    }
+
+    /// ES2020 22.2.3.26 step 2 (TypedArray SortCompare without a comparator).
+    fn typed_array_default_order(left: &Value, right: &Value) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        if let (Value::BigInt(x), Value::BigInt(y)) = (left, right) {
+            return bigint_ops::compare(x, y);
+        }
+        let number = |value: &Value| Self::coerce_to_float(value).unwrap_or(f64::NAN);
+        let (x, y) = (number(left), number(right));
+        match (x.is_nan(), y.is_nan()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => x.total_cmp(&y),
+        }
     }
 
     fn typed_array_copy_within(
@@ -81882,6 +82168,24 @@ impl InterpreterCore {
                 return joined;
             }
         }
+        // Any other typed array converts through %TypedArray%.prototype.toString,
+        // i.e. Array.prototype.join of its elements.
+        if let Some(view) = self
+            .heap
+            .get(id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            && let Ok(values) = self.typed_array_values_in_range(view, 0, view.length)
+        {
+            return values
+                .iter()
+                .map(|value| self.value_to_string(value))
+                .collect::<Vec<_>>()
+                .join(",");
+        }
+        // A RegExp converts through RegExp.prototype.toString.
+        if let Some((source, flags)) = self.regexp_source_flags_from_object(id) {
+            return Self::regexp_display(&source, &flags);
+        }
         // A Date converts through Date.prototype.toString: its
         // @@toPrimitive treats the "default" hint as "string".
         if let Some(object) = self.heap.get(id.0 as usize)
@@ -81894,8 +82198,14 @@ impl InterpreterCore {
             };
             return date_math::to_date_string(t);
         }
-        self.error_object_to_string(id)
-            .unwrap_or_else(|| "[object Object]".to_string())
+        // Everything else converts through Object.prototype.toString: the
+        // builtin or @@toStringTag tag (`'' + new Map()` is "[object Map]").
+        self.error_object_to_string(id).unwrap_or_else(|| {
+            match self.object_prototype_to_string_value(&Value::Object(id)) {
+                Value::Str(text) => text.to_string(),
+                _ => "[object Object]".to_string(),
+            }
+        })
     }
 
     /// ES2020 23.1.3.13 (join) / 23.1.3.30 (toString) element stringification:

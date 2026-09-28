@@ -6,8 +6,13 @@
 //! isPlainObject-style checks accept Dates and Maps. Expected string is Node
 //! v22.2.0's output.
 //!
-//! No-claim: guest-defined @@toStringTag getters, Arguments, JSON and Math
-//! still answer "[object Object]".
+//! A String-valued data @@toStringTag on the object or its prototype chain
+//! replaces the builtinTag (Math, JSON, transpiled modules' 'Module'), and the
+//! engine's own string conversion of an object (`+`, templates, join) goes
+//! through the same tag, or RegExp.prototype.toString for a RegExp.
+//!
+//! No-claim: guest-defined @@toStringTag getters and Arguments still answer
+//! "[object Object]".
 
 use frankenengine_engine::HybridRouter;
 
@@ -29,5 +34,47 @@ fn builtin_objects_report_their_tags() {
          [object Error] [object Error] [object Error] [object Map] [object Uint8Array] \
          [object Float64Array] [object ArrayBuffer] [object DataView] [object Object] \
          [object Array] [object Object] [object Object]"
+    );
+}
+
+#[test]
+fn data_to_string_tags_replace_the_builtin_tag() {
+    let source = r#"const t = (x) => Object.prototype.toString.call(x);
+const mod = {}; Object.defineProperty(mod, Symbol.toStringTag, { value: 'Module' });
+const inherit = Object.create(mod);
+const own = { [Symbol.toStringTag]: 'Own' };
+const nonString = { [Symbol.toStringTag]: 42 };
+const d = Object.getOwnPropertyDescriptor(Math, Symbol.toStringTag);
+[t(Math), t(JSON), String(Math), `${JSON}`, t(mod), t(inherit), t(own), t(nonString), t([]), t(new Map()),
+  `${own}`, own + '', d.value, d.writable, d.enumerable, d.configurable].join(' ');"#;
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "[object Math] [object JSON] [object Math] [object JSON] [object Module] [object Module] \
+         [object Own] [object Object] [object Array] [object Map] [object Own] [object Own] Math \
+         false false true"
+    );
+}
+
+/// RegExp.prototype.toString (ES2020 21.2.5.14) did not exist, so a RegExp
+/// printed "[object RegExp]" through String() and "[object Object]" through
+/// `+`; Maps, Sets and buffers converted to "[object Object]" through `+`,
+/// templates and join.
+#[test]
+fn engine_string_conversion_uses_regexp_to_string_and_tags() {
+    let source = r#"const re = /a+b/gi;
+[re.toString(), String(re), '' + re, `${/x\/y/m}`, new RegExp('').toString(), [/q/y].join(), RegExp.prototype.toString.call(/z/),
+  '' + new Map(), `${new Set()}`, String(new WeakMap()), '' + new ArrayBuffer(2), '' + new DataView(new ArrayBuffer(1)), [new Map()].join(), ({}) + '', typeof RegExp.prototype.toString].join(' ');"#;
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "/a+b/gi /a+b/gi /a+b/gi /x\\/y/m /(?:)/ /q/y /z/ [object Map] [object Set] [object WeakMap] \
+         [object ArrayBuffer] [object DataView] [object Map] [object Object] function"
     );
 }

@@ -38286,29 +38286,20 @@ impl InterpreterCore {
             // normal property walk, so it is not a method here.
             BuiltinFunctionKind::MapSet => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(map_id) = receiver else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Map receiver for Map.prototype.set".to_string(),
-                        got: receiver.type_name().to_string(),
-                    });
-                };
+                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "set")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 self.map_collection_set(map_id, key, value)
             }
             BuiltinFunctionKind::MapGet => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(map_id) = receiver else {
-                    return Ok(Value::Undefined);
-                };
+                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "get")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(self.collection_get(map_id, "Map", "__entries", &key))
             }
             BuiltinFunctionKind::MapHas => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(map_id) = receiver else {
-                    return Ok(Value::Bool(false));
-                };
+                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "has")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_has(
                     map_id,
@@ -38319,9 +38310,7 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::MapDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(map_id) = receiver else {
-                    return Ok(Value::Bool(false));
-                };
+                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "delete")?;
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_delete(
                     map_id,
@@ -38332,20 +38321,13 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::SetAdd => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(set_id) = receiver else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "Set receiver for Set.prototype.add".to_string(),
-                        got: receiver.type_name().to_string(),
-                    });
-                };
+                let set_id = self.collection_receiver(&receiver, "Set", "__values", "add")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.set_collection_add(set_id, value)
             }
             BuiltinFunctionKind::SetHas => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(set_id) = receiver else {
-                    return Ok(Value::Bool(false));
-                };
+                let set_id = self.collection_receiver(&receiver, "Set", "__values", "has")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(
                     self.collection_has(set_id, "Set", "__values", &value),
@@ -38353,9 +38335,7 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::SetDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(set_id) = receiver else {
-                    return Ok(Value::Bool(false));
-                };
+                let set_id = self.collection_receiver(&receiver, "Set", "__values", "delete")?;
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 Ok(Value::Bool(self.collection_delete(
                     set_id, "Set", "__values", &value,
@@ -38363,16 +38343,12 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::MapClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(map_id) = receiver else {
-                    return Ok(Value::Undefined);
-                };
+                let map_id = self.collection_receiver(&receiver, "Map", "__entries", "clear")?;
                 self.collection_clear(map_id, "Map", "__entries")
             }
             BuiltinFunctionKind::SetClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(set_id) = receiver else {
-                    return Ok(Value::Undefined);
-                };
+                let set_id = self.collection_receiver(&receiver, "Set", "__values", "clear")?;
                 self.collection_clear(set_id, "Set", "__values")
             }
             BuiltinFunctionKind::PromiseThenFinally | BuiltinFunctionKind::PromiseCatchFinally => {
@@ -53992,6 +53968,33 @@ impl InterpreterCore {
         match obj.properties.get(storage_prop) {
             Some(Value::Object(id)) => Some(*id),
             _ => None,
+        }
+    }
+
+    /// ES2020 23.1.3 / 23.2.3: every Map and Set method requires a receiver
+    /// with the matching [[MapData]] / [[SetData]] slot and throws a TypeError
+    /// otherwise. `has`/`get`/`delete`/`clear` used to answer `false` or
+    /// `undefined` for any other receiver, and `set`/`add` silently did
+    /// nothing on a plain object.
+    fn collection_receiver(
+        &self,
+        receiver: &Value,
+        type_tag: &str,
+        storage_prop: &str,
+        method: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        match receiver {
+            Value::Object(id)
+                if self
+                    .collection_storage_id(*id, type_tag, storage_prop)
+                    .is_some() =>
+            {
+                Ok(*id)
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: format!("{type_tag} receiver for {type_tag}.prototype.{method}"),
+                got: other.type_name().to_string(),
+            }),
         }
     }
 
@@ -75115,12 +75118,18 @@ impl InterpreterCore {
             // Object methods
             "builtin:ObjectKeys" => {
                 // Object.keys implementation - returns array of object's own property names
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start)?;
+                // ES2020 19.1.2: ToObject(O) throws for undefined and null
+                // (a missing argument is undefined).
+                let obj_val = if args.count == 0 {
+                    Value::Undefined
+                } else {
+                    self.read_reg(args.start)?
+                };
                 match obj_val {
+                    Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                        expected: "object-coercible argument for Object.keys".to_string(),
+                        got: obj_val.type_name().to_string(),
+                    }),
                     Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
                         // bd-9trje: a Proxy receiver must surface keys through the
                         // ownKeys trap and per-key getOwnPropertyDescriptor trap.
@@ -75177,12 +75186,18 @@ impl InterpreterCore {
             }
             "builtin:ObjectValues" => {
                 // Object.values implementation - returns array of object's own property values
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start)?;
+                // ES2020 19.1.2: ToObject(O) throws for undefined and null
+                // (a missing argument is undefined).
+                let obj_val = if args.count == 0 {
+                    Value::Undefined
+                } else {
+                    self.read_reg(args.start)?
+                };
                 match obj_val {
+                    Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                        expected: "object-coercible argument for Object.values".to_string(),
+                        got: obj_val.type_name().to_string(),
+                    }),
                     Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
                         // bd-9trje: read each enumerable Proxy key's value through
                         // the get trap, in ownKeys-trap order.
@@ -75226,12 +75241,18 @@ impl InterpreterCore {
             }
             "builtin:ObjectEntries" => {
                 // Object.entries implementation - returns array of [key, value] pairs
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start)?;
+                // ES2020 19.1.2: ToObject(O) throws for undefined and null
+                // (a missing argument is undefined).
+                let obj_val = if args.count == 0 {
+                    Value::Undefined
+                } else {
+                    self.read_reg(args.start)?
+                };
                 match obj_val {
+                    Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                        expected: "object-coercible argument for Object.entries".to_string(),
+                        got: obj_val.type_name().to_string(),
+                    }),
                     Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
                         // bd-9trje: [key, value] pairs for each enumerable Proxy key,
                         // key order from the ownKeys trap, values from the get trap.
@@ -75293,13 +75314,21 @@ impl InterpreterCore {
             }
             "builtin:ObjectAssign" => {
                 // Object.assign implementation - copies properties from source objects to target
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let target_val = self.read_reg(args.start)?;
+                // ES2020 19.1.2.1: ToObject(target) throws for undefined and
+                // null (a missing target is undefined).
+                let target_val = if args.count == 0 {
+                    Value::Undefined
+                } else {
+                    self.read_reg(args.start)?
+                };
                 let target_obj_id = match target_val {
                     Value::Object(obj_id) => obj_id,
+                    Value::Undefined | Value::Null => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object-coercible target for Object.assign".to_string(),
+                            got: target_val.type_name().to_string(),
+                        });
+                    }
                     _ => {
                         // If target is not an object, return it as-is
                         return Ok(target_val);

@@ -3487,6 +3487,11 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                 }
             }
             ';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                // `if (a) x(); else y();`: an `else` never starts a statement,
+                // so this `;` ends the consequent, not the if statement.
+                if starts_with_keyword(line[index + ch.len_utf8()..].trim_start(), "else") {
+                    continue;
+                }
                 push_segment(&mut out, line, segment_start, index);
                 segment_start = index.saturating_add(ch.len_utf8());
             }
@@ -9689,16 +9694,6 @@ fn strip_statement_label(text: &str) -> Option<&str> {
         return None;
     }
     after.trim_start().strip_prefix(':').map(str::trim_start)
-}
-
-/// `text` starts with `keyword` as a whole word.
-fn starts_with_keyword(text: &str, keyword: &str) -> bool {
-    text.strip_prefix(keyword).is_some_and(|after| {
-        after
-            .chars()
-            .next()
-            .is_none_or(|ch| !(ch == '_' || ch == '$' || ch.is_alphanumeric()))
-    })
 }
 
 /// ES2020 13.6, 13.7, 13.11, 13.13 with Annex B.3.2 / B.3.4: an if, loop,

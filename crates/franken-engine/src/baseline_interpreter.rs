@@ -92153,6 +92153,11 @@ fn number_to_fixed_string(num: f64, digits: usize) -> String {
             "-Infinity".to_string()
         };
     }
+    // ES2020 20.1.3.3 step 9: from 10^21 up the result is ToString(x)
+    // (`(1e21).toFixed(2)` is "1e+21", not a 22-digit integer).
+    if num.abs() >= 1e21 {
+        return Float64::new(num).to_string();
+    }
     // Sign is handled separately on the magnitude. `num < 0.0` is false for
     // -0.0, so `(-0).toFixed(2)` yields "0.00" as the spec requires.
     let negative = num < 0.0;
@@ -92233,6 +92238,18 @@ fn format_signed(negative: bool, body: &str) -> String {
 #[cfg(test)]
 mod number_to_fixed_tests {
     use super::number_to_fixed_string;
+
+    #[test]
+    fn from_1e21_up_the_result_is_number_to_string() {
+        // Node v22.2.0: (1e21).toFixed(2) etc.
+        assert_eq!(number_to_fixed_string(1e21, 2), "1e+21");
+        assert_eq!(number_to_fixed_string(-1e21, 0), "-1e+21");
+        assert_eq!(number_to_fixed_string(1.5e22, 3), "1.5e+22");
+        assert_eq!(
+            number_to_fixed_string(999_999_999_999_999_900_000.0, 0),
+            "999999999999999868928"
+        );
+    }
 
     #[test]
     fn exact_dyadic_ties_round_half_up_not_to_even() {

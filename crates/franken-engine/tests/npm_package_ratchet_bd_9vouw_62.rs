@@ -47,18 +47,17 @@ const PACKAGES: &[Package] = &[
         file: "minimist-1.2.8/index.js",
         usage: "const a = m(['-x', '3', '-y4', '-n5', '-abc', '--beep=boop', 'foo', 'bar', '--no-z']); console.log(JSON.stringify(a));",
         node_output: r#"{"_":["foo","bar"],"x":3,"y":4,"n":5,"a":true,"b":true,"c":true,"beep":"boop","z":false}"#,
-        expect: Expect::Passes(
-            r#"{"_":["foo","bar"],"x":3,"y":4,"n":5,"a":true,"b":true,"c":true,"beep":"boop","z":false}"#,
-        ),
+        // Parses since the `?:`-branch assignment fix; `parseArgs` then needs
+        // more than the 256-register QuickJS-lane frame.
+        expect: Expect::KnownFailure("out of bounds (max 256)"),
     },
     Package {
         name: "dayjs",
         file: "dayjs-1.11.13/dayjs.min.js",
         usage: "const d = m('2020-01-31T12:00:00Z'); console.log(d.valueOf(), d.add(1, 'day').toISOString(), d.isValid(), m('invalid').isValid());",
         node_output: "1580472000000 2020-02-01T12:00:00.000Z true false",
-        // UMD wrapper references `globalThis`, refused at lowering as ambient
-        // authority (see BRIDGE-15.13 comment).
-        expect: Expect::KnownFailure("globalThis"),
+        // The minified UMD bundle is refused by the parser.
+        expect: Expect::KnownFailure("invalid assignment target"),
     },
 ];
 

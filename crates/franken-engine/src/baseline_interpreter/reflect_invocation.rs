@@ -548,6 +548,9 @@ impl InterpreterCore {
         frame.this_value = value.clone();
         frame.this_label = label;
         frame.this_initialized = true;
+        // The derived class's instance fields initialize once super() returns
+        // (ES2022 SuperCall step 11), whichever form the call took.
+        self.run_derived_class_instance_fields(module)?;
         Ok(value)
     }
 

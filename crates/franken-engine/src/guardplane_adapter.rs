@@ -173,7 +173,7 @@ impl GuardplaneExtensionContext {
                 "guardplane.witness_confidence_millionths",
             ],
         )
-        .and_then(|(key, value)| match value.parse::<i64>() {
+        .map(|(key, value)| match value.parse::<i64>() {
             Ok(parsed) => {
                 let clamped = parsed.clamp(0, MILLION);
                 if clamped != parsed {
@@ -183,7 +183,7 @@ impl GuardplaneExtensionContext {
                         "clamped witness confidence to [0, 1000000]",
                     ));
                 }
-                Some(clamped)
+                clamped
             }
             Err(_) => {
                 diagnostics.push(GuardplaneDiagnosticRecord::metadata_parse_error(
@@ -193,7 +193,7 @@ impl GuardplaneExtensionContext {
                 ));
                 // Fail closed: a malformed confidence counts as declared
                 // with zero confidence, not as absent.
-                Some(0)
+                0
             }
         });
         let witness_confidence_declared = declared_witness_confidence.is_some();

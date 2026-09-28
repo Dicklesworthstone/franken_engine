@@ -51558,8 +51558,41 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype(name)?;
         let error_id = self.alloc_object_with_prototype(Some(prototype))?;
         self.initialize_error_object(error_id, message)?;
+        self.install_error_cause(error_id, args)?;
 
         Ok(Value::Object(error_id))
+    }
+
+    /// ES2022 20.5.8.1 InstallErrorCause: when the second constructor
+    /// argument is an object that has a `cause` (own or inherited), the error
+    /// gets an own non-enumerable `cause` with that value and its IFC label.
+    /// `new Error(m, { cause })` used to drop it, so `err.cause.message`
+    /// threw. An accessor `cause` would need a guest getter call and is left
+    /// uninstalled.
+    fn install_error_cause(
+        &mut self,
+        object_id: ObjectId,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        if args.count < 2 {
+            return Ok(());
+        }
+        let options_register = args.start + 1;
+        let Value::Object(options) = self.read_reg(options_register)? else {
+            return Ok(());
+        };
+        let Some(cause) = self
+            .chain_data_property(options, "cause")
+            .filter(|value| !matches!(value, Value::Accessor { .. }))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let key = RuntimePropertyKey::String(JsString::from("cause"));
+        let label = self.get_register_label(options_register)?.clone();
+        self.set_own_runtime_property_label(object_id, &key, &label)?;
+        self.set_object_property(object_id, "cause".to_string(), cause)?;
+        self.set_own_property_attributes(object_id, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)
     }
 
     /// An engine-raised error named `name` (native faults, host errors). Its
@@ -88748,6 +88781,7 @@ impl InterpreterCore {
             | "EvalError" | "URIError" => {
                 let message = self.error_message_from_args(args)?;
                 self.initialize_error_object(object_id, message)?;
+                self.install_error_cause(object_id, args)?;
             }
             "Map" => {
                 let entries_id = self.alloc_object_with_prototype(None)?;

@@ -4144,6 +4144,16 @@ fn parse_binding_pattern_inner(
     // Rest element: `...pattern`
     if let Some(rest_source) = trimmed.strip_prefix("...") {
         let inner = parse_binding_pattern(rest_source, span, context)?;
+        // ES2020 13.3.3 / 14.1: a rest element or rest parameter has no
+        // initializer (`[...x = 1]`, `(...args = [])`).
+        if matches!(inner, BindingPattern::AssignmentPattern { .. }) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "a rest element cannot have an initializer",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         return Ok(BindingPattern::Rest(Box::new(inner)));
     }
 

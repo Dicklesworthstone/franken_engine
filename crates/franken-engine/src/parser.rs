@@ -4202,8 +4202,10 @@ fn parse_binding_pattern_inner(
                 Some(span.clone()),
             ));
         }
-        reject_strict_restricted_binding(trimmed, context.strict_mode, span, context)?;
-        return Ok(BindingPattern::Identifier(canonicalize_identifier(trimmed)));
+        let name = canonicalize_identifier(trimmed);
+        reject_strict_restricted_binding(&name, context.strict_mode, span, context)?;
+        reject_context_reserved_binding(&name, span, context)?;
+        return Ok(BindingPattern::Identifier(name));
     }
 
     Err(ParseError::new(
@@ -9696,6 +9698,40 @@ fn reject_strict_restricted_binding(
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             format!("`{name}` cannot be a binding name in strict mode code"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
+/// ES2020 11.6.2.2, 12.1.1: strict code reserves `implements`, `interface`,
+/// `let`, `package`, `private`, `protected`, `public`, `static` and
+/// `yield`; async functions and modules reserve `await`. None of them can be
+/// a binding name there.
+fn reject_context_reserved_binding(
+    name: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let reserved = (context.await_context && name == "await")
+        || (context.strict_mode
+            && matches!(
+                name,
+                "implements"
+                    | "interface"
+                    | "let"
+                    | "package"
+                    | "private"
+                    | "protected"
+                    | "public"
+                    | "static"
+                    | "yield"
+            ));
+    if reserved {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("`{name}` is a reserved word here and cannot be a binding name"),
             context.source_label.to_string(),
             Some(span.clone()),
         ));

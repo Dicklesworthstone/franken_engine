@@ -11091,6 +11091,12 @@ fn lower_expression_to_ir1(
                     let eval_rhs_label = alloc_label(label_counter);
                     let end_label = alloc_label(label_counter);
 
+                    // Both paths reach `end_label` with nothing pushed and the
+                    // expression's value in `current_binding` (the RHS once
+                    // assigned), which is read after the join. Leaving a value
+                    // on the stack from each path instead named two different
+                    // registers, so the short-circuit path produced whatever the
+                    // assignment path's register held.
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: current_binding,
                     });
@@ -11116,21 +11122,11 @@ fn lower_expression_to_ir1(
                             });
                         }
                     }
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: current_binding,
-                    });
                     ops.push(Ir1Op::Jump {
                         label_id: end_label,
                     });
                     ops.push(Ir1Op::Label { id: eval_rhs_label });
 
-                    let rhs_binding = alloc_internal_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        "member_assignment_rhs",
-                    )?;
                     lower_expression_to_ir1(
                         right,
                         ops,
@@ -11141,7 +11137,7 @@ fn lower_expression_to_ir1(
                         label_counter,
                     )?;
                     ops.push(Ir1Op::StoreBinding {
-                        binding_id: rhs_binding,
+                        binding_id: current_binding,
                     });
                     ops.push(Ir1Op::Pop);
                     ops.push(Ir1Op::LoadBinding {
@@ -11153,10 +11149,14 @@ fn lower_expression_to_ir1(
                         });
                     }
                     ops.push(Ir1Op::LoadBinding {
-                        binding_id: rhs_binding,
+                        binding_id: current_binding,
                     });
                     ops.push(Ir1Op::SetProperty { key });
+                    ops.push(Ir1Op::Pop);
                     ops.push(Ir1Op::Label { id: end_label });
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: current_binding,
+                    });
                     return Ok(());
                 }
 

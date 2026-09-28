@@ -31861,6 +31861,11 @@ impl InterpreterCore {
         {
             return Err(checkpoint_error.expect("non-catchable checkpoint error was checked"));
         }
+        // The end of the entry's first tick: a rejection nothing handled by
+        // now fails the program before any timer runs, as in Node.
+        if result.is_ok() && checkpoint_error.is_none() {
+            self.raise_unhandled_rejection()?;
+        }
 
         // Run the event loop until all pending work is complete
         // (macrotasks like timers, with microtask draining after each).
@@ -54708,8 +54713,11 @@ impl InterpreterCore {
         let inputs = self.collect_promise_combinator_inputs(args)?;
         for input in &inputs {
             if let Value::Promise(handle) = input {
+                // The combinator observes every input's rejection, as the
+                // spec's `then` on each input would, including inputs after
+                // the one that settles it: all of them are handled (bd-xzemw).
                 self.promise_store
-                    .get(crate::promise_model::PromiseHandle(*handle))
+                    .mark_rejection_handled(crate::promise_model::PromiseHandle(*handle))
                     .map_err(|error| InterpreterError::TypeError {
                         expected: "promise".to_string(),
                         got: error.to_string(),
@@ -55512,45 +55520,14 @@ impl InterpreterCore {
                                 )
                             })
                     });
-                let best_effort_timer_like = match macrotask.source {
-                    crate::promise_model::MacrotaskSource::Timer => true,
-                    crate::promise_model::MacrotaskSource::Immediate => {
-                        // Child-process lifecycle events and callbacks use the
-                        // Immediate lane for Node ordering, but they are still
-                        // host-effect completions. Treat only ordinary
-                        // setImmediate work as the historical best-effort
-                        // timer class; otherwise an unhandled child `error` or
-                        // throwing child callback would be silently swallowed.
-                        !self
-                            .pending_http_tasks
-                            .contains_key(&macrotask.registration_seq)
-                            && !self
-                                .pending_io_callbacks
-                                .contains_key(&macrotask.registration_seq)
-                    }
-                    _ => false,
-                };
-                // Execute the macrotask's handler closure
+                // Execute the macrotask's handler closure. An error escaping a
+                // timer, immediate or I/O callback is an uncaught exception
+                // that ends the program, as in Node (bd-xzemw, bd-7qwej): it
+                // used to be printed and dropped for timers and immediates,
+                // and the run exited 0.
                 if let Err(err) = self.execute_macrotask_callback(&macrotask, module) {
-                    if !best_effort_timer_like
-                        || matches!(
-                            err,
-                            InterpreterError::MemoryBudgetExceeded { .. }
-                                | InterpreterError::ConsoleBudgetExceeded { .. }
-                                | InterpreterError::ContainmentActionRequested { .. }
-                                | InterpreterError::ProcessExit { .. }
-                        )
-                    {
-                        failed_readable = readable_listener_target;
-                        macrotask_error = Some(err);
-                    } else {
-                        // Preserve only the historical best-effort timer and
-                        // immediate exception behavior. I/O-completion errors
-                        // (including unhandled EventEmitter `error`) are real
-                        // asynchronous program failures and must escape the
-                        // eval boundary (bd-7qwej).
-                        eprintln!("Timer callback execution failed: {err:?}");
-                    }
+                    failed_readable = readable_listener_target;
+                    macrotask_error = Some(err);
                 }
             }
             self.finish_promise_task_transfer(transferred_bytes);
@@ -55563,6 +55540,7 @@ impl InterpreterCore {
 
             // Phase 2: settle internal Writable work, then drain microtasks.
             self.drain_runtime_checkpoint(module)?;
+            self.raise_unhandled_rejection()?;
         }
         if turns >= MAX_TURNS
             && self.event_loop.has_pending_work()
@@ -55576,6 +55554,33 @@ impl InterpreterCore {
             });
         }
         Ok(())
+    }
+
+    /// Node's default `--unhandled-rejections=throw` (bd-xzemw): a Promise
+    /// rejected with no handler attached by the end of a microtask checkpoint
+    /// is an uncaught exception that ends the program. Before this check an
+    /// async failure (`Promise.reject(e)`, a throwing async function nobody
+    /// awaited) was dropped and the run exited 0.
+    fn raise_unhandled_rejection(&mut self) -> Result<(), InterpreterError> {
+        let Some(handle) = self
+            .promise_store
+            .take_unhandled_rejections()
+            .into_iter()
+            .next()
+        else {
+            return Ok(());
+        };
+        let Ok(crate::promise_model::PromiseState::Rejected(reason)) = self
+            .promise_store
+            .get(handle)
+            .map(|record| record.state.clone())
+        else {
+            return Ok(());
+        };
+        let reason = Self::js_value_to_value(&reason);
+        Err(InterpreterError::UncaughtException {
+            value: self.uncaught_exception_description(&reason),
+        })
     }
 
     /// Drain engine-internal stream lifecycle work before the ordinary
@@ -55754,6 +55759,14 @@ impl InterpreterCore {
                 self.fulfill_promise(target, value, label)
             }
             crate::promise_model::PromiseState::Rejected(reason) => {
+                // Adopting a settled source handles its rejection, as the
+                // pending-source path does through its forwarding reaction.
+                self.promise_store
+                    .mark_rejection_handled(source)
+                    .map_err(|error| InterpreterError::TypeError {
+                        expected: "valid promise handle".to_string(),
+                        got: error.to_string(),
+                    })?;
                 self.reject_promise(target, reason, label)
             }
             crate::promise_model::PromiseState::Pending => {

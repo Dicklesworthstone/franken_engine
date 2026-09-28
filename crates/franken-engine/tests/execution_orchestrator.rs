@@ -2938,6 +2938,150 @@ fn process_argv_is_the_argv_the_host_set_under_the_trusted_grant() {
     );
 }
 
+/// An exception thrown in a timer or immediate callback ends the run like
+/// Node's uncaught exception (bd-xzemw): the run fails with the thrown error,
+/// later callbacks never run, and what was printed before is kept.
+#[test]
+fn uncaught_exception_in_a_timer_or_immediate_callback_fails_the_run() {
+    for (kind, schedule) in [
+        (
+            "timer",
+            "setTimeout(() => { throw new Error(\"boom\"); }, 1);",
+        ),
+        (
+            "immediate",
+            "setImmediate(() => { throw new Error(\"boom\"); });",
+        ),
+    ] {
+        let source = format!(
+            "console.log(\"before\");\n{schedule}\nsetTimeout(() => {{ console.log(\"after\"); }}, 50);\n"
+        );
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                force_lane: Some(lane),
+                ..OrchestratorConfig::default()
+            });
+            let error = orchestrator
+                .execute(&ExtensionPackage {
+                    capabilities: vec!["builtin".to_string(), "timer".to_string()],
+                    ..simple_package("ext-async-throw", &source)
+                })
+                .expect_err("an exception escaping a callback must fail the run");
+            assert!(
+                error.to_string().contains("boom"),
+                "{kind} {lane:?}: {error}"
+            );
+            assert_eq!(
+                failed_console_lines(&orchestrator),
+                ["before"],
+                "{kind} {lane:?}: later callbacks must not run"
+            );
+        }
+    }
+}
+
+/// A Promise rejected with nothing handling it by the end of its tick fails
+/// the run like Node's default `--unhandled-rejections=throw` (bd-xzemw):
+/// the error surfaces, later timers never run, and earlier output is kept.
+#[test]
+fn unhandled_promise_rejection_fails_the_run() {
+    for (source, needle) in [
+        (
+            "console.log(\"before\");\nPromise.reject(new Error(\"boom\"));\nsetTimeout(() => { console.log(\"after\"); }, 10);\n",
+            "boom",
+        ),
+        (
+            "console.log(\"before\");\n(async () => { throw new TypeError(\"bad async\"); })();\n",
+            "bad async",
+        ),
+        (
+            "console.log(\"before\");\nPromise.resolve().then(() => { throw new Error(\"in then\"); });\n",
+            "in then",
+        ),
+        (
+            "console.log(\"before\");\nnew Promise((resolve, reject) => { setTimeout(() => { reject(new Error(\"late\")); }, 5); });\nsetTimeout(() => { console.log(\"after\"); }, 50);\n",
+            "late",
+        ),
+    ] {
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                force_lane: Some(lane),
+                ..OrchestratorConfig::default()
+            });
+            let error = orchestrator
+                .execute(&ExtensionPackage {
+                    capabilities: vec!["builtin".to_string(), "timer".to_string()],
+                    ..simple_package("ext-unhandled-rejection", source)
+                })
+                .expect_err("an unhandled rejection must fail the run");
+            assert!(
+                error.to_string().contains(needle),
+                "{lane:?} {source}: {error}"
+            );
+            assert_eq!(
+                failed_console_lines(&orchestrator),
+                ["before"],
+                "{lane:?} {source}"
+            );
+        }
+    }
+}
+
+/// Rejections that the program handles, however late within the tick, and
+/// rejections a combinator or an adopting Promise observes, never fail the
+/// run (no false positives from the bd-xzemw check).
+#[test]
+fn handled_promise_rejections_do_not_fail_the_run() {
+    for (source, expected) in [
+        (
+            "Promise.reject(new Error(\"x\")).catch((e) => { console.log(\"caught \" + e.message); });\n",
+            vec!["caught x"],
+        ),
+        (
+            "async function f() { throw new Error(\"y\"); }\n(async () => { try { await f(); } catch (e) { console.log(\"caught \" + e.message); } })();\n",
+            vec!["caught y"],
+        ),
+        (
+            "Promise.all([Promise.reject(new Error(\"a\")), new Promise((resolve, reject) => { setTimeout(() => { reject(new Error(\"b\")); }, 1); })]).catch((e) => { console.log(\"all \" + e.message); });\n",
+            vec!["all a"],
+        ),
+        (
+            "Promise.allSettled([Promise.reject(1), Promise.resolve(2)]).then((results) => { console.log(results.map((r) => r.status).join(\",\")); });\n",
+            vec!["rejected,fulfilled"],
+        ),
+        (
+            "Promise.race([new Promise((resolve, reject) => { setTimeout(() => { reject(new Error(\"slow\")); }, 5); }), Promise.resolve(\"fast\")]).then((v) => { console.log(v); });\n",
+            vec!["fast"],
+        ),
+        (
+            "async function g() { return Promise.reject(new Error(\"adopted\")); }\ng().catch((e) => { console.log(\"caught \" + e.message); });\n",
+            vec!["caught adopted"],
+        ),
+        (
+            "const p = Promise.reject(new Error(\"z\"));\np.then(() => {}, () => { console.log(\"handled\"); });\n",
+            vec!["handled"],
+        ),
+        (
+            "Promise.reject(new Error(\"f\")).finally(() => { console.log(\"fin\"); }).catch(() => { console.log(\"c\"); });\n",
+            vec!["fin", "c"],
+        ),
+    ] {
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                force_lane: Some(lane),
+                ..OrchestratorConfig::default()
+            });
+            let result = orchestrator
+                .execute(&ExtensionPackage {
+                    capabilities: vec!["builtin".to_string(), "timer".to_string()],
+                    ..simple_package("ext-handled-rejection", source)
+                })
+                .unwrap_or_else(|error| panic!("{lane:?} {source}: {error}"));
+            assert_eq!(console_lines(&result), expected, "{lane:?} {source}");
+        }
+    }
+}
+
 /// Output printed by a CommonJS entry and by the module it requires survives
 /// when that module throws, since both run in the same interpreter.
 #[test]

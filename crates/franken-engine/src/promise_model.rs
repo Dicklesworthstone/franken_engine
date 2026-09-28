@@ -692,6 +692,11 @@ pub struct PromiseStore {
     next_seq: u64,
     /// Witness log for replay.
     witness: WitnessLog,
+    /// Promises rejected with no handler attached, in rejection order, since
+    /// the last [`Self::take_unhandled_rejections`]
+    /// (HostPromiseRejectionTracker "reject").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pending_unhandled_rejections: Vec<PromiseHandle>,
 }
 
 impl PromiseStore {
@@ -700,6 +705,7 @@ impl PromiseStore {
             promises: PromiseSlots::default(),
             next_seq: 0,
             witness: WitnessLog::new(),
+            pending_unhandled_rejections: Vec::new(),
         }
     }
 
@@ -1012,7 +1018,7 @@ impl PromiseStore {
             return Err(PromiseError::AlreadySettled { handle });
         }
 
-        let reactions: Vec<PromiseReaction> = self.update(handle, |record| {
+        let (reactions, rejection_handled) = self.update(handle, |record| {
             let reactions = std::mem::take(&mut record.reactions);
             let rejection_handled = record.rejection_handled
                 || reactions
@@ -1021,8 +1027,11 @@ impl PromiseStore {
             record.state = PromiseState::Rejected(reason.clone());
             record.label = label.clone();
             record.rejection_handled = rejection_handled;
-            reactions
+            (reactions, rejection_handled)
         })?;
+        if !rejection_handled {
+            self.pending_unhandled_rejections.push(handle);
+        }
 
         self.witness.push(WitnessEvent::PromiseRejected {
             handle,
@@ -1395,6 +1404,29 @@ impl PromiseStore {
     /// Get the witness log (for replay/forensics).
     pub fn witness_log(&self) -> &[WitnessEvent] {
         &self.witness
+    }
+
+    /// Drain the Promises rejected without a handler since the last call and
+    /// return those still unhandled, in rejection order: Node's end-of-tick
+    /// unhandled-rejection check. A handler attached in between
+    /// (HostPromiseRejectionTracker "handle") removes a rejection. Costs one
+    /// lookup per rejection, never a walk of the store.
+    pub fn take_unhandled_rejections(&mut self) -> Vec<PromiseHandle> {
+        let pending = std::mem::take(&mut self.pending_unhandled_rejections);
+        pending
+            .into_iter()
+            .filter(|handle| {
+                self.get(*handle)
+                    .is_ok_and(|record| record.state.is_rejected() && !record.rejection_handled)
+            })
+            .collect()
+    }
+
+    /// Record that the runtime itself observes `handle`'s rejection (a
+    /// combinator input, an adopted source), the native counterpart of
+    /// attaching a reaction.
+    pub fn mark_rejection_handled(&mut self, handle: PromiseHandle) -> Result<(), PromiseError> {
+        self.update(handle, |record| record.rejection_handled = true)
     }
 
     /// Collect all unhandled rejections (for reporting).
@@ -2891,6 +2923,7 @@ mod tests {
                 label: label.clone(),
             }]
             .into(),
+            pending_unhandled_rejections: Vec::new(),
         };
 
         let expected = estimate_vector_slot_bytes::<PromiseRecord>(1)
@@ -3580,6 +3613,51 @@ mod tests {
         let unhandled = store.unhandled_rejections();
         assert_eq!(unhandled.len(), 1);
         assert_eq!(unhandled[0], h);
+    }
+
+    #[test]
+    fn take_unhandled_rejections_reports_each_rejection_once_unless_handled_in_time() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let late_handled = store.create();
+        let unhandled = store.create();
+        let handled_first = store.create();
+        let observed = store.create();
+        store
+            .then(
+                handled_first,
+                None,
+                Some(ClosureHandle(0)),
+                Label::Public,
+                &mut queue,
+            )
+            .expect("then on a pending promise");
+        store
+            .mark_rejection_handled(observed)
+            .expect("mark a pending promise handled");
+        for handle in [late_handled, unhandled, handled_first, observed] {
+            store
+                .reject(handle, js_str("boom"), Label::Public, &mut queue)
+                .expect("reject a pending promise");
+        }
+        // A handler attached after the rejection but before the check still
+        // counts (HostPromiseRejectionTracker "handle").
+        store
+            .then(
+                late_handled,
+                None,
+                Some(ClosureHandle(1)),
+                Label::Public,
+                &mut queue,
+            )
+            .expect("then on a rejected promise");
+
+        assert_eq!(store.take_unhandled_rejections(), vec![unhandled]);
+        // Each rejection is reported at most once.
+        assert!(store.take_unhandled_rejections().is_empty());
+        // A snapshot with nothing pending serializes exactly as before.
+        let wire = serde_json::to_value(&store).expect("serialize store");
+        assert!(wire.get("pending_unhandled_rejections").is_none());
     }
 
     #[test]

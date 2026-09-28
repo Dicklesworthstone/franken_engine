@@ -82,3 +82,21 @@ fn user_defined_set_timeout_is_not_hijacked_by_the_builtin() {
         outcome.value
     );
 }
+
+/// bd-xzemw: an exception escaping a timer, interval or immediate callback is
+/// an uncaught exception and fails the program, as in Node. It used to be
+/// printed to the host's stderr and dropped, and the eval succeeded.
+#[test]
+fn throwing_timer_interval_or_immediate_callback_fails_the_eval() {
+    for source in [
+        "setTimeout(() => { throw new Error('timer boom'); }, 0);",
+        "setInterval(function () { throw new TypeError('interval boom'); }, 1);",
+        "setImmediate(() => { throw new Error('immediate boom'); });",
+    ] {
+        let mut engine = HybridRouter::default();
+        let error = engine
+            .eval(source)
+            .expect_err("an exception escaping a timer callback must fail the eval");
+        assert!(error.to_string().contains("boom"), "{source}: {error}");
+    }
+}

@@ -399,10 +399,30 @@ impl AsyncPromiseHarness {
                 es_section: "25.6.1.9".to_string(),
                 requirement_level: RequirementLevel::Must,
                 category: AsyncPromiseCategory::UnhandledRejectionTracking,
-                source: "Promise.reject('unhandled'); Promise.resolve().then(() => console.log('after-unhandled'));"
+                // The rejection is observed unhandled ("reject") and handled
+                // later in the same tick ("handle"); the later fulfillment job
+                // must still run in order. Node v22 prints `after-unhandled`
+                // and exits 0 for this source.
+                source: "const p = Promise.reject('unhandled'); Promise.resolve().then(() => console.log('after-unhandled')); p.catch(() => {});"
                     .to_string(),
                 expected_result: ExpectedResult::Success {
                     output: "after-unhandled\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-25.6.1.9-unhandled-rejection-fails-the-program-like-node".to_string(),
+                description: "A rejection still unhandled after the tick's microtasks ran ends \
+                              the program, as under Node's default --unhandled-rejections=throw \
+                              (the host's HostPromiseRejectionTracker policy; bd-xzemw). Node \
+                              v22 prints `after-unhandled`, then ERR_UNHANDLED_REJECTION, exit 1."
+                    .to_string(),
+                es_section: "25.6.1.9".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::UnhandledRejectionTracking,
+                source: "Promise.reject('unhandled'); Promise.resolve().then(() => console.log('after-unhandled'));"
+                    .to_string(),
+                expected_result: ExpectedResult::RuntimeError {
+                    error_type: "uncaught exception: unhandled".to_string(),
                 },
             },
             AsyncPromiseTest {

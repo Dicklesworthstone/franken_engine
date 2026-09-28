@@ -8,8 +8,10 @@
 //! uncommitted evidence chain for post-cell failures; the orchestrator now
 //! attaches a signed denial entry to capability-denial failures, which the
 //! CLI verifies against the run's identity before writing it out.
-//! No-claim: lowering-time rejections (e.g. `process.env`) happen before an
-//! execution cell exists and still report only through stderr.
+//! Lowering-time rejections (e.g. `process.env`) happen before an execution
+//! cell exists, so there is no execution evidence to chain; they now write a
+//! rejection report naming the refused access, its required effect and span.
+//! No-claim: that rejection report is not a signed evidence entry.
 
 use std::fs;
 use std::path::PathBuf;
@@ -92,5 +94,68 @@ fn denied_fetch_writes_a_failure_report_with_signed_denial_evidence() {
             .as_str()
             .is_some_and(|hash| !hash.is_empty()),
         "the denial is chained under a receipt"
+    );
+}
+
+fn run(dir: &std::path::Path, name: &str, source: &str) -> (std::process::Output, PathBuf) {
+    let input = dir.join(format!("{name}.js"));
+    let report = dir.join(format!("{name}.report.json"));
+    fs::write(&input, source).expect("program");
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            input.to_str().expect("utf8"),
+            "--extension-id",
+            "denial61",
+            "--out",
+            report.to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("frankenctl should execute");
+    (output, report)
+}
+
+#[test]
+fn lowering_time_rejection_writes_a_rejection_report() {
+    let dir = scratch_dir();
+    let (output, report) = run(
+        &dir,
+        "env",
+        "console.log(Object.keys(process.env).length);\n",
+    );
+    assert_eq!(output.status.code(), Some(2), "the rejection fails the run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("ambient authority violation"), "{stderr}");
+    assert!(
+        stderr.contains("classification: rejected_at_lowering"),
+        "{stderr}"
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&report).expect("rejection report written"))
+            .expect("report json");
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout carries the same report");
+    assert_eq!(written, stdout);
+    assert_eq!(
+        written["schema_version"],
+        "franken-engine.frankenctl.lowering-rejection.v1"
+    );
+    assert_eq!(written["classification"], "rejected_at_lowering");
+    assert_eq!(written["exit_code"], 2);
+    let rejection = &written["rejection"];
+    assert_eq!(rejection["kind"], "ambient_authority");
+    assert_eq!(rejection["accessor"], "process.env");
+    assert_eq!(rejection["required_effect"], "env.read");
+    assert_eq!(rejection["span"]["start_line"], 1);
+
+    // A lowering failure that is not a security refusal keeps its old shape:
+    // no rejection report.
+    let (output, report) = run(&dir, "syntax", "let x = ;\n");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        !report.exists(),
+        "a syntax error is not a rejection: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

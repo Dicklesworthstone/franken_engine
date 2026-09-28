@@ -30645,16 +30645,17 @@ fn simulate_ir2_flow_labels(
 /// exist, and every label above the simulator's engine floors enters a
 /// program through one of the operations enumerated here:
 ///
-/// - literals, via [`infer_data_label_for_op`] (including its sensitive-keyword
-///   heuristic);
 /// - HostCall results, via the shared result contract registry;
 /// - HostCall exceptions that can carry host-originated data (provider-backed
 ///   authorities under unauthenticated provenance, native crypto failures);
 /// - code this IR does not contain (`ImportModule`, `module:require`,
 ///   `module:import`), which may perform its own effects.
 ///
-/// Every other operation computes from its operands or from engine-owned
-/// state at or below `Internal`. Function bodies are embedded as `body_ops`
+/// Literals are Public: a literal's text is program code, not evidence that
+/// it holds a secret (bd-9vouw.19); only a legacy `hostcall<"cap"> payload`
+/// marker models a labeled argument (see [`infer_data_label_for_op`]). Every
+/// other operation computes from its operands or from engine-owned state at
+/// or below `Internal`. Function bodies are embedded as `body_ops`
 /// and are walked recursively. Runtime-compiled `Function` source is lowered
 /// again under the same deny-all ambient-authority policy (eval, env, and
 /// ambient require stay denied), which is the same trust assumption the
@@ -30689,6 +30690,7 @@ fn accumulate_ir1_flow_label_ceiling(
             }
             return;
         }
+        // Only a legacy hostcall marker literal can carry a label above Public.
         Ir1Op::LoadLiteral { .. } => infer_data_label_for_op(op, &BTreeMap::new(), Label::Public),
         Ir1Op::ImportModule { .. } => Label::TopSecret,
         Ir1Op::HostCall { capability, .. } => {
@@ -30895,15 +30897,26 @@ fn infer_data_label_for_op(
     last_label: Label,
 ) -> Label {
     match op {
+        // bd-9vouw.19: a literal is Public whatever its text. Labelling string
+        // literals that merely CONTAIN "secret", "token", "api_key",
+        // "password" or "credential" refused benign programs at compile time
+        // ("Unexpected token" messages, password prompts, a lexer's `tokens`
+        // array, semver's `tokens` key) while the same text assembled at run
+        // time stayed Public, so it was no boundary. Secret data enters through
+        // HostCall result contracts (entropy, key material), which label it.
+        //
+        // The one exception is a legacy `hostcall<"cap"> payload` marker: it
+        // is not program data but a modeled hostcall whose argument is the
+        // payload text, and it takes no operands, so the payload's keywords
+        // are its only way to model a secret argument (the orchestrator's
+        // declassification-receipt fixtures rely on it).
         Ir1Op::LoadLiteral {
             value: Ir1Literal::String(raw),
-        } => {
+        } if extract_hostcall_capability(raw).is_some() => {
             let lowered = raw.to_ascii_lowercase();
-            if lowered.contains("secret")
-                || lowered.contains("token")
-                || lowered.contains("api_key")
-                || lowered.contains("password")
-                || lowered.contains("credential")
+            if ["secret", "token", "api_key", "password", "credential"]
+                .iter()
+                .any(|keyword| lowered.contains(keyword))
             {
                 Label::Secret
             } else {
@@ -31861,6 +31874,34 @@ mod tests {
         ops.push(Ir1Op::Pop);
     }
 
+    // bd-9vouw.19: a literal's text is not a label source, so a fixture's
+    // secret comes from a real one: an entropy read, whose RandomRead result
+    // contract floors the value at Secret. It pushes one value, like the
+    // keyword literal it replaces. Its host exceptions are Internal under
+    // ProviderInternal provenance and fail high under Unknown
+    // (`hostcall_flow_label_ceiling`).
+    fn secret_source_op() -> Ir1Op {
+        Ir1Op::HostCall {
+            capability: "random_read".to_string(),
+            arg_count: 0,
+        }
+    }
+
+    /// The flow annotation of the first HostCall with `capability` (a
+    /// fixture's secret source is a HostCall too, so "the first HostCall" is
+    /// ambiguous).
+    fn hostcall_flow<'a>(
+        ir2: &'a Ir2Module,
+        capability: &str,
+    ) -> Option<&'a crate::ir_contract::FlowAnnotation> {
+        ir2.ops
+            .iter()
+            .find(|op| {
+                matches!(&op.inner, Ir1Op::HostCall { capability: found, .. } if found == capability)
+            })
+            .and_then(|op| op.flow.as_ref())
+    }
+
     fn script_ir0() -> Ir0Module {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
@@ -32518,9 +32559,7 @@ mod tests {
     #[test]
     fn dynamic_hostcall_paths_insert_runtime_ifc_guard() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-ir0"), "dynamic_flow.js");
-        ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_token".into()),
-        });
+        ir1.ops.push(secret_source_op());
         ir1.ops.push(Ir1Op::HostCall {
             capability: "hostcall.invoke".to_string(),
             arg_count: 1,
@@ -32530,15 +32569,8 @@ mod tests {
         let ir2 = lower_ir1_to_ir2(&ir1)
             .expect("IR1->IR2 should succeed")
             .module;
-        let call_op = ir2
-            .ops
-            .iter()
-            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
-            .expect("hostcall op");
         assert!(
-            call_op
-                .flow
-                .as_ref()
+            hostcall_flow(&ir2, "hostcall.invoke")
                 .expect("flow annotation")
                 .declassification_required
         );
@@ -32606,9 +32638,7 @@ mod tests {
             "nested_dynamic_flow.js",
         );
         ir1.ops.push(nested_function_with_body(vec![
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("secret_token".into()),
-            },
+            secret_source_op(),
             Ir1Op::HostCall {
                 capability: "hostcall.invoke".to_string(),
                 arg_count: 1,
@@ -32696,19 +32726,19 @@ mod tests {
 
     #[test]
     fn nested_multi_arg_hostcall_join_is_operand_order_invariant_bd_wyazf() {
-        for values in [
-            ["secret_token", "public-value"],
-            ["public-value", "secret_token"],
-        ] {
+        for secret_first in [true, false] {
             let mut ir1 = Ir1Module::new(
                 ContentHash::compute(b"nested-flow-order"),
                 "nested_flow_order.js",
             );
             let mut body_ops = Vec::new();
-            for value in values {
-                body_ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(value.into()),
-                });
+            let public = Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("public-value".into()),
+            };
+            if secret_first {
+                body_ops.extend([secret_source_op(), public]);
+            } else {
+                body_ops.extend([public, secret_source_op()]);
             }
             body_ops.push(Ir1Op::HostCall {
                 capability: "net.write".to_string(),
@@ -32729,11 +32759,20 @@ mod tests {
             .expect("nested body flow");
             let flow = annotated
                 .iter()
-                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+                .find(|op| {
+                    matches!(&op.inner, Ir1Op::HostCall { capability, .. } if capability == "net.write")
+                })
                 .and_then(|op| op.flow.as_ref())
                 .expect("nested hostcall flow");
-            assert_eq!(flow.data_label, Label::Secret, "{values:?}");
-            assert!(flow.declassification_required, "{values:?}");
+            assert_eq!(
+                flow.data_label,
+                Label::Secret,
+                "secret_first={secret_first}"
+            );
+            assert!(
+                flow.declassification_required,
+                "secret_first={secret_first}"
+            );
 
             let ir3 = lower_ir2_to_ir3(&ir2)
                 .expect("nested guarded IR2->IR3")
@@ -32744,7 +32783,7 @@ mod tests {
                     Ir3Instruction::HostCall { capability, .. }
                         if capability.0 == IFC_RUNTIME_GUARD_CAPABILITY
                 )),
-                "Secret-vs-Public nested net.write must insert ifc.check_flow for {values:?}"
+                "Secret-vs-Public nested net.write must insert ifc.check_flow (secret_first={secret_first})"
             );
         }
     }
@@ -32784,15 +32823,15 @@ mod tests {
 
     #[test]
     fn multi_argument_hostcall_flow_join_is_operand_order_invariant_bd_bscab() {
-        for values in [
-            ["secret_token", "public-value"],
-            ["public-value", "secret_token"],
-        ] {
+        for secret_first in [true, false] {
             let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-order"), "flow_order.js");
-            for value in values {
-                ir1.ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(value.into()),
-                });
+            let public = Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("public-value".into()),
+            };
+            if secret_first {
+                ir1.ops.extend([secret_source_op(), public]);
+            } else {
+                ir1.ops.extend([public, secret_source_op()]);
             }
             ir1.ops.push(Ir1Op::HostCall {
                 capability: "net.write".to_string(),
@@ -32803,12 +32842,7 @@ mod tests {
             let ir2 = lower_ir1_to_ir2(&ir1)
                 .expect("operand-aware IR1 to IR2 lowering")
                 .module;
-            let flow = ir2
-                .ops
-                .iter()
-                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
-                .and_then(|op| op.flow.as_ref())
-                .expect("hostcall flow annotation");
+            let flow = hostcall_flow(&ir2, "net.write").expect("hostcall flow annotation");
             assert_eq!(flow.data_label, Label::Secret);
             assert_eq!(flow.sink_clearance, Label::Public);
             assert!(flow.declassification_required);
@@ -32829,6 +32863,7 @@ mod tests {
         let cases = [
             (
                 "public-builtin-error",
+                vec![],
                 vec![
                     Ir1Op::LoadLiteral {
                         value: Ir1Literal::String("public-input".into()),
@@ -32844,17 +32879,21 @@ mod tests {
             ),
             (
                 "secret-explicit-throw",
+                // The secret is read before the protected region, so only the
+                // explicit throw (not the entropy read's own host exception)
+                // can reach the handler.
                 vec![
-                    Ir1Op::LoadLiteral {
-                        value: Ir1Literal::String("secret-token".into()),
-                    },
-                    Ir1Op::Throw,
+                    secret_source_op(),
+                    Ir1Op::StoreBinding { binding_id: 90 },
+                    Ir1Op::Pop,
                 ],
+                vec![Ir1Op::LoadBinding { binding_id: 90 }, Ir1Op::Throw],
                 Label::Secret,
                 true,
             ),
             (
                 "guest-callback-hostcall",
+                vec![],
                 vec![
                     Ir1Op::LoadLiteral {
                         value: Ir1Literal::String("public-callback".into()),
@@ -32870,10 +32909,11 @@ mod tests {
             ),
         ];
 
-        for (name, protected_ops, expected_label, expected_declassification) in cases {
+        for (name, before_ops, protected_ops, expected_label, expected_declassification) in cases {
             let mut ir1 =
                 Ir1Module::new(ContentHash::compute(name.as_bytes()), format!("{name}.js"));
             push_opaque_ceiling_source(&mut ir1.ops);
+            ir1.ops.extend(before_ops);
             ir1.ops.push(Ir1Op::BeginTry {
                 catch_label: 41,
                 finally_label: None,
@@ -32974,7 +33014,8 @@ mod tests {
             ),
             (
                 "secret_console_input",
-                "try { console.log('secret-token'); } catch (error) { console.log(error); }",
+                // bd-9vouw.19: the secret is an entropy read before the try.
+                "const crypto = require('crypto'); const secret = crypto.randomUUID(); try { console.log(secret); } catch (error) { console.log(error); }",
                 Label::Secret,
                 true,
             ),
@@ -33152,7 +33193,9 @@ mod tests {
             "the canonical provider may expose its bounded Internal error state"
         );
 
-        let sync_secret = "const fs = require('fs'); try { fs.readFileSync('secret-token', 'utf8'); } catch (error) { console.log(error); }";
+        // bd-9vouw.19: the secret is an entropy read made before the protected
+        // region (a literal's text is not a label source).
+        let sync_secret = "const crypto = require('crypto'); const secretPath = crypto.randomUUID(); const fs = require('fs'); try { fs.readFileSync(secretPath, 'utf8'); } catch (error) { console.log(error); }";
         assert_eq!(
             catch_console_flow(
                 "secret_path",
@@ -33163,7 +33206,7 @@ mod tests {
             "provider authentication must not erase the direct path operand label"
         );
 
-        let sync_secret_content = "const fs = require('fs'); try { fs.writeFileSync('missing-parent/output.txt', 'secret-token'); } catch (error) { console.log(error); }";
+        let sync_secret_content = "const crypto = require('crypto'); const secret = crypto.randomUUID(); const fs = require('fs'); try { fs.writeFileSync('missing-parent/output.txt', secret); } catch (error) { console.log(error); }";
         assert_eq!(
             catch_console_flow(
                 "secret_content",
@@ -33345,7 +33388,14 @@ mod tests {
             ContentHash::compute(b"catch-forwarder"),
             "catch_forwarder.js",
         );
+        // bd-9vouw.19: the forwarder's secret is an entropy read made before
+        // the protected region, so the assertion below still distinguishes a
+        // forwarder throw that leaks into the catch (Secret) from one that
+        // does not (Internal).
         ir1.ops.extend([
+            secret_source_op(),
+            Ir1Op::StoreBinding { binding_id: 95 },
+            Ir1Op::Pop,
             Ir1Op::BeginTry {
                 catch_label: 41,
                 finally_label: Some(45),
@@ -33361,9 +33411,7 @@ mod tests {
             Ir1Op::Jump { label_id: 44 },
             Ir1Op::Label { id: 43 },
             Ir1Op::EndTry,
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("secret-forwarder-value".into()),
-            },
+            Ir1Op::LoadBinding { binding_id: 95 },
             Ir1Op::Throw,
             Ir1Op::Label { id: 44 },
             Ir1Op::EndTry,
@@ -33416,7 +33464,11 @@ mod tests {
                 }),
                 "nested_catch.js",
             );
+            // bd-9vouw.19: the secret is read before the protected regions.
             ir1.ops.extend([
+                secret_source_op(),
+                Ir1Op::StoreBinding { binding_id: 95 },
+                Ir1Op::Pop,
                 Ir1Op::BeginTry {
                     catch_label: 90,
                     finally_label: None,
@@ -33425,9 +33477,7 @@ mod tests {
                     catch_label: 91,
                     finally_label: None,
                 },
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret-inner-error".into()),
-                },
+                Ir1Op::LoadBinding { binding_id: 95 },
                 Ir1Op::Throw,
                 Ir1Op::EndTry,
                 Ir1Op::Jump { label_id: 92 },
@@ -33534,9 +33584,7 @@ mod tests {
             ]);
         }
         ir1.ops.extend([
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("secret-chain-source".into()),
-            },
+            secret_source_op(),
             Ir1Op::StoreBinding { binding_id: 21 },
             Ir1Op::Pop,
             Ir1Op::LoadLiteral {
@@ -33639,9 +33687,10 @@ mod tests {
     #[test]
     fn hostcall_flow_joins_only_consumed_operands_bd_bscab() {
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"flow-slice"), "flow_slice.js");
-        ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_below_args".into()),
-        });
+        // bd-9vouw.19: the unconsumed value below the argument is a real
+        // Secret (an entropy read); with a Public literal there, the
+        // assertion below would hold even if the join read past its operands.
+        ir1.ops.push(secret_source_op());
         ir1.ops.push(Ir1Op::LoadLiteral {
             value: Ir1Literal::String("public-value".into()),
         });
@@ -33654,12 +33703,7 @@ mod tests {
         let ir2 = lower_ir1_to_ir2(&ir1)
             .expect("operand-sliced IR1 to IR2 lowering")
             .module;
-        let flow = ir2
-            .ops
-            .iter()
-            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
-            .and_then(|op| op.flow.as_ref())
-            .expect("hostcall flow annotation");
+        let flow = hostcall_flow(&ir2, "fs.read").expect("hostcall flow annotation");
         assert_eq!(flow.data_label, Label::Public);
         assert!(!flow.declassification_required);
     }
@@ -33950,10 +33994,9 @@ mod tests {
         // A callback that throws a captured secret must surface at least that
         // secret's label on the catch binding (captured-labels correspondence).
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"bd-pafik-cap"), "bd_pafik_cap.js");
-        // binding 3 holds a Secret literal; the callback captures it.
-        ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("my_secret_key".into()),
-        });
+        // binding 3 holds a Secret (an entropy read, bd-9vouw.19); the
+        // callback captures it.
+        ir1.ops.push(secret_source_op());
         ir1.ops.push(Ir1Op::StoreBinding { binding_id: 3 });
         ir1.ops.push(Ir1Op::Pop);
         let capture_name = format!("{CAPTURE_CELL_NAME_PREFIX}3\0leak");
@@ -34112,9 +34155,7 @@ mod tests {
     fn computed_values_preserve_nonfinal_secret_operands_bd_bscab() {
         let cases = [
             vec![
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_lhs".into()),
-                },
+                secret_source_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-rhs".into()),
                 },
@@ -34126,9 +34167,7 @@ mod tests {
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-callee".into()),
                 },
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_receiver".into()),
-                },
+                secret_source_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-arg".into()),
                 },
@@ -34151,12 +34190,7 @@ mod tests {
             let ir2 = lower_ir1_to_ir2(&ir1)
                 .expect("computed operand flow lowering")
                 .module;
-            let flow = ir2
-                .ops
-                .iter()
-                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
-                .and_then(|op| op.flow.as_ref())
-                .expect("hostcall flow annotation");
+            let flow = hostcall_flow(&ir2, "net.write").expect("hostcall flow annotation");
             assert_eq!(flow.data_label, Label::Secret, "case {case_index}");
             assert!(flow.declassification_required, "case {case_index}");
         }
@@ -34166,18 +34200,14 @@ mod tests {
     fn aggregate_and_invocation_results_join_every_direct_input_bd_bscab() {
         let cases = [
             vec![
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_callee".into()),
-                },
+                secret_source_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-argument".into()),
                 },
                 Ir1Op::Call { arg_count: 1 },
             ],
             vec![
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_object".into()),
-                },
+                secret_source_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-key".into()),
                 },
@@ -34186,36 +34216,28 @@ mod tests {
                 },
             ],
             vec![
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_element".into()),
-                },
+                secret_source_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-element".into()),
                 },
                 Ir1Op::NewArray { count: 2 },
             ],
             vec![
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_key".into()),
-                },
+                secret_source_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-value".into()),
                 },
                 Ir1Op::NewObject { count: 1 },
             ],
             vec![
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_constructor".into()),
-                },
+                secret_source_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-argument".into()),
                 },
                 Ir1Op::Construct { arg_count: 1 },
             ],
             vec![
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret-quasi".into()),
-                },
+                secret_source_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-expression".into()),
                 },
@@ -34241,12 +34263,7 @@ mod tests {
             let ir2 = lower_ir1_to_ir2(&ir1)
                 .expect("aggregate operand flow lowering")
                 .module;
-            let flow = ir2
-                .ops
-                .iter()
-                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
-                .and_then(|op| op.flow.as_ref())
-                .expect("hostcall flow annotation");
+            let flow = hostcall_flow(&ir2, "net.write").expect("hostcall flow annotation");
             assert_eq!(flow.data_label, Label::Secret, "case {case_index}");
             assert!(flow.declassification_required, "case {case_index}");
         }
@@ -34258,9 +34275,7 @@ mod tests {
             ContentHash::compute(b"closure-capture-flow"),
             "closure_capture_flow.js",
         );
-        ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_capture".into()),
-        });
+        ir1.ops.push(secret_source_op());
         ir1.ops.push(Ir1Op::StoreBinding { binding_id: 17 });
         ir1.ops.push(Ir1Op::Pop);
         ir1.ops.push(Ir1Op::CreateFunction {
@@ -34286,12 +34301,7 @@ mod tests {
         let ir2 = lower_ir1_to_ir2(&ir1)
             .expect("closure capture flow lowering")
             .module;
-        let flow = ir2
-            .ops
-            .iter()
-            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
-            .and_then(|op| op.flow.as_ref())
-            .expect("hostcall flow annotation");
+        let flow = hostcall_flow(&ir2, "net.write").expect("hostcall flow annotation");
         assert_eq!(flow.data_label, Label::Secret);
         assert!(flow.declassification_required);
     }
@@ -34488,12 +34498,7 @@ mod tests {
         Ir1Op::CreateFunction {
             name: None,
             param_names: Vec::new(),
-            body_ops: vec![
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String("secret_function_result".into()),
-                },
-                Ir1Op::Return,
-            ],
+            body_ops: vec![secret_source_op(), Ir1Op::Return],
             free_vars: Vec::new(),
             free_var_ids: Vec::new(),
             runtime_global_loads: Vec::new(),
@@ -34558,9 +34563,7 @@ mod tests {
             "qjh7y_capture_origin.js",
         );
         ir1.ops.extend([
-            Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("secret_captured_value".into()),
-            },
+            secret_source_op(),
             Ir1Op::StoreBinding { binding_id: 7 },
             Ir1Op::Pop,
             Ir1Op::CreateFunction {
@@ -34652,9 +34655,7 @@ mod tests {
                         value: Ir1Literal::Boolean(false),
                     },
                     Ir1Op::JumpIfFalsyConsume { label_id: 1 },
-                    Ir1Op::LoadLiteral {
-                        value: Ir1Literal::String("secret_branch_result".into()),
-                    },
+                    secret_source_op(),
                     Ir1Op::Return,
                     Ir1Op::Label { id: 1 },
                     Ir1Op::LoadLiteral {
@@ -34667,21 +34668,14 @@ mod tests {
                 "async",
                 true,
                 false,
-                vec![
-                    Ir1Op::LoadLiteral {
-                        value: Ir1Literal::String("secret_async_result".into()),
-                    },
-                    Ir1Op::Return,
-                ],
+                vec![secret_source_op(), Ir1Op::Return],
             ),
             (
                 "generator",
                 false,
                 true,
                 vec![
-                    Ir1Op::LoadLiteral {
-                        value: Ir1Literal::String("secret_generator_yield".into()),
-                    },
+                    secret_source_op(),
                     Ir1Op::Yield { delegate: false },
                     Ir1Op::Return,
                 ],
@@ -34742,15 +34736,18 @@ mod tests {
 
     #[test]
     fn binding_flow_fixed_point_is_store_order_invariant_bd_bscab() {
-        for values in [
-            ["secret_branch", "public-value"],
-            ["public-value", "secret_branch"],
-        ] {
+        for secret_first in [true, false] {
             let mut ir1 = Ir1Module::new(ContentHash::compute(b"binding-flow"), "binding_flow.js");
-            for value in values {
-                ir1.ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(value.into()),
-                });
+            let public = Ir1Op::LoadLiteral {
+                value: Ir1Literal::String("public-value".into()),
+            };
+            let stores = if secret_first {
+                [secret_source_op(), public]
+            } else {
+                [public, secret_source_op()]
+            };
+            for value in stores {
+                ir1.ops.push(value);
                 ir1.ops.push(Ir1Op::StoreBinding { binding_id: 7 });
                 ir1.ops.push(Ir1Op::Pop);
             }
@@ -34764,14 +34761,16 @@ mod tests {
             let ir2 = lower_ir1_to_ir2(&ir1)
                 .expect("binding fixed-point lowering")
                 .module;
-            let flow = ir2
-                .ops
-                .iter()
-                .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
-                .and_then(|op| op.flow.as_ref())
-                .expect("hostcall flow annotation");
-            assert_eq!(flow.data_label, Label::Secret);
-            assert!(flow.declassification_required);
+            let flow = hostcall_flow(&ir2, "net.write").expect("hostcall flow annotation");
+            assert_eq!(
+                flow.data_label,
+                Label::Secret,
+                "secret_first={secret_first}"
+            );
+            assert!(
+                flow.declassification_required,
+                "secret_first={secret_first}"
+            );
         }
     }
 
@@ -34785,9 +34784,7 @@ mod tests {
         ir1.ops.push(Ir1Op::LoadBinding { binding_id: 11 });
         ir1.ops.push(Ir1Op::StoreBinding { binding_id: 12 });
         ir1.ops.push(Ir1Op::Pop);
-        ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_loop_carried".into()),
-        });
+        ir1.ops.push(secret_source_op());
         ir1.ops.push(Ir1Op::StoreBinding { binding_id: 11 });
         ir1.ops.push(Ir1Op::Pop);
         ir1.ops.push(Ir1Op::Jump { label_id: 1 });
@@ -34801,12 +34798,7 @@ mod tests {
         let ir2 = lower_ir1_to_ir2(&ir1)
             .expect("backward binding flow reaches a fixed point")
             .module;
-        let flow = ir2
-            .ops
-            .iter()
-            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
-            .and_then(|op| op.flow.as_ref())
-            .expect("hostcall flow annotation");
+        let flow = hostcall_flow(&ir2, "net.write").expect("hostcall flow annotation");
         assert_eq!(flow.data_label, Label::Secret);
         assert!(flow.declassification_required);
     }
@@ -34831,7 +34823,9 @@ mod tests {
     #[test]
     fn parsed_source_preserves_nonfinal_secret_hostcall_operand_bd_bscab() {
         let tree = crate::parser_api_stability::parse_script(
-            "const fs = require('fs'); fs.writeFileSync('secret_path', 'public-data');",
+            // bd-9vouw.19: the non-final (path) operand's secret is an entropy read.
+            "const crypto = require('crypto'); const secretPath = crypto.randomUUID(); \
+             const fs = require('fs'); fs.writeFileSync(secretPath, 'public-data');",
         )
         .expect("parse source-level multi-argument hostcall");
         let ir0 = Ir0Module::from_syntax_tree(tree, "source_operand_order_bd_bscab.js");
@@ -35053,15 +35047,13 @@ mod tests {
     #[test]
     fn property_read_off_a_high_value_is_not_an_egress_bd_az056() {
         // Reproduces bd-az056 at the flow-proof level: reading a property off a
-        // high-labeled value (a Secret string literal here -- the same shape as
-        // a caught exception carrying the fail-high user-Call exception label)
-        // must NOT be denied. Before reclassifying GetProperty as Pure this
-        // failed closed with Secret -> Internal, which rejected the pervasive
-        // `catch (e) { e.message }` idiom.
+        // high-labeled value (a Secret entropy read here, bd-9vouw.19 -- the
+        // same shape as a caught exception carrying the fail-high user-Call
+        // exception label) must NOT be denied. Before reclassifying GetProperty
+        // as Pure this failed closed with Secret -> Internal, which rejected
+        // the pervasive `catch (e) { e.message }` idiom.
         let mut ir1 = Ir1Module::new(ContentHash::compute(b"az056-ir0"), "prop_read_az056.js");
-        ir1.ops.push(Ir1Op::LoadLiteral {
-            value: Ir1Literal::String("secret_token".into()),
-        });
+        ir1.ops.push(secret_source_op());
         ir1.ops.push(Ir1Op::GetProperty {
             key: Ir1PropertyKey::Static("length".into()),
         });
@@ -36853,6 +36845,7 @@ mod tests {
     fn finite_buffer_hostcall_catches_require_closed_argument_shapes_bd_x10yn() {
         for (
             case_name,
+            before_ops,
             setup_ops,
             capability,
             arg_count,
@@ -36861,6 +36854,7 @@ mod tests {
         ) in [
             (
                 "primitive_from",
+                vec![],
                 vec![Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-input".into()),
                 }],
@@ -36871,13 +36865,18 @@ mod tests {
             ),
             (
                 "primitive_alloc",
+                // bd-9vouw.19: the fill value is a Secret entropy read made
+                // before the protected region.
+                vec![
+                    secret_source_op(),
+                    Ir1Op::StoreBinding { binding_id: 77 },
+                    Ir1Op::Pop,
+                ],
                 vec![
                     Ir1Op::LoadLiteral {
                         value: Ir1Literal::Integer(16),
                     },
-                    Ir1Op::LoadLiteral {
-                        value: Ir1Literal::String("secret-token".into()),
-                    },
+                    Ir1Op::LoadBinding { binding_id: 77 },
                 ],
                 "builtin:BufferAlloc",
                 2,
@@ -36886,6 +36885,7 @@ mod tests {
             ),
             (
                 "primitive_alloc_unsafe",
+                vec![],
                 vec![Ir1Op::LoadLiteral {
                     value: Ir1Literal::Integer(16),
                 }],
@@ -36896,6 +36896,7 @@ mod tests {
             ),
             (
                 "fresh_closed_concat",
+                vec![],
                 vec![
                     Ir1Op::LoadLiteral {
                         value: Ir1Literal::String("public-input".into()),
@@ -36909,6 +36910,7 @@ mod tests {
             ),
             (
                 "fresh_closed_concat_with_primitive_length",
+                vec![],
                 vec![
                     Ir1Op::LoadLiteral {
                         value: Ir1Literal::String("public-input".into()),
@@ -36925,6 +36927,7 @@ mod tests {
             ),
             (
                 "object_from_fails_high",
+                vec![],
                 vec![Ir1Op::NewObject { count: 0 }],
                 "builtin:BufferFrom",
                 1,
@@ -36933,6 +36936,7 @@ mod tests {
             ),
             (
                 "object_fill_alloc_fails_high",
+                vec![],
                 vec![
                     Ir1Op::LoadLiteral {
                         value: Ir1Literal::Integer(16),
@@ -36946,6 +36950,7 @@ mod tests {
             ),
             (
                 "unknown_element_concat_fails_high",
+                vec![],
                 vec![
                     Ir1Op::LoadBinding { binding_id: 99 },
                     Ir1Op::NewArray { count: 1 },
@@ -36957,6 +36962,7 @@ mod tests {
             ),
             (
                 "escaped_then_mutated_concat_fails_high",
+                vec![],
                 vec![
                     Ir1Op::LoadLiteral {
                         value: Ir1Literal::String("public-input".into()),
@@ -36982,6 +36988,7 @@ mod tests {
             ),
             (
                 "branch_crossing_concat_fails_high",
+                vec![],
                 vec![
                     Ir1Op::LoadLiteral {
                         value: Ir1Literal::String("public-input".into()),
@@ -37000,6 +37007,7 @@ mod tests {
                 ContentHash::compute(case_name.as_bytes()),
                 format!("buffer_exception_{case_name}_bd_x10yn.js"),
             );
+            ir1.ops.extend(before_ops);
             ir1.ops.push(Ir1Op::BeginTry {
                 catch_label: 41,
                 finally_label: None,
@@ -38100,10 +38108,18 @@ mod tests {
 
     #[test]
     fn crypto_lifecycle_flow_persists_across_update_and_into_catch_bd_1by6p() {
+        // bd-9vouw.19: the secret update input is an entropy read.
         for (update_value, expected_label, expected_declassification) in [
             ("public-input", Label::Internal, false),
-            ("secret-token", Label::Secret, true),
+            ("entropy", Label::Secret, true),
         ] {
+            let update_op = if update_value == "entropy" {
+                secret_source_op()
+            } else {
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(update_value.into()),
+                }
+            };
             let mut ir1 = Ir1Module::new(
                 ContentHash::compute(update_value.as_bytes()),
                 format!("crypto_lifecycle_{update_value}_bd_1by6p.js"),
@@ -38125,9 +38141,7 @@ mod tests {
                 Ir1Op::StoreBinding { binding_id: 7 },
                 Ir1Op::Pop,
                 Ir1Op::LoadBinding { binding_id: 7 },
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(update_value.into()),
-                },
+                update_op,
                 Ir1Op::HostCall {
                     capability: "builtin:CryptoObjectUpdate".to_string(),
                     arg_count: 2,
@@ -38182,10 +38196,29 @@ mod tests {
 
     #[test]
     fn crypto_set_auth_tag_catch_joins_receiver_and_tag_bd_1by6p() {
+        // bd-9vouw.19: the secret tag is an entropy read made before the
+        // protected region, so only setAuthTag's own failure reaches the catch.
         for (tag_value, expected_label, expected_declassification) in [
             ("public-auth-tag", Label::Internal, false),
-            ("secret-token", Label::Secret, true),
+            ("entropy", Label::Secret, true),
         ] {
+            let (tag_setup, tag_op) = if tag_value == "entropy" {
+                (
+                    vec![
+                        secret_source_op(),
+                        Ir1Op::StoreBinding { binding_id: 9 },
+                        Ir1Op::Pop,
+                    ],
+                    Ir1Op::LoadBinding { binding_id: 9 },
+                )
+            } else {
+                (
+                    Vec::new(),
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String(tag_value.into()),
+                    },
+                )
+            };
             let mut ir1 = Ir1Module::new(
                 ContentHash::compute(tag_value.as_bytes()),
                 format!("crypto_set_auth_tag_{tag_value}_bd_1by6p.js"),
@@ -38206,14 +38239,15 @@ mod tests {
                 },
                 Ir1Op::StoreBinding { binding_id: 7 },
                 Ir1Op::Pop,
+            ]);
+            ir1.ops.extend(tag_setup);
+            ir1.ops.extend([
                 Ir1Op::BeginTry {
                     catch_label: 41,
                     finally_label: None,
                 },
                 Ir1Op::LoadBinding { binding_id: 7 },
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(tag_value.into()),
-                },
+                tag_op,
                 Ir1Op::HostCall {
                     capability: "builtin:CryptoObjectSetAuthTag".to_string(),
                     arg_count: 2,
@@ -41689,53 +41723,46 @@ mod tests {
 
     // -- infer_data_label_for_op --
 
+    /// bd-9vouw.19: a string literal's text is not a source label, so
+    /// literals naming secrets, tokens, keys, passwords or credentials are
+    /// Public like any other literal (this test pinned the removed heuristic,
+    /// which labelled all five Secret). Only a legacy hostcall marker's
+    /// payload still models a labeled argument.
     #[test]
-    fn infer_data_label_secret_patterns() {
+    fn infer_data_label_keyword_literals_are_public_bd_9vouw_19() {
         let labels = BTreeMap::new();
-        let secret = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_secret_key".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(secret, Label::Secret);
-
-        let token = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("AUTH_TOKEN".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(token, Label::Secret);
-
-        let api_key = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_api_key_here".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(api_key, Label::Secret);
-
-        let password = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("user_password".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(password, Label::Secret);
-
-        let credential = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("credential_store".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(credential, Label::Secret);
+        for text in [
+            "my_secret_key",
+            "AUTH_TOKEN",
+            "my_api_key_here",
+            "user_password",
+            "credential_store",
+            "Unexpected token",
+        ] {
+            let label = infer_data_label_for_op(
+                &Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(text.into()),
+                },
+                &labels,
+                Label::Secret,
+            );
+            assert_eq!(label, Label::Public, "{text}");
+        }
+        // The legacy `hostcall<"cap"> payload` marker keeps modeling a secret
+        // argument through its payload text.
+        for (marker, expected) in [
+            ("hostcall<\"declassify.audit\"> secret_token", Label::Secret),
+            ("hostcall<\"declassify.audit\"> audit-record", Label::Public),
+        ] {
+            let label = infer_data_label_for_op(
+                &Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(marker.into()),
+                },
+                &labels,
+                Label::Public,
+            );
+            assert_eq!(label, expected, "{marker}");
+        }
     }
 
     #[test]

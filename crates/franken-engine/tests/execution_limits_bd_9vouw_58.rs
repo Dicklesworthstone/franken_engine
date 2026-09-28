@@ -92,14 +92,17 @@ fn more_than_ten_thousand_timers_run_to_completion() {
 #[test]
 fn heap_object_cap_is_configurable_and_recorded_for_replay() {
     let dir = scratch_dir("heap");
-    let source = "let s=0; for (let i=0;i<150000;i++){ const o={a:i}; s+=o.a&1 } console.log(s);\n";
+    // The objects stay reachable: the collector (bd-9vouw.57) reclaims
+    // garbage, so only a LIVE set above the cap can exceed it.
+    let source = "const keep=[]; for (let i=0;i<150000;i++){ keep.push({a:i}); } \
+                  let s=0; for (const o of keep) s+=o.a&1; console.log(keep.length, s);\n";
     let budget = ["--instruction-budget", "100000000"];
 
-    // Default containment cap (append-only heap) still fails closed.
+    // A live set above the default containment cap still fails closed.
     let (default_run, _) = run(&dir, "heap_default", source, &budget);
     assert!(
         !default_run.status.success(),
-        "150k allocations must exceed the default cap"
+        "150k live objects must exceed the default cap"
     );
     assert!(
         stderr(&default_run).contains("memory budget exceeded"),
@@ -119,8 +122,8 @@ fn heap_object_cap_is_configurable_and_recorded_for_replay() {
         stderr(&raised_run)
     );
     let report = report.expect("report");
-    // node: 75000
-    assert_eq!(console_lines(&report), vec!["75000"]);
+    // node: 150000 75000
+    assert_eq!(console_lines(&report), vec!["150000 75000"]);
     assert_eq!(report["replay_input"]["max_heap_objects"], 1_000_000);
 
     // Strict replay re-executes under the recorded cap (it would fail closed

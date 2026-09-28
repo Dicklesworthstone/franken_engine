@@ -778,7 +778,7 @@ fn typed_array_method_conformance_vectors() {
         ytbg_memory_error(
             "ytbg-typedarray-unsupported-method-diagnostic",
             "typedarray_methods",
-            "new Uint8Array(1).map(0)",
+            "new Uint8Array(1).toLocaleString()",
             "eval.runtime.fault",
             Some("unsupported TypedArray method"),
             1,

@@ -61905,7 +61905,7 @@ impl InterpreterCore {
                 Self::typed_array_number(&value).to_bits().to_le_bytes()
             }
             DataViewIntegerKind::BigInt64 | DataViewIntegerKind::BigUint64 => {
-                let digits = self.to_bigint_digits(value)?;
+                let digits = self.bigint_digits_of(value)?;
                 let wrapped = bigint_ops::as_uint_n(64, &digits).map_err(|error| {
                     InterpreterError::RangeError {
                         message: error.message().to_string(),
@@ -61941,7 +61941,7 @@ impl InterpreterCore {
     /// ES2020 7.1.13 ToBigInt as decimal digits: a BigInt, a boolean (0n/1n)
     /// or a string that parses as one; a Number, undefined, null or Symbol is
     /// a TypeError and an unparsable string a SyntaxError.
-    fn to_bigint_digits(&mut self, value: Value) -> Result<String, InterpreterError> {
+    fn bigint_digits_of(&mut self, value: Value) -> Result<String, InterpreterError> {
         match value {
             Value::BigInt(digits) => Ok(digits.to_string()),
             Value::Bool(flag) => Ok(i64::from(flag).to_string()),

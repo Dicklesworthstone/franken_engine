@@ -470,6 +470,12 @@ impl GuardplaneAdapter {
             context.extension_id.clone(),
         );
         updater.set_epoch(epoch);
+        // The extension's static context (trust level, declared witness
+        // confidence, capability breadth) is ONE observation about the
+        // extension, folded into the prior before any operation. Feeding it
+        // into every hooked operation counted the same metadata as fresh
+        // evidence each time (bd-9vouw.60).
+        updater.update(&context_evidence(&context, epoch));
         let mut selector = ExpectedLossSelector::new(loss_matrix);
         selector.set_epoch(epoch);
 
@@ -580,13 +586,20 @@ impl GuardplaneAdapter {
         } else {
             0
         };
-        let first_observation = state.operation_count == 1;
-
-        let evidence = self.build_evidence(&operation, suspicious_index, first_observation);
+        let evidence = self.build_evidence(&operation, suspicious_index);
 
         // Legacy decision path (maintained for compatibility)
         let update = state.updater.update(&evidence);
         let decision = state.selector.select(&update.posterior);
+        // An operation whose own evidence is neutral leaves the posterior
+        // where it was. The expected-loss selector can still prefer Challenge
+        // over Allow at an unchanged, uncertain posterior (the prior tax), and
+        // every non-Allow hook action stops execution, so letting it act on
+        // no evidence stopped benign programs at their first operation
+        // (bd-9vouw.60). Such an operation is judged by the posterior
+        // threshold policy alone: an extension whose posterior already sits
+        // past a containment threshold is still contained.
+        let operation_evidence_neutral = update.likelihoods.iter().all(|&l| l == MILLION);
         let posterior_delta_millionths = posterior_delta(&update.posterior);
         let threshold_action = state.thresholds.evaluate(posterior_delta_millionths);
 
@@ -623,9 +636,14 @@ impl GuardplaneAdapter {
 
         // Derive the legacy action, then combine it with the unified action by
         // containment severity so neither path can weaken the other.
+        let effective_selector_action = if operation_evidence_neutral {
+            SelectorContainmentAction::Allow
+        } else {
+            decision.action
+        };
         let action = hook_action_from_decisions(
             &operation,
-            decision.action,
+            effective_selector_action,
             threshold_action,
             &update.posterior,
             posterior_delta_millionths,
@@ -649,51 +667,25 @@ impl GuardplaneAdapter {
         final_action
     }
 
-    /// Evidence for one hooked operation. The extension's static context
-    /// (trust level, declared witness confidence) is one observation, made
-    /// with the first operation; re-adding it to every later operation counted
-    /// the same metadata as fresh evidence each time and drove any program to
-    /// suspension within a few operations (bd-9vouw.60). Later operations
-    /// carry only their own signal: suspicion, capability use, and the
-    /// suspicious-operation burst rate.
-    fn build_evidence(
-        &self,
-        operation: &GuardplaneOperation,
-        suspicious_index: u64,
-        first_observation: bool,
-    ) -> Evidence {
+    /// Evidence for one hooked operation: its own suspicion, capability use,
+    /// and the suspicious-operation burst rate. The static context is already
+    /// in the prior (see [`context_evidence`]); capability breadth is static
+    /// too, so per-operation evidence reports a neutral breadth of one.
+    fn build_evidence(&self, operation: &GuardplaneOperation, suspicious_index: u64) -> Evidence {
         let suspicion_millionths = operation.suspicion_millionths();
-        let trust_penalty_millionths = if first_observation {
-            self.effective_trust_penalty_millionths()
-        } else {
-            0
-        };
-        let confidence_penalty_millionths =
-            if first_observation && self.context.witness_confidence_declared {
-                (WITNESS_CONFIDENCE_FLOOR_MILLIONTHS - self.context.witness_confidence_millionths)
-                    .max(0)
-            } else {
-                0
-            };
         let capability_penalty_millionths =
             self.capability_penalty_millionths(operation.capability_label());
 
-        let resource_score_millionths = (suspicion_millionths / 2
-            + trust_penalty_millionths / 3
-            + confidence_penalty_millionths / 4
-            + capability_penalty_millionths / 3)
-            .clamp(0, MILLION);
-        let timing_anomaly_millionths =
-            (suspicion_millionths + confidence_penalty_millionths / 2).clamp(0, MILLION);
-        let denial_rate_millionths = (capability_penalty_millionths
-            + trust_penalty_millionths / 2
-            + suspicion_millionths / 4)
-            .clamp(0, MILLION);
+        let resource_score_millionths =
+            (suspicion_millionths / 2 + capability_penalty_millionths / 3).clamp(0, MILLION);
+        let timing_anomaly_millionths = suspicion_millionths.clamp(0, MILLION);
+        let denial_rate_millionths =
+            (capability_penalty_millionths + suspicion_millionths / 4).clamp(0, MILLION);
 
         Evidence {
             extension_id: self.context.extension_id.clone(),
             hostcall_rate_millionths: operation.rate_millionths(suspicious_index),
-            distinct_capabilities: self.context.distinct_capability_count(),
+            distinct_capabilities: 1,
             resource_score_millionths,
             timing_anomaly_millionths,
             denial_rate_millionths,
@@ -721,19 +713,53 @@ impl GuardplaneAdapter {
     }
 
     fn effective_trust_penalty_millionths(&self) -> i64 {
-        let base = self.context.trust_level.risk_penalty_millionths();
-        if !self.context.witness_declared() {
-            return base;
-        }
+        context_trust_penalty_millionths(&self.context)
+    }
+}
 
-        // Confidence above 0.6 earns credit; confidence below it earns none
-        // (it used to go negative and raise the penalty, bd-9vouw.60).
-        let confidence_credit = self
-            .context
-            .witness_confidence_millionths
-            .saturating_sub(600_000)
-            .max(0);
-        base.saturating_sub(confidence_credit)
+/// Trust penalty of an extension's static context. Confidence above 0.6
+/// earns credit; confidence below it earns none (it used to go negative and
+/// raise the penalty, bd-9vouw.60).
+fn context_trust_penalty_millionths(context: &GuardplaneExtensionContext) -> i64 {
+    let base = context.trust_level.risk_penalty_millionths();
+    if !context.witness_declared() {
+        return base;
+    }
+    let confidence_credit = context
+        .witness_confidence_millionths
+        .saturating_sub(600_000)
+        .max(0);
+    base.saturating_sub(confidence_credit).max(0)
+}
+
+/// Penalty for a DECLARED low witness confidence. A missing confidence is not
+/// a zero confidence (bd-9vouw.60); a malformed one is recorded as declared
+/// zero when the context is parsed.
+fn context_confidence_penalty_millionths(context: &GuardplaneExtensionContext) -> i64 {
+    if context.witness_confidence_declared {
+        (WITNESS_CONFIDENCE_FLOOR_MILLIONTHS - context.witness_confidence_millionths).max(0)
+    } else {
+        0
+    }
+}
+
+/// The extension's static context as a single observation, folded into the
+/// guardplane prior once at construction (bd-9vouw.60). It carries the
+/// channels the context used to add to every operation, and no operation
+/// signal.
+fn context_evidence(context: &GuardplaneExtensionContext, epoch: SecurityEpoch) -> Evidence {
+    let trust_penalty_millionths = context_trust_penalty_millionths(context);
+    let confidence_penalty_millionths = context_confidence_penalty_millionths(context);
+    Evidence {
+        extension_id: context.extension_id.clone(),
+        hostcall_rate_millionths: 0,
+        distinct_capabilities: context.distinct_capability_count(),
+        resource_score_millionths: (trust_penalty_millionths / 3
+            + confidence_penalty_millionths / 4)
+            .clamp(0, MILLION),
+        timing_anomaly_millionths: (confidence_penalty_millionths / 2).clamp(0, MILLION),
+        denial_rate_millionths: (trust_penalty_millionths / 2).clamp(0, MILLION),
+        epoch,
     }
 }
 
@@ -1087,12 +1113,19 @@ mod tests {
             ("capability_witness.confidence_millionths", "700000"),
         ]);
 
-        let _ = one.pre_property_access(&test_hook_context(1), &ObjectId(1), &"value".to_string());
+        // Risk accumulates with repeated EVIDENCE. An ordinary read carries
+        // none (bd-9vouw.60: re-counting static context per operation was the
+        // defect), so the repeated operation is a suspicious one.
+        let _ = one.pre_property_access(
+            &test_hook_context(1),
+            &ObjectId(1),
+            &"__proto__".to_string(),
+        );
         for i in 0..10 {
             let _ = ten.pre_property_access(
                 &test_hook_context(i + 1),
                 &ObjectId(1),
-                &"value".to_string(),
+                &"__proto__".to_string(),
             );
         }
 
@@ -1285,7 +1318,6 @@ mod tests {
             adapter.pre_call(&ctx, &named_call("map"), &[Value::Int(1), Value::Int(2)]),
             adapter.pre_call(&ctx, &named_call("retrieval"), &[]),
             adapter.pre_call(&ctx, &named_call("evaluateRow"), &[Value::Int(1)]),
-            adapter.pre_import(&ctx, "./lib/util.js"),
         ]
     }
 
@@ -1300,7 +1332,23 @@ mod tests {
                 );
             }
         }
-        assert_eq!(adapter.summary().decision_count, 200 * 12);
+        assert_eq!(adapter.summary().decision_count, 200 * 11);
+    }
+
+    #[test]
+    fn undeclared_module_import_is_escalated_after_ordinary_work() {
+        // Positive control for the neutral-operation rule: the agent manifest
+        // declares fs_read/console/builtin/timer, so a module import is an
+        // undeclared capability use and carries evidence.
+        let adapter = agent_sandbox_adapter();
+        for step in 1..=20 {
+            ordinary_round(&adapter, step);
+        }
+        let action = adapter.pre_import(&test_hook_context(21), "./lib/util.js");
+        assert!(
+            hook_action_rank(&action) >= hook_action_rank(&HookAction::Suspend),
+            "undeclared import must be contained, got {action:?}"
+        );
     }
 
     #[test]
@@ -1348,17 +1396,8 @@ mod tests {
         assert!(malformed.witness_confidence_declared);
         assert_eq!(malformed.witness_confidence_millionths, 0);
 
-        let operation = GuardplaneOperation::PropertyAccess {
-            key: "value".to_string(),
-        };
         let evidence_for = |context: GuardplaneExtensionContext| {
-            GuardplaneAdapter::from_runtime_config(
-                context,
-                LossMatrix::balanced(),
-                &RuntimeConfig::default(),
-                SecurityEpoch::from_raw(1),
-            )
-            .build_evidence(&operation, 0, true)
+            context_evidence(&context, SecurityEpoch::from_raw(1))
         };
         let undeclared_evidence = evidence_for(undeclared);
         let declared_zero_evidence = evidence_for(declared_zero);

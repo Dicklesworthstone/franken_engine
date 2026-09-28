@@ -540,23 +540,13 @@ mod tests {
     /// conformance gaps surfaced by the audit; closing them is tracked under the
     /// bd-bg9l1 epic. The harness was passing green at only ~60% pass rate.
     const KNOWN_ARROW_FUNCTION_GAPS: &[&str] = &[
-        "ES2020-13.3.3-array-destructuring",
-        "ES2020-13.3.3-object-destructuring",
-        "ES2020-14.1.19-default-params",
-        "ES2020-14.1.19-default-params-override",
-        "ES2020-14.1.20-rest-params",
-        // bd-vj6kn (FIND-9): three newly-added SyntaxError cases. Listed here
-        // until the parser rejects them so the drift detector treats them as
-        // known engine gaps rather than failing the gate. Remove from this
-        // list when the parser starts emitting the expected SyntaxError.
+        // bd-vj6kn (FIND-9): SyntaxError cases. Listed here until the parser
+        // rejects them so the drift detector treats them as known engine gaps
+        // rather than failing the gate. Remove from this list when the parser
+        // starts emitting the expected SyntaxError.
         "ES2020-14.1.20-syntax-error-rest-not-last",
-        "ES2020-14.2.1-syntax-error-await-in-non-async-arrow",
         "ES2020-14.2.1-syntax-error-duplicate-params",
         "ES2020-14.2.1-syntax-error-yield-in-arrow",
-        "ES2020-14.2.16-arrow-in-method",
-        "ES2020-14.2.16-lexical-this",
-        "ES2020-14.7-async-arrow",
-        "ES2020-14.7-async-arrow-params",
     ];
 
     #[test]

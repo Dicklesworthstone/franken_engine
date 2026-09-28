@@ -2480,6 +2480,8 @@ enum QuoteContext {
     Template,
     /// Inside a `${ ... }` substitution, with its open-brace depth.
     Substitution(u32),
+    /// Inside a regular-expression literal, with the bytes left in it.
+    Regex(usize),
 }
 
 impl QuoteState {
@@ -2513,12 +2515,27 @@ impl QuoteState {
         ch.is_ascii() && self.open(ch as u8)
     }
 
+    /// Enter the regular-expression literal opened by the `/` at `s[slash]`
+    /// when a regex, not a division, can start there. Its quotes, brackets
+    /// and operators are pattern text, so lodash's `/[&<>"']/g` opens no
+    /// string. Returns whether it did; the `/` itself is consumed.
+    fn open_regex_at(&mut self, s: &str, slash: usize) -> bool {
+        match regex_literal_len_at(s, slash) {
+            Some(len) if len > 1 => {
+                self.stack.push(QuoteContext::Regex(len - 1));
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Consume one byte while [`Self::active`].
     fn advance(&mut self, b: u8) {
         let Some(&context) = self.stack.last() else {
             return;
         };
         match context {
+            QuoteContext::Regex(left) => self.consume_regex_bytes(left, 1),
             QuoteContext::String(quote) => {
                 if self.escaped {
                     self.escaped = false;
@@ -2570,24 +2587,38 @@ impl QuoteState {
     }
 
     fn advance_char(&mut self, ch: char) {
+        // A regex literal's extent is in bytes.
+        if let Some(&QuoteContext::Regex(left)) = self.stack.last() {
+            self.consume_regex_bytes(left, ch.len_utf8());
+            return;
+        }
         // Every delimiter is ASCII; any other character is plain content.
         self.advance(if ch.is_ascii() { ch as u8 } else { 0x80 });
     }
+
+    fn consume_regex_bytes(&mut self, left: usize, consumed: usize) {
+        if left <= consumed {
+            self.stack.pop();
+        } else {
+            *self.stack.last_mut().expect("regex context") = QuoteContext::Regex(left - consumed);
+        }
+    }
 }
 
-/// For each byte of `s`, whether it belongs to a string or template literal
-/// (delimiters and substitutions included), computed forward with
+/// For each byte of `s`, whether it belongs to a string, template or regex
+/// literal (delimiters and substitutions included), computed forward with
 /// [`QuoteState`]. Scanners that walk right-to-left use this, because a
 /// template's nesting cannot be recovered from its right end (bd-9vouw.41).
 fn quoted_byte_mask(s: &str) -> Vec<bool> {
     let mut quotes = QuoteState::default();
     s.bytes()
-        .map(|b| {
+        .enumerate()
+        .map(|(index, b)| {
             if quotes.active() {
                 quotes.advance(b);
                 true
             } else {
-                quotes.open(b)
+                (b == b'/' && quotes.open_regex_at(s, index)) || quotes.open(b)
             }
         })
         .collect()
@@ -3386,6 +3417,11 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
             quotes.advance_char(ch);
             continue;
         }
+        // A regex literal's `;` and quotes are pattern text: lodash's
+        // `var r = /\b__p \+= '';/g, s = …;` is one statement.
+        if ch == '/' && quotes.open_regex_at(line, index) {
+            continue;
+        }
 
         match ch {
             '\'' | '"' | '`' => {
@@ -4171,6 +4207,9 @@ fn find_top_level_eq(source: &str) -> Option<usize> {
             quotes.advance_char(ch);
             continue;
         }
+        if ch == '/' && quotes.open_regex_at(source, i) {
+            continue;
+        }
         match ch {
             '\'' | '"' | '`' => {
                 quotes.open_char(ch);
@@ -4349,6 +4388,9 @@ fn find_top_level_colon_in_pattern(source: &str) -> Option<usize> {
             quotes.advance_char(ch);
             continue;
         }
+        if ch == '/' && quotes.open_regex_at(source, i) {
+            continue;
+        }
         match ch {
             '\'' | '"' | '`' => {
                 quotes.open_char(ch);
@@ -4424,6 +4466,9 @@ fn split_pattern_elements(source: &str) -> Vec<&str> {
     for (i, ch) in source.char_indices() {
         if quotes.active() {
             quotes.advance_char(ch);
+            continue;
+        }
+        if ch == '/' && quotes.open_regex_at(source, i) {
             continue;
         }
         match ch {
@@ -5056,6 +5101,10 @@ fn strip_trailing_line_comment(expression: &str) -> &str {
             index += 1;
             continue;
         }
+        if byte == b'/' && quotes.open_regex_at(expression, index) {
+            index += 1;
+            continue;
+        }
 
         match byte {
             b'\'' | b'"' | b'`' => {
@@ -5242,6 +5291,10 @@ fn find_top_level_arrow(s: &str) -> Option<usize> {
         let b = bytes[i];
         if quotes.active() {
             quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(s, i) {
             i += 1;
             continue;
         }
@@ -5878,6 +5931,9 @@ fn find_top_level_colon(s: &str) -> Option<usize> {
             quotes.advance(b);
             continue;
         }
+        if b == b'/' && quotes.open_regex_at(s, i) {
+            continue;
+        }
         match b {
             b'\'' | b'"' | b'`' => {
                 quotes.open(b);
@@ -5935,6 +5991,10 @@ fn find_ternary_colon(s: &str) -> Option<usize> {
         let b = bytes[i];
         if quotes.active() {
             quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(s, i) {
             i += 1;
             continue;
         }
@@ -6032,6 +6092,10 @@ fn try_parse_binary(
         let b = bytes[i];
         if quotes.active() {
             quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(expr, i) {
             i += 1;
             continue;
         }
@@ -6895,6 +6959,9 @@ fn find_top_level_template_start(s: &str) -> Option<usize> {
             quotes.advance_char(ch);
             continue;
         }
+        if ch == '/' && quotes.open_regex_at(s, index) {
+            continue;
+        }
 
         match ch {
             '\'' | '"' => {
@@ -6937,6 +7004,10 @@ fn find_first_top_level_paren_pair(s: &str) -> Option<(usize, usize)> {
         let b = bytes[i];
         if quotes.active() {
             quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(s, i) {
             i += 1;
             continue;
         }
@@ -7039,6 +7110,10 @@ fn find_last_top_level_dot(s: &str) -> Option<usize> {
             quotes.advance(b);
             continue;
         }
+        // `/a.b/.test(x)`: only the `.` after the literal is a member access.
+        if b == b'/' && quotes.open_regex_at(s, i) {
+            continue;
+        }
         match b {
             b'\'' | b'"' | b'`' => {
                 quotes.open(b);
@@ -7095,6 +7170,10 @@ fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
         let b = bytes[i];
         if quotes.active() {
             quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(s, i) {
             i += 1;
             continue;
         }
@@ -8257,6 +8336,10 @@ fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
 /// than dividing. Operator scanners skip the literal, so the `=` in `/a=b/` or
 /// `/=/g` is never mistaken for an assignment.
 fn regex_literal_len_at(expr: &str, slash: usize) -> Option<usize> {
+    // `//` and `/*` open comments; no regex body starts with `/` or `*`.
+    if matches!(expr.as_bytes().get(slash + 1), Some(b'/' | b'*')) {
+        return None;
+    }
     let before = expr[..slash].trim_end();
     let identifier_start = before
         .char_indices()
@@ -8271,7 +8354,13 @@ fn regex_literal_len_at(expr: &str, slash: usize) -> Option<usize> {
     ) {
         return None;
     }
-    leading_regexp_literal(&expr[slash..]).map(|(end, _, _)| end)
+    // A regex literal never spans a line, so a `/` whose "literal" would
+    // (`i++ / 2` … `/`) divides.
+    let line = &expr[slash..];
+    let line = line
+        .find(is_ecmascript_line_terminator)
+        .map_or(line, |end| &line[..end]);
+    leading_regexp_literal(line).map(|(end, _, _)| end)
 }
 
 /// Return the byte end and components of a regex literal at the start of `input`.
@@ -9324,6 +9413,9 @@ fn extract_balanced(s: &str, open_char: char, close_char: char) -> Option<(&str,
             quotes.advance(b);
             continue;
         }
+        if b == b'/' && quotes.open_regex_at(s, i) {
+            continue;
+        }
         match b {
             b'\'' | b'"' | b'`' => {
                 quotes.open(b);
@@ -9637,6 +9729,10 @@ fn find_top_level_else(s: &str) -> Option<usize> {
             i += 1;
             continue;
         }
+        if b == b'/' && quotes.open_regex_at(s, i) {
+            i += 1;
+            continue;
+        }
         match b {
             b'\'' | b'"' | b'`' => {
                 quotes.open(b);
@@ -9753,6 +9849,10 @@ fn split_for_header(header: &str) -> Option<(&str, &str, &str)> {
         let b = bytes[i];
         if quotes.active() {
             quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(header, i) {
             i += 1;
             continue;
         }
@@ -10024,7 +10124,7 @@ fn find_top_level_keyword(src: &str, keyword: &str) -> Option<usize> {
         let b = bytes[i];
         if quotes.active() {
             quotes.advance(b);
-        } else if !quotes.open(b) {
+        } else if !(b == b'/' && quotes.open_regex_at(src, i)) && !quotes.open(b) {
             match b {
                 b'(' => depth_paren += 1,
                 b')' => depth_paren -= 1,
@@ -10434,6 +10534,10 @@ fn split_at_next_case(s: &str) -> (&str, &str) {
         let b = bytes[i];
         if quotes.active() {
             quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(s, i) {
             i += 1;
             continue;
         }
@@ -10938,6 +11042,9 @@ fn split_class_members(body: &str) -> Vec<&str> {
     for (i, ch) in body.char_indices() {
         if quotes.active() {
             quotes.advance_char(ch);
+            continue;
+        }
+        if ch == '/' && quotes.open_regex_at(body, i) {
             continue;
         }
         match ch {

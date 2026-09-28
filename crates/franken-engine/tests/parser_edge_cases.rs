@@ -17,7 +17,7 @@
 
 use std::io::Cursor;
 
-use frankenengine_engine::ast::{ExportKind, Expression, ParseGoal, Statement};
+use frankenengine_engine::ast::{BinaryOperator, ExportKind, Expression, ParseGoal, Statement};
 use frankenengine_engine::parser::{
     CanonicalEs2020Parser, Es2020Parser, ParseErrorCode, StreamInput,
 };
@@ -810,6 +810,133 @@ fn assignments_inside_conditional_branches_belong_to_the_branch() {
         for part in [&*test, &*consequent, &*alternate] {
             assert!(!matches!(part, Expression::Raw(_)), "{source}: {part:?}");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Regex literal contents are pattern text to every splitter (lodash 4.17.21)
+// ---------------------------------------------------------------------------
+
+fn collect_raw_fragments(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(text)) = map.get("Raw") {
+                out.push(text.clone());
+            }
+            for nested in map.values() {
+                collect_raw_fragments(nested, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for nested in items {
+                collect_raw_fragments(nested, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_without_raw(source: &str) -> Vec<Statement> {
+    let tree = parser()
+        .parse(source, ParseGoal::Script)
+        .unwrap_or_else(|error| panic!("{source}: {error}"));
+    let mut raws = Vec::new();
+    collect_raw_fragments(&serde_json::to_value(&tree).expect("serialize tree"), &mut raws);
+    assert!(raws.is_empty(), "{source}: unparsed fragments {raws:?}");
+    tree.body
+}
+
+fn regex_pattern(expression: &Expression) -> &str {
+    match expression {
+        Expression::RegExpLiteral { pattern, .. } => pattern,
+        other => panic!("expected a regex literal, got {other:?}"),
+    }
+}
+
+#[test]
+fn regex_literal_contents_never_split_statements_or_operands() {
+    // lodash 4.17.21's template regexes. The `'';` inside the first pattern
+    // ended the `var` statement mid-literal; the remainder then failed with
+    // "invalid assignment target" and lodash's whole IIFE fell back to Raw.
+    let body = parse_without_raw(
+        "var reEmptyStringLeading = /\\b__p \\+= '';/g,\n    reEmptyStringMiddle = /\\b(__p \\+=) '' \\+/g,\n    reEmptyStringTrailing = /(__e\\(.*?\\)|\\b__t\\)) \\+\\n'';/g;",
+    );
+    assert_eq!(body.len(), 1);
+    let Statement::VariableDeclaration(declaration) = &body[0] else {
+        panic!("expected a var declaration");
+    };
+    let patterns: Vec<&str> = declaration
+        .declarations
+        .iter()
+        .map(|declarator| regex_pattern(declarator.initializer.as_ref().expect("initializer")))
+        .collect();
+    assert_eq!(
+        patterns,
+        [
+            r"\b__p \+= '';",
+            r"\b(__p \+=) '' \+",
+            r"(__e\(.*?\)|\b__t\)) \+\n'';"
+        ]
+    );
+    let body = parse_without_raw(
+        "var reUnescapedHtml = /[&<>\"']/g, reHasUnescapedHtml = RegExp(reUnescapedHtml.source);",
+    );
+    let Statement::VariableDeclaration(declaration) = &body[0] else {
+        panic!("expected a var declaration");
+    };
+    assert_eq!(declaration.declarations.len(), 2);
+
+    // Quotes, brackets, `;`, `.`, `,`, `:`, `?`, `=>`, `{` and `)` inside a
+    // pattern are pattern text to the statement, operator, member, call,
+    // argument, conditional, block and for-header splitters.
+    assert_eq!(parse_without_raw("a = /;/; b = 2;").len(), 2);
+    for source in [
+        "y = /'/.test(s) ? /\"/ : /`/;",
+        "f(/,/, /a=>b/, /:/);",
+        "z = g(/[)]/);",
+        "z = g(/\\)/);",
+        "if (/[{]/.test(s)) { t = 1; }",
+        "for (i = 0; /;/.test(s) && i < 3; i++) { t = i; }",
+        "o = { k: /}/ };",
+    ] {
+        parse_without_raw(source);
+    }
+    let Expression::Assignment { right, .. } = expression_statement("x = /a.b/.test(s);") else {
+        panic!("expected an assignment");
+    };
+    let Expression::Call { callee, .. } = *right else {
+        panic!("expected a call");
+    };
+    let Expression::Member { object, .. } = *callee else {
+        panic!("expected a member callee");
+    };
+    assert_eq!(regex_pattern(&object), "a.b");
+    let Expression::Call { arguments, .. } = expression_statement("s.replace(/[()]/g, '');") else {
+        panic!("expected a call");
+    };
+    assert_eq!(arguments.len(), 2);
+    assert_eq!(regex_pattern(&arguments[0]), "[()]");
+
+    // A `/` after an operand still divides.
+    for source in [
+        "q = a / b / c;",
+        "q = (a + b) / 2;",
+        "q = s.length / 2 / n;",
+        "q = x[0] / 2;",
+    ] {
+        let Expression::Assignment { right, .. } = expression_statement(source) else {
+            panic!("{source}: expected an assignment");
+        };
+        assert!(
+            matches!(
+                *right,
+                Expression::Binary {
+                    operator: BinaryOperator::Divide,
+                    ..
+                }
+            ),
+            "{source}: {right:?}"
+        );
     }
 }
 

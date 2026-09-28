@@ -439,7 +439,7 @@ impl InterpreterCore {
                 got: source.type_name().into(),
             });
         }
-        let mut labels = self.clone_isolated_call_labels_from_registers(
+        let labels = self.clone_isolated_call_labels_from_registers(
             Some(if construct {
                 args.start
             } else {
@@ -451,6 +451,121 @@ impl InterpreterCore {
             },
         )?;
         let context = self.join_arg_range_label(args)?;
+        self.invoke_with_argument_list(
+            module,
+            target,
+            this_arg,
+            source,
+            labels,
+            context,
+            explicit_new_target,
+            construct,
+        )
+    }
+
+    /// `super(...args)` (ES2020 12.3.7.1 SuperCall with a spread argument
+    /// list). The lowering builds the argument array; this constructs the
+    /// active derived constructor's parent with the frame's new.target, like
+    /// `ConstructSuper`, and then initializes the frame's `this` binding with
+    /// the result. The parent runs through the same bounded native construct
+    /// as `Reflect.construct(parent, args, new.target)`.
+    pub(super) fn construct_super_spread_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let frame = self
+            .call_stack
+            .last()
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "active derived constructor".to_string(),
+                got: "super() outside a constructor".to_string(),
+            })?;
+        if !frame.derived_constructor || frame.this_initialized {
+            return Err(InterpreterError::TypeError {
+                expected: "uninitialized derived-constructor this binding".to_string(),
+                got: if frame.derived_constructor {
+                    "super() called more than once".to_string()
+                } else {
+                    "super() in a base constructor".to_string()
+                },
+            });
+        }
+        // A builtin parent (`extends Array`, `extends Error`, ...) is
+        // registered by its canonical constructor name.
+        let parent = match frame.super_value.clone() {
+            Value::Str(name) => {
+                let name = name.to_string();
+                STANDARD_CONSTRUCTOR_GLOBALS
+                    .iter()
+                    .copied()
+                    .find(|candidate| *candidate == name)
+                    .map(|name| Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)))
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "constructible superclass".to_string(),
+                        got: format!("builtin superclass {name}"),
+                    })?
+            }
+            parent => parent,
+        };
+        let labels = IsolatedCallLabels {
+            receiver: frame.super_label.clone(),
+            arguments: IsolatedArgumentLabels::Public,
+        };
+        let new_target = (
+            frame.new_target_value.clone(),
+            frame.new_target_label.clone(),
+        );
+        let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let context = self.join_arg_range_label(args)?;
+        let value = self.invoke_with_argument_list(
+            module,
+            parent,
+            Value::Undefined,
+            source,
+            labels,
+            context,
+            Some(new_target),
+            true,
+        )?;
+        let label = self
+            .pending_hostcall_result_label
+            .clone()
+            .unwrap_or(Label::Public);
+        let frame = self
+            .call_stack
+            .last_mut()
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "enclosing derived constructor".to_string(),
+                got: "missing caller frame after super()".to_string(),
+            })?;
+        if !frame.derived_constructor || frame.this_initialized {
+            return Err(InterpreterError::TypeError {
+                expected: "uninitialized enclosing derived-constructor this binding".to_string(),
+                got: "super() attempted to initialize this twice".to_string(),
+            });
+        }
+        frame.this_value = value.clone();
+        frame.this_label = label;
+        frame.this_initialized = true;
+        Ok(value)
+    }
+
+    /// The shared tail of `Reflect.apply`, `Reflect.construct` and
+    /// `super(...args)`: CreateListFromArrayLike(`source`) under `context`,
+    /// then call or construct `target` with that list.
+    #[allow(clippy::too_many_arguments)]
+    fn invoke_with_argument_list(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target: Value,
+        this_arg: Value,
+        source: Value,
+        mut labels: IsolatedCallLabels,
+        context: Label,
+        explicit_new_target: Option<(Value, Label)>,
+        construct: bool,
+    ) -> Result<Value, InterpreterError> {
         let context_bytes = Self::estimate_label_bytes(&context);
         let saved_bytes = self
             .active_inline_callback_context_label

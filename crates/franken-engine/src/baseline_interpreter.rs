@@ -81666,17 +81666,15 @@ impl InterpreterCore {
                 continue;
             };
 
-            let entries_index = entries_id.0 as usize;
-            let mut inserted = false;
-
-            self.mutate_heap(|heap| {
-                if let Some(entries_obj) = heap.get_mut(entries_index) {
-                    inserted = entries_obj
-                        .properties
-                        .insert(key_str, value.clone())
-                        .is_none();
-                }
-            });
+            // Charged like `map_collection_set`: a raw insert here left the
+            // entries (and a duplicate key's replacement growth) out of the
+            // running estimate, which only the full re-walk at every
+            // microtask checkpoint used to repair.
+            let inserted = self
+                .heap
+                .get(entries_id.0 as usize)
+                .is_some_and(|entries| !entries.properties.contains_key(&key_str));
+            self.set_object_property(entries_id, key_str, value)?;
 
             if inserted && let Some(collection_id) = size_owner {
                 self.increment_collection_size(collection_id);

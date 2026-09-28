@@ -65,7 +65,8 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir4Module};
 use frankenengine_engine::jsx_tsx_parser::JsxRuntimeMode;
 use frankenengine_engine::lowering_pipeline::{
-    AmbientAuthorityGrant, LoweringContext, LoweringPipelineOutput, lower_ir0_to_ir3,
+    AmbientAuthorityGrant, LoweringContext, LoweringPipelineError, LoweringPipelineOutput,
+    lower_ir0_to_ir3,
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::non_use_certificate::{
@@ -142,6 +143,7 @@ const RUN_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run.v2";
 const AGENT_SANDBOX_COMMAND_SCHEMA_VERSION: &str = "franken-engine.frankenctl.agent-sandbox.v2";
 const ORCHESTRATION_FAILURE_SCHEMA_VERSION: &str =
     "franken-engine.frankenctl.orchestration-failure.v1";
+const LOWERING_REJECTION_SCHEMA_VERSION: &str = "franken-engine.frankenctl.lowering-rejection.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
 const RUN_REPORT_SCHEMA_VERSION: &str = RUN_COMMAND_SCHEMA_VERSION;
 const RUN_SOURCE_SCHEMA_VERSION: &str = "franken-engine.frankenctl.run-source.v1";
@@ -1174,6 +1176,44 @@ struct OrchestrationFailureOutput {
     evidence_chain_head: Option<String>,
     uncommitted_evidence_chain: UncommittedEvidenceChainEvidence,
     observability_mode: ObservabilityModeOutput,
+}
+
+/// bd-9vouw.61: `frankenctl run` refused the program while lowering it (an
+/// ambient-authority access or an unauthorized information flow), before any
+/// execution cell existed. There is no execution evidence to chain; the
+/// report records what was refused and where, so the refusal is no longer a
+/// bare stderr line.
+#[derive(Debug, Clone, Serialize)]
+struct LoweringRejectionOutput {
+    schema_version: String,
+    command: String,
+    input_path: String,
+    exit_code: i32,
+    error: String,
+    classification: String,
+    rejection: LoweringRejection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_write_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum LoweringRejection {
+    AmbientAuthority {
+        accessor: String,
+        required_effect: String,
+        caller_profile: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        span: Option<frankenengine_engine::ast::SourceSpan>,
+    },
+    UnauthorizedFlow {
+        op_index: usize,
+        source_label: String,
+        sink_clearance: String,
+        detail: String,
+    },
 }
 
 /// Summary of an emitted E8 certificate bundle (bd-fqlfw.8.3) in the run
@@ -4564,6 +4604,15 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let result = match orchestrator.execute(&package) {
         Ok(result) => result,
         Err(error) => {
+            if let Some(rejection) = lowering_rejection(&error) {
+                return emit_lowering_rejection(
+                    "run",
+                    &args.input,
+                    args.out.as_deref(),
+                    &error,
+                    rejection,
+                );
+            }
             return emit_orchestration_failure(
                 "run",
                 &args.input,
@@ -6886,8 +6935,80 @@ fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
         OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { .. }) => {
             Some("capability_denied")
         }
+        OrchestratorError::Lowering(lowering) => match lowering.as_ref() {
+            LoweringPipelineError::AmbientAuthorityViolation { .. }
+            | LoweringPipelineError::UnauthorizedFlow { .. } => Some("rejected_at_lowering"),
+            _ => None,
+        },
         _ => None,
     }
+}
+
+/// bd-9vouw.61: the security refusal a lowering error records, if it is one.
+fn lowering_rejection(error: &OrchestratorError) -> Option<LoweringRejection> {
+    let OrchestratorError::Lowering(lowering) = error.primary_error() else {
+        return None;
+    };
+    match lowering.as_ref() {
+        LoweringPipelineError::AmbientAuthorityViolation {
+            required_effect,
+            caller_profile,
+            accessor,
+            span,
+        } => Some(LoweringRejection::AmbientAuthority {
+            accessor: accessor.clone(),
+            required_effect: required_effect.to_string(),
+            caller_profile: caller_profile.to_string(),
+            span: *span,
+        }),
+        LoweringPipelineError::UnauthorizedFlow {
+            op_index,
+            source_label,
+            sink_clearance,
+            detail,
+        } => Some(LoweringRejection::UnauthorizedFlow {
+            op_index: *op_index,
+            source_label: source_label.to_string(),
+            sink_clearance: sink_clearance.to_string(),
+            detail: detail.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// bd-9vouw.61: write the refusal report (stdout and `--out`) for a program
+/// rejected while lowering, then the usual stderr line; exit 2 as before.
+fn emit_lowering_rejection(
+    command: &str,
+    input: &Path,
+    out: Option<&Path>,
+    error: &OrchestratorError,
+    rejection: LoweringRejection,
+) -> Result<i32, String> {
+    let error_message = format_orchestration_error(command, input, error);
+    let mut output = LoweringRejectionOutput {
+        schema_version: LOWERING_REJECTION_SCHEMA_VERSION.to_string(),
+        command: command.to_string(),
+        input_path: input.display().to_string(),
+        exit_code: 2,
+        error: error_message.clone(),
+        classification: "rejected_at_lowering".to_string(),
+        rejection,
+        report_path: out.map(|path| path.display().to_string()),
+        report_write_error: None,
+    };
+    if let Some(path) = out
+        && let Err(write_error) = write_json_file(path, &output)
+    {
+        output.report_path = None;
+        output.report_write_error = Some(write_error);
+    }
+    print_json(&output)?;
+    eprintln!("{error_message}");
+    if let Some(write_error) = output.report_write_error.as_deref() {
+        eprintln!("rejection report file was not written: {write_error}");
+    }
+    Ok(output.exit_code)
 }
 
 /// The typed capability profile a `frankenctl run` grants (the certifier's

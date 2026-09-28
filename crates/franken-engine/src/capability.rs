@@ -263,6 +263,7 @@ pub fn is_language_operation_tag(tag: &str) -> bool {
                 | "builtin:ClassMembersNonEnumerable"
                 | "builtin:ArgumentsObject"
                 | "builtin:ClassPrototypeLink"
+                | "builtin:ConstructSuperSpread"
         )
 }
 

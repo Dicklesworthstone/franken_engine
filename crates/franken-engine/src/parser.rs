@@ -2711,6 +2711,70 @@ fn physical_line_segments(source: &str) -> Vec<PhysicalLine<'_>> {
 /// trailing `else` / `else if (...)` / `catch (e)` / `finally` / `try` / `do`
 /// after an earlier clause's `}`. A header already followed by a body (so
 /// `if (x) f()` before a block) does not qualify.
+/// The text after the last top-level `;` or block-closing `}` of
+/// `statement` (quotes and nested delimiters respected).
+fn text_after_last_top_level_terminator(statement: &str) -> &str {
+    let mut depth = 0i64;
+    let mut quotes = QuoteState::default();
+    let mut start = 0usize;
+    for (index, ch) in statement.char_indices() {
+        if quotes.active() {
+            quotes.advance_char(ch);
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => {
+                quotes.open_char(ch);
+            }
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' => depth -= 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    start = index + 1;
+                }
+            }
+            ';' if depth == 0 => start = index + 1,
+            _ => {}
+        }
+    }
+    &statement[start..]
+}
+
+/// Whether `statement` is a `do` statement whose `while (...)` has not
+/// appeared yet (its body is complete or still to come).
+fn do_statement_awaits_while(statement: &str) -> bool {
+    starts_with_keyword(statement, "do") && find_top_level_keyword(statement, " while").is_none()
+}
+
+/// Whether `statement` ends in a header whose body may be a single unbraced
+/// statement on the next line: `if (...)`, `for (...)`, `while (...)`,
+/// `with (...)`, `else` or `do`. A do statement's trailing `while (...)` is
+/// its condition, not a header.
+fn statement_header_takes_unbraced_body(statement: &str) -> bool {
+    let tail = text_after_last_top_level_terminator(statement).trim();
+    if tail == "else" || tail == "do" {
+        return true;
+    }
+    let header = tail
+        .strip_prefix("else")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .map_or(tail, str::trim_start);
+    if header.is_empty() || header.contains('{') {
+        return false;
+    }
+    if starts_with_keyword(header, "while") && starts_with_keyword(statement, "do") {
+        return false;
+    }
+    ["if", "for", "while", "with"]
+        .iter()
+        .any(|keyword| starts_with_keyword(header, keyword))
+        && header.find('(').is_some_and(|open| {
+            extract_balanced(&header[open..], '(', ')')
+                .is_some_and(|(_, rest)| rest.trim().is_empty())
+        })
+}
+
 fn statement_header_awaits_body(statement: &str) -> bool {
     let tail = statement
         .rfind('}')
@@ -2843,10 +2907,36 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     };
                     statement_header_awaits_body(strip_leading_labels(previous).trim())
                 });
+            // The previous statement's last clause as the splitter sees it.
+            let previous_clause = |prev: &LogicalLine| -> Option<String> {
+                split_statement_segments(&prev.text)
+                    .last()
+                    .map(|(_, _, previous)| strip_leading_labels(previous).trim().to_string())
+            };
+            // An unbraced body on the line after its header (`if (x)\n  f();`,
+            // `for (...)\n  s += i;`, `else\n  g();`, `do\n  i++;`).
+            let body_continues_header = !trimmed_line.starts_with('{')
+                && result.last().is_some_and(|prev| {
+                    previous_clause(prev)
+                        .is_some_and(|clause| statement_header_takes_unbraced_body(&clause))
+                });
+            // `else` on its own line after an unbraced consequent
+            // (`if (a) x();\nelse y();`), and a do statement's `while` on its
+            // own line (`do\n  i++;\nwhile (c);`).
+            let clause_continues_statement = result.last().is_some_and(|prev| {
+                previous_clause(prev).is_some_and(|clause| {
+                    (starts_with_keyword(trimmed_line, "else")
+                        && starts_with_keyword(&clause, "if"))
+                        || (starts_with_keyword(trimmed_line, "while")
+                            && do_statement_awaits_while(&clause))
+                })
+            });
             if dot_continues_previous
                 || operator_continues_previous
                 || block_clause_continues_previous
                 || brace_continues_header
+                || body_continues_header
+                || clause_continues_statement
             {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;
@@ -3488,11 +3578,24 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
             }
             ';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 // `if (a) x(); else y();`: an `else` never starts a statement,
-                // so this `;` ends the consequent, not the if statement.
-                if starts_with_keyword(line[index + ch.len_utf8()..].trim_start(), "else") {
+                // so this `;` ends the consequent, not the if statement. Same
+                // for `do x(); while (c)` before the do statement has its
+                // `while`.
+                let rest = line[index + ch.len_utf8()..].trim_start();
+                let clause = strip_leading_labels(line[segment_start..index].trim_start());
+                if starts_with_keyword(rest, "else")
+                    || (starts_with_keyword(rest, "while") && do_statement_awaits_while(clause))
+                {
                     continue;
                 }
-                push_segment(&mut out, line, segment_start, index);
+                // `while (x);` / `for (...);`: after a header this `;` is the
+                // empty statement body, so it stays in the segment.
+                let end = if statement_header_takes_unbraced_body(clause.trim_end()) {
+                    index.saturating_add(ch.len_utf8())
+                } else {
+                    index
+                };
+                push_segment(&mut out, line, segment_start, end);
                 segment_start = index.saturating_add(ch.len_utf8());
             }
             _ => {}
@@ -3586,6 +3689,15 @@ fn parse_statement_inner(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
+    // The empty statement as a loop / if / label body (`while (x);`,
+    // `for (...);`). The AST has no empty-statement node; an empty block
+    // behaves identically there.
+    if statement.trim() == ";" {
+        return Ok(Statement::Block(BlockStatement {
+            body: Vec::new(),
+            span,
+        }));
+    }
     if statement.starts_with("import ") || statement == "import" {
         if goal == ParseGoal::Script {
             return Err(ParseError::new(

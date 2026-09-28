@@ -62287,6 +62287,7 @@ impl InterpreterCore {
         let pad = match self.builtin_arg(args, 1)? {
             Some(Value::Undefined) | None => JsString::from(" "),
             Some(Value::Str(s)) => s,
+            Some(Value::Symbol(_)) => return Err(Self::symbol_to_string_error()),
             Some(arg) => JsString::from(self.value_to_string(&arg)),
         };
         let pad_units = pad.code_units_vec();
@@ -81524,9 +81525,20 @@ impl InterpreterCore {
     ) -> Result<JsString, InterpreterError> {
         Ok(match self.builtin_arg(args, index)? {
             Some(Value::Str(s)) => s,
+            // ES2020 7.1.12 ToString: a Symbol throws (`'a'.endsWith(Symbol())`).
+            Some(Value::Symbol(_)) => return Err(Self::symbol_to_string_error()),
             Some(other) => JsString::from(self.value_to_string(&other)),
             None => JsString::from("undefined"),
         })
+    }
+
+    /// ES2020 7.1.12: ToString of a Symbol is a TypeError (only `String(sym)`
+    /// and `sym.toString()` produce `Symbol(description)`).
+    fn symbol_to_string_error() -> InterpreterError {
+        InterpreterError::TypeError {
+            expected: "value convertible to a string".to_string(),
+            got: "Symbol (Cannot convert a Symbol value to a string)".to_string(),
+        }
     }
 
     fn weakmap_object_key(key: Value) -> Option<String> {

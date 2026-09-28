@@ -6692,7 +6692,8 @@ const FUNCTION_NAME_LENGTH_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
     configurable: true,
 };
 
-/// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3).: [&str; 7] = [
+/// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3).
+const ERROR_PROTOTYPE_NAMES: [&str; 7] = [
     "Error",
     "TypeError",
     "RangeError",

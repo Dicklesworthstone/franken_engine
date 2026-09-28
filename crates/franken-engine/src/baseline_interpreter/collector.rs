@@ -1022,6 +1022,8 @@ impl InterpreterCore {
             execution_seed_reservation_ledger: _,
             ip: _,
             instructions_executed: _,
+            // Instruction count at the last virtual-clock advance (bd-9vouw.59).
+            virtual_clock_instruction_mark: _,
             tier_i_instructions_executed: _,
             tier_i_specialized_instructions_executed: _,
             // Evidence and telemetry records name ids but never dereference

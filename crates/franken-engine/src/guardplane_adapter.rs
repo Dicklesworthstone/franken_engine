@@ -711,10 +711,6 @@ impl GuardplaneAdapter {
         }
         0
     }
-
-    fn effective_trust_penalty_millionths(&self) -> i64 {
-        context_trust_penalty_millionths(&self.context)
-    }
 }
 
 /// Trust penalty of an extension's static context. Confidence above 0.6
@@ -1417,7 +1413,7 @@ mod tests {
                 ("capability_witness.confidence_millionths", confidence),
             ]);
             assert_eq!(
-                adapter.effective_trust_penalty_millionths(),
+                context_trust_penalty_millionths(&adapter.context),
                 GuardplaneTrustLevel::Provisional.risk_penalty_millionths(),
                 "confidence {confidence} must not raise the trust penalty"
             );
@@ -1428,7 +1424,7 @@ mod tests {
             ("capability_witness.confidence_millionths", "700000"),
         ]);
         assert!(
-            confident.effective_trust_penalty_millionths()
+            context_trust_penalty_millionths(&confident.context)
                 < GuardplaneTrustLevel::Provisional.risk_penalty_millionths()
         );
     }

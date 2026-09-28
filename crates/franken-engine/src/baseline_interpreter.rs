@@ -46752,10 +46752,7 @@ impl InterpreterCore {
                                 // may be statics inherited from the parent
                                 // constructor (bd-9vouw.24).
                                 Some(backing)
-                                    if matches!(
-                                        property_key.as_str(),
-                                        Some("name" | "length")
-                                    ) =>
+                                    if matches!(property_key.as_str(), Some("name" | "length")) =>
                                 {
                                     if self.heap.get(backing.0 as usize).is_some_and(|object| {
                                         object.contains_own_runtime_property(&property_key)
@@ -46772,8 +46769,10 @@ impl InterpreterCore {
                                     }
                                 }
                                 Some(backing)
-                                    if self
-                                        .chain_contains_runtime_property(backing, &property_key) =>
+                                    if self.chain_contains_runtime_property(
+                                        backing,
+                                        &property_key,
+                                    ) =>
                                 {
                                     Some(backing)
                                 }
@@ -47250,8 +47249,7 @@ impl InterpreterCore {
                                             &Value::BuiltinFunction(builtin.clone()),
                                         )?
                                         .ok_or_else(|| InterpreterError::TypeError {
-                                            expected: "object with writable properties"
-                                                .to_string(),
+                                            expected: "object with writable properties".to_string(),
                                             got: builtin.display_name().to_string(),
                                         })?,
                                 };
@@ -75435,7 +75433,9 @@ impl InterpreterCore {
                                 .properties
                                 .exact_keys()
                                 .into_iter()
-                                .filter(|key| self.ordinary_own_string_key_is_enumerable(backing, key))
+                                .filter(|key| {
+                                    self.ordinary_own_string_key_is_enumerable(backing, key)
+                                })
                                 .map(Value::Str)
                                 .collect::<Vec<_>>(),
                             None => Vec::new(),
@@ -77598,7 +77598,8 @@ impl InterpreterCore {
                     && prop_name.as_str() == Some("prototype")
                     && let Some(module) = module
                 {
-                    let descriptor = self.read_property_descriptor(Some(module), &descriptor_val)?;
+                    let descriptor =
+                        self.read_property_descriptor(Some(module), &descriptor_val)?;
                     if let Some(value) = descriptor.value
                         && matches!(obj_val, Value::Function(_) | Value::Closure(_))
                     {
@@ -78251,7 +78252,9 @@ impl InterpreterCore {
                                 .properties
                                 .exact_keys()
                                 .into_iter()
-                                .filter(|key| self.writable_own_runtime_property_visible(backing, key))
+                                .filter(|key| {
+                                    self.writable_own_runtime_property_visible(backing, key)
+                                })
                                 .map(Value::Str)
                                 .collect::<Vec<_>>(),
                             None => Vec::new(),
@@ -88671,9 +88674,11 @@ impl InterpreterCore {
             return Ok(None);
         }
         if let Some(backing) = self.function_own_property_object(module, function)? {
-            return Ok(Some(self.heap.get(backing.0 as usize).is_some_and(|object| {
-                object.contains_own_runtime_property(key)
-            })));
+            return Ok(Some(
+                self.heap
+                    .get(backing.0 as usize)
+                    .is_some_and(|object| object.contains_own_runtime_property(key)),
+            ));
         }
         Ok(Some(match (key.as_str(), function) {
             (Some("name"), _) => true,

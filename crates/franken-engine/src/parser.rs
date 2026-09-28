@@ -2706,11 +2706,6 @@ fn physical_line_segments(source: &str) -> Vec<PhysicalLine<'_>> {
 
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
-/// Whether `statement` ends in a statement header still waiting for its
-/// braced body: `function f(...)`, `if (...)`, `class C extends B`, and a
-/// trailing `else` / `else if (...)` / `catch (e)` / `finally` / `try` / `do`
-/// after an earlier clause's `}`. A header already followed by a body (so
-/// `if (x) f()` before a block) does not qualify.
 /// The text after the last top-level `;` or block-closing `}` of
 /// `statement` (quotes and nested delimiters respected).
 fn text_after_last_top_level_terminator(statement: &str) -> &str {
@@ -2775,6 +2770,11 @@ fn statement_header_takes_unbraced_body(statement: &str) -> bool {
         })
 }
 
+/// Whether `statement` ends in a statement header still waiting for its
+/// braced body: `function f(...)`, `if (...)`, `class C extends B`, and a
+/// trailing `else` / `else if (...)` / `catch (e)` / `finally` / `try` / `do`
+/// after an earlier clause's `}`. A header already followed by a body (so
+/// `if (x) f()` before a block) does not qualify.
 fn statement_header_awaits_body(statement: &str) -> bool {
     let tail = statement
         .rfind('}')

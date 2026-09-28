@@ -3219,6 +3219,11 @@ pub enum BuiltinFunctionKind {
     TimersPromisesIntervalReturn,
     /// `Function.prototype.toString` (ES2020 19.2.3.5). Append only.
     FunctionPrototypeToString,
+    /// `DataView.prototype` accessors beyond getUint8/getInt32/getUint32 and
+    /// their setters (Int8, Int16, Uint16, Float32, Float64, BigInt64,
+    /// BigUint64); the method name travels in `module_specifier` (one of
+    /// [`DATA_VIEW_METHODS`]). Append only.
+    DataViewMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4901,6 +4906,11 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or("weakMapMethod"),
+            BuiltinFunctionKind::DataViewMethod => DATA_VIEW_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("dataViewMethod"),
             BuiltinFunctionKind::DatePrototypeMethod => DATE_PROTOTYPE_METHODS
                 .iter()
                 .copied()
@@ -5075,7 +5085,8 @@ impl BuiltinFunction {
             | K::DataViewGetUint8
             | K::DataViewSetInt32
             | K::DataViewSetUint32
-            | K::DataViewSetUint8 => "DataView.prototype",
+            | K::DataViewSetUint8
+            | K::DataViewMethod => "DataView.prototype",
             K::ObjectHasOwnProperty
             | K::ObjectPrototypeIsPrototypeOf
             | K::ObjectPrototypePropertyIsEnumerable
@@ -5792,7 +5803,34 @@ enum DataViewIntegerKind {
     Uint8,
     Int32,
     Uint32,
+    // Served through `BuiltinFunctionKind::DataViewMethod` (floats and
+    // BigInts too, despite the enum's name).
+    Int8,
+    Int16,
+    Uint16,
+    Float32,
+    Float64,
+    BigInt64,
+    BigUint64,
 }
+
+/// DataView accessors served by [`BuiltinFunctionKind::DataViewMethod`].
+const DATA_VIEW_METHODS: [&str; 14] = [
+    "getInt8",
+    "setInt8",
+    "getInt16",
+    "setInt16",
+    "getUint16",
+    "setUint16",
+    "getFloat32",
+    "setFloat32",
+    "getFloat64",
+    "setFloat64",
+    "getBigInt64",
+    "setBigInt64",
+    "getBigUint64",
+    "setBigUint64",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BufferIntegerKind {
@@ -5815,8 +5853,10 @@ impl BufferIntegerKind {
 impl DataViewIntegerKind {
     fn byte_width(self) -> usize {
         match self {
-            Self::Uint8 => 1,
-            Self::Int32 | Self::Uint32 => 4,
+            Self::Uint8 | Self::Int8 => 1,
+            Self::Int16 | Self::Uint16 => 2,
+            Self::Int32 | Self::Uint32 | Self::Float32 => 4,
+            Self::Float64 | Self::BigInt64 | Self::BigUint64 => 8,
         }
     }
 
@@ -5828,7 +5868,41 @@ impl DataViewIntegerKind {
             (Self::Int32, true) => "setInt32",
             (Self::Uint32, false) => "getUint32",
             (Self::Uint32, true) => "setUint32",
+            (Self::Int8, false) => "getInt8",
+            (Self::Int8, true) => "setInt8",
+            (Self::Int16, false) => "getInt16",
+            (Self::Int16, true) => "setInt16",
+            (Self::Uint16, false) => "getUint16",
+            (Self::Uint16, true) => "setUint16",
+            (Self::Float32, false) => "getFloat32",
+            (Self::Float32, true) => "setFloat32",
+            (Self::Float64, false) => "getFloat64",
+            (Self::Float64, true) => "setFloat64",
+            (Self::BigInt64, false) => "getBigInt64",
+            (Self::BigInt64, true) => "setBigInt64",
+            (Self::BigUint64, false) => "getBigUint64",
+            (Self::BigUint64, true) => "setBigUint64",
         }
+    }
+
+    /// The element kind and setter flag of a [`DATA_VIEW_METHODS`] name.
+    fn from_method_name(name: &str) -> Option<(Self, bool)> {
+        [
+            Self::Int8,
+            Self::Int16,
+            Self::Uint16,
+            Self::Float32,
+            Self::Float64,
+            Self::BigInt64,
+            Self::BigUint64,
+        ]
+        .into_iter()
+        .find_map(|kind| {
+            [false, true]
+                .into_iter()
+                .find(|setter| kind.method_name(*setter) == name)
+                .map(|setter| (kind, setter))
+        })
     }
 }
 
@@ -31549,7 +31623,12 @@ impl InterpreterCore {
                 | Kind::BufferSwap16
                 | Kind::BufferSwap32
                 | Kind::BufferSwap64
-        );
+        ) || (builtin.kind == Kind::DataViewMethod
+            && builtin
+                .module_specifier
+                .0
+                .as_deref()
+                .is_some_and(|name| name.starts_with("set")));
         if mutates_receiver && let Value::Object(object_id) = receiver {
             self.join_binary_storage_label(*object_id, label)?;
         }
@@ -39396,6 +39475,21 @@ impl InterpreterCore {
                 args,
                 DataViewIntegerKind::Uint32,
             ),
+            BuiltinFunctionKind::DataViewMethod => {
+                let name = builtin.module_specifier.0.as_deref().unwrap_or_default();
+                let Some((kind, setter)) = DataViewIntegerKind::from_method_name(name) else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "DataView accessor".to_string(),
+                        got: name.to_string(),
+                    });
+                };
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                if setter {
+                    self.data_view_set_integer(receiver, args, kind)
+                } else {
+                    self.data_view_get_integer(receiver, args, kind)
+                }
+            }
             BuiltinFunctionKind::TypedArraySet => {
                 self.typed_array_set(receiver.unwrap_or(Value::Undefined), args)
             }
@@ -53583,6 +53677,12 @@ impl InterpreterCore {
             ("DataView", "setInt32") => Some(BuiltinFunction::data_view_set_int32()),
             ("DataView", "getUint32") => Some(BuiltinFunction::data_view_get_uint32()),
             ("DataView", "setUint32") => Some(BuiltinFunction::data_view_set_uint32()),
+            ("DataView", method) if DATA_VIEW_METHODS.contains(&method) => Some(BuiltinFunction {
+                kind: BuiltinFunctionKind::DataViewMethod,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                iterator_handle: None,
+                bound_object: None,
+            }),
             _ => None,
         }
         .or_else(|| Self::typed_array_prototype_method(type_tag, key))
@@ -61645,7 +61745,7 @@ impl InterpreterCore {
         let method_name = kind.method_name(false);
         let view = self.data_view_receiver_view(receiver, method_name)?;
         let byte_offset = self.data_view_byte_offset_arg(args, method_name)?;
-        let little_endian = if matches!(kind, DataViewIntegerKind::Uint8) {
+        let little_endian = if kind.byte_width() == 1 {
             false
         } else {
             self.data_view_little_endian_arg(args, 1)?
@@ -61660,29 +61760,54 @@ impl InterpreterCore {
                         "DataView.prototype.{method_name} absolute byte range is out of bounds"
                     ),
                 })?;
-            match kind {
-                DataViewIntegerKind::Uint8 => Ok(Value::Int(i64::from(slot[0]))),
+            let mut raw = [0u8; 8];
+            raw[..slot.len()].copy_from_slice(slot);
+            let ordered = |width: usize| -> [u8; 8] {
+                let mut bytes = [0u8; 8];
+                bytes[..width].copy_from_slice(&raw[..width]);
+                if !little_endian {
+                    bytes[..width].reverse();
+                }
+                bytes
+            };
+            // `ordered` yields little-endian bytes for every width.
+            Ok(match kind {
+                DataViewIntegerKind::Uint8 => Value::Int(i64::from(raw[0])),
+                DataViewIntegerKind::Int8 => Value::Int(i64::from(raw[0] as i8)),
+                DataViewIntegerKind::Int16 => {
+                    let bytes = ordered(2);
+                    Value::Int(i64::from(i16::from_le_bytes([bytes[0], bytes[1]])))
+                }
+                DataViewIntegerKind::Uint16 => {
+                    let bytes = ordered(2);
+                    Value::Int(i64::from(u16::from_le_bytes([bytes[0], bytes[1]])))
+                }
                 DataViewIntegerKind::Int32 => {
-                    let mut raw = [0u8; 4];
-                    raw.copy_from_slice(slot);
-                    let value = if little_endian {
-                        i32::from_le_bytes(raw)
-                    } else {
-                        i32::from_be_bytes(raw)
-                    };
-                    Ok(Value::Int(i64::from(value)))
+                    let bytes = ordered(4);
+                    Value::Int(i64::from(i32::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3],
+                    ])))
                 }
                 DataViewIntegerKind::Uint32 => {
-                    let mut raw = [0u8; 4];
-                    raw.copy_from_slice(slot);
-                    let value = if little_endian {
-                        u32::from_le_bytes(raw)
-                    } else {
-                        u32::from_be_bytes(raw)
-                    };
-                    Ok(Value::Int(i64::from(value)))
+                    let bytes = ordered(4);
+                    Value::Int(i64::from(u32::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3],
+                    ])))
                 }
-            }
+                DataViewIntegerKind::Float32 => {
+                    let bytes = ordered(4);
+                    js_number_to_value(f64::from(f32::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3],
+                    ])))
+                }
+                DataViewIntegerKind::Float64 => js_number_to_value(f64::from_le_bytes(ordered(8))),
+                DataViewIntegerKind::BigInt64 => Value::BigInt(Arc::from(
+                    i64::from_le_bytes(ordered(8)).to_string().as_str(),
+                )),
+                DataViewIntegerKind::BigUint64 => Value::BigInt(Arc::from(
+                    u64::from_le_bytes(ordered(8)).to_string().as_str(),
+                )),
+            })
         })?
     }
 
@@ -61696,45 +61821,87 @@ impl InterpreterCore {
         let view = self.data_view_receiver_view(receiver, method_name)?;
         let byte_offset = self.data_view_byte_offset_arg(args, method_name)?;
         let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-        let little_endian = if matches!(kind, DataViewIntegerKind::Uint8) {
+        let little_endian = if kind.byte_width() == 1 {
             false
         } else {
             self.data_view_little_endian_arg(args, 2)?
         };
-        let (start, end) =
-            Self::data_view_absolute_range(&view, method_name, byte_offset, kind.byte_width())?;
-        self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
-            let slot = bytes
+        // ES2020 24.3.1.2 SetViewValue converts the value (ToNumber, or
+        // ToBigInt for the BigInt kinds) before the range check.
+        let mut bytes: [u8; 8] = match kind {
+            DataViewIntegerKind::Uint8 => {
+                u64::from(Self::typed_array_u8_value(&value)).to_le_bytes()
+            }
+            DataViewIntegerKind::Int8 => {
+                Self::typed_array_unsigned_mod(&value, 1 << 8).to_le_bytes()
+            }
+            DataViewIntegerKind::Int16 | DataViewIntegerKind::Uint16 => {
+                Self::typed_array_unsigned_mod(&value, 1 << 16).to_le_bytes()
+            }
+            DataViewIntegerKind::Int32 => {
+                u64::from(Self::typed_array_i32_value(&value) as u32).to_le_bytes()
+            }
+            DataViewIntegerKind::Uint32 => {
+                u64::from(Self::typed_array_u32_value(&value)).to_le_bytes()
+            }
+            DataViewIntegerKind::Float32 => {
+                u64::from((Self::typed_array_number(&value) as f32).to_bits()).to_le_bytes()
+            }
+            DataViewIntegerKind::Float64 => {
+                Self::typed_array_number(&value).to_bits().to_le_bytes()
+            }
+            DataViewIntegerKind::BigInt64 | DataViewIntegerKind::BigUint64 => {
+                let digits = self.to_bigint_digits(value)?;
+                let wrapped = bigint_ops::as_uint_n(64, &digits).map_err(|error| {
+                    InterpreterError::RangeError {
+                        message: error.message().to_string(),
+                    }
+                })?;
+                wrapped
+                    .parse::<u64>()
+                    .map_err(|_| InterpreterError::RangeError {
+                        message: format!("DataView.prototype.{method_name} value out of range"),
+                    })?
+                    .to_le_bytes()
+            }
+        };
+        let width = kind.byte_width();
+        if !little_endian {
+            bytes[..width].reverse();
+        }
+        let (start, end) = Self::data_view_absolute_range(&view, method_name, byte_offset, width)?;
+        self.with_array_buffer_bytes_mut(view.buffer, |buffer| {
+            let slot = buffer
                 .get_mut(start..end)
                 .ok_or_else(|| InterpreterError::RangeError {
                     message: format!(
                         "DataView.prototype.{method_name} absolute byte range is out of bounds"
                     ),
                 })?;
-            match kind {
-                DataViewIntegerKind::Uint8 => {
-                    slot[0] = Self::typed_array_u8_value(&value);
-                }
-                DataViewIntegerKind::Int32 => {
-                    let raw = if little_endian {
-                        Self::typed_array_i32_value(&value).to_le_bytes()
-                    } else {
-                        Self::typed_array_i32_value(&value).to_be_bytes()
-                    };
-                    slot.copy_from_slice(&raw);
-                }
-                DataViewIntegerKind::Uint32 => {
-                    let raw = if little_endian {
-                        Self::typed_array_u32_value(&value).to_le_bytes()
-                    } else {
-                        Self::typed_array_u32_value(&value).to_be_bytes()
-                    };
-                    slot.copy_from_slice(&raw);
-                }
-            }
+            slot.copy_from_slice(&bytes[..width]);
             Ok(())
         })??;
         Ok(Value::Undefined)
+    }
+
+    /// ES2020 7.1.13 ToBigInt as decimal digits: a BigInt, a boolean (0n/1n)
+    /// or a string that parses as one; a Number, undefined, null or Symbol is
+    /// a TypeError and an unparsable string a SyntaxError.
+    fn to_bigint_digits(&mut self, value: Value) -> Result<String, InterpreterError> {
+        match value {
+            Value::BigInt(digits) => Ok(digits.to_string()),
+            Value::Bool(flag) => Ok(i64::from(flag).to_string()),
+            Value::Str(text) => {
+                let text = text.to_string();
+                bigint_ops::from_string(&text).ok_or_else(|| {
+                    self.throw_js_error("SyntaxError", format!("Cannot convert {text} to a BigInt"))
+                })
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "value convertible to BigInt".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
     }
 
     /// Coerce a value to f64 for floating-point operations.

@@ -30614,8 +30614,10 @@ fn simulate_ir2_flow_labels(
 ///   `module:import`), which may perform its own effects.
 ///
 /// Literals are Public: a literal's text is program code, not evidence that
-/// it holds a secret (bd-9vouw.19). Every other operation computes from its
-/// operands or from engine-owned state at or below `Internal`. Function bodies are embedded as `body_ops`
+/// it holds a secret (bd-9vouw.19); only a legacy `hostcall<"cap"> payload`
+/// marker models a labeled argument (see [`infer_data_label_for_op`]). Every
+/// other operation computes from its operands or from engine-owned state at
+/// or below `Internal`. Function bodies are embedded as `body_ops`
 /// and are walked recursively. Runtime-compiled `Function` source is lowered
 /// again under the same deny-all ambient-authority policy (eval, env, and
 /// ambient require stay denied), which is the same trust assumption the
@@ -30650,6 +30652,8 @@ fn accumulate_ir1_flow_label_ceiling(
             }
             return;
         }
+        // Only a legacy hostcall marker literal can carry a label above Public.
+        Ir1Op::LoadLiteral { .. } => infer_data_label_for_op(op, &BTreeMap::new(), Label::Public),
         Ir1Op::ImportModule { .. } => Label::TopSecret,
         Ir1Op::HostCall { capability, .. } => {
             hostcall_flow_label_ceiling(capability, host_io_exception_provenance)
@@ -30862,6 +30866,25 @@ fn infer_data_label_for_op(
         // array, semver's `tokens` key) while the same text assembled at run
         // time stayed Public, so it was no boundary. Secret data enters through
         // HostCall result contracts (entropy, key material), which label it.
+        //
+        // The one exception is a legacy `hostcall<"cap"> payload` marker: it
+        // is not program data but a modeled hostcall whose argument is the
+        // payload text, and it takes no operands, so the payload's keywords
+        // are its only way to model a secret argument (the orchestrator's
+        // declassification-receipt fixtures rely on it).
+        Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(raw),
+        } if extract_hostcall_capability(raw).is_some() => {
+            let lowered = raw.to_ascii_lowercase();
+            if ["secret", "token", "api_key", "password", "credential"]
+                .iter()
+                .any(|keyword| lowered.contains(keyword))
+            {
+                Label::Secret
+            } else {
+                Label::Public
+            }
+        }
         Ir1Op::LoadLiteral { .. } => Label::Public,
         Ir1Op::LoadBinding { binding_id } => binding_labels
             .get(binding_id)
@@ -41658,10 +41681,11 @@ mod tests {
 
     // -- infer_data_label_for_op --
 
-    /// bd-9vouw.19: a string literal's text is never a source label, so
+    /// bd-9vouw.19: a string literal's text is not a source label, so
     /// literals naming secrets, tokens, keys, passwords or credentials are
     /// Public like any other literal (this test pinned the removed heuristic,
-    /// which labelled all five Secret).
+    /// which labelled all five Secret). Only a legacy hostcall marker's
+    /// payload still models a labeled argument.
     #[test]
     fn infer_data_label_keyword_literals_are_public_bd_9vouw_19() {
         let labels = BTreeMap::new();
@@ -41681,6 +41705,21 @@ mod tests {
                 Label::Secret,
             );
             assert_eq!(label, Label::Public, "{text}");
+        }
+        // The legacy `hostcall<"cap"> payload` marker keeps modeling a secret
+        // argument through its payload text.
+        for (marker, expected) in [
+            ("hostcall<\"declassify.audit\"> secret_token", Label::Secret),
+            ("hostcall<\"declassify.audit\"> audit-record", Label::Public),
+        ] {
+            let label = infer_data_label_for_op(
+                &Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(marker.into()),
+                },
+                &labels,
+                Label::Public,
+            );
+            assert_eq!(label, expected, "{marker}");
         }
     }
 

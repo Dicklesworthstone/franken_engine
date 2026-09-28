@@ -7722,7 +7722,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     let mut live_status_registers = BTreeSet::<Reg>::new();
     let mut pinned_register_high: Reg = register_cursor;
     let mut register_high_water: Reg = register_cursor;
+    let mut iterator_anchors = Vec::<IteratorAnchor>::new();
     for (op_index, op) in ir2.ops.iter().enumerate() {
+        prune_iterator_anchors(&mut iterator_anchors, &value_stack);
         if value_stack.is_empty() && live_status_registers.is_empty() {
             statement_register_floor = register_cursor;
         }
@@ -8119,11 +8121,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 ir3.instructions.push(Ir3Instruction::Return { value });
                 // A return or throw ends its statement as a Pop does: its
                 // operand and temporaries are dead (bd-9vouw.23).
-                if value_stack.is_empty() {
+                if let Some(target) = statement_rewind_target(
+                    &value_stack,
+                    &iterator_anchors,
+                    statement_register_floor,
+                    pinned_register_high,
+                    &live_status_registers,
+                ) {
                     register_high_water = register_high_water.max(register_cursor);
-                    register_cursor = statement_register_floor
-                        .max(pinned_register_high)
-                        .max(live_status_register_ceiling(&live_status_registers));
+                    register_cursor = target;
                 }
             }
             Ir1Op::Discard => {
@@ -8134,11 +8140,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let _ = pop_lowering_value(&mut value_stack)?;
                 // Declarations end in a Discard rather than a Pop; either one
                 // emptying the stack ends a statement (bd-9vouw.23).
-                if value_stack.is_empty() {
+                if let Some(target) = statement_rewind_target(
+                    &value_stack,
+                    &iterator_anchors,
+                    statement_register_floor,
+                    pinned_register_high,
+                    &live_status_registers,
+                ) {
                     register_high_water = register_high_water.max(register_cursor);
-                    register_cursor = statement_register_floor
-                        .max(pinned_register_high)
-                        .max(live_status_register_ceiling(&live_status_registers));
+                    register_cursor = target;
                 }
             }
             Ir1Op::Nop | Ir1Op::Pop => {
@@ -8154,11 +8164,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             src: register,
                         });
                     }
-                    if value_stack.is_empty() {
+                    if let Some(target) = statement_rewind_target(
+                        &value_stack,
+                        &iterator_anchors,
+                        statement_register_floor,
+                        pinned_register_high,
+                        &live_status_registers,
+                    ) {
                         register_high_water = register_high_water.max(register_cursor);
-                        register_cursor = statement_register_floor
-                            .max(pinned_register_high)
-                            .max(live_status_register_ceiling(&live_status_registers));
+                        register_cursor = target;
                     }
                 } else {
                     ir3.instructions.push(Ir3Instruction::Move {
@@ -8784,11 +8798,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             Ir1Op::Throw => {
                 let value = pop_lowering_value(&mut value_stack)?;
                 ir3.instructions.push(Ir3Instruction::Throw { value });
-                if value_stack.is_empty() {
+                if let Some(target) = statement_rewind_target(
+                    &value_stack,
+                    &iterator_anchors,
+                    statement_register_floor,
+                    pinned_register_high,
+                    &live_status_registers,
+                ) {
                     register_high_water = register_high_water.max(register_cursor);
-                    register_cursor = statement_register_floor
-                        .max(pinned_register_high)
-                        .max(live_status_register_ceiling(&live_status_registers));
+                    register_cursor = target;
                 }
             }
             Ir1Op::LoadThis => {
@@ -9084,6 +9102,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 iterator_cleanup_labels
                     .entry(*done_label)
                     .or_insert(iterator);
+                anchor_loop_iterator(&mut iterator_anchors, &value_stack, iterator, value_dst);
                 value_stack.push(value_dst);
             }
             Ir1Op::ForOfNext { done_label } => {
@@ -9102,6 +9121,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 iterator_cleanup_labels
                     .entry(*done_label)
                     .or_insert(iterator);
+                anchor_loop_iterator(&mut iterator_anchors, &value_stack, iterator, value_dst);
                 value_stack.push(value_dst);
             }
             Ir1Op::IteratorClose { reason } => {
@@ -9784,12 +9804,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         let mut fn_live_status_registers = BTreeSet::<Reg>::new();
         let mut fn_pinned_register_high: Reg = fn_reg;
         let mut fn_register_high_water: Reg = fn_reg;
+        let mut fn_iterator_anchors = Vec::<IteratorAnchor>::new();
         if annotated_body_ops.len() != body_ops.len() {
             return Err(LoweringPipelineError::InvariantViolation {
                 detail: "annotated function body does not match its IR1 ops",
             });
         }
         for (op_index, ir2_op) in annotated_body_ops.iter().enumerate() {
+            prune_iterator_anchors(&mut fn_iterator_anchors, &fn_value_stack);
             // A short-lived local's register is free once its last reference
             // (the previous op) has been lowered.
             for binding_id in fn_local_releases.get(&op_index).into_iter().flatten() {
@@ -10100,11 +10122,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     ir3.instructions.push(Ir3Instruction::Return { value });
                     // A return or throw ends its statement as a Pop does: its
                     // operand and temporaries are dead.
-                    if fn_value_stack.is_empty() {
+                    if let Some(target) = statement_rewind_target(
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    ) {
                         fn_register_high_water = fn_register_high_water.max(fn_reg);
-                        fn_reg = fn_statement_register_floor
-                            .max(fn_pinned_register_high)
-                            .max(live_status_register_ceiling(&fn_live_status_registers));
+                        fn_reg = target;
                     }
                 }
                 Ir1Op::Call { arg_count } => {
@@ -10218,11 +10244,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     // `Discard` is always a pure discard, here and at module
                     // scope (bd-62un6).
                     let _ = pop_lowering_value(&mut fn_value_stack)?;
-                    if fn_value_stack.is_empty() {
+                    if let Some(target) = statement_rewind_target(
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    ) {
                         fn_register_high_water = fn_register_high_water.max(fn_reg);
-                        fn_reg = fn_statement_register_floor
-                            .max(fn_pinned_register_high)
-                            .max(live_status_register_ceiling(&fn_live_status_registers));
+                        fn_reg = target;
                     }
                 }
                 Ir1Op::Nop => {
@@ -10566,11 +10596,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 Ir1Op::Throw => {
                     let value = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Throw { value });
-                    if fn_value_stack.is_empty() {
+                    if let Some(target) = statement_rewind_target(
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    ) {
                         fn_register_high_water = fn_register_high_water.max(fn_reg);
-                        fn_reg = fn_statement_register_floor
-                            .max(fn_pinned_register_high)
-                            .max(live_status_register_ceiling(&fn_live_status_registers));
+                        fn_reg = target;
                     }
                 }
                 // Nested function definitions inside function bodies.
@@ -11052,6 +11086,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     fn_iterator_cleanup_labels
                         .entry(*done_label)
                         .or_insert(iterator);
+                    anchor_loop_iterator(
+                        &mut fn_iterator_anchors,
+                        &fn_value_stack,
+                        iterator,
+                        value_dst,
+                    );
                     fn_value_stack.push(value_dst);
                 }
                 Ir1Op::ForOfInit => {
@@ -11077,6 +11117,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     fn_iterator_cleanup_labels
                         .entry(*done_label)
                         .or_insert(iterator);
+                    anchor_loop_iterator(
+                        &mut fn_iterator_anchors,
+                        &fn_value_stack,
+                        iterator,
+                        value_dst,
+                    );
                     fn_value_stack.push(value_dst);
                 }
                 Ir1Op::IteratorClose { reason } => {
@@ -30822,6 +30868,82 @@ fn compact_batch_literal(
 /// per expression temporary, for the rest of the body.
 fn live_status_register_ceiling(live: &BTreeSet<Reg>) -> Reg {
     live.last().map_or(0, |register| register.saturating_add(1))
+}
+
+/// bd-9vouw.23: a for-in/for-of iterator that stays on the lowering value
+/// stack for its loop's whole body: its stack slot, its register, and the
+/// lowest register the body's statements may reuse (the loop head's
+/// per-iteration value register, dead once the loop variable is stored).
+#[derive(Debug, Clone, Copy)]
+struct IteratorAnchor {
+    depth: usize,
+    iterator: Reg,
+    body_floor: Reg,
+}
+
+/// bd-9vouw.23: where a statement-ending op (Pop, Discard, Return, Throw) may
+/// rewind the cursor, if anywhere. An empty value stack ends a statement:
+/// rewind to the statement floor. Inside a for-in/for-of body the loop's
+/// iterator stays on the stack, so no statement there ever emptied it and a
+/// body of ~40 statements overflowed the 256-register frame; when exactly the
+/// innermost loop's iterator (and entries below it) remains, rewind to that
+/// body's floor instead. Never below pinned bindings or live slots.
+fn statement_rewind_target(
+    value_stack: &[Reg],
+    anchors: &[IteratorAnchor],
+    floor: Reg,
+    pinned_high: Reg,
+    live: &BTreeSet<Reg>,
+) -> Option<Reg> {
+    let base = match (value_stack.last(), anchors.last()) {
+        (None, _) => floor,
+        (Some(&top), Some(anchor))
+            if value_stack.len() == anchor.depth.saturating_add(1)
+                && top == anchor.iterator
+                && value_stack
+                    .iter()
+                    .all(|register| *register < anchor.body_floor) =>
+        {
+            anchor.body_floor.max(floor)
+        }
+        _ => return None,
+    };
+    Some(
+        base.max(pinned_high)
+            .max(live_status_register_ceiling(live)),
+    )
+}
+
+/// bd-9vouw.23: forget loops whose iterator has left the value stack.
+fn prune_iterator_anchors(anchors: &mut Vec<IteratorAnchor>, value_stack: &[Reg]) {
+    while anchors
+        .last()
+        .is_some_and(|anchor| value_stack.get(anchor.depth) != Some(&anchor.iterator))
+    {
+        anchors.pop();
+    }
+}
+
+/// bd-9vouw.23: record a loop head's iterator (the stack top) as an anchor for
+/// its body, unless the same loop head already did.
+fn anchor_loop_iterator(
+    anchors: &mut Vec<IteratorAnchor>,
+    value_stack: &[Reg],
+    iterator: Reg,
+    body_floor: Reg,
+) {
+    let depth = value_stack.len().saturating_sub(1);
+    if anchors
+        .last()
+        .is_some_and(|anchor| anchor.depth == depth && anchor.iterator == iterator)
+    {
+        return;
+    }
+    anchors.push(IteratorAnchor {
+        depth,
+        iterator,
+        body_floor,
+    });
 }
 
 /// bd-9vouw.23: allocate a register that must outlive the current statement

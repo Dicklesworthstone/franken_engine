@@ -60,3 +60,49 @@ fn unbraced_consequents_keep_their_else() {
         );
     }
 }
+
+/// The consequent keeps its terminating `;` through the splitter; it must
+/// still parse as a statement. These run the consequent (the cases above
+/// mostly take the else branch), which used to throw "SyntaxError:
+/// unsupported expression syntax: g();" at run time.
+#[test]
+fn unbraced_consequents_run_when_their_branch_is_taken() {
+    for (source, node) in [
+        (
+            "function g() { return 'g'; } \
+             function f(n) { if (n > 1) return g(); else return 'e'; } f(2) + f(0);",
+            "ge",
+        ),
+        (
+            "var out = []; function f(n) { if (n > 1) out.push(n); else out.push(-n); } \
+             f(2); f(1); out.join(',');",
+            "2,-1",
+        ),
+        (
+            "function h(v){if(v===1)return'one';else if(v===2)return'two';else return'many'} \
+             [h(1),h(2),h(3)].join(' ');",
+            "one two many",
+        ),
+        ("var c = 0; if (c === 0) c++; else c--; c;", "1"),
+        (
+            "var s = ''; if (true) s = 'x'.toUpperCase(); else s = 'y'; s;",
+            "X",
+        ),
+        ("var x = 0; if (x === 0) ; else x = 9; x;", "0"),
+        (
+            "var n = 0; if (1) for (var i = 0; i < 3; i++) n += i; else n = -1; n;",
+            "3",
+        ),
+        (
+            "let s = 5; var out = []; function f(n) { if (n > 1) g(); else out.push(s); } \
+             function g() { out.push('g'); } f(2); f(0); out.join(',');",
+            "g,5",
+        ),
+    ] {
+        assert_eq!(
+            eval_to_string(source),
+            node,
+            "`{source}` must match Node v22.2.0"
+        );
+    }
+}

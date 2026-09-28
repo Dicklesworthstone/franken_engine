@@ -81156,14 +81156,12 @@ impl InterpreterCore {
             .to_string());
         }
 
-        // For radix 10, use standard formatting
+        // Radix 10 is ES2020 7.1.12.1 Number::toString, the same form as
+        // `String(x)`: exponent notation outside [1e-6, 1e21), so
+        // `(1e21).toString()` is "1e+21" (Rust's `f64` Display printed every
+        // digit).
         if radix == 10 {
-            // Convert to integer if possible for cleaner output
-            if number_val.fract() == 0.0 && number_val.abs() <= (i64::MAX as f64) {
-                return Ok((number_val as i64).to_string());
-            } else {
-                return Ok(number_val.to_string());
-            }
+            return Ok(self.value_to_string(&js_number_to_value(number_val)));
         }
 
         // This runtime intentionally keeps non-decimal conversion bounded and

@@ -249,10 +249,10 @@ impl Eraser<'_> {
         if !arrow && !(named && self.text(body) == "{") {
             return;
         }
-        if let Some(generic) = self.type_parameters_before(open) {
-            if arrow || self.declared_function_before(open) {
-                self.mark(generic, open);
-            }
+        if let Some(generic) = self.type_parameters_before(open)
+            && (arrow || self.declared_function_before(open))
+        {
+            self.mark(generic, open);
         }
         if after != body {
             self.mark(after, body);
@@ -615,16 +615,15 @@ fn next_token<'a>(
             continue;
         }
         let start = *cursor;
-        let kind;
-        if matches!(ch, '\'' | '"') {
+        let kind = if matches!(ch, '\'' | '"') {
             *cursor = quoted_end(source, *cursor, ch)?;
-            kind = Kind::Literal;
+            Kind::Literal
         } else if ch == '`' {
             *cursor = template_end(source, *cursor, depth)?;
-            kind = Kind::Literal;
+            Kind::Literal
         } else if ch == '/' && regex_allowed && regex_end(source, *cursor).is_some() {
             *cursor = regex_end(source, *cursor)?;
-            kind = Kind::Literal;
+            Kind::Literal
         } else if ch == '_' || ch == '$' || ch.is_alphabetic() {
             *cursor += ch.len_utf8();
             while let Some(next) = source[*cursor..].chars().next() {
@@ -634,7 +633,7 @@ fn next_token<'a>(
                     break;
                 }
             }
-            kind = Kind::Word;
+            Kind::Word
         } else if ch.is_ascii_digit() {
             *cursor += 1;
             while let Some(next) = source[*cursor..].chars().next() {
@@ -648,15 +647,15 @@ fn next_token<'a>(
                     break;
                 }
             }
-            kind = Kind::Literal;
+            Kind::Literal
         } else {
             let width = ["...", "=>", "?.", "++", "--", "&&", "||", "??", "==", "!="]
                 .into_iter()
                 .find(|punct| source[*cursor..].starts_with(*punct))
                 .map_or(ch.len_utf8(), str::len);
             *cursor += width;
-            kind = Kind::Punctuation;
-        }
+            Kind::Punctuation
+        };
         return Some(Some(Token { text: &source[start..*cursor], start, end: *cursor, kind }));
     }
     Some(None)

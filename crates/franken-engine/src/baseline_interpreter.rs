@@ -35380,6 +35380,24 @@ impl InterpreterCore {
         module: &Ir3Module,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        // bd-9vouw.60: code generation is the call the behavior firewall
+        // exists to see, but a builtin callee never reaches the per-call hook
+        // (only IR3 functions and closures do). Every Function-constructor
+        // path (`Function(src)`, `new Function(src)`, `.call`, Reflect) ends
+        // here, so it reports as a call named "Function"; `u32::MAX` marks
+        // "no IR3 function".
+        if let Some(hook) = self.hook.as_ref() {
+            let mut arguments = Vec::with_capacity(args.count as usize);
+            for index in 0..args.count {
+                arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+            }
+            let callee = FunctionRef::Function {
+                function_index: u32::MAX,
+                name: Some("Function".to_string()),
+            };
+            let ctx = self.hook_context(module);
+            self.enforce_hook_action(hook.pre_call(&ctx, &callee, &arguments))?;
+        }
         self.ensure_generated_function_realm_globals()?;
         let (owner_program_id, owner_specifier, owner_program) =
             self.generated_function_owner(module)?;

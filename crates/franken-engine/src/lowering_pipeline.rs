@@ -30828,16 +30828,15 @@ fn simulate_ir2_flow_labels(
 /// exist, and every label above the simulator's engine floors enters a
 /// program through one of the operations enumerated here:
 ///
-/// - literals, via [`infer_data_label_for_op`] (including its sensitive-keyword
-///   heuristic);
 /// - HostCall results, via the shared result contract registry;
 /// - HostCall exceptions that can carry host-originated data (provider-backed
 ///   authorities under unauthenticated provenance, native crypto failures);
 /// - code this IR does not contain (`ImportModule`, `module:require`,
 ///   `module:import`), which may perform its own effects.
 ///
-/// Every other operation computes from its operands or from engine-owned
-/// state at or below `Internal`. Function bodies are embedded as `body_ops`
+/// Literals are Public: a literal's text is program code, not evidence that
+/// it holds a secret (bd-9vouw.19). Every other operation computes from its
+/// operands or from engine-owned state at or below `Internal`. Function bodies are embedded as `body_ops`
 /// and are walked recursively. Runtime-compiled `Function` source is lowered
 /// again under the same deny-all ambient-authority policy (eval, env, and
 /// ambient require stay denied), which is the same trust assumption the
@@ -30872,7 +30871,6 @@ fn accumulate_ir1_flow_label_ceiling(
             }
             return;
         }
-        Ir1Op::LoadLiteral { .. } => infer_data_label_for_op(op, &BTreeMap::new(), Label::Public),
         Ir1Op::ImportModule { .. } => Label::TopSecret,
         Ir1Op::HostCall { capability, .. } => {
             hostcall_flow_label_ceiling(capability, host_io_exception_provenance)
@@ -31078,21 +31076,13 @@ fn infer_data_label_for_op(
     last_label: Label,
 ) -> Label {
     match op {
-        Ir1Op::LoadLiteral {
-            value: Ir1Literal::String(raw),
-        } => {
-            let lowered = raw.to_ascii_lowercase();
-            if lowered.contains("secret")
-                || lowered.contains("token")
-                || lowered.contains("api_key")
-                || lowered.contains("password")
-                || lowered.contains("credential")
-            {
-                Label::Secret
-            } else {
-                Label::Public
-            }
-        }
+        // bd-9vouw.19: a literal is Public whatever its text. Labelling string
+        // literals that merely CONTAIN "secret", "token", "api_key",
+        // "password" or "credential" refused benign programs at compile time
+        // ("Unexpected token" messages, password prompts, a lexer's `tokens`
+        // array, semver's `tokens` key) while the same text assembled at run
+        // time stayed Public, so it was no boundary. Secret data enters through
+        // HostCall result contracts (entropy, key material), which label it.
         Ir1Op::LoadLiteral { .. } => Label::Public,
         Ir1Op::LoadBinding { binding_id } => binding_labels
             .get(binding_id)
@@ -41888,53 +41878,30 @@ mod tests {
 
     // -- infer_data_label_for_op --
 
+    /// bd-9vouw.19: a string literal's text is never a source label, so
+    /// literals naming secrets, tokens, keys, passwords or credentials are
+    /// Public like any other literal (this test pinned the removed heuristic,
+    /// which labelled all five Secret).
     #[test]
-    fn infer_data_label_secret_patterns() {
+    fn infer_data_label_keyword_literals_are_public_bd_9vouw_19() {
         let labels = BTreeMap::new();
-        let secret = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_secret_key".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(secret, Label::Secret);
-
-        let token = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("AUTH_TOKEN".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(token, Label::Secret);
-
-        let api_key = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("my_api_key_here".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(api_key, Label::Secret);
-
-        let password = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("user_password".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(password, Label::Secret);
-
-        let credential = infer_data_label_for_op(
-            &Ir1Op::LoadLiteral {
-                value: Ir1Literal::String("credential_store".into()),
-            },
-            &labels,
-            Label::Public,
-        );
-        assert_eq!(credential, Label::Secret);
+        for text in [
+            "my_secret_key",
+            "AUTH_TOKEN",
+            "my_api_key_here",
+            "user_password",
+            "credential_store",
+            "Unexpected token",
+        ] {
+            let label = infer_data_label_for_op(
+                &Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(text.into()),
+                },
+                &labels,
+                Label::Secret,
+            );
+            assert_eq!(label, Label::Public, "{text}");
+        }
     }
 
     #[test]

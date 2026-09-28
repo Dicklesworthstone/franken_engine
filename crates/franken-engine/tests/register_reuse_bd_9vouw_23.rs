@@ -615,3 +615,65 @@ fn for_in_and_for_of_bodies_reuse_registers() {
         "2,4,6"
     );
 }
+
+fn repeated(item: &str, count: usize) -> String {
+    vec![item; count].join(", ")
+}
+
+#[test]
+fn calls_inside_one_expression_release_their_temporaries() {
+    // A call's callee, receiver and argument registers (and the contiguous
+    // copies it passes) stayed allocated until its statement ended, about six
+    // registers per `f(1, 2)`, so an array literal, object literal or argument
+    // list of ~40 calls overflowed the 256-register frame. Node values.
+    let calls = repeated("f(1, 2)", 60);
+    let prelude = "function f(a, b) { return a + b; } \
+                   function g() { return arguments.length; } \
+                   var o = { m(a) { return a * 2; } }; \
+                   function P(a) { this.a = a; }";
+    let object_entries = (0..60)
+        .map(|i| format!("k{i}: f(1, 2)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    for (name, expression, node) in [
+        (
+            "array_of_calls",
+            format!("((r) => r.length + r[59])([{calls}])"),
+            "63",
+        ),
+        ("call_arguments", format!("g({calls})"), "60"),
+        (
+            "object_of_calls",
+            format!("Object.keys({{{object_entries}}}).length"),
+            "60",
+        ),
+        (
+            "method_calls",
+            format!("[{}].reduce((s, x) => s + x, 0)", repeated("o.m(1)", 60)),
+            "120",
+        ),
+        (
+            "constructions",
+            format!("[{}].length", repeated("new P(1)", 60)),
+            "60",
+        ),
+        (
+            "builtin_calls",
+            format!("[{}].length", repeated("Math.max(1, 2)", 60)),
+            "60",
+        ),
+    ] {
+        assert_eq!(
+            fixed_lane_value(&format!("{prelude} {expression};")),
+            node,
+            "{name} at top level"
+        );
+        assert_eq!(
+            fixed_lane_value(&format!(
+                "{prelude} (function () {{ return {expression}; }})();"
+            )),
+            node,
+            "{name} in a function body"
+        );
+    }
+}

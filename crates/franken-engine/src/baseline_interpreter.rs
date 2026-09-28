@@ -63411,6 +63411,86 @@ impl InterpreterCore {
         Ok(stored)
     }
 
+    /// ES2020 20.4.2.2 `new Date(value)`: another Date's time value; else
+    /// ToPrimitive(value), and a string is parsed like Date.parse (it used to
+    /// give NaN for every string, `new Date('2020-03-04')` included) while
+    /// anything else goes through ToNumber (Symbol and BigInt throw); then
+    /// TimeClip.
+    fn date_single_argument_time_value(
+        &mut self,
+        register: u32,
+        module: Option<&Ir3Module>,
+    ) -> Result<f64, InterpreterError> {
+        let value = self.read_reg(register)?;
+        if let Value::Object(date_id) = &value
+            && let Some(object) = self.heap.get(date_id.0 as usize)
+            && matches!(object.properties.get("__type"), Some(Value::Str(tag)) if tag.as_ref() == "Date")
+        {
+            let time = match object.properties.get("__timestamp") {
+                Some(Value::Int(millis)) => *millis as f64,
+                Some(Value::Float(millis)) => millis.inner(),
+                _ => f64::NAN,
+            };
+            return Ok(date_math::time_clip(time));
+        }
+        let primitive = if value.is_object_like() && module.is_some() {
+            self.coerce_runtime_primitive_with_hint(module, value, "default")?
+        } else {
+            value
+        };
+        let type_name = primitive.type_name();
+        let time = match primitive {
+            Value::Str(text) => return Ok(Self::parse_date_string(text.as_utf8_projection())),
+            Value::Int(millis) => millis as f64,
+            Value::Float(millis) => millis.inner(),
+            Value::Bool(flag) => f64::from(u8::from(flag)),
+            Value::Null => 0.0,
+            Value::Symbol(_) | Value::BigInt(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "value convertible to a number".to_string(),
+                    got: format!("{type_name} (Date time value)"),
+                });
+            }
+            _ => f64::NAN,
+        };
+        Ok(date_math::time_clip(time))
+    }
+
+    /// ES2020 20.4.2.1 `new Date(year, month[, date[, hours[, minutes[,
+    /// seconds[, ms]]]]])`: each component through ToNumber (left to right),
+    /// years 0-99 mean 1900-1999, local time is UTC here; then TimeClip. The
+    /// components used to be ignored (NaN).
+    fn date_components_time_value(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<f64, InterpreterError> {
+        let mut parts = [f64::NAN, f64::NAN, 1.0, 0.0, 0.0, 0.0, 0.0];
+        for (index, part) in parts.iter_mut().enumerate().take(args.count as usize) {
+            let register = args.start.checked_add(index as u32).ok_or(
+                InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                },
+            )?;
+            *part = match self.math_argument_value(register, module)? {
+                Value::Int(value) => value as f64,
+                Value::Float(value) => value.inner(),
+                _ => f64::NAN,
+            };
+        }
+        let [year, month, date, hours, minutes, seconds, millis] = parts;
+        let year = if !year.is_nan() && (0.0..=99.0).contains(&year.trunc()) {
+            1900.0 + year.trunc()
+        } else {
+            year
+        };
+        Ok(date_math::time_clip(date_math::make_date(
+            date_math::make_day(year, month, date),
+            date_math::make_time(hours, minutes, seconds, millis),
+        )))
+    }
+
     /// Date.parse (ES2020 20.4.3.2) for the date-time string format
     /// (20.4.1.15): `YYYY[-MM[-DD]][THH:mm[:ss[.sss]]][Z|±HH:mm]` with
     /// extended `±YYYYYY` years, plus the `toUTCString` form
@@ -75875,17 +75955,10 @@ impl InterpreterCore {
                 // plus virtual elapsed time, bd-9vouw.59). With an explicit
                 // millisecond argument (`new Date(0)`), honor it so
                 // `getTime()` round-trips (bd-cseei).
-                let millis = if args.count > 0 {
-                    match self.read_reg(args.start)? {
-                        Value::Int(i) => i as f64,
-                        Value::Float(f) => f.inner(),
-                        Value::Bool(true) => 1.0,
-                        Value::Bool(false) => 0.0,
-                        Value::Null => 0.0,
-                        _ => f64::NAN,
-                    }
-                } else {
-                    self.virtual_wall_clock_ms()
+                let millis = match args.count {
+                    0 => self.virtual_wall_clock_ms(),
+                    1 => self.date_single_argument_time_value(args.start, module)?,
+                    _ => self.date_components_time_value(args, module)?,
                 };
 
                 // Create a new Date object. Tag it with `__type:"Date"` so the

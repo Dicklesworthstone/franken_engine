@@ -77889,6 +77889,7 @@ impl InterpreterCore {
             }
             "builtin:ReflectApply" => self.reflect_invocation_builtin(module, args, false),
             "builtin:ReflectConstruct" => self.reflect_invocation_builtin(module, args, true),
+            "builtin:ConstructSuperSpread" => self.construct_super_spread_builtin(module, args),
             "builtin:Map" => {
                 // Map([iterable]) constructor implementation
                 let prototype = self.ensure_builtin_prototype("Map")?;

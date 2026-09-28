@@ -7771,7 +7771,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
 
             // Reconstruct logic for HostCall intercept.
             // Calls pop the callee + args; hostcalls pop only the args.
-            let (start_reg, arg_count) = match &op.inner {
+            let (start_reg, arg_count, mut operands) = match &op.inner {
                 Ir1Op::Call { arg_count } => {
                     let count = *arg_count;
                     let mut args = Vec::new();
@@ -7779,14 +7779,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         args.push(pop_lowering_value(&mut value_stack)?);
                     }
                     args.reverse();
-                    let _callee = pop_lowering_value(&mut value_stack)?; // Pop callee, not used for HostCall cap
+                    let callee = pop_lowering_value(&mut value_stack)?; // Not used for HostCall cap
                     let start = register_cursor;
-                    for arg_reg in args {
+                    for &arg_reg in &args {
                         let dst = alloc_register(&mut register_cursor);
                         ir3.instructions
                             .push(Ir3Instruction::Move { dst, src: arg_reg });
                     }
-                    (start, count)
+                    args.push(callee);
+                    (start, count, args)
                 }
                 Ir1Op::HostCall { arg_count, .. } => {
                     let count = *arg_count;
@@ -7796,12 +7797,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     }
                     args.reverse();
                     let start = register_cursor;
-                    for arg_reg in args {
+                    for &arg_reg in &args {
                         let dst = alloc_register(&mut register_cursor);
                         ir3.instructions
                             .push(Ir3Instruction::Move { dst, src: arg_reg });
                     }
-                    (start, count)
+                    (start, count, args)
                 }
                 Ir1Op::LoadLiteral { value } => {
                     let literal_reg = alloc_register(&mut register_cursor);
@@ -7816,7 +7817,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         dst: start,
                         src: literal_reg,
                     });
-                    (start, 1)
+                    (start, 1, vec![literal_reg])
                 }
                 _ => {
                     let hostcall_arg = pop_lowering_value(&mut value_stack)?;
@@ -7825,13 +7826,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         dst: start,
                         src: hostcall_arg,
                     });
-                    (start, 1)
+                    (start, 1, vec![hostcall_arg])
                 }
             };
 
             if flow_requires_runtime_check(op.flow.as_ref(), &capability) {
                 required_capabilities.insert(IFC_RUNTIME_GUARD_CAPABILITY.to_string());
                 let guard_dst = alloc_register(&mut register_cursor);
+                operands.push(guard_dst);
                 ir3.instructions.push(Ir3Instruction::HostCall {
                     capability: CapabilityTag(IFC_RUNTIME_GUARD_CAPABILITY.to_string()),
                     args: RegRange {
@@ -7843,14 +7845,28 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             }
             required_capabilities.insert(capability.0.clone());
             let dst = alloc_register(&mut register_cursor);
+            let copies = RegRange {
+                start: start_reg,
+                count: arg_count,
+            };
             ir3.instructions.push(Ir3Instruction::HostCall {
                 capability,
-                args: RegRange {
-                    start: start_reg,
-                    count: arg_count,
-                },
+                args: copies,
                 dst,
             });
+            let reserved_below = statement_register_floor
+                .max(pinned_register_high)
+                .max(live_status_register_ceiling(&live_status_registers));
+            let dst = compact_call_result(
+                &mut ir3.instructions,
+                dst,
+                &operands,
+                copies,
+                &value_stack,
+                reserved_below,
+                &mut register_cursor,
+                &mut register_high_water,
+            );
             value_stack.push(dst);
             continue;
         }
@@ -8052,21 +8068,36 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let callee = pop_lowering_value(&mut value_stack)?;
 
                 let start_reg = register_cursor;
-                for arg_reg in args {
+                for &arg_reg in &args {
                     let dst = alloc_register(&mut register_cursor);
                     ir3.instructions
                         .push(Ir3Instruction::Move { dst, src: arg_reg });
                 }
 
                 let dst = alloc_register(&mut register_cursor);
+                let copies = RegRange {
+                    start: start_reg,
+                    count: *arg_count,
+                };
                 ir3.instructions.push(Ir3Instruction::Call {
                     callee,
-                    args: RegRange {
-                        start: start_reg,
-                        count: *arg_count,
-                    },
+                    args: copies,
                     dst,
                 });
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                args.push(callee);
+                let dst = compact_call_result(
+                    &mut ir3.instructions,
+                    dst,
+                    &args,
+                    copies,
+                    &value_stack,
+                    reserved_below,
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 value_stack.push(dst);
             }
             Ir1Op::CallMethod { arg_count } => {
@@ -8083,22 +8114,37 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let callee = pop_lowering_value(&mut value_stack)?;
 
                 let start_reg = register_cursor;
-                for arg_reg in args {
+                for &arg_reg in &args {
                     let dst = alloc_register(&mut register_cursor);
                     ir3.instructions
                         .push(Ir3Instruction::Move { dst, src: arg_reg });
                 }
 
                 let dst = alloc_register(&mut register_cursor);
+                let copies = RegRange {
+                    start: start_reg,
+                    count: *arg_count,
+                };
                 ir3.instructions.push(Ir3Instruction::CallMethod {
                     receiver,
                     callee,
-                    args: RegRange {
-                        start: start_reg,
-                        count: *arg_count,
-                    },
+                    args: copies,
                     dst,
                 });
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                args.extend([receiver, callee]);
+                let dst = compact_call_result(
+                    &mut ir3.instructions,
+                    dst,
+                    &args,
+                    copies,
+                    &value_stack,
+                    reserved_below,
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 value_stack.push(dst);
             }
             Ir1Op::ImportModule { specifier } => {
@@ -9261,6 +9307,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 };
                 ir3.instructions
                     .push(Ir3Instruction::Construct { callee, args, dst });
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                arg_regs.push(callee);
+                let dst = compact_call_result(
+                    &mut ir3.instructions,
+                    dst,
+                    &arg_regs,
+                    args,
+                    &value_stack,
+                    reserved_below,
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 value_stack.push(dst);
             }
             Ir1Op::TemplateLiteral { quasi_count } => {
@@ -9322,7 +9382,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 }
                 args.reverse();
                 let start_reg = register_cursor;
-                for arg_reg in args {
+                for &arg_reg in &args {
                     let contiguous_dst = alloc_register(&mut register_cursor);
                     ir3.instructions.push(Ir3Instruction::Move {
                         dst: contiguous_dst,
@@ -9330,14 +9390,28 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                 }
                 let dst = alloc_register(&mut register_cursor);
+                let copies = RegRange {
+                    start: start_reg,
+                    count: *arg_count,
+                };
                 ir3.instructions.push(Ir3Instruction::HostCall {
                     capability: CapabilityTag(capability.clone()),
-                    args: RegRange {
-                        start: start_reg,
-                        count: *arg_count,
-                    },
+                    args: copies,
                     dst,
                 });
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                let dst = compact_call_result(
+                    &mut ir3.instructions,
+                    dst,
+                    &args,
+                    copies,
+                    &value_stack,
+                    reserved_below,
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 value_stack.push(dst);
             }
         }
@@ -10217,14 +10291,29 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             .push(Ir3Instruction::Move { dst, src: *arg_reg });
                     }
                     let dst = alloc_register(&mut fn_reg);
+                    let copies = RegRange {
+                        start: start_reg,
+                        count: count as u32,
+                    };
                     ir3.instructions.push(Ir3Instruction::Call {
                         callee,
-                        args: RegRange {
-                            start: start_reg,
-                            count: count as u32,
-                        },
+                        args: copies,
                         dst,
                     });
+                    let reserved_below = fn_statement_register_floor
+                        .max(fn_pinned_register_high)
+                        .max(live_status_register_ceiling(&fn_live_status_registers));
+                    args.push(callee);
+                    let dst = compact_call_result(
+                        &mut ir3.instructions,
+                        dst,
+                        &args,
+                        copies,
+                        &fn_value_stack,
+                        reserved_below,
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::CallMethod { arg_count } => {
@@ -10244,15 +10333,30 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             .push(Ir3Instruction::Move { dst, src: *arg_reg });
                     }
                     let dst = alloc_register(&mut fn_reg);
+                    let copies = RegRange {
+                        start: start_reg,
+                        count: count as u32,
+                    };
                     ir3.instructions.push(Ir3Instruction::CallMethod {
                         receiver,
                         callee,
-                        args: RegRange {
-                            start: start_reg,
-                            count: count as u32,
-                        },
+                        args: copies,
                         dst,
                     });
+                    let reserved_below = fn_statement_register_floor
+                        .max(fn_pinned_register_high)
+                        .max(live_status_register_ceiling(&fn_live_status_registers));
+                    args.extend([receiver, callee]);
+                    let dst = compact_call_result(
+                        &mut ir3.instructions,
+                        dst,
+                        &args,
+                        copies,
+                        &fn_value_stack,
+                        reserved_below,
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::Label { id } => {
@@ -11096,6 +11200,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     };
                     ir3.instructions
                         .push(Ir3Instruction::Construct { callee, args, dst });
+                    let reserved_below = fn_statement_register_floor
+                        .max(fn_pinned_register_high)
+                        .max(live_status_register_ceiling(&fn_live_status_registers));
+                    arg_regs.push(callee);
+                    let dst = compact_call_result(
+                        &mut ir3.instructions,
+                        dst,
+                        &arg_regs,
+                        args,
+                        &fn_value_stack,
+                        reserved_below,
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::BeginTry {
@@ -11221,7 +11339,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     }
                     args.reverse();
                     let start_reg = fn_reg;
-                    for arg_reg in args {
+                    for &arg_reg in &args {
                         let contiguous_dst = alloc_register(&mut fn_reg);
                         ir3.instructions.push(Ir3Instruction::Move {
                             dst: contiguous_dst,
@@ -11232,6 +11350,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     if flow_requires_runtime_check(ir2_op.flow.as_ref(), &capability_tag) {
                         required_capabilities.insert(IFC_RUNTIME_GUARD_CAPABILITY.to_string());
                         let guard_dst = alloc_register(&mut fn_reg);
+                        args.push(guard_dst);
                         ir3.instructions.push(Ir3Instruction::HostCall {
                             capability: CapabilityTag(IFC_RUNTIME_GUARD_CAPABILITY.to_string()),
                             args: RegRange {
@@ -11242,14 +11361,28 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         });
                     }
                     let dst = alloc_register(&mut fn_reg);
+                    let copies = RegRange {
+                        start: start_reg,
+                        count: *arg_count,
+                    };
                     ir3.instructions.push(Ir3Instruction::HostCall {
                         capability: capability_tag,
-                        args: RegRange {
-                            start: start_reg,
-                            count: *arg_count,
-                        },
+                        args: copies,
                         dst,
                     });
+                    let reserved_below = fn_statement_register_floor
+                        .max(fn_pinned_register_high)
+                        .max(live_status_register_ceiling(&fn_live_status_registers));
+                    let dst = compact_call_result(
+                        &mut ir3.instructions,
+                        dst,
+                        &args,
+                        copies,
+                        &fn_value_stack,
+                        reserved_below,
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     fn_value_stack.push(dst);
                 }
             }
@@ -31287,6 +31420,48 @@ fn compact_batch_literal(
     *high_water = (*high_water).max(*cursor);
     *cursor = base.saturating_add(1);
     base
+}
+
+/// bd-9vouw.23: once a call (Call, CallMethod, Construct, HostCall) has
+/// produced `result`, its callee, receiver and argument registers and the
+/// contiguous argument copies are dead. Reclaim the temporaries among them
+/// as [`compact_batch_literal`] reclaims a built literal's operands; operands
+/// below `reserved_below` (pinned bindings, live slots, the statement floor)
+/// are not temporaries and are left alone. Without this each call held about
+/// twice its arity plus two registers until its statement ended, so an array
+/// literal or argument list of ~40 calls (`[f(1, 2), f(1, 2), ...]`)
+/// overflowed the 256-register frame. A call that leaves the value stack
+/// empty is left as it is: nothing accumulates above it, and the statement
+/// boundary rewind reclaims its registers without an extra Move.
+#[allow(clippy::too_many_arguments)]
+fn compact_call_result(
+    instructions: &mut Vec<Ir3Instruction>,
+    result: Reg,
+    operands: &[Reg],
+    copies: RegRange,
+    value_stack: &[Reg],
+    reserved_below: Reg,
+    cursor: &mut Reg,
+    high_water: &mut Reg,
+) -> Reg {
+    if value_stack.is_empty() {
+        return result;
+    }
+    let temporaries = operands
+        .iter()
+        .copied()
+        .chain(copies.start..copies.start.saturating_add(copies.count))
+        .filter(|register| *register >= reserved_below)
+        .collect::<Vec<_>>();
+    compact_batch_literal(
+        instructions,
+        result,
+        &temporaries,
+        value_stack,
+        reserved_below,
+        cursor,
+        high_water,
+    )
 }
 
 /// bd-9vouw.23: lowest register a statement-boundary rewind may return to

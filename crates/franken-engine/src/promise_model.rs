@@ -709,6 +709,18 @@ impl PromiseStore {
         }
     }
 
+    /// Visit every reaction handler a pending promise holds (collector
+    /// roots, bd-9vouw.57).
+    pub(crate) fn for_each_handler(&self, mut visit: impl FnMut(ClosureHandle)) {
+        for record in self.promises.slots.iter().flatten() {
+            for reaction in &record.reactions {
+                if let Some(handler) = reaction.handler {
+                    visit(handler);
+                }
+            }
+        }
+    }
+
     /// Visit every value a promise record holds: the settled value or
     /// reason. Reactions hold closure handles only. The baseline
     /// interpreter's collector treats these values as roots (bd-9vouw.57).
@@ -1568,6 +1580,22 @@ impl MicrotaskQueue {
             cursor: 0,
             enqueue_count: 0,
             witness: WitnessLog::new(),
+        }
+    }
+
+    /// Visit every handler a queued microtask will call (collector roots,
+    /// bd-9vouw.57).
+    pub(crate) fn for_each_handler(&self, mut visit: impl FnMut(ClosureHandle)) {
+        for task in self.tasks.slots.iter().flatten() {
+            match task {
+                Microtask::PromiseReaction {
+                    handler: Some(handler),
+                    ..
+                } => visit(*handler),
+                Microtask::PromiseReaction { handler: None, .. }
+                | Microtask::PromiseRejection { .. } => {}
+                Microtask::ResolveThenable { then_handler, .. } => visit(*then_handler),
+            }
         }
     }
 

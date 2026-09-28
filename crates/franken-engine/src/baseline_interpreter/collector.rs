@@ -23,10 +23,12 @@
 //!   not compile until the field is registered here as a root, a weak table,
 //!   or non-referencing state.
 //!
-//! Not in this version: closures, generators, iterators and promises live in
-//! their own tables and are never reclaimed, so they are roots (all captured
-//! values stay alive). WeakMap entries are ephemerons: a value is kept only
-//! while its key is reachable.
+//! Closures are traced from the values that reference them: an unreachable
+//! closure's captured environment is released and its function index is
+//! poisoned (`ClosureTable::reclaim`); its id is never reused. Generators,
+//! iterators, async objects and promises live in their own tables and are not
+//! reclaimed yet, so they are roots. WeakMap entries are ephemerons: a value is
+//! kept only while its key is reachable.
 
 use std::collections::HashSet;
 
@@ -44,6 +46,8 @@ pub struct GcStats {
     pub reclaimed_objects: u64,
     /// Estimated bytes released over all collections.
     pub reclaimed_bytes: u64,
+    /// Closures whose captured environments were released.
+    pub reclaimed_closures: u64,
 }
 
 /// Collector state carried by `InterpreterCore`.
@@ -85,17 +89,41 @@ pub(super) enum GcSkip {
 struct GcMarker {
     marked: Vec<bool>,
     stack: Vec<u32>,
+    closures_marked: Vec<bool>,
+    closure_stack: Vec<u32>,
     visited_frames: HashSet<usize>,
     visited_cells: HashSet<usize>,
 }
 
 impl GcMarker {
-    fn new(heap_len: usize) -> Self {
+    fn new(heap_len: usize, closures_len: usize) -> Self {
         Self {
             marked: vec![false; heap_len],
             stack: Vec::new(),
+            closures_marked: vec![false; closures_len],
+            closure_stack: Vec::new(),
             visited_frames: HashSet::new(),
             visited_cells: HashSet::new(),
+        }
+    }
+
+    /// Closure-table ids: `Value::Closure` and the generator/async function
+    /// values index the closure table.
+    fn closure(&mut self, id: u32) {
+        if let Some(mark) = self.closures_marked.get_mut(id as usize)
+            && !*mark
+        {
+            *mark = true;
+            self.closure_stack.push(id);
+        }
+    }
+
+    /// A promise/timer handler handle: a closure id, or (at or above
+    /// `PROMISE_REACTION_CALLABLE_BASE`) a key of
+    /// `promise_reaction_callables`, which is traced as a root.
+    fn handler(&mut self, handle: crate::closure_model::ClosureHandle) {
+        if handle.0 < PROMISE_REACTION_CALLABLE_BASE {
+            self.closure(handle.0);
         }
     }
 
@@ -128,8 +156,12 @@ impl GcMarker {
                     self.value(set);
                 }
             }
-            // Closures, generators, iterators, async objects and promises
-            // index tables whose entries are all roots.
+            Value::Closure(id)
+            | Value::GeneratorFunction(id)
+            | Value::AsyncFunction(id)
+            | Value::AsyncGeneratorFunction(id) => self.closure(*id),
+            // Generators, iterators, async objects and promises index tables
+            // whose entries are all roots.
             Value::Undefined
             | Value::Null
             | Value::Bool(_)
@@ -138,13 +170,9 @@ impl GcMarker {
             | Value::Float(_)
             | Value::Str(_)
             | Value::Function(_)
-            | Value::Closure(_)
             | Value::Iterator(_)
-            | Value::GeneratorFunction(_)
             | Value::Generator(_)
-            | Value::AsyncFunction(_)
             | Value::AsyncFunctionObject(_)
-            | Value::AsyncGeneratorFunction(_)
             | Value::AsyncGeneratorObject(_)
             | Value::Promise(_)
             | Value::Symbol(_) => {}
@@ -381,6 +409,9 @@ impl GcMarker {
                 .iter()
                 .for_each(|value| self.value(value));
             self.value(&invocation.this_value);
+            if let Some(closure) = invocation.closure_index {
+                self.closure(closure);
+            }
         }
         if let Some(execution) = execution {
             self.generator_execution(execution);
@@ -392,7 +423,7 @@ impl GcMarker {
             owner_module: _,
             isolated_execution,
             function_index: _,
-            closure_index: _,
+            closure_index,
             saved_ip: _,
             saved_registers,
             saved_register_labels: _,
@@ -402,6 +433,9 @@ impl GcMarker {
         } = function;
         if let Some(execution) = isolated_execution {
             self.generator_execution(execution);
+        }
+        if let Some(closure) = closure_index {
+            self.closure(*closure);
         }
         saved_registers.iter().for_each(|value| self.value(value));
     }
@@ -485,7 +519,7 @@ impl InterpreterCore {
         if !std::mem::take(&mut self.gc.cjs_entry_pending) {
             return None;
         }
-        let mut marker = GcMarker::new(self.heap.len());
+        let mut marker = GcMarker::new(self.heap.len(), self.closures.len());
         marker.module_execution(caller);
         let pinned: Vec<ObjectId> = marker.stack.iter().map(|id| ObjectId(*id)).collect();
         let previous = self.gc_arm_top_level();
@@ -535,7 +569,7 @@ impl InterpreterCore {
 
     /// One stop-the-world mark-sweep over the heap.
     fn collect_garbage(&mut self) -> Result<(), GcSkip> {
-        let mut marker = GcMarker::new(self.heap.len());
+        let mut marker = GcMarker::new(self.heap.len(), self.closures.len());
         self.gc_mark_roots(&mut marker)?;
         self.gc_drain(&mut marker);
         self.gc_mark_ephemerons(&mut marker);
@@ -545,7 +579,11 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .wrapping_sub(self.recompute_base_estimated_memory_bytes());
 
-        let marked = marker.marked;
+        let GcMarker {
+            marked,
+            closures_marked,
+            ..
+        } = marker;
         let mut reclaimed_objects = 0u64;
         let mut reclaimed_bytes = 0u64;
         self.mutate_heap(|heap| {
@@ -559,6 +597,30 @@ impl InterpreterCore {
         });
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(reclaimed_bytes);
 
+        // Closures: release unreachable captured environments. The closure,
+        // cold-cell and scope components move together, so charge the exact
+        // difference of the recomputed estimate.
+        let dead_closures: Vec<usize> = closures_marked
+            .iter()
+            .enumerate()
+            .filter(|(index, live)| {
+                !**live && self.closures[*index].function_index != RECLAIMED_CLOSURE_FUNCTION_INDEX
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let mut reclaimed_closures = 0u64;
+        if !dead_closures.is_empty() {
+            let before = self.recompute_base_estimated_memory_bytes();
+            for index in dead_closures {
+                if self.closures.reclaim(index) {
+                    reclaimed_closures += 1;
+                }
+            }
+            let released = before.saturating_sub(self.recompute_base_estimated_memory_bytes());
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+            reclaimed_bytes = reclaimed_bytes.saturating_add(released);
+        }
+
         #[cfg(debug_assertions)]
         debug_assert_eq!(
             self.estimated_memory_bytes
@@ -571,6 +633,7 @@ impl InterpreterCore {
         stats.collections = stats.collections.saturating_add(1);
         stats.reclaimed_objects = stats.reclaimed_objects.saturating_add(reclaimed_objects);
         stats.reclaimed_bytes = stats.reclaimed_bytes.saturating_add(reclaimed_bytes);
+        stats.reclaimed_closures = stats.reclaimed_closures.saturating_add(reclaimed_closures);
 
         // Next trigger: halfway between the surviving live set and the
         // budget, so collection cost stays proportional to allocation.
@@ -585,7 +648,14 @@ impl InterpreterCore {
     }
 
     fn gc_drain(&self, marker: &mut GcMarker) {
-        while let Some(index) = marker.stack.pop() {
+        loop {
+            if let Some(closure) = marker.closure_stack.pop() {
+                self.gc_trace_closure(marker, closure);
+                continue;
+            }
+            let Some(index) = marker.stack.pop() else {
+                break;
+            };
             let Some(object) = self.heap.get(index as usize) else {
                 continue;
             };
@@ -650,6 +720,24 @@ impl InterpreterCore {
                     marker.value(&Self::collection_key_from_repr(repr));
                 }
             }
+        }
+    }
+
+    /// A live closure keeps its captured environment and its per-closure
+    /// metadata (home object, lexical `this`) alive.
+    fn gc_trace_closure(&self, marker: &mut GcMarker, closure: u32) {
+        if let Some(entry) = self.closures.get(closure as usize) {
+            marker.scope_frames(&entry.captured_env);
+        }
+        if let Some(metadata) = self.closure_method_metadata.get(&closure) {
+            marker.object(metadata.home_object);
+        }
+        if let Some(metadata) = self.closure_lexical_super_metadata.get(&closure) {
+            marker.object(metadata.home_object);
+            marker.value(&metadata.this_value);
+        }
+        if let Some((value, _)) = self.arrow_lexical_this.get(&closure) {
+            marker.value(value);
         }
     }
 
@@ -750,10 +838,11 @@ impl InterpreterCore {
             generated_function_realm_globals,
             generated_function_realm_generation: _,
             runtime_name_references,
-            closures,
-            closure_method_metadata,
-            closure_lexical_super_metadata,
-            arrow_lexical_this,
+            // Traced per live closure by `gc_trace_closure`.
+            closures: _,
+            closure_method_metadata: _,
+            closure_lexical_super_metadata: _,
+            arrow_lexical_this: _,
             closure_module_origins: _,
             closure_generated_function_artifacts: _,
             module_reentrant_call_depth: _,
@@ -839,7 +928,7 @@ impl InterpreterCore {
             process_exit_code: _,
             profiling_data: _,
             next_timer_id: _,
-            active_timers: _,
+            active_timers,
             pending_timer_tasks,
             unref_timer_ids: _,
             suspended: _,
@@ -975,21 +1064,9 @@ impl InterpreterCore {
         function_prototypes.values().for_each(|id| m.object(*id));
         builtin_prototypes.values().for_each(|id| m.object(*id));
 
-        // Tables whose entries are never reclaimed.
+        // Tables whose entries are never reclaimed. Closures are traced from
+        // the values that reference them (`gc_trace_closure`).
         iterators.iter().for_each(|iterator| m.iterator(iterator));
-        for closure in &closures.entries {
-            m.scope_frames(&closure.captured_env);
-        }
-        for metadata in closure_method_metadata.entries.values() {
-            m.object(metadata.home_object);
-        }
-        for metadata in closure_lexical_super_metadata.entries.values() {
-            m.object(metadata.home_object);
-            m.value(&metadata.this_value);
-        }
-        for (value, _) in arrow_lexical_this.entries.values() {
-            m.value(value);
-        }
         generators
             .iter()
             .for_each(|generator| m.generator(generator));
@@ -1004,11 +1081,23 @@ impl InterpreterCore {
         }
         async_generator_runtime.for_each_value(|value| m.value(value));
 
-        // Promises and queued work.
+        // Promises and queued work, including the handlers they will call.
         promise_store.for_each_value(|value| m.js_value(value));
+        promise_store.for_each_handler(|handler| m.handler(handler));
         event_loop
             .microtasks
             .for_each_value(|value| m.js_value(value));
+        event_loop
+            .microtasks
+            .for_each_handler(|handler| m.handler(handler));
+        for task in event_loop.macrotasks.iter_pending() {
+            m.handler(task.handler);
+        }
+        for timer in active_timers.values() {
+            if let Some(handler) = timer.handler {
+                m.handler(crate::closure_model::ClosureHandle(handler));
+            }
+        }
         promise_reaction_callables
             .values()
             .for_each(|value| m.value(value));

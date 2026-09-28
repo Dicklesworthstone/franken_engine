@@ -125,6 +125,34 @@ fn garbage_loops_complete_past_the_object_budget() {
     }
 }
 
+/// Closures are not heap objects, but each captures an environment that the
+/// byte budget charges. The perf suite's `closures` workload died on the
+/// 64 MiB budget near 100,000 closures before closures were reclaimed.
+const CLOSURE_LOOPS: &[(&str, &str)] = &[
+    (
+        "let s = 0; for (let i = 0; i < 250000; i++) { const f = () => i; s += f() & 1; } String(s)",
+        "125000",
+    ),
+    (
+        "function mk(k) { return function (x) { return x + k; }; } \
+         let s = 0; for (let i = 0; i < 150000; i++) s = mk(i)(s) % 1000003; String(s)",
+        "891253",
+    ),
+];
+
+#[test]
+fn closure_garbage_loops_complete_past_the_byte_budget() {
+    for (source, node) in CLOSURE_LOOPS {
+        let run = run(source, None);
+        assert_eq!(value_of(&run, source), *node, "{source}");
+        assert!(
+            run.gc.reclaimed_closures >= 50_000,
+            "reclaimed only {} closures: {source}",
+            run.gc.reclaimed_closures
+        );
+    }
+}
+
 /// A 300,000-iteration garbage loop runs after the live structures are built;
 /// every structure must read back intact.
 const CHURN: &str = "for (let i = 0; i < 300000; i++) { const g = { i }; }";
@@ -196,9 +224,21 @@ fn reachable_cases() -> Vec<(String, &'static str)> {
             "const obj = { v: 6, get() { return this.v; } }; const b = obj.get.bind(obj);",
             "String(b())",
         ),
+        (
+            "array of closures",
+            "const fns = []; for (let i = 0; i < 50; i++) fns.push(() => i * 2);",
+            "String(fns.reduce((a, f) => a + f(), 0))",
+        ),
+        (
+            "closure state behind an object",
+            "function counter() { let c = 0; return { inc: () => ++c }; } \
+             const k = counter(); for (let i = 0; i < 1000; i++) k.inc();",
+            "String(k.inc())",
+        ),
     ];
     let node = [
-        "499500", "499500", "2450", "1225", "7", "6", "11", "5", "42", "9", "6", "4", "6",
+        "499500", "499500", "2450", "1225", "7", "6", "11", "5", "42", "9", "6", "4", "6", "2450",
+        "1001",
     ];
     cases
         .iter()
@@ -277,7 +317,7 @@ fn stress_collection_preserves_results_and_console_output() {
             compared += 1;
         }
     }
-    // 50 probes (a few are rejected at lowering) plus 13 reachability cases.
+    // 50 probes (a few are rejected at lowering) plus 15 reachability cases.
     assert!(compared >= 3 * 55, "compared only {compared} runs");
     assert!(
         collections_by_interval.iter().all(|total| *total > 0),

@@ -310,6 +310,9 @@ const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
 /// and ids at or above the base index `promise_reaction_callables` instead
 /// of the closure table.
 const PROMISE_REACTION_CALLABLE_BASE: u32 = 0x8000_0000;
+/// Function index of a closure the collector reclaimed (bd-9vouw.57). No
+/// function table is that large, so a call through a missed root fails.
+const RECLAIMED_CLOSURE_FUNCTION_INDEX: u32 = u32::MAX;
 /// Maximum nesting depth for recursive Array join/toString stringification.
 /// Runtime-constructed arrays can nest unboundedly, so recursion is bounded
 /// fail-closed: deeper sub-arrays render as `""` rather than risking stack
@@ -7562,6 +7565,30 @@ impl ClosureTable {
 
     fn clear(&mut self) {
         while self.pop().is_some() {}
+    }
+
+    /// Collector (bd-9vouw.57): release an unreachable closure's captured
+    /// environment and poison its function index. The id is never reused;
+    /// calling a reclaimed closure fails on the out-of-range function index
+    /// instead of running with another closure's environment. Returns
+    /// whether the closure was live.
+    fn reclaim(&mut self, index: usize) -> bool {
+        let Some(closure) = self.entries.get_mut(index) else {
+            return false;
+        };
+        if closure.function_index == RECLAIMED_CLOSURE_FUNCTION_INDEX {
+            return false;
+        }
+        let previous_bytes = InterpreterCore::estimate_closure_bytes(closure);
+        let captured_env = std::mem::take(&mut closure.captured_env);
+        closure.function_index = RECLAIMED_CLOSURE_FUNCTION_INDEX;
+        let next_bytes = InterpreterCore::estimate_closure_bytes(closure);
+        self.structural_bytes = self
+            .structural_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(next_bytes);
+        self.cold_cells.release_frames(&captured_env);
+        true
     }
 
     fn structural_bytes(&self) -> u64 {

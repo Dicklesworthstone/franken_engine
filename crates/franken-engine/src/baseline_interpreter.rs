@@ -74386,6 +74386,29 @@ impl InterpreterCore {
                     _ => Ok(Value::Object(self.alloc_arguments_object(&[])?)),
                 }
             }
+            "builtin:ClassPrototypeLink" => {
+                // ES2020 14.6.13 ClassDefinitionEvaluation: a derived class's
+                // prototype object inherits from the superclass prototype.
+                // args = (prototype, parent prototype). This is class
+                // machinery, so unlike a guest `o.__proto__ = p` it runs no
+                // property hook (bd-9vouw.60); the IFC mutation label joins
+                // exactly as that store would.
+                let prototype = self.arg_or_undefined(args, 0)?;
+                let parent = self.arg_or_undefined(args, 1)?;
+                let link = match parent {
+                    Value::Object(parent_id) => Some(Some(parent_id)),
+                    Value::Null => Some(None),
+                    _ => None,
+                };
+                if let (Value::Object(prototype_id), Some(link)) = (prototype, link) {
+                    let label = self
+                        .get_register_label(args.start)?
+                        .join(self.get_register_label(args.start + 1)?);
+                    self.join_object_mutation_label(prototype_id, &label)?;
+                    self.store_prototype_link(prototype_id, link);
+                }
+                Ok(Value::Undefined)
+            }
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are
                 // non-enumerable. args = (constructor, constructor.prototype).

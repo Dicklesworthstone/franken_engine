@@ -2717,6 +2717,9 @@ fn text_after_last_top_level_terminator(statement: &str) -> &str {
             quotes.advance_char(ch);
             continue;
         }
+        if ch == '/' && quotes.open_regex_at(statement, index) {
+            continue;
+        }
         match ch {
             '\'' | '"' | '`' => {
                 quotes.open_char(ch);

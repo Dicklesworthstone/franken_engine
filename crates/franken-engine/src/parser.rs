@@ -6978,7 +6978,7 @@ fn try_parse_postfix(
             Expression::Super
         } else {
             match parse_expression(object_src, span, context, recursion_depth + 1) {
-                Ok(e) => e,
+                Ok(e) => parenthesized_chain_boundary(object_src, e),
                 Err(e) => return Some(Err(e)),
             }
         };
@@ -7037,7 +7037,7 @@ fn try_parse_postfix(
                 Expression::Super
             } else {
                 match parse_expression(object_src, span, context, recursion_depth + 1) {
-                    Ok(e) => e,
+                    Ok(e) => parenthesized_chain_boundary(object_src, e),
                     Err(e) => return Some(Err(e)),
                 }
             };
@@ -7072,6 +7072,39 @@ fn try_parse_postfix(
     }
 
     None
+}
+
+/// ES2020 12.3.9: parentheses end an optional chain, so in `(a?.b).c` a
+/// nullish `a` still makes `.c` read a property of undefined (TypeError),
+/// while `a?.b.c` short-circuits to undefined. The AST drops parentheses, so a
+/// parenthesized chain used as the object of a further member access is kept
+/// apart as `true ? chain : undefined` (the same value), which the lowering's
+/// whole-chain short-circuit does not look through.
+fn parenthesized_chain_boundary(source: &str, parsed: Expression) -> Expression {
+    let parenthesized = source.starts_with('(')
+        && extract_balanced(source, '(', ')').is_some_and(|(_, rest)| rest.trim().is_empty());
+    if parenthesized && expression_is_optional_chain(&parsed) {
+        Expression::Conditional {
+            test: Box::new(Expression::BooleanLiteral(true)),
+            consequent: Box::new(parsed),
+            alternate: Box::new(Expression::UndefinedLiteral),
+        }
+    } else {
+        parsed
+    }
+}
+
+/// Whether `expression` is a member/call chain containing an optional link.
+fn expression_is_optional_chain(expression: &Expression) -> bool {
+    let mut node = expression;
+    loop {
+        match node {
+            Expression::OptionalMember { .. } | Expression::OptionalCall { .. } => return true,
+            Expression::Member { object, .. } => node = object.as_ref(),
+            Expression::Call { callee, .. } => node = callee.as_ref(),
+            _ => return false,
+        }
+    }
 }
 
 fn optional_chaining_syntax_error(

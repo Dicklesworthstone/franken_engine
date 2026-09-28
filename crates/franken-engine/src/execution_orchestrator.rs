@@ -4560,6 +4560,12 @@ impl ExecutionOrchestrator {
             GuardplaneOperation::PropertyAccess { key } => {
                 builder = builder.meta("guardplane_property_key".to_string(), key.clone());
             }
+            GuardplaneOperation::SymbolPropertyAccess { symbol_id } => {
+                builder = builder.meta(
+                    "guardplane_property_symbol_id".to_string(),
+                    symbol_id.to_string(),
+                );
+            }
             GuardplaneOperation::Call {
                 callee_name,
                 arg_count,
@@ -5550,7 +5556,8 @@ impl LabFixtureExecutionOrchestratorExt for ExecutionOrchestrator {
 
 fn guardplane_operation_label(operation: &GuardplaneOperation) -> &'static str {
     match operation {
-        GuardplaneOperation::PropertyAccess { .. } => "property_access",
+        GuardplaneOperation::PropertyAccess { .. }
+        | GuardplaneOperation::SymbolPropertyAccess { .. } => "property_access",
         GuardplaneOperation::Call { .. } => "call",
         GuardplaneOperation::Allocation { .. } => "allocation",
         GuardplaneOperation::Import { .. } => "import",
@@ -5561,6 +5568,9 @@ fn guardplane_operation_witness_value(operation: &GuardplaneOperation) -> String
     match operation {
         GuardplaneOperation::PropertyAccess { key } => {
             format!("property_access key={key}")
+        }
+        GuardplaneOperation::SymbolPropertyAccess { symbol_id } => {
+            format!("property_access symbol={symbol_id}")
         }
         GuardplaneOperation::Call {
             callee_name,

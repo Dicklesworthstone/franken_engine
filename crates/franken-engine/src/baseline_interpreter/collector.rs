@@ -385,6 +385,7 @@ impl GcMarker {
             derived_constructor: _,
             this_initialized: _,
             initialize_derived_this_on_return: _,
+            class_instance_fields,
             saved_pending_exception,
             saved_pending_exception_label: _,
             saved_pending_return,
@@ -407,6 +408,9 @@ impl GcMarker {
         }
         if let Some(value) = construct_this {
             self.value(value);
+        }
+        if let Some(fields) = class_instance_fields {
+            self.value(fields);
         }
         if let Some(value) = saved_pending_exception {
             self.value(value);
@@ -1027,6 +1031,7 @@ impl InterpreterCore {
                 derived_constructor_parent_label: _,
                 is_derived_constructor: _,
                 is_default_derived_constructor: _,
+                class_fields,
                 is_array: _,
                 cached_dense_length: _,
                 array_buffer: _,
@@ -1061,6 +1066,9 @@ impl InterpreterCore {
             }
             if let Some(parent) = derived_constructor_parent {
                 marker.value(parent);
+            }
+            if let Some(fields) = class_fields {
+                marker.value(fields);
             }
             if let Some(view) = typed_array {
                 marker.object(view.buffer);

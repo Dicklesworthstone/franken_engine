@@ -278,7 +278,8 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
                 | "builtin:DestructureIteratorInit" | "builtin:DestructureIteratorNext"
                 | "builtin:DestructureIteratorElide" | "builtin:DestructureIteratorDone"
                 | "builtin:ClassMembersNonEnumerable" | "builtin:ArgumentsObject"
-                | "builtin:ClassPrototypeLink" | "builtin:ConstructSuperSpread") =>
+                | "builtin:ClassPrototypeLink" | "builtin:ConstructSuperSpread"
+                | "builtin:ClassDefineField" | "builtin:ClassInitStaticFields") =>
         (
             None,
             HostcallResultContract::JoinInputs,

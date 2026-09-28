@@ -5356,12 +5356,15 @@ fn parse_new_expression(
         }
     }
 
-    // Find the arguments list at the end, if any.
+    // Find the arguments list at the end, if any. A parenthesised callee with
+    // no argument list (lodash's `new (Map || ListCache)`) is not an argument
+    // list with an empty callee: it falls through to `new Foo` below.
     if rest.ends_with(')')
         && let Some((callee_src, args_inner)) = {
             let open = find_matching_open_paren(rest);
             open.map(|pos| (rest[..pos].trim(), &rest[pos + 1..rest.len() - 1]))
         }
+        && !callee_src.is_empty()
     {
         let callee = parse_expression(callee_src, span, context, recursion_depth + 1)?;
         let arguments = if args_inner.trim().is_empty() {

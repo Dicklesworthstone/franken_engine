@@ -841,7 +841,10 @@ fn parse_without_raw(source: &str) -> Vec<Statement> {
         .parse(source, ParseGoal::Script)
         .unwrap_or_else(|error| panic!("{source}: {error}"));
     let mut raws = Vec::new();
-    collect_raw_fragments(&serde_json::to_value(&tree).expect("serialize tree"), &mut raws);
+    collect_raw_fragments(
+        &serde_json::to_value(&tree).expect("serialize tree"),
+        &mut raws,
+    );
     assert!(raws.is_empty(), "{source}: unparsed fragments {raws:?}");
     tree.body
 }
@@ -938,6 +941,36 @@ fn regex_literal_contents_never_split_statements_or_operands() {
             "{source}: {right:?}"
         );
     }
+}
+
+#[test]
+fn new_with_a_parenthesised_callee_and_no_argument_list() {
+    // lodash 4.17.21 `mapCacheClear`: `new (Map || ListCache)` constructs the
+    // parenthesised expression's value. The `(...)` used to be read as an
+    // argument list with an empty callee ("empty expression statement").
+    let Expression::Assignment { right, .. } = expression_statement("x = new (Map || ListCache);")
+    else {
+        panic!("expected an assignment");
+    };
+    let Expression::New { callee, arguments } = *right else {
+        panic!("expected a new expression");
+    };
+    assert!(arguments.is_empty());
+    assert!(!matches!(*callee, Expression::Raw(_)), "{callee:?}");
+    assert!(format!("{callee:?}").contains("LogicalOr"), "{callee:?}");
+
+    // A parenthesised callee followed by an argument list keeps its arguments.
+    let Expression::Assignment { right, .. } = expression_statement("x = new (a.b)(1, 2);") else {
+        panic!("expected an assignment");
+    };
+    let Expression::New { arguments, .. } = *right else {
+        panic!("expected a new expression");
+    };
+    assert_eq!(arguments.len(), 2);
+
+    parse_without_raw(
+        "function mapCacheClear() { this.size = 0; this.__data__ = { 'hash': new Hash, 'map': new (Map || ListCache), 'string': new Hash }; }",
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -824,6 +824,13 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
         reclaimed_bytes = reclaimed_bytes.saturating_add(released);
 
+        // Drain the running totals' dirty lists. They name every entry
+        // borrowed mutably since the last re-derivation, and a loop that
+        // never re-derives (no closure, promise or iterator to reclaim) grew
+        // them by one id per object it wrote after allocating.
+        self.heap.estimated_bytes();
+        self.async_functions.estimated_bytes();
+
         #[cfg(debug_assertions)]
         debug_assert_eq!(
             self.estimated_memory_bytes
@@ -1802,6 +1809,92 @@ mod tests {
             stats.reclaimed_async_functions
         );
         assert!(core.async_functions.live < core.async_functions.len() / 2);
+    }
+
+    /// Every object written after allocation is listed as dirty for the
+    /// running heap byte total. A loop that never re-derives memory used to
+    /// grow that list by one id per iteration forever; each collection now
+    /// drains it.
+    #[test]
+    fn collections_drain_the_heap_dirty_list() {
+        let source = "let s = 0; for (let i = 0; i < 20000; i++) { \
+                      const o = { p: { i } }; s += o.p.i & 1; } s";
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "gc-unit.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "gc-unit.js"),
+            &LoweringContext::new("gc-trace", "gc-decision", "gc-policy"),
+        )
+        .expect("lower")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.max_heap_objects = 2_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "gc-unit");
+        let result = core.execute(&module).expect("execute");
+        assert_eq!(result.value, Value::Int(10000));
+        assert!(core.gc_stats().collections >= 10);
+        // Bounded by what was written since the last collection, not by the
+        // 40,000 objects allocated.
+        let dirty = core.heap.dirty.borrow().len();
+        assert!(dirty < 2_000, "{dirty} dirty heap ids retained");
+    }
+
+    /// Each `await` registered an internal reaction promise as the key of
+    /// its resumption context and never settled it, so it stayed a root:
+    /// one promise record per await, retained after every collection. Once
+    /// the awaiting code resumes, the carrier is removed.
+    #[test]
+    fn resumed_awaits_leave_no_promise_records_behind() {
+        let source = "async function f(i) { return i; } (async () => { let s = 0; \
+                      for (let i = 0; i < 3000; i++) { s += await f(i); } })(); 0";
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "gc-unit.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "gc-unit.js"),
+            &LoweringContext::new("gc-trace", "gc-decision", "gc-policy"),
+        )
+        .expect("lower")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "gc-unit");
+        core.execute(&module).expect("execute");
+        assert!(core.promise_store.slot_count() >= 6_000);
+        core.collect_garbage().expect("collection runs");
+        let retained = core.promise_store.len();
+        assert!(retained < 16, "{retained} promise records retained");
+        assert!(core.async_resumption_contexts.is_empty());
     }
 
     /// Reclaimed slots cost one pointer, not a whole object.

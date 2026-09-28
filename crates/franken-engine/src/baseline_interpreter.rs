@@ -55151,6 +55151,25 @@ impl InterpreterCore {
         Ok(result)
     }
 
+    /// An await's internal reaction promise (`register_promise_then_for_await`)
+    /// exists only as the key of its resumption context. Once the context is
+    /// consumed and the awaiting code resumed, nothing can observe it; left
+    /// pending it stayed a collector root forever, one record per `await`
+    /// (bd-9vouw.57). Remove it, releasing its exact charge. A carrier that
+    /// is no longer pending (cancellation settles it) is left to the
+    /// collector.
+    fn release_await_carrier(&mut self, carrier: crate::promise_model::PromiseHandle) {
+        let before = self.promise_runtime_memory_bytes();
+        if self
+            .promise_store
+            .remove_pending_at_execution_boundary(carrier)
+            .is_ok()
+        {
+            let released = before.saturating_sub(self.promise_runtime_memory_bytes());
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+        }
+    }
+
     fn register_promise_then_for_await(
         &mut self,
         handle: crate::promise_model::PromiseHandle,
@@ -56897,6 +56916,7 @@ impl InterpreterCore {
                                     task_label.clone(),
                                     module,
                                 )?;
+                                self.release_await_carrier(*result_promise);
                                 return Ok(());
                             }
                             // Check if there's an async resumption context for this promise
@@ -56918,6 +56938,7 @@ impl InterpreterCore {
                                     );
                                     return Err(err);
                                 }
+                                self.release_await_carrier(*result_promise);
                             } else if let Some(resumption_context) = self
                                 .top_level_await_resumption_contexts
                                 .remove(&result_promise.0)
@@ -56928,6 +56949,7 @@ impl InterpreterCore {
                                     task_label.clone(),
                                     module,
                                 )?;
+                                self.release_await_carrier(*result_promise);
                             } else {
                                 // With no closure handler, the identity transform propagates
                                 // the argument to the result promise as a fulfillment value.
@@ -57014,6 +57036,7 @@ impl InterpreterCore {
                                 task_label.clone(),
                                 module,
                             )?;
+                            self.release_await_carrier(*result_promise);
                             return Ok(());
                         }
                         if let Some(resumption_context) =
@@ -57033,6 +57056,7 @@ impl InterpreterCore {
                                 );
                                 return Err(err);
                             }
+                            self.release_await_carrier(*result_promise);
                         } else if let Some(resumption_context) = self
                             .top_level_await_resumption_contexts
                             .remove(&result_promise.0)
@@ -57043,6 +57067,7 @@ impl InterpreterCore {
                                 task_label.clone(),
                                 module,
                             )?;
+                            self.release_await_carrier(*result_promise);
                         } else {
                             self.reject_promise(
                                 *result_promise,

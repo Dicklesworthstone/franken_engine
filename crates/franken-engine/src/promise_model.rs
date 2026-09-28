@@ -429,7 +429,8 @@ fn estimate_witness_log_memory_bytes(witness: &[WitnessEvent]) -> u64 {
 /// Replay witness log with a running total of its events' dynamic payload
 /// bytes (bd-9vouw.31).
 ///
-/// The log grows with every Promise and task operation and is charged to the
+/// The log records every Promise and task operation, keeps the most recent
+/// ones (see `WITNESS_LOG_RETAINED_EVENTS`), and is charged to the
 /// interpreter's resident-memory estimate, which the interpreter re-reads
 /// around each Promise operation. Summing the events on every read made each
 /// operation O(operations so far). Serialized as the plain event sequence;
@@ -438,7 +439,22 @@ fn estimate_witness_log_memory_bytes(witness: &[WitnessEvent]) -> u64 {
 pub struct WitnessLog {
     events: Vec<WitnessEvent>,
     dynamic_bytes: u64,
+    /// Oldest events dropped to keep the log bounded (bd-9vouw.71).
+    dropped: u64,
 }
+
+/// Events a witness log keeps (bd-9vouw.71). Once a log reaches twice this,
+/// its oldest events are dropped down to this many.
+///
+/// Nothing in production replays these logs; tests read the logs of short
+/// programs. The engine's own uses read only recent events:
+/// - rollback of a just-created promise checks the last event;
+/// - boundary removal of a pending promise tolerates a dropped creation
+///   event.
+///
+/// Unbounded, the logs grew by several events per `await` and exhausted the
+/// memory budget of long-running async programs.
+const WITNESS_LOG_RETAINED_EVENTS: usize = 1024;
 
 impl WitnessLog {
     pub fn new() -> Self {
@@ -450,6 +466,20 @@ impl WitnessLog {
             .dynamic_bytes
             .saturating_add(estimate_witness_event_memory_bytes(&event));
         self.events.push(event);
+        if self.events.len() >= 2 * WITNESS_LOG_RETAINED_EVENTS {
+            let excess = self.events.len() - WITNESS_LOG_RETAINED_EVENTS;
+            for dropped in self.events.drain(..excess) {
+                self.dynamic_bytes = self
+                    .dynamic_bytes
+                    .saturating_sub(estimate_witness_event_memory_bytes(&dropped));
+            }
+            self.dropped = self.dropped.saturating_add(excess as u64);
+        }
+    }
+
+    /// Number of oldest events dropped to keep the log bounded.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
     }
 
     pub fn pop(&mut self) -> Option<WitnessEvent> {
@@ -492,6 +522,7 @@ impl From<Vec<WitnessEvent>> for WitnessLog {
         Self {
             events,
             dynamic_bytes,
+            dropped: 0,
         }
     }
 }
@@ -989,25 +1020,24 @@ impl PromiseStore {
             return Err(PromiseError::AlreadySettled { handle });
         }
         let creation_seq = record.creation_seq;
-        let witness_index = self
-            .witness
-            .iter()
-            .rposition(|event| {
-                matches!(
-                    event,
-                    WitnessEvent::PromiseCreated {
-                        handle: witness_handle,
-                        seq,
-                    } if *witness_handle == handle && *seq == creation_seq
-                )
-            })
-            .ok_or(PromiseError::InvalidHandle { handle })?;
+        // The creation event may already be dropped from the bounded log.
+        let witness_index = self.witness.iter().rposition(|event| {
+            matches!(
+                event,
+                WitnessEvent::PromiseCreated {
+                    handle: witness_handle,
+                    seq,
+                } if *witness_handle == handle && *seq == creation_seq
+            )
+        });
 
         let record = self
             .promises
             .take(handle.0 as usize)
             .expect("validated pending Promise slot remains occupied");
-        self.witness.remove(witness_index);
+        if let Some(witness_index) = witness_index {
+            self.witness.remove(witness_index);
+        }
         Ok(record)
     }
 
@@ -3971,6 +4001,44 @@ mod tests {
     }
 
     // ----- Witness events -----
+
+    /// bd-9vouw.71: a witness log keeps only its most recent events, with
+    /// its byte total equal to a walk of what it keeps.
+    #[test]
+    fn witness_log_keeps_recent_events_bounded() {
+        let mut log = WitnessLog::new();
+        let total = 3 * WITNESS_LOG_RETAINED_EVENTS as u64;
+        for index in 0..total {
+            log.push(WitnessEvent::MicrotaskEnqueued { index });
+        }
+        assert!(log.len() < 2 * WITNESS_LOG_RETAINED_EVENTS);
+        assert_eq!(log.dropped() + log.len() as u64, total);
+        assert_eq!(
+            log.last(),
+            Some(&WitnessEvent::MicrotaskEnqueued { index: total - 1 })
+        );
+        assert_eq!(log.memory_bytes(), estimate_witness_log_memory_bytes(&log));
+    }
+
+    /// Removing a pending promise at an execution boundary still works when
+    /// its creation event has been dropped from the bounded log.
+    #[test]
+    fn boundary_removal_tolerates_a_dropped_creation_event() {
+        let mut store = PromiseStore::new();
+        let first = store.create();
+        for _ in 0..2 * WITNESS_LOG_RETAINED_EVENTS {
+            store.create();
+        }
+        assert!(!store.witness_log().iter().any(|event| matches!(
+            event,
+            WitnessEvent::PromiseCreated { handle, .. } if *handle == first
+        )));
+        let record = store
+            .remove_pending_at_execution_boundary(first)
+            .expect("pending promise is removable");
+        assert_eq!(record.handle, first);
+        assert!(store.get(first).is_err());
+    }
 
     #[test]
     fn witness_records_create_and_settle() {

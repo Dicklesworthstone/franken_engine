@@ -41,6 +41,15 @@ fn try_run_with_object_budget(
     stress_interval: Option<u64>,
     max_heap_objects: Option<u32>,
 ) -> Option<Run> {
+    try_run_with_budgets(source, stress_interval, max_heap_objects, None)
+}
+
+fn try_run_with_budgets(
+    source: &str,
+    stress_interval: Option<u64>,
+    max_heap_objects: Option<u32>,
+    max_total_memory_bytes: Option<u64>,
+) -> Option<Run> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
@@ -61,6 +70,9 @@ fn try_run_with_object_budget(
     config.instruction_budget = 1_000_000_000;
     if let Some(max_heap_objects) = max_heap_objects {
         config.max_heap_objects = max_heap_objects;
+    }
+    if let Some(max_total_memory_bytes) = max_total_memory_bytes {
+        config.max_total_memory_bytes = max_total_memory_bytes;
     }
     config.granted_capabilities = [
         RuntimeCapability::VmDispatch,
@@ -315,6 +327,22 @@ fn await_loop_completes_past_the_object_budget() {
         "reclaimed only {} async-function records",
         run.gc.reclaimed_async_functions
     );
+}
+
+/// An await loop's memory must not grow with its length. Minimal byte budget
+/// measured for this loop (3k / 6k / 12k / 24k awaits):
+/// - before: 2 / 4 / 6 / 16 MiB;
+/// - with bounded witness logs (bd-9vouw.71) only: 1 / 1.5 / 3 / 4 MiB;
+/// - with each resumed await's internal carrier promise released as well:
+///   0.75 / 1 / 1.5 / 1.5 MiB, flat once the logs reach their bound.
+///
+/// 24,000 awaits under 2 MiB therefore fail on the old code and fit now.
+#[test]
+fn await_loop_completes_past_the_byte_budget() {
+    let source = "async function f(i) { return i; } (async () => { let s = 0; \
+                  for (let i = 0; i < 24000; i++) { s += await f(i); } console.log(s); })();";
+    let run = try_run_with_budgets(source, None, None, Some(2 * 1024 * 1024)).expect("lowers");
+    assert_eq!(console_lines(&run, source), vec!["287988000"]);
 }
 
 fn reachable_cases() -> Vec<(String, &'static str)> {

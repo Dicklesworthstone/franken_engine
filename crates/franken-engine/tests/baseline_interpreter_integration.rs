@@ -842,7 +842,9 @@ fn add_type_error_bool_plus_null() {
 }
 
 #[test]
-fn sub_type_error_on_non_integers() {
+fn sub_non_numeric_string_is_nan() {
+    // ES2020 12.8.4 / 7.1.4.1.1: `'hello' - 1` is ToNumber('hello') - 1 = NaN,
+    // not a TypeError (bd-9vouw.37).
     let m = test_module_with_pool(
         vec![
             Ir3Instruction::LoadStr {
@@ -858,10 +860,10 @@ fn sub_type_error_on_non_integers() {
         ],
         vec!["hello".into()],
     );
-    assert!(matches!(
-        qjs_run(&m).unwrap_err(),
-        InterpreterError::TypeError { .. }
-    ));
+    match qjs_run(&m).unwrap().value {
+        Value::Float(f) => assert!(f.inner().is_nan(), "expected NaN, got {f:?}"),
+        other => panic!("expected NaN, got {other:?}"),
+    }
 }
 
 #[test]

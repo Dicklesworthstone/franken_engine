@@ -52186,13 +52186,20 @@ impl InterpreterCore {
     }
 
     fn regexp_test_value(
-        &self,
+        &mut self,
         receiver: &Value,
         input: &Value,
     ) -> Result<Value, InterpreterError> {
         let Some((source, flags)) = self.regexp_source_flags_from_value(receiver) else {
             return Ok(Value::Bool(false));
         };
+        // ES2020 21.2.5.13: test is RegExpExec(R, S) !== null, so a global or
+        // sticky regex reads and advances lastIndex exactly as exec does.
+        // Ignoring it made `while (re.test(s))` over a /g regex loop forever.
+        if flags.contains('g') || flags.contains('y') {
+            let result = self.regexp_prototype_exec(receiver.clone(), input)?;
+            return Ok(Value::Bool(!matches!(result, Value::Null)));
+        }
         let regex = Self::compile_regexp_pattern(&source, &flags)?;
         let input = Self::value_to_primitive_string(input);
         Ok(Value::Bool(regex.is_match(&input)))

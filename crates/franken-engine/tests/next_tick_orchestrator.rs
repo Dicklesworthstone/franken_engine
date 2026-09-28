@@ -142,19 +142,29 @@ fn shadowed_process_binding_is_user_data_bd_8nrud() {
     );
 }
 
-/// The recognizer grants exactly the nextTick call: every other `process`
-/// surface stays denied at lowering, so no raw process authority leaks.
+/// The recognizers grant exactly `nextTick` and the controlled termination
+/// `process.exit` / `process.exitCode` (bd-my9hk), which ends only the guest
+/// run with an exit code: every raw `process` surface stays denied at
+/// lowering, so no raw process authority leaks. (`process.exit(0)` was this
+/// test's canary until bd-my9hk made it a controlled termination.)
 #[test]
 fn raw_process_authority_stays_denied_bd_8nrud() {
-    let (exit_success, stderr, _) = run_frankenctl(
-        "fe_8nrud_exit_denied",
-        "bd-8nrud-denied",
-        "process.exit(0);\n",
-    );
-    assert!(
-        !exit_success,
-        "process.exit must stay denied; stderr: {stderr}"
-    );
+    for (name, source) in [
+        ("kill", "process.kill(1, 'SIGKILL');\n"),
+        ("chdir", "process.chdir('/');\n"),
+        ("abort", "process.abort();\n"),
+        ("env", "console.log(process.env.HOME);\n"),
+    ] {
+        let (success, stderr, _) = run_frankenctl(
+            &format!("fe_8nrud_{name}_denied"),
+            "bd-8nrud-denied",
+            source,
+        );
+        assert!(
+            !success,
+            "process.{name} must stay denied; stderr: {stderr}"
+        );
+    }
 
     let (alias_success, alias_stderr, _) = run_frankenctl(
         "fe_8nrud_alias_denied",

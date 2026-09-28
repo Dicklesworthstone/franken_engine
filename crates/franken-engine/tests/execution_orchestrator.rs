@@ -2807,6 +2807,137 @@ fn console_output_over_budget_fails_the_run_and_keeps_the_head() {
     }
 }
 
+/// bd-my9hk: `process.exit(code)` ends the run at once with that exit code, as
+/// in Node: nothing after it runs, not even a `finally` block or a pending
+/// timer, and `catch` cannot intercept it. `process.exitCode` sets the code a
+/// normal completion reports.
+#[test]
+fn process_exit_and_exit_code_end_the_run_with_the_requested_code() {
+    let cases: [(&str, Option<i32>, &[&str]); 12] = [
+        (
+            "Promise.resolve().then(() => { process.exit(8); });\nsetTimeout(() => { console.log(\"late\"); }, 5);\n",
+            Some(8),
+            &[],
+        ),
+        (
+            "(async () => { await null; process.exit(10); })();\nconsole.log(\"sync\");\n",
+            Some(10),
+            &["sync"],
+        ),
+        (
+            "console.log(\"a\");\nprocess.exit(3);\nconsole.log(\"b\");\n",
+            Some(3),
+            &["a"],
+        ),
+        (
+            "setTimeout(() => { console.log(\"timer\"); }, 0);\nprocess.exit();\n",
+            Some(0),
+            &[],
+        ),
+        (
+            "try { process.exit(4); } finally { console.log(\"finally\"); }\n",
+            Some(4),
+            &[],
+        ),
+        (
+            "try { process.exit(5); } catch (e) { console.log(\"caught\"); }\n",
+            Some(5),
+            &[],
+        ),
+        (
+            "setTimeout(() => { process.exit(6); }, 1);\nsetTimeout(() => { console.log(\"late\"); }, 50);\n",
+            Some(6),
+            &[],
+        ),
+        (
+            "function main() { if (true) { process.exit(9); } }\nmain();\nconsole.log(\"unreachable\");\n",
+            Some(9),
+            &[],
+        ),
+        (
+            "process.exitCode = 7;\nconsole.log(\"done\");\n",
+            Some(7),
+            &["done"],
+        ),
+        ("process.exitCode = 2;\nprocess.exit();\n", Some(2), &[]),
+        (
+            "try { process.exit(\"x\"); } catch (e) { console.log(e.name); }\n",
+            None,
+            &["TypeError"],
+        ),
+        ("console.log(\"plain\");\n", None, &["plain"]),
+    ];
+    for (source, expected_code, expected_lines) in cases {
+        for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+            let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+                force_lane: Some(lane),
+                ..OrchestratorConfig::default()
+            });
+            let result = orchestrator
+                .execute(&ExtensionPackage {
+                    capabilities: vec!["builtin".to_string(), "timer".to_string()],
+                    ..simple_package("ext-process-exit", source)
+                })
+                .unwrap_or_else(|error| panic!("{lane:?} {source}: {error}"));
+            assert_eq!(result.exit_code, expected_code, "{lane:?} {source}");
+            assert_eq!(console_lines(&result), expected_lines, "{lane:?} {source}");
+        }
+    }
+}
+
+/// bd-my9hk: under the trusted process-shape grant, `process.argv` is the argv
+/// the host set (the same array on every read) and an empty array when it set
+/// none. Setting argv grants nothing: under the deny-all default the read is
+/// still refused at lowering (bd-xewby).
+#[test]
+fn process_argv_is_the_argv_the_host_set_under_the_trusted_grant() {
+    use frankenengine_engine::lowering_pipeline::AmbientAuthorityGrant;
+    use frankenengine_engine::runtime_config::RuntimeConfig;
+
+    let source = "console.log(process.argv.slice(2).join(\",\"));\n\
+                  console.log(process.argv.length);\n\
+                  console.log(process.argv === process.argv);\n";
+    let argv = vec![
+        "/usr/local/bin/franken-node".to_string(),
+        "/app/main.js".to_string(),
+        "alpha".to_string(),
+        "beta".to_string(),
+    ];
+    let package = |id: &str| ExtensionPackage {
+        capabilities: vec!["builtin".to_string()],
+        ..simple_package(id, source)
+    };
+    let trusted = || {
+        ExecutionOrchestrator::new_with_runtime_config_and_ambient_authority_grant(
+            OrchestratorConfig::default(),
+            RuntimeConfig::default(),
+            AmbientAuthorityGrant::TrustedProcessShape,
+        )
+    };
+
+    let mut orchestrator = trusted();
+    orchestrator.set_process_argv(argv.clone());
+    let result = orchestrator
+        .execute(&package("ext-process-argv"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(console_lines(&result), ["alpha,beta", "4", "true"]);
+
+    let result = trusted()
+        .execute(&package("ext-process-argv-unset"))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(console_lines(&result), ["", "0", "true"]);
+
+    let mut untrusted = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    untrusted.set_process_argv(argv);
+    let error = untrusted
+        .execute(&package("ext-process-argv-denied"))
+        .expect_err("deny-all lowering must still refuse process.argv");
+    assert!(
+        error.to_string().contains("ambient authority violation"),
+        "{error}"
+    );
+}
+
 /// Output printed by a CommonJS entry and by the module it requires survives
 /// when that module throws, since both run in the same interpreter.
 #[test]

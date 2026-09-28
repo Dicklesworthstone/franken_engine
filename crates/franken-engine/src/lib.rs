@@ -2355,6 +2355,7 @@ fn execute_prepared_eval(
             iteration_traces,
             nondeterminism_trace,
             generated_code_audit,
+            exit_code,
         } = &routed.result;
         let artifact_bytes = serde_json::to_vec(&(
             value,
@@ -2368,6 +2369,7 @@ fn execute_prepared_eval(
             iteration_traces,
             nondeterminism_trace,
             generated_code_audit,
+            exit_code,
         ))
         .map_err(|error| {
             EvalError::new(

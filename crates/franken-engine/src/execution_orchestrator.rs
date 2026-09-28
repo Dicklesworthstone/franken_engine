@@ -1147,6 +1147,9 @@ pub struct OrchestratorResult {
     /// evidence, and the engine<->core differential oracle.
     pub completion_label: crate::ifc_artifacts::Label,
     pub console_output: Vec<ConsoleEntry>,
+    /// Exit status the program set through `process.exit(n)` or
+    /// `process.exitCode = n` (bd-my9hk); `None` when it set none.
+    pub exit_code: Option<i32>,
     pub instructions_executed: u64,
     /// Exact number of source IR3 instructions dispatched through compact
     /// Tier-I handlers. Zero means the execution stayed entirely on Tier R.
@@ -1875,6 +1878,8 @@ pub struct ExecutionOrchestrator {
     /// failed. The lane writes it through this shared sink because a failed
     /// execution returns only its error.
     last_failed_console_output: FailedConsoleSink,
+    /// `process.argv` the host launched the program with (bd-my9hk).
+    process_argv: Vec<String>,
     /// Optional per-run cancellation signal supplied by the product supervisor.
     cancellation_token: Option<CancellationToken>,
     /// Optional data-contract IFC ingress binding (bd-fqlfw.8.2): the labeled
@@ -2155,6 +2160,7 @@ impl ExecutionOrchestrator {
             last_failed_host_effect_journal_records: Vec::new(),
             last_failed_trace_id: None,
             last_failed_console_output: Arc::default(),
+            process_argv: Vec::new(),
             cancellation_token: None,
             data_contract_ingress: None,
             data_contract_flow_events: Vec::new(),
@@ -2271,6 +2277,13 @@ impl ExecutionOrchestrator {
             .lock()
             .map(|captured| captured.clone())
             .unwrap_or_default()
+    }
+
+    /// Set `process.argv` for later executions (bd-my9hk): the runtime path,
+    /// the script path, then the program's own arguments, as Node reports
+    /// them. Unset, the program sees an empty array.
+    pub fn set_process_argv(&mut self, argv: Vec<String>) {
+        self.process_argv = argv;
     }
 
     /// Install a per-run cooperative cancellation signal for both interpreter
@@ -2813,6 +2826,7 @@ impl ExecutionOrchestrator {
             let execution_value = format!("{}", exec_result.value);
             let completion_label = exec_result.completion_label.clone();
             let console_output = exec_result.console_output.clone();
+            let exit_code = exec_result.exit_code;
             let instructions_executed = exec_result.instructions_executed;
             let tier_i_instructions_executed = exec_result.tier_i_instructions_executed;
             let tier_i_specialized_instructions_executed =
@@ -2974,6 +2988,7 @@ impl ExecutionOrchestrator {
                 execution_value,
                 completion_label,
                 console_output,
+                exit_code,
                 instructions_executed,
                 tier_i_instructions_executed,
                 tier_i_specialized_instructions_executed,
@@ -3451,6 +3466,7 @@ impl ExecutionOrchestrator {
         // A required or imported module is parsed under the same options (and
         // budgets) as the entry, not the parser's built-in defaults.
         quickjs_config.module_parser_options = self.config.parser_options.clone();
+        quickjs_config.process_argv = self.process_argv.clone();
         if let Some((root, canonical_root)) = module_root.as_ref() {
             quickjs_config.module_root = Some(root.clone());
             quickjs_config.canonical_module_root = canonical_root.clone();
@@ -3466,6 +3482,7 @@ impl ExecutionOrchestrator {
         v8_config.cancellation_token = cancellation_token.cloned();
         v8_config.commonjs_entry = self.commonjs_entry();
         v8_config.module_parser_options = self.config.parser_options.clone();
+        v8_config.process_argv = self.process_argv.clone();
         if let Some((root, canonical_root)) = module_root {
             v8_config.module_root = Some(root);
             v8_config.canonical_module_root = canonical_root;
@@ -6614,6 +6631,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert_eq!(reward, 400_000);
@@ -9368,6 +9386,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // Zero instructions should yield maximum reward (no cost).
@@ -9806,6 +9825,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let capability_summary =
             ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
@@ -9841,6 +9861,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let capability_summary =
             ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
@@ -9889,6 +9910,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let capability_summary =
             ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
@@ -9947,6 +9969,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert!(reward > 0, "reward for 1 instruction should be positive");
@@ -10136,6 +10159,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let capability_summary =
             ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities);
@@ -10183,6 +10207,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 2 hostcalls => penalty = 2 * 25_000 = 50_000. Reward = 1M - 0 - 50_000 = 950_000.
@@ -10216,6 +10241,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 100 hostcalls => penalty = min(100*25_000, 300_000) = 300_000. Reward = 700_000.
@@ -10382,6 +10408,7 @@ mod tests {
                 "orchestrator-test-stub",
             ),
             generated_code_audit: Vec::new(),
+            exit_code: None,
         };
         for raw_epoch in [1u64, 100, u64::MAX] {
             let epoch = SecurityEpoch::from_raw(raw_epoch);

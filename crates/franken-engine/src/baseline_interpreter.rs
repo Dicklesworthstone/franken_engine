@@ -8499,6 +8499,10 @@ pub enum InterpreterError {
     },
     /// Execution terminated by containment action.
     Terminated { reason: String },
+    /// The program called `process.exit(code)` (bd-my9hk). Not catchable and
+    /// runs no `finally` block, pending callback or microtask, as in Node;
+    /// the top level turns it into a completed run with that exit code.
+    ProcessExit { code: i32 },
     /// Execution cancelled by CheckpointGuard.
     Cancelled,
 }
@@ -8643,6 +8647,7 @@ impl fmt::Display for InterpreterError {
             Self::Terminated { reason } => {
                 write!(f, "execution terminated by containment action: {reason}")
             }
+            Self::ProcessExit { code } => write!(f, "process.exit({code})"),
         }
     }
 }
@@ -8704,6 +8709,11 @@ pub struct InterpreterConfig {
     /// same budget as the program that requires it.
     #[serde(default)]
     pub module_parser_options: ParserOptions,
+    /// `process.argv` as the embedder launched the program (bd-my9hk):
+    /// runtime path, script path, then the program's own arguments. Empty
+    /// unless the embedder supplies it.
+    #[serde(default)]
+    pub process_argv: Vec<String>,
 }
 
 impl PartialEq for InterpreterConfig {
@@ -8722,6 +8732,7 @@ impl PartialEq for InterpreterConfig {
             && self.extension_id == other.extension_id
             && self.checkpoint_density == other.checkpoint_density
             && self.module_parser_options == other.module_parser_options
+            && self.process_argv == other.process_argv
         // Note: cancellation_token is intentionally excluded from comparison
     }
 }
@@ -8745,6 +8756,7 @@ impl InterpreterConfig {
             canonical_module_root: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
+            process_argv: Vec::new(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8768,6 +8780,7 @@ impl InterpreterConfig {
             canonical_module_root: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
+            process_argv: Vec::new(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8791,6 +8804,7 @@ impl InterpreterConfig {
             canonical_module_root: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
+            process_argv: Vec::new(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8814,6 +8828,7 @@ impl InterpreterConfig {
             canonical_module_root: None,
             commonjs_entry: false,
             module_parser_options: ParserOptions::default(),
+            process_argv: Vec::new(),
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -8982,6 +8997,9 @@ pub struct ExecutionResult {
     /// generator, and async entries do not add rows. Empty when no dynamic code
     /// was generated.
     pub generated_code_audit: Vec<GeneratedCodeAuditEntry>,
+    /// Exit status the program asked for through `process.exit(n)` or
+    /// `process.exitCode = n` (bd-my9hk); `None` when it set none.
+    pub exit_code: Option<i32>,
 }
 
 /// Immutable compact dispatch plan compiled from canonical IR3.
@@ -11640,6 +11658,9 @@ pub struct InterpreterCore {
     /// Total message bytes in `console_output`, held under
     /// `config.max_console_bytes`.
     console_output_bytes: usize,
+    /// Exit status set by `process.exitCode = n` or `process.exit(n)`
+    /// (bd-my9hk); `None` means the program never set one.
+    process_exit_code: Option<i32>,
     /// Profiling data collection (optional for performance measurements).
     profiling_data: Option<crate::profiling::Profiler>,
     /// Next timer ID for setTimeout/setInterval (monotonic for determinism).
@@ -12323,6 +12344,7 @@ impl InterpreterCore {
             entry_module_specifier: None,
             console_output: Vec::new(),
             console_output_bytes: 0,
+            process_exit_code: None,
             profiling_data: None,
             next_timer_id: 0,
             active_timers: BTreeMap::new(),
@@ -31278,6 +31300,7 @@ impl InterpreterCore {
             iteration_traces: std::mem::take(&mut self.iteration_traces),
             nondeterminism_trace,
             generated_code_audit: std::mem::take(&mut self.generated_code_audit),
+            exit_code: self.process_exit_code.take(),
         }
     }
 
@@ -31331,7 +31354,19 @@ impl InterpreterCore {
         })?;
         self.ensure_vm_dispatch_capability()?;
         let entry_specifier = self.prepare_execution(module)?;
-        let result = self.run_top_level_execution(module, compact_tier1);
+        self.process_exit_code = None;
+        let result = match self.run_top_level_execution(module, compact_tier1) {
+            // `process.exit(code)` ends the program normally (bd-my9hk): the
+            // run completes with that exit code rather than failing.
+            Err(InterpreterError::ProcessExit { code }) => {
+                self.process_exit_code = Some(code);
+                Ok(LabeledReturn {
+                    value: Value::Undefined,
+                    label: Label::Public,
+                })
+            }
+            other => other,
+        };
         // Final capture opportunity: a request equal to the trace's final
         // event count observes end-of-execution state (bd-fqlfw.3.5.5).
         self.check_state_capture_boundary();
@@ -31803,6 +31838,11 @@ impl InterpreterCore {
             self.top_level_compact_tier1 = previous_compact_tier1;
             result
         };
+        // `process.exit` ends the program on the spot: no microtask, timer or
+        // other pending callback runs after it (bd-my9hk).
+        if matches!(result, Err(InterpreterError::ProcessExit { .. })) {
+            return result;
+        }
         if result.is_err() {
             // Tier-R leaves the failing callee's captured environment and
             // fresh local scope installed while checkpoints drain. Reify the
@@ -32739,7 +32779,15 @@ impl InterpreterCore {
     }
 
     fn inject_runtime_globals_inner(&mut self) -> Result<(), InterpreterError> {
-        let argv = Value::Object(self.alloc_array_from_values(&[])?);
+        // bd-my9hk: the argv the embedder launched the program with; empty
+        // when it supplied none.
+        let argv_values: Vec<Value> = self
+            .config
+            .process_argv
+            .iter()
+            .map(|arg| Value::str(arg.as_str()))
+            .collect();
+        let argv = Value::Object(self.alloc_array_from_values(&argv_values)?);
         let env = Value::Object(self.alloc_object_with_properties(&[])?);
         // bd-qmy52/bd-y30zw: `platform` and `pid` are benign process-SHAPE
         // descriptors readable only through a statically allowlisted member
@@ -55490,6 +55538,7 @@ impl InterpreterCore {
                             InterpreterError::MemoryBudgetExceeded { .. }
                                 | InterpreterError::ConsoleBudgetExceeded { .. }
                                 | InterpreterError::ContainmentActionRequested { .. }
+                                | InterpreterError::ProcessExit { .. }
                         )
                     {
                         failed_readable = readable_listener_target;
@@ -56079,6 +56128,15 @@ impl InterpreterCore {
                                     }
                                 },
                                 Err(err) => {
+                                    // Budgets, containment and `process.exit`
+                                    // (bd-my9hk) are not JS exceptions: they end
+                                    // the run instead of rejecting the chain,
+                                    // exactly as in the executor path.
+                                    if !matches!(err, InterpreterError::UncaughtException { .. })
+                                        && Self::js_catchable_error_name(&err).is_none()
+                                    {
+                                        return Err(err);
+                                    }
                                     // A guest throw re-arms the thrown value in
                                     // the pending-exception slot; reject with it
                                     // (an Error object stays an object) instead
@@ -57234,6 +57292,31 @@ impl InterpreterCore {
             });
         }
         Ok(())
+    }
+
+    /// Node's `process.exit(code)` / `process.exitCode` validation: an integer
+    /// or a string holding one; `undefined`/`null` mean "not set".
+    fn process_exit_code_from_value(value: &Value) -> Result<Option<i32>, InterpreterError> {
+        let integer = match value {
+            Value::Undefined | Value::Null => return Ok(None),
+            Value::Int(n) => Some(*n),
+            Value::Float(f) if f.inner().fract() == 0.0 && f.inner().is_finite() => {
+                Some(f.inner() as i64)
+            }
+            Value::Str(s) => s.as_str().and_then(|text| text.trim().parse::<i64>().ok()),
+            _ => None,
+        };
+        let Some(integer) = integer else {
+            return Err(InterpreterError::TypeError {
+                expected: "process exit code as an integer or integer string".to_string(),
+                got: value.type_name().to_string(),
+            });
+        };
+        i32::try_from(integer)
+            .map(Some)
+            .map_err(|_| InterpreterError::RangeError {
+                message: format!("process exit code {integer} is out of the 32-bit range"),
+            })
     }
 
     #[allow(dead_code)] // Kept for potential integer-only operations; tested below
@@ -78790,6 +78873,35 @@ impl InterpreterCore {
                 self.queue_microtask_from_value(&callback_val)
             }
 
+            "builtin:ProcessExit" => {
+                // process.exit([code]) — end the program now (bd-my9hk).
+                // Slot-0 convention. Without a code, the exit status is
+                // `process.exitCode`, else 0, as in Node.
+                let requested = if args.count == 0 {
+                    None
+                } else {
+                    Self::process_exit_code_from_value(&self.read_reg(args.start)?)?
+                };
+                Err(InterpreterError::ProcessExit {
+                    code: requested.or(self.process_exit_code).unwrap_or(0),
+                })
+            }
+
+            "builtin:ProcessSetExitCode" => {
+                // process.exitCode = value (bd-my9hk): the status a normal
+                // completion reports; `undefined` clears it. The assignment's
+                // value is the assigned value.
+                if args.count < 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "process.exitCode value".to_string(),
+                        got: "no argument".to_string(),
+                    });
+                }
+                let value = self.read_reg(args.start)?;
+                self.process_exit_code = Self::process_exit_code_from_value(&value)?;
+                Ok(value)
+            }
+
             "builtin:ProcessNextTick" => {
                 // process.nextTick(cb[, ...args]) — enqueue onto the dedicated
                 // next-tick job queue, which drains before Promise microtasks
@@ -81922,6 +82034,7 @@ impl InterpreterCore {
             | InterpreterError::InstructionOutOfBounds { .. }
             | InterpreterError::StackOverflow { .. }
             | InterpreterError::DivisionByZero
+            | InterpreterError::ProcessExit { .. }
             | InterpreterError::UndefinedRegister { .. }
             | InterpreterError::ObjectNotFound { .. }
             | InterpreterError::FunctionNotFound { .. }

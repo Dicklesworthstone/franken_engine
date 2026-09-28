@@ -13486,6 +13486,28 @@ fn lower_expression_to_ir1_inner(
             right,
             assignment_strictness,
         } => {
+            if *operator == AssignmentOperator::Assign
+                && is_process_exit_code_target(left, binding_lookup)
+            {
+                // `process.exitCode = v` (bd-my9hk) records the program's exit
+                // status through a dedicated hostcall, whose result is the
+                // assigned value like any assignment's.
+                lower_expression_to_ir1(
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ProcessSetExitCode".to_string(),
+                    arg_count: 1,
+                });
+                return Ok(());
+            }
             if let Expression::Identifier(name) = left.as_ref() {
                 let resolved_binding_id = if has_source_lexical_binding(binding_lookup, name) {
                     Some(materialize_source_binding_id(
@@ -14359,11 +14381,10 @@ fn lower_expression_to_ir1_inner(
                     )?;
                     return Ok(());
                 }
-                if let Some(capability) = process_next_tick_call_capability(callee, binding_lookup)
-                {
-                    // `process.nextTick(cb, ...args)` — dedicated job-queue
-                    // hostcall; the raw `process` object is never lowered
-                    // (bd-8nrud).
+                if let Some(capability) = process_builtin_call_capability(callee, binding_lookup) {
+                    // `process.nextTick(cb, ...args)` (bd-8nrud) and
+                    // `process.exit(code)` (bd-my9hk) — dedicated hostcalls;
+                    // the raw `process` object is never lowered.
                     lower_spread_apply_hostcall_to_ir1(
                         capability,
                         &[],
@@ -15113,11 +15134,11 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
-            if let Some(capability) = process_next_tick_call_capability(callee, binding_lookup) {
-                // `process.nextTick(cb, ...args)` — dedicated job-queue
-                // hostcall on the function-body path; the raw `process` object
-                // is never lowered (bd-8nrud). Slot-0 convention: the callback
-                // and its forwarded arguments are the hostcall arguments.
+            if let Some(capability) = process_builtin_call_capability(callee, binding_lookup) {
+                // `process.nextTick(cb, ...args)` (bd-8nrud) and
+                // `process.exit(code)` (bd-my9hk) on the function-body path;
+                // the raw `process` object is never lowered. Slot-0
+                // convention: the call's arguments are the hostcall arguments.
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -25699,39 +25720,61 @@ pub(crate) fn reflect_member_capability(member: &str) -> Option<&'static str> {
     }
 }
 
-/// Capability for a statically recognized `process.nextTick(...)` member call
-/// (bd-8nrud). Only the exact unshadowed call shape routes to the dedicated
-/// `builtin:ProcessNextTick` job-queue hostcall: a lexical `process` binding
-/// in scope, a computed non-literal key, or any other `process` member falls
-/// through to the ordinary lowering (and its ambient-authority denial), so
-/// raw process authority is never exposed — the recognizer grants exactly the
-/// next-tick scheduling call and nothing else.
-fn process_next_tick_call_capability(
-    callee: &Expression,
+/// The member name of an unshadowed `process.<name>` / `process["<name>"]`
+/// reference. A source binding named `process` in scope or a computed
+/// non-literal key yields `None`, so the recognizers below only ever match the
+/// global. Like the process-shape read path (bd-y30zw), only a *source*
+/// binding shadows: the plain name entry that path installs for the injected
+/// receiver must not hide `process.exit` after a `process.argv` read.
+fn unshadowed_process_member<'a>(
+    expression: &'a Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
-) -> Option<&'static str> {
+) -> Option<&'a str> {
     let Expression::Member {
         object,
         property,
         computed,
         ..
-    } = callee
+    } = expression
     else {
         return None;
     };
     if !matches!(object.as_ref(), Expression::Identifier(name) if name == "process")
-        || is_lexically_shadowed(binding_lookup, "process")
+        || has_source_lexical_binding(binding_lookup, "process")
     {
         return None;
     }
-    let method = match *computed {
-        false => well_formed_static_name(property)?,
-        true => well_formed_string_literal(property)?,
-    };
-    match method {
+    match *computed {
+        false => well_formed_static_name(property),
+        true => well_formed_string_literal(property),
+    }
+}
+
+/// Capability for a statically recognized `process` method call: the exact
+/// unshadowed `process.nextTick(...)` (bd-8nrud) and `process.exit(...)`
+/// (bd-my9hk) shapes route to dedicated hostcalls. Any other `process` member
+/// falls through to the ordinary lowering and its ambient-authority denial, so
+/// raw process authority is never exposed: the recognizer grants next-tick
+/// scheduling and ending the program itself, nothing else.
+fn process_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    match unshadowed_process_member(callee, binding_lookup)? {
         "nextTick" => Some("builtin:ProcessNextTick"),
+        "exit" => Some("builtin:ProcessExit"),
         _ => None,
     }
+}
+
+/// Whether an assignment target is the unshadowed `process.exitCode`
+/// (bd-my9hk), which lowers to `builtin:ProcessSetExitCode` instead of a
+/// property store on the (never lowered) raw `process` object.
+fn is_process_exit_code_target(
+    target: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    unshadowed_process_member(target, binding_lookup) == Some("exitCode")
 }
 
 /// Capability tag for a recognized timer-global name (bd-1lw7r.13, extended

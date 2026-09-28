@@ -53909,19 +53909,67 @@ impl InterpreterCore {
         let Value::Object(object_id) = receiver else {
             return Value::str(Self::value_to_object_to_string_tag(receiver));
         };
+        Value::str(format!(
+            "[object {}]",
+            self.object_to_string_tag(*object_id)
+        ))
+    }
 
-        let tag = self
-            .heap
-            .get(object_id.0 as usize)
-            .map(|object| {
-                if object.is_array {
-                    "[object Array]"
-                } else {
-                    "[object Object]"
-                }
-            })
-            .unwrap_or("[object Object]");
-        Value::str(tag)
+    /// ES2020 19.1.3.6: the builtinTag of an object from its internal slots
+    /// (Array, Error, Date, RegExp) or, for objects whose prototype supplies a
+    /// standard @@toStringTag (Map, Set, WeakMap, WeakSet, ArrayBuffer,
+    /// DataView, typed arrays), that tag. Every object used to answer
+    /// "[object Object]" (only arrays were told apart), so type checks such as
+    /// `Object.prototype.toString.call(d) === '[object Date]'` failed and
+    /// isPlainObject-style checks accepted Dates and Maps. Error objects have
+    /// no [[ErrorData]] brand here, so an Error is an object whose prototype
+    /// chain reaches a built-in Error prototype. Not modelled: a guest-defined
+    /// @@toStringTag getter, Arguments, JSON and Math.
+    fn object_to_string_tag(&self, object_id: ObjectId) -> &'static str {
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return "Object";
+        };
+        if object.is_array {
+            return "Array";
+        }
+        if let Some(view) = &object.typed_array {
+            return view.kind.type_name();
+        }
+        if object.data_view.is_some() {
+            return "DataView";
+        }
+        if object.array_buffer.is_some() {
+            return "ArrayBuffer";
+        }
+        if let Some(Value::Str(type_tag)) = object.properties.get("__type") {
+            match type_tag.as_ref() {
+                "Date" => return "Date",
+                "RegExp" => return "RegExp",
+                "Map" => return "Map",
+                "Set" => return "Set",
+                "WeakMap" => return "WeakMap",
+                "WeakSet" => return "WeakSet",
+                _ => {}
+            }
+        }
+        let error_prototypes = ERROR_PROTOTYPE_NAMES
+            .iter()
+            .filter_map(|name| self.builtin_prototypes.get(*name).copied())
+            .collect::<Vec<_>>();
+        let mut current = object.prototype;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(prototype) = current else {
+                break;
+            };
+            if error_prototypes.contains(&prototype) {
+                return "Error";
+            }
+            current = self
+                .heap
+                .get(prototype.0 as usize)
+                .and_then(|next| next.prototype);
+        }
+        "Object"
     }
 
     /// Storage key for a Map key / Set value (bd-juodx). Every Map/Set path,

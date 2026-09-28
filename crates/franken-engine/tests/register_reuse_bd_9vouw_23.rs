@@ -538,6 +538,29 @@ fn reused_local_registers_keep_values_across_loops_handlers_and_finally() {
 }
 
 #[test]
+fn statements_after_a_switch_still_reuse_registers() {
+    // A switch stored its discriminant and left the value on the lowering
+    // stack, so statement-boundary reuse stayed off for the rest of the body:
+    // every statement after one `switch` kept all its temporaries.
+    let tail: String = (0..300)
+        .map(|i| format!("out.push([{i}].concat([0]).length);\n"))
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "var out = []; switch (out.length) {{ case 0: out.push(1); }}\n{tail}out.length;"
+        )),
+        "301"
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var out = []; switch (out.length) {{ case 0: out.push(1); }}\n\
+             {tail}return out.length; }})();"
+        )),
+        "301"
+    );
+}
+
+#[test]
 fn return_and_throw_statements_release_their_temporaries() {
     // Test262's S11.7.3_A4_T4 is 500 top-level `if (c) { throw new
     // Test262Error(...) }` statements: a throw (like a return) consumed its

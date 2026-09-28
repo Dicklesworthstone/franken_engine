@@ -75908,8 +75908,13 @@ impl InterpreterCore {
                         Value::Int(n) => Ok(Value::Int(n)), // Integer is already its own ceiling
                         Value::Float(f) => {
                             let val = f.inner().ceil();
-                            // Check if the result fits in an integer range
-                            if val.is_finite() && val >= i64::MIN as f64 && val <= i64::MAX as f64 {
+                            // ES2020 20.2.2.10: ceil of -0 or of -1 < x < 0 is -0 (an Int would lose the sign).
+                            if val == 0.0 && val.is_sign_negative() {
+                                Ok(Value::Float(Float64::new(-0.0)))
+                            } else if val.is_finite()
+                                && val >= i64::MIN as f64
+                                && val <= i64::MAX as f64
+                            {
                                 Ok(Value::Int(val as i64))
                             } else {
                                 Ok(Value::Float(Float64::new(val)))
@@ -75929,8 +75934,13 @@ impl InterpreterCore {
                         Value::Int(n) => Ok(Value::Int(n)), // Integer is already its own floor
                         Value::Float(f) => {
                             let val = f.inner().floor();
-                            // Check if the result fits in an integer range
-                            if val.is_finite() && val >= i64::MIN as f64 && val <= i64::MAX as f64 {
+                            // ES2020 20.2.2.16: floor of -0 is -0 (an Int would lose the sign).
+                            if val == 0.0 && val.is_sign_negative() {
+                                Ok(Value::Float(Float64::new(-0.0)))
+                            } else if val.is_finite()
+                                && val >= i64::MIN as f64
+                                && val <= i64::MAX as f64
+                            {
                                 Ok(Value::Int(val as i64))
                             } else {
                                 Ok(Value::Float(Float64::new(val)))
@@ -75966,8 +75976,13 @@ impl InterpreterCore {
                                     floor
                                 }
                             };
-                            // Check if the result fits in an integer range
-                            if val.is_finite() && val >= i64::MIN as f64 && val <= i64::MAX as f64 {
+                            // ES2020 20.2.2.28: a zero result from -0.5 <= x < 0 or from -0 is -0.
+                            if val == 0.0 && input.is_sign_negative() {
+                                Ok(Value::Float(Float64::new(-0.0)))
+                            } else if val.is_finite()
+                                && val >= i64::MIN as f64
+                                && val <= i64::MAX as f64
+                            {
                                 Ok(Value::Int(val as i64))
                             } else {
                                 Ok(Value::Float(Float64::new(val)))

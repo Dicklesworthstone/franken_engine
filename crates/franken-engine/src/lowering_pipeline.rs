@@ -6837,6 +6837,7 @@ fn lower_statement_to_ir1_with_flow(
                         &mut Vec::new(),
                     )?;
                 }
+                name_class_field_initializer(method, &mut m_body_ops, &method_name);
                 if !matches!(m_body_ops.last(), Some(Ir1Op::Return)) {
                     m_body_ops.push(Ir1Op::LoadLiteral {
                         value: Ir1Literal::Undefined,
@@ -6868,6 +6869,12 @@ fn lower_statement_to_ir1_with_flow(
                     ops.push(Ir1Op::HostCall {
                         capability: "builtin:ToPropertyKey".to_string(),
                         arg_count: 1,
+                    });
+                    Ir1PropertyKey::Dynamic
+                } else if method.kind == MethodKind::Field {
+                    // builtin:ClassDefineField takes its key as an operand.
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String(method_key),
                     });
                     Ir1PropertyKey::Dynamic
                 } else {
@@ -6935,6 +6942,12 @@ fn lower_statement_to_ir1_with_flow(
                         key: property_key,
                         kind: AccessorKind::Set,
                     }),
+                    // [target, key, initializer]: recorded, run at construction
+                    // (instance) or after the class body (static).
+                    MethodKind::Field => ops.push(Ir1Op::HostCall {
+                        capability: CLASS_DEFINE_FIELD_CAPABILITY.to_string(),
+                        arg_count: 3,
+                    }),
                     _ => {
                         // Stack is now: [target_obj, method_fn]. DefineMethod
                         // (not SetProperty) records the method's [[HomeObject]]
@@ -6948,6 +6961,7 @@ fn lower_statement_to_ir1_with_flow(
                 ops.push(Ir1Op::Discard);
             }
             push_class_members_non_enumerable(ops, &cls.body, bid);
+            push_class_static_field_initialization(ops, &cls.body, bid);
         }
         Statement::Import(_) | Statement::Export(_) => {
             // Handled at top level only.
@@ -13340,6 +13354,32 @@ fn name_anonymous_function_definition(
     }
 }
 
+/// ES2022 15.7.10 ClassFieldDefinitionEvaluation: an anonymous function,
+/// arrow or class initializer of a non-computed field takes the field's name
+/// (`handler = () => {}` has `name === "handler"`). The initializer body is
+/// `return <initializer>;`, so its definition ends right before the Return.
+fn name_class_field_initializer(
+    field: &crate::ast::MethodDefinition,
+    body_ops: &mut [Ir1Op],
+    name: &str,
+) {
+    if field.kind != MethodKind::Field || field.computed {
+        return;
+    }
+    let [
+        crate::ast::Statement::Return(crate::ast::ReturnStatement {
+            argument: Some(initializer),
+            ..
+        }),
+    ] = field.body.body.as_slice()
+    else {
+        return;
+    };
+    if let Some((Ir1Op::Return, definition)) = body_ops.split_last_mut() {
+        name_anonymous_function_definition(definition, 0, initializer, name);
+    }
+}
+
 /// Keep nested arrow bodies out of the generic expression lowerer's large
 /// recursive frame. A callback can retain several local bindings while its
 /// body creates more callbacks; lowering those children through the same
@@ -18421,6 +18461,7 @@ fn lower_expression_to_ir1_inner(
                         &mut Vec::new(),
                     )?;
                 }
+                name_class_field_initializer(method, &mut m_body_ops, &method_name);
                 if !matches!(m_body_ops.last(), Some(Ir1Op::Return)) {
                     m_body_ops.push(Ir1Op::LoadLiteral {
                         value: Ir1Literal::Undefined,
@@ -18450,6 +18491,12 @@ fn lower_expression_to_ir1_inner(
                     ops.push(Ir1Op::HostCall {
                         capability: "builtin:ToPropertyKey".to_string(),
                         arg_count: 1,
+                    });
+                    Ir1PropertyKey::Dynamic
+                } else if method.kind == MethodKind::Field {
+                    // builtin:ClassDefineField takes its key as an operand.
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String(method_key),
                     });
                     Ir1PropertyKey::Dynamic
                 } else {
@@ -18536,6 +18583,10 @@ fn lower_expression_to_ir1_inner(
                         key: property_key,
                         kind: AccessorKind::Set,
                     }),
+                    MethodKind::Field => ops.push(Ir1Op::HostCall {
+                        capability: CLASS_DEFINE_FIELD_CAPABILITY.to_string(),
+                        arg_count: 3,
+                    }),
                     // DefineMethod records [[HomeObject]] for `super` (bd-9vouw.24).
                     _ => ops.push(Ir1Op::DefineMethod { key: property_key }),
                 }
@@ -18545,6 +18596,7 @@ fn lower_expression_to_ir1_inner(
                 ops.push(Ir1Op::Discard);
             }
             push_class_members_non_enumerable(ops, body, bid);
+            push_class_static_field_initialization(ops, body, bid);
 
             ops.push(Ir1Op::LoadBinding { binding_id: bid });
         }
@@ -18585,6 +18637,39 @@ pub(crate) const CLASS_MEMBERS_NON_ENUMERABLE_CAPABILITY: &str =
 /// `builtin:ClassPrototypeLink` in the interpreter.
 pub(crate) const CLASS_PROTOTYPE_LINK_CAPABILITY: &str = "builtin:ClassPrototypeLink";
 
+/// Internal hostcall recording a class field (args: target, key,
+/// initializer): on the class prototype for an instance field, on the
+/// constructor for a static one. The initializer gets the target as its
+/// [[HomeObject]].
+pub(crate) const CLASS_DEFINE_FIELD_CAPABILITY: &str = "builtin:ClassDefineField";
+/// Internal hostcall running a class's static field initializers once its
+/// body is defined (arg: the class).
+pub(crate) const CLASS_INIT_STATIC_FIELDS_CAPABILITY: &str = "builtin:ClassInitStaticFields";
+
+/// ES2022 15.7.14 steps 31-32: static fields are defined on the class, in
+/// order, after every method (so after the members became non-enumerable;
+/// fields stay enumerable).
+fn push_class_static_field_initialization(
+    ops: &mut Vec<Ir1Op>,
+    body: &[crate::ast::MethodDefinition],
+    class_binding: BindingId,
+) {
+    if !body
+        .iter()
+        .any(|method| method.kind == MethodKind::Field && method.is_static)
+    {
+        return;
+    }
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: class_binding,
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: CLASS_INIT_STATIC_FIELDS_CAPABILITY.to_string(),
+        arg_count: 1,
+    });
+    ops.push(Ir1Op::Discard);
+}
+
 /// ES2020 14.6.13 ClassDefinitionEvaluation defines class methods and
 /// accessors with `enumerable: false`. They are installed by the same
 /// DefineMethod/DefineAccessor ops as object-literal members (which are
@@ -18597,7 +18682,7 @@ fn push_class_members_non_enumerable(
 ) {
     if body
         .iter()
-        .all(|method| method.kind == MethodKind::Constructor)
+        .all(|method| matches!(method.kind, MethodKind::Constructor | MethodKind::Field))
     {
         return;
     }

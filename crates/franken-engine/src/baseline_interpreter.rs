@@ -5205,6 +5205,14 @@ const GLOBAL_FUNCTION_VALUES: [&str; 4] = crate::lowering_pipeline::GLOBAL_FUNCT
 /// (bd-9vouw.47). Not a builtin name, so no prototype lookup ever matches it.
 const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 
+/// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
+/// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
+/// being stored as own heap properties (bd-9vouw.17).
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 11] = [
+    "Array", "String", "Number", "Map", "Set", "Function", "Date", "RegExp", "Promise", "WeakMap",
+    "WeakSet",
+];
+
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
 /// FrankenEngine is hermetic: local time is UTC, so each local accessor
 /// equals its `UTC` twin and `getTimezoneOffset()` is 0.
@@ -53179,6 +53187,10 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .map(|object| object.contains_own_runtime_property(&property_key))
             .unwrap_or(false)
+            || property_key.as_str().is_some_and(|key| {
+                self.canonical_prototype_own_virtual_value(*object_id, key)
+                    .is_some()
+            })
     }
 
     fn object_own_property_is_enumerable(&self, receiver: &Value, property: &Value) -> bool {
@@ -67054,7 +67066,16 @@ impl InterpreterCore {
                         .map(|property| (property, object.own_property_attributes(key)))
                 })
             })
-            .flatten();
+            .flatten()
+            .or_else(|| {
+                let virtual_value = key
+                    .as_str()
+                    .and_then(|name| self.canonical_prototype_own_virtual_value(object_id, name))?;
+                Some((
+                    BaselineSymbolProperty::Data(virtual_value),
+                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                ))
+            });
         let Some((property, attributes)) = source else {
             return Ok(Value::Undefined);
         };
@@ -88165,41 +88186,30 @@ impl InterpreterCore {
         Ok(Value::str(text))
     }
 
+    /// The builtin method `key` that the canonical prototype registered as
+    /// `name` in `builtin_prototypes` supplies virtually (bd-9vouw.17): these
+    /// prototypes do not store their methods as own heap properties.
+    fn canonical_prototype_method(name: &str, key: &str) -> Option<Value> {
+        let defined = |value: Value| (!matches!(value, Value::Undefined)).then_some(value);
+        match name {
+            "Array" => Self::array_prototype_method(key).map(Value::BuiltinFunction),
+            "String" => Self::string_prototype_method(key),
+            "Number" => defined(Self::number_property_value(key)),
+            "Function" => Self::function_prototype_property(key),
+            "Promise" => defined(Self::promise_property_value(key)),
+            "Map" | "Set" | "Date" | "RegExp" | "WeakMap" | "WeakSet" => {
+                Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)
+            }
+            _ => None,
+        }
+    }
+
     /// bd-9vouw.17: a builtin method named `key` on the first canonical
-    /// `Array`/`String`/`Number`/`Map`/`Set` prototype in `object_id`'s chain.
+    /// prototype in `object_id`'s chain that supplies methods virtually.
     fn builtin_prototype_method_for_chain(&self, object_id: ObjectId, key: &str) -> Option<Value> {
-        let array_method = Self::array_prototype_method(key).map(Value::BuiltinFunction);
-        let string_method = Self::string_prototype_method(key);
-        let number_method = match Self::number_property_value(key) {
-            Value::Undefined => None,
-            method => Some(method),
-        };
-        let map_method = Self::collection_prototype_method("Map", key).map(Value::BuiltinFunction);
-        let set_method = Self::collection_prototype_method("Set", key).map(Value::BuiltinFunction);
-        let function_method = Self::function_prototype_property(key);
-        let date_method =
-            Self::collection_prototype_method("Date", key).map(Value::BuiltinFunction);
-        let regexp_method =
-            Self::collection_prototype_method("RegExp", key).map(Value::BuiltinFunction);
-        let promise_method = match Self::promise_property_value(key) {
-            Value::Undefined => None,
-            method => Some(method),
-        };
-        let weakmap_method =
-            Self::collection_prototype_method("WeakMap", key).map(Value::BuiltinFunction);
-        let weakset_method =
-            Self::collection_prototype_method("WeakSet", key).map(Value::BuiltinFunction);
-        if array_method.is_none()
-            && string_method.is_none()
-            && number_method.is_none()
-            && map_method.is_none()
-            && set_method.is_none()
-            && function_method.is_none()
-            && date_method.is_none()
-            && regexp_method.is_none()
-            && promise_method.is_none()
-            && weakmap_method.is_none()
-            && weakset_method.is_none()
+        if VIRTUAL_METHOD_PROTOTYPES
+            .iter()
+            .all(|name| Self::canonical_prototype_method(name, key).is_none())
         {
             return None;
         }
@@ -88214,24 +88224,60 @@ impl InterpreterCore {
                 .iter()
                 .find(|(_, prototype)| **prototype == id)
                 .map(|(name, _)| name.as_str());
-            match name {
-                Some("Array") => return array_method,
-                Some("String") => return string_method,
-                Some("Number") => return number_method,
-                Some("Map") => return map_method,
-                Some("Set") => return set_method,
-                Some("Function") => return function_method,
-                Some("Date") => return date_method,
-                Some("RegExp") => return regexp_method,
-                Some("Promise") => return promise_method,
-                Some("WeakMap") => return weakmap_method,
-                Some("WeakSet") => return weakset_method,
-                _ => {}
+            if let Some(name) = name
+                && VIRTUAL_METHOD_PROTOTYPES.contains(&name)
+            {
+                return Self::canonical_prototype_method(name, key);
             }
             current = self.observable_prototype_of(id);
             depth += 1;
         }
         None
+    }
+
+    /// A builtin that the canonical prototype `object_id` itself (not an
+    /// object inheriting from it) supplies virtually, which ES2020 17 makes
+    /// an own data property { writable: true, enumerable: false,
+    /// configurable: true }: its methods and its `constructor`. This keeps
+    /// `Array.prototype.hasOwnProperty('map')` and
+    /// `Object.getOwnPropertyDescriptor(Date.prototype, 'getTime')` in step
+    /// with [[Get]]. Real own properties are checked first by the callers.
+    fn canonical_prototype_own_virtual_value(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Option<Value> {
+        let name = self
+            .builtin_prototypes
+            .iter()
+            .find(|(_, prototype)| **prototype == object_id)
+            .map(|(name, _)| name.as_str())?;
+        if key == "constructor" {
+            return STANDARD_CONSTRUCTOR_GLOBALS
+                .iter()
+                .copied()
+                .find(|candidate| *candidate == name)
+                .map(|name| Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)));
+        }
+        match name {
+            "Object" => Self::object_prototype_method(key).map(Value::BuiltinFunction),
+            "Error" if key == "toString" => Some(Value::BuiltinFunction(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::ErrorPrototypeToString),
+            )),
+            // Function.prototype inherits these from Object.prototype.
+            "Function"
+                if matches!(
+                    key,
+                    "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf"
+                ) =>
+            {
+                None
+            }
+            _ if VIRTUAL_METHOD_PROTOTYPES.contains(&name) => {
+                Self::canonical_prototype_method(name, key)
+            }
+            _ => None,
+        }
     }
 
     /// bd-9vouw.17: virtual, non-enumerable `constructor` of the canonical

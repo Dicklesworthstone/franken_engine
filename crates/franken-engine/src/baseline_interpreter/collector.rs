@@ -6,9 +6,11 @@
 //!
 //! Design:
 //! - Precise, stop-the-world mark from an enumerated root set, then a sweep
-//!   that empties the slot of every unmarked object (`Heap::reclaim`).
+//!   that empties the slot of every unmarked object (`Heap::sweep`).
 //! - Slot ids are never reused. A missed root therefore surfaces as a missing
-//!   object, never as another object's identity.
+//!   object, never as another object's identity. Memory is released by chunk:
+//!   a full chunk of slots whose objects are all reclaimed is dropped, and
+//!   mark and sweep visit only resident chunks.
 //! - Collection runs only at a safe point, where every live value sits in
 //!   interpreter state. The first safe point is the top of the dispatch loop
 //!   of the top-level script's own run loop.
@@ -29,8 +31,12 @@
 //!   or non-referencing state.
 //!
 //! Closures are traced from the values that reference them: an unreachable
-//! closure's captured environment is released and its function index is
-//! poisoned (`ClosureTable::reclaim`); its id is never reused. Generators,
+//! closure's captured environment is released, its function index is
+//! poisoned (`ClosureTable::reclaim`) and its per-closure side-table entries
+//! are purged; its id is never reused. The closure table releases fully dead
+//! chunks like the heap. Weak side tables keyed by object id drop the entries
+//! of reclaimed objects (mutation labels), and the write-barrier remembered
+//! set restarts empty after each collection. Generators,
 //! iterators, async objects and promises live in their own tables and are not
 //! reclaimed yet, so they are roots. WeakMap entries are ephemerons: a value is
 //! kept only while its key is reachable.
@@ -96,11 +102,51 @@ pub(super) enum GcSkip {
     HostState,
 }
 
+/// Mark bits for ids stored in fixed chunks (heap slots, closure-table
+/// entries). A chunk's bits are allocated on its first mark, so marking costs
+/// follow the live set rather than every id ever allocated.
+struct ChunkedMarks {
+    chunks: Vec<Option<Box<[u64; HEAP_CHUNK_SLOTS / 64]>>>,
+    len: usize,
+}
+
+impl ChunkedMarks {
+    fn new(len: usize) -> Self {
+        Self {
+            chunks: vec![None; len.div_ceil(HEAP_CHUNK_SLOTS)],
+            len,
+        }
+    }
+
+    fn is_marked(&self, index: usize) -> bool {
+        let offset = index % HEAP_CHUNK_SLOTS;
+        self.chunks
+            .get(index / HEAP_CHUNK_SLOTS)
+            .and_then(Option::as_ref)
+            .is_some_and(|bits| bits[offset / 64] & (1 << (offset % 64)) != 0)
+    }
+
+    /// Mark `index`; true when it was not marked before. Ids at or past the
+    /// table length are ignored.
+    fn mark(&mut self, index: usize) -> bool {
+        if index >= self.len {
+            return false;
+        }
+        let offset = index % HEAP_CHUNK_SLOTS;
+        let bits = self.chunks[index / HEAP_CHUNK_SLOTS]
+            .get_or_insert_with(|| Box::new([0; HEAP_CHUNK_SLOTS / 64]));
+        let bit = 1u64 << (offset % 64);
+        let unmarked = bits[offset / 64] & bit == 0;
+        bits[offset / 64] |= bit;
+        unmarked
+    }
+}
+
 /// Mark state for one collection.
 struct GcMarker {
-    marked: Vec<bool>,
+    objects: ChunkedMarks,
     stack: Vec<u32>,
-    closures_marked: Vec<bool>,
+    closures: ChunkedMarks,
     closure_stack: Vec<u32>,
     visited_frames: HashSet<usize>,
     visited_cells: HashSet<usize>,
@@ -109,9 +155,9 @@ struct GcMarker {
 impl GcMarker {
     fn new(heap_len: usize, closures_len: usize) -> Self {
         Self {
-            marked: vec![false; heap_len],
+            objects: ChunkedMarks::new(heap_len),
             stack: Vec::new(),
-            closures_marked: vec![false; closures_len],
+            closures: ChunkedMarks::new(closures_len),
             closure_stack: Vec::new(),
             visited_frames: HashSet::new(),
             visited_cells: HashSet::new(),
@@ -121,10 +167,7 @@ impl GcMarker {
     /// Closure-table ids: `Value::Closure` and the generator/async function
     /// values index the closure table.
     fn closure(&mut self, id: u32) {
-        if let Some(mark) = self.closures_marked.get_mut(id as usize)
-            && !*mark
-        {
-            *mark = true;
+        if self.closures.mark(id as usize) {
             self.closure_stack.push(id);
         }
     }
@@ -139,14 +182,11 @@ impl GcMarker {
     }
 
     fn is_marked(&self, id: u32) -> bool {
-        self.marked.get(id as usize).copied().unwrap_or(false)
+        self.objects.is_marked(id as usize)
     }
 
     fn object(&mut self, id: ObjectId) {
-        if let Some(mark) = self.marked.get_mut(id.0 as usize)
-            && !*mark
-        {
-            *mark = true;
+        if self.objects.mark(id.0 as usize) {
             self.stack.push(id.0);
         }
     }
@@ -616,35 +656,51 @@ impl InterpreterCore {
             .estimated_memory_bytes
             .wrapping_sub(self.recompute_base_estimated_memory_bytes());
 
-        let GcMarker {
-            marked,
-            closures_marked,
-            ..
-        } = marker;
         let mut reclaimed_objects = 0u64;
         let mut reclaimed_bytes = 0u64;
         self.mutate_heap(|heap| {
-            for (index, live) in marked.iter().enumerate() {
-                if !*live && let Some(object) = heap.reclaim(index) {
+            heap.sweep(
+                |index| marker.objects.is_marked(index),
+                |object| {
                     reclaimed_objects += 1;
                     reclaimed_bytes =
-                        reclaimed_bytes.saturating_add(Self::estimate_heap_object_bytes(&object));
-                }
-            }
+                        reclaimed_bytes.saturating_add(Self::estimate_heap_object_bytes(object));
+                },
+            );
         });
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(reclaimed_bytes);
 
-        // Closures: release unreachable captured environments. The closure,
-        // cold-cell and scope components move together, so charge the exact
-        // difference of the recomputed estimate.
-        let dead_closures: Vec<usize> = closures_marked
-            .iter()
-            .enumerate()
-            .filter(|(index, live)| {
-                !**live && self.closures[*index].function_index != RECLAIMED_CLOSURE_FUNCTION_INDEX
-            })
-            .map(|(index, _)| index)
-            .collect();
+        // Mutation labels of reclaimed objects can never be read again, but
+        // they stay charged against the memory budget until purged.
+        let heap = &self.heap;
+        let mut released_label_bytes = 0u64;
+        self.object_mutation_labels.retain(|id, label| {
+            let live = !heap.is_reclaimed(id.0 as usize);
+            if !live {
+                released_label_bytes = released_label_bytes
+                    .saturating_add(Self::estimate_object_mutation_label_entry_bytes(label));
+            }
+            live
+        });
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_label_bytes);
+        reclaimed_bytes = reclaimed_bytes.saturating_add(released_label_bytes);
+
+        // The write-barrier remembered set records objects written since the
+        // last collection. A full collection leaves no younger generation, so
+        // it restarts empty, as its contract states; nothing else clears it.
+        self.gc_remembered_set.clear();
+
+        // Closures: release unreachable captured environments and the
+        // per-closure side-table entries, which no live value can reach
+        // again. The closure, cold-cell and scope components move together,
+        // so charge the exact difference of the recomputed estimate.
+        let dead_closures = self
+            .closures
+            .live_indices()
+            .filter(|index| !marker.closures.is_marked(*index))
+            .collect::<Vec<_>>();
         let mut reclaimed_closures = 0u64;
         if !dead_closures.is_empty() {
             let before = self.recompute_base_estimated_memory_bytes();
@@ -652,6 +708,12 @@ impl InterpreterCore {
                 if self.closures.reclaim(index) {
                     reclaimed_closures += 1;
                 }
+                let id = index as u32;
+                self.closure_method_metadata.remove(&id);
+                self.closure_lexical_super_metadata.remove(&id);
+                self.arrow_lexical_this.remove(&id);
+                self.closure_module_origins.remove(&id);
+                self.closure_generated_function_artifacts.remove(&id);
             }
             let released = before.saturating_sub(self.recompute_base_estimated_memory_bytes());
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
@@ -977,13 +1039,15 @@ impl InterpreterCore {
             nondeterminism_trace: _,
             register_labels: _,
             // Weak side tables: entries for reclaimed ids are unreachable
-            // and ids are never reused.
+            // and ids are never reused. `collect_garbage` purges the
+            // mutation labels of reclaimed objects.
             object_mutation_labels: _,
             active_inline_callback_context_label: _,
             inline_callback_start_probes: _,
             proxy_trap_lookup_depth: _,
             weakmap_storage: _,
             symbol_state: _,
+            // Ids only; cleared by `collect_garbage`.
             gc_remembered_set: _,
             jit_function_call_counts: _,
             jit_loop_iteration_counts: _,
@@ -1358,6 +1422,158 @@ mod tests {
             .get(id.0 as usize)
             .expect("completion value was reclaimed");
         assert_eq!(object.properties.get("v"), Some(&Value::Int(9)));
+    }
+
+    /// Memory follows the live set: every full chunk whose objects were all
+    /// reclaimed is released, and the heap stays usable (ids keep counting,
+    /// rollback truncation still crosses released chunks).
+    #[test]
+    fn fully_reclaimed_chunks_are_released() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [RuntimeCapability::HeapAllocate].into_iter().collect();
+        let mut core = InterpreterCore::new(config, "gc-unit");
+        let holder = core.alloc_object_with_prototype(None).expect("holder");
+        let first_garbage = core.heap.len();
+        for _ in 0..10 * HEAP_CHUNK_SLOTS {
+            core.alloc_object_with_prototype(None).expect("garbage");
+        }
+        let end = core.heap.len();
+        let full_garbage_chunks: Vec<usize> =
+            (first_garbage.div_ceil(HEAP_CHUNK_SLOTS)..end / HEAP_CHUNK_SLOTS).collect();
+        assert!(full_garbage_chunks.len() >= 9);
+        let resident_before = core.heap.resident_chunks();
+
+        core.set_reg(0, Value::Object(holder));
+        core.collect_garbage().expect("collection runs");
+
+        for chunk in &full_garbage_chunks {
+            assert!(core.heap.chunks[*chunk].is_none(), "chunk {chunk} kept");
+        }
+        assert_eq!(
+            core.heap.resident_chunks(),
+            resident_before - full_garbage_chunks.len()
+        );
+        assert!(
+            core.heap.get(holder.0 as usize).is_some(),
+            "holder reclaimed"
+        );
+        let dead = full_garbage_chunks[0] * HEAP_CHUNK_SLOTS;
+        assert!(core.heap.is_reclaimed(dead));
+        assert_eq!(core.heap.len(), end, "ids are never reused");
+
+        let fresh = core.alloc_object_with_prototype(None).expect("fresh");
+        assert_eq!(fresh.0 as usize, end);
+        assert!(core.heap.get(end).is_some());
+
+        // A transactional rollback truncates back into a released chunk.
+        let mut heap = core.heap.clone();
+        let rollback_len = dead + 7;
+        heap.truncate(rollback_len);
+        assert_eq!(heap.len(), rollback_len);
+        assert!(heap.is_reclaimed(dead));
+        heap.push(heap[holder.0 as usize].clone());
+        assert!(heap.get(rollback_len).is_some());
+        assert_eq!(heap.len(), rollback_len + 1);
+    }
+
+    /// A reclaimed object's IFC mutation label is purged and its charge
+    /// released; a live object keeps its label.
+    #[test]
+    fn mutation_labels_of_reclaimed_objects_are_purged() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [RuntimeCapability::HeapAllocate].into_iter().collect();
+        let mut core = InterpreterCore::new(config, "gc-unit");
+        let holder = core.alloc_object_with_prototype(None).expect("holder");
+        let garbage = core.alloc_object_with_prototype(None).expect("garbage");
+        for id in [holder, garbage] {
+            core.join_direct_object_mutation_label(id, &Label::Secret)
+                .expect("label charge");
+        }
+        let charged = core.object_mutation_labels_memory_bytes();
+        assert!(charged > 0);
+        core.set_reg(0, Value::Object(holder));
+        core.collect_garbage().expect("collection runs");
+        assert_eq!(
+            core.object_mutation_labels.get(&holder),
+            Some(&Label::Secret)
+        );
+        assert!(!core.object_mutation_labels.contains_key(&garbage));
+        assert_eq!(core.object_mutation_labels_memory_bytes(), charged / 2);
+    }
+
+    /// Before collections existed the write-barrier remembered set only
+    /// grew: one entry per object ever written. A collection clears it.
+    #[test]
+    fn collection_clears_the_remembered_set() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = [RuntimeCapability::HeapAllocate].into_iter().collect();
+        let mut core = InterpreterCore::new(config, "gc-unit");
+        let holder = core.alloc_object_with_prototype(None).expect("holder");
+        let garbage = core.alloc_object_with_prototype(None).expect("garbage");
+        core.gc_write_barrier(holder);
+        core.gc_write_barrier(garbage);
+        assert_eq!(core.gc_remembered_set_size(), 2);
+        core.set_reg(0, Value::Object(holder));
+        core.collect_garbage().expect("collection runs");
+        assert_eq!(core.gc_remembered_set_size(), 0);
+        assert!(
+            core.heap.get(holder.0 as usize).is_some(),
+            "holder reclaimed"
+        );
+    }
+
+    /// A dead arrow closure used to stay charged forever: its 32-byte entry
+    /// plus its lexical-`this` side-table entry (48+ bytes), so 8,000 of them
+    /// (at least 640 KB) could not fit a 256 KiB budget with nothing live. Now
+    /// the loop completes, the side table holds only live closures, and fully
+    /// dead closure chunks are released.
+    #[test]
+    fn dead_closures_release_their_charge_side_tables_and_chunks() {
+        let source =
+            "let s = 0; for (let i = 0; i < 8000; i++) { const f = () => i; s += f() & 1; } s";
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "gc-unit.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "gc-unit.js"),
+            &LoweringContext::new("gc-trace", "gc-decision", "gc-policy"),
+        )
+        .expect("lower")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.max_total_memory_bytes = 256 * 1024;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "gc-unit");
+        let result = core.execute(&module).expect("execute");
+        assert_eq!(result.value, Value::Int(4000));
+        let stats = core.gc_stats();
+        assert!(stats.reclaimed_closures >= 6_000, "{stats:?}");
+        assert!(core.closures.len() >= 8_000);
+        assert!(
+            core.arrow_lexical_this.len() < 2 * CLOSURE_CHUNK_SLOTS,
+            "lexical-this entries of dead closures kept: {}",
+            core.arrow_lexical_this.len()
+        );
+        let resident = core.closures.chunks.iter().flatten().count();
+        assert!(
+            resident <= 3 && core.closures.chunks.len() >= 8,
+            "{resident} of {} closure chunks resident",
+            core.closures.chunks.len()
+        );
     }
 
     /// Reclaimed slots cost one pointer, not a whole object.

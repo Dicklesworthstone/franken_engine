@@ -39,7 +39,7 @@
 )]
 
 use std::borrow::Cow;
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, LinkedList, VecDeque};
 use std::fmt;
@@ -313,6 +313,18 @@ const PROMISE_REACTION_CALLABLE_BASE: u32 = 0x8000_0000;
 /// Function index of a closure the collector reclaimed (bd-9vouw.57). No
 /// function table is that large, so a call through a missed root fails.
 const RECLAIMED_CLOSURE_FUNCTION_INDEX: u32 = u32::MAX;
+
+/// Iteration traces are replay evidence (`ExecutionResult::iteration_traces`)
+/// read by tests and cross-run comparisons of short programs. Each costs two
+/// id derivations up front and one event (with derived value ids) per step,
+/// uncharged by the memory budget, so recording is bounded: one trace per
+/// `for...of` in a 1M-iteration loop reached 3 GB of RSS. Iterations past
+/// `MAX_ITERATION_TRACES` are untraced; a trace stops recording events at
+/// `MAX_ITERATION_TRACE_EVENTS`. Execution never depends on a trace.
+const MAX_ITERATION_TRACES: usize = 1024;
+const MAX_ITERATION_TRACE_EVENTS: usize = 4096;
+/// Trace index of an untraced iteration.
+const UNTRACED_ITERATION: usize = usize::MAX;
 /// Maximum nesting depth for recursive Array join/toString stringification.
 /// Runtime-constructed arrays can nest unboundedly, so recursion is bounded
 /// fail-closed: deeper sub-arrays render as `""` rather than risking stack
@@ -5717,17 +5729,62 @@ fn property_resolution_found_payload(
     payload
 }
 
+/// Slots per heap chunk. A full chunk whose objects were all reclaimed is
+/// released as a whole (bd-9vouw.57 phase B), so memory follows the live set
+/// rather than the number of allocations.
+const HEAP_CHUNK_SLOTS: usize = 1024;
+
+#[derive(Debug, Clone, Default)]
+struct HeapChunk {
+    slots: Vec<Option<Box<HeapSlot>>>,
+    live: usize,
+}
+
+/// A live object with the estimate the heap last recorded for it.
+#[derive(Debug, Clone)]
+struct HeapSlot {
+    object: HeapObject,
+    /// `estimate_heap_object_bytes(&object)` when last measured.
+    measured_bytes: Cell<u64>,
+    /// Borrowed mutably since it was last measured.
+    dirty: Cell<bool>,
+}
+
+impl HeapSlot {
+    fn new(object: HeapObject) -> Box<Self> {
+        let measured_bytes = Cell::new(InterpreterCore::estimate_heap_object_bytes(&object));
+        Box::new(Self {
+            object,
+            measured_bytes,
+            dirty: Cell::new(false),
+        })
+    }
+}
+
 /// The interpreter heap. `ObjectId(n)` names slot `n`; the collector
 /// (bd-9vouw.57) empties the slot of an unreachable object.
 ///
-/// Slot ids are never reused. A missed GC root therefore shows up as a
-/// missing object (`get` returns `None`, indexing panics and names the id),
-/// never as silent aliasing of a newer object. A reclaimed slot costs one
-/// pointer.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Ids are append-only and never reused. The engine's transactional
+/// allocations roll back by truncating to a previous length, and a missed GC
+/// root shows up as a missing object (`get` returns `None`, indexing panics and
+/// names the id), never as silent aliasing of a newer object. A reclaimed slot
+/// costs one pointer until every object in its chunk is gone; then the chunk is
+/// released.
+///
+/// The heap also keeps the sum of its objects' memory estimates. Every
+/// mutable borrow of an object marks it dirty, and `estimated_bytes`
+/// re-measures only the dirty objects, so a full memory re-derivation costs
+/// O(objects changed) instead of O(heap).
+#[derive(Debug, Clone, Default)]
 pub struct Heap {
-    slots: Vec<Option<Box<HeapObject>>>,
+    /// `None`: a released chunk, every slot of which was reclaimed.
+    chunks: Vec<Option<HeapChunk>>,
+    len: usize,
     live: usize,
+    /// Sum of `measured_bytes` over live slots.
+    measured_bytes: Cell<u64>,
+    /// Ids of slots marked dirty; a slot is listed at most once.
+    dirty: RefCell<Vec<usize>>,
 }
 
 impl Heap {
@@ -5737,11 +5794,11 @@ impl Heap {
 
     /// Number of slots ever allocated: the next `ObjectId` is `len()`.
     pub fn len(&self) -> usize {
-        self.slots.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.slots.is_empty()
+        self.len == 0
     }
 
     /// Number of objects that have not been reclaimed.
@@ -5749,72 +5806,196 @@ impl Heap {
         self.live
     }
 
+    /// Chunks still holding at least one live object or the allocation tail.
+    pub fn resident_chunks(&self) -> usize {
+        self.chunks.iter().filter(|chunk| chunk.is_some()).count()
+    }
+
+    fn slot(&self, index: usize) -> Option<&HeapSlot> {
+        self.chunks
+            .get(index / HEAP_CHUNK_SLOTS)?
+            .as_ref()?
+            .slots
+            .get(index % HEAP_CHUNK_SLOTS)?
+            .as_deref()
+    }
+
     pub fn get(&self, index: usize) -> Option<&HeapObject> {
-        self.slots.get(index)?.as_deref()
+        self.slot(index).map(|slot| &slot.object)
     }
 
     pub fn get_mut(&mut self, index: usize) -> Option<&mut HeapObject> {
-        self.slots.get_mut(index)?.as_deref_mut()
+        let slot = self
+            .chunks
+            .get_mut(index / HEAP_CHUNK_SLOTS)?
+            .as_mut()?
+            .slots
+            .get_mut(index % HEAP_CHUNK_SLOTS)?
+            .as_deref_mut()?;
+        if !slot.dirty.replace(true) {
+            self.dirty.get_mut().push(index);
+        }
+        Some(&mut slot.object)
+    }
+
+    /// Sum of the memory estimates of the live objects, re-measuring only
+    /// objects borrowed mutably since they were last measured.
+    fn estimated_bytes(&self) -> u64 {
+        let mut total = self.measured_bytes.get();
+        for index in self.dirty.borrow_mut().drain(..) {
+            // A slot reclaimed or popped since it was listed is skipped; its
+            // last measurement left the total when it was removed.
+            if let Some(slot) = self.slot(index)
+                && slot.dirty.replace(false)
+            {
+                let bytes = InterpreterCore::estimate_heap_object_bytes(&slot.object);
+                total = total
+                    .saturating_sub(slot.measured_bytes.replace(bytes))
+                    .saturating_add(bytes);
+            }
+        }
+        self.measured_bytes.set(total);
+        total
+    }
+
+    fn forget(&mut self, slot: &HeapSlot) {
+        let total = self.measured_bytes.get_mut();
+        *total = total.saturating_sub(slot.measured_bytes.get());
     }
 
     pub fn push(&mut self, object: HeapObject) {
-        self.slots.push(Some(Box::new(object)));
+        if self.len.is_multiple_of(HEAP_CHUNK_SLOTS) {
+            self.chunks.push(Some(HeapChunk {
+                slots: Vec::with_capacity(HEAP_CHUNK_SLOTS),
+                live: 0,
+            }));
+        }
+        let slot = HeapSlot::new(object);
+        let total = self.measured_bytes.get_mut();
+        *total = total.saturating_add(slot.measured_bytes.get());
+        // Only a full chunk is ever released, so the tail chunk is resident.
+        let chunk = self
+            .chunks
+            .last_mut()
+            .and_then(Option::as_mut)
+            .expect("the allocation tail chunk is resident");
+        chunk.slots.push(Some(slot));
+        chunk.live += 1;
+        self.len += 1;
         self.live += 1;
     }
 
     /// Remove the last slot, returning its object if it was live.
     pub fn pop(&mut self) -> Option<HeapObject> {
-        let object = self.slots.pop()??;
-        self.live -= 1;
-        Some(*object)
+        let index = self.len.checked_sub(1)?;
+        let chunk_index = index / HEAP_CHUNK_SLOTS;
+        let chunk = self.chunks.get_mut(chunk_index)?;
+        if chunk.is_none() {
+            // Popping from a released chunk: its remaining slots are dead.
+            *chunk = Some(HeapChunk {
+                slots: vec![None; HEAP_CHUNK_SLOTS],
+                live: 0,
+            });
+        }
+        let chunk = chunk.as_mut().expect("chunk was just made resident");
+        let slot = chunk.slots.pop().flatten();
+        if slot.is_some() {
+            chunk.live -= 1;
+            self.live -= 1;
+        }
+        self.len = index;
+        if self.len.is_multiple_of(HEAP_CHUNK_SLOTS) {
+            self.chunks.truncate(self.len / HEAP_CHUNK_SLOTS);
+        }
+        let slot = slot?;
+        self.forget(&slot);
+        Some(slot.object)
     }
 
     pub fn truncate(&mut self, len: usize) {
-        if len < self.slots.len() {
-            let removed_live = self.slots[len..]
-                .iter()
-                .filter(|slot| slot.is_some())
-                .count();
-            self.slots.truncate(len);
-            self.live -= removed_live;
+        while self.len > len {
+            self.pop();
         }
     }
 
     /// Live objects in id order (reclaimed slots are skipped).
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &HeapObject> {
-        self.slots.iter().filter_map(|slot| slot.as_deref())
+        self.chunks
+            .iter()
+            .flatten()
+            .flat_map(|chunk| chunk.slots.iter())
+            .filter_map(|slot| slot.as_deref().map(|slot| &slot.object))
     }
 
     /// Live objects with their slot index.
     pub fn iter_live(&self) -> impl Iterator<Item = (usize, &HeapObject)> {
-        self.slots
+        self.chunks
             .iter()
             .enumerate()
-            .filter_map(|(index, slot)| slot.as_deref().map(|object| (index, object)))
+            .filter_map(|(chunk_index, chunk)| chunk.as_ref().map(|chunk| (chunk_index, chunk)))
+            .flat_map(|(chunk_index, chunk)| {
+                chunk
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(offset, slot)| {
+                        slot.as_deref()
+                            .map(|slot| (chunk_index * HEAP_CHUNK_SLOTS + offset, &slot.object))
+                    })
+            })
     }
 
     pub fn is_reclaimed(&self, index: usize) -> bool {
-        matches!(self.slots.get(index), Some(None))
+        index < self.len && self.get(index).is_none()
     }
 
-    /// Empty slot `index` and return its object.
-    fn reclaim(&mut self, index: usize) -> Option<Box<HeapObject>> {
-        let object = self.slots.get_mut(index)?.take()?;
-        self.live -= 1;
-        Some(object)
+    /// Empty the slot of every live object `keep` rejects, handing each object
+    /// to `reclaimed`. Only resident chunks are visited, and a full chunk left
+    /// with no live object is released.
+    fn sweep(
+        &mut self,
+        mut keep: impl FnMut(usize) -> bool,
+        mut reclaimed: impl FnMut(&HeapObject),
+    ) {
+        let total = self.measured_bytes.get_mut();
+        for (chunk_index, entry) in self.chunks.iter_mut().enumerate() {
+            let Some(chunk) = entry else {
+                continue;
+            };
+            let base = chunk_index * HEAP_CHUNK_SLOTS;
+            for (offset, slot) in chunk.slots.iter_mut().enumerate() {
+                if slot.is_some() && !keep(base + offset) {
+                    let slot = slot.take().expect("slot was checked live");
+                    *total = total.saturating_sub(slot.measured_bytes.get());
+                    reclaimed(&slot.object);
+                    chunk.live -= 1;
+                    self.live -= 1;
+                }
+            }
+            if chunk.live == 0 && chunk.slots.len() == HEAP_CHUNK_SLOTS {
+                *entry = None;
+            }
+        }
     }
 }
 
+/// Heaps are equal when they hold the same objects under the same ids,
+/// whatever their chunks' release state.
+impl PartialEq for Heap {
+    fn eq(&self, other: &Self) -> bool {
+        self.len == other.len && (0..self.len).all(|index| self.get(index) == other.get(index))
+    }
+}
+
+impl Eq for Heap {}
+
 impl From<Vec<HeapObject>> for Heap {
     fn from(objects: Vec<HeapObject>) -> Self {
-        let live = objects.len();
-        Self {
-            slots: objects
-                .into_iter()
-                .map(|object| Some(Box::new(object)))
-                .collect(),
-            live,
+        let mut heap = Self::new();
+        for object in objects {
+            heap.push(object);
         }
+        heap
     }
 }
 
@@ -5822,19 +6003,18 @@ impl From<Vec<HeapObject>> for Heap {
 /// slot, with `null` for a reclaimed slot.
 impl Serialize for Heap {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_seq(self.slots.iter().map(|slot| slot.as_deref()))
+        serializer.collect_seq((0..self.len).map(|index| self.get(index)))
     }
 }
 
 /// A heap equals the object list it holds when no slot is reclaimed.
 impl PartialEq<Vec<HeapObject>> for Heap {
     fn eq(&self, other: &Vec<HeapObject>) -> bool {
-        self.slots.len() == other.len()
-            && self
-                .slots
+        self.len == other.len()
+            && other
                 .iter()
-                .zip(other)
-                .all(|(slot, object)| slot.as_deref() == Some(object))
+                .enumerate()
+                .all(|(index, object)| self.get(index) == Some(object))
     }
 }
 
@@ -5842,22 +6022,22 @@ impl std::ops::Index<usize> for Heap {
     type Output = HeapObject;
 
     fn index(&self, index: usize) -> &HeapObject {
-        match self.slots.get(index) {
-            Some(Some(object)) => object,
-            Some(None) => panic!("use of reclaimed heap object {index}"),
-            None => panic!("heap object {index} out of bounds ({})", self.slots.len()),
+        match self.get(index) {
+            Some(object) => object,
+            None if index < self.len => panic!("use of reclaimed heap object {index}"),
+            None => panic!("heap object {index} out of bounds ({})", self.len),
         }
     }
 }
 
 impl std::ops::IndexMut<usize> for Heap {
     fn index_mut(&mut self, index: usize) -> &mut HeapObject {
-        let len = self.slots.len();
-        match self.slots.get_mut(index) {
-            Some(Some(object)) => object,
-            Some(None) => panic!("use of reclaimed heap object {index}"),
-            None => panic!("heap object {index} out of bounds ({len})"),
+        let len = self.len;
+        if index >= len {
+            panic!("heap object {index} out of bounds ({len})");
         }
+        self.get_mut(index)
+            .unwrap_or_else(|| panic!("use of reclaimed heap object {index}"))
     }
 }
 
@@ -7529,33 +7709,145 @@ impl ColdBindingCells {
     }
 }
 
-/// The closure store plus the running accounting totals derived from it
-/// (bd-9vouw.31). Entries are only appended, popped on rollback, or cleared,
-/// so the structural bytes of every captured environment are summed as
-/// closures come and go, and each captured cell is registered in the shared
-/// cold-cell ledger. Reads go through `Deref<Target = [ClosureValue]>`; there
-/// is deliberately no mutable access to an entry.
+/// Closure-table entries per chunk. As with heap slots, a full chunk whose
+/// closures were all reclaimed is released (bd-9vouw.57).
+const CLOSURE_CHUNK_SLOTS: usize = HEAP_CHUNK_SLOTS;
+
 #[derive(Debug, Clone, Default)]
-struct ClosureTable {
+struct ClosureChunk {
     entries: Vec<ClosureValue>,
-    /// Sum of `InterpreterCore::estimate_closure_bytes` over `entries`.
+    /// Entries not yet reclaimed.
+    live: usize,
+}
+
+/// The closure store plus the running accounting totals derived from it
+/// (bd-9vouw.31). Entries are only appended, popped on rollback, cleared, or
+/// reclaimed by the collector, so the structural bytes of every captured
+/// environment are summed as closures come and go, and each captured cell is
+/// registered in the shared cold-cell ledger. Reads go through `get`, `len`
+/// and `iter`; there is deliberately no mutable access to an entry.
+///
+/// Closure ids are never reused. A reclaimed closure reads as an entry with
+/// `RECLAIMED_CLOSURE_FUNCTION_INDEX`, so calling it fails; once every
+/// closure of a full chunk is reclaimed, the chunk itself is released.
+#[derive(Debug, Clone)]
+struct ClosureTable {
+    /// `None`: a released chunk, every entry of which was reclaimed.
+    chunks: Vec<Option<ClosureChunk>>,
+    len: usize,
+    /// What an entry of a released chunk reads as.
+    reclaimed: ClosureValue,
+    /// Sum of `InterpreterCore::estimate_closure_bytes` over the entries.
     structural_bytes: u64,
     /// Cells reachable from closure environments and from suspended
     /// generator / isolated async activations, deduplicated across both.
     cold_cells: ColdBindingCells,
 }
 
+impl Default for ClosureTable {
+    fn default() -> Self {
+        Self {
+            chunks: Vec::new(),
+            len: 0,
+            reclaimed: ClosureValue {
+                function_index: RECLAIMED_CLOSURE_FUNCTION_INDEX,
+                captured_env: Vec::new(),
+            },
+            structural_bytes: 0,
+            cold_cells: ColdBindingCells::default(),
+        }
+    }
+}
+
 impl ClosureTable {
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn get(&self, index: usize) -> Option<&ClosureValue> {
+        if index >= self.len {
+            return None;
+        }
+        match &self.chunks[index / CLOSURE_CHUNK_SLOTS] {
+            Some(chunk) => chunk.entries.get(index % CLOSURE_CHUNK_SLOTS),
+            None => Some(&self.reclaimed),
+        }
+    }
+
+    /// Entries of resident chunks. Released chunks hold only reclaimed
+    /// closures, which have no captured environment and are charged nothing.
+    fn iter(&self) -> impl Iterator<Item = &ClosureValue> {
+        self.chunks
+            .iter()
+            .flatten()
+            .flat_map(|chunk| chunk.entries.iter())
+    }
+
+    /// Ids of closures that have not been reclaimed.
+    fn live_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.chunks
+            .iter()
+            .enumerate()
+            .filter_map(|(chunk_index, chunk)| chunk.as_ref().map(|chunk| (chunk_index, chunk)))
+            .flat_map(|(chunk_index, chunk)| {
+                chunk
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, closure)| {
+                        closure.function_index != RECLAIMED_CLOSURE_FUNCTION_INDEX
+                    })
+                    .map(move |(offset, _)| chunk_index * CLOSURE_CHUNK_SLOTS + offset)
+            })
+    }
+
     fn push(&mut self, closure: ClosureValue) {
         self.structural_bytes = self
             .structural_bytes
             .saturating_add(InterpreterCore::estimate_closure_bytes(&closure));
         self.cold_cells.register_frames(&closure.captured_env);
-        self.entries.push(closure);
+        if self.len.is_multiple_of(CLOSURE_CHUNK_SLOTS) {
+            self.chunks.push(Some(ClosureChunk::default()));
+        }
+        // Only a full chunk is ever released, so the tail chunk is resident.
+        let chunk = self
+            .chunks
+            .last_mut()
+            .and_then(Option::as_mut)
+            .expect("the closure tail chunk is resident");
+        if closure.function_index != RECLAIMED_CLOSURE_FUNCTION_INDEX {
+            chunk.live += 1;
+        }
+        chunk.entries.push(closure);
+        self.len += 1;
     }
 
     fn pop(&mut self) -> Option<ClosureValue> {
-        let closure = self.entries.pop()?;
+        let index = self.len.checked_sub(1)?;
+        let chunk_index = index / CLOSURE_CHUNK_SLOTS;
+        if self.chunks[chunk_index].is_none() {
+            // Popping into a released chunk: its remaining entries are dead.
+            self.chunks[chunk_index] = Some(ClosureChunk {
+                entries: vec![self.reclaimed.clone(); CLOSURE_CHUNK_SLOTS],
+                live: 0,
+            });
+        }
+        let chunk = self.chunks[chunk_index]
+            .as_mut()
+            .expect("chunk was just made resident");
+        let closure = chunk.entries.pop()?;
+        if closure.function_index != RECLAIMED_CLOSURE_FUNCTION_INDEX {
+            chunk.live -= 1;
+        }
+        self.len = index;
+        if self.len.is_multiple_of(CLOSURE_CHUNK_SLOTS) {
+            self.chunks.truncate(self.len / CLOSURE_CHUNK_SLOTS);
+        }
         self.structural_bytes = self
             .structural_bytes
             .saturating_sub(InterpreterCore::estimate_closure_bytes(&closure));
@@ -7570,10 +7862,15 @@ impl ClosureTable {
     /// Collector (bd-9vouw.57): release an unreachable closure's captured
     /// environment and poison its function index. The id is never reused;
     /// calling a reclaimed closure fails on the out-of-range function index
-    /// instead of running with another closure's environment. Returns
-    /// whether the closure was live.
+    /// instead of running with another closure's environment. A full chunk
+    /// left with no live closure is released. Returns whether the closure
+    /// was live.
     fn reclaim(&mut self, index: usize) -> bool {
-        let Some(closure) = self.entries.get_mut(index) else {
+        let chunk_index = index / CLOSURE_CHUNK_SLOTS;
+        let Some(Some(chunk)) = self.chunks.get_mut(chunk_index) else {
+            return false;
+        };
+        let Some(closure) = chunk.entries.get_mut(index % CLOSURE_CHUNK_SLOTS) else {
             return false;
         };
         if closure.function_index == RECLAIMED_CLOSURE_FUNCTION_INDEX {
@@ -7582,11 +7879,11 @@ impl ClosureTable {
         let previous_bytes = InterpreterCore::estimate_closure_bytes(closure);
         let captured_env = std::mem::take(&mut closure.captured_env);
         closure.function_index = RECLAIMED_CLOSURE_FUNCTION_INDEX;
-        let next_bytes = InterpreterCore::estimate_closure_bytes(closure);
-        self.structural_bytes = self
-            .structural_bytes
-            .saturating_sub(previous_bytes)
-            .saturating_add(next_bytes);
+        chunk.live -= 1;
+        if chunk.live == 0 && chunk.entries.len() == CLOSURE_CHUNK_SLOTS {
+            self.chunks[chunk_index] = None;
+        }
+        self.structural_bytes = self.structural_bytes.saturating_sub(previous_bytes);
         self.cold_cells.release_frames(&captured_env);
         true
     }
@@ -7619,20 +7916,12 @@ impl ClosureTable {
     }
 }
 
-impl std::ops::Deref for ClosureTable {
-    type Target = [ClosureValue];
+impl std::ops::Index<usize> for ClosureTable {
+    type Output = ClosureValue;
 
-    fn deref(&self) -> &[ClosureValue] {
-        &self.entries
-    }
-}
-
-impl<'a> IntoIterator for &'a ClosureTable {
-    type Item = &'a ClosureValue;
-    type IntoIter = std::slice::Iter<'a, ClosureValue>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.entries.iter()
+    fn index(&self, index: usize) -> &ClosureValue {
+        self.get(index)
+            .unwrap_or_else(|| panic!("closure {index} out of bounds ({})", self.len))
     }
 }
 
@@ -42590,13 +42879,15 @@ impl InterpreterCore {
             if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
                 state.done = true;
             }
-            let observed = self.iterator_value_from_runtime(&value);
-            self.record_iteration_event(trace_index, |record_id, step_index| IterationEvent {
-                record_id,
-                step_index,
-                operation: IterationOperation::IteratorValue { value: observed },
-                completion: IterationCompletion::Normal,
-            });
+            if self.iteration_traced(trace_index) {
+                let observed = self.iterator_value_from_runtime(&value);
+                self.record_iteration_event(trace_index, |record_id, step_index| IterationEvent {
+                    record_id,
+                    step_index,
+                    operation: IterationOperation::IteratorValue { value: observed },
+                    completion: IterationCompletion::Normal,
+                });
+            }
             let completion = LabeledReturn { value, label };
             return Ok(if kind == GeneratorResumeKind::Return {
                 GeneratorDelegationStep::Return(completion)
@@ -48975,8 +49266,18 @@ impl InterpreterCore {
         .unwrap_or_default()
     }
 
-    fn start_iteration_trace(&mut self, kind: IterationKind, discriminator: String) -> usize {
+    /// Start the replay trace of one iteration, or return
+    /// `UNTRACED_ITERATION` once `MAX_ITERATION_TRACES` traces exist.
+    fn start_iteration_trace(
+        &mut self,
+        kind: IterationKind,
+        discriminator: impl FnOnce() -> String,
+    ) -> usize {
         let trace_index = self.iteration_traces.len();
+        if trace_index >= MAX_ITERATION_TRACES {
+            return UNTRACED_ITERATION;
+        }
+        let discriminator = discriminator();
         let trace_id = self
             .derive_iteration_engine_id("trace", format!("{trace_index}|{}|{discriminator}", kind));
         let record_id = self.derive_iteration_engine_id(
@@ -49024,11 +49325,21 @@ impl InterpreterCore {
         }
     }
 
+    /// Whether events of `trace_index` are still recorded. Callers check it
+    /// before deriving the ids an event carries.
+    fn iteration_traced(&self, trace_index: usize) -> bool {
+        self.iteration_traces
+            .get(trace_index)
+            .is_some_and(|trace| trace.events.len() < MAX_ITERATION_TRACE_EVENTS)
+    }
+
     fn record_iteration_event<F>(&mut self, trace_index: usize, make_event: F)
     where
         F: FnOnce(EngineObjectId, u64) -> IterationEvent,
     {
-        if let Some(trace) = self.iteration_traces.get_mut(trace_index) {
+        if let Some(trace) = self.iteration_traces.get_mut(trace_index)
+            && trace.events.len() < MAX_ITERATION_TRACE_EVENTS
+        {
             let event = make_event(trace.record_id.clone(), trace.events.len() as u64);
             trace.record_event(event);
         }
@@ -49045,6 +49356,9 @@ impl InterpreterCore {
         exact_for_in_key: bool,
         read_value: bool,
     ) {
+        if !self.iteration_traced(trace_index) {
+            return;
+        }
         let result = match value.as_ref() {
             Some(_) if !read_value => IteratorResult::value(IteratorValue::Unobserved),
             Some(Value::Str(value)) if exact_for_in_key => IteratorResult::value(
@@ -49114,16 +49428,18 @@ impl InterpreterCore {
 
         let keys = self.collect_for_in_keys(module, object_id)?;
         let trace_index =
-            self.start_iteration_trace(IterationKind::ForIn, format!("object:{}", object_id.0));
-        let object_ref = self.iteration_ref_for_object(object_id);
-        let event_keys = keys
-            .iter()
-            .cloned()
-            .map(|key| RuntimePropertyKey::String(key).diagnostic())
-            .collect();
-        self.record_iteration_event(trace_index, |record_id, step_index| {
-            make_enumerate_event(record_id, step_index, object_ref, event_keys)
-        });
+            self.start_iteration_trace(IterationKind::ForIn, || format!("object:{}", object_id.0));
+        if self.iteration_traced(trace_index) {
+            let object_ref = self.iteration_ref_for_object(object_id);
+            let event_keys = keys
+                .iter()
+                .cloned()
+                .map(|key| RuntimePropertyKey::String(key).diagnostic())
+                .collect();
+            self.record_iteration_event(trace_index, |record_id, step_index| {
+                make_enumerate_event(record_id, step_index, object_ref, event_keys)
+            });
+        }
         let handle = self.alloc_iterator(RuntimeIteratorState::ForIn(RuntimeForInState {
             object_id,
             keys,
@@ -49492,12 +49808,14 @@ impl InterpreterCore {
         kind: IterationKind,
         symbol_kind: IteratorSymbolKind,
     ) -> Result<Value, InterpreterError> {
-        let iterable_ref = self.iteration_ref_for_value(&value);
-        let trace_index =
-            self.start_iteration_trace(kind, format!("iterable:{}|{}", value.type_name(), value));
-        self.record_iteration_event(trace_index, |record_id, step_index| {
-            make_get_iterator_event(record_id, step_index, symbol_kind, iterable_ref)
-        });
+        let trace_index = self
+            .start_iteration_trace(kind, || format!("iterable:{}|{}", value.type_name(), value));
+        if self.iteration_traced(trace_index) {
+            let iterable_ref = self.iteration_ref_for_value(&value);
+            self.record_iteration_event(trace_index, |record_id, step_index| {
+                make_get_iterator_event(record_id, step_index, symbol_kind, iterable_ref)
+            });
+        }
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: init.values,
             next_index: 0,
@@ -58370,19 +58688,20 @@ impl InterpreterCore {
                 });
             }
         };
-        let trace_index = self.start_iteration_trace(
-            IterationKind::ForOf,
-            format!("typed_array_iterator:{kind_name}|{}", object_id.0),
-        );
-        let iterable_ref = self.iteration_ref_for_object(object_id);
-        self.record_iteration_event(trace_index, |record_id, step_index| {
-            make_get_iterator_event(
-                record_id,
-                step_index,
-                IteratorSymbolKind::Iterator,
-                iterable_ref,
-            )
+        let trace_index = self.start_iteration_trace(IterationKind::ForOf, || {
+            format!("typed_array_iterator:{kind_name}|{}", object_id.0)
         });
+        if self.iteration_traced(trace_index) {
+            let iterable_ref = self.iteration_ref_for_object(object_id);
+            self.record_iteration_event(trace_index, |record_id, step_index| {
+                make_get_iterator_event(
+                    record_id,
+                    step_index,
+                    IteratorSymbolKind::Iterator,
+                    iterable_ref,
+                )
+            });
+        }
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: Vec::new(),
             next_index: 0,
@@ -63136,28 +63455,32 @@ impl InterpreterCore {
             }
         };
 
-        let trace_index = self.start_iteration_trace(
-            IterationKind::ForOf,
+        let trace_index = self.start_iteration_trace(IterationKind::ForOf, || {
             format!(
                 "array_iterator:{kind}|{}",
                 array_id
                     .map(|id| id.0.to_string())
                     .unwrap_or_else(|| "non_object".to_string())
-            ),
-        );
-        let iterable_ref = array_id
-            .map(|object_id| self.iteration_ref_for_object(object_id))
-            .unwrap_or_else(|| {
-                self.derive_iteration_engine_id("array_iterator_receiver", "non_object".to_string())
-            });
-        self.record_iteration_event(trace_index, |record_id, step_index| {
-            make_get_iterator_event(
-                record_id,
-                step_index,
-                IteratorSymbolKind::Iterator,
-                iterable_ref,
             )
         });
+        if self.iteration_traced(trace_index) {
+            let iterable_ref = array_id
+                .map(|object_id| self.iteration_ref_for_object(object_id))
+                .unwrap_or_else(|| {
+                    self.derive_iteration_engine_id(
+                        "array_iterator_receiver",
+                        "non_object".to_string(),
+                    )
+                });
+            self.record_iteration_event(trace_index, |record_id, step_index| {
+                make_get_iterator_event(
+                    record_id,
+                    step_index,
+                    IteratorSymbolKind::Iterator,
+                    iterable_ref,
+                )
+            });
+        }
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: Vec::new(),
             next_index: 0,
@@ -81395,9 +81718,7 @@ impl InterpreterCore {
         symbol_state: &RuntimeSymbolState,
     ) -> u64 {
         Self::saturating_sum(registers.iter().map(Self::estimate_value_bytes))
-            .saturating_add(Self::saturating_sum(
-                heap.iter().map(Self::estimate_heap_object_bytes),
-            ))
+            .saturating_add(heap.estimated_bytes())
             .saturating_add(Self::estimate_symbol_state_bytes(symbol_state))
     }
 
@@ -82457,7 +82778,7 @@ impl InterpreterCore {
                 ));
             }
         }
-        for closure in &self.closures {
+        for closure in self.closures.iter() {
             total = total.saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
                 &closure.captured_env,
                 &mut seen,
@@ -82834,12 +83155,17 @@ impl InterpreterCore {
     }
 
     fn estimate_closure_bytes(closure: &ClosureValue) -> u64 {
+        // A reclaimed closure is charged nothing: its entry is released with
+        // its chunk (bd-9vouw.57).
+        if closure.function_index == RECLAIMED_CLOSURE_FUNCTION_INDEX {
+            return 0;
+        }
         MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
             .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
     }
 
-    fn estimate_closures_bytes(closures: &[ClosureValue]) -> u64 {
-        Self::saturating_sum(closures.iter().map(Self::estimate_closure_bytes))
+    fn estimate_closures_bytes<'a>(closures: impl Iterator<Item = &'a ClosureValue>) -> u64 {
+        Self::saturating_sum(closures.map(Self::estimate_closure_bytes))
     }
 
     fn estimate_closure_method_metadata_entry_bytes(metadata: &ClosureMethodMetadata) -> u64 {
@@ -82893,7 +83219,7 @@ impl InterpreterCore {
     }
 
     fn heap_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes))
+        self.heap.estimated_bytes()
     }
 
     /// Structural bytes of the live scope chain plus the deduped payload of
@@ -83042,7 +83368,7 @@ impl InterpreterCore {
     /// Full-walk reference for [`Self::closures_memory_bytes`], used by the
     /// `recompute_estimated_memory_bytes` oracle.
     fn closures_memory_bytes_by_walk(&self) -> u64 {
-        Self::estimate_closures_bytes(&self.closures)
+        Self::estimate_closures_bytes(self.closures.iter())
             .saturating_add(Self::saturating_sum(
                 self.closure_method_metadata
                     .values()
@@ -83341,6 +83667,7 @@ impl InterpreterCore {
     /// components from their running totals.
     fn recompute_base_estimated_memory_bytes_by_walk(&self) -> u64 {
         self.base_estimated_memory_bytes_with(
+            Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes)),
             self.scope_chain_memory_bytes_by_walk(),
             self.closures_memory_bytes_by_walk(),
             self.promise_runtime_memory_bytes_by_walk(),
@@ -83349,10 +83676,20 @@ impl InterpreterCore {
 
     /// Runtime re-derivation of the base estimate. Identical algebra to
     /// [`Self::recompute_base_estimated_memory_bytes_by_walk`], with the
-    /// scope, closure and Promise-runtime components taken from their running
-    /// totals (bd-9vouw.31).
+    /// heap, scope, closure and Promise-runtime components taken from their
+    /// running totals (bd-9vouw.31). The heap total re-measures only objects
+    /// borrowed mutably since the last derivation: re-walking the heap here
+    /// made every resumed `await` O(heap), so an await loop was quadratic.
     fn recompute_base_estimated_memory_bytes(&self) -> u64 {
+        let heap_bytes = self.heap.estimated_bytes();
+        #[cfg(test)]
+        debug_assert_eq!(
+            heap_bytes,
+            Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes)),
+            "heap running total drifted from the full walk"
+        );
         self.base_estimated_memory_bytes_with(
+            heap_bytes,
             self.scope_chain_memory_bytes(),
             self.closures_memory_bytes(),
             self.promise_runtime_memory_bytes(),
@@ -83361,14 +83698,13 @@ impl InterpreterCore {
 
     fn base_estimated_memory_bytes_with(
         &self,
+        heap_bytes: u64,
         scope_chain_bytes: u64,
         closure_bytes: u64,
         promise_runtime_bytes: u64,
     ) -> u64 {
         self.symbol_state_memory_bytes()
-            .saturating_add(Self::saturating_sum(
-                self.heap.iter().map(Self::estimate_heap_object_bytes),
-            ))
+            .saturating_add(heap_bytes)
             .saturating_add(Self::saturating_sum(
                 self.registers.iter().map(Self::estimate_value_bytes),
             ))
@@ -89444,6 +89780,48 @@ mod active_builtin_regressions {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    /// Trace recording is bounded: iterations past `MAX_ITERATION_TRACES` are
+    /// untraced and a trace stops at `MAX_ITERATION_TRACE_EVENTS`, while the
+    /// iterations themselves still produce every value.
+    #[test]
+    fn iteration_trace_recording_is_bounded() {
+        let mut core = test_core();
+        let one = RegRange { start: 0, count: 1 };
+        let long: Vec<Value> = (0..3_000).map(Value::Int).collect();
+        let array = core.alloc_array_from_values(&long).unwrap();
+        core.write_reg(0, Value::Object(array)).unwrap();
+        let iterator = core
+            .dispatch_builtin_hostcall("builtin:DestructureIteratorInit", one, None)
+            .unwrap();
+        core.write_reg(0, iterator).unwrap();
+        for expected in 0..3_000 {
+            assert_eq!(
+                core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None)
+                    .unwrap(),
+                Value::Int(expected)
+            );
+        }
+        assert_eq!(
+            core.iteration_traces[0].events.len(),
+            MAX_ITERATION_TRACE_EVENTS
+        );
+
+        let short = core.alloc_array_from_values(&[Value::Int(7)]).unwrap();
+        for _ in 0..MAX_ITERATION_TRACES + 100 {
+            core.write_reg(0, Value::Object(short)).unwrap();
+            let iterator = core
+                .dispatch_builtin_hostcall("builtin:DestructureIteratorInit", one, None)
+                .unwrap();
+            core.write_reg(0, iterator).unwrap();
+            assert_eq!(
+                core.dispatch_builtin_hostcall("builtin:DestructureIteratorNext", one, None)
+                    .unwrap(),
+                Value::Int(7)
+            );
+        }
+        assert_eq!(core.iteration_traces.len(), MAX_ITERATION_TRACES);
+    }
+
     #[test]
     fn destructuring_iterator_intrinsics_keep_exhaustion_sticky() {
         let mut core = test_core();
@@ -91832,10 +92210,9 @@ mod active_builtin_regressions {
                 "result".to_string(),
                 ScopeBinding::with_state(BindingKind::Var, result, true),
             );
-        let trace_index = core.start_iteration_trace(
-            IterationKind::ForOf,
-            format!("test:iterator-return:{discriminator}"),
-        );
+        let trace_index = core.start_iteration_trace(IterationKind::ForOf, || {
+            format!("test:iterator-return:{discriminator}")
+        });
         let handle = core
             .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
                 values: vec![Value::Int(1)],
@@ -92133,7 +92510,7 @@ mod active_builtin_regressions {
         core.set_object_property(iterator_object, "return".to_string(), Value::Function(0))
             .expect("test iterator return method write should succeed");
         let trace_index =
-            core.start_iteration_trace(IterationKind::ForOf, "test:iterator-return".to_string());
+            core.start_iteration_trace(IterationKind::ForOf, || "test:iterator-return".to_string());
         let handle = core
             .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
                 values: vec![Value::Int(1)],
@@ -94143,9 +94520,7 @@ mod async_runtime_tests_current {
             })
             .collect();
         assert!(
-            synthetic_await_promise_labels
-                .iter()
-                .any(|label| *label == crate::ifc_artifacts::Label::Secret),
+            synthetic_await_promise_labels.contains(&crate::ifc_artifacts::Label::Secret),
             "the synthetic Promise for the awaited non-Promise must carry its Secret label, got {synthetic_await_promise_labels:?}"
         );
     }
@@ -132524,7 +132899,7 @@ mod tests {
                 .cloned()
                 .expect("closure must capture the iteration binding")
         };
-        let outer: Vec<ScopeBinding> = core.closures[..3].iter().map(binding_from).collect();
+        let outer: Vec<ScopeBinding> = (0..3).map(|id| binding_from(&core.closures[id])).collect();
         let nested_ids: Vec<usize> = [20_u32, 21, 22]
             .into_iter()
             .map(

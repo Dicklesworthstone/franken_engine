@@ -10096,7 +10096,17 @@ fn parse_if_statement(
     } else {
         // Single-statement consequent: find "else" boundary.
         if let Some(else_idx) = find_top_level_else(rest) {
-            let cons = rest[..else_idx].trim().to_string();
+            // The statement splitter keeps `if (a) x(); else y();` together,
+            // so the consequent arrives with the `;` that ends it; parsed as
+            // part of an expression it became a Raw node that threw a
+            // SyntaxError only when the branch ran. A lone `;` is the empty
+            // statement and stays.
+            let cons = rest[..else_idx].trim();
+            let cons = match cons.strip_suffix(';') {
+                Some(body) if !body.trim().is_empty() => body.trim_end(),
+                _ => cons,
+            }
+            .to_string();
             let alt = rest[else_idx + 4..].trim().to_string();
             (cons, Some(alt))
         } else {

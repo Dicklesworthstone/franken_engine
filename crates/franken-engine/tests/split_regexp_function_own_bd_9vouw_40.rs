@@ -93,3 +93,25 @@ fn number_methods_require_a_number_receiver() {
         "true",
     );
 }
+
+/// ES2020 String.prototype.matchAll (was missing: "expected function, got
+/// undefined") and `$<name>` in replacement templates (was left literal).
+/// matchAll yields exec-shaped results (index, groups), accepts a string
+/// pattern, starts from the RegExp's lastIndex without changing it, refuses
+/// a non-global RegExp, and advances past empty matches. `$<name>` of an
+/// unknown group is empty; without named groups, or without `>`, it stays
+/// literal. Expected string is Node v22.2.0's output.
+#[test]
+fn match_all_and_named_group_substitution() {
+    check(
+        r#"const r = [...'a1b22c333'.matchAll(/(\d+)/g)].map(m => m[1] + '@' + m.index);
+const named = [...'x=1,y=2'.matchAll(/(?<k>\w)=(?<v>\d)/g)].map(m => m.groups.k + m.groups.v);
+const s = [...'aXbX'.matchAll('X')].map(m => m.index);
+const re = /o/g; re.lastIndex = 2; const fromLast = [...'foo boo'.matchAll(re)].map(m => m.index);
+let err; try { 'x'.matchAll(/x/); } catch (e) { err = e instanceof TypeError; }
+const empty = [...'ab'.matchAll(/(?:)/g)].map(m => m.index);
+const it = 'aa'.matchAll(/a/g);
+[r.join(), named.join(), s.join(), fromLast.join(), re.lastIndex, err, empty.join(), typeof it.next, '2020-01-02'.replace(/(?<y>\d+)-(?<m>\d+)-(?<d>\d+)/, '$<d>/$<m>/$<y>'), 'ab'.replace(/(?<x>a)/, '[$<nope>]'), 'ab'.replace(/(a)/, '[$<x>]'), 'ab'.replace(/(?<x>a)/, '[$<x]')].join(' | ');"#,
+        "1@1,22@3,333@6 | x1,y2 | 1,3 | 2,5,6 | 2 | true | 0,1,2 | function | 02/01/2020 | []b | [$<x>]b | [$<x]b",
+    );
+}

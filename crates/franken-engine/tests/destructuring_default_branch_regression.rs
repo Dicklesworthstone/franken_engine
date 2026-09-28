@@ -2,8 +2,11 @@
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::InterpreterConfig;
 use frankenengine_engine::ir_contract::Ir0Module;
-use frankenengine_engine::lowering_pipeline::lower_ir0_to_ir1;
+use frankenengine_engine::lowering_pipeline::{
+    LoweringContext, lower_ir0_to_ir1, lower_ir0_to_ir3,
+};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
 
 fn assert_eval(source: &str, expected: &str) {
@@ -176,14 +179,36 @@ fn large_destructuring_frames_work_in_functions_and_prepared_reexecution() {
 
 #[test]
 fn automatically_sized_registers_cannot_bypass_the_memory_budget() {
-    // A frame is wide when many values are live at once: all 300 elements of
-    // this array literal are. (The depth-12 nested default used here before
-    // stopped needing a wide frame once lowering reused statement temporaries,
-    // bd-9vouw.23; see `nested_defaults_fit_the_budget_after_register_reuse`.)
-    let elements: Vec<String> = std::iter::once("7".to_string())
+    // A frame is wide when many values are live at once: all 300 arguments of
+    // this call are. (A depth-12 nested default and then a 300-element array
+    // literal were used here before; neither needs a wide frame since
+    // lowering reuses statement temporaries and builds long literals one
+    // entry at a time, bd-9vouw.23. See
+    // `nested_defaults_fit_the_budget_after_register_reuse`.)
+    let arguments: Vec<String> = std::iter::once("7".to_string())
         .chain((1..300).map(|i| i.to_string()))
         .collect();
-    let source = format!("let [value] = [{}]; value;", elements.join(", "));
+    let source = format!(
+        "function first(value) {{ return value; }} first({});",
+        arguments.join(", ")
+    );
+    let tree = CanonicalEs2020Parser
+        .parse(source.as_str(), ParseGoal::Script)
+        .expect("wide call should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "wide-frame-budget");
+    let context = LoweringContext::new("wide-trace", "wide-decision", "wide-policy");
+    let widest_frame = lower_ir0_to_ir3(&ir0, &context)
+        .expect("wide call should lower")
+        .ir3
+        .function_table
+        .iter()
+        .map(|function| function.frame_size)
+        .max()
+        .expect("at least the main function");
+    assert!(
+        widest_frame > InterpreterConfig::quickjs_defaults().max_registers,
+        "the program must need a frame wider than the default lane: {widest_frame}"
+    );
     let prepared = HybridRouter::prepare_eval(&source).expect("prepare wide frame");
     let budget = frankenengine_engine::EngineMemoryBudget {
         max_heap_objects: 100_000,

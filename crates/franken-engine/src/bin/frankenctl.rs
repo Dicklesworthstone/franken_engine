@@ -12514,8 +12514,9 @@ const EXECUTION_LIMITS_HELP: &str =
   --max-heap-objects caps live heap objects (default 100000 on the
   deterministic profile, 1000000 on the throughput profile).
   --max-heap-bytes caps estimated memory (default 64 MiB / 512 MiB).
-  --max-console-entries sizes the console transcript (default 1000 /
-  10000). --max-source-bytes caps the source size (default 1 MiB).";
+  --max-console-entries sizes the console transcript (default 100000 /
+  1000000; past it the run fails closed). --max-source-bytes caps the
+  source size (default 1 MiB).";
 
 fn run_usage() -> String {
     [

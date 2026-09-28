@@ -593,3 +593,39 @@ fn return_and_throw_statements_release_their_temporaries() {
         "1-2-3"
     );
 }
+
+#[test]
+fn nested_batch_literals_release_their_element_registers() {
+    // Test262's harness/byteConversionValues.js is one statement holding an
+    // object of eleven ~58-element arrays. Each array (under the 64-entry
+    // batch threshold) kept its element and key registers until the
+    // statement ended, so the main frame needed 1295 registers.
+    let array = |step: usize| -> String {
+        let elements: Vec<String> = (0..58).map(|i| (i * step).to_string()).collect();
+        format!("[{}]", elements.join(", "))
+    };
+    let expected: Vec<String> = "abcdefghijk"
+        .chars()
+        .enumerate()
+        .map(|(i, name)| format!("{name}: {}", array(i + 1)))
+        .collect();
+    let table = format!(
+        "{{ values: {}, expected: {{ {} }} }}",
+        array(1),
+        expected.join(", ")
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "var table = {table};\n\
+             table.expected.k.length + ':' + table.expected.k[57] + ':' + table.values[57];"
+        )),
+        "58:627:57"
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var table = {table}; \
+             var n = 0; for (var k in table.expected) n++; return table.expected.j[10] + ':' + n; }})();"
+        )),
+        "100:11"
+    );
+}

@@ -62,6 +62,8 @@ pub struct GcStats {
     pub reclaimed_closures: u64,
     /// Settled promises whose records were vacated.
     pub reclaimed_promises: u64,
+    /// Completed async-function records released.
+    pub reclaimed_async_functions: u64,
 }
 
 /// Collector state carried by `InterpreterCore`.
@@ -154,12 +156,20 @@ struct GcMarker {
     closure_stack: Vec<u32>,
     promises: ChunkedMarks,
     promise_stack: Vec<u32>,
+    /// Async-function records named by a call frame or an await
+    /// continuation. Records that have not completed are always kept.
+    async_functions: ChunkedMarks,
     visited_frames: HashSet<usize>,
     visited_cells: HashSet<usize>,
 }
 
 impl GcMarker {
-    fn new(heap_len: usize, closures_len: usize, promises_len: usize) -> Self {
+    fn new(
+        heap_len: usize,
+        closures_len: usize,
+        promises_len: usize,
+        async_functions_len: usize,
+    ) -> Self {
         Self {
             objects: ChunkedMarks::new(heap_len),
             stack: Vec::new(),
@@ -167,6 +177,7 @@ impl GcMarker {
             closure_stack: Vec::new(),
             promises: ChunkedMarks::new(promises_len),
             promise_stack: Vec::new(),
+            async_functions: ChunkedMarks::new(async_functions_len),
             visited_frames: HashSet::new(),
             visited_cells: HashSet::new(),
         }
@@ -326,9 +337,12 @@ impl GcMarker {
             saved_scope_depth: _,
             saved_scope_chain,
             scope_inert_virtual_scope_bytes: _,
-            async_function_id: _,
+            async_function_id,
             native_boundary: _,
         } = frame;
+        if let Some(id) = async_function_id {
+            self.async_functions.mark(*id as usize);
+        }
         self.value(this_value);
         self.value(new_target_value);
         self.value(super_value);
@@ -638,6 +652,7 @@ impl InterpreterCore {
             self.heap.len(),
             self.closures.len(),
             self.promise_store.slot_count(),
+            self.async_functions.len(),
         );
         marker.module_execution(caller);
         let pinned: Vec<Value> = marker
@@ -698,6 +713,7 @@ impl InterpreterCore {
             self.heap.len(),
             self.closures.len(),
             self.promise_store.slot_count(),
+            self.async_functions.len(),
         );
         self.gc_mark_roots(&mut marker)?;
         self.gc_drain(&mut marker);
@@ -772,6 +788,32 @@ impl InterpreterCore {
             reclaimed_bytes = reclaimed_bytes.saturating_add(released);
         }
 
+        // Completed async-function records no frame or continuation names:
+        // nothing resumes or settles through them again.
+        let dead_async_functions = self
+            .async_functions
+            .iter_live()
+            .filter(|(id, function)| {
+                matches!(function.phase, AsyncFunctionPhase::Completed)
+                    && !marker.async_functions.is_marked(*id)
+            })
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let mut reclaimed_async_functions = 0u64;
+        if !dead_async_functions.is_empty() {
+            let before = self.recompute_base_estimated_memory_bytes();
+            for id in dead_async_functions {
+                if let Some(mut function) = self.async_functions.reclaim(id) {
+                    self.closures
+                        .replace_activation(&mut function.isolated_execution, None);
+                    reclaimed_async_functions += 1;
+                }
+            }
+            let released = before.saturating_sub(self.recompute_base_estimated_memory_bytes());
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+            reclaimed_bytes = reclaimed_bytes.saturating_add(released);
+        }
+
         // Settled promises nothing reachable names: vacate their records
         // (values and reactions). Pending promises are roots.
         let before = self.promise_runtime_memory_bytes();
@@ -796,6 +838,9 @@ impl InterpreterCore {
         stats.reclaimed_bytes = stats.reclaimed_bytes.saturating_add(reclaimed_bytes);
         stats.reclaimed_closures = stats.reclaimed_closures.saturating_add(reclaimed_closures);
         stats.reclaimed_promises = stats.reclaimed_promises.saturating_add(reclaimed_promises);
+        stats.reclaimed_async_functions = stats
+            .reclaimed_async_functions
+            .saturating_add(reclaimed_async_functions);
 
         // Next trigger: halfway between the surviving live set and the
         // budget, so collection cost stays proportional to allocation.
@@ -1271,6 +1316,9 @@ impl InterpreterCore {
             .keys()
             .chain(top_level_await_resumption_contexts.keys())
             .for_each(|handle| m.promise(*handle));
+        for context in async_resumption_contexts.values() {
+            m.async_functions.mark(context.async_function_id as usize);
+        }
         promise_combinator_watchers
             .keys()
             .for_each(|handle| m.promise(handle.0));
@@ -1675,6 +1723,85 @@ mod tests {
             "{resident} of {} closure chunks resident",
             core.closures.chunks.len()
         );
+    }
+
+    /// `ReclaimableTable`: ids are never reused, a reclaimed id reads as
+    /// `None`, a fully reclaimed chunk is released, popping back into a
+    /// released chunk works, and the running byte total re-measures entries
+    /// borrowed mutably since the last read.
+    #[test]
+    fn reclaimable_table_releases_chunks_and_tracks_bytes() {
+        // An entry's "size" is its value.
+        fn measure(value: &u64) -> u64 {
+            *value
+        }
+        let mut table: ReclaimableTable<u64> = ReclaimableTable::new("entry", measure);
+        for _ in 0..3 * TABLE_CHUNK_SLOTS {
+            table.push(2);
+        }
+        assert_eq!(table.estimated_bytes(), 6 * TABLE_CHUNK_SLOTS as u64);
+        table[5] += 1;
+        assert_eq!(table.estimated_bytes(), 6 * TABLE_CHUNK_SLOTS as u64 + 1);
+        for id in TABLE_CHUNK_SLOTS..2 * TABLE_CHUNK_SLOTS {
+            assert!(table.reclaim(id).is_some());
+        }
+        assert!(table.chunks[1].is_none(), "fully reclaimed chunk kept");
+        assert!(table.get(TABLE_CHUNK_SLOTS).is_none());
+        assert_eq!(table.len(), 3 * TABLE_CHUNK_SLOTS);
+        assert_eq!(table.estimated_bytes(), 4 * TABLE_CHUNK_SLOTS as u64 + 1);
+        assert_eq!(table.iter().count(), 2 * TABLE_CHUNK_SLOTS);
+        // Roll back into the released chunk, then keep allocating.
+        while table.len() > TABLE_CHUNK_SLOTS + 3 {
+            table.pop();
+        }
+        assert!(table.get(TABLE_CHUNK_SLOTS + 1).is_none());
+        table.push(7);
+        assert_eq!(table[TABLE_CHUNK_SLOTS + 3], 7);
+        assert_eq!(table.estimated_bytes(), 2 * TABLE_CHUNK_SLOTS as u64 + 8);
+    }
+
+    /// Completed async-function records are reclaimed: an await loop keeps
+    /// only the records still running or suspended.
+    #[test]
+    fn completed_async_function_records_are_reclaimed() {
+        let source = "let s = 0; async function f(i) { return i; } \
+                      (async () => { for (let i = 0; i < 3000; i++) { s += await f(i); } })(); s";
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "gc-unit.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("parse");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "gc-unit.js"),
+            &LoweringContext::new("gc-trace", "gc-decision", "gc-policy"),
+        )
+        .expect("lower")
+        .ir3;
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "gc-unit");
+        core.set_gc_stress_interval(Some(64));
+        core.execute(&module).expect("execute");
+        let stats = core.gc_stats();
+        assert!(core.async_functions.len() >= 3000);
+        assert!(
+            stats.reclaimed_async_functions >= 2000,
+            "reclaimed only {} async records",
+            stats.reclaimed_async_functions
+        );
+        assert!(core.async_functions.live < core.async_functions.len() / 2);
     }
 
     /// Reclaimed slots cost one pointer, not a whole object.

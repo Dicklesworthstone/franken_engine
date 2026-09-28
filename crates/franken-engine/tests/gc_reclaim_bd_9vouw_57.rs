@@ -308,6 +308,13 @@ fn await_loop_completes_past_the_object_budget() {
         "reclaimed only {} promises",
         run.gc.reclaimed_promises
     );
+    // Each `f(i)` call leaves a completed async-function record; collections
+    // every few hundred awaits release them.
+    assert!(
+        run.gc.reclaimed_async_functions >= 5_000,
+        "reclaimed only {} async-function records",
+        run.gc.reclaimed_async_functions
+    );
 }
 
 fn reachable_cases() -> Vec<(String, &'static str)> {

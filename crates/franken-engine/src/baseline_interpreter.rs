@@ -6041,6 +6041,284 @@ impl std::ops::IndexMut<usize> for Heap {
     }
 }
 
+/// Entries per chunk of a [`ReclaimableTable`].
+const TABLE_CHUNK_SLOTS: usize = HEAP_CHUNK_SLOTS;
+
+#[derive(Debug, Clone)]
+struct TableSlot<T> {
+    value: T,
+    /// The table's `measure` of `value` when last measured.
+    measured_bytes: Cell<u64>,
+    /// Borrowed mutably since it was last measured.
+    dirty: Cell<bool>,
+}
+
+#[derive(Debug, Clone)]
+struct TableChunk<T> {
+    slots: Vec<Option<TableSlot<T>>>,
+    live: usize,
+}
+
+/// An append-only id table whose entries the collector can reclaim
+/// (bd-9vouw.57), keeping the running sum of its entries' memory estimates.
+///
+/// Ids are never reused: a reclaimed id reads as `None`, and indexing it
+/// panics naming the table and the id. A full chunk whose entries are all
+/// reclaimed is released. Every mutable borrow marks the entry dirty, and
+/// `estimated_bytes` re-measures only dirty entries, so a full memory
+/// re-derivation does not walk the table.
+#[derive(Debug, Clone)]
+struct ReclaimableTable<T> {
+    name: &'static str,
+    measure: fn(&T) -> u64,
+    /// `None`: a released chunk, every entry of which was reclaimed.
+    chunks: Vec<Option<TableChunk<T>>>,
+    len: usize,
+    live: usize,
+    /// Sum of `measured_bytes` over live entries.
+    measured_bytes: Cell<u64>,
+    /// Ids of entries marked dirty; an entry is listed at most once.
+    dirty: RefCell<Vec<usize>>,
+}
+
+impl<T> ReclaimableTable<T> {
+    fn new(name: &'static str, measure: fn(&T) -> u64) -> Self {
+        Self {
+            name,
+            measure,
+            chunks: Vec::new(),
+            len: 0,
+            live: 0,
+            measured_bytes: Cell::new(0),
+            dirty: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Number of ids ever allocated: the next id is `len()`.
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The entry with id 0, as `<[T]>::first` read it.
+    #[cfg(test)]
+    fn first(&self) -> Option<&T> {
+        self.get(0)
+    }
+
+    /// The entry with the highest id, as `<[T]>::last` read it.
+    #[cfg(test)]
+    fn last(&self) -> Option<&T> {
+        self.get(self.len.checked_sub(1)?)
+    }
+
+    fn slot(&self, index: usize) -> Option<&TableSlot<T>> {
+        self.chunks
+            .get(index / TABLE_CHUNK_SLOTS)?
+            .as_ref()?
+            .slots
+            .get(index % TABLE_CHUNK_SLOTS)?
+            .as_ref()
+    }
+
+    fn get(&self, index: usize) -> Option<&T> {
+        self.slot(index).map(|slot| &slot.value)
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        let slot = self
+            .chunks
+            .get_mut(index / TABLE_CHUNK_SLOTS)?
+            .as_mut()?
+            .slots
+            .get_mut(index % TABLE_CHUNK_SLOTS)?
+            .as_mut()?;
+        if !slot.dirty.replace(true) {
+            self.dirty.get_mut().push(index);
+        }
+        Some(&mut slot.value)
+    }
+
+    fn push(&mut self, value: T) {
+        if self.len.is_multiple_of(TABLE_CHUNK_SLOTS) {
+            self.chunks.push(Some(TableChunk {
+                slots: Vec::new(),
+                live: 0,
+            }));
+        }
+        let measured = (self.measure)(&value);
+        self.measured_bytes
+            .set(self.measured_bytes.get().saturating_add(measured));
+        // Only a full chunk is ever released, so the tail chunk is resident.
+        let chunk = self
+            .chunks
+            .last_mut()
+            .and_then(Option::as_mut)
+            .expect("the table's tail chunk is resident");
+        chunk.slots.push(Some(TableSlot {
+            value,
+            measured_bytes: Cell::new(measured),
+            dirty: Cell::new(false),
+        }));
+        chunk.live += 1;
+        self.len += 1;
+        self.live += 1;
+    }
+
+    /// Remove the last id, returning its entry if it was live.
+    fn pop(&mut self) -> Option<T> {
+        let index = self.len.checked_sub(1)?;
+        let chunk_index = index / TABLE_CHUNK_SLOTS;
+        if self.chunks[chunk_index].is_none() {
+            // Popping into a released chunk: its remaining entries are dead.
+            self.chunks[chunk_index] = Some(TableChunk {
+                slots: (0..TABLE_CHUNK_SLOTS).map(|_| None).collect(),
+                live: 0,
+            });
+        }
+        let chunk = self.chunks[chunk_index]
+            .as_mut()
+            .expect("chunk was just made resident");
+        let slot = chunk.slots.pop().flatten();
+        if slot.is_some() {
+            chunk.live -= 1;
+            self.live -= 1;
+        }
+        self.len = index;
+        if self.len.is_multiple_of(TABLE_CHUNK_SLOTS) {
+            self.chunks.truncate(self.len / TABLE_CHUNK_SLOTS);
+        }
+        let slot = slot?;
+        self.measured_bytes.set(
+            self.measured_bytes
+                .get()
+                .saturating_sub(slot.measured_bytes.get()),
+        );
+        Some(slot.value)
+    }
+
+    fn clear(&mut self) {
+        while self.len > 0 {
+            self.pop();
+        }
+    }
+
+    /// Live entries in id order.
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.chunks
+            .iter()
+            .flatten()
+            .flat_map(|chunk| chunk.slots.iter())
+            .filter_map(|slot| slot.as_ref().map(|slot| &slot.value))
+    }
+
+    /// Live entries with their ids.
+    fn iter_live(&self) -> impl Iterator<Item = (usize, &T)> {
+        self.chunks
+            .iter()
+            .enumerate()
+            .filter_map(|(chunk_index, chunk)| chunk.as_ref().map(|chunk| (chunk_index, chunk)))
+            .flat_map(|(chunk_index, chunk)| {
+                chunk
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(offset, slot)| {
+                        slot.as_ref()
+                            .map(|slot| (chunk_index * TABLE_CHUNK_SLOTS + offset, &slot.value))
+                    })
+            })
+    }
+
+    /// Live entries, each marked dirty.
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        let dirty = self.dirty.get_mut();
+        for (chunk_index, chunk) in self.chunks.iter().enumerate() {
+            let Some(chunk) = chunk else {
+                continue;
+            };
+            for (offset, slot) in chunk.slots.iter().enumerate() {
+                if let Some(slot) = slot
+                    && !slot.dirty.replace(true)
+                {
+                    dirty.push(chunk_index * TABLE_CHUNK_SLOTS + offset);
+                }
+            }
+        }
+        self.chunks
+            .iter_mut()
+            .flatten()
+            .flat_map(|chunk| chunk.slots.iter_mut())
+            .filter_map(|slot| slot.as_mut().map(|slot| &mut slot.value))
+    }
+
+    /// Empty the entry of `index` and return it. A full chunk left with no
+    /// live entry is released.
+    fn reclaim(&mut self, index: usize) -> Option<T> {
+        let chunk_index = index / TABLE_CHUNK_SLOTS;
+        let chunk = self.chunks.get_mut(chunk_index)?.as_mut()?;
+        let slot = chunk.slots.get_mut(index % TABLE_CHUNK_SLOTS)?.take()?;
+        chunk.live -= 1;
+        self.live -= 1;
+        if chunk.live == 0 && chunk.slots.len() == TABLE_CHUNK_SLOTS {
+            self.chunks[chunk_index] = None;
+        }
+        self.measured_bytes.set(
+            self.measured_bytes
+                .get()
+                .saturating_sub(slot.measured_bytes.get()),
+        );
+        Some(slot.value)
+    }
+
+    /// Sum of the memory estimates of the live entries, re-measuring only
+    /// entries borrowed mutably since they were last measured.
+    fn estimated_bytes(&self) -> u64 {
+        let mut total = self.measured_bytes.get();
+        for index in self.dirty.borrow_mut().drain(..) {
+            // An entry reclaimed or popped since it was listed is skipped; its
+            // last measurement left the total when it was removed.
+            if let Some(slot) = self.slot(index)
+                && slot.dirty.replace(false)
+            {
+                let bytes = (self.measure)(&slot.value);
+                total = total
+                    .saturating_sub(slot.measured_bytes.replace(bytes))
+                    .saturating_add(bytes);
+            }
+        }
+        self.measured_bytes.set(total);
+        total
+    }
+}
+
+impl<T> std::ops::Index<usize> for ReclaimableTable<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &T {
+        match self.get(index) {
+            Some(value) => value,
+            None if index < self.len => panic!("use of reclaimed {} {index}", self.name),
+            None => panic!("{} {index} out of bounds ({})", self.name, self.len),
+        }
+    }
+}
+
+impl<T> std::ops::IndexMut<usize> for ReclaimableTable<T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        let (name, len) = (self.name, self.len);
+        if index >= len {
+            panic!("{name} {index} out of bounds ({len})");
+        }
+        self.get_mut(index)
+            .unwrap_or_else(|| panic!("use of reclaimed {name} {index}"))
+    }
+}
+
 /// A heap-allocated object with string-keyed properties.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeapObject {
@@ -11904,7 +12182,7 @@ pub struct InterpreterCore {
     /// when a nested generator or isolated async continuation runs.
     generator_delegation: Option<GeneratorDelegation>,
     /// Async function object store.
-    async_functions: Vec<AsyncFunctionObject>,
+    async_functions: ReclaimableTable<AsyncFunctionObject>,
     /// Context information for async function resumption after await.
     async_resumption_contexts: BTreeMap<u32, AsyncResumptionContext>,
     /// Promise-reaction contexts for pending entry-module top-level awaits.
@@ -12738,7 +13016,10 @@ impl InterpreterCore {
             generator_resume_dst: None,
             generator_result_label: Label::Public,
             generator_delegation: None,
-            async_functions: Vec::new(),
+            async_functions: ReclaimableTable::new(
+                "async function",
+                Self::estimate_async_function_bytes,
+            ),
             async_resumption_contexts: BTreeMap::new(),
             top_level_await_resumption_contexts: BTreeMap::new(),
             top_level_await_outcome: None,
@@ -32233,7 +32514,7 @@ impl InterpreterCore {
         self.generator_resume_dst = None;
         self.generator_result_label = Label::Public;
         self.generator_delegation = None;
-        for function in &mut self.async_functions {
+        for function in self.async_functions.iter_mut() {
             self.closures
                 .replace_activation(&mut function.isolated_execution, None);
         }
@@ -82111,7 +82392,20 @@ impl InterpreterCore {
             )
     }
 
+    /// Running total of the async-function records (bd-9vouw.57): each
+    /// re-derivation re-measures only records borrowed mutably since.
     fn async_functions_memory_bytes(&self) -> u64 {
+        let bytes = self.async_functions.estimated_bytes();
+        #[cfg(test)]
+        debug_assert_eq!(
+            bytes,
+            self.async_functions_memory_bytes_by_walk(),
+            "async-function running total drifted from the full walk"
+        );
+        bytes
+    }
+
+    fn async_functions_memory_bytes_by_walk(&self) -> u64 {
         Self::saturating_sum(
             self.async_functions
                 .iter()
@@ -82791,7 +83085,7 @@ impl InterpreterCore {
                 );
             }
         }
-        for function in &self.async_functions {
+        for function in self.async_functions.iter() {
             if let Some(execution) = &function.isolated_execution {
                 total = total.saturating_add(
                     Self::accumulate_generator_execution_cell_payload_bytes(execution, &mut seen),
@@ -83668,6 +83962,7 @@ impl InterpreterCore {
     fn recompute_base_estimated_memory_bytes_by_walk(&self) -> u64 {
         self.base_estimated_memory_bytes_with(
             Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes)),
+            self.async_functions_memory_bytes_by_walk(),
             self.scope_chain_memory_bytes_by_walk(),
             self.closures_memory_bytes_by_walk(),
             self.promise_runtime_memory_bytes_by_walk(),
@@ -83690,6 +83985,7 @@ impl InterpreterCore {
         );
         self.base_estimated_memory_bytes_with(
             heap_bytes,
+            self.async_functions_memory_bytes(),
             self.scope_chain_memory_bytes(),
             self.closures_memory_bytes(),
             self.promise_runtime_memory_bytes(),
@@ -83699,6 +83995,7 @@ impl InterpreterCore {
     fn base_estimated_memory_bytes_with(
         &self,
         heap_bytes: u64,
+        async_function_bytes: u64,
         scope_chain_bytes: u64,
         closure_bytes: u64,
         promise_runtime_bytes: u64,
@@ -83719,7 +84016,7 @@ impl InterpreterCore {
             ))
             .saturating_add(Self::estimate_generators_bytes(&self.generators))
             .saturating_add(self.generator_delegation_memory_bytes())
-            .saturating_add(self.async_functions_memory_bytes())
+            .saturating_add(async_function_bytes)
             .saturating_add(self.async_generators_memory_bytes())
             .saturating_add(self.top_level_await_outcome_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())

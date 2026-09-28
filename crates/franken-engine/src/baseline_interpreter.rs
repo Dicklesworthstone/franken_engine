@@ -6298,6 +6298,12 @@ pub struct HeapObject {
     is_derived_constructor: bool,
     /// Whether the owning function uses the implicit forwarding constructor.
     is_default_derived_constructor: bool,
+    /// Engine-private ES2022 class field list: on a class's prototype object
+    /// its instance fields, on its constructor's own-property object its
+    /// static fields (consumed once they run). An internal array
+    /// `[key0, initializer0, key1, initializer1, ...]` in declaration order,
+    /// reachable only through this slot.
+    class_fields: Option<Value>,
     /// Whether this object was created as a true Array instance.
     pub is_array: bool,
     /// Cached dense length for arrays (None = sparse, compute from properties).
@@ -6470,6 +6476,7 @@ impl Serialize for HeapObject {
                 + usize::from(!symbol_properties.is_empty())
                 + usize::from(!self.property_labels.is_empty())
                 + usize::from(!self.property_attributes.is_empty())
+                + usize::from(self.class_fields.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -6502,6 +6509,9 @@ impl Serialize for HeapObject {
                 "is_default_derived_constructor",
                 &self.is_default_derived_constructor,
             )?;
+        }
+        if let Some(fields) = &self.class_fields {
+            object.serialize_field("class_fields", fields)?;
         }
         if !self.property_labels.is_empty() {
             object.serialize_field("property_labels", &self.property_labels)?;
@@ -6562,6 +6572,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_derived_constructor: bool,
             #[serde(default)]
             is_default_derived_constructor: bool,
+            #[serde(default)]
+            class_fields: Option<Value>,
             #[serde(default)]
             property_labels: OrderedStringMap<Label>,
             #[serde(default)]
@@ -6646,6 +6658,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             derived_constructor_parent_label: wire.derived_constructor_parent_label,
             is_derived_constructor: wire.is_derived_constructor,
             is_default_derived_constructor: wire.is_default_derived_constructor,
+            class_fields: wire.class_fields,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -6714,6 +6727,10 @@ pub(crate) fn heap_object_contains_symbols(object: &HeapObject) -> bool {
     !object.properties.baseline_symbol_key_order().is_empty()
         || object
             .derived_constructor_parent
+            .as_ref()
+            .is_some_and(value_contains_symbol)
+        || object
+            .class_fields
             .as_ref()
             .is_some_and(value_contains_symbol)
         || object
@@ -6787,6 +6804,9 @@ fn validate_heap_symbol_references(
 ) -> Result<(), String> {
     if let Some(parent) = &object.derived_constructor_parent {
         validate_symbol_value(state, parent)?;
+    }
+    if let Some(fields) = &object.class_fields {
+        validate_symbol_value(state, fields)?;
     }
     for value in object.properties.all_data_values() {
         validate_symbol_value(state, value)?;
@@ -8191,6 +8211,9 @@ struct CallFrame {
     /// Whether this frame was entered by `super()` and must initialize the
     /// immediately enclosing derived activation when it completes.
     initialize_derived_this_on_return: bool,
+    /// A derived class constructor's instance field list (see
+    /// [`HeapObject::class_fields`]), run once its `super()` returns.
+    class_instance_fields: Option<Value>,
     /// Caller exception state saved across the call so callee control flow
     /// cannot clobber an outer in-flight abrupt completion.
     saved_pending_exception: Option<Value>,
@@ -39919,6 +39942,7 @@ impl InterpreterCore {
 
     fn complete_return(
         &mut self,
+        module: Option<&Ir3Module>,
         return_val: Value,
         return_label: Label,
     ) -> Result<Option<LabeledReturn>, InterpreterError> {
@@ -40046,6 +40070,9 @@ impl InterpreterCore {
                 }
             } else {
                 self.write_reg_with_label(frame.return_reg, effective_val, effective_label)?;
+            }
+            if frame.initialize_derived_this_on_return {
+                self.run_derived_class_instance_fields(module)?;
             }
             Ok(None)
         } else {
@@ -42219,6 +42246,9 @@ impl InterpreterCore {
             }
             self.write_reg_with_label(return_reg, result, result_label)?;
             self.ip = return_ip;
+            if initialize_derived_this_on_return {
+                self.run_derived_class_instance_fields(Some(module))?;
+            }
             return Ok(());
         }
 
@@ -42277,6 +42307,22 @@ impl InterpreterCore {
             let this_value = Value::Object(object_id);
             (this_value.clone(), Some(this_value), true)
         };
+        // ES2022 [[Construct]]: a base class's instance fields initialize on
+        // the new object before its constructor body (and parameter
+        // initializers) run; a derived class's once its super() returns.
+        let class_instance_fields = self.class_instance_field_list(module, &active_callee)?;
+        let class_instance_fields = match (&class_instance_fields, &construct_this) {
+            (Some(fields), Some(Value::Object(object_id))) if !derived_constructor => {
+                self.run_class_field_initializers(
+                    module,
+                    Value::Object(*object_id),
+                    *object_id,
+                    fields,
+                )?;
+                None
+            }
+            _ => class_instance_fields.filter(|_| derived_constructor),
+        };
 
         let mut argument_values = Vec::new();
         let mut argument_labels = Vec::new();
@@ -42325,6 +42371,7 @@ impl InterpreterCore {
             derived_constructor,
             this_initialized,
             initialize_derived_this_on_return,
+            class_instance_fields,
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_exception_label: std::mem::replace(
                 &mut self.pending_exception_label,
@@ -42577,6 +42624,7 @@ impl InterpreterCore {
                 derived_constructor: false,
                 this_initialized: true,
                 initialize_derived_this_on_return: false,
+                class_instance_fields: None,
                 saved_pending_exception: None,
                 saved_pending_exception_label: Label::Public,
                 saved_pending_return: None,
@@ -43056,7 +43104,8 @@ impl InterpreterCore {
             let completion = self
                 .take_pending_return_slot()
                 .expect("injected return remains pending");
-            self.complete_return(completion.value, completion.label)
+            // A generator frame is never a constructor entered by super().
+            self.complete_return(None, completion.value, completion.label)
         }
     }
 
@@ -44755,7 +44804,7 @@ impl InterpreterCore {
                 // Fell off the end of the instruction stream.
                 if !self.call_stack.is_empty() {
                     if let Some(completion) =
-                        self.complete_return(Value::Undefined, Label::Public)?
+                        self.complete_return(Some(module), Value::Undefined, Label::Public)?
                     {
                         return Ok(DispatchOutcome::Complete(completion));
                     }
@@ -45245,6 +45294,7 @@ impl InterpreterCore {
                                 derived_constructor: false,
                                 this_initialized: true,
                                 initialize_derived_this_on_return: false,
+                                class_instance_fields: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_exception_label: std::mem::replace(
                                     &mut self.pending_exception_label,
@@ -45508,6 +45558,7 @@ impl InterpreterCore {
                                 derived_constructor: false,
                                 this_initialized: true,
                                 initialize_derived_this_on_return: false,
+                                class_instance_fields: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_exception_label: std::mem::replace(
                                     &mut self.pending_exception_label,
@@ -45852,6 +45903,7 @@ impl InterpreterCore {
                                 derived_constructor: false,
                                 this_initialized: true,
                                 initialize_derived_this_on_return: false,
+                                class_instance_fields: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_exception_label: std::mem::replace(
                                     &mut self.pending_exception_label,
@@ -46028,6 +46080,7 @@ impl InterpreterCore {
                         derived_constructor: false,
                         this_initialized: true,
                         initialize_derived_this_on_return: false,
+                        class_instance_fields: None,
                         saved_pending_exception: self.pending_exception.take(),
                         saved_pending_exception_label: std::mem::replace(
                             &mut self.pending_exception_label,
@@ -46096,7 +46149,11 @@ impl InterpreterCore {
                         let pending_return = self
                             .take_pending_return_slot()
                             .expect("Return installed a pending completion before direct return");
-                        match self.complete_return(pending_return.value, pending_return.label) {
+                        match self.complete_return(
+                            Some(module),
+                            pending_return.value,
+                            pending_return.label,
+                        ) {
                             Ok(Some(completion)) => {
                                 return Ok(DispatchOutcome::Complete(completion));
                             }
@@ -47725,6 +47782,7 @@ impl InterpreterCore {
                                 derived_constructor: false,
                                 this_initialized: true,
                                 initialize_derived_this_on_return: false,
+                                class_instance_fields: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_exception_label: std::mem::replace(
                                     &mut self.pending_exception_label,
@@ -48014,9 +48072,11 @@ impl InterpreterCore {
                                     self.estimated_memory_bytes.saturating_sub(
                                         Self::estimate_labeled_return_bytes(&pending_return),
                                     );
-                                match self
-                                    .complete_return(pending_return.value, pending_return.label)
-                                {
+                                match self.complete_return(
+                                    Some(module),
+                                    pending_return.value,
+                                    pending_return.label,
+                                ) {
                                     Ok(Some(completion)) => {
                                         return Ok(DispatchOutcome::Complete(completion));
                                     }
@@ -65967,6 +66027,7 @@ impl InterpreterCore {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: None,
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,
@@ -74176,6 +74237,46 @@ impl InterpreterCore {
                         .join(self.get_register_label(args.start + 1)?);
                     self.join_object_mutation_label(prototype_id, &label)?;
                     self.store_prototype_link(prototype_id, link);
+                }
+                Ok(Value::Undefined)
+            }
+            "builtin:ClassDefineField" | "builtin:ClassInitStaticFields" => {
+                // ES2022 class fields. ClassDefineField(target, key,
+                // initializer) records a field on the class prototype
+                // (instance) or on the constructor (static);
+                // ClassInitStaticFields(class) then defines the static ones
+                // on the class, in order, once its methods exist.
+                let module = module.ok_or_else(|| InterpreterError::InternalError {
+                    details: format!("{cap} needs the executing module"),
+                })?;
+                let target = self.arg_or_undefined(args, 0)?;
+                let target_id = match &target {
+                    Value::Object(object_id) => Some(*object_id),
+                    function => self.ensure_function_own_property_object(module, function)?,
+                };
+                let Some(target_id) = target_id else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "class prototype or constructor".to_string(),
+                        got: target.type_name().to_string(),
+                    });
+                };
+                if cap == "builtin:ClassDefineField" {
+                    let key = self.arg_or_undefined(args, 1)?;
+                    let initializer = self.arg_or_undefined(args, 2)?;
+                    let label = self
+                        .get_register_label(args.start)?
+                        .join(self.get_register_label(args.start + 1)?)
+                        .join(self.get_register_label(args.start + 2)?);
+                    self.record_class_field(target_id, key, initializer, label)?;
+                } else if let Some(fields) = self
+                    .heap
+                    .get(target_id.0 as usize)
+                    .and_then(|object| object.class_fields.clone())
+                {
+                    // The list stays reachable from its slot while the
+                    // initializers run, then is released.
+                    self.run_class_field_initializers(module, target, target_id, &fields)?;
+                    self.set_class_fields_slot(target_id, None)?;
                 }
                 Ok(Value::Undefined)
             }
@@ -83231,6 +83332,13 @@ impl InterpreterCore {
             )
             .saturating_add(
                 object
+                    .class_fields
+                    .as_ref()
+                    .map(Self::estimate_execution_seed_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                object
                     .derived_constructor_parent_label
                     .as_ref()
                     .map(Self::estimate_label_bytes)
@@ -84506,6 +84614,13 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                object
+                    .class_fields
                     .as_ref()
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
@@ -87538,6 +87653,146 @@ impl InterpreterCore {
                 .clone()
                 .unwrap_or(Label::Public),
         ))
+    }
+
+    /// The instance field list of a class constructor (recorded on its
+    /// prototype object by `builtin:ClassDefineField`), if it has fields.
+    fn class_instance_field_list(
+        &mut self,
+        module: &Ir3Module,
+        constructor: &Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if !matches!(constructor, Value::Closure(_) | Value::Function(_)) {
+            return Ok(None);
+        }
+        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
+        Ok(self
+            .heap
+            .get(prototype.0 as usize)
+            .and_then(|object| object.class_fields.clone()))
+    }
+
+    /// Replace an object's engine-private class field list, charging the
+    /// slot's footprint.
+    fn set_class_fields_slot(
+        &mut self,
+        object_id: ObjectId,
+        fields: Option<Value>,
+    ) -> Result<(), InterpreterError> {
+        let index = object_id.0 as usize;
+        let previous = self
+            .heap
+            .get(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let previous_bytes = Self::estimate_heap_object_bytes(previous);
+        let mut projected = previous.clone();
+        projected.class_fields = fields;
+        let projected_bytes = Self::estimate_heap_object_bytes(&projected);
+        self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
+        self.mutate_heap(|heap| heap[index] = projected);
+        Ok(())
+    }
+
+    /// `builtin:ClassDefineField(target, key, initializer)`: append the field
+    /// to `target`'s list and give the initializer `target` as its
+    /// [[HomeObject]], so `super.x` in an initializer resolves like it does in
+    /// a method of the same class.
+    fn record_class_field(
+        &mut self,
+        target: ObjectId,
+        key: Value,
+        initializer: Value,
+        definition_label: Label,
+    ) -> Result<(), InterpreterError> {
+        let Value::Closure(closure_id) = initializer else {
+            return Err(InterpreterError::TypeError {
+                expected: "fresh closure for a class field initializer".to_string(),
+                got: initializer.type_name().to_string(),
+            });
+        };
+        if self.closure_method_metadata.contains_key(&closure_id) {
+            return Err(InterpreterError::TypeError {
+                expected: "unregistered class field initializer".to_string(),
+                got: format!("closure#{closure_id} already has a [[HomeObject]]"),
+            });
+        }
+        let property_key = self.executable_property_key_from_value(&key);
+        let metadata = ClosureMethodMetadata {
+            home_object: target,
+            name: self.inferred_method_name(&property_key),
+            definition_label,
+        };
+        let metadata_bytes = Self::estimate_closure_method_metadata_entry_bytes(&metadata);
+        self.apply_memory_component_delta(0, metadata_bytes)?;
+        self.closure_method_metadata.insert(closure_id, metadata);
+
+        let mut entries = match self
+            .heap
+            .get(target.0 as usize)
+            .and_then(|object| object.class_fields.clone())
+        {
+            Some(Value::Object(list)) => self.array_like_values(list)?,
+            _ => Vec::new(),
+        };
+        entries.push(key);
+        entries.push(Value::Closure(closure_id));
+        let list = self.alloc_array_from_values(&entries)?;
+        self.set_class_fields_slot(target, Some(Value::Object(list)))
+    }
+
+    /// ES2022 InitializeInstanceElements / static field definition: run each
+    /// initializer of `fields` with `receiver` as `this`, in declaration
+    /// order, and define its result as an own enumerable, writable,
+    /// configurable data property of `target` (CreateDataPropertyOrThrow: a
+    /// non-extensible target throws). The value's IFC label is stored with it.
+    fn run_class_field_initializers(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        target: ObjectId,
+        fields: &Value,
+    ) -> Result<(), InterpreterError> {
+        let Value::Object(list) = fields else {
+            return Ok(());
+        };
+        let entries = self.array_like_values(*list)?;
+        for pair in entries.chunks_exact(2) {
+            let (value, label) = self.invoke_inline_method_call_with_argument_label(
+                Some(module),
+                pair[1].clone(),
+                receiver.clone(),
+                Vec::new(),
+                None,
+            )?;
+            let key = self.executable_property_key_from_value(&pair[0]);
+            self.run_pre_runtime_property_access_hook(module, target, &key)?;
+            self.set_own_runtime_property_label(target, &key, &label)?;
+            self.set_object_runtime_property(target, key.clone(), value)?;
+            self.set_own_property_attributes(target, &key, PropertyAttributes::DEFAULT)?;
+        }
+        Ok(())
+    }
+
+    /// Run the instance fields of the derived constructor on top of the call
+    /// stack once its super() has initialized `this` (ES2022 15.7.14
+    /// SuperCall step 11 InitializeInstanceElements).
+    fn run_derived_class_instance_fields(
+        &mut self,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let Some(frame) = self.call_stack.last_mut() else {
+            return Ok(());
+        };
+        let Some(fields) = frame.class_instance_fields.take() else {
+            return Ok(());
+        };
+        let Value::Object(object_id) = frame.this_value else {
+            return Ok(());
+        };
+        let module = module.ok_or_else(|| InterpreterError::InternalError {
+            details: "class field initializers need the executing module".to_string(),
+        })?;
+        self.run_class_field_initializers(module, Value::Object(object_id), object_id, &fields)
     }
 
     fn register_derived_constructor_metadata(
@@ -101816,6 +102071,7 @@ mod async_runtime_tests_current {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: None,
             saved_pending_exception_label: Label::Public,
             saved_pending_return: Some(pending.clone()),
@@ -103650,6 +103906,7 @@ mod async_runtime_tests_current {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: None,
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,
@@ -119233,6 +119490,7 @@ mod function_prototype_call_apply_tests_current {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: None,
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,
@@ -133124,6 +133382,7 @@ mod tests {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: None,
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,
@@ -133139,7 +133398,7 @@ mod tests {
             .expect("seed call-frame state should fit memory budget");
 
         let outcome = core
-            .complete_return(Value::str("done"), Label::Public)
+            .complete_return(None, Value::str("done"), Label::Public)
             .expect("return should complete");
         assert_eq!(outcome, None);
         assert_eq!(core.ip, 123);
@@ -133161,7 +133420,7 @@ mod tests {
         // label, not drop it (the pre-fix behavior returned only the Value).
         let mut core = InterpreterCore::new(test_quickjs_config(), "bd-5ilh1-return");
         let outcome = core
-            .complete_return(Value::str("tainted"), Label::Secret)
+            .complete_return(None, Value::str("tainted"), Label::Secret)
             .expect("top-level return should complete");
         assert_eq!(
             outcome,
@@ -133303,6 +133562,7 @@ mod tests {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: None,
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,
@@ -133489,6 +133749,7 @@ mod tests {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: Some(Value::str("outer error")),
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,
@@ -133591,6 +133852,7 @@ mod tests {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: Some(Value::str("outer error")),
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,
@@ -134353,6 +134615,7 @@ mod tests {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: None,
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,
@@ -142536,6 +142799,7 @@ mod lazy_seed_tests {
             derived_constructor: false,
             this_initialized: true,
             initialize_derived_this_on_return: false,
+            class_instance_fields: None,
             saved_pending_exception: None,
             saved_pending_exception_label: Label::Public,
             saved_pending_return: None,

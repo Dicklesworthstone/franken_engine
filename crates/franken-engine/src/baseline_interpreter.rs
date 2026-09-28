@@ -251,10 +251,15 @@ const DEFAULT_V8_MAX_HEAP_OBJECTS: u32 = 1_000_000;
 const DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
 /// Default total memory budget for the throughput profile.
 const DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
-// Maximum console entries before truncation (conservative profile)
-const DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES: usize = 1_000;
-// Maximum console entries before truncation (throughput profile)
-const DEFAULT_V8_MAX_CONSOLE_ENTRIES: usize = 10_000;
+/// Console entries a run may retain before it fails closed (conservative profile).
+const DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES: usize = 100_000;
+/// Console entries a run may retain before it fails closed (throughput profile).
+const DEFAULT_V8_MAX_CONSOLE_ENTRIES: usize = 1_000_000;
+/// Bytes of console text a run may retain before it fails closed. Retained
+/// console text is not charged to the memory budget, so this is what bounds
+/// it; 8 MiB also leaves an embedder's result frame room for the rest of the
+/// result.
+const DEFAULT_MAX_CONSOLE_BYTES: usize = 8 * 1024 * 1024;
 /// Default scope-chain depth budget for all interpreter profiles.
 const DEFAULT_MAX_SCOPE_DEPTH: u32 = 512;
 
@@ -5387,6 +5392,10 @@ fn public_ifc_label() -> Label {
     Label::Public
 }
 
+fn default_max_console_bytes() -> usize {
+    DEFAULT_MAX_CONSOLE_BYTES
+}
+
 impl Default for ArrayBufferBacking {
     fn default() -> Self {
         Self {
@@ -8472,6 +8481,15 @@ pub enum InterpreterError {
         requested_depth: usize,
         max_depth: usize,
     },
+    /// The program printed more console output than the run may retain.
+    /// Fails the run instead of dropping output: `entries`/`bytes` are what
+    /// retaining the refused entry would have required.
+    ConsoleBudgetExceeded {
+        entries: usize,
+        max_entries: usize,
+        bytes: usize,
+        max_bytes: usize,
+    },
     /// Internal invariant violation detected in interpreter state.
     InternalError { details: String },
     /// Guardplane containment hook requested a fail-closed action.
@@ -8603,6 +8621,15 @@ impl fmt::Display for InterpreterError {
                 f,
                 "scope depth exceeded: requested depth {requested_depth}, limit {max_depth}"
             ),
+            Self::ConsoleBudgetExceeded {
+                entries,
+                max_entries,
+                bytes,
+                max_bytes,
+            } => write!(
+                f,
+                "console output budget exceeded: {entries} entries / {bytes} bytes, limits {max_entries} entries / {max_bytes} bytes"
+            ),
             Self::InternalError { details } => {
                 write!(f, "internal interpreter invariant violated: {details}")
             }
@@ -8641,8 +8668,14 @@ pub struct InterpreterConfig {
     pub max_heap_objects: u32,
     /// Maximum estimated live memory before failing closed.
     pub max_total_memory_bytes: u64,
-    /// Maximum console entries before truncation (prevents DoS via console spam).
+    /// Maximum console entries a run may retain. One more fails the run with
+    /// [`InterpreterError::ConsoleBudgetExceeded`]; output is never dropped
+    /// silently. `0` disables console capture altogether.
     pub max_console_entries: usize,
+    /// Maximum bytes of console text a run may retain; exceeding it fails the
+    /// run with [`InterpreterError::ConsoleBudgetExceeded`].
+    #[serde(default = "default_max_console_bytes")]
+    pub max_console_bytes: usize,
     /// Maximum scope-chain depth, including the global frame.
     pub max_scope_depth: u32,
     /// Optional module root used for resolving relative import specifiers.
@@ -8682,6 +8715,7 @@ impl PartialEq for InterpreterConfig {
             && self.max_heap_objects == other.max_heap_objects
             && self.max_total_memory_bytes == other.max_total_memory_bytes
             && self.max_console_entries == other.max_console_entries
+            && self.max_console_bytes == other.max_console_bytes
             && self.max_scope_depth == other.max_scope_depth
             && self.module_root == other.module_root
             && self.granted_capabilities == other.granted_capabilities
@@ -8705,6 +8739,7 @@ impl InterpreterConfig {
             max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
             max_console_entries: DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES,
+            max_console_bytes: DEFAULT_MAX_CONSOLE_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
@@ -8727,6 +8762,7 @@ impl InterpreterConfig {
             max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
             max_console_entries: DEFAULT_V8_MAX_CONSOLE_ENTRIES,
+            max_console_bytes: DEFAULT_MAX_CONSOLE_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
@@ -8749,6 +8785,7 @@ impl InterpreterConfig {
             max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
             max_console_entries: DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES,
+            max_console_bytes: DEFAULT_MAX_CONSOLE_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
@@ -8771,6 +8808,7 @@ impl InterpreterConfig {
             max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
             max_console_entries: DEFAULT_V8_MAX_CONSOLE_ENTRIES,
+            max_console_bytes: DEFAULT_MAX_CONSOLE_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
             canonical_module_root: None,
@@ -11599,6 +11637,9 @@ pub struct InterpreterCore {
     entry_module_specifier: Option<String>,
     /// Console output captured for deterministic replay.
     console_output: Vec<ConsoleEntry>,
+    /// Total message bytes in `console_output`, held under
+    /// `config.max_console_bytes`.
+    console_output_bytes: usize,
     /// Profiling data collection (optional for performance measurements).
     profiling_data: Option<crate::profiling::Profiler>,
     /// Next timer ID for setTimeout/setInterval (monotonic for determinism).
@@ -12281,6 +12322,7 @@ impl InterpreterCore {
             active_generated_function_artifact: None,
             entry_module_specifier: None,
             console_output: Vec::new(),
+            console_output_bytes: 0,
             profiling_data: None,
             next_timer_id: 0,
             active_timers: BTreeMap::new(),
@@ -31136,21 +31178,38 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn push_console_output(&mut self, level: ConsoleLevel, message: String) {
+    /// Retain one console entry, or fail the run when the console budget is
+    /// spent. Output is never dropped silently: a truncated transcript would
+    /// be a wrong answer that still exits 0.
+    fn push_console_output(
+        &mut self,
+        level: ConsoleLevel,
+        message: String,
+    ) -> Result<(), InterpreterError> {
         let max_entries = self.config.max_console_entries;
         if max_entries == 0 {
-            return;
+            return Ok(());
         }
 
-        if self.console_output.len() >= max_entries {
-            self.console_output.remove(0);
+        let entries = self.console_output.len().saturating_add(1);
+        let bytes = self.console_output_bytes.saturating_add(message.len());
+        let max_bytes = self.config.max_console_bytes;
+        if entries > max_entries || bytes > max_bytes {
+            return Err(InterpreterError::ConsoleBudgetExceeded {
+                entries,
+                max_entries,
+                bytes,
+                max_bytes,
+            });
         }
 
+        self.console_output_bytes = bytes;
         self.console_output.push(ConsoleEntry {
             level,
             message,
             instruction_index: self.instructions_executed,
         });
+        Ok(())
     }
 
     #[cfg(test)]
@@ -31204,6 +31263,7 @@ impl InterpreterCore {
                 NondeterminismTrace::new(String::new()),
             ),
         };
+        self.console_output_bytes = 0;
         ExecutionResult {
             value: completion.value,
             completion_label: completion.label,
@@ -55428,6 +55488,7 @@ impl InterpreterCore {
                         || matches!(
                             err,
                             InterpreterError::MemoryBudgetExceeded { .. }
+                                | InterpreterError::ConsoleBudgetExceeded { .. }
                                 | InterpreterError::ContainmentActionRequested { .. }
                         )
                     {
@@ -64879,7 +64940,7 @@ impl InterpreterCore {
         // `util.inspect`, `%` directives in a leading string.
         let message = self.console_format_arguments(module, args)?;
 
-        self.push_console_output(level, message);
+        self.push_console_output(level, message)?;
 
         self.emit_witness(
             WitnessEventKind::HostcallDispatched,
@@ -81870,6 +81931,7 @@ impl InterpreterCore {
             | InterpreterError::StringLimitExceeded { .. }
             | InterpreterError::MemoryBudgetExceeded { .. }
             | InterpreterError::ScopeDepthExceeded { .. }
+            | InterpreterError::ConsoleBudgetExceeded { .. }
             | InterpreterError::Cancelled => 0,
         }
     }

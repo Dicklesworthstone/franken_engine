@@ -11409,26 +11409,88 @@ fn console_output_bounded_by_config_builtin_methods() {
     config.granted_capabilities = capabilities_with([RuntimeCapability::Builtin]);
     let mut core = InterpreterCore::new(config, "console-bounds-test");
 
-    let result = core.execute(&module).expect("execution should succeed");
-    assert_eq!(result.value, Value::Undefined);
-
-    // Verify console output is bounded to max 3 entries (ring buffer behavior)
-    let console_output = &result.console_output;
-    assert_eq!(
-        console_output.len(),
-        3,
-        "console output should be limited to max_console_entries"
+    // The fourth entry exceeds the budget: the run fails instead of silently
+    // dropping output.
+    let error = core
+        .execute(&module)
+        .expect_err("console output over budget must fail the run");
+    assert!(
+        matches!(
+            error,
+            InterpreterError::ConsoleBudgetExceeded {
+                entries: 4,
+                max_entries: 3,
+                ..
+            }
+        ),
+        "{error:?}"
     );
 
-    // Verify ring buffer: should contain last 3 messages (message3, message4, message5)
-    assert_eq!(console_output[0].message, "message3");
-    assert_eq!(console_output[1].message, "message4");
-    assert_eq!(console_output[2].message, "message5");
-
-    // All entries should be Log level
+    // What was printed before the budget ran out is kept, in order.
+    let console_output = core.console_output();
+    let messages: Vec<&str> = console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(messages, ["message1", "message2", "message3"]);
     for entry in console_output {
         assert_eq!(entry.level, ConsoleLevel::Log);
     }
+}
+
+#[test]
+fn console_output_bounded_by_config_bytes() {
+    let log = |pool_index| {
+        [
+            Ir3Instruction::LoadStr { dst: 0, pool_index },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ConsoleLog".to_string()),
+                args: RegRange { start: 0, count: 1 },
+                dst: 0,
+            },
+        ]
+    };
+    let mut instructions: Vec<Ir3Instruction> = [log(0), log(1), log(2)].concat();
+    instructions.push(Ir3Instruction::Halt);
+    let module = test_module_with_pool(
+        instructions,
+        vec!["hello".to_string(), "world".to_string(), "!".to_string()],
+    );
+
+    // Exactly at the byte budget still succeeds.
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.max_console_bytes = 11;
+    config.granted_capabilities = capabilities_with([RuntimeCapability::Builtin]);
+    let mut core = InterpreterCore::new(config.clone(), "console-bytes-at-limit");
+    let result = core
+        .execute(&module)
+        .expect("11 bytes fit an 11-byte budget");
+    assert_eq!(result.console_output.len(), 3);
+
+    // One byte less fails on the entry that would cross it.
+    config.max_console_bytes = 10;
+    let mut core = InterpreterCore::new(config, "console-bytes-over-limit");
+    let error = core
+        .execute(&module)
+        .expect_err("console text over the byte budget must fail the run");
+    assert!(
+        matches!(
+            error,
+            InterpreterError::ConsoleBudgetExceeded {
+                entries: 3,
+                bytes: 11,
+                max_bytes: 10,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let messages: Vec<&str> = core
+        .console_output()
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(messages, ["hello", "world"]);
 }
 
 #[test]
@@ -11491,21 +11553,28 @@ fn console_output_bounded_by_config_mixed_levels() {
     config.granted_capabilities = capabilities_with([RuntimeCapability::Builtin]);
     let mut core = InterpreterCore::new(config, "console-mixed-levels");
 
-    let result = core.execute(&module).expect("execution should succeed");
-    assert_eq!(result.value, Value::Undefined);
-
-    let console_output = &result.console_output;
-    assert_eq!(
-        console_output.len(),
-        2,
-        "console output should be limited to 2 entries"
+    let error = core
+        .execute(&module)
+        .expect_err("console output over budget must fail the run");
+    assert!(
+        matches!(
+            error,
+            InterpreterError::ConsoleBudgetExceeded {
+                entries: 3,
+                max_entries: 2,
+                ..
+            }
+        ),
+        "{error:?}"
     );
 
-    // Should contain the last 2 messages: warn1 and log2
-    assert_eq!(console_output[0].message, "warn1");
-    assert_eq!(console_output[0].level, ConsoleLevel::Warn);
-    assert_eq!(console_output[1].message, "log2");
-    assert_eq!(console_output[1].level, ConsoleLevel::Log);
+    // The first 2 entries are kept with their levels: log1 and error1.
+    let console_output = core.console_output();
+    assert_eq!(console_output.len(), 2);
+    assert_eq!(console_output[0].message, "log1");
+    assert_eq!(console_output[0].level, ConsoleLevel::Log);
+    assert_eq!(console_output[1].message, "error1");
+    assert_eq!(console_output[1].level, ConsoleLevel::Error);
 }
 
 #[test]
@@ -11608,23 +11677,30 @@ fn console_output_hostcall_bounds_capability_based() {
     config.granted_capabilities = capabilities_with([RuntimeCapability::Console]);
     let mut core = InterpreterCore::new(config, "console-hostcall-bounds");
 
-    let result = core.execute(&module).expect("execution should succeed");
-    assert_eq!(result.value, Value::Undefined);
-
-    let console_output = &result.console_output;
-    assert_eq!(
-        console_output.len(),
-        3,
-        "hostcall console output should be bounded"
+    let error = core
+        .execute(&module)
+        .expect_err("hostcall console output over budget must fail the run");
+    assert!(
+        matches!(
+            error,
+            InterpreterError::ConsoleBudgetExceeded {
+                entries: 4,
+                max_entries: 3,
+                ..
+            }
+        ),
+        "{error:?}"
     );
 
-    // Should contain last 3 messages (error1, warn1, log2)
-    assert_eq!(console_output[0].message, "hostcall_error1");
-    assert_eq!(console_output[0].level, ConsoleLevel::Error);
-    assert_eq!(console_output[1].message, "hostcall_warn1");
-    assert_eq!(console_output[1].level, ConsoleLevel::Warn);
-    assert_eq!(console_output[2].message, "hostcall_log2");
-    assert_eq!(console_output[2].level, ConsoleLevel::Log);
+    // The first 3 messages are kept (log1, error1, warn1).
+    let console_output = core.console_output();
+    assert_eq!(console_output.len(), 3);
+    assert_eq!(console_output[0].message, "hostcall_log1");
+    assert_eq!(console_output[0].level, ConsoleLevel::Log);
+    assert_eq!(console_output[1].message, "hostcall_error1");
+    assert_eq!(console_output[1].level, ConsoleLevel::Error);
+    assert_eq!(console_output[2].message, "hostcall_warn1");
+    assert_eq!(console_output[2].level, ConsoleLevel::Warn);
 }
 
 // ============================================================================

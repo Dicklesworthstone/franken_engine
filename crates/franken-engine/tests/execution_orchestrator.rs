@@ -2768,6 +2768,45 @@ fn failed_execution_keeps_console_output_printed_before_the_throw() {
     }
 }
 
+/// Console output past the run's budget fails the run on both lanes instead of
+/// being dropped silently, a JS `catch` cannot swallow that failure, and what
+/// was printed before the budget ran out is kept in order.
+#[test]
+fn console_output_over_budget_fails_the_run_and_keeps_the_head() {
+    // Nine 1 MiB lines cross the default 8 MiB console byte budget on the
+    // ninth line, long before any instruction or memory budget.
+    let source = "const line = \"x\".repeat(1048576);\n\
+                  try {\n\
+                    for (let i = 0; i < 9; i++) { console.log(line); }\n\
+                  } catch (error) {\n\
+                    console.log(\"caught\");\n\
+                  }\n";
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            ..OrchestratorConfig::default()
+        });
+        let error = orchestrator
+            .execute(&ExtensionPackage {
+                capabilities: vec!["builtin".to_string()],
+                ..simple_package("ext-console-budget", source)
+            })
+            .expect_err("console output over budget must fail the run");
+        assert!(
+            error
+                .to_string()
+                .contains("console output budget exceeded: 9 entries"),
+            "{lane:?}: {error}"
+        );
+        let lines = failed_console_lines(&orchestrator);
+        assert_eq!(lines.len(), 8, "{lane:?}");
+        assert!(
+            lines.iter().all(|line| line.len() == 1_048_576),
+            "{lane:?}: the catch block must not have run"
+        );
+    }
+}
+
 /// Output printed by a CommonJS entry and by the module it requires survives
 /// when that module throws, since both run in the same interpreter.
 #[test]

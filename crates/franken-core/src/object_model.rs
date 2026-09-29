@@ -44,12 +44,20 @@ use crate::js_string::{ExactPropertyMap, JsString};
 #[derive(Debug, Clone)]
 pub struct OrderedStringMap<V> {
     by_key: KeyedValues<V>,
+    array_indices: BTreeMap<u32, String>,
+    string_insertion_order: Vec<String>,
+    // Allocated on first use: an ordinary object's properties have none.
+    sidecars: Option<Box<Sidecars<V>>>,
+}
+
+/// The rarely used parts of an [`OrderedStringMap`], kept behind one pointer
+/// so a map without them stays small.
+#[derive(Debug, Clone)]
+struct Sidecars<V> {
     // Exact-only data keys. Keeping ordinary strings in the historical map
     // preserves its allocation-free hot path; this sidecar's invariant is
     // that every key is non-well-formed.
     exact_only_by_key: ExactPropertyMap<V>,
-    array_indices: BTreeMap<u32, String>,
-    string_insertion_order: Vec<String>,
     // Activated only while exact-only data exists. It merges well-formed and
     // exact-only ordinary data keys in creation order for lossless iteration
     // and the pair-sequence wire.
@@ -69,6 +77,43 @@ pub struct OrderedStringMap<V> {
     // their additive wire representation.
     baseline_symbol_properties: BTreeMap<SymbolId, BaselineSymbolProperty<V>>,
     baseline_symbol_key_order: Vec<SymbolId>,
+}
+
+impl<V> Default for Sidecars<V> {
+    fn default() -> Self {
+        Self {
+            exact_only_by_key: ExactPropertyMap::new(),
+            exact_string_insertion_order: None,
+            baseline_string_key_order: None,
+            baseline_exact_string_accessors: ExactPropertyMap::new(),
+            baseline_symbol_properties: BTreeMap::new(),
+            baseline_symbol_key_order: Vec::new(),
+        }
+    }
+}
+
+impl<V: PartialEq> Sidecars<V> {
+    /// Equality of two maps' sidecars, an absent one reading as empty. The
+    /// baseline string-key order is not compared, as before it moved here.
+    fn equal(left: Option<&Self>, right: Option<&Self>) -> bool {
+        match (left, right) {
+            (None, None) => true,
+            (Some(present), None) | (None, Some(present)) => {
+                present.exact_only_by_key.is_empty()
+                    && present.exact_string_insertion_order.is_none()
+                    && present.baseline_exact_string_accessors.is_empty()
+                    && present.baseline_symbol_properties.is_empty()
+                    && present.baseline_symbol_key_order.is_empty()
+            }
+            (Some(left), Some(right)) => {
+                left.exact_only_by_key == right.exact_only_by_key
+                    && left.exact_string_insertion_order == right.exact_string_insertion_order
+                    && left.baseline_exact_string_accessors == right.baseline_exact_string_accessors
+                    && left.baseline_symbol_properties == right.baseline_symbol_properties
+                    && left.baseline_symbol_key_order == right.baseline_symbol_key_order
+            }
+        }
+    }
 }
 
 /// Descriptor carrier used by the executable baseline heaps while their
@@ -235,13 +280,9 @@ impl<'a, V> Iterator for KeyedValuesIter<'a, V> {
 impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
     fn eq(&self, other: &Self) -> bool {
         self.by_key == other.by_key
-            && self.exact_only_by_key == other.exact_only_by_key
             && self.array_indices == other.array_indices
             && self.string_insertion_order == other.string_insertion_order
-            && self.exact_string_insertion_order == other.exact_string_insertion_order
-            && self.baseline_exact_string_accessors == other.baseline_exact_string_accessors
-            && self.baseline_symbol_properties == other.baseline_symbol_properties
-            && self.baseline_symbol_key_order == other.baseline_symbol_key_order
+            && Sidecars::equal(self.sidecars.as_deref(), other.sidecars.as_deref())
     }
 }
 
@@ -251,14 +292,9 @@ impl<V> Default for OrderedStringMap<V> {
     fn default() -> Self {
         Self {
             by_key: KeyedValues::new(),
-            exact_only_by_key: ExactPropertyMap::new(),
             array_indices: BTreeMap::new(),
             string_insertion_order: Vec::new(),
-            exact_string_insertion_order: None,
-            baseline_string_key_order: None,
-            baseline_exact_string_accessors: ExactPropertyMap::new(),
-            baseline_symbol_properties: BTreeMap::new(),
-            baseline_symbol_key_order: Vec::new(),
+            sidecars: None,
         }
     }
 }
@@ -267,6 +303,24 @@ impl<V> OrderedStringMap<V> {
     /// Create empty ordered storage.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn sidecars(&self) -> Option<&Sidecars<V>> {
+        self.sidecars.as_deref()
+    }
+
+    /// The sidecars, allocated if absent.
+    fn sidecars_mut(&mut self) -> &mut Sidecars<V> {
+        self.sidecars.get_or_insert_with(Box::default)
+    }
+
+    fn exact_only_by_key(&self) -> Option<&ExactPropertyMap<V>> {
+        self.sidecars().map(|sidecars| &sidecars.exact_only_by_key)
+    }
+
+    fn exact_only_is_empty(&self) -> bool {
+        self.exact_only_by_key()
+            .is_none_or(ExactPropertyMap::is_empty)
     }
 
     /// Return the number of well-formed entries in the compatibility view.
@@ -304,14 +358,16 @@ impl<V> OrderedStringMap<V> {
                 self.array_indices.insert(index, key.clone());
             } else {
                 self.string_insertion_order.push(key.clone());
-                let exact_key = JsString::from(&key);
-                if let Some(order) = self.exact_string_insertion_order.as_mut() {
-                    order.push(exact_key.clone());
-                }
-                if let Some(order) = self.baseline_string_key_order.as_mut()
-                    && !order.iter().any(|candidate| candidate == &exact_key)
-                {
-                    order.push(exact_key);
+                if let Some(sidecars) = self.sidecars.as_deref_mut() {
+                    let exact_key = JsString::from(&key);
+                    if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
+                        order.push(exact_key.clone());
+                    }
+                    if let Some(order) = sidecars.baseline_string_key_order.as_mut()
+                        && !order.iter().any(|candidate| candidate == &exact_key)
+                    {
+                        order.push(exact_key);
+                    }
                 }
             }
         }
@@ -320,19 +376,22 @@ impl<V> OrderedStringMap<V> {
 
     /// Return the number of exact data entries, including exact-only keys.
     pub fn exact_len(&self) -> usize {
-        self.by_key.len() + self.exact_only_by_key.len()
+        self.by_key.len() + self.exact_only_by_key().map_or(0, ExactPropertyMap::len)
     }
 
     /// Return whether the exact data carrier has no entries.
     pub fn exact_is_empty(&self) -> bool {
-        self.by_key.is_empty() && self.exact_only_by_key.is_empty()
+        self.by_key.is_empty() && self.exact_only_is_empty()
     }
 
     /// Return a shared value for an exact key.
     pub fn get_exact(&self, key: &JsString) -> Option<&V> {
         match key.as_str() {
             Some(key) => self.by_key.get(key),
-            None => self.exact_only_by_key.get(key),
+            None => self
+                .sidecars
+                .as_deref()
+                .and_then(|sidecars| sidecars.exact_only_by_key.get(key)),
         }
     }
 
@@ -340,7 +399,10 @@ impl<V> OrderedStringMap<V> {
     pub fn get_exact_mut(&mut self, key: &JsString) -> Option<&mut V> {
         match key.as_str() {
             Some(key) => self.by_key.get_mut(key),
-            None => self.exact_only_by_key.get_mut(key),
+            None => self
+                .sidecars
+                .as_deref_mut()
+                .and_then(|sidecars| sidecars.exact_only_by_key.get_mut(key)),
         }
     }
 
@@ -348,7 +410,9 @@ impl<V> OrderedStringMap<V> {
     pub fn contains_exact_key(&self, key: &JsString) -> bool {
         match key.as_str() {
             Some(key) => self.by_key.contains_key(key),
-            None => self.exact_only_by_key.contains_key(key),
+            None => self
+                .exact_only_by_key()
+                .is_some_and(|exact_only| exact_only.contains_key(key)),
         }
     }
 
@@ -357,33 +421,43 @@ impl<V> OrderedStringMap<V> {
         if let Some(key) = key.as_str() {
             return self.insert(key.to_string(), value);
         }
-        if !self.exact_only_by_key.contains_key(&key) {
-            let order = self.exact_string_insertion_order.get_or_insert_with(|| {
-                self.string_insertion_order
-                    .iter()
-                    .map(JsString::from)
-                    .collect()
-            });
+        if !self.contains_exact_key(&key) {
+            let initial_order = self
+                .sidecars()
+                .is_none_or(|sidecars| sidecars.exact_string_insertion_order.is_none())
+                .then(|| {
+                    self.string_insertion_order
+                        .iter()
+                        .map(JsString::from)
+                        .collect::<Vec<_>>()
+                });
+            let sidecars = self.sidecars.get_or_insert_with(Box::default);
+            if let Some(initial_order) = initial_order {
+                sidecars.exact_string_insertion_order = Some(initial_order);
+            }
+            let order = sidecars
+                .exact_string_insertion_order
+                .as_mut()
+                .expect("exact insertion order was just initialized");
             order.push(key.clone());
-            match self.baseline_string_key_order.as_mut() {
+            match sidecars.baseline_string_key_order.as_mut() {
                 Some(order) if !order.iter().any(|candidate| candidate == &key) => {
                     order.push(key.clone());
                 }
                 None => {
-                    self.baseline_string_key_order = Some(order.clone());
+                    sidecars.baseline_string_key_order = Some(order.clone());
                 }
                 Some(_) => {}
             }
         }
-        self.exact_only_by_key.insert(key, value)
+        self.sidecars_mut().exact_only_by_key.insert(key, value)
     }
 
     /// Return all exact data keys in ES string-key order.
     pub fn exact_keys(&self) -> Vec<JsString> {
         let array_indices = self.array_indices.values().map(JsString::from);
         let ordinary = self
-            .exact_string_insertion_order
-            .as_ref()
+            .exact_string_insertion_order()
             .map_or_else(
                 || {
                     self.string_insertion_order
@@ -391,7 +465,7 @@ impl<V> OrderedStringMap<V> {
                         .map(JsString::from)
                         .collect::<Vec<_>>()
                 },
-                |order| order.clone(),
+                <[JsString]>::to_vec,
             )
             .into_iter()
             .filter(|key| self.contains_exact_key(key));
@@ -417,7 +491,11 @@ impl<V> OrderedStringMap<V> {
     /// Borrow every data value without allocating or imposing observable
     /// property order. Used by seed validation and other whole-carrier scans.
     pub fn all_data_values(&self) -> impl Iterator<Item = &V> {
-        self.by_key.values().chain(self.exact_only_by_key.values())
+        self.by_key.values().chain(
+            self.exact_only_by_key()
+                .into_iter()
+                .flat_map(ExactPropertyMap::values),
+        )
     }
 
     /// Borrow well-formed data entries in deterministic storage order.
@@ -427,7 +505,9 @@ impl<V> OrderedStringMap<V> {
 
     /// Borrow exact-only data entries in deterministic storage order.
     pub fn exact_only_data_entries(&self) -> impl Iterator<Item = (&JsString, &V)> {
-        self.exact_only_by_key.iter()
+        self.exact_only_by_key()
+            .into_iter()
+            .flat_map(ExactPropertyMap::iter)
     }
 
     /// Drop exact-key ordering metadata in place after the final exact-only
@@ -439,16 +519,22 @@ impl<V> OrderedStringMap<V> {
     /// sidecars to remain allocated after the final exact-only string leaves.
     /// Exact string accessors still do require that chronology.
     pub fn normalize_data_only_exact_sidecars(&mut self) -> bool {
-        if !self.exact_only_by_key.is_empty() || !self.baseline_exact_string_accessors.is_empty() {
+        let Some(sidecars) = self.sidecars.as_deref_mut() else {
+            return true;
+        };
+        if !sidecars.exact_only_by_key.is_empty()
+            || !sidecars.baseline_exact_string_accessors.is_empty()
+        {
             return false;
         }
-        self.exact_string_insertion_order = None;
-        self.baseline_string_key_order = None;
+        sidecars.exact_string_insertion_order = None;
+        sidecars.baseline_string_key_order = None;
         true
     }
 
     pub(crate) fn exact_string_insertion_order(&self) -> Option<&[JsString]> {
-        self.exact_string_insertion_order.as_deref()
+        self.sidecars()
+            .and_then(|sidecars| sidecars.exact_string_insertion_order.as_deref())
     }
 
     /// Return the ordinary-string creation position for `key`.
@@ -467,7 +553,7 @@ impl<V> OrderedStringMap<V> {
         if exact_canonical_array_index(key).is_some() || !self.contains_exact_key(key) {
             return None;
         }
-        match &self.exact_string_insertion_order {
+        match self.exact_string_insertion_order() {
             Some(order) => order.iter().position(|candidate| candidate == key),
             None => key
                 .as_str()
@@ -485,7 +571,7 @@ impl<V> OrderedStringMap<V> {
         if self.contains_exact_key(&key) || exact_canonical_array_index(&key).is_some() {
             return self.insert_exact(key, value);
         }
-        if self.exact_string_insertion_order.is_none()
+        if self.exact_string_insertion_order().is_none()
             && let Some(text) = key.as_str()
         {
             let position = position.min(self.string_insertion_order.len());
@@ -493,12 +579,20 @@ impl<V> OrderedStringMap<V> {
                 .insert(position, text.to_string());
             return self.by_key.insert(text.to_string(), value);
         }
-        let order = self.exact_string_insertion_order.get_or_insert_with(|| {
+        let initial_order = self.exact_string_insertion_order().is_none().then(|| {
             self.string_insertion_order
                 .iter()
                 .map(JsString::from)
-                .collect()
+                .collect::<Vec<_>>()
         });
+        let sidecars = self.sidecars.get_or_insert_with(Box::default);
+        if let Some(initial_order) = initial_order {
+            sidecars.exact_string_insertion_order = Some(initial_order);
+        }
+        let order = sidecars
+            .exact_string_insertion_order
+            .as_mut()
+            .expect("exact insertion order was just initialized");
         let position = position.min(order.len());
         order.insert(position, key.clone());
         if let Some(text) = key.as_str() {
@@ -510,7 +604,7 @@ impl<V> OrderedStringMap<V> {
                 .insert(legacy_position, text.to_string());
             self.by_key.insert(text.to_string(), value)
         } else {
-            self.exact_only_by_key.insert(key, value)
+            sidecars.exact_only_by_key.insert(key, value)
         }
     }
 
@@ -537,15 +631,17 @@ impl<V> OrderedStringMap<V> {
             } else {
                 self.string_insertion_order
                     .retain(|candidate| candidate != key);
-                if let Some(order) = self.exact_string_insertion_order.as_mut() {
-                    let exact_key = JsString::from(key);
-                    order.retain(|candidate| candidate != &exact_key);
-                }
-                if remove_from_baseline_order
-                    && let Some(order) = self.baseline_string_key_order.as_mut()
-                {
-                    let exact_key = JsString::from(key);
-                    order.retain(|candidate| candidate != &exact_key);
+                if let Some(sidecars) = self.sidecars.as_deref_mut() {
+                    if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
+                        let exact_key = JsString::from(key);
+                        order.retain(|candidate| candidate != &exact_key);
+                    }
+                    if remove_from_baseline_order
+                        && let Some(order) = sidecars.baseline_string_key_order.as_mut()
+                    {
+                        let exact_key = JsString::from(key);
+                        order.retain(|candidate| candidate != &exact_key);
+                    }
                 }
             }
         }
@@ -560,18 +656,19 @@ impl<V> OrderedStringMap<V> {
         if let Some(key) = key.as_str() {
             return self.remove_internal(key, remove_from_baseline_order);
         }
-        let removed = self.exact_only_by_key.remove(key);
+        let sidecars = self.sidecars.as_deref_mut()?;
+        let removed = sidecars.exact_only_by_key.remove(key);
         if removed.is_some() {
-            if let Some(order) = self.exact_string_insertion_order.as_mut() {
+            if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
                 order.retain(|candidate| candidate != key);
             }
             if remove_from_baseline_order
-                && let Some(order) = self.baseline_string_key_order.as_mut()
+                && let Some(order) = sidecars.baseline_string_key_order.as_mut()
             {
                 order.retain(|candidate| candidate != key);
             }
-            if self.exact_only_by_key.is_empty() {
-                self.exact_string_insertion_order = None;
+            if sidecars.exact_only_by_key.is_empty() {
+                sidecars.exact_string_insertion_order = None;
             }
         }
         removed
@@ -579,17 +676,25 @@ impl<V> OrderedStringMap<V> {
 
     /// Remove all data entries and their ordering state.
     pub fn clear(&mut self) {
-        let removed_keys = self.exact_keys().into_iter().collect::<BTreeSet<_>>();
+        let removed_keys = self
+            .sidecars()
+            .is_some_and(|sidecars| sidecars.baseline_string_key_order.is_some())
+            .then(|| self.exact_keys().into_iter().collect::<BTreeSet<_>>());
         self.by_key.clear();
-        self.exact_only_by_key = ExactPropertyMap::new();
         self.array_indices.clear();
         self.string_insertion_order.clear();
-        self.exact_string_insertion_order = None;
-        if let Some(order) = self.baseline_string_key_order.as_mut() {
-            order.retain(|key| !removed_keys.contains(key));
+        if let Some(sidecars) = self.sidecars.as_deref_mut() {
+            sidecars.exact_only_by_key = ExactPropertyMap::new();
+            sidecars.exact_string_insertion_order = None;
+            if let (Some(order), Some(removed_keys)) = (
+                sidecars.baseline_string_key_order.as_mut(),
+                removed_keys.as_ref(),
+            ) {
+                order.retain(|key| !removed_keys.contains(key));
+            }
+            sidecars.baseline_symbol_properties.clear();
+            sidecars.baseline_symbol_key_order.clear();
         }
-        self.baseline_symbol_properties.clear();
-        self.baseline_symbol_key_order.clear();
     }
 
     /// Retain only entries for which `keep` returns true.
@@ -603,19 +708,22 @@ impl<V> OrderedStringMap<V> {
         self.array_indices.retain(|_, key| by_key.contains_key(key));
         self.string_insertion_order
             .retain(|key| by_key.contains_key(key));
-        if let Some(order) = self.exact_string_insertion_order.as_mut() {
-            order.retain(|key| {
-                key.as_str().map_or_else(
-                    || self.exact_only_by_key.contains_key(key),
-                    |key| by_key.contains_key(key),
-                )
-            });
-        }
-        if let Some(order) = self.baseline_string_key_order.as_mut() {
-            order.retain(|key| {
-                key.as_str()
-                    .is_none_or(|key| !old_keys.contains(key) || by_key.contains_key(key))
-            });
+        if let Some(sidecars) = self.sidecars.as_deref_mut() {
+            let exact_only_by_key = &sidecars.exact_only_by_key;
+            if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
+                order.retain(|key| {
+                    key.as_str().map_or_else(
+                        || exact_only_by_key.contains_key(key),
+                        |key| by_key.contains_key(key),
+                    )
+                });
+            }
+            if let Some(order) = sidecars.baseline_string_key_order.as_mut() {
+                order.retain(|key| {
+                    key.as_str()
+                        .is_none_or(|key| !old_keys.contains(key) || by_key.contains_key(key))
+                });
+            }
         }
     }
 
@@ -643,28 +751,41 @@ impl<V> OrderedStringMap<V> {
     }
 
     pub(crate) fn baseline_string_key_order(&self) -> Option<&[JsString]> {
-        self.baseline_string_key_order.as_deref()
+        self.sidecars()
+            .and_then(|sidecars| sidecars.baseline_string_key_order.as_deref())
     }
 
     pub(crate) fn baseline_string_key_order_mut(&mut self) -> Option<&mut Vec<JsString>> {
-        self.baseline_string_key_order.as_mut()
+        self.sidecars
+            .as_deref_mut()
+            .and_then(|sidecars| sidecars.baseline_string_key_order.as_mut())
     }
 
     pub(crate) fn set_baseline_string_key_order(&mut self, order: Option<Vec<JsString>>) {
-        self.baseline_string_key_order = order;
+        match order {
+            Some(order) => self.sidecars_mut().baseline_string_key_order = Some(order),
+            None => {
+                if let Some(sidecars) = self.sidecars.as_deref_mut() {
+                    sidecars.baseline_string_key_order = None;
+                }
+            }
+        }
     }
 
     pub(crate) fn baseline_exact_string_accessor(
         &self,
         key: &JsString,
     ) -> Option<&BaselineStringAccessor<V>> {
-        self.baseline_exact_string_accessors.get(key)
+        self.sidecars()
+            .and_then(|sidecars| sidecars.baseline_exact_string_accessors.get(key))
     }
 
     pub(crate) fn baseline_exact_string_accessors(
         &self,
     ) -> impl Iterator<Item = (&JsString, &BaselineStringAccessor<V>)> {
-        self.baseline_exact_string_accessors.iter()
+        self.sidecars()
+            .into_iter()
+            .flat_map(|sidecars| sidecars.baseline_exact_string_accessors.iter())
     }
 
     pub(crate) fn insert_baseline_exact_string_accessor(
@@ -676,20 +797,25 @@ impl<V> OrderedStringMap<V> {
             !key.is_well_formed(),
             "exact-only accessor sidecar requires a non-well-formed key"
         );
-        self.baseline_exact_string_accessors.insert(key, accessor)
+        self.sidecars_mut()
+            .baseline_exact_string_accessors
+            .insert(key, accessor)
     }
 
     pub(crate) fn remove_baseline_exact_string_accessor(
         &mut self,
         key: &JsString,
     ) -> Option<BaselineStringAccessor<V>> {
-        self.baseline_exact_string_accessors.remove(key)
+        self.sidecars
+            .as_deref_mut()
+            .and_then(|sidecars| sidecars.baseline_exact_string_accessors.remove(key))
     }
 
     /// Return one executable-baseline Symbol property by exact identity.
     #[doc(hidden)]
     pub fn baseline_symbol_property(&self, symbol: SymbolId) -> Option<&BaselineSymbolProperty<V>> {
-        self.baseline_symbol_properties.get(&symbol)
+        self.sidecars()
+            .and_then(|sidecars| sidecars.baseline_symbol_properties.get(&symbol))
     }
 
     /// Iterate executable-baseline Symbol properties in creation order.
@@ -697,17 +823,24 @@ impl<V> OrderedStringMap<V> {
     pub fn baseline_symbol_properties(
         &self,
     ) -> impl Iterator<Item = (SymbolId, &BaselineSymbolProperty<V>)> {
-        self.baseline_symbol_key_order.iter().filter_map(|symbol| {
-            self.baseline_symbol_properties
-                .get(symbol)
-                .map(|property| (*symbol, property))
+        self.sidecars().into_iter().flat_map(|sidecars| {
+            sidecars
+                .baseline_symbol_key_order
+                .iter()
+                .filter_map(|symbol| {
+                    sidecars
+                        .baseline_symbol_properties
+                        .get(symbol)
+                        .map(|property| (*symbol, property))
+                })
         })
     }
 
     /// Return executable-baseline Symbol identities in creation order.
     #[doc(hidden)]
     pub fn baseline_symbol_key_order(&self) -> &[SymbolId] {
-        &self.baseline_symbol_key_order
+        self.sidecars()
+            .map_or(&[], |sidecars| &sidecars.baseline_symbol_key_order)
     }
 
     /// Insert or replace a typed Symbol property. Replacing an existing
@@ -719,10 +852,11 @@ impl<V> OrderedStringMap<V> {
         symbol: SymbolId,
         property: BaselineSymbolProperty<V>,
     ) -> Option<BaselineSymbolProperty<V>> {
-        if !self.baseline_symbol_properties.contains_key(&symbol) {
-            self.baseline_symbol_key_order.push(symbol);
+        let sidecars = self.sidecars_mut();
+        if !sidecars.baseline_symbol_properties.contains_key(&symbol) {
+            sidecars.baseline_symbol_key_order.push(symbol);
         }
-        self.baseline_symbol_properties.insert(symbol, property)
+        sidecars.baseline_symbol_properties.insert(symbol, property)
     }
 
     /// Remove one executable-baseline Symbol property by exact identity.
@@ -731,9 +865,11 @@ impl<V> OrderedStringMap<V> {
         &mut self,
         symbol: SymbolId,
     ) -> Option<BaselineSymbolProperty<V>> {
-        let removed = self.baseline_symbol_properties.remove(&symbol);
+        let sidecars = self.sidecars.as_deref_mut()?;
+        let removed = sidecars.baseline_symbol_properties.remove(&symbol);
         if removed.is_some() {
-            self.baseline_symbol_key_order
+            sidecars
+                .baseline_symbol_key_order
                 .retain(|candidate| *candidate != symbol);
         }
         removed
@@ -747,11 +883,13 @@ impl<V> OrderedStringMap<V> {
         property: BaselineSymbolProperty<V>,
         position: usize,
     ) {
-        self.baseline_symbol_properties.insert(symbol, property);
-        self.baseline_symbol_key_order
+        let sidecars = self.sidecars_mut();
+        sidecars.baseline_symbol_properties.insert(symbol, property);
+        sidecars
+            .baseline_symbol_key_order
             .retain(|candidate| *candidate != symbol);
-        let position = position.min(self.baseline_symbol_key_order.len());
-        self.baseline_symbol_key_order.insert(position, symbol);
+        let position = position.min(sidecars.baseline_symbol_key_order.len());
+        sidecars.baseline_symbol_key_order.insert(position, symbol);
     }
 }
 
@@ -773,7 +911,7 @@ impl<V> FromIterator<(String, V)> for OrderedStringMap<V> {
 
 impl<V: Serialize> Serialize for OrderedStringMap<V> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if self.exact_only_by_key.is_empty() {
+        if self.exact_only_is_empty() {
             use serde::ser::SerializeMap as _;
 
             let mut map = serializer.serialize_map(Some(self.len()))?;

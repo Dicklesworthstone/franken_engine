@@ -5991,6 +5991,25 @@ fn lower_statement_to_ir1_with_flow(
                         binding_lookup,
                         binding_index,
                     );
+                    // ES2020 13.15.7: each entry to a catch clause creates a
+                    // fresh environment for its parameter and body
+                    // declarations. Inside a loop, a closure made in one
+                    // iteration keeps that iteration's catch bindings, as it
+                    // does a block's (`Statement::Block`); they all shared one
+                    // cell and saw the last value. Only captured bindings lower
+                    // to a runtime operation.
+                    let fresh_per_entry = control_flow.continue_label.is_some();
+                    if fresh_per_entry {
+                        for (name, kind) in direct_block_lexical_kinds(&handler.body.body) {
+                            if let Some(&binding_id) = binding_lookup.get(name.as_str()) {
+                                ops.push(Ir1Op::CreatePerIterationBinding {
+                                    binding_id,
+                                    kind,
+                                    preserve_state: false,
+                                });
+                            }
+                        }
+                    }
                     if let Some(param) = &handler.parameter {
                         binding_lookup.insert(lexical_binding_sentinel(param), 0);
                         let bid = alloc_shadow_binding(
@@ -6002,6 +6021,15 @@ fn lower_statement_to_ir1_with_flow(
                             BindingKind::Let,
                         );
                         binding_lookup.insert(capture_origin_sentinel(param), bid);
+                        if fresh_per_entry {
+                            // The fresh cell copies the current state, so the
+                            // store below behaves as before, into a new cell.
+                            ops.push(Ir1Op::CreatePerIterationBinding {
+                                binding_id: bid,
+                                kind: BindingKind::Let,
+                                preserve_state: true,
+                            });
+                        }
                         ops.push(Ir1Op::StoreBinding { binding_id: bid });
                         ops.push(Ir1Op::Pop);
                     } else {

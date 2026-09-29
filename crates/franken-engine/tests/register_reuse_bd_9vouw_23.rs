@@ -763,12 +763,13 @@ fn calls_inside_one_expression_release_their_temporaries() {
         ),
     ] {
         let top_level = fixed_lane_value(&format!("{prelude} {expression};"));
-        if name == "method_calls" {
+        if matches!(name, "method_calls" | "builtin_calls") {
             // Ratchet, known limit (bd-9vouw.86): at top level each member
-            // call's receiver is a synthetic binding in a pinned register
-            // until the statement ends, so 60 of them in one top-level
-            // expression still overflow. The function-body case below reuses
-            // one register per call. Promote to `node` when fixed.
+            // call's receiver (`o` in `o.m(1)`, `Math` in `Math.max(1, 2)`)
+            // is a synthetic binding in a pinned register until the
+            // statement ends, so 60 of them in one top-level expression
+            // still overflow. The function-body case below reuses one
+            // register per call. Promote to `node` when fixed.
             assert_eq!(
                 top_level, "ERROR: register 256 out of bounds (max 256)",
                 "{name} at top level: promote the bd-9vouw.86 ratchet to Node's value"

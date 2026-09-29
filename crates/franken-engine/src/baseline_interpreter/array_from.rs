@@ -14,6 +14,34 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        self.array_from_impl(module, args, false)
+    }
+
+    /// IterableToList + CreateArrayFromList for builtins that take an
+    /// iterable (AggregateError's `errors`, bd-9vouw.75): Array.from of the
+    /// first argument without a mapper, where a non-iterable source is a
+    /// TypeError instead of an array-like.
+    pub(super) fn iterable_to_array(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        self.array_from_impl(
+            module,
+            RegRange {
+                start: args.start,
+                count: args.count.min(1),
+            },
+            true,
+        )
+    }
+
+    fn array_from_impl(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+        iterable_only: bool,
+    ) -> Result<Value, InterpreterError> {
         let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let mapper = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let this_arg = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
@@ -54,7 +82,7 @@ impl InterpreterCore {
             for value in [&source, &mapper, &this_arg] {
                 self.json_observe_reachable_value(value)?;
             }
-            self.array_from_source(module, source, &mapper, &this_arg)
+            self.array_from_source(module, source, &mapper, &this_arg, iterable_only)
         })();
         if let Err(error) = self.observe_scoped_callback_result() {
             outcome = Err(error);
@@ -105,6 +133,7 @@ impl InterpreterCore {
         source: Value,
         mapper: &Value,
         this_arg: &Value,
+        iterable_only: bool,
     ) -> Result<Value, InterpreterError> {
         let backing = match &source {
             value if value.is_object_like() => {
@@ -170,6 +199,11 @@ impl InterpreterCore {
                 // An explicitly nullish @@iterator instead selects ToObject's
                 // indexed UTF-16 code-unit view, including split surrogates.
                 self.array_from_string(module, &text, mapper, this_arg, target, !explicit_iterator)?
+            } else if iterable_only {
+                return Err(InterpreterError::TypeError {
+                    expected: "iterable".to_string(),
+                    got: source.type_name().to_string(),
+                });
             } else {
                 self.array_from_array_like(module, source, backing, mapper, this_arg, target)?
             }

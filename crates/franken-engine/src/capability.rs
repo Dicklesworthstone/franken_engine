@@ -239,6 +239,7 @@ fn internal_builtin_meta_tag(tag: &str) -> bool {
                 | "SyntaxError"
                 | "EvalError"
                 | "URIError"
+                | "AggregateError"
                 | "EventEmitter"
         )
 }

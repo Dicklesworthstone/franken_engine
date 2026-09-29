@@ -3042,6 +3042,8 @@ pub enum BuiltinFunctionKind {
     /// Identity coercion for `String.prototype.toString`. Writable's honest
     /// string-chunk representation exercises this ordinary primitive method.
     StringToString,
+    /// `String.prototype.valueOf` (ES2020 21.1.3.30): thisStringValue(this).
+    StringValueOf,
     /// `Writable.prototype.write()` over the engine-owned Writable kernel
     /// (bd-fw7zd). These variants remain at the true enum tail because the
     /// discriminant participates in deterministic register hashing.
@@ -4926,6 +4928,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringIsWellFormed => "isWellFormed",
             BuiltinFunctionKind::StringToWellFormed => "toWellFormed",
             BuiltinFunctionKind::StringToString => "toString",
+            BuiltinFunctionKind::StringValueOf => "valueOf",
             BuiltinFunctionKind::SetTimeout => "setTimeout",
             BuiltinFunctionKind::ClearTimeout => "clearTimeout",
             BuiltinFunctionKind::SetInterval => "setInterval",
@@ -5133,6 +5136,7 @@ impl BuiltinFunction {
             | K::StringSubstring
             | K::StringToLowerCase
             | K::StringToString
+            | K::StringValueOf
             | K::StringToUpperCase
             | K::StringToWellFormed
             | K::StringTrim
@@ -37561,7 +37565,7 @@ impl InterpreterCore {
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 Ok(Value::str(value.as_utf8_projection()))
             }
-            BuiltinFunctionKind::StringToString => {
+            BuiltinFunctionKind::StringToString | BuiltinFunctionKind::StringValueOf => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 match receiver {
                     Value::Str(value) => Ok(Value::Str(value)),
@@ -53523,6 +53527,9 @@ impl InterpreterCore {
             "padEnd" => Value::BuiltinFunction(BuiltinFunction::string_pad_end()),
             "isWellFormed" => Value::BuiltinFunction(BuiltinFunction::string_is_well_formed()),
             "toWellFormed" => Value::BuiltinFunction(BuiltinFunction::string_to_well_formed()),
+            "valueOf" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StringValueOf,
+            )),
             "toString" => Value::BuiltinFunction(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StringToString,
             )),
@@ -57151,6 +57158,11 @@ impl InterpreterCore {
             return Ok(value);
         };
         if !self.object_has_user_conversion_hook(object_id) {
+            // A primitive wrapper's valueOf answers its primitive
+            // (bd-9vouw.73); the operator applies ToNumber to it.
+            if let Some(primitive) = self.primitive_wrapper_value(object_id) {
+                return Ok(primitive.clone());
+            }
             if let Some(object) = self.heap.get(object_id.0 as usize)
                 && matches!(object.properties.get("__type"), Some(Value::Str(kind)) if kind.as_ref() == "Date")
             {
@@ -57184,6 +57196,15 @@ impl InterpreterCore {
             return Ok(value);
         };
         if !self.object_has_user_conversion_hook(object_id) {
+            // A primitive wrapper: valueOf answers its primitive (hint
+            // "default"); toString answers its string form (hint "string").
+            if let Some(primitive) = self.primitive_wrapper_value(object_id) {
+                return Ok(match primitive {
+                    Value::Str(_) => primitive.clone(),
+                    other if prefer_string => Value::str(self.value_to_string(other)),
+                    other => other.clone(),
+                });
+            }
             return self.engine_object_string_primitive(module, object_id);
         }
         let hint = if prefer_string { "string" } else { "default" };

@@ -309,3 +309,28 @@ fn callback_recursion_keeps_the_native_run_loop_cap() {
         "1,000 callback levels must fail closed: {message}"
     );
 }
+
+/// A stack overflow is a catchable RangeError with V8's message, as in every
+/// JS engine; an async function whose body overflows rejects with it. The
+/// depth limit still holds afterwards: catching one unwinds the frames it
+/// counted.
+#[test]
+fn stack_overflow_is_a_catchable_range_error() {
+    assert_output(
+        &format!(
+            "{D}
+             let caught = 'none';
+             try {{ d(1e6); }} catch (e) {{
+               caught = [e instanceof RangeError, e.name, e.message].join('|');
+             }}
+             log(caught, d(100));
+             function r(n) {{ return r(n + 1); }}
+             async function b() {{ r(0); }}
+             b().catch((e) => log('rejected', e instanceof RangeError));"
+        ),
+        &[
+            "true|RangeError|Maximum call stack size exceeded 100",
+            "rejected true",
+        ],
+    );
+}

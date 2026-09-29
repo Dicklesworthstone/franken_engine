@@ -598,14 +598,13 @@ impl InterpreterCore {
             // the native work/memory guards have had a chance to run.
             self.json_observe_reachable_value(&source)?;
             let source_label = self.json_parse_context_label()?;
-            let limit = self.apply_argument_limit(&target);
             let (arguments, argument_labels, selection_label) = self.observable_apply_arguments(
                 module,
                 source,
                 source_label,
                 &mut reserved,
                 false,
-                limit,
+                MAX_CALL_ARGUMENTS,
             )?;
             labels.arguments = IsolatedArgumentLabels::Exact(argument_labels);
             self.json_observe_label(selection_label)?;

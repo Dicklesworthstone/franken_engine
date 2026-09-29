@@ -19025,6 +19025,8 @@ fn typed_array_constructor_capability(
         "Uint16Array" => Some("builtin:Uint16Array"),
         "Float32Array" => Some("builtin:Float32Array"),
         "Float64Array" => Some("builtin:Float64Array"),
+        "BigInt64Array" => Some("builtin:BigInt64Array"),
+        "BigUint64Array" => Some("builtin:BigUint64Array"),
         _ => None,
     }
 }
@@ -19061,6 +19063,8 @@ fn known_constructor_typeof_name(name: &str) -> bool {
             | "Uint16Array"
             | "Float32Array"
             | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
             | "DataView"
     )
 }
@@ -28803,6 +28807,8 @@ fn hostcall_exception_is_operand_derived(
         | "builtin:Uint16Array"
         | "builtin:Float32Array"
         | "builtin:Float64Array"
+        | "builtin:BigInt64Array"
+        | "builtin:BigUint64Array"
         | "builtin:DataView" => inputs.iter().all(|value| value.shape.is_closed()),
         // Unshadowed native Error-family constructors are finite engine
         // implementations for primitive arguments: stringifying a primitive
@@ -30404,6 +30410,8 @@ fn simulate_ir2_flow_labels(
                             | "builtin:Uint16Array"
                             | "builtin:Float32Array"
                             | "builtin:Float64Array"
+                            | "builtin:BigInt64Array"
+                            | "builtin:BigUint64Array"
                             | "builtin:DataView"
                     )
                 {

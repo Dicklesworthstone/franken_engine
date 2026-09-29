@@ -847,7 +847,38 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     lower_ir0_to_ir1_with_authenticated_runtime_bindings(ir0, ambient_grant, false)
 }
 
+/// Native stack for IR0 -> IR1 lowering, which recurses over the syntax tree
+/// as the parser does: a base plus an allowance per nesting level of the
+/// parser's default recursion budget (256 levels). A debug build spends about
+/// 270 KiB per level (`lower_expression_to_ir1_inner` alone has a 180 KiB
+/// frame), so lowering on the caller's stack aborted the process from a 2 MiB
+/// thread, Rust's default for spawned and test threads, on two nested for-of
+/// loops inside a function expression. Pages are committed on demand.
+const LOWERING_STACK_BASE_BYTES: usize = 4 * 1024 * 1024;
+const LOWERING_STACK_BYTES_PER_NESTING_LEVEL: usize = 320 * 1024;
+const LOWERING_STACK_NESTING_LEVELS: usize = 256;
+
 fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
+    ir0: &Ir0Module,
+    ambient_grant: AmbientAuthorityGrant,
+    authenticated_commonjs_runtime_bindings: bool,
+) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
+    crate::parser::run_with_provisioned_stack(
+        "franken-engine-lower",
+        LOWERING_STACK_BASE_BYTES.saturating_add(
+            LOWERING_STACK_NESTING_LEVELS.saturating_mul(LOWERING_STACK_BYTES_PER_NESTING_LEVEL),
+        ),
+        || {
+            lower_ir0_to_ir1_on_current_stack(
+                ir0,
+                ambient_grant,
+                authenticated_commonjs_runtime_bindings,
+            )
+        },
+    )
+}
+
+fn lower_ir0_to_ir1_on_current_stack(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
     authenticated_commonjs_runtime_bindings: bool,
@@ -35846,6 +35877,27 @@ mod tests {
 
     /// bd-1xl17.d helper: lower script-goal `source` to its IR1 op stream (the
     /// non-Module analogue of [`lower_esm_source_ops`]).
+    /// Lowering runs on its own provisioned stack, so a small caller thread
+    /// can lower a deeply nested program. On the caller's stack, one level of
+    /// function expression plus for-of takes about 270 KiB of debug-build
+    /// lowering frames, more than this 256 KiB thread has.
+    #[test]
+    fn nested_program_lowers_from_a_small_caller_thread() {
+        let mut body = String::from("out.push(1);");
+        for depth in 0..12 {
+            body = format!("(function () {{ for (const x{depth} of [1]) {{ {body} }} }})();");
+        }
+        let source = format!("var out = []; {body}");
+        let ops = std::thread::Builder::new()
+            .name("small-caller".into())
+            .stack_size(256 * 1024)
+            .spawn(move || lower_script_source_ops(&source, "nested_small_caller.js").len())
+            .expect("spawn small caller thread")
+            .join()
+            .expect("lowering must not overflow the caller's stack");
+        assert!(ops > 0);
+    }
+
     fn lower_script_source_ops(source: &str, label: &str) -> Vec<Ir1Op> {
         let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
         let ir0 = Ir0Module::from_syntax_tree(tree, label);

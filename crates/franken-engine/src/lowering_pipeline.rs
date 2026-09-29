@@ -8196,7 +8196,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             Ir1Op::BinaryOp { operator } => {
                 let rhs = pop_lowering_value(&mut value_stack)?;
                 let lhs = pop_lowering_value(&mut value_stack)?;
-                let dst = alloc_register(&mut register_cursor);
+                let dst = pure_op_result_register(
+                    &[lhs, rhs],
+                    &value_stack,
+                    statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers)),
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 let instr = match operator {
                     BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
                     BinaryOperator::Subtract => Ir3Instruction::Sub { dst, lhs, rhs },
@@ -8233,7 +8241,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             }
             Ir1Op::UnaryOp { operator } => {
                 let src = pop_lowering_value(&mut value_stack)?;
-                let dst = alloc_register(&mut register_cursor);
+                let dst = pure_op_result_register(
+                    &[src],
+                    &value_stack,
+                    statement_register_floor
+                        .max(pinned_register_high)
+                        .max(live_status_register_ceiling(&live_status_registers)),
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 let instr = match operator {
                     UnaryOperator::Negate => Ir3Instruction::UnaryNeg { dst, src },
                     UnaryOperator::BitwiseNot => Ir3Instruction::BitNot { dst, src },
@@ -9562,17 +9578,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             .collect::<BTreeSet<_>>();
         runtime_local_binding_ids.extend(child_capture_id_to_name.keys().copied());
         // bd-9vouw.23: every other local pins a frame register for the whole
-        // body, and a lazily pinned binding lands above its own initializer
-        // temporary, so each costs up to two registers. A body with more
-        // locals than a frame holds failed at runtime ("register N out of
-        // bounds"). Bundler output wraps a whole program in one such
-        // function. Past a budget, the earliest-numbered locals get their
-        // registers up front (below every temporary, as at the root) and the
-        // rest take the identity-named function-entry scope route that
-        // captured and TDZ locals already use. Only bindings reached through
-        // plain load/store/assign/declare ops are candidates. Per-iteration
-        // loop bindings always stay in registers. Bodies within the budget
-        // keep their lowering unchanged.
+        // body. A body with more locals than a frame holds failed at runtime
+        // ("register N out of bounds"); bundler output wraps a whole program
+        // in one such function. Past a budget, the earliest-numbered locals
+        // stay in registers and the rest take the identity-named
+        // function-entry scope route that captured and TDZ locals already
+        // use. Only bindings reached through plain load/store/assign/declare
+        // ops are candidates. Per-iteration loop bindings always stay in
+        // registers.
         let per_iteration_binding_ids = body_ops
             .iter()
             .filter_map(|op| match op {
@@ -9683,13 +9696,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             host_io_exception_provenance,
             &program_label_ceiling,
         )?;
-        if spills_locals {
-            for binding_id in &register_local_ids {
-                if !spilled_local_names.contains_key(binding_id) {
-                    fn_binding_regs
-                        .entry(*binding_id)
-                        .or_insert_with(|| alloc_register(&mut fn_reg));
-                }
+        // bd-9vouw.23: register-resident locals get their registers up front,
+        // below every temporary, as root bindings do. Pinned lazily, a local
+        // landed at the high-water mark so that it could never have held a
+        // rewound temporary; each declaration after a wide statement (call
+        // arguments, literals) then raised the floor that later statements
+        // rewind to. minimist 1.2.8's parser function (about 30 locals)
+        // reached a 589-register frame that way.
+        for binding_id in &register_local_ids {
+            if !spilled_local_names.contains_key(binding_id) {
+                fn_binding_regs
+                    .entry(*binding_id)
+                    .or_insert_with(|| alloc_register(&mut fn_reg));
             }
         }
         // bd-9vouw.23: the same statement-boundary register reuse as the
@@ -9957,14 +9975,30 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 Ir1Op::BinaryOp { operator } => {
                     let rhs = pop_lowering_value(&mut fn_value_stack)?;
                     let lhs = pop_lowering_value(&mut fn_value_stack)?;
-                    let dst = alloc_register(&mut fn_reg);
+                    let dst = pure_op_result_register(
+                        &[lhs, rhs],
+                        &fn_value_stack,
+                        fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     let instr = lower_binary_op_to_ir3(*operator, dst, lhs, rhs);
                     ir3.instructions.push(instr);
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::UnaryOp { operator } => {
                     let operand = pop_lowering_value(&mut fn_value_stack)?;
-                    let dst = alloc_register(&mut fn_reg);
+                    let dst = pure_op_result_register(
+                        &[operand],
+                        &fn_value_stack,
+                        fn_statement_register_floor
+                            .max(fn_pinned_register_high)
+                            .max(live_status_register_ceiling(&fn_live_status_registers)),
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     let instr = lower_unary_op_to_ir3(*operator, dst, operand);
                     ir3.instructions.push(instr);
                     fn_value_stack.push(dst);
@@ -30407,6 +30441,39 @@ fn alloc_pinned_register(cursor: &mut Reg, pinned_high: &mut Reg, high_water: &m
     *pinned_high = (*pinned_high).max(*cursor);
     *high_water = (*high_water).max(*cursor);
     register
+}
+
+/// bd-9vouw.23: the destination register of a pure operation (a binary or
+/// unary operator). Its lowest operand that is a dead statement temporary
+/// takes the result, and the registers above it are released: every such
+/// IR3 operation reads its operands before it writes its destination. A
+/// chain `c0 + c1 + ... + cN` then needs one temporary instead of N, which
+/// is what overflowed the 256-register frame in large functions. A popped
+/// operand is a dead temporary when it sits at or above `reserved_below`
+/// (the statement floor, pinned bindings and live name-status slots) and no
+/// value still on the stack sits at or above it.
+fn pure_op_result_register(
+    operands: &[Reg],
+    value_stack: &[Reg],
+    reserved_below: Reg,
+    cursor: &mut Reg,
+    high_water: &mut Reg,
+) -> Reg {
+    let reusable = operands
+        .iter()
+        .copied()
+        .filter(|&operand| {
+            operand >= reserved_below && value_stack.iter().all(|&live| live < operand)
+        })
+        .min();
+    match reusable {
+        Some(register) => {
+            *high_water = (*high_water).max(*cursor);
+            *cursor = (*cursor).min(register.saturating_add(1));
+            register
+        }
+        None => alloc_register(cursor),
+    }
 }
 
 fn scope_binding_ids_are_unique(scopes: &[ScopeNode]) -> bool {

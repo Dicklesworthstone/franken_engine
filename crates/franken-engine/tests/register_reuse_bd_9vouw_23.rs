@@ -344,3 +344,92 @@ fn large_literals_fit_the_fixed_256_register_lane() {
         "1:101:99"
     );
 }
+
+/// A pure operator's result lands in its dead operand temporary, so one long
+/// expression no longer takes a register per operator. A function with 130
+/// locals returning `c0 + ... + c129` failed with "register 256 out of
+/// bounds (max 256)", as did 130 locals with a 100-term mixed chain. Operand
+/// order, `+`'s ToPrimitive calls on objects held in reused temporaries, and
+/// a throw in the middle of a chain are unchanged. Expected strings are Node
+/// v22.2.0's.
+#[test]
+fn long_operator_chains_reuse_their_temporaries() {
+    let locals: String = (0..130).map(|i| format!("var c{i} = {i}; ")).collect();
+    let sum: Vec<String> = (0..130).map(|i| format!("c{i}")).collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "function f() {{ {locals}return {}; }} f();",
+            sum.join(" + ")
+        )),
+        "8385"
+    );
+    // Chains stay under the parser's 256-level recursion budget.
+    let mixed: Vec<String> = (0..100)
+        .map(|i| format!("-(c{} * 2) + ~{i}", i % 130))
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "function g() {{ {locals}return {}; }} g();",
+            mixed.join(" + ")
+        )),
+        "-14950"
+    );
+    assert_eq!(
+        fixed_lane_value(
+            "var log = ''; var a = { valueOf() { log += 'a'; return 1; } }; \
+             var b = { valueOf() { log += 'b'; return 2; } }; \
+             '' + ([a][0] + [b][0]) + ([b][0] + [a][0]) + (typeof a) + !b + ':' + log;"
+        ),
+        "33objectfalse:abba"
+    );
+    assert_eq!(
+        fixed_lane_value("var x = 5; '' + !!-~x + (typeof typeof x) + (void x) + (-(-x));"),
+        "truestringundefined5"
+    );
+    assert_eq!(
+        fixed_lane_value(
+            "var r; try { r = 1 + 2 * (function () { throw 7; })() + 3; } \
+             catch (e) { r = 'caught ' + e; } r;"
+        ),
+        "caught 7"
+    );
+    let chain = |terms: usize| format!("let q = 3;\n{};", vec!["q"; terms].join(" + "));
+    assert_eq!(fixed_lane_value(&chain(200)), "600");
+    assert_eq!(
+        main_frame_size(&chain(200)),
+        main_frame_size(&chain(3)),
+        "a longer chain must not need more registers"
+    );
+}
+
+/// Function-body locals take their registers up front, below every
+/// temporary. Pinned lazily, each `var` landed at the high-water mark left by
+/// the widest statement before it, raising the floor every later statement
+/// rewinds to. Thirty locals each declared after a ten-argument call failed
+/// with "register 256 out of bounds (max 256)". minimist 1.2.8's parser
+/// function, with about 30 locals, reached a 589-register frame that way.
+/// Hoisted reads before the first write still see `undefined`. Expected
+/// strings are Node v22.2.0's.
+#[test]
+fn locals_declared_after_wide_statements_do_not_ratchet_the_frame() {
+    let body: String = (0..30)
+        .map(|i| format!("g(a, a, a, a, a, a, a, a, a, a); var v{i} = {i}; "))
+        .collect();
+    let sum: Vec<String> = (0..30).map(|i| format!("v{i}")).collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "function g() {{ return arguments.length; }} \
+             function f(a) {{ {body}return {}; }} f(1);",
+            sum.join(" + ")
+        )),
+        "435"
+    );
+    assert_eq!(
+        fixed_lane_value(
+            "function h() { var early = typeof late; g(1, 2, 3, 4, 5, 6, 7, 8); \
+             var late = 5; return early + ':' + late; } \
+             function g() { return 0; } h();"
+        ),
+        "undefined:5"
+    );
+}

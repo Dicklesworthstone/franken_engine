@@ -1,5 +1,6 @@
 ---
 source: crates/franken-engine/src/lowering_pipeline.rs
+assertion_line: 45404
 expression: actual_json
 ---
 {
@@ -303,14 +304,14 @@ expression: actual_json
       },
       {
         "Add": {
-          "dst": 4,
+          "dst": 2,
           "lhs": 2,
           "rhs": 3
         }
       },
       {
         "Return": {
-          "value": 4
+          "value": 2
         }
       }
     ],
@@ -326,7 +327,7 @@ expression: actual_json
       {
         "entry": 4,
         "arity": 2,
-        "frame_size": 5,
+        "frame_size": 4,
         "name": "add",
         "is_generator": false
       }
@@ -396,7 +397,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:0bd42df7d694f6cefac160235253d91e098be045a331ad00b4ddf9c5d2f8e94a",
-      "output_hash": "sha256:84e5cb26cd3f6e8582d7b13fcbf7f6214c83cd8e357f2497e31389921fd0a79f",
+      "output_hash": "sha256:4579ef02b8a0fbd5a4faf272856593f138ba36a40568e6d64da470b7e63aab82",
       "rollback_token": "sha256:0bd42df7d694f6cefac160235253d91e098be045a331ad00b4ddf9c5d2f8e94a",
       "invariant_checks": [
         {
@@ -440,7 +441,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:0bd42df7d694f6cefac160235253d91e098be045a331ad00b4ddf9c5d2f8e94a",
-      "output_hash": "sha256:84e5cb26cd3f6e8582d7b13fcbf7f6214c83cd8e357f2497e31389921fd0a79f",
+      "output_hash": "sha256:4579ef02b8a0fbd5a4faf272856593f138ba36a40568e6d64da470b7e63aab82",
       "input_op_count": 3,
       "output_op_count": 8
     }

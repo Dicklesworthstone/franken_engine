@@ -2179,10 +2179,14 @@ fn append_source_fragment(
     );
 }
 
+/// Join the next physical line onto a logical line with one separator
+/// character: a space, or `'\n'` where the break must survive (see
+/// `merge_logical_lines`).
 fn append_normalized_separator(
     logical_text: &mut String,
     source_boundaries: &mut Vec<usize>,
     following_source_offset: usize,
+    separator: char,
 ) {
     debug_assert_eq!(
         source_boundaries.len(),
@@ -2193,7 +2197,8 @@ fn append_normalized_separator(
             .last()
             .is_some_and(|offset| *offset <= following_source_offset)
     );
-    logical_text.push(' ');
+    debug_assert!(matches!(separator, ' ' | '\n'));
+    logical_text.push(separator);
     source_boundaries.push(following_source_offset);
 }
 
@@ -2262,6 +2267,21 @@ fn merge_logical_lines_slash_starts_regex(
     }
 }
 
+/// Whether a physical line ends with a `++`/`--` update operator (an even
+/// run of `+` or `-`). That completes the expression, so `i++` followed by a
+/// new line is two statements; a line ending in a binary `+`/`-` (`a +`,
+/// `a+++`) continues onto the next.
+fn line_ends_with_update_operator(line: &str) -> bool {
+    let tail = line.trim_end();
+    let Some(last) = tail.chars().last() else {
+        return false;
+    };
+    if !matches!(last, '+' | '-') {
+        return false;
+    }
+    tail.chars().rev().take_while(|ch| *ch == last).count() % 2 == 0
+}
+
 fn merge_logical_lines_requires_continuation(
     last_significant: Option<char>,
     trailing_identifier: &str,
@@ -2273,9 +2293,12 @@ fn merge_logical_lines_requires_continuation(
         return true;
     }
 
+    // `return` and `yield` are restricted productions (ES2020 11.9.1): a line
+    // break after them ends the statement (`return\n  x` returns undefined),
+    // so they do not continue onto the next line.
     matches!(
         trailing_identifier,
-        "return" | "throw" | "typeof" | "void" | "delete" | "yield" | "case"
+        "throw" | "typeof" | "void" | "delete" | "case"
     )
 }
 
@@ -2830,6 +2853,13 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut brace_depth: i64 = 0;
     let mut paren_depth: i64 = 0;
     let mut bracket_depth: i64 = 0;
+    // The open brackets, innermost last. A line break whose innermost
+    // enclosing bracket is `{` (a block, function, class or object body)
+    // stays a line break in the merged text: the body is merged again when
+    // it is parsed, and its statements need their breaks for ASI
+    // (`function f() {\n let a = 1\n let b = 2\n}`). Inside parentheses or
+    // brackets a break is only whitespace and becomes a space.
+    let mut open_brackets: Vec<char> = Vec::new();
     let mut quotes = QuoteState::default();
     let mut in_block_comment = false;
     let mut in_regex_literal = false;
@@ -2950,6 +2980,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     &mut current_text,
                     &mut current_source_boundaries,
                     trimmed_source_offset,
+                    ' ',
                 );
                 append_source_fragment(
                     &mut current_text,
@@ -2990,10 +3021,17 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     let leading = line.len().saturating_sub(fragment.len());
                     (fragment, byte_offset.saturating_add(leading))
                 };
+                let separator =
+                    if !preserve_leading_whitespace && open_brackets.last() == Some(&'{') {
+                        '\n'
+                    } else {
+                        ' '
+                    };
                 append_normalized_separator(
                     &mut current_text,
                     &mut current_source_boundaries,
                     fragment_source_offset,
+                    separator,
                 );
                 append_source_fragment(
                     &mut current_text,
@@ -3069,31 +3107,37 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 }
                 '{' => {
                     brace_depth += 1;
+                    open_brackets.push('{');
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
                 '}' => {
                     brace_depth -= 1;
+                    open_brackets.pop();
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
                 '(' => {
                     paren_depth += 1;
+                    open_brackets.push('(');
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
                 ')' => {
                     paren_depth -= 1;
+                    open_brackets.pop();
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
                 '[' => {
                     bracket_depth += 1;
+                    open_brackets.push('[');
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
                 ']' => {
                     bracket_depth -= 1;
+                    open_brackets.pop();
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
@@ -3140,10 +3184,11 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             && !in_block_comment
             && !in_regex_literal;
         if balanced
-            && !merge_logical_lines_requires_continuation(
-                last_significant,
-                trailing_identifier.as_str(),
-            )
+            && (line_ends_with_update_operator(line)
+                || !merge_logical_lines_requires_continuation(
+                    last_significant,
+                    trailing_identifier.as_str(),
+                ))
         {
             if let Some(logical_line) = logical_line_from_buffer(
                 &current_text,
@@ -3156,6 +3201,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             brace_depth = 0;
             paren_depth = 0;
             bracket_depth = 0;
+            open_brackets.clear();
             escaped = false;
             in_regex_literal = false;
             regex_in_char_class = false;

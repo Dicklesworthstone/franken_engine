@@ -1,10 +1,11 @@
-//! `Proxy` is a first-class constructor value.
+//! `Symbol` is a first-class value.
 //!
-//! `new Proxy(t, h)` worked (intercepted at lowering), but a bare `Proxy`
-//! had no binding: `typeof Proxy` was "undefined", so libraries that feature
-//! detect it (immer, Vue, MobX) took their no-Proxy paths, and the
-//! constructor could not be stored or passed. Expected lines are Node
-//! v22.2.0's for the same programs (`node -e`).
+//! `Symbol('x')`, `Symbol.for` and `Symbol.iterator` worked (intercepted at
+//! lowering), but a bare `Symbol` had no binding, so `const S = Symbol`
+//! failed with "Symbol is not defined", `sym.constructor` was missing, and
+//! the `root.Symbol` aliases libraries take at load (lodash) could not be
+//! built. `new Symbol()` and `new BigInt(1)` are TypeErrors, as in Node.
+//! Expected lines are Node v22.2.0's for the same programs (`node -e`).
 
 #![forbid(unsafe_code)]
 
@@ -18,36 +19,31 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserS
 /// (name, program, Node v22.2.0 output)
 const CASES: &[(&str, &str, &str)] = &[
     (
-        "typeof_and_alias",
-        r#"const P = Proxy; const p = new P({}, { get: (t, k) => k + '!' }); console.log(typeof Proxy, p.hello, typeof P);"#,
-        "function hello! function",
+        "symbol_as_value",
+        r#"const S = Symbol; const a = S('x'); console.log(typeof S, typeof a, a.toString(), S === Symbol, S.iterator === Symbol.iterator, typeof S.for);"#,
+        "function symbol Symbol(x) true true function",
     ),
     (
-        "name_length_prototype",
-        r#"console.log(Proxy.name, Proxy.length, Proxy.prototype);"#,
-        "Proxy 2 undefined",
+        "symbol_constructor_and_statics",
+        r#"console.log(Symbol('q').constructor === Symbol, Symbol.name, Symbol.length, typeof Symbol.asyncIterator, Symbol.keyFor(Symbol.for('r')));"#,
+        "true Symbol 0 symbol r",
     ),
     (
-        "revocable_through_alias",
-        r#"const P = Proxy; const r = P.revocable({ a: 1 }, {}); console.log(r.proxy.a); r.revoke(); let threw = false; try { r.proxy.a; } catch (e) { threw = e instanceof TypeError; } console.log(threw);"#,
-        "1\ntrue",
+        "not_constructible",
+        r#"const r = []; for (const f of [() => new Symbol(), () => new BigInt(1)]) { try { f(); r.push('no throw'); } catch (e) { r.push(e instanceof TypeError); } } console.log(r.join());"#,
+        "true,true",
     ),
     (
-        "feature_detection",
-        r#"const hasProxy = typeof Proxy !== 'undefined' && typeof Proxy === 'function'; console.log(hasProxy ? 'proxy' : 'fallback');"#,
-        "proxy",
-    ),
-    (
-        "called_without_new_throws",
-        r#"try { Proxy({}, {}); console.log('no throw'); } catch (e) { console.log(e instanceof TypeError); }"#,
-        "true",
+        "root_symbol_alias",
+        r#"var root = { Symbol: Symbol }; var Sym = root.Symbol; var symToStringTag = Sym ? Sym.toStringTag : undefined; console.log(typeof symToStringTag, Object.prototype.toString.call({ [symToStringTag]: 'Tagged' }));"#,
+        "symbol [object Tagged]",
     ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
-                label: "proxy.js".into(),
+                label: "symbol.js".into(),
                 text: source.into(),
             },
             ParseGoal::Script,
@@ -55,8 +51,8 @@ fn console_output(source: &str) -> Result<String, String> {
         )
         .map_err(|error| format!("parse: {error:?}"))?;
     let module = lower_ir0_to_ir3(
-        &Ir0Module::from_syntax_tree(tree, "proxy.js"),
-        &LoweringContext::new("proxy-trace", "proxy-decision", "proxy-policy"),
+        &Ir0Module::from_syntax_tree(tree, "symbol.js"),
+        &LoweringContext::new("symbol-trace", "symbol-decision", "symbol-policy"),
     )
     .map_err(|error| format!("lower: {error:?}"))?
     .ir3;
@@ -69,7 +65,7 @@ fn console_output(source: &str) -> Result<String, String> {
     ]
     .into_iter()
     .collect();
-    let mut core = InterpreterCore::new(config, "proxy");
+    let mut core = InterpreterCore::new(config, "symbol");
     let result = core.execute(&module);
     assert_eq!(
         core.estimated_memory_bytes(),
@@ -86,7 +82,7 @@ fn console_output(source: &str) -> Result<String, String> {
 }
 
 #[test]
-fn proxy_constructor_value_matches_node() {
+fn symbol_constructor_value_matches_node() {
     let mut mismatches = Vec::new();
     for (name, source, node) in CASES {
         match console_output(source) {

@@ -51297,21 +51297,66 @@ impl InterpreterCore {
                     0,
                 )?))
             }
-            Value::Function(_) => Ok(Value::Bool(matches!(
-                key.as_str(),
-                Some("name" | "prototype")
-            ))),
-            Value::Closure(closure_id) => Ok(Value::Bool(
-                if self.closure_method_metadata.contains_key(&closure_id) {
-                    key.as_str() == Some("name")
-                } else {
-                    matches!(key.as_str(), Some("name" | "prototype"))
-                },
+            ref function if function.is_callable() => Ok(Value::Bool(
+                self.function_has_property(module, function, &key)?,
             )),
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
                 got: other.type_name().to_string(),
             }),
+        }
+    }
+
+    /// [[HasProperty]] of a function value (ES2020 7.3.11), for `in`: its own
+    /// properties (its backing object once that exists, else the standard
+    /// name/length/prototype), a builtin constructor's statics, what its
+    /// backing object inherits (a class's parent statics), then
+    /// Function.prototype: its builtins, then the allocated object and its
+    /// chain up to Object.prototype.
+    fn function_has_property(
+        &mut self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        let own = match self.function_own_property_exists(module, function, key)? {
+            Some(own) => own,
+            None => self.object_own_property_contains(function, &key.value()),
+        };
+        if own {
+            return Ok(true);
+        }
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && let Some(name) = key.as_str()
+            && !matches!(
+                self.standard_constructor_property(builtin, name)?,
+                Value::Undefined
+            )
+        {
+            return Ok(true);
+        }
+        if let Some(backing) = self.function_own_property_object(module, function)?
+            && self.proxy_aware_has_runtime_property(Some(module), backing, key, 0)?
+        {
+            return Ok(true);
+        }
+        if key
+            .as_str()
+            .is_some_and(|name| Self::function_prototype_property(name).is_some())
+        {
+            return Ok(true);
+        }
+        if let Some(&function_prototype) = self.builtin_prototypes.get("Function") {
+            return self.proxy_aware_has_runtime_property(Some(module), function_prototype, key, 0);
+        }
+        match self.builtin_prototypes.get("Object").copied() {
+            Some(object_prototype) => {
+                self.proxy_aware_has_runtime_property(Some(module), object_prototype, key, 0)
+            }
+            None => Ok(key.as_str().is_some_and(|name| {
+                name == "constructor" || Self::object_prototype_method(name).is_some()
+            })),
         }
     }
 

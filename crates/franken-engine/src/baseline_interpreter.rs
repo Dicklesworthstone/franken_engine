@@ -6879,6 +6879,12 @@ pub struct HeapObject {
     /// `[key0, initializer0, key1, initializer1, ...]` in declaration order,
     /// reachable only through this slot.
     class_fields: Option<Value>,
+    /// The [[BooleanData]], [[NumberData]], [[StringData]], [[BigIntData]] or
+    /// [[SymbolData]] of a primitive wrapper object (`Object(1)`,
+    /// `new String('a')`; ES2020 19.3.4, 20.1.4, 21.1.4, 20.2.4, 19.4.4).
+    /// Engine-private: guest code reaches it only through the prototype
+    /// methods' thisXValue and the conversions.
+    primitive_value: Option<Value>,
     /// Whether this object was created as a true Array instance.
     pub is_array: bool,
     /// Cached dense length for arrays (None = sparse, compute from properties).
@@ -7054,6 +7060,7 @@ impl Serialize for HeapObject {
                 + usize::from(!self.property_labels.is_empty())
                 + usize::from(!self.property_attributes.is_empty())
                 + usize::from(self.class_fields.is_some())
+                + usize::from(self.primitive_value.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -7089,6 +7096,9 @@ impl Serialize for HeapObject {
         }
         if let Some(fields) = &self.class_fields {
             object.serialize_field("class_fields", fields)?;
+        }
+        if let Some(value) = &self.primitive_value {
+            object.serialize_field("primitive_value", value)?;
         }
         if !self.property_labels.is_empty() {
             object.serialize_field("property_labels", &self.property_labels)?;
@@ -7151,6 +7161,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_default_derived_constructor: bool,
             #[serde(default)]
             class_fields: Option<Value>,
+            #[serde(default)]
+            primitive_value: Option<Value>,
             #[serde(default)]
             property_labels: OrderedStringMap<Label>,
             #[serde(default)]
@@ -7236,6 +7248,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_derived_constructor: wire.is_derived_constructor,
             is_default_derived_constructor: wire.is_default_derived_constructor,
             class_fields: wire.class_fields,
+            primitive_value: wire.primitive_value,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -7308,6 +7321,10 @@ pub(crate) fn heap_object_contains_symbols(object: &HeapObject) -> bool {
             .is_some_and(value_contains_symbol)
         || object
             .class_fields
+            .as_ref()
+            .is_some_and(value_contains_symbol)
+        || object
+            .primitive_value
             .as_ref()
             .is_some_and(value_contains_symbol)
         || object
@@ -7384,6 +7401,9 @@ fn validate_heap_symbol_references(
     }
     if let Some(fields) = &object.class_fields {
         validate_symbol_value(state, fields)?;
+    }
+    if let Some(value) = &object.primitive_value {
+        validate_symbol_value(state, value)?;
     }
     for value in object.properties.all_data_values() {
         validate_symbol_value(state, value)?;
@@ -37187,9 +37207,14 @@ impl InterpreterCore {
         module: &Ir3Module,
         builtin: &BuiltinFunction,
         args: RegRange,
-        receiver: Option<Value>,
+        mut receiver: Option<Value>,
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
+        // ES2020 thisXValue: a Number/String/Boolean/BigInt/Symbol prototype
+        // builtin called on a wrapper object works on its primitive.
+        if let Some(Value::Object(object_id)) = receiver {
+            receiver = Some(self.this_primitive_receiver(builtin, object_id));
+        }
         match builtin.kind {
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
@@ -48866,8 +48891,20 @@ impl InterpreterCore {
                                 ),
                             });
                         }
-                        let result =
+                        let mut result =
                             self.dispatch_builtin_function(module, builtin, args, None, None)?;
+                        // ES2020 20.1.1.1, 21.1.1.1, 19.3.1.1: `new Number(x)`,
+                        // `new String(x)` and `new Boolean(x)` wrap the converted
+                        // primitive (bd-9vouw.48); called, they return it.
+                        if builtin.kind == BuiltinFunctionKind::StandardConstructor
+                            && matches!(
+                                Self::standard_constructor_name(builtin),
+                                Ok("Number" | "String" | "Boolean")
+                            )
+                            && !result.is_object_like()
+                        {
+                            result = Value::Object(self.alloc_primitive_wrapper(result)?);
+                        }
                         // IFC: a `new Builtin(...)` result derives entirely from
                         // its argument registers, so the dst label is the join
                         // of the arg labels — same contract as the `Call`
@@ -54273,6 +54310,9 @@ impl InterpreterCore {
                 if let Some(value) = self.typed_array_indexed_get_property(id, key)? {
                     return Ok(value);
                 }
+                if let Some(value) = self.string_wrapper_own_property(id, key) {
+                    return Ok(value);
+                }
             }
             let (property_value, next_prototype) = {
                 let object = self
@@ -55116,6 +55156,12 @@ impl InterpreterCore {
         let Value::Object(object_id) = receiver else {
             return false;
         };
+        if property_key
+            .as_str()
+            .is_some_and(|key| self.string_wrapper_own_property(*object_id, key).is_some())
+        {
+            return true;
+        }
         if let RuntimePropertyKey::String(key) = &property_key
             && !self.writable_own_runtime_property_visible(*object_id, key)
         {
@@ -55217,6 +55263,14 @@ impl InterpreterCore {
         };
         if object.is_array {
             return "Array";
+        }
+        match &object.primitive_value {
+            Some(Value::Bool(_)) => return "Boolean",
+            Some(Value::Int(_) | Value::Float(_)) => return "Number",
+            Some(Value::Str(_)) => return "String",
+            Some(Value::BigInt(_)) => return "BigInt",
+            Some(Value::Symbol(_)) => return "Symbol",
+            _ => {}
         }
         if let Some(view) = &object.typed_array {
             return view.kind.type_name();
@@ -56221,6 +56275,9 @@ impl InterpreterCore {
                     }
                     if let Some(value) = self.typed_array_indexed_get_property(id, name)? {
                         return Ok(!matches!(value, Value::Undefined));
+                    }
+                    if self.string_wrapper_own_property(id, name).is_some() {
+                        return Ok(true);
                     }
                 }
                 let object = self
@@ -84277,6 +84334,11 @@ impl InterpreterCore {
     /// (`value_to_string`, `+` concatenation, template literals) so error
     /// stringification is uniform and deterministic.
     fn object_to_coerced_string(&self, id: ObjectId) -> String {
+        // A wrapper converts through its prototype's toString/valueOf, which
+        // answer the wrapped primitive (bd-9vouw.73).
+        if let Some(value) = self.primitive_wrapper_value(id) {
+            return self.value_to_string(value);
+        }
         // Node Buffers implement a UTF-8 `toString` primitive hint. The net
         // stream corpus exercises that through ordinary `text += chunk`
         // coercion, not an explicit method call (bd-7qwej).
@@ -85405,6 +85467,13 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .class_fields
+                    .as_ref()
+                    .map(Self::estimate_execution_seed_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                object
+                    .primitive_value
                     .as_ref()
                     .map(Self::estimate_execution_seed_value_bytes)
                     .unwrap_or(0),
@@ -86704,6 +86773,13 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .class_fields
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                object
+                    .primitive_value
                     .as_ref()
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
@@ -89838,6 +89914,72 @@ impl InterpreterCore {
 
     /// Replace an object's engine-private class field list, charging the
     /// slot's footprint.
+    /// The primitive a wrapper object holds, if `object_id` is one.
+    fn primitive_wrapper_value(&self, object_id: ObjectId) -> Option<&Value> {
+        self.heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.primitive_value.as_ref())
+    }
+
+    /// ES2020 7.1.18 ToObject of a primitive: a new wrapper object whose
+    /// prototype is its type's (bd-9vouw.73).
+    fn alloc_primitive_wrapper(&mut self, value: Value) -> Result<ObjectId, InterpreterError> {
+        let type_name = match &value {
+            Value::Bool(_) => "Boolean",
+            Value::Int(_) | Value::Float(_) => "Number",
+            Value::Str(_) => "String",
+            Value::BigInt(_) => "BigInt",
+            Value::Symbol(_) => "Symbol",
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "primitive to wrap".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let prototype = self.ensure_builtin_prototype(type_name)?;
+        let object_id = self.alloc_object_with_prototype(Some(prototype))?;
+        let index = object_id.0 as usize;
+        let previous = self
+            .heap
+            .get(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let previous_bytes = Self::estimate_heap_object_bytes(previous);
+        let mut projected = previous.clone();
+        projected.primitive_value = Some(value);
+        let projected_bytes = Self::estimate_heap_object_bytes(&projected);
+        self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
+        self.mutate_heap(|heap| heap[index] = projected);
+        Ok(object_id)
+    }
+
+    /// ES2020 thisNumberValue / thisStringValue / thisBooleanValue /
+    /// thisBigIntValue / thisSymbolValue: a builtin of Number.prototype
+    /// (String, Boolean, BigInt, Symbol) called on a wrapper object of that
+    /// type works on the wrapped primitive.
+    fn this_primitive_receiver(&self, builtin: &BuiltinFunction, object_id: ObjectId) -> Value {
+        match (
+            builtin.spec_owner(),
+            self.primitive_wrapper_value(object_id),
+        ) {
+            (Some("Number.prototype"), Some(value @ (Value::Int(_) | Value::Float(_))))
+            | (Some("String.prototype"), Some(value @ Value::Str(_)))
+            | (Some("Boolean.prototype"), Some(value @ Value::Bool(_)))
+            | (Some("BigInt.prototype"), Some(value @ Value::BigInt(_)))
+            | (Some("Symbol.prototype"), Some(value @ Value::Symbol(_))) => value.clone(),
+            _ => Value::Object(object_id),
+        }
+    }
+
+    /// A String wrapper's own properties: its code-unit indices and `length`
+    /// (ES2020 9.4.3 String exotic objects).
+    fn string_wrapper_own_property(&self, object_id: ObjectId, key: &str) -> Option<Value> {
+        match self.primitive_wrapper_value(object_id) {
+            Some(Value::Str(text)) => Self::string_own_property_value(text, key),
+            _ => None,
+        }
+    }
+
     fn set_class_fields_slot(
         &mut self,
         object_id: ObjectId,
@@ -90886,11 +91028,8 @@ impl InterpreterCore {
                         Ok(Value::Object(self.alloc_object_with_prototype(None)?))
                     }
                     Some(value) if value.is_object_like() => Ok(value),
-                    Some(value) => Err(InterpreterError::TypeError {
-                        expected: "object argument (boxing primitives through Object() is not supported yet)"
-                            .to_string(),
-                        got: value.type_name().to_string(),
-                    }),
+                    // ES2020 19.1.1.1 step 3: ToObject(value).
+                    Some(value) => Ok(Value::Object(self.alloc_primitive_wrapper(value)?)),
                 }
             }
             "BigInt" => {

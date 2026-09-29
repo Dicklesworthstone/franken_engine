@@ -48347,6 +48347,28 @@ impl InterpreterCore {
                                 )?;
                             }
                             let this_val = Value::Object(this_id);
+                            // ES2022 [[Construct]] step 6.b: a base class's
+                            // instance fields initialize on the new object
+                            // before its constructor body and parameter
+                            // initializers run (derived classes do this in
+                            // `enter_constructor_call`, once super() returns).
+                            let fields_initialized = self
+                                .class_instance_field_list(module, &callee_val)
+                                .and_then(|fields| match fields {
+                                    Some(fields) => self.run_class_field_initializers(
+                                        module,
+                                        this_val.clone(),
+                                        this_id,
+                                        &fields,
+                                    ),
+                                    None => Ok(()),
+                                });
+                            if let Err(error) = fields_initialized {
+                                match self.route_isolated_explicit_throw(module, error)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
 
                             let mut arg_vals = Vec::new();
                             let mut arg_labels = Vec::new();

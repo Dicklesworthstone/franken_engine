@@ -5301,7 +5301,7 @@ impl BuiltinFunction {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 32] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 33] = [
     "Object",
     "Array",
     "Number",
@@ -5337,6 +5337,10 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 32] = [
     "Float64Array",
     "BigInt64Array",
     "BigUint64Array",
+    // `new Proxy(t, h)` stays intercepted at lowering; the binding makes
+    // `typeof Proxy` "function" (library feature detection) and the
+    // constructor usable as a value. Proxy has no `prototype`.
+    "Proxy",
 ];
 
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
@@ -91201,11 +91205,13 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let name = Self::standard_constructor_name(builtin)?;
         Ok(match key {
+            // ES2020 26.2.2: the Proxy constructor has no `prototype`.
+            "prototype" if name == "Proxy" => Value::Undefined,
             "prototype" => Value::Object(self.ensure_builtin_prototype(name)?),
             "name" => Value::str(name),
             "length" => Value::Int(match name {
                 "Map" | "Set" | "WeakMap" | "WeakSet" => 0,
-                "RegExp" | "AggregateError" => 2,
+                "RegExp" | "AggregateError" | "Proxy" => 2,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
             }),
@@ -91270,6 +91276,7 @@ impl InterpreterCore {
             "Boolean" => self.dispatch_builtin_hostcall("builtin:Boolean", args, Some(module)),
             "Map" => self.dispatch_builtin_hostcall("builtin:Map", args, Some(module)),
             "Set" => self.dispatch_builtin_hostcall("builtin:Set", args, Some(module)),
+            "Proxy" => self.dispatch_builtin_hostcall("builtin:Proxy", args, Some(module)),
             // `RegExp(p, f)` and `new R(p, f)` through a RegExp value: the same
             // hostcall `new RegExp(...)` and literals lower to.
             "RegExp" => self.dispatch_builtin_hostcall("builtin:RegExp", args, Some(module)),

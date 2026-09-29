@@ -478,6 +478,15 @@ const TASK_CHURN_CASES: &[(&str, &str)] = &[
          if (n === 3) { clearInterval(t); console.log(n, s); } }, 0);",
         "3 150000",
     ),
+    // bd-9vouw.50: a 300-element spread stages its tail out of band. The rest
+    // array and `arguments` built from it must survive the collections the
+    // resumed body runs before it reads them.
+    (
+        "async function f(...r) { await null; let s = 0; for (let i = 0; i < 300000; i++) { \
+         const g = { i }; s += g.i & 1; } return s + r.length + r[299].v + arguments[298].v; } \
+         f(...Array.from({ length: 300 }, (_, v) => ({ v }))).then(t => console.log(t));",
+        "150897",
+    ),
 ];
 
 #[test]

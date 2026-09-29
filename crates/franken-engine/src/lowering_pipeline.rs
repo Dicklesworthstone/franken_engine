@@ -18869,6 +18869,7 @@ fn builtin_constructor_name(
         "SyntaxError" => Some("SyntaxError"),
         "EvalError" => Some("EvalError"),
         "URIError" => Some("URIError"),
+        "AggregateError" => Some("AggregateError"),
         _ => None,
     }
 }
@@ -18899,6 +18900,7 @@ fn error_constructor_capability(
         "SyntaxError" => Some("builtin:SyntaxError"),
         "EvalError" => Some("builtin:EvalError"),
         "URIError" => Some("builtin:URIError"),
+        "AggregateError" => Some("builtin:AggregateError"),
         // `new RegExp(pattern, flags)`: the same lowering-only constructor
         // hostcall that RegExp literals use.
         "RegExp" => Some("builtin:RegExp"),

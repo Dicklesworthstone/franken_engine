@@ -1393,6 +1393,7 @@ impl InterpreterCore {
             native_run_loop_depth: _,
             stacked_register_frame_clear_width_high_water: _,
             top_level_compact_tier1: _,
+            entry_frame_widths: _,
             catch_frames: _,
             pending_exception,
             pending_exception_label: _,

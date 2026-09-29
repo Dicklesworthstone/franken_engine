@@ -51530,11 +51530,22 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         value: Value,
     ) -> Result<Value, InterpreterError> {
-        let Value::Object(object_id) = value else {
-            return Err(InterpreterError::TypeError {
-                expected: "object".to_string(),
-                got: value.type_name().to_string(),
-            });
+        // ES2020 13.7.5.12 ForIn/OfHeadEvaluation: ToObject(exprValue), so a
+        // primitive enumerates its wrapper (a string its indices).
+        let object_id = match value {
+            Value::Object(object_id) => object_id,
+            primitive @ (Value::Str(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Bool(_)
+            | Value::BigInt(_)
+            | Value::Symbol(_)) => self.alloc_primitive_wrapper(primitive)?,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
         };
 
         let keys = self.collect_for_in_keys(module, object_id)?;
@@ -77316,16 +77327,23 @@ impl InterpreterCore {
                         Ok(Value::Object(array_id))
                     }
                     Value::Object(obj_id) => {
-                        let key_values = self
-                            .heap
-                            .get(obj_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
-                            .properties
-                            .exact_keys()
+                        let mut key_values = self
+                            .wrapped_string_index_entries(obj_id)?
                             .into_iter()
-                            .filter(|key| self.ordinary_own_string_key_is_enumerable(obj_id, key))
-                            .map(Value::Str)
+                            .map(|(key, _)| Value::Str(key))
                             .collect::<Vec<_>>();
+                        key_values.extend(
+                            self.heap
+                                .get(obj_id.0 as usize)
+                                .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                                .properties
+                                .exact_keys()
+                                .into_iter()
+                                .filter(|key| {
+                                    self.ordinary_own_string_key_is_enumerable(obj_id, key)
+                                })
+                                .map(Value::Str),
+                        );
                         self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&key_values)?;
                         Ok(Value::Object(array_id))
@@ -77348,6 +77366,15 @@ impl InterpreterCore {
                                 .collect::<Vec<_>>(),
                             None => Vec::new(),
                         };
+                        let array_id = self.alloc_array_from_values(&key_values)?;
+                        Ok(Value::Object(array_id))
+                    }
+                    Value::Str(text) => {
+                        let key_values = self
+                            .string_index_entries(&text)?
+                            .into_iter()
+                            .map(|(key, _)| Value::Str(key))
+                            .collect::<Vec<_>>();
                         let array_id = self.alloc_array_from_values(&key_values)?;
                         Ok(Value::Object(array_id))
                     }
@@ -77390,19 +77417,33 @@ impl InterpreterCore {
                         Ok(Value::Object(array_id))
                     }
                     Value::Object(obj_id) => {
-                        let values = self
-                            .heap
-                            .get(obj_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
-                            .properties
-                            .exact_entries()
+                        let mut values = self
+                            .wrapped_string_index_entries(obj_id)?
                             .into_iter()
-                            .filter(|(key, _)| {
-                                self.ordinary_own_string_key_is_enumerable(obj_id, key)
-                            })
-                            .map(|(_, value)| value.clone())
+                            .map(|(_, value)| value)
                             .collect::<Vec<_>>();
+                        values.extend(
+                            self.heap
+                                .get(obj_id.0 as usize)
+                                .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                                .properties
+                                .exact_entries()
+                                .into_iter()
+                                .filter(|(key, _)| {
+                                    self.ordinary_own_string_key_is_enumerable(obj_id, key)
+                                })
+                                .map(|(_, value)| value.clone()),
+                        );
                         self.join_pending_hostcall_stream_label(obj_id)?;
+                        let array_id = self.alloc_array_from_values(&values)?;
+                        Ok(Value::Object(array_id))
+                    }
+                    Value::Str(text) => {
+                        let values = self
+                            .string_index_entries(&text)?
+                            .into_iter()
+                            .map(|(_, value)| value)
+                            .collect::<Vec<_>>();
                         let array_id = self.alloc_array_from_values(&values)?;
                         Ok(Value::Object(array_id))
                     }
@@ -77447,20 +77488,31 @@ impl InterpreterCore {
                         let array_id = self.alloc_array_from_values(&entry_values)?;
                         Ok(Value::Object(array_id))
                     }
-                    Value::Object(obj_id) => {
-                        let entries = self
-                            .heap
-                            .get(obj_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
-                            .properties
-                            .exact_entries()
-                            .into_iter()
-                            .filter(|(key, _)| {
-                                self.ordinary_own_string_key_is_enumerable(obj_id, key)
-                            })
-                            .map(|(key, value)| (key, value.clone()))
-                            .collect::<Vec<_>>();
-                        self.join_pending_hostcall_stream_label(obj_id)?;
+                    ref value @ (Value::Object(_) | Value::Str(_)) => {
+                        let (obj_id, mut entries) = match value {
+                            Value::Str(text) => (None, self.string_index_entries(text)?),
+                            Value::Object(obj_id) => {
+                                (Some(*obj_id), self.wrapped_string_index_entries(*obj_id)?)
+                            }
+                            _ => unreachable!("matched an object or a string"),
+                        };
+                        if let Some(obj_id) = obj_id {
+                            entries.extend(
+                                self.heap
+                                    .get(obj_id.0 as usize)
+                                    .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                                    .properties
+                                    .exact_entries()
+                                    .into_iter()
+                                    .filter(|(key, _)| {
+                                        self.ordinary_own_string_key_is_enumerable(obj_id, key)
+                                    })
+                                    .map(|(key, value)| (key, value.clone())),
+                            );
+                        }
+                        if let Some(obj_id) = obj_id {
+                            self.join_pending_hostcall_stream_label(obj_id)?;
+                        }
                         let mut entry_values = Vec::with_capacity(entries.len());
 
                         // Set array elements as numeric properties, each containing a [key, value] pair
@@ -88855,6 +88907,11 @@ impl InterpreterCore {
                     }
                 }
             } else {
+                for (key, _) in self.wrapped_string_index_entries(id)? {
+                    if seen.insert(key.clone()) {
+                        keys.push(key);
+                    }
+                }
                 let object = self
                     .heap
                     .get(id.0 as usize)
@@ -90109,6 +90166,42 @@ impl InterpreterCore {
             | (Some("BigInt.prototype"), Some(value @ Value::BigInt(_)))
             | (Some("Symbol.prototype"), Some(value @ Value::Symbol(_))) => value.clone(),
             _ => Value::Object(object_id),
+        }
+    }
+
+    /// A string's enumerable own index properties, which come first in its
+    /// [[OwnPropertyKeys]] (ES2020 9.4.3.3): each index with its code unit.
+    /// The key and value strings are charged before they are built.
+    fn string_index_entries(
+        &self,
+        text: &JsString,
+    ) -> Result<Vec<(JsString, Value)>, InterpreterError> {
+        let length = text.utf16_len();
+        self.check_temporary_memory_budget(
+            u64::try_from(length)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_mul(2) + 24),
+        )?;
+        Ok(text
+            .encode_utf16()
+            .enumerate()
+            .map(|(index, unit)| {
+                (
+                    JsString::from(index.to_string()),
+                    Value::Str(JsString::from_code_units(&[unit])),
+                )
+            })
+            .collect())
+    }
+
+    /// [`Self::string_index_entries`] of a String wrapper; empty otherwise.
+    fn wrapped_string_index_entries(
+        &self,
+        object_id: ObjectId,
+    ) -> Result<Vec<(JsString, Value)>, InterpreterError> {
+        match self.primitive_wrapper_value(object_id) {
+            Some(Value::Str(text)) => self.string_index_entries(text),
+            _ => Ok(Vec::new()),
         }
     }
 

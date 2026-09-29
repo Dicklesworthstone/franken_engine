@@ -37822,8 +37822,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::ArrayToString => {
                 // ES2020 23.1.3.30: Array.prototype.toString invokes the
                 // receiver's `join` if callable (an own override wins), else
-                // the default "," join; arguments are ignored. A non-array
-                // receiver keeps the ordinary object tag.
+                // the default "," join; arguments are ignored. A typed array
+                // inherits %TypedArray%.prototype.join, the same "," join
+                // (22.2.3.29). Any other receiver keeps the ordinary object tag.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 match receiver {
                     Value::Object(arr_id) => {
@@ -37845,11 +37846,14 @@ impl InterpreterCore {
                                 Vec::new(),
                             );
                         }
-                        if self
-                            .heap
-                            .get(arr_id.0 as usize)
-                            .is_some_and(|object| object.is_array)
-                        {
+                        if self.heap.get(arr_id.0 as usize).is_some_and(|object| {
+                            object.is_array
+                                || matches!(
+                                    object.properties.get("__type"),
+                                    Some(Value::Str(tag))
+                                        if TypedArrayKind::from_type_name(tag.as_ref()).is_some()
+                                )
+                        }) {
                             let mut active = BTreeSet::new();
                             Ok(Value::str(self.array_join_observable(
                                 module,

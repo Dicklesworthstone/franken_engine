@@ -322,11 +322,12 @@ pub(crate) fn register_file_slot_limit(max_call_depth: usize, max_registers: usi
         )
 }
 
-/// Longest argument list a vector-variadic builtin (`Math.max`,
-/// `String.fromCharCode`, ...) accepts through spread or `apply`
-/// (bd-9vouw.50). It is still charged to the memory budget before
-/// materializing. Node's own limit comes from its stack, at roughly 10^5.
-const MAX_VECTOR_BUILTIN_ARGUMENTS: u32 = 1 << 17;
+/// Longest argument list a spread call, `apply`, `Reflect.apply` or
+/// `Reflect.construct` accepts (bd-9vouw.50). Arguments past the register
+/// frame are staged out of band ([`ArgumentOverflow`]); the list is still
+/// charged to the memory budget before it is materialized. Node's own limit
+/// comes from its stack, at roughly 10^5.
+const MAX_CALL_ARGUMENTS: u32 = 1 << 17;
 /// Native stack reserved before baseline execution begins. The interpreter's
 /// debug dispatch frame is intentionally large; cross-module wrappers re-enter
 /// it recursively while preserving the logical depth in
@@ -11330,6 +11331,21 @@ struct IsolatedCallLabels {
     arguments: IsolatedArgumentLabels,
 }
 
+/// Trailing arguments of a synthetic call site whose list does not fit a
+/// register frame (bd-9vouw.50). Register `max_registers + i` of the frame at
+/// `register_base` reads `values[i]` and `labels[i]`, so an argument range
+/// that starts inside the frame runs on past its end, and every consumer
+/// (formals, rest parameter, `arguments`, native builtins) reads it through
+/// the ordinary register accessors.
+#[derive(Debug)]
+struct ArgumentOverflow {
+    register_base: usize,
+    values: Vec<Value>,
+    labels: Vec<Label>,
+    /// Charge carried in `InterpreterCore::argument_overflow_bytes`.
+    bytes: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Promise combinator state (Promise.all / race / allSettled / any)
 // ---------------------------------------------------------------------------
@@ -12827,6 +12843,12 @@ pub struct InterpreterCore {
     /// `arguments` object staged by call setup for the callee's entry marker
     /// (bd-9vouw.25): (call-stack depth of the callee frame, object, label).
     pending_arguments_object: Option<(usize, Value, Label)>,
+    /// Out-of-band argument lists of the active synthetic call sites, one
+    /// entry per site (empty when its list fits the frame), innermost last
+    /// (bd-9vouw.50). Only the last is readable; every entry is a GC root.
+    argument_overflow: Vec<ArgumentOverflow>,
+    /// Charge for every entry of `argument_overflow`.
+    argument_overflow_bytes: u64,
     /// Drop-aware ownership charged for every live execution-seed snapshot.
     execution_seed_reservation_ledger: std::rc::Rc<ExecutionSeedReservationLedger>,
     /// Current instruction pointer.
@@ -13835,6 +13857,8 @@ impl InterpreterCore {
             seed_epoch: 0,
             pending_lazy_seeds: Vec::new(),
             pending_arguments_object: None,
+            argument_overflow: Vec::new(),
+            argument_overflow_bytes: 0,
             execution_seed_reservation_ledger: std::rc::Rc::new(
                 ExecutionSeedReservationLedger::default(),
             ),
@@ -31536,6 +31560,7 @@ impl InterpreterCore {
             .saturating_add(self.live_execution_seed_reserved_bytes())
             .saturating_add(self.simple_callback_temporary_bytes)
             .saturating_add(self.json_parse_temporary_bytes)
+            .saturating_add(self.argument_overflow_bytes)
     }
 
     fn prune_dead_pending_execution_seeds(&mut self) {
@@ -31886,10 +31911,7 @@ impl InterpreterCore {
     /// Get the IFC label for a register.
     pub fn get_register_label(&self, reg: u32) -> Result<&Label, InterpreterError> {
         if reg >= self.config.max_registers {
-            return Err(InterpreterError::RegisterOutOfBounds {
-                register: reg,
-                max: self.config.max_registers,
-            });
+            return self.overflow_argument(reg).map(|(_, label)| label);
         }
         let actual_reg = self.register_base + reg as usize;
         self.register_labels
@@ -42913,6 +42935,98 @@ impl InterpreterCore {
         let label_bytes = Self::estimate_label_bytes(&label);
         self.release_isolated_label_transport_charge(remaining_transport_bytes, label_bytes);
         self.write_reg_with_label(register, value, label)
+    }
+
+    /// bd-9vouw.50: register `reg`, at or past `max_registers`, of the active
+    /// frame, when the call site that owns the frame staged its trailing
+    /// arguments there. Any other register there is out of bounds.
+    #[cold]
+    fn overflow_argument(&self, reg: u32) -> Result<(&Value, &Label), InterpreterError> {
+        let out_of_bounds = InterpreterError::RegisterOutOfBounds {
+            register: reg,
+            max: self.config.max_registers,
+        };
+        let Some(overflow) = self
+            .argument_overflow
+            .last()
+            .filter(|overflow| overflow.register_base == self.register_base)
+        else {
+            return Err(out_of_bounds);
+        };
+        let index = (reg - self.config.max_registers) as usize;
+        match (overflow.values.get(index), overflow.labels.get(index)) {
+            (Some(value), Some(label)) => Ok((value, label)),
+            _ => Err(out_of_bounds),
+        }
+    }
+
+    /// bd-9vouw.50: make `values`/`labels` registers `max_registers..` of the
+    /// active frame, charging `bytes` (a list's entry charges its own size as
+    /// well; an empty entry, pushed by every call site whose list fits, is
+    /// bounded by the native call depth and charged nothing). Returns the
+    /// stack depth to hand to [`Self::restore_argument_overflow`] when the
+    /// call site is done.
+    fn install_argument_overflow(
+        &mut self,
+        values: Vec<Value>,
+        labels: Vec<Label>,
+        bytes: u64,
+    ) -> usize {
+        let depth = self.argument_overflow.len();
+        let bytes = if values.is_empty() {
+            bytes
+        } else {
+            bytes.saturating_add(std::mem::size_of::<ArgumentOverflow>() as u64)
+        };
+        self.argument_overflow_bytes = self.argument_overflow_bytes.saturating_add(bytes);
+        self.argument_overflow.push(ArgumentOverflow {
+            register_base: self.register_base,
+            values,
+            labels,
+            bytes,
+        });
+        depth
+    }
+
+    /// bd-9vouw.50: end the out-of-band lists of every call site from `depth`
+    /// up, releasing their charge; the caller's list is readable again.
+    fn restore_argument_overflow(&mut self, depth: usize) {
+        for staged in self.argument_overflow.drain(depth..) {
+            self.argument_overflow_bytes =
+                self.argument_overflow_bytes.saturating_sub(staged.bytes);
+        }
+    }
+
+    /// bd-9vouw.50: a synthetic call site about to stage `arguments` from
+    /// `start_register` moves whatever does not fit the register frame, with
+    /// its labels, out of band. It always pushes an entry (empty when
+    /// everything fits), so a register past the frame only ever reads the
+    /// innermost call site's own arguments. The moved labels stay under the
+    /// call's label-transport charge; the values and both carriers are
+    /// charged here. Returns the depth for [`Self::restore_argument_overflow`].
+    fn stage_argument_overflow(
+        &mut self,
+        start_register: u32,
+        arguments: &mut Vec<Value>,
+        labels: &mut IsolatedArgumentLabels,
+    ) -> Result<usize, InterpreterError> {
+        let in_frame = self.config.max_registers.saturating_sub(start_register) as usize;
+        if arguments.len() <= in_frame {
+            return Ok(self.install_argument_overflow(Vec::new(), Vec::new(), 0));
+        }
+        let values = arguments.split_off(in_frame);
+        let tail_labels = match labels {
+            IsolatedArgumentLabels::Public => vec![Label::Public; values.len()],
+            IsolatedArgumentLabels::Exact(labels) => labels.split_off(in_frame.min(labels.len())),
+            IsolatedArgumentLabels::Uniform(label) => vec![label.clone(); values.len()],
+        };
+        let bytes = Self::estimate_value_vec_bytes(&values).saturating_add(
+            u64::try_from(tail_labels.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(std::mem::size_of::<Label>() as u64),
+        );
+        self.check_temporary_memory_budget(bytes)?;
+        Ok(self.install_argument_overflow(values, tail_labels, bytes))
     }
 
     fn seed_isolated_arguments(
@@ -64534,17 +64648,6 @@ impl InterpreterCore {
         }
     }
 
-    /// Longest `apply` argument list for `callee`: a vector-variadic builtin
-    /// takes a Vec; every other call stages receiver, callee and arguments
-    /// in one register frame.
-    fn apply_argument_limit(&self, callee: &Value) -> u32 {
-        if Self::vector_variadic_builtin_tag(callee).is_some() {
-            MAX_VECTOR_BUILTIN_ARGUMENTS
-        } else {
-            self.config.max_registers.saturating_sub(2)
-        }
-    }
-
     /// Run a vector-variadic builtin over an argument vector.
     fn dispatch_vector_variadic_builtin(
         &mut self,
@@ -66030,14 +66133,13 @@ impl InterpreterCore {
                 } else {
                     Label::Public
                 };
-                let limit = self.apply_argument_limit(&function);
                 let (values, value_labels, selection_label) = self.observable_apply_arguments(
                     module,
                     source,
                     source_label,
                     &mut reserved,
                     false,
-                    limit,
+                    MAX_CALL_ARGUMENTS,
                 )?;
                 context_label =
                     self.join_owned_label_with_temporary_budget(context_label, &selection_label)?;
@@ -67247,21 +67349,13 @@ impl InterpreterCore {
             expected: "u32-bounded Function.prototype.call/apply argument count".to_string(),
             got: format!("{argument_count} arguments"),
         })?;
-        let required_registers =
-            2u32.checked_add(arg_count)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "u32-bounded Function.prototype.call/apply register budget"
-                        .to_string(),
-                    got: format!("2 metadata registers + {arg_count} arguments"),
-                })?;
-        if required_registers > self.config.max_registers {
+        // bd-9vouw.50: arguments past the register frame are staged out of
+        // band, so only the list length is bounded.
+        if arg_count > MAX_CALL_ARGUMENTS {
             return Err(InterpreterError::TypeError {
-                expected: "Function.prototype.call/apply arguments within register budget"
+                expected: "Function.prototype.call/apply argument list within MAX_CALL_ARGUMENTS"
                     .to_string(),
-                got: format!(
-                    "{required_registers} registers required but max is {}",
-                    self.config.max_registers
-                ),
+                got: format!("{arg_count} arguments"),
             });
         }
         if let Some(IsolatedCallLabels {
@@ -67423,21 +67517,13 @@ impl InterpreterCore {
                 expected: "u32-bounded Function.prototype.call/apply argument count".to_string(),
                 got: format!("{} arguments", arguments.len()),
             })?;
-        let required_registers =
-            2u32.checked_add(arg_count)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "u32-bounded Function.prototype.call/apply register budget"
-                        .to_string(),
-                    got: format!("2 metadata registers + {arg_count} arguments"),
-                })?;
-        if required_registers > self.config.max_registers {
+        // bd-9vouw.50: arguments past the register frame are staged out of
+        // band, so only the list length is bounded.
+        if arg_count > MAX_CALL_ARGUMENTS {
             return Err(InterpreterError::TypeError {
-                expected: "Function.prototype.call/apply arguments within register budget"
+                expected: "Function.prototype.call/apply argument list within MAX_CALL_ARGUMENTS"
                     .to_string(),
-                got: format!(
-                    "{required_registers} registers required but max is {}",
-                    self.config.max_registers
-                ),
+                got: format!("{arg_count} arguments"),
             });
         }
 
@@ -67579,6 +67665,7 @@ impl InterpreterCore {
                 .collect::<Vec<_>>();
             self.gc_arm_nested(&pins)
         });
+        let mut overflow_depth = None;
         let mut result = (|| -> Result<Value, InterpreterError> {
             // An isolated callback is not the suspended delegating generator.
             // In particular, a foreign async callback must not retain its
@@ -67616,6 +67703,9 @@ impl InterpreterCore {
                 &mut remaining_label_transport_bytes,
             )?;
             self.write_reg(1, callee)?;
+            let (mut arguments, mut argument_labels) = (arguments, argument_labels);
+            overflow_depth =
+                Some(self.stage_argument_overflow(2, &mut arguments, &mut argument_labels)?);
             self.seed_isolated_arguments(
                 2,
                 arguments,
@@ -67641,6 +67731,9 @@ impl InterpreterCore {
             result
         })();
         self.gc_disarm_nested(gc_arm);
+        if let Some(depth) = overflow_depth {
+            self.restore_argument_overflow(depth);
+        }
         let mut isolated_async_result_label = None;
         let mut isolated_async_execution_rehomed = false;
         let mut isolated_async_execution_owner = None;
@@ -67875,6 +67968,7 @@ impl InterpreterCore {
         self.call_stack
             .push(pushed_frame, &mut self.closures.cold_cells);
         let catch_frames_before = self.catch_frames.len();
+        let mut overflow_depth = None;
 
         let run = (|| -> Result<(Value, Label), InterpreterError> {
             self.apply_call_stack_memory_delta(previous_call_stack_bytes)?;
@@ -67888,10 +67982,13 @@ impl InterpreterCore {
                     .saturating_add(2)
                     .min(self.config.max_registers as usize),
             )?;
-            let (receiver_label, argument_labels) = match call_labels {
+            let (receiver_label, mut argument_labels) = match call_labels {
                 Some(labels) => (Some(labels.receiver), labels.arguments),
                 None => (None, IsolatedArgumentLabels::Public),
             };
+            let mut arguments = arguments;
+            overflow_depth =
+                Some(self.stage_argument_overflow(2, &mut arguments, &mut argument_labels)?);
             self.seed_isolated_receiver(
                 0,
                 receiver,
@@ -67934,6 +68031,9 @@ impl InterpreterCore {
                 Err(error) => Err(error),
             }
         })();
+        if let Some(depth) = overflow_depth {
+            self.restore_argument_overflow(depth);
+        }
 
         // Unwind whatever the callee left above the boundary (an escaping
         // throw or a native fault), then drop the boundary frame itself.
@@ -68015,20 +68115,12 @@ impl InterpreterCore {
                 got: format!("{} arguments", arguments.len()),
             })?;
         let argument_start: u32 = if explicit_new_target.is_some() { 2 } else { 1 };
-        let required_registers =
-            argument_start
-                .checked_add(arg_count)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "u32-bounded Reflect.construct register budget".to_string(),
-                    got: format!("{argument_start} constructor registers + {arg_count} arguments"),
-                })?;
-        if required_registers > self.config.max_registers {
+        // bd-9vouw.50: arguments past the register frame are staged out of
+        // band, so only the list length is bounded.
+        if arg_count > MAX_CALL_ARGUMENTS {
             return Err(InterpreterError::TypeError {
-                expected: "Reflect.construct arguments within register budget".to_string(),
-                got: format!(
-                    "{required_registers} registers required but max is {}",
-                    self.config.max_registers
-                ),
+                expected: "Reflect.construct argument list within MAX_CALL_ARGUMENTS".to_string(),
+                got: format!("{arg_count} arguments"),
             });
         }
         if let Some(IsolatedCallLabels {
@@ -68116,6 +68208,7 @@ impl InterpreterCore {
         let mut wrapper_memory_committed = false;
         let previous_granted_capabilities =
             self.replace_with_contained_codegen_grant(contained_codegen_grant);
+        let mut overflow_depth = None;
         let result = (|| -> Result<Value, InterpreterError> {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
@@ -68155,6 +68248,12 @@ impl InterpreterCore {
                     &mut remaining_label_transport_bytes,
                 )?;
             }
+            let (mut arguments, mut argument_labels) = (arguments, argument_labels);
+            overflow_depth = Some(self.stage_argument_overflow(
+                argument_start,
+                &mut arguments,
+                &mut argument_labels,
+            )?);
             self.seed_isolated_arguments(
                 argument_start,
                 arguments,
@@ -68174,6 +68273,9 @@ impl InterpreterCore {
             self.active_foreign_module_call_depth = previous_foreign_call_depth;
             result
         })();
+        if let Some(depth) = overflow_depth {
+            self.restore_argument_overflow(depth);
+        }
         let result_label = if result.is_ok() {
             self.clone_register_label_with_temporary_budget(0)
         } else {
@@ -74834,12 +74936,12 @@ impl InterpreterCore {
         });
         let count = match count {
             Ok(count)
-                if count <= self.config.max_registers
+                if count <= MAX_CALL_ARGUMENTS
                     && arguments.values.len() == arguments.labels.len() =>
             {
                 count
             }
-            Ok(count) if count > self.config.max_registers => {
+            Ok(count) if count > MAX_CALL_ARGUMENTS => {
                 self.release_delegated_hostcall_arguments(arguments);
                 return Err(InterpreterError::RegisterOutOfBounds {
                     register: count,
@@ -74858,7 +74960,28 @@ impl InterpreterCore {
             }
         };
 
-        let frame = self.install_delegated_hostcall_scratch(arguments, count)?;
+        // bd-9vouw.50: arguments past the register frame are staged out of
+        // band; their share of the carrier charge moves with them.
+        let mut arguments = arguments;
+        let in_frame = count.min(self.config.max_registers);
+        let overflow_depth = if count > in_frame {
+            let values = arguments.values.split_off(in_frame as usize);
+            let labels = arguments.labels.split_off(in_frame as usize);
+            let bytes = Self::estimate_value_vec_bytes(&values)
+                .saturating_add(Self::estimate_label_vec_bytes(&labels));
+            arguments.carrier_bytes = arguments.carrier_bytes.saturating_sub(bytes);
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(bytes);
+            self.install_argument_overflow(values, labels, bytes)
+        } else {
+            self.install_argument_overflow(Vec::new(), Vec::new(), 0)
+        };
+        let frame = match self.install_delegated_hostcall_scratch(arguments, in_frame) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.restore_argument_overflow(overflow_depth);
+                return Err(error);
+            }
+        };
 
         let delegated_args = RegRange { start: 0, count };
         let outcome = match hostcall_registry_row(cap).map(|row| row.dispatch) {
@@ -74913,6 +75036,7 @@ impl InterpreterCore {
         };
 
         self.restore_delegated_hostcall_scratch(frame);
+        self.restore_argument_overflow(overflow_depth);
 
         match outcome {
             Ok(value) => {
@@ -75215,21 +75339,17 @@ impl InterpreterCore {
                 return Err(error);
             }
         };
-        let argument_limit = if Self::is_vector_variadic_tag(&target_cap) {
-            MAX_VECTOR_BUILTIN_ARGUMENTS
-        } else {
-            self.config.max_registers
+        let arguments = match self
+            .prepare_delegated_hostcall_arguments_up_to(arguments_list, MAX_CALL_ARGUMENTS)
+        {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(delegation_input_bytes);
+                return Err(error);
+            }
         };
-        let arguments =
-            match self.prepare_delegated_hostcall_arguments_up_to(arguments_list, argument_limit) {
-                Ok(arguments) => arguments,
-                Err(error) => {
-                    self.estimated_memory_bytes = self
-                        .estimated_memory_bytes
-                        .saturating_sub(delegation_input_bytes);
-                    return Err(error);
-                }
-            };
         let previous_context = self.active_inline_callback_context_label.take();
         let context_winner = previous_context
             .as_ref()
@@ -84343,10 +84463,7 @@ impl InterpreterCore {
 
     fn read_reg(&self, reg: u32) -> Result<Value, InterpreterError> {
         if reg >= self.config.max_registers {
-            return Err(InterpreterError::RegisterOutOfBounds {
-                register: reg,
-                max: self.config.max_registers,
-            });
+            return self.overflow_argument(reg).map(|(value, _)| value.clone());
         }
         let actual_reg = self.register_base + reg as usize;
         Ok(self
@@ -91998,6 +92115,78 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         )
         .expect("ledger lifecycle source should lower")
         .ir3
+    }
+
+    /// bd-9vouw.50: a register past the frame reads the out-of-band argument
+    /// list only in the frame whose call site staged it, and only within it;
+    /// restoring ends the list and its charge.
+    #[test]
+    fn registers_past_the_frame_read_only_their_call_sites_arguments_bd_9vouw_50() {
+        let mut core = accounting_test_core();
+        let max = core.config.max_registers;
+        let out_of_bounds = |result: Result<Value, InterpreterError>| {
+            matches!(result, Err(InterpreterError::RegisterOutOfBounds { .. }))
+        };
+        assert!(out_of_bounds(core.read_reg(max)));
+        let depth = core.install_argument_overflow(vec![Value::Int(7)], vec![Label::Secret], 16);
+        assert_eq!(depth, 0);
+        assert_eq!(core.read_reg(max).expect("staged argument"), Value::Int(7));
+        assert_eq!(
+            core.get_register_label(max).expect("staged label"),
+            &Label::Secret
+        );
+        assert!(out_of_bounds(core.read_reg(max + 1)));
+        let entry_bytes = std::mem::size_of::<ArgumentOverflow>() as u64;
+        assert_eq!(core.argument_overflow_bytes, 16 + entry_bytes);
+        // An empty entry (a call site whose list fits) is charged nothing.
+        // A callee frame stacked above never sees its caller's list.
+        core.register_base += max as usize;
+        assert!(out_of_bounds(core.read_reg(max)));
+        core.register_base -= max as usize;
+        // A nested call site whose list fits hides the caller's list until it
+        // is done, even in the same frame (isolated calls reset the base).
+        let nested = core.install_argument_overflow(Vec::new(), Vec::new(), 0);
+        assert_eq!(core.argument_overflow_bytes, 16 + entry_bytes);
+        assert!(out_of_bounds(core.read_reg(max)));
+        core.restore_argument_overflow(nested);
+        assert_eq!(
+            core.read_reg(max).expect("caller list is back"),
+            Value::Int(7)
+        );
+        core.restore_argument_overflow(depth);
+        assert!(core.argument_overflow.is_empty());
+        assert_eq!(core.argument_overflow_bytes, 0);
+        assert!(out_of_bounds(core.read_reg(max)));
+    }
+
+    /// bd-9vouw.50: spread calls whose lists outgrow the register frame run
+    /// (a nested one displaces and restores its caller's list), and nothing
+    /// staged or charged outlives them.
+    #[test]
+    fn argument_overflow_ends_with_its_spread_calls_bd_9vouw_50() {
+        let module = lower_script_bd_9vouw_31(
+            "const a = Array.from({ length: 600 }, (_, i) => i);\
+             function inner(...r) { return r.length; }\
+             function outer(...r) { return inner(...r, ...r) + r[599]; }\
+             const b = []; b.push(...a);\
+             outer(...a) + b.length + Math.max(...a);",
+        );
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]);
+        let mut core = InterpreterCore::new(config, "bd-9vouw-50");
+        let result = core.execute(&module).expect("spread program runs");
+        // Node v22.2.0: 1200 + 599 + 600 + 599.
+        assert_eq!(result.value, Value::Int(2998));
+        assert!(core.argument_overflow.is_empty());
+        assert_eq!(core.argument_overflow_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     /// bd-9vouw.31: drive the cold-cell ledger through every transition a real

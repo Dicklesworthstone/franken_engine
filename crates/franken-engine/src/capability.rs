@@ -243,6 +243,28 @@ fn internal_builtin_meta_tag(tag: &str) -> bool {
         )
 }
 
+/// HostCall tags that encode an ECMAScript operation rather than a host
+/// effect or an IFC check: destructuring steps, RequireObjectCoercible,
+/// ToPropertyKey, object rest, class-member enumerability, the arguments
+/// object and intrinsic prototype lookups. They require no authority, so
+/// their capability decision is `allowed` by construction and the gate does
+/// not record one per call (bd-9vouw.76).
+pub fn is_language_operation_tag(tag: &str) -> bool {
+    internal_builtin_meta_tag(tag)
+        || matches!(
+            tag,
+            "builtin:RequireObjectCoercible"
+                | "builtin:ObjectRest"
+                | "builtin:ToPropertyKey"
+                | "builtin:DestructureIteratorInit"
+                | "builtin:DestructureIteratorNext"
+                | "builtin:DestructureIteratorElide"
+                | "builtin:DestructureIteratorDone"
+                | "builtin:ClassMembersNonEnumerable"
+                | "builtin:ArgumentsObject"
+        )
+}
+
 /// Resolve one exact HostCall tag to its authority, IFC result contract, and
 /// production dispatcher. Unknown tags return `None`, which makes both the
 /// capability gate and provenance analysis fail high.
@@ -273,12 +295,7 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             HostcallResultContract::JoinInputs,
             HostcallDispatchBinding::Internal,
         ),
-        tag if internal_builtin_meta_tag(tag)
-            || matches!(tag, "builtin:RequireObjectCoercible" | "builtin:ObjectRest" | "builtin:ToPropertyKey"
-                | "builtin:DestructureIteratorInit" | "builtin:DestructureIteratorNext"
-                | "builtin:DestructureIteratorElide" | "builtin:DestructureIteratorDone"
-                | "builtin:ClassMembersNonEnumerable" | "builtin:ArgumentsObject") =>
-        (
+        tag if is_language_operation_tag(tag) => (
             None,
             HostcallResultContract::JoinInputs,
             HostcallDispatchBinding::Builtin,

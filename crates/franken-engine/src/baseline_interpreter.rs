@@ -109,6 +109,7 @@ use crate::ast::ParseGoal;
 use crate::capability::{
     APPLY_HOSTCALL_TARGET_PREFIX, CapabilityProfile, HostcallDispatchBinding,
     HostcallResultContract, RuntimeCapability, hostcall_registry_row, hostcall_result_contract,
+    is_language_operation_tag,
 };
 use crate::checkpoint::{
     CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
@@ -1719,6 +1720,12 @@ fn check_hostcall_capability_gate(
     instruction_index: u32,
 ) -> Result<(), InterpreterError> {
     let capability_tag = capability_gate_key(capability_tag);
+    // bd-9vouw.76: a language operation encoded as a HostCall needs no
+    // authority. Recording its constant `allowed` decision per call grew the
+    // witness and decision log by one entry per destructuring step.
+    if is_language_operation_tag(capability_tag) {
+        return Ok(());
+    }
     // E9.T4 (bd-fqlfw.9.4): consult the capability-pruned dispatch table
     // first when one is installed; any miss falls through to the live
     // classification (fail-closed per-call fallback). Only the allow/deny
@@ -44186,10 +44193,12 @@ impl InterpreterCore {
                 // Apply shared capability gate logic
                 check_hostcall_capability_gate(self, &capability.0, self.ip as u32)?;
 
-                self.emit_witness(
-                    WitnessEventKind::HostcallDispatched,
-                    Some(&format!("cap:{}", capability_gate_key(&capability.0))),
-                );
+                if !is_language_operation_tag(&capability.0) {
+                    self.emit_witness(
+                        WitnessEventKind::HostcallDispatched,
+                        Some(&format!("cap:{}", capability_gate_key(&capability.0))),
+                    );
+                }
 
                 // bd-n2mjy: capture the join of arg labels BEFORE dispatch so
                 // hostcalls that mutate their arg slots don't strip the
@@ -71866,7 +71875,10 @@ impl InterpreterCore {
         // next, unrelated hostcall.
         self.clear_pending_hostcall_result_label();
         self.builtin_dispatch_hit_unknown_member = false;
-        let args_hash = self.hostcall_arguments_hash(args);
+        // bd-9vouw.76: a language operation is not a host call, so it leaves
+        // no telemetry record either.
+        let args_hash =
+            (!is_language_operation_tag(cap)).then(|| self.hostcall_arguments_hash(args));
         if cap.starts_with("builtin:Math") {
             for offset in 0..args.count {
                 if let Value::BigInt(_) = self.read_reg(args.start + offset)? {
@@ -71890,8 +71902,10 @@ impl InterpreterCore {
         // hostcalls. Record the outer builtin in completion order so its
         // deterministic timestamp cannot precede an already-retained inner
         // record and trigger a false monotonicity drop (bd-juz83).
-        let timestamp_ns = self.instructions_executed;
-        self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
+        if let Some(args_hash) = args_hash {
+            let timestamp_ns = self.instructions_executed;
+            self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
+        }
         outcome
     }
 
@@ -72382,11 +72396,13 @@ impl InterpreterCore {
             });
         }
         check_hostcall_capability_gate(self, &target_cap, self.ip as u32)?;
-        let recordable_target = recordable_capability_tag(capability_gate_key(&target_cap));
-        self.emit_witness(
-            WitnessEventKind::HostcallDispatched,
-            Some(&format!("cap:{recordable_target}")),
-        );
+        if !is_language_operation_tag(&target_cap) {
+            let recordable_target = recordable_capability_tag(capability_gate_key(&target_cap));
+            self.emit_witness(
+                WitnessEventKind::HostcallDispatched,
+                Some(&format!("cap:{recordable_target}")),
+            );
+        }
         let delegation_inputs = self.join_arg_range_with_object_mutation_label(args)?;
         let delegation_input_bytes = Self::estimate_label_bytes(&delegation_inputs);
         self.apply_memory_component_delta(0, delegation_input_bytes)?;

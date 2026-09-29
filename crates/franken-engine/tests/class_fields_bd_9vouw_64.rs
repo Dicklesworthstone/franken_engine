@@ -77,15 +77,15 @@ const q = new Q();
     );
 }
 
-/// Computed keys are evaluated once at class definition; a field with no initializer is present
-/// with value undefined; a static initializer sees the class as `this`.
+/// Computed keys are evaluated once at class definition; a field with no initializer ends at a line
+/// break (ASI) and is present with value undefined; a static initializer sees the class as `this`.
 #[test]
-fn computed_keys_uninitialized_and_static_this() {
+fn computed_keys_asi_and_static_this() {
     check(
         r#"const k = 'dyn';
-class R { [k + '1'] = 1;
-  plain;
-  ['x' + 'y'] = 2;
+class R { [k + '1'] = 1
+  plain
+  ['x' + 'y'] = 2
   static s2 = this.name; }
 const r = new R();
 [r.dyn1, 'plain' in r, r.plain, r.xy, R.s2, Object.keys(r).join()].join(' ');"#,

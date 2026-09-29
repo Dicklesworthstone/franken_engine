@@ -7018,6 +7018,18 @@ impl RuntimeForOfInit {
         }
     }
 
+    /// Steps `object_id` as the intrinsic ArrayIterator's `next` would: the
+    /// live `length`, then the indexed Get (bd-9vouw.70).
+    fn from_array(object_id: ObjectId) -> Self {
+        Self {
+            array: Some(RuntimeArrayIterator {
+                object_id,
+                kind: RuntimeTypedArrayIteratorKind::Values,
+            }),
+            ..Self::from_values(Vec::new())
+        }
+    }
+
     #[cfg(test)]
     fn from_custom(iterator_object: ObjectId, next_method: Value) -> Self {
         Self {
@@ -49915,6 +49927,25 @@ impl InterpreterCore {
         };
 
         let lookup_label = self.pending_hostcall_result_label.clone();
+        // bd-9vouw.70: the intrinsic Array.prototype[Symbol.iterator] is not
+        // called. Its ArrayIterator would never be visible to guest code, and
+        // its `next` is the intrinsic, so the consumption record steps the
+        // array itself: the same length and indexed reads that `next` performs.
+        // Calling it, and then its `next` for every element, went through an
+        // isolated activation that snapshotted the whole execution state.
+        if let (Value::BuiltinFunction(builtin), Value::Object(object_id)) =
+            (&iterator_method, iterable)
+            && builtin.kind == BuiltinFunctionKind::ArrayValues
+        {
+            let callback_label = self.intrinsic_array_values_label(*object_id, lookup_label);
+            let label = self
+                .pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public)
+                .join(&callback_label);
+            self.replace_pending_hostcall_result_label(Some(label))?;
+            return Ok(Some(RuntimeForOfInit::from_array(*object_id)));
+        }
         let (iterator_value, callback_label) = self.invoke_inline_method_call_with_argument_label(
             Some(module),
             iterator_method,
@@ -63845,6 +63876,39 @@ impl InterpreterCore {
             Value::Undefined
         };
         self.array_prototype_iterator_for_receiver(receiver, kind)
+    }
+
+    /// The IFC label that calling the intrinsic `Array.prototype[Symbol.iterator]`
+    /// (`ArrayValues`) on `object_id` through
+    /// `invoke_inline_method_call_with_argument_label` returns (bd-9vouw.70).
+    ///
+    /// That isolated call runs under one context label: the inherited callback
+    /// context where it dominates `argument_label`, else `argument_label`.
+    /// Register writes take the context where it dominates, and
+    /// `finish_builtin_dispatch` labels the result with the receiver register's
+    /// label joined with the receiver's state labels and the builtin's own
+    /// result label, which `array_prototype_iterator_for_receiver` never sets.
+    /// Labels are totally ordered and join is their maximum, so the isolated
+    /// call's label is the join of those.
+    fn intrinsic_array_values_label(
+        &mut self,
+        object_id: ObjectId,
+        argument_label: Option<Label>,
+    ) -> Label {
+        let context = match (
+            self.active_inline_callback_context_label.as_ref(),
+            argument_label,
+        ) {
+            (Some(inherited), Some(argument)) if *inherited < argument => argument,
+            (Some(inherited), _) => inherited.clone(),
+            (None, argument) => argument.unwrap_or(Label::Public),
+        };
+        self.mark_inline_callback_started();
+        context
+            .join(&self.binary_storage_label(object_id))
+            .join(&self.stream_state_label(object_id))
+            .join(&self.url_state_label(object_id))
+            .join(&self.cluster_state_label(object_id))
     }
 
     fn array_prototype_iterator_for_receiver(
@@ -114536,6 +114600,98 @@ mod async_runtime_tests_current {
             &crate::ifc_artifacts::Label::Secret,
             "for-of loop variable must inherit (join) the iterable's label"
         );
+    }
+
+    /// bd-9vouw.70: for-of over an array whose @@iterator is the intrinsic
+    /// `ArrayValues` gets the label the isolated call of that method returns,
+    /// for every combination of inherited callback context and lookup label
+    /// (including same-level Custom labels that differ only by name), and its
+    /// array-backed consumption record yields what stepping the iterator that
+    /// call returns yields.
+    #[test]
+    fn intrinsic_array_values_matches_the_isolated_call_bd_9vouw_70() {
+        use crate::ifc_artifacts::Label;
+        let module = test_module_with_functions(vec![Ir3Instruction::Halt], vec![]);
+        let custom = |name: &str| Label::Custom {
+            name: name.to_string(),
+            level: 3,
+        };
+        let contexts = [
+            None,
+            Some(Label::Public),
+            Some(Label::Secret),
+            Some(custom("a")),
+        ];
+        let lookups = [
+            None,
+            Some(Label::Public),
+            Some(Label::Internal),
+            Some(Label::Secret),
+            Some(custom("b")),
+            Some(Label::TopSecret),
+        ];
+        let array_values =
+            Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayValues));
+        for context in &contexts {
+            for lookup in &lookups {
+                let mut core = test_interpreter();
+                let array = core
+                    .alloc_array_from_values(&[Value::Int(1), Value::Int(2), Value::Int(3)])
+                    .expect("array allocation");
+                core.active_inline_callback_context_label = context.clone();
+                core.sync_estimated_memory_bytes()
+                    .expect("callback-context accounting");
+                let (isolated, isolated_label) = core
+                    .invoke_inline_method_call_with_argument_label(
+                        Some(&module),
+                        array_values.clone(),
+                        Value::Object(array),
+                        Vec::new(),
+                        lookup.clone(),
+                    )
+                    .expect("isolated ArrayValues call");
+                let direct_label = core.intrinsic_array_values_label(array, lookup.clone());
+                assert_eq!(
+                    direct_label, isolated_label,
+                    "context {context:?}, lookup {lookup:?}"
+                );
+                let Value::Iterator(isolated) = isolated else {
+                    panic!("ArrayValues returns an iterator");
+                };
+                let mut sequences = Vec::new();
+                for init in [
+                    RuntimeForOfInit::from_existing(isolated),
+                    RuntimeForOfInit::from_array(array),
+                ] {
+                    let record = core
+                        .init_iterator_from_state(Value::Object(array), init, IterationKind::ForOf)
+                        .expect("consumption record");
+                    let mut values = Vec::new();
+                    while let Some(value) = core
+                        .advance_for_of_iterator(Some(&module), record.clone())
+                        .expect("step")
+                    {
+                        values.push(value);
+                    }
+                    assert_eq!(
+                        core.advance_for_of_iterator(Some(&module), record)
+                            .expect("step after done"),
+                        None
+                    );
+                    sequences.push(values);
+                }
+                assert_eq!(
+                    sequences[0],
+                    vec![Value::Int(1), Value::Int(2), Value::Int(3)]
+                );
+                assert_eq!(sequences[0], sequences[1]);
+                assert_eq!(core.active_inline_callback_context_label, *context);
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
     }
 
     /// bd-l0d6z: a thrown value's label must survive the throw->catch edge.

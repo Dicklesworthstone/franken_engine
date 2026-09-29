@@ -4095,7 +4095,7 @@ impl ExecutionOrchestrator {
             value: format!(
                 "instructions={} hostcalls={} value={}",
                 exec.instructions_executed,
-                exec.hostcall_decisions.len(),
+                exec.hostcall_decision_count(),
                 exec.value
             ),
         });
@@ -4600,7 +4600,7 @@ impl ExecutionOrchestrator {
             .unwrap_or(i64::MAX)
             .saturating_mul(50)
             .min(600_000);
-        let hostcall_penalty = i64::try_from(exec.hostcall_decisions.len())
+        let hostcall_penalty = i64::try_from(exec.hostcall_decision_count())
             .unwrap_or(i64::MAX)
             .saturating_mul(25_000)
             .min(300_000);
@@ -5076,8 +5076,11 @@ impl ExecutionOrchestrator {
         optimal_stopping_certificate: Option<&OptimalStoppingCertificate>,
         ir3_schedule_cost: Option<TropicalWeight>,
     ) -> EvidenceCompressionSketch {
-        let (allowed_hostcalls, denied_hostcalls, hostcall_hash) =
+        let (recorded_allowed_hostcalls, denied_hostcalls, hostcall_hash) =
             Self::hostcall_decision_summary(&exec.hostcall_decisions);
+        // Folded grants (bd-9vouw.83) are allowed decisions without records.
+        let allowed_hostcalls =
+            recorded_allowed_hostcalls.saturating_add(exec.folded_hostcall_decisions);
 
         let mut bytes = Vec::with_capacity(256);
         Self::append_len_prefixed_bytes(&mut bytes, EVIDENCE_COMPRESSION_SKETCH_SCHEMA.as_bytes());
@@ -5087,7 +5090,7 @@ impl ExecutionOrchestrator {
             &Self::risk_state_symbol(update.posterior.map_estimate()).to_be_bytes(),
         );
         bytes.extend_from_slice(&exec.instructions_executed.to_be_bytes());
-        bytes.extend_from_slice(&Self::usize_to_u64(exec.hostcall_decisions.len()).to_be_bytes());
+        bytes.extend_from_slice(&exec.hostcall_decision_count().to_be_bytes());
         bytes.extend_from_slice(&capability_summary.total.to_be_bytes());
         bytes.extend_from_slice(&capability_summary.canonical_distinct.to_be_bytes());
         bytes.extend_from_slice(capability_summary.multiset_hash.as_bytes());
@@ -5316,7 +5319,7 @@ impl ExecutionOrchestrator {
         epoch: SecurityEpoch,
         instruction_budget: u64,
     ) -> Evidence {
-        let hostcall_count = exec.hostcall_decisions.len() as u64;
+        let hostcall_count = exec.hostcall_decision_count();
         let hostcall_rate_millionths = hostcall_count
             .saturating_mul(1_000_000)
             .checked_div(exec.instructions_executed)
@@ -6619,6 +6622,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
             instructions_executed: u64::MAX,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -9374,6 +9378,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
             instructions_executed: 0,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -9813,6 +9818,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Int(42_000_000),
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
             instructions_executed: 10,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -9849,6 +9855,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
             instructions_executed: u64::MAX,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -9898,6 +9905,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
             instructions_executed: 5,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -9957,6 +9965,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
             instructions_executed: 1,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -10147,6 +10156,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
             instructions_executed: 0,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -10195,6 +10205,7 @@ mod tests {
                     instruction_index: 1,
                 },
             ],
+            folded_hostcall_decisions: 0,
             instructions_executed: 0, // no instruction penalty
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -10229,6 +10240,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: many_hostcalls,
+            folded_hostcall_decisions: 0,
             instructions_executed: 0,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
@@ -10246,6 +10258,70 @@ mod tests {
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 100 hostcalls => penalty = min(100*25_000, 300_000) = 300_000. Reward = 700_000.
         assert_eq!(reward, 700_000);
+    }
+
+    /// bd-9vouw.83: a folded grant is an allowed decision without a record.
+    /// Evidence and reward read the total, so a run that folded grants scores
+    /// exactly like one that recorded each of them.
+    #[test]
+    fn folded_hostcall_grants_count_in_evidence_and_reward() {
+        use crate::ir_contract::{CapabilityTag, HostcallDecisionRecord};
+        let record = |seq: u64, allowed: bool| HostcallDecisionRecord {
+            seq,
+            capability: CapabilityTag("builtin:ObjectKeys".to_string()),
+            allowed,
+            instruction_index: 3,
+        };
+        let exec = |hostcall_decisions: Vec<HostcallDecisionRecord>, folded: u64| ExecutionResult {
+            value: crate::baseline_interpreter::Value::Null,
+            completion_label: crate::ifc_artifacts::Label::Public,
+            hostcall_decisions,
+            folded_hostcall_decisions: folded,
+            instructions_executed: 400,
+            tier_i_instructions_executed: 0,
+            tier_i_specialized_instructions_executed: 0,
+            requested_hook_action: None,
+            witness_events: Vec::new(),
+            events: Vec::new(),
+            console_output: Vec::new(),
+            iteration_traces: Vec::new(),
+            nondeterminism_trace: crate::deterministic_replay::NondeterminismTrace::new(
+                "orchestrator-test-stub",
+            ),
+            generated_code_audit: Vec::new(),
+            exit_code: None,
+        };
+        // Nine grants and a denial, recorded one by one or as one grant, the
+        // denial and eight folded grants.
+        let recorded = exec(
+            (0..9)
+                .map(|seq| record(seq, true))
+                .chain([record(9, false)])
+                .collect(),
+            0,
+        );
+        let folded = exec(vec![record(0, true), record(1, false)], 8);
+        assert_eq!(recorded.hostcall_decision_count(), 10);
+        assert_eq!(folded.hostcall_decision_count(), 10);
+        assert_eq!(
+            ExecutionOrchestrator::execution_reward_millionths(&folded),
+            ExecutionOrchestrator::execution_reward_millionths(&recorded)
+        );
+        let pkg = simple_package();
+        let evidence = |exec: &ExecutionResult| {
+            ExecutionOrchestrator::build_evidence(
+                &pkg,
+                exec,
+                ExecutionOrchestrator::capability_multiset_summary(&pkg.capabilities),
+                SecurityEpoch::from_raw(1),
+                1_000_000,
+            )
+        };
+        let from_folded = evidence(&folded);
+        assert_eq!(from_folded, evidence(&recorded));
+        // 10 decisions over 400 instructions; 1 of 10 denied.
+        assert_eq!(from_folded.hostcall_rate_millionths, 25_000);
+        assert_eq!(from_folded.denial_rate_millionths, 100_000);
     }
 
     #[test]
@@ -10396,6 +10472,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Int(1_000_000),
             completion_label: crate::ifc_artifacts::Label::Public,
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
             instructions_executed: 5,
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,

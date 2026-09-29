@@ -1713,19 +1713,29 @@ fn generated_code_fault_code(err: &InterpreterError) -> &'static str {
     }
 }
 
+/// Whether a hostcall has no host effect: its registry authority is
+/// `Builtin` (a computation over guest values) or none. Its grant carries
+/// nothing beyond the decision itself, so repeats of it can be folded.
+fn hostcall_is_effect_free(tag: &str) -> bool {
+    hostcall_registry_row(tag)
+        .is_some_and(|row| matches!(row.authority, None | Some(RuntimeCapability::Builtin)))
+}
+
 /// Shared capability gate logic for both Call and HostCall instructions.
 /// Checks if the given capability is allowed and records witness events/decisions.
+/// Returns whether a decision was recorded; a caller records the dispatch
+/// witness only then.
 fn check_hostcall_capability_gate(
     interpreter: &mut InterpreterCore,
     capability_tag: &str,
     instruction_index: u32,
-) -> Result<(), InterpreterError> {
+) -> Result<bool, InterpreterError> {
     let capability_tag = capability_gate_key(capability_tag);
     // bd-9vouw.76: a language operation encoded as a HostCall needs no
     // authority. Recording its constant `allowed` decision per call grew the
     // witness and decision log by one entry per destructuring step.
     if is_language_operation_tag(capability_tag) {
-        return Ok(());
+        return Ok(false);
     }
     // E9.T4 (bd-fqlfw.9.4): consult the capability-pruned dispatch table
     // first when one is installed; any miss falls through to the live
@@ -1747,6 +1757,9 @@ fn check_hostcall_capability_gate(
     let recordable_tag = recordable_capability_tag(capability_tag);
 
     if capability_denied {
+        interpreter
+            .recorded_effect_free_grants
+            .remove(recordable_tag.as_ref());
         interpreter.emit_witness(
             WitnessEventKind::CapabilityChecked,
             Some(&format!("denied:{}", recordable_tag)),
@@ -1773,6 +1786,27 @@ fn check_hostcall_capability_gate(
         });
     }
 
+    // bd-9vouw.83: an effect-free hostcall in a loop (`JSON.stringify`,
+    // `Object.keys`, `parseInt`, `String.fromCharCode`) repeated its tag's
+    // last recorded grant on every call, two witness events and one decision
+    // per call for the whole run. Count the repeat instead. The first grant
+    // per tag and the first grant after a denial stay recorded, so every
+    // change of decision is in the log; denials and hostcalls with host
+    // effects record every call.
+    if hostcall_is_effect_free(capability_tag) {
+        if interpreter
+            .recorded_effect_free_grants
+            .contains(recordable_tag.as_ref())
+        {
+            interpreter.folded_hostcall_decisions =
+                interpreter.folded_hostcall_decisions.saturating_add(1);
+            return Ok(false);
+        }
+        interpreter
+            .recorded_effect_free_grants
+            .insert(recordable_tag.clone().into_owned());
+    }
+
     // Record successful capability grant
     interpreter.emit_witness(
         WitnessEventKind::CapabilityChecked,
@@ -1785,7 +1819,7 @@ fn check_hostcall_capability_gate(
         instruction_index,
     });
 
-    Ok(())
+    Ok(true)
 }
 
 /// Canonical operator-facing label for the deterministic execution profile.
@@ -6431,6 +6465,18 @@ const NON_ENUMERABLE_DATA_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
     configurable: true,
 };
 
+/// Most compiled RegExp patterns one interpreter keeps for reuse.
+const REGEXP_CACHE_ENTRIES: usize = 32;
+/// Longest pattern source the RegExp cache keeps compiled.
+const REGEXP_CACHE_MAX_PATTERN_BYTES: usize = 256;
+/// Compiled-program limit for a cached RegExp. A pattern that needs more
+/// compiles under the default limits and is not kept, so the cache holds at
+/// most about `REGEXP_CACHE_ENTRIES` times this plus the DFA limit below.
+const REGEXP_CACHE_MAX_PROGRAM_BYTES: usize = 1024 * 1024;
+/// Lazy-DFA transition cache limit for a cached RegExp. It bounds only how
+/// much of the DFA is kept; matching falls back to other engines past it.
+const REGEXP_CACHE_MAX_DFA_BYTES: usize = 512 * 1024;
+
 /// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3).
 const ERROR_PROTOTYPE_NAMES: [&str; 7] = [
     "Error",
@@ -9759,6 +9805,10 @@ pub struct ExecutionResult {
     pub witness_events: Vec<WitnessEvent>,
     /// Hostcall decisions recorded.
     pub hostcall_decisions: Vec<HostcallDecisionRecord>,
+    /// Grants of effect-free hostcalls (registry authority `Builtin` or none)
+    /// that repeated their tag's last recorded grant and were counted here
+    /// instead of recorded (bd-9vouw.83).
+    pub folded_hostcall_decisions: u64,
     /// Structured events emitted.
     pub events: Vec<InterpreterEvent>,
     /// Console output captured from console.log/error/warn calls.
@@ -9781,6 +9831,16 @@ pub struct ExecutionResult {
     /// Exit status the program asked for through `process.exit(n)` or
     /// `process.exitCode = n` (bd-my9hk); `None` when it set none.
     pub exit_code: Option<i32>,
+}
+
+impl ExecutionResult {
+    /// Every hostcall decision the run made: the recorded ones and the
+    /// folded repeats of an effect-free grant.
+    pub fn hostcall_decision_count(&self) -> u64 {
+        u64::try_from(self.hostcall_decisions.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(self.folded_hostcall_decisions)
+    }
 }
 
 /// Immutable compact dispatch plan compiled from canonical IR3.
@@ -12039,6 +12099,14 @@ pub struct InterpreterCore {
     witness_events: Vec<WitnessEvent>,
     /// Hostcall decisions.
     hostcall_decisions: Vec<HostcallDecisionRecord>,
+    /// Effect-free hostcall grants counted instead of recorded
+    /// (bd-9vouw.83); see `check_hostcall_capability_gate`.
+    folded_hostcall_decisions: u64,
+    /// Effect-free hostcall tags whose last recorded decision is a grant.
+    recorded_effect_free_grants: BTreeSet<String>,
+    /// Recently compiled RegExp patterns by (pattern, flags), oldest first.
+    /// Owned by this interpreter so no other execution can observe it.
+    regexp_cache: RefCell<VecDeque<(String, String, Regex)>>,
     /// Mandatory runtime security observability surface. The runtime capability
     /// gate feeds real `record_capability_denial` calls here so the
     /// `capability_denial_total` counter and structured security log reflect
@@ -13014,6 +13082,9 @@ impl InterpreterCore {
             tier_i_specialized_instructions_executed: 0,
             witness_events: Vec::new(),
             hostcall_decisions: Vec::new(),
+            folded_hostcall_decisions: 0,
+            recorded_effect_free_grants: BTreeSet::new(),
+            regexp_cache: RefCell::new(VecDeque::new()),
             security_observability: RuntimeSecurityObservability::new(),
             telemetry_recorder: TelemetryRecorder::new(RecorderConfig::default()),
             events: Vec::new(),
@@ -32090,6 +32161,7 @@ impl InterpreterCore {
             ),
         };
         self.console_output_bytes = 0;
+        self.recorded_effect_free_grants.clear();
         ExecutionResult {
             value: completion.value,
             completion_label: completion.label,
@@ -32099,6 +32171,7 @@ impl InterpreterCore {
             requested_hook_action,
             witness_events: std::mem::take(&mut self.witness_events),
             hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
+            folded_hostcall_decisions: std::mem::take(&mut self.folded_hostcall_decisions),
             events: std::mem::take(&mut self.events),
             console_output: std::mem::take(&mut self.console_output),
             iteration_traces: std::mem::take(&mut self.iteration_traces),
@@ -44251,9 +44324,7 @@ impl InterpreterCore {
                 dst,
             } => {
                 // Apply shared capability gate logic
-                check_hostcall_capability_gate(self, &capability.0, self.ip as u32)?;
-
-                if !is_language_operation_tag(&capability.0) {
+                if check_hostcall_capability_gate(self, &capability.0, self.ip as u32)? {
                     self.emit_witness(
                         WitnessEventKind::HostcallDispatched,
                         Some(&format!("cap:{}", capability_gate_key(&capability.0))),
@@ -51131,11 +51202,12 @@ impl InterpreterCore {
     /// with each match's capture groups spliced in. An empty match never
     /// splits at either end of the input or directly after a previous match.
     fn regexp_split_pieces(
+        &self,
         input: &str,
         source: &str,
         flags: &str,
     ) -> Result<Vec<Value>, InterpreterError> {
-        let regex = Self::compile_regexp_pattern(source, flags)?;
+        let regex = self.compile_regexp_pattern(source, flags)?;
         let mut pieces = Vec::new();
         if input.is_empty() {
             if !regex.is_match("") {
@@ -51183,7 +51255,7 @@ impl InterpreterCore {
             return Ok(Value::Object(self.alloc_array_from_values(&[])?));
         }
         if let Some((source, flags)) = self.regexp_source_flags_from_value(&separator_value) {
-            let mut pieces = Self::regexp_split_pieces(this_str.as_ref(), &source, &flags)?;
+            let mut pieces = self.regexp_split_pieces(this_str.as_ref(), &source, &flags)?;
             pieces.truncate(limit);
             return Ok(Value::Object(self.alloc_array_from_values(&pieces)?));
         }
@@ -51641,7 +51713,51 @@ impl InterpreterCore {
         Some((source, flags))
     }
 
-    fn compile_regexp_pattern(pattern: &str, flags: &str) -> Result<Regex, InterpreterError> {
+    /// Compile a RegExp pattern, reusing this interpreter's recent
+    /// compilation of the same pattern and flags. Compiling dominated every
+    /// `exec`, `test`, `match`, `replace` and `split` call: about 670 us per
+    /// `re.exec` in a loop. A compiled `Regex` is immutable, so reuse cannot
+    /// change a result. Guest code chooses the patterns, so only short
+    /// patterns whose compiled form fits the cache limits are kept; any other
+    /// pattern compiles under the default limits every time, as before.
+    fn compile_regexp_pattern(
+        &self,
+        pattern: &str,
+        flags: &str,
+    ) -> Result<Regex, InterpreterError> {
+        if pattern.len() > REGEXP_CACHE_MAX_PATTERN_BYTES {
+            return Self::build_regexp(&Self::regexp_builder(pattern, flags)?);
+        }
+        if let Some(regex) = self
+            .regexp_cache
+            .borrow()
+            .iter()
+            .find(|(cached_pattern, cached_flags, _)| {
+                cached_pattern == pattern && cached_flags == flags
+            })
+            .map(|(_, _, regex)| regex.clone())
+        {
+            return Ok(regex);
+        }
+        let mut builder = Self::regexp_builder(pattern, flags)?;
+        let Ok(regex) = builder
+            .size_limit(REGEXP_CACHE_MAX_PROGRAM_BYTES)
+            .dfa_size_limit(REGEXP_CACHE_MAX_DFA_BYTES)
+            .build()
+        else {
+            // Too large for the cache limits, or invalid: the default limits
+            // decide, and report the same error as an uncached compile.
+            return Self::build_regexp(&Self::regexp_builder(pattern, flags)?);
+        };
+        let mut cache = self.regexp_cache.borrow_mut();
+        if cache.len() == REGEXP_CACHE_ENTRIES {
+            cache.pop_front();
+        }
+        cache.push_back((pattern.to_string(), flags.to_string(), regex.clone()));
+        Ok(regex)
+    }
+
+    fn regexp_builder(pattern: &str, flags: &str) -> Result<RegexBuilder, InterpreterError> {
         let mut case_insensitive = false;
         let mut multi_line = false;
         let mut dot_matches_new_line = false;
@@ -51661,11 +51777,17 @@ impl InterpreterCore {
             }
         }
 
-        RegexBuilder::new(pattern)
+        let mut builder = RegexBuilder::new(pattern);
+        builder
             .case_insensitive(case_insensitive)
             .multi_line(multi_line)
             .dot_matches_new_line(dot_matches_new_line)
-            .unicode(true)
+            .unicode(true);
+        Ok(builder)
+    }
+
+    fn build_regexp(builder: &RegexBuilder) -> Result<Regex, InterpreterError> {
+        builder
             .build()
             .map_err(|error| InterpreterError::TypeError {
                 expected: "valid RegExp pattern".to_string(),
@@ -51681,7 +51803,7 @@ impl InterpreterCore {
         let Some((source, flags)) = self.regexp_source_flags_from_value(receiver) else {
             return Ok(Value::Bool(false));
         };
-        let regex = Self::compile_regexp_pattern(&source, &flags)?;
+        let regex = self.compile_regexp_pattern(&source, &flags)?;
         let input = Self::value_to_primitive_string(input);
         Ok(Value::Bool(regex.is_match(&input)))
     }
@@ -51692,7 +51814,7 @@ impl InterpreterCore {
         pattern: &Value,
     ) -> Result<Value, InterpreterError> {
         if let Some((source, flags)) = self.regexp_source_flags_from_value(pattern) {
-            let regex = Self::compile_regexp_pattern(&source, &flags)?;
+            let regex = self.compile_regexp_pattern(&source, &flags)?;
             if flags.contains('g') {
                 let result_id = self.alloc_array_with_prototype(None)?;
                 let mut count = 0usize;
@@ -51730,7 +51852,7 @@ impl InterpreterCore {
 
     fn string_search_value(&self, input: &str, pattern: &Value) -> Result<Value, InterpreterError> {
         if let Some((source, flags)) = self.regexp_source_flags_from_value(pattern) {
-            let regex = Self::compile_regexp_pattern(&source, &flags)?;
+            let regex = self.compile_regexp_pattern(&source, &flags)?;
             return Ok(Value::Int(
                 regex
                     .find(input)
@@ -51759,7 +51881,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let mut matches: Vec<(usize, usize, Vec<Option<String>>)> = Vec::new();
         if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
-            let regex = Self::compile_regexp_pattern(&source, &flags)?;
+            let regex = self.compile_regexp_pattern(&source, &flags)?;
             let global = all || flags.contains('g');
             for captures in regex.captures_iter(input) {
                 let Some(whole) = captures.get(0) else {
@@ -63017,7 +63139,7 @@ impl InterpreterCore {
             });
         };
         let text = self.value_to_string(input);
-        let regex = Self::compile_regexp_pattern(&source, &flags)?;
+        let regex = self.compile_regexp_pattern(&source, &flags)?;
         let sticky = flags.contains('y');
         let tracks_last_index = sticky || flags.contains('g');
         let last_index = if tracks_last_index {
@@ -72618,8 +72740,7 @@ impl InterpreterCore {
                 got: target_cap,
             });
         }
-        check_hostcall_capability_gate(self, &target_cap, self.ip as u32)?;
-        if !is_language_operation_tag(&target_cap) {
+        if check_hostcall_capability_gate(self, &target_cap, self.ip as u32)? {
             let recordable_target = recordable_capability_tag(capability_gate_key(&target_cap));
             self.emit_witness(
                 WitnessEventKind::HostcallDispatched,
@@ -79768,7 +79889,7 @@ impl InterpreterCore {
                 if limit == 0 {
                     // `split(sep, 0)` is always empty.
                 } else if let Some((source, flags)) = regexp_separator {
-                    pieces = Self::regexp_split_pieces(&str_text, &source, &flags)?;
+                    pieces = self.regexp_split_pieces(&str_text, &source, &flags)?;
                 } else if matches!(separator, Value::Undefined) {
                     pieces.push(Value::str(str_text));
                 } else {
@@ -90521,6 +90642,128 @@ mod active_builtin_regressions {
             );
         }
         assert_eq!(core.iteration_traces.len(), MAX_ITERATION_TRACES);
+    }
+
+    /// The RegExp cache reuses a compilation only for the same pattern and
+    /// flags, keeps at most `REGEXP_CACHE_ENTRIES`, never keeps a pattern past
+    /// its size limits, and reports invalid patterns as an uncached compile.
+    #[test]
+    fn regexp_cache_is_keyed_bounded_and_skips_large_patterns() {
+        let core = test_core();
+        let cached = |core: &InterpreterCore, source: &str| {
+            core.regexp_cache
+                .borrow()
+                .iter()
+                .any(|(pattern, _, _)| pattern == source)
+        };
+        let sensitive = core.compile_regexp_pattern("ab+c", "").unwrap();
+        let insensitive = core.compile_regexp_pattern("ab+c", "i").unwrap();
+        assert!(sensitive.is_match("xabbc") && !sensitive.is_match("ABBC"));
+        assert!(insensitive.is_match("ABBC"));
+        assert!(
+            core.compile_regexp_pattern("ab+c", "i")
+                .unwrap()
+                .is_match("ABBC")
+        );
+        assert_eq!(core.regexp_cache.borrow().len(), 2);
+
+        for index in 0..REGEXP_CACHE_ENTRIES + 8 {
+            let source = format!("p{index}q");
+            assert!(
+                core.compile_regexp_pattern(&source, "")
+                    .unwrap()
+                    .is_match(&source)
+            );
+        }
+        assert_eq!(core.regexp_cache.borrow().len(), REGEXP_CACHE_ENTRIES);
+        assert!(!cached(&core, "ab+c"));
+
+        // Unicode `\w{50}` compiles to about 4 MiB: valid and matched, not kept.
+        let large = core.compile_regexp_pattern(r"^\w{50}$", "").unwrap();
+        assert!(large.is_match(&"\u{e9}".repeat(50)));
+        assert!(!cached(&core, r"^\w{50}$"));
+        let long_source = "a".repeat(REGEXP_CACHE_MAX_PATTERN_BYTES + 1);
+        assert!(
+            core.compile_regexp_pattern(&long_source, "")
+                .unwrap()
+                .is_match(&long_source)
+        );
+        assert!(!cached(&core, &long_source));
+
+        assert!(matches!(
+            core.compile_regexp_pattern("(", ""),
+            Err(InterpreterError::TypeError { ref expected, .. }) if expected == "valid RegExp pattern"
+        ));
+        assert!(matches!(
+            core.compile_regexp_pattern("a", "x"),
+            Err(InterpreterError::TypeError { ref expected, .. }) if expected == "supported RegExp flag"
+        ));
+        assert!(!cached(&core, "("));
+        assert!(test_core().regexp_cache.borrow().is_empty());
+    }
+
+    /// bd-9vouw.83: repeated grants of an effect-free hostcall are counted,
+    /// not recorded. The first grant per tag, every denial and the first
+    /// grant after a denial are recorded; host effects record every call.
+    #[test]
+    fn effect_free_grants_fold_until_the_decision_changes() {
+        let mut core = test_core();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Console);
+        let decisions = |core: &InterpreterCore| {
+            core.hostcall_decisions
+                .iter()
+                .map(|decision| (decision.capability.0.clone(), decision.allowed))
+                .collect::<Vec<_>>()
+        };
+        let keys = "builtin:ObjectKeys";
+        assert!(check_hostcall_capability_gate(&mut core, keys, 1).unwrap());
+        assert!(!check_hostcall_capability_gate(&mut core, keys, 2).unwrap());
+        assert!(!check_hostcall_capability_gate(&mut core, keys, 3).unwrap());
+        assert!(check_hostcall_capability_gate(&mut core, "number:parseInt", 4).unwrap());
+        assert!(check_hostcall_capability_gate(&mut core, "console:log", 5).unwrap());
+        assert!(check_hostcall_capability_gate(&mut core, "console:log", 6).unwrap());
+        assert_eq!(core.folded_hostcall_decisions, 2);
+
+        core.config
+            .granted_capabilities
+            .remove(&RuntimeCapability::Builtin);
+        for index in [7, 8] {
+            assert!(matches!(
+                check_hostcall_capability_gate(&mut core, keys, index),
+                Err(InterpreterError::CapabilityDenied { .. })
+            ));
+        }
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        assert!(check_hostcall_capability_gate(&mut core, keys, 9).unwrap());
+        assert!(!check_hostcall_capability_gate(&mut core, keys, 10).unwrap());
+        assert_eq!(core.folded_hostcall_decisions, 3);
+        assert_eq!(
+            decisions(&core),
+            [
+                (keys, true),
+                ("number:parseInt", true),
+                ("console:log", true),
+                ("console:log", true),
+                (keys, false),
+                (keys, false),
+                (keys, true),
+            ]
+            .map(|(tag, allowed)| (tag.to_string(), allowed))
+        );
+        assert_eq!(
+            core.hostcall_decisions
+                .iter()
+                .map(|decision| decision.instruction_index)
+                .collect::<Vec<_>>(),
+            [1, 4, 5, 6, 7, 8, 9]
+        );
     }
 
     #[test]

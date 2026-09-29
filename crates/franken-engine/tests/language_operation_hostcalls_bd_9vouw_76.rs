@@ -7,6 +7,10 @@
 //! event and a constant `allowed` decision record, so the IR4 witness grew by
 //! about 1.2 KB per array destructuring for the life of the run, and built a
 //! hostcall telemetry record. Host effects are still recorded once per call.
+//!
+//! Effect-free builtins that do need authority (`JSON.stringify`,
+//! `Object.keys`, `parseInt`, `String.fromCharCode`) record their first
+//! grant per tag and count the repeats (bd-9vouw.83).
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +26,7 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserS
 struct Run {
     console: Vec<String>,
     decisions: Vec<String>,
+    decision_count: u64,
     capability_checked_events: usize,
     dispatched_events: usize,
     telemetry_records: usize,
@@ -70,6 +75,7 @@ fn run(source: &str) -> Run {
             .iter()
             .map(|decision| decision.capability.0.clone())
             .collect(),
+        decision_count: result.hostcall_decision_count(),
         capability_checked_events: result
             .witness_events
             .iter()
@@ -153,6 +159,38 @@ fn host_effects_are_still_recorded_per_call() {
     );
     assert_eq!(run.dispatched_events, 3 * only_log.dispatched_events);
     assert_eq!(run.telemetry_records, 3 * only_log.telemetry_records);
+}
+
+/// bd-9vouw.83: four effect-free builtins per iteration record one grant per
+/// tag for the whole run. 2,000 iterations leave the records of a single
+/// iteration, while the decision total still counts every call. Output
+/// matches Node v22.2.0.
+#[test]
+fn effect_free_builtin_grants_are_recorded_once_per_tag() {
+    let program = |iterations: u32| {
+        format!(
+            "let s = ''; let t = 0; for (let i = 0; i < {iterations}; i++) {{ \
+             t += JSON.stringify({{ i }}).length + Object.keys({{ a: i, b: 1 }}).length \
+             + parseInt('7' + (i % 10)); s = String.fromCharCode(65 + (i % 26)); }} \
+             console.log(t, s);"
+        )
+    };
+    let once = run(&program(1));
+    let many = run(&program(2000));
+    assert_eq!(once.console, vec!["79 A"]);
+    assert_eq!(many.console, vec!["171890 X"]);
+    assert_eq!(once.decisions.len(), 5, "{:?}", once.decisions);
+    assert_eq!(
+        once.decisions.last().map(String::as_str),
+        Some("console:log")
+    );
+    assert_eq!(many.decisions, once.decisions);
+    assert_eq!(
+        many.capability_checked_events,
+        once.capability_checked_events
+    );
+    assert_eq!(many.dispatched_events, once.dispatched_events);
+    assert_eq!(many.decision_count, once.decision_count + 4 * 1999);
 }
 
 /// The gate skips language operations only because they need no authority:

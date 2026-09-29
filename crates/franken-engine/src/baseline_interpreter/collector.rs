@@ -1360,6 +1360,10 @@ impl InterpreterCore {
             // them.
             witness_events: _,
             hostcall_decisions: _,
+            folded_hostcall_decisions: _,
+            recorded_effect_free_grants: _,
+            // Compiled patterns hold no guest values.
+            regexp_cache: _,
             security_observability: _,
             telemetry_recorder: _,
             events: _,

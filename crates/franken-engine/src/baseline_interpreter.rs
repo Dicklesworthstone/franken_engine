@@ -342,6 +342,24 @@ const PROXY_TYPE_TAG: &str = "Proxy";
 const PROXY_TARGET_SLOT: &str = "__proxy_target";
 const PROXY_HANDLER_SLOT: &str = "__proxy_handler";
 const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
+/// Built-in class parents the lowering records by name (`class X extends Map`,
+/// see `builtin_constructor_name` in the lowering); construction handles
+/// each through `initialize_builtin_subclass_instance`.
+const LOWERED_BUILTIN_CLASS_PARENTS: [&str; 12] = [
+    "Object",
+    "Array",
+    "Map",
+    "Set",
+    "Error",
+    "TypeError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "EvalError",
+    "URIError",
+    "AggregateError",
+];
+
 const WELL_KNOWN_SYMBOL_SCHEMA: &str = "es2020-symbol-ids-1-13-v1";
 const FIRST_DYNAMIC_SYMBOL_ID: u32 = 14;
 /// Approximate per-string heap footprint used for fail-closed budgeting.
@@ -89307,6 +89325,22 @@ impl InterpreterCore {
         parent_label: Label,
         default_constructor: bool,
     ) -> Result<(), InterpreterError> {
+        // A standard constructor reached as a value (`const M = Map`, a name
+        // that `typeof` made dynamic, `extends (Base || Error)`) is recorded
+        // by its canonical name, as the lowering records `extends Map`
+        // itself, so construction takes the same built-in-parent path
+        // instead of failing with "expected constructor function".
+        let parent = match &parent {
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::StandardConstructor =>
+            {
+                match Self::standard_constructor_name(builtin) {
+                    Ok(name) if LOWERED_BUILTIN_CLASS_PARENTS.contains(&name) => Value::str(name),
+                    _ => parent,
+                }
+            }
+            _ => parent,
+        };
         let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
         let index = prototype.0 as usize;
         let previous = self

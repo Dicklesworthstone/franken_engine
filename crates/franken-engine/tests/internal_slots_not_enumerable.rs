@@ -7,6 +7,7 @@
 //! - `JSON.stringify({ m: new Map() })` serialized the engine's storage;
 //! - `{ ...date }` copied `__type` and `__timestamp` into a plain object,
 //!   which the engine then took for a Date.
+//!
 //! The slots are now non-enumerable, and the objects themselves behave as
 //! before.
 //!

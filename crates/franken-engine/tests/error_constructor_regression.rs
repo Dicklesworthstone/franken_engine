@@ -210,6 +210,7 @@ fn stack_starts_with_name_and_message() {
 /// - `Error.prototype.name` was undefined;
 /// - a subclass's `MyErr.prototype.name` was shadowed, so errors printed
 ///   as `Error`.
+///
 /// Expected values are what Node v22.2.0 prints.
 #[test]
 fn error_name_and_message_are_inherited_and_not_enumerable() {

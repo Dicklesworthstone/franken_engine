@@ -561,27 +561,84 @@ fn estimate_promise_record_memory_bytes(record: &PromiseRecord) -> u64 {
         ))
 }
 
+/// Promise slots per chunk. A full chunk whose slots are all vacated is
+/// released (bd-9vouw.57), so the arena's memory follows the promises still
+/// held rather than every promise ever created.
+const PROMISE_SLOT_CHUNK: usize = 1024;
+
+#[derive(Debug, Clone, Default)]
+struct PromiseSlotChunk {
+    slots: Vec<Option<PromiseRecord>>,
+    occupied: usize,
+}
+
 /// Promise arena slots with the occupied count and the sum of
 /// [`estimate_promise_record_memory_bytes`] kept current (bd-9vouw.31).
 /// Every in-place record mutation goes through [`Self::update`], which
-/// re-measures that one record. Serialized as the plain slot sequence; reads
-/// go through `Deref<Target = [Option<PromiseRecord>]>`.
+/// re-measures that one record. Serialized as the plain slot sequence.
+///
+/// Handles are never reused: a vacated handle reads as `None`. Slots live in
+/// chunks of [`PROMISE_SLOT_CHUNK`]; a full chunk with every slot vacated is
+/// released.
 #[derive(Debug, Clone, Default)]
 struct PromiseSlots {
-    slots: Vec<Option<PromiseRecord>>,
+    /// `None`: a released chunk, every slot of which was vacated.
+    chunks: Vec<Option<PromiseSlotChunk>>,
+    allocated: usize,
     occupied: usize,
     record_bytes: u64,
 }
 
 impl PromiseSlots {
+    /// Number of slots ever allocated: the next handle.
+    fn len(&self) -> usize {
+        self.allocated
+    }
+
+    fn record(&self, index: usize) -> Option<&PromiseRecord> {
+        self.chunks
+            .get(index / PROMISE_SLOT_CHUNK)?
+            .as_ref()?
+            .slots
+            .get(index % PROMISE_SLOT_CHUNK)?
+            .as_ref()
+    }
+
+    /// The record in the highest slot, if that slot is occupied.
+    fn last_record(&self) -> Option<&PromiseRecord> {
+        self.record(self.allocated.checked_sub(1)?)
+    }
+
+    /// Occupied records in handle order.
+    fn records(&self) -> impl Iterator<Item = &PromiseRecord> {
+        self.chunks
+            .iter()
+            .flatten()
+            .flat_map(|chunk| chunk.slots.iter())
+            .flatten()
+    }
+
     fn push(&mut self, record: Option<PromiseRecord>) {
+        if self.allocated.is_multiple_of(PROMISE_SLOT_CHUNK) {
+            self.chunks.push(Some(PromiseSlotChunk::default()));
+        }
         if let Some(record) = &record {
             self.occupied += 1;
             self.record_bytes = self
                 .record_bytes
                 .saturating_add(estimate_promise_record_memory_bytes(record));
         }
-        self.slots.push(record);
+        // Only a full chunk is ever released, so the tail chunk is resident.
+        let chunk = self
+            .chunks
+            .last_mut()
+            .and_then(Option::as_mut)
+            .expect("the promise tail chunk is resident");
+        if record.is_some() {
+            chunk.occupied += 1;
+        }
+        chunk.slots.push(record);
+        self.allocated += 1;
     }
 
     fn release(&mut self, record: &Option<PromiseRecord>) {
@@ -594,16 +651,61 @@ impl PromiseSlots {
     }
 
     fn pop(&mut self) -> Option<Option<PromiseRecord>> {
-        let record = self.slots.pop()?;
+        let index = self.allocated.checked_sub(1)?;
+        let chunk_index = index / PROMISE_SLOT_CHUNK;
+        if self.chunks[chunk_index].is_none() {
+            // Popping into a released chunk: its remaining slots are vacant.
+            self.chunks[chunk_index] = Some(PromiseSlotChunk {
+                slots: (0..PROMISE_SLOT_CHUNK).map(|_| None).collect(),
+                occupied: 0,
+            });
+        }
+        let chunk = self.chunks[chunk_index]
+            .as_mut()
+            .expect("chunk was just made resident");
+        let record = chunk.slots.pop()?;
+        if record.is_some() {
+            chunk.occupied -= 1;
+        }
+        self.allocated = index;
+        if self.allocated.is_multiple_of(PROMISE_SLOT_CHUNK) {
+            self.chunks.truncate(self.allocated / PROMISE_SLOT_CHUNK);
+        }
         self.release(&record);
         Some(record)
     }
 
-    /// Vacate one slot, keeping later handles stable.
+    /// Vacate one slot, keeping later handles stable. A full chunk left with
+    /// no occupied slot is released.
     fn take(&mut self, index: usize) -> Option<PromiseRecord> {
-        let record = self.slots.get_mut(index)?.take();
+        let chunk_index = index / PROMISE_SLOT_CHUNK;
+        let chunk = self.chunks.get_mut(chunk_index)?.as_mut()?;
+        let record = chunk.slots.get_mut(index % PROMISE_SLOT_CHUNK)?.take();
+        if record.is_some() {
+            chunk.occupied -= 1;
+            if chunk.occupied == 0 && chunk.slots.len() == PROMISE_SLOT_CHUNK {
+                self.chunks[chunk_index] = None;
+            }
+        }
         self.release(&record);
         record
+    }
+
+    /// Handles of occupied slots whose record `select` picks, visiting only
+    /// resident chunks.
+    fn select_handles(&self, mut select: impl FnMut(&PromiseRecord) -> bool) -> Vec<usize> {
+        let mut handles = Vec::new();
+        for (chunk_index, chunk) in self.chunks.iter().enumerate() {
+            let Some(chunk) = chunk else {
+                continue;
+            };
+            for (offset, slot) in chunk.slots.iter().enumerate() {
+                if slot.as_ref().is_some_and(&mut select) {
+                    handles.push(chunk_index * PROMISE_SLOT_CHUNK + offset);
+                }
+            }
+        }
+        handles
     }
 
     /// Mutate one occupied record in place and re-measure it.
@@ -612,7 +714,13 @@ impl PromiseSlots {
         index: usize,
         mutate: impl FnOnce(&mut PromiseRecord) -> R,
     ) -> Option<R> {
-        let record = self.slots.get_mut(index)?.as_mut()?;
+        let record = self
+            .chunks
+            .get_mut(index / PROMISE_SLOT_CHUNK)?
+            .as_mut()?
+            .slots
+            .get_mut(index % PROMISE_SLOT_CHUNK)?
+            .as_mut()?;
         let before = estimate_promise_record_memory_bytes(record);
         let result = mutate(record);
         let after = estimate_promise_record_memory_bytes(record);
@@ -628,17 +736,9 @@ impl PromiseSlots {
     }
 }
 
-impl std::ops::Deref for PromiseSlots {
-    type Target = [Option<PromiseRecord>];
-
-    fn deref(&self) -> &[Option<PromiseRecord>] {
-        &self.slots
-    }
-}
-
 impl Serialize for PromiseSlots {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.slots.serialize(serializer)
+        serializer.collect_seq((0..self.allocated).map(|index| self.record(index)))
     }
 }
 
@@ -749,14 +849,14 @@ impl PromiseStore {
 
     /// Number of promise slots, vacated or not: the next handle.
     pub(crate) fn slot_count(&self) -> usize {
-        self.promises.slots.len()
+        self.promises.len()
     }
 
     /// Collector roots (bd-9vouw.57): every pending promise, since a
     /// resolving function or a queued job may still settle it, and every
     /// rejection awaiting the unhandled-rejection check.
     pub(crate) fn for_each_root(&self, mut visit: impl FnMut(PromiseHandle)) {
-        for record in self.promises.slots.iter().flatten() {
+        for record in self.promises.records() {
             if record.state == PromiseState::Pending {
                 visit(record.handle);
             }
@@ -795,12 +895,12 @@ impl PromiseStore {
     /// Handles are not reused, so a stale handle fails with
     /// `InvalidHandle` instead of naming another promise.
     pub(crate) fn reclaim_settled(&mut self, mut keep: impl FnMut(PromiseHandle) -> bool) -> u64 {
+        let settled = self
+            .promises
+            .select_handles(|record| record.state != PromiseState::Pending);
         let mut reclaimed = 0;
-        for index in 0..self.promises.slots.len() {
-            let settled = self.promises.slots[index]
-                .as_ref()
-                .is_some_and(|record| record.state != PromiseState::Pending);
-            if settled && !keep(PromiseHandle(index as u32)) {
+        for index in settled {
+            if !keep(PromiseHandle(index as u32)) {
                 self.promises.take(index);
                 reclaimed += 1;
             }
@@ -824,14 +924,8 @@ impl PromiseStore {
 
     /// Full-walk reference for [`Self::estimated_memory_bytes`].
     pub(crate) fn estimated_memory_bytes_by_walk(&self) -> u64 {
-        estimate_vector_slot_bytes::<PromiseRecord>(
-            self.promises
-                .iter()
-                .filter(|record| record.is_some())
-                .count(),
-        )
-        .saturating_add(saturating_sum(self.promises.iter().flatten().map(
-            |record| {
+        estimate_vector_slot_bytes::<PromiseRecord>(self.promises.records().count())
+            .saturating_add(saturating_sum(self.promises.records().map(|record| {
                 let state_bytes = match &record.state {
                     PromiseState::Pending => 0,
                     PromiseState::Fulfilled(value) | PromiseState::Rejected(value) => {
@@ -849,9 +943,8 @@ impl PromiseStore {
                             .iter()
                             .map(|reaction| estimate_label_memory_bytes(&reaction.label)),
                     ))
-            },
-        )))
-        .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
+            })))
+            .saturating_add(estimate_witness_log_memory_bytes(&self.witness))
     }
 
     pub(crate) fn projected_create_memory_bytes(&self) -> u64 {
@@ -979,15 +1072,11 @@ impl PromiseStore {
     /// Roll back the most recent still-pending creation after an enclosing
     /// interpreter memory preflight refuses its resident charge.
     pub(crate) fn rollback_last_created(&mut self, handle: PromiseHandle) -> bool {
-        let is_last_pending = self
-            .promises
-            .last()
-            .and_then(Option::as_ref)
-            .is_some_and(|record| {
-                record.handle == handle
-                    && matches!(record.state, PromiseState::Pending)
-                    && record.reactions.is_empty()
-            });
+        let is_last_pending = self.promises.last_record().is_some_and(|record| {
+            record.handle == handle
+                && matches!(record.state, PromiseState::Pending)
+                && record.reactions.is_empty()
+        });
         let has_matching_witness = matches!(
             self.witness.last(),
             Some(WitnessEvent::PromiseCreated {
@@ -1044,8 +1133,7 @@ impl PromiseStore {
     /// Get a Promise by handle.
     pub fn get(&self, handle: PromiseHandle) -> Result<&PromiseRecord, PromiseError> {
         self.promises
-            .get(handle.0 as usize)
-            .and_then(Option::as_ref)
+            .record(handle.0 as usize)
             .ok_or(PromiseError::InvalidHandle { handle })
     }
 
@@ -1274,8 +1362,7 @@ impl PromiseStore {
         terminal_epoch: u64,
     ) -> bool {
         self.promises
-            .get(handle.0 as usize)
-            .and_then(Option::as_ref)
+            .record(handle.0 as usize)
             .is_some_and(|record| record.terminal_epoch == terminal_epoch)
     }
 
@@ -1530,8 +1617,7 @@ impl PromiseStore {
     /// Collect all unhandled rejections (for reporting).
     pub fn unhandled_rejections(&self) -> Vec<PromiseHandle> {
         self.promises
-            .iter()
-            .flatten()
+            .records()
             .filter(|p| p.state.is_rejected() && !p.rejection_handled)
             .map(|p| p.handle)
             .collect()
@@ -3998,6 +4084,77 @@ mod tests {
             .get(h)
             .expect("operation should succeed for valid inputs");
         assert_eq!(p.label, Label::Secret);
+    }
+
+    /// bd-9vouw.57: vacated promise slots are released by chunk. Handles
+    /// stay stable (a vacated handle is invalid, never reused) and the byte
+    /// totals match a walk (asserted inside `estimated_memory_bytes`).
+    #[test]
+    fn fully_vacated_promise_chunks_are_released() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let first = store.create();
+        for _ in 1..3 * PROMISE_SLOT_CHUNK {
+            let handle = store.create();
+            store
+                .fulfill(handle, JsValue::Int(1), Label::Public, &mut queue)
+                .expect("fresh promise fulfills");
+        }
+        let _ = store.estimated_memory_bytes();
+        // Every settled promise is vacated; the first one is still pending.
+        let reclaimed = store.reclaim_settled(|_| false);
+        assert_eq!(reclaimed, 3 * PROMISE_SLOT_CHUNK as u64 - 1);
+        assert_eq!(store.len(), 1);
+        assert!(
+            store.promises.chunks[1].is_none(),
+            "fully vacated chunk kept"
+        );
+        assert!(
+            store.promises.chunks[2].is_none(),
+            "fully vacated tail chunk kept"
+        );
+        assert!(
+            store.promises.chunks[0].is_some(),
+            "chunk with a pending promise released"
+        );
+        assert!(store.get(PromiseHandle(PROMISE_SLOT_CHUNK as u32)).is_err());
+        assert!(store.get(first).is_ok());
+        let _ = store.estimated_memory_bytes();
+
+        // New handles keep counting past the released chunks.
+        let next = store.create();
+        assert_eq!(next.0 as usize, 3 * PROMISE_SLOT_CHUNK);
+        assert!(store.get(next).is_ok());
+        let _ = store.estimated_memory_bytes();
+    }
+
+    #[test]
+    fn popping_into_a_released_promise_chunk_keeps_slots_vacant() {
+        let mut slots = PromiseSlots::default();
+        for index in 0..PROMISE_SLOT_CHUNK {
+            slots.push(Some(PromiseRecord::new(
+                PromiseHandle(index as u32),
+                index as u64,
+            )));
+        }
+        for index in 0..PROMISE_SLOT_CHUNK {
+            assert!(slots.take(index).is_some());
+        }
+        assert!(slots.chunks[0].is_none());
+        assert_eq!(slots.pop().map(|record| record.is_none()), Some(true));
+        assert_eq!(slots.len(), PROMISE_SLOT_CHUNK - 1);
+        assert!(slots.record(0).is_none());
+        slots.push(Some(PromiseRecord::new(PromiseHandle(1023), 1023)));
+        assert!(slots.record(PROMISE_SLOT_CHUNK - 1).is_some());
+        assert_eq!(
+            slots.memory_bytes(),
+            estimate_vector_slot_bytes::<PromiseRecord>(1).saturating_add(
+                slots
+                    .records()
+                    .map(estimate_promise_record_memory_bytes)
+                    .sum::<u64>()
+            )
+        );
     }
 
     // ----- Witness events -----

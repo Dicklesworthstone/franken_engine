@@ -5567,7 +5567,17 @@ fn parse_new_expression(
     // the trailing access applies to the constructed object, reusing the existing
     // postfix (member/call/index) machinery (bd-if9uy). The parenthesised form is
     // known-good, so this is a faithful regrouping rather than new parsing logic.
-    if let Some((open, close)) = find_first_top_level_paren_pair(rest) {
+    // A parenthesised callee (`new (K)().m()`, `new (o.K)(a).b`) is not the
+    // argument list: the arguments are the next top-level pair after it.
+    let argument_pair = find_first_top_level_paren_pair(rest).and_then(|(open, close)| {
+        if rest[..open].trim().is_empty() {
+            find_first_top_level_paren_pair(&rest[close + 1..])
+                .map(|(next_open, next_close)| (close + 1 + next_open, close + 1 + next_close))
+        } else {
+            Some((open, close))
+        }
+    });
+    if let Some((open, close)) = argument_pair {
         let callee_src = rest[..open].trim();
         let trailing = rest[close + 1..].trim();
         if !callee_src.is_empty()

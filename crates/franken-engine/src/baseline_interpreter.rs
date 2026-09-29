@@ -33697,7 +33697,28 @@ impl InterpreterCore {
     }
 
     fn alloc_math_global(&mut self) -> Result<Value, InterpreterError> {
-        let math = self.alloc_object_with_properties(&[
+        // @@toStringTag goes on first, while the property map is empty:
+        // set_symbol_property projects an insertion on a copy of the map and
+        // charges that copy as a temporary peak, so tagging the finished
+        // object peaked a whole property map above what Math retains (the
+        // generated Function realm must fit its exact retained budget,
+        // bd-fw7zd.8.3). Symbol keys list after string keys either way.
+        let math = self.alloc_object_with_properties(&[])?;
+        self.set_object_runtime_property(
+            math,
+            RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+            Value::str("Math"),
+        )?;
+        self.set_own_property_attributes(
+            math,
+            &RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+            },
+        )?;
+        for (name, value) in [
             (
                 "abs",
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAbs)),
@@ -33818,7 +33839,9 @@ impl InterpreterCore {
                 "atanh",
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAtanh)),
             ),
-        ])?;
+        ] {
+            self.set_object_property(math, name.to_string(), value)?;
+        }
         self.mark_builtin_members_non_enumerable(math)?;
         // ES2020 20.2.1 value properties.
         for (name, value) in [
@@ -33838,20 +33861,6 @@ impl InterpreterCore {
                 READ_ONLY_VALUE_ATTRIBUTES,
             )?;
         }
-        self.set_object_runtime_property(
-            math,
-            RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
-            Value::str("Math"),
-        )?;
-        self.set_own_property_attributes(
-            math,
-            &RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
-            PropertyAttributes {
-                writable: false,
-                enumerable: false,
-                configurable: true,
-            },
-        )?;
         Ok(Value::Object(math))
     }
 

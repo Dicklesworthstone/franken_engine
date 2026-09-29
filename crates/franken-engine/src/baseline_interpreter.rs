@@ -51490,6 +51490,16 @@ impl InterpreterCore {
             | Value::Bool(_)
             | Value::BigInt(_)
             | Value::Symbol(_)) => self.alloc_primitive_wrapper(primitive)?,
+            // A function's own properties live on its backing object (its
+            // `name` and `length` are not enumerable), bd-9vouw.17.
+            ref function if function.is_callable() && module.is_some() => {
+                let module = module.expect("checked above");
+                self.ensure_function_own_property_object(module, function)?
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "function with an own-property object".to_string(),
+                        got: function.type_name().to_string(),
+                    })?
+            }
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "object".to_string(),

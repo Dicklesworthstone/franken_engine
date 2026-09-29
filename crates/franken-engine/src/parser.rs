@@ -6367,6 +6367,14 @@ fn try_parse_binary(
             i += 1;
             continue;
         }
+        // `++`/`--` is one update-operator token (maximal munch), never a
+        // binary `+`/`-`: `a+++b` is `a++ + b`, and `a++ + 2` must not split
+        // at the first `+` of `++` (that parsed as `a + (+(+2))` and dropped
+        // the increment).
+        if matches!(b, b'+' | b'-') && bytes.get(i + 1) == Some(&b) {
+            i += 2;
+            continue;
+        }
         if let Some((op, len)) = match_binary_operator_at(bytes, i) {
             // For the same precedence, prefer the rightmost for right-associative,
             // leftmost for left-associative.
@@ -6394,6 +6402,7 @@ fn try_parse_binary(
                 // e.g. the `-` in `2 * -3`, `a - -b`, or `2 ** -1`. Skipping it
                 // lets the real binary operator win the split.
                 let unary_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
+                    && !ends_with_postfix_update(lhs)
                     && lhs
                         .as_bytes()
                         .last()
@@ -6428,6 +6437,20 @@ fn try_parse_binary(
         left: Box::new(left),
         right: Box::new(right),
     }))
+}
+
+/// Whether `lhs` ends with a postfix `++`/`--` (the update follows an
+/// operand). The update completes its operand, so a `+`/`-` after it is
+/// binary (`a++ + 2`, `a---b`), not a sign of the right operand.
+fn ends_with_postfix_update(lhs: &str) -> bool {
+    let Some(operand) = lhs.strip_suffix("++").or_else(|| lhs.strip_suffix("--")) else {
+        return false;
+    };
+    operand
+        .trim_end()
+        .as_bytes()
+        .last()
+        .is_some_and(|&c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'$' | b')' | b']'))
 }
 
 /// A sign in a decimal exponent belongs to its numeric token, not an

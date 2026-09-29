@@ -43,7 +43,7 @@ use crate::js_string::{ExactPropertyMap, JsString};
 /// format, matching the JSON replay/checkpoint boundary used by this carrier.
 #[derive(Debug, Clone)]
 pub struct OrderedStringMap<V> {
-    by_key: BTreeMap<String, V>,
+    by_key: KeyedValues<V>,
     // Exact-only data keys. Keeping ordinary strings in the historical map
     // preserves its allocation-free hot path; this sidecar's invariant is
     // that every key is non-well-formed.
@@ -92,6 +92,146 @@ pub(crate) struct BaselineStringAccessor<V> {
     pub(crate) set: Option<V>,
 }
 
+/// Storage for [`OrderedStringMap`]'s well-formed keys: a vector sorted by key
+/// while it holds at most [`SMALL_KEYED_VALUES`] entries, a B-tree beyond.
+///
+/// Most objects have a handful of properties. A B-tree allocates a full leaf
+/// node (eleven key and eleven value slots) for its first entry, so a
+/// two-property object paid for eleven. Both forms iterate in key order, and
+/// equality compares entries, not the form.
+#[derive(Debug, Clone)]
+enum KeyedValues<V> {
+    Small(Vec<(String, V)>),
+    Large(BTreeMap<String, V>),
+}
+
+/// Most entries [`KeyedValues`] keeps in its sorted vector.
+const SMALL_KEYED_VALUES: usize = 8;
+
+impl<V> KeyedValues<V> {
+    fn new() -> Self {
+        Self::Small(Vec::new())
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Small(entries) => entries.len(),
+            Self::Large(map) => map.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn small_position(entries: &[(String, V)], key: &str) -> Result<usize, usize> {
+        entries.binary_search_by(|(candidate, _)| candidate.as_str().cmp(key))
+    }
+
+    fn get(&self, key: &str) -> Option<&V> {
+        match self {
+            Self::Small(entries) => Self::small_position(entries, key)
+                .ok()
+                .map(|index| &entries[index].1),
+            Self::Large(map) => map.get(key),
+        }
+    }
+
+    fn get_mut(&mut self, key: &str) -> Option<&mut V> {
+        match self {
+            Self::Small(entries) => Self::small_position(entries, key)
+                .ok()
+                .map(|index| &mut entries[index].1),
+            Self::Large(map) => map.get_mut(key),
+        }
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        match self {
+            Self::Small(entries) => Self::small_position(entries, key).is_ok(),
+            Self::Large(map) => map.contains_key(key),
+        }
+    }
+
+    fn insert(&mut self, key: String, value: V) -> Option<V> {
+        match self {
+            Self::Small(entries) => match Self::small_position(entries, &key) {
+                Ok(index) => Some(std::mem::replace(&mut entries[index].1, value)),
+                Err(index) if entries.len() < SMALL_KEYED_VALUES => {
+                    entries.insert(index, (key, value));
+                    None
+                }
+                Err(_) => {
+                    let mut map: BTreeMap<String, V> =
+                        std::mem::take(entries).into_iter().collect();
+                    map.insert(key, value);
+                    *self = Self::Large(map);
+                    None
+                }
+            },
+            Self::Large(map) => map.insert(key, value),
+        }
+    }
+
+    fn remove(&mut self, key: &str) -> Option<V> {
+        match self {
+            Self::Small(entries) => Self::small_position(entries, key)
+                .ok()
+                .map(|index| entries.remove(index).1),
+            Self::Large(map) => map.remove(key),
+        }
+    }
+
+    fn clear(&mut self) {
+        *self = Self::new();
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&String, &mut V) -> bool) {
+        match self {
+            Self::Small(entries) => entries.retain_mut(|(key, value)| keep(key, value)),
+            Self::Large(map) => map.retain(|key, value| keep(key, value)),
+        }
+    }
+
+    fn iter(&self) -> KeyedValuesIter<'_, V> {
+        match self {
+            Self::Small(entries) => KeyedValuesIter::Small(entries.iter()),
+            Self::Large(map) => KeyedValuesIter::Large(map.iter()),
+        }
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.iter().map(|(key, _)| key)
+    }
+
+    fn values(&self) -> impl Iterator<Item = &V> {
+        self.iter().map(|(_, value)| value)
+    }
+}
+
+impl<V: PartialEq> PartialEq for KeyedValues<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+/// Key-ordered iterator over [`KeyedValues`].
+enum KeyedValuesIter<'a, V> {
+    Small(std::slice::Iter<'a, (String, V)>),
+    Large(std::collections::btree_map::Iter<'a, String, V>),
+}
+
+impl<'a, V> Iterator for KeyedValuesIter<'a, V> {
+    type Item = (&'a String, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Small(entries) => entries.next().map(|(key, value)| (key, value)),
+            Self::Large(entries) => entries.next(),
+        }
+    }
+}
+
 impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
     fn eq(&self, other: &Self) -> bool {
         self.by_key == other.by_key
@@ -110,7 +250,7 @@ impl<V: Eq> Eq for OrderedStringMap<V> {}
 impl<V> Default for OrderedStringMap<V> {
     fn default() -> Self {
         Self {
-            by_key: BTreeMap::new(),
+            by_key: KeyedValues::new(),
             exact_only_by_key: ExactPropertyMap::new(),
             array_indices: BTreeMap::new(),
             string_insertion_order: Vec::new(),
@@ -708,7 +848,7 @@ pub struct OrderedStringMapIter<'a, V> {
         std::collections::btree_map::Values<'a, u32, String>,
         std::slice::Iter<'a, String>,
     >,
-    by_key: &'a BTreeMap<String, V>,
+    by_key: &'a KeyedValues<V>,
 }
 
 impl<'a, V> Iterator for OrderedStringMapIter<'a, V> {
@@ -736,7 +876,7 @@ impl<'a, V> IntoIterator for &'a OrderedStringMap<V> {
 /// Owning iterator over [`OrderedStringMap`] entries.
 pub struct OrderedStringMapIntoIter<V> {
     keys: std::vec::IntoIter<String>,
-    by_key: BTreeMap<String, V>,
+    by_key: KeyedValues<V>,
 }
 
 impl<V> Iterator for OrderedStringMapIntoIter<V> {
@@ -3479,6 +3619,62 @@ mod tests {
             map.values().copied().collect::<Vec<_>>(),
             vec![6, 3, 2, 8, 1, 4, 5, 7]
         );
+    }
+
+    /// Crossing the small-storage threshold keeps every lookup, the ES key
+    /// order and equality with a map built without crossing it.
+    #[test]
+    fn ordered_string_map_small_and_large_storage_agree() {
+        let keys = (0..SMALL_KEYED_VALUES + 4)
+            .rev()
+            .map(|index| format!("k{index}"))
+            .chain(["3".to_string(), "1".to_string()])
+            .collect::<Vec<_>>();
+        let mut map = OrderedStringMap::new();
+        for (value, key) in keys.iter().enumerate() {
+            map.insert(key.clone(), value);
+            assert_eq!(map.get(key), Some(&value));
+        }
+        assert!(matches!(map.by_key, KeyedValues::Large(_)));
+        let mut expected = vec!["1".to_string(), "3".to_string()];
+        expected.extend(keys[..SMALL_KEYED_VALUES + 4].iter().cloned());
+        assert_eq!(map.keys().cloned().collect::<Vec<_>>(), expected);
+        for (value, key) in keys.iter().enumerate() {
+            assert!(map.contains_key(key));
+            assert_eq!(map.get(key), Some(&value));
+        }
+        assert_eq!(
+            map.insert("k0".to_string(), 99),
+            Some(SMALL_KEYED_VALUES + 3)
+        );
+        assert_eq!(map.get("k0"), Some(&99));
+        assert_eq!(map.get("absent"), None);
+
+        // Remove down to a few entries: the storage stays large, and equals a
+        // map that only ever held those entries in small storage.
+        for key in &keys[..SMALL_KEYED_VALUES + 2] {
+            assert!(map.remove(key).is_some());
+        }
+        assert!(matches!(map.by_key, KeyedValues::Large(_)));
+        let mut small = OrderedStringMap::new();
+        for key in &keys[SMALL_KEYED_VALUES + 2..] {
+            small.insert(key.clone(), *map.get(key).expect("kept"));
+        }
+        assert!(matches!(small.by_key, KeyedValues::Small(_)));
+        assert_eq!(map, small);
+        assert_eq!(
+            map.clone().into_iter().collect::<Vec<_>>(),
+            small.into_iter().collect::<Vec<_>>()
+        );
+
+        map.retain(|key, _| key != "3");
+        assert_eq!(
+            map.keys().cloned().collect::<Vec<_>>(),
+            vec!["1", "k1", "k0"]
+        );
+        map.clear();
+        assert!(map.is_empty());
+        assert!(matches!(map.by_key, KeyedValues::Small(_)));
     }
 
     #[test]

@@ -54368,12 +54368,39 @@ impl InterpreterCore {
     /// (not as an own property of the shared prototype objects) somewhere on
     /// `object_id`'s chain, so `'push' in []` and `'hasOwnProperty' in {}`
     /// agree with the [[Get]] fallbacks (bd-9vouw.34).
+    /// Whether `object_id` inherits the Array.prototype builtins through an
+    /// array further up its chain (`F.prototype = [...]`,
+    /// `Object.create([])`): an array whose own link is the default one
+    /// reaches %Array.prototype%, which is not allocated until a program
+    /// names it (with it allocated, the canonical-prototype walk serves the
+    /// methods). The root itself is the caller's `is_array` check.
+    fn chain_inherits_array_prototype(&self, object_id: ObjectId) -> bool {
+        let array_prototype = self.builtin_prototypes.get("Array").copied();
+        let mut current = self.observable_prototype_of(object_id);
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(id) = current else {
+                return false;
+            };
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                return false;
+            };
+            if object.is_array {
+                return !object.is_null_prototype
+                    && (object.prototype.is_none() || object.prototype == array_prototype);
+            }
+            current = self.observable_prototype_link(object, id);
+        }
+        false
+    }
+
     fn chain_has_virtual_builtin_property(&self, object_id: ObjectId, key: &str) -> bool {
         let root_is_array = self
             .heap
             .get(object_id.0 as usize)
             .is_some_and(|object| object.is_array);
-        if root_is_array && Self::array_prototype_method(key).is_some() {
+        if (root_is_array || self.chain_inherits_array_prototype(object_id))
+            && Self::array_prototype_method(key).is_some()
+        {
             return true;
         }
         if self
@@ -54560,7 +54587,9 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .map(|object| object.is_array)
             .unwrap_or(false);
-        if root_is_array && let Some(builtin) = Self::array_prototype_method(key_text) {
+        if let Some(builtin) = Self::array_prototype_method(key_text)
+            && (root_is_array || self.chain_inherits_array_prototype(object_id))
+        {
             return Ok(Value::BuiltinFunction(builtin));
         }
         // bd-9vouw.17: the canonical `Array.prototype`, `String.prototype`
@@ -91603,7 +91632,9 @@ impl InterpreterCore {
         let constructor = |name: &'static str| {
             Value::BuiltinFunction(BuiltinFunction::standard_constructor(name))
         };
-        if self.heap.get(object_id.0 as usize)?.is_array {
+        if self.heap.get(object_id.0 as usize)?.is_array
+            || self.chain_inherits_array_prototype(object_id)
+        {
             return Some(constructor("Array"));
         }
         let mut current = Some(object_id);

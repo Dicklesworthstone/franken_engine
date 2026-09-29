@@ -8346,7 +8346,16 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             Ir1Op::BinaryOp { operator } => {
                 let rhs = pop_lowering_value(&mut value_stack)?;
                 let lhs = pop_lowering_value(&mut value_stack)?;
-                let dst = alloc_register(&mut register_cursor);
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                let dst = binary_result_register(
+                    lhs,
+                    &value_stack,
+                    reserved_below,
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 let instr = match operator {
                     BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
                     BinaryOperator::Subtract => Ir3Instruction::Sub { dst, lhs, rhs },
@@ -10237,7 +10246,16 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 Ir1Op::BinaryOp { operator } => {
                     let rhs = pop_lowering_value(&mut fn_value_stack)?;
                     let lhs = pop_lowering_value(&mut fn_value_stack)?;
-                    let dst = alloc_register(&mut fn_reg);
+                    let reserved_below = fn_statement_register_floor
+                        .max(fn_pinned_register_high)
+                        .max(live_status_register_ceiling(&fn_live_status_registers));
+                    let dst = binary_result_register(
+                        lhs,
+                        &fn_value_stack,
+                        reserved_below,
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     let instr = lower_binary_op_to_ir3(*operator, dst, lhs, rhs);
                     ir3.instructions.push(instr);
                     fn_value_stack.push(dst);
@@ -31554,6 +31572,31 @@ fn compact_call_result(
         cursor,
         high_water,
     )
+}
+
+/// bd-9vouw.23: a binary operator's operands are dead once it has run. When
+/// its left operand is a temporary with nothing live at or above it (no
+/// value-stack entry, and above the statement floor, pinned bindings and live
+/// slots), the result takes that register, as `x += y` already writes its
+/// left operand (every binary instruction reads both operands before it
+/// writes), and the cursor rewinds past it. Otherwise the result gets a fresh
+/// register. Without this each operator held two registers until its
+/// statement ended, so a 128-term `1 + 1 + ... + 1` overflowed the
+/// 256-register frame.
+fn binary_result_register(
+    lhs: Reg,
+    value_stack: &[Reg],
+    reserved_below: Reg,
+    cursor: &mut Reg,
+    high_water: &mut Reg,
+) -> Reg {
+    if lhs >= reserved_below && lhs < *cursor && value_stack.iter().all(|register| *register < lhs)
+    {
+        *high_water = (*high_water).max(*cursor);
+        *cursor = lhs.saturating_add(1);
+        return lhs;
+    }
+    alloc_register(cursor)
 }
 
 /// bd-9vouw.23: lowest register a statement-boundary rewind may return to

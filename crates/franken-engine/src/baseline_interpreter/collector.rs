@@ -170,6 +170,9 @@ struct GcMarker {
     closure_stack: Vec<u32>,
     promises: ChunkedMarks,
     promise_stack: Vec<u32>,
+    /// Promise-value carriers (bd-9vouw.69) named by a traced `JsValue`.
+    carriers: HashSet<u32>,
+    carrier_stack: Vec<u32>,
     /// Async-function records named by a call frame or an await
     /// continuation. Records that have not completed are always kept.
     async_functions: ChunkedMarks,
@@ -197,6 +200,8 @@ impl GcMarker {
             closure_stack: Vec::new(),
             promises: ChunkedMarks::new(promises_len),
             promise_stack: Vec::new(),
+            carriers: HashSet::new(),
+            carrier_stack: Vec::new(),
             async_functions: ChunkedMarks::new(async_functions_len),
             iterators: ChunkedMarks::new(iterators_len),
             iterator_stack: Vec::new(),
@@ -324,8 +329,14 @@ impl GcMarker {
     }
 
     fn js_value(&mut self, value: &JsValue) {
-        if let JsValue::Object(handle) = value {
-            self.object(ObjectId(handle.0));
+        match value {
+            JsValue::Object(handle) => self.object(ObjectId(handle.0)),
+            JsValue::Function(id) if *id >= PROMISE_VALUE_CARRIER_BASE => {
+                if self.carriers.insert(*id) {
+                    self.carrier_stack.push(*id);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -927,6 +938,22 @@ impl InterpreterCore {
             reclaimed_bytes = reclaimed_bytes.saturating_add(released);
         }
 
+        // Promise-value carriers no traced value names.
+        let marked_carriers = std::mem::take(&mut marker.carriers);
+        let mut released_carrier_bytes = 0u64;
+        self.promise_value_carriers.retain(|id, value| {
+            let live = marked_carriers.contains(id);
+            if !live {
+                released_carrier_bytes = released_carrier_bytes
+                    .saturating_add(Self::estimate_promise_value_carrier_bytes(value));
+            }
+            live
+        });
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_carrier_bytes);
+        reclaimed_bytes = reclaimed_bytes.saturating_add(released_carrier_bytes);
+
         // Settled promises nothing reachable names: vacate their records
         // (values and reactions). Pending promises are roots.
         let before = self.promise_runtime_memory_bytes();
@@ -997,6 +1024,12 @@ impl InterpreterCore {
             if let Some(iterator) = marker.iterator_stack.pop() {
                 if let Some(state) = self.iterators.get(iterator as usize) {
                     marker.iterator(state);
+                }
+                continue;
+            }
+            if let Some(carrier) = marker.carrier_stack.pop() {
+                if let Some(value) = self.promise_value_carriers.get(&carrier) {
+                    marker.value(value);
                 }
                 continue;
             }
@@ -1224,6 +1257,9 @@ impl InterpreterCore {
             event_loop,
             promise_in_flight_task_bytes: _,
             promise_reaction_callables,
+            // Traced from the promise values and jobs that name each carrier.
+            promise_value_carriers: _,
+            next_promise_value_carrier: _,
             next_tick_queue,
             next_promise_reaction_callable_id: _,
             builtin_dispatch_hit_unknown_member: _,

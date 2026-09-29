@@ -310,6 +310,14 @@ const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
 /// and ids at or above the base index `promise_reaction_callables` instead
 /// of the closure table.
 const PROMISE_REACTION_CALLABLE_BASE: u32 = 0x8000_0000;
+
+/// First id of a promise-value carrier (bd-9vouw.69). The promise subsystem
+/// carries `JsValue`, which cannot express closures, generators, iterators,
+/// promises, bound or builtin functions, BigInt or non-well-formed strings.
+/// Such a value settles a promise as `JsValue::Function(id)`, with `id` at or
+/// above this base naming an entry of `promise_value_carriers`. Function
+/// indices of real modules never reach it, and guest code cannot name one.
+const PROMISE_VALUE_CARRIER_BASE: u32 = 0xF000_0000;
 /// Function index of a closure the collector reclaimed (bd-9vouw.57). No
 /// function table is that large, so a call through a missed root fails.
 const RECLAIMED_CLOSURE_FUNCTION_INDEX: u32 = u32::MAX;
@@ -12225,6 +12233,11 @@ pub struct InterpreterCore {
     /// `ClosureHandle` transport stays unchanged while the id can never
     /// collide with a real closure-table index (bd-sxh8o.1).
     promise_reaction_callables: BTreeMap<u32, Value>,
+    /// Values `JsValue` cannot express, keyed by carrier id (bd-9vouw.69).
+    /// An entry lives while a traced promise value, queued job or combinator
+    /// names its id; the collector purges the rest.
+    promise_value_carriers: BTreeMap<u32, Value>,
+    next_promise_value_carrier: u32,
     /// Node-compatible `process.nextTick` job queue (bd-8nrud). Drained
     /// completely before each Promise microtask at every checkpoint, matching
     /// Node's next-tick-before-Promise ordering. Populated only by the
@@ -13041,6 +13054,8 @@ impl InterpreterCore {
             event_loop: crate::promise_model::EventLoop::new(),
             promise_in_flight_task_bytes: 0,
             promise_reaction_callables: BTreeMap::new(),
+            promise_value_carriers: BTreeMap::new(),
+            next_promise_value_carrier: PROMISE_VALUE_CARRIER_BASE,
             next_promise_reaction_callable_id: PROMISE_REACTION_CALLABLE_BASE,
             builtin_dispatch_hit_unknown_member: false,
             next_tick_queue: std::collections::VecDeque::new(),
@@ -21115,10 +21130,10 @@ impl InterpreterCore {
                             crate::object_model::ObjectHandle(array.0),
                         ))
                     }
-                    EventPromiseWaiterAction::Reject => Err(arguments
-                        .first()
-                        .map(Self::value_to_js_value)
-                        .unwrap_or(crate::object_model::JsValue::Undefined)),
+                    EventPromiseWaiterAction::Reject => Err(match arguments.first() {
+                        Some(argument) => self.promise_value(argument)?,
+                        None => crate::object_model::JsValue::Undefined,
+                    }),
                 };
             self.remove_event_promise_waiter_links(target_id, record.waiter_id);
             match settlement {
@@ -27620,7 +27635,8 @@ impl InterpreterCore {
             }
             (StreamPipelineCompletion::Promise(promise), error) => {
                 if let Some(error) = error {
-                    self.reject_promise(promise, Self::value_to_js_value(&error), settlement_label)
+                    let reason = self.promise_value(&error)?;
+                    self.reject_promise(promise, reason, settlement_label)
                 } else {
                     self.fulfill_promise(
                         promise,
@@ -40111,12 +40127,12 @@ impl InterpreterCore {
                         label,
                     )?;
                 } else {
-                    let js_value = Self::value_to_js_value(&value);
+                    let js_value = self.promise_value(&value)?;
                     self.fulfill_promise(promise_handle, js_value, label)?;
                 }
             }
             Err(error_value) => {
-                let js_reason = Self::value_to_js_value(&error_value);
+                let js_reason = self.promise_value(&error_value)?;
                 self.reject_promise(promise_handle, js_reason, label)?;
             }
         }
@@ -40516,12 +40532,12 @@ impl InterpreterCore {
             Ok(argument) => {
                 self.write_reg_with_label(
                     result_register,
-                    Self::js_value_to_value(&argument),
+                    self.js_value_to_value(&argument),
                     settlement_label,
                 )?;
             }
             Err(reason) => {
-                let error_value = Self::js_value_to_value(&reason);
+                let error_value = self.js_value_to_value(&reason);
                 let _ = self.raise_await_rejection_with_label(error_value, settlement_label)?;
             }
         }
@@ -40843,12 +40859,12 @@ impl InterpreterCore {
             (ModuleAwaitContinuation::AwaitValue { result_register }, Ok(argument)) => {
                 self.write_reg_with_label(
                     result_register,
-                    Self::js_value_to_value(&argument),
+                    self.js_value_to_value(&argument),
                     label,
                 )?;
             }
             (ModuleAwaitContinuation::AwaitValue { .. }, Err(reason)) => {
-                let error_value = Self::js_value_to_value(&reason);
+                let error_value = self.js_value_to_value(&reason);
                 let _ = self.raise_await_rejection_with_label(error_value, label)?;
             }
             (ModuleAwaitContinuation::Dependency { .. }, Ok(_)) => {}
@@ -48101,7 +48117,7 @@ impl InterpreterCore {
                         Value::Promise(h) => crate::promise_model::PromiseHandle(h),
                         _ => {
                             // await non-promise: create a resolved promise with the value
-                            let js_val = Self::value_to_js_value(&awaited_value);
+                            let js_val = self.promise_value(&awaited_value)?;
                             self.create_fulfilled_promise(js_val, awaited_label.clone())?
                         }
                     };
@@ -54848,8 +54864,9 @@ impl InterpreterCore {
 
     // -- Promise hostcall dispatch ------------------------------------------
 
-    /// Convert a baseline `Value` to a `JsValue` from `object_model` for the
-    /// promise subsystem.
+    /// Convert a baseline `Value` that `JsValue` can express exactly:
+    /// primitives other than BigInt, well-formed strings, symbols, objects and
+    /// function indices. Use [`Self::promise_value`] for arbitrary values.
     fn value_to_js_value(val: &Value) -> crate::object_model::JsValue {
         match val {
             Value::Undefined => crate::object_model::JsValue::Undefined,
@@ -54867,9 +54884,57 @@ impl InterpreterCore {
         }
     }
 
-    /// Convert a `JsValue` from `object_model` back to a baseline `Value`.
-    #[allow(dead_code)]
-    fn js_value_to_value(jv: &crate::object_model::JsValue) -> Value {
+    /// Convert any `Value` for the promise subsystem without loss
+    /// (bd-9vouw.69). Values `JsValue` cannot express exactly (closures,
+    /// generators, iterators, promises, builtin and bound functions, BigInt,
+    /// accessors, non-well-formed strings) travel as a carrier id charged to
+    /// the memory budget; [`Self::js_value_to_value`] restores them.
+    fn promise_value(
+        &mut self,
+        value: &Value,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
+        let representable = match value {
+            Value::Undefined
+            | Value::Null
+            | Value::Bool(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Symbol(_)
+            | Value::Object(_)
+            | Value::Function(_) => true,
+            Value::Str(text) => text.as_str().is_some(),
+            _ => false,
+        };
+        if representable {
+            return Ok(Self::value_to_js_value(value));
+        }
+        let id = self.next_promise_value_carrier;
+        let next = id
+            .checked_add(1)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "promise value carrier capacity".to_string(),
+                got: format!("carrier id {id} exhausted"),
+            })?;
+        self.apply_memory_component_delta(0, Self::estimate_promise_value_carrier_bytes(value))?;
+        self.promise_value_carriers.insert(id, value.clone());
+        self.next_promise_value_carrier = next;
+        Ok(crate::object_model::JsValue::Function(id))
+    }
+
+    fn estimate_promise_value_carrier_bytes(value: &Value) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::estimate_value_bytes(value))
+    }
+
+    fn promise_value_carriers_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
+            self.promise_value_carriers
+                .values()
+                .map(Self::estimate_promise_value_carrier_bytes),
+        )
+    }
+
+    /// Convert a promise-subsystem `JsValue` back, restoring carried values.
+    fn js_value_to_value(&self, jv: &crate::object_model::JsValue) -> Value {
         match jv {
             crate::object_model::JsValue::Undefined => Value::Undefined,
             crate::object_model::JsValue::Null => Value::Null,
@@ -54880,6 +54945,12 @@ impl InterpreterCore {
                 Value::Float(Float64::new(f64::from_bits(*bits)))
             }
             crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
+            crate::object_model::JsValue::Function(idx) if *idx >= PROMISE_VALUE_CARRIER_BASE => {
+                self.promise_value_carriers
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("use of reclaimed promise value carrier {idx}"))
+            }
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
             crate::object_model::JsValue::Symbol(symbol) => Value::Symbol(*symbol),
         }
@@ -54950,7 +55021,10 @@ impl InterpreterCore {
         &mut self,
         values: Vec<crate::object_model::JsValue>,
     ) -> Result<crate::object_model::JsValue, InterpreterError> {
-        let value_objs: Vec<Value> = values.iter().map(Self::js_value_to_value).collect();
+        let value_objs: Vec<Value> = values
+            .iter()
+            .map(|value| self.js_value_to_value(value))
+            .collect();
         let array_id = self.alloc_array_from_values(&value_objs)?;
         Ok(Self::value_to_js_value(&Value::Object(array_id)))
     }
@@ -54970,7 +55044,7 @@ impl InterpreterCore {
                         status: "fulfilled".into(),
                         value: crate::object_model::JsValue::Undefined,
                     });
-            let value = Self::js_value_to_value(&outcome.value);
+            let value = self.js_value_to_value(&outcome.value);
             let mut props = vec![("status", Value::str(outcome.status.as_str()))];
             if outcome.status == "fulfilled" {
                 props.push(("value", value));
@@ -54988,7 +55062,10 @@ impl InterpreterCore {
         &mut self,
         errors: Vec<crate::object_model::JsValue>,
     ) -> Result<crate::object_model::JsValue, InterpreterError> {
-        let error_values: Vec<Value> = errors.iter().map(Self::js_value_to_value).collect();
+        let error_values: Vec<Value> = errors
+            .iter()
+            .map(|value| self.js_value_to_value(value))
+            .collect();
         let errors_array = self.alloc_array_from_values(&error_values)?;
         let error_id = self.alloc_object_with_properties(&[
             ("name", Value::str("AggregateError")),
@@ -55715,7 +55792,7 @@ impl InterpreterCore {
                     }
                 }
                 other => {
-                    let js_val = Self::value_to_js_value(&other);
+                    let js_val = self.promise_value(&other)?;
                     self.update_combinator_fulfillment(
                         combinator_id,
                         index,
@@ -56153,7 +56230,7 @@ impl InterpreterCore {
                         } else {
                             Value::Undefined
                         };
-                        let js_val = Self::value_to_js_value(&val);
+                        let js_val = self.promise_value(&val)?;
                         let handle = crate::promise_model::PromiseHandle(h);
                         self.fulfill_promise(handle, js_val, label.clone())?;
                         Ok(Value::Promise(h))
@@ -56191,14 +56268,14 @@ impl InterpreterCore {
                         } else {
                             Value::Undefined
                         };
-                        let js_reason = Self::value_to_js_value(&reason);
+                        let js_reason = self.promise_value(&reason)?;
                         let handle = crate::promise_model::PromiseHandle(h);
                         self.reject_promise(handle, js_reason, label.clone())?;
                         Ok(Value::Promise(h))
                     }
                     _ => {
                         // Promise.reject(reason) — create a pre-rejected promise.
-                        let js_reason = Self::value_to_js_value(&arg0);
+                        let js_reason = self.promise_value(&arg0)?;
                         let handle = self.create_rejected_promise(js_reason, label.clone())?;
                         Ok(Value::Promise(handle.0))
                     }
@@ -56432,7 +56509,7 @@ impl InterpreterCore {
         else {
             return Ok(());
         };
-        let reason = Self::js_value_to_value(&reason);
+        let reason = self.js_value_to_value(&reason);
         Err(InterpreterError::UncaughtException {
             value: self.uncaught_exception_description(&reason),
         })
@@ -56526,7 +56603,7 @@ impl InterpreterCore {
             expected: "module-backed Promise reaction handler dispatch".to_string(),
             got: "missing module context".to_string(),
         })?;
-        let argument = Self::js_value_to_value(&argument);
+        let argument = self.js_value_to_value(&argument);
         // Synthetic handles at/above the base name a retained non-closure
         // callable (builtin, async/generator function object); everything
         // below is a real closure-table id.
@@ -56692,7 +56769,8 @@ impl InterpreterCore {
                 );
             }
         }
-        self.fulfill_promise(promise, Self::value_to_js_value(&value), label)
+        let value = self.promise_value(&value)?;
+        self.fulfill_promise(promise, value, label)
     }
 
     /// Enqueue a PromiseResolveThenableJob (memory-preflighted, mirroring
@@ -56704,11 +56782,12 @@ impl InterpreterCore {
         thenable: Value,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
+        let thenable = self.promise_value(&thenable)?;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let task = crate::promise_model::Microtask::ResolveThenable {
             promise,
             then_handler,
-            thenable: Self::value_to_js_value(&thenable),
+            thenable,
             label,
         };
         let next_queue_bytes = self
@@ -56769,7 +56848,8 @@ impl InterpreterCore {
         if is_resolve {
             self.resolve_promise_with_value(promise, argument, label)?;
         } else {
-            self.reject_promise(promise, Self::value_to_js_value(&argument), label)?;
+            let reason = self.promise_value(&argument)?;
+            self.reject_promise(promise, reason, label)?;
         }
         Ok(Value::Undefined)
     }
@@ -56814,7 +56894,7 @@ impl InterpreterCore {
                 InterpreterError::UncaughtException { .. } => {
                     match self.take_pending_exception_slot() {
                         Some((thrown, thrown_label)) => (
-                            Self::value_to_js_value(&thrown),
+                            self.promise_value(&thrown)?,
                             thrown_label.join(&executor_label),
                         ),
                         None => (
@@ -56825,7 +56905,7 @@ impl InterpreterCore {
                 }
                 native if Self::js_catchable_error_name(native).is_some() => {
                     let thrown = self.native_error_to_thrown_value(native)?;
-                    (Self::value_to_js_value(&thrown), executor_label.clone())
+                    (self.promise_value(&thrown)?, executor_label.clone())
                 }
                 _ => return Err(error),
             };
@@ -56995,9 +57075,10 @@ impl InterpreterCore {
                                         )?;
                                     }
                                     other => {
+                                        let value = self.promise_value(&other)?;
                                         self.fulfill_promise(
                                             *result_promise,
-                                            Self::value_to_js_value(&other),
+                                            value,
                                             task_label.clone(),
                                         )?;
                                     }
@@ -57019,7 +57100,7 @@ impl InterpreterCore {
                                     let (reason, reason_label) =
                                         match self.take_pending_exception_slot() {
                                             Some((thrown, thrown_label)) => (
-                                                Self::value_to_js_value(&thrown),
+                                                self.promise_value(&thrown)?,
                                                 thrown_label.join(task_label),
                                             ),
                                             None => (
@@ -57100,7 +57181,7 @@ impl InterpreterCore {
                         // synchronously within this job; any microtasks it
                         // schedules (and the settle it performs) are enqueued in
                         // program order, preserving nested-microtask ordering.
-                        let thenable_value = Self::js_value_to_value(thenable);
+                        let thenable_value = self.js_value_to_value(thenable);
                         let resolve_fn = self
                             .make_promise_capability(BuiltinFunctionKind::PromiseResolve, *promise);
                         let reject_fn = self
@@ -84084,6 +84165,7 @@ impl InterpreterCore {
             .saturating_add(self.pending_timer_tasks_memory_bytes())
             .saturating_add(promise_runtime_bytes)
             .saturating_add(self.promise_reaction_callables_memory_bytes())
+            .saturating_add(self.promise_value_carriers_memory_bytes())
             .saturating_add(self.next_tick_queue_memory_bytes())
             .saturating_add(self.weakmap_storage_memory_bytes())
             .saturating_add(self.event_listeners_memory_bytes())
@@ -120956,14 +121038,20 @@ mod function_prototype_call_apply_tests_current {
         assert_eq!(core.closures.len(), closures_before_resume + 1);
         let nested_closure_id =
             u32::try_from(closures_before_resume).expect("generated nested closure id");
+        // The result Promise settles with the nested closure itself; before
+        // bd-9vouw.69 it carried the closure's display string.
+        let settled = match &core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(async_result_promise))
+            .expect("generated async result Promise")
+            .state
+        {
+            crate::promise_model::PromiseState::Fulfilled(value) => value.clone(),
+            other => panic!("generated async result Promise not fulfilled: {other:?}"),
+        };
         assert_eq!(
-            core.promise_store
-                .get(crate::promise_model::PromiseHandle(async_result_promise))
-                .expect("generated async result Promise")
-                .state,
-            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
-                Value::Closure(nested_closure_id).to_string()
-            ))
+            core.js_value_to_value(&settled),
+            Value::Closure(nested_closure_id)
         );
         assert_eq!(
             core.closure_module_origins.get(&nested_closure_id),

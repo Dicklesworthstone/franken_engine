@@ -681,14 +681,14 @@ impl InterpreterCore {
             .map(|record| record.state.clone());
         let entry = match settled {
             Some(crate::promise_model::PromiseState::Fulfilled(value)) => {
-                let value = Self::js_value_to_value(&value);
+                let value = self.js_value_to_value(&value);
                 state.indentation += 2;
                 let rendered = self.inspect_value(state, &value, recurse_times);
                 state.indentation -= 2;
                 rendered?
             }
             Some(crate::promise_model::PromiseState::Rejected(reason)) => {
-                let reason = Self::js_value_to_value(&reason);
+                let reason = self.js_value_to_value(&reason);
                 state.indentation += 2;
                 let rendered = self.inspect_value(state, &reason, recurse_times);
                 state.indentation -= 2;

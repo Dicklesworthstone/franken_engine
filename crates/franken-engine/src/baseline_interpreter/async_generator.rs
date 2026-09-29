@@ -180,8 +180,8 @@ impl InterpreterCore {
                 got: receiver.type_name().into(),
             };
             let reason = self.native_error_to_thrown_value(&error)?;
-            let promise =
-                self.create_rejected_promise(Self::value_to_js_value(&reason), label.clone())?;
+            let reason = self.promise_value(&reason)?;
+            let promise = self.create_rejected_promise(reason, label.clone())?;
             self.replace_pending_hostcall_result_label(Some(label))?;
             return Ok(Value::Promise(promise.0));
         };
@@ -569,11 +569,10 @@ impl InterpreterCore {
                 Ok(label) => Ok(label),
                 Err(error) => match self.async_generator_exception(error, floor) {
                     Ok(rejection) => self
-                        .reject_promise(
-                            promise,
-                            Self::value_to_js_value(&rejection.value),
-                            rejection.label.clone(),
-                        )
+                        .promise_value(&rejection.value)
+                        .and_then(|reason| {
+                            self.reject_promise(promise, reason, rejection.label.clone())
+                        })
                         .map(|()| rejection.label),
                     Err(error) => Err(error),
                 },
@@ -646,9 +645,9 @@ impl InterpreterCore {
             .map(|value| {
                 context
                     .exact_value
-                    .unwrap_or_else(|| Self::js_value_to_value(&value))
+                    .unwrap_or_else(|| self.js_value_to_value(&value))
             })
-            .map_err(|reason| Self::js_value_to_value(&reason));
+            .map_err(|reason| self.js_value_to_value(&reason));
         let outcome = (|| {
             if self.async_generators[id as usize].phase != AsyncGeneratorPhase::SuspendedAwait {
                 return Err(InterpreterError::InternalError {
@@ -763,7 +762,10 @@ impl InterpreterCore {
                 let result = self.async_generator_result_object(value, done, &label)?;
                 self.fulfill_promise(promise, Self::value_to_js_value(&result), label)?;
             }
-            Err(reason) => self.reject_promise(promise, Self::value_to_js_value(&reason), label)?,
+            Err(reason) => {
+                let reason = self.promise_value(&reason)?;
+                self.reject_promise(promise, reason, label)?;
+            }
         }
         self.async_generators[id as usize].requests.pop_front();
         self.async_generators[id as usize].phase = if done {
@@ -1183,7 +1185,7 @@ mod tests {
             core.settle_async_generator_request(id, Ok(Value::Int(42)), done, Label::Secret)
                 .unwrap();
             let result = match &core.promise_store.get(promise).unwrap().state {
-                PromiseState::Fulfilled(value) => InterpreterCore::js_value_to_value(value),
+                PromiseState::Fulfilled(value) => core.js_value_to_value(value),
                 _ => panic!("request must be fulfilled"),
             };
             for (key, expected) in [("value", Value::Int(42)), ("done", Value::Bool(done))] {
@@ -1252,7 +1254,7 @@ mod tests {
         let record = core.promise_store.get(promise).unwrap();
         assert_eq!(record.label, Label::Secret);
         assert_eq!(
-            InterpreterCore::js_value_to_value(match &record.state {
+            core.js_value_to_value(match &record.state {
                 PromiseState::Fulfilled(value) => value,
                 _ => panic!("non-thenable source must fulfill with its exact identity"),
             }),
@@ -1508,7 +1510,7 @@ mod tests {
         let PromiseState::Fulfilled(value) = &record.state else {
             panic!("a live token must not cancel execution");
         };
-        let Value::Object(object) = InterpreterCore::js_value_to_value(value) else {
+        let Value::Object(object) = core.js_value_to_value(value) else {
             panic!("native iterator result object");
         };
         assert_eq!(

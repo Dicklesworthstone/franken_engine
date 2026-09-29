@@ -539,7 +539,7 @@ fn config_quickjs_defaults() {
     let cfg = InterpreterConfig::quickjs_defaults();
     assert_eq!(cfg.instruction_budget, 100_000);
     assert_eq!(cfg.max_registers, 256);
-    assert_eq!(cfg.max_call_depth, 256);
+    assert_eq!(cfg.max_call_depth, 10_000);
     assert!(cfg.granted_capabilities.is_empty());
 }
 
@@ -548,7 +548,7 @@ fn config_v8_defaults() {
     let cfg = InterpreterConfig::v8_defaults();
     assert_eq!(cfg.instruction_budget, 1_000_000);
     assert_eq!(cfg.max_registers, 4096);
-    assert_eq!(cfg.max_call_depth, 256);
+    assert_eq!(cfg.max_call_depth, 10_000);
     assert!(cfg.granted_capabilities.is_empty());
 }
 

@@ -500,7 +500,7 @@ fn quickjs_defaults_fields() {
     let c = InterpreterConfig::quickjs_defaults();
     assert_eq!(c.instruction_budget, 100_000);
     assert_eq!(c.max_registers, 256);
-    assert_eq!(c.max_call_depth, 256);
+    assert_eq!(c.max_call_depth, 10_000);
     assert!(c.granted_capabilities.is_empty());
 }
 
@@ -509,7 +509,7 @@ fn v8_defaults_fields() {
     let c = InterpreterConfig::v8_defaults();
     assert_eq!(c.instruction_budget, 1_000_000);
     assert_eq!(c.max_registers, 4096);
-    assert_eq!(c.max_call_depth, 256);
+    assert_eq!(c.max_call_depth, 10_000);
     assert!(c.granted_capabilities.is_empty());
 }
 

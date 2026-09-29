@@ -22,7 +22,7 @@ fn default_execution_config_values() {
     assert_eq!(cfg.throughput_budget, 1_000_000);
     assert_eq!(cfg.deterministic_max_registers, 256);
     assert_eq!(cfg.throughput_max_registers, 4096);
-    assert_eq!(cfg.max_call_depth, 256);
+    assert_eq!(cfg.max_call_depth, 10_000);
     assert_eq!(cfg.max_prototype_chain_depth, 64);
 }
 

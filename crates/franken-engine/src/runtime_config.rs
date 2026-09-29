@@ -117,7 +117,7 @@ impl Default for ExecutionConfig {
             throughput_budget: 1_000_000,
             deterministic_max_registers: 256,
             throughput_max_registers: 4096,
-            max_call_depth: 256,
+            max_call_depth: 10_000,
             max_prototype_chain_depth: 64,
             max_heap_objects: None,
             max_total_memory_bytes: None,
@@ -913,7 +913,7 @@ mod tests {
         assert_eq!(e.throughput_budget, 1_000_000);
         assert_eq!(e.deterministic_max_registers, 256);
         assert_eq!(e.throughput_max_registers, 4096);
-        assert_eq!(e.max_call_depth, 256);
+        assert_eq!(e.max_call_depth, 10_000);
         assert_eq!(e.max_prototype_chain_depth, 64);
     }
 

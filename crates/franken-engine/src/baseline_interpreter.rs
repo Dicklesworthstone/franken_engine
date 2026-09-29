@@ -286,8 +286,41 @@ const INSTRUCTIONS_PER_VIRTUAL_MS: u64 = 1_000;
 /// for a decision receipt under the same HMAC key.
 const RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"FrankenEngine.DecisionReceipt.Signature.v1";
 
-/// Maximum call-stack depth.
-const MAX_CALL_DEPTH: usize = 256;
+/// Maximum call-stack depth (bd-9vouw.72). A JS-to-JS call pushes a
+/// `CallFrame` and continues in the same dispatch loop, so this bounds
+/// heap-side frames, not the native stack. Node v22 takes 9,642 frames of a
+/// one-argument recursive function before its RangeError.
+const MAX_CALL_DEPTH: usize = 10_000;
+/// Nested run loops (builtin callbacks, accessors, cross-module re-entry)
+/// recurse on the native stack. They are capped separately from JS frames, at
+/// the old default call depth, and the provisioned execution stack is sized
+/// for that many (`interpreter_execution_stack_bytes`).
+const MAX_NATIVE_RUN_LOOP_DEPTH: usize = 256;
+/// Register-file extent, part 1: full-width (`max_registers`) windows, what
+/// the fixed-stride layout reached at its old default depth (256 frames plus
+/// the top-level window).
+const REGISTER_FILE_FULL_WIDTH_WINDOWS: usize = MAX_NATIVE_RUN_LOOP_DEPTH + 1;
+/// Register-file extent, part 2: registers per configured frame. A callee's
+/// window starts right above its caller's verified window, so narrow frames
+/// recurse to `max_call_depth` (a one-argument recursive function has a
+/// window of about 10 registers); wide ones stop earlier, as they do in Node,
+/// whose limit is stack bytes.
+const REGISTER_FILE_SLOTS_PER_FRAME: usize = 16;
+
+/// Register slots the file may hold (bd-9vouw.72): the larger of the two
+/// extents above. The shallow value/label carriers are not charged to the
+/// memory budget, so this is what bounds them: 160,016 slots (about 9 MB) at
+/// the default depth with 256-register windows, 257 windows (about 59 MB)
+/// with 4096-register windows, as before.
+pub(crate) fn register_file_slot_limit(max_call_depth: usize, max_registers: usize) -> usize {
+    REGISTER_FILE_FULL_WIDTH_WINDOWS
+        .saturating_mul(max_registers)
+        .max(
+            max_call_depth
+                .saturating_add(1)
+                .saturating_mul(REGISTER_FILE_SLOTS_PER_FRAME),
+        )
+}
 
 /// Longest argument list a vector-variadic builtin (`Math.max`,
 /// `String.fromCharCode`, ...) accepts through spread or `apply`
@@ -299,9 +332,10 @@ const MAX_VECTOR_BUILTIN_ARGUMENTS: u32 = 1 << 17;
 /// it recursively while preserving the logical depth in
 /// `module_reentrant_call_depth`.
 const INTERPRETER_EXECUTION_STACK_BASE_BYTES: usize = 4 * 1024 * 1024;
-/// Conservative native-stack allowance for each configured logical call
-/// depth. Stack pages remain demand-paged, so the reservation bounds address
-/// space without eagerly committing the full default-depth allowance.
+/// Conservative native-stack allowance for each nested run loop the
+/// configuration admits (the smaller of `max_call_depth` and
+/// `MAX_NATIVE_RUN_LOOP_DEPTH`). Stack pages remain demand-paged, so the
+/// reservation bounds address space without eagerly committing it.
 const INTERPRETER_EXECUTION_STACK_PER_CALL_DEPTH_BYTES: usize = 512 * 1024;
 /// Deterministic bound for baseline prototype-chain walks.
 const MAX_PROTOTYPE_CHAIN_DEPTH: u32 = 64;
@@ -7814,6 +7848,7 @@ struct GeneratorExecutionSnapshot {
     call_stack: Vec<CallFrame>,
     ip: usize,
     register_base: usize,
+    register_width: usize,
     catch_frames: Vec<CatchFrame>,
     pending_exception: Option<Value>,
     pending_exception_label: Label,
@@ -8012,6 +8047,9 @@ struct DelegatedHostcallArguments {
 /// error.
 struct DelegatedHostcallScratchFrame {
     register_base: usize,
+    /// `register_width` before the scratch widened it to cover the staged
+    /// arguments (bd-9vouw.72).
+    saved_register_width: usize,
     required_len: usize,
     original_register_len: usize,
     original_label_len: usize,
@@ -8378,10 +8416,11 @@ struct ColdBindingCell {
 /// with N live closures or pending async calls ran in O(N^2). These surfaces
 /// change only when a closure is created or rolled back, when an activation is
 /// parked or resumed, and when one of their cells is written, so the deduped
-/// payload is maintained at those points. The live scope chain and the
-/// call-frame saved chains are still walked per operation, skipping cells
-/// this ledger already charges; `shared_binding_cell_payloads_memory_bytes`
-/// remains the full-walk oracle.
+/// payload is maintained at those points. [`CallStack`] registers the saved
+/// caller chains of the frames below the top one here too (bd-9vouw.72). The
+/// live scope chain and the top frame's saved chain are still walked per
+/// operation, skipping cells this ledger already charges;
+/// `shared_binding_cell_payloads_memory_bytes` remains the full-walk oracle.
 #[derive(Debug, Clone, Default)]
 struct ColdBindingCells {
     cells: BTreeMap<usize, ColdBindingCell>,
@@ -8790,6 +8829,9 @@ struct CallFrame {
     return_reg: u32,
     /// Base register offset for this frame (reserved for frame isolation).
     register_base: usize,
+    /// The caller's register-window width, restored with `register_base`
+    /// (bd-9vouw.72).
+    register_width: usize,
     /// Function table index (reserved for frame-level diagnostics).
     #[allow(dead_code)]
     function_index: Option<u32>,
@@ -8859,6 +8901,144 @@ struct CallFrame {
     /// same-module callback): exception routing, async rejection and
     /// abrupt-completion clearing never reach past it.
     native_boundary: bool,
+}
+
+/// The live call stack (bd-9vouw.72).
+///
+/// Every call and return used to re-sum all frames' memory estimates and walk
+/// every frame's saved caller chain, before and after its setup, so a call at
+/// depth d cost O(d) and plain recursion was quadratic. A frame below the top
+/// cannot change while a frame above it is live, so the frames below the top
+/// are a running total here and their saved caller chains are registered in
+/// the cold binding-cell ledger, as a parked activation's are. Only the top
+/// frame, which `last_mut` may change, is measured on demand. Reads deref to a
+/// slice; every other mutation goes through these methods.
+#[derive(Debug, Default)]
+struct CallStack {
+    frames: Vec<CallFrame>,
+    /// [`InterpreterCore::estimate_call_frame_bytes`] summed over every frame
+    /// but the top one.
+    below_top_bytes: u64,
+    /// For each frame below the top, the index of the first frame at or
+    /// below it with the strictly greatest `super_label` among the frames
+    /// that carry a HomeObject (`active_execution_context_label`).
+    below_top_super_winner: Vec<Option<usize>>,
+}
+
+impl std::ops::Deref for CallStack {
+    type Target = [CallFrame];
+
+    fn deref(&self) -> &[CallFrame] {
+        &self.frames
+    }
+}
+
+impl CallStack {
+    /// Estimated bytes of all frames.
+    fn frame_bytes(&self) -> u64 {
+        self.below_top_bytes.saturating_add(
+            self.frames
+                .last()
+                .map_or(0, InterpreterCore::estimate_call_frame_bytes),
+        )
+    }
+
+    /// The top frame's saved caller chain, the only saved chain the live-only
+    /// scope walk still visits.
+    fn top_saved_scope_chain(&self) -> Option<&[ScopeFrame]> {
+        self.frames
+            .last()
+            .and_then(|frame| frame.saved_scope_chain.as_deref())
+    }
+
+    fn push(&mut self, frame: CallFrame, cold: &mut ColdBindingCells) {
+        if let Some(top) = self.frames.last() {
+            self.below_top_bytes = self
+                .below_top_bytes
+                .saturating_add(InterpreterCore::estimate_call_frame_bytes(top));
+            if let Some(saved) = &top.saved_scope_chain {
+                cold.register_frames(saved);
+            }
+            let previous = self.below_top_super_winner.last().copied().flatten();
+            let top_index = self.frames.len() - 1;
+            let winner = if top.super_home_object.is_some()
+                && previous.is_none_or(|index| top.super_label > self.frames[index].super_label)
+            {
+                Some(top_index)
+            } else {
+                previous
+            };
+            self.below_top_super_winner.push(winner);
+        }
+        self.frames.push(frame);
+    }
+
+    /// The `super_label` of the first frame with the strictly greatest one
+    /// among the frames that carry a HomeObject, bottom-up.
+    fn super_label_winner(&self) -> Option<&Label> {
+        let below = self
+            .below_top_super_winner
+            .last()
+            .copied()
+            .flatten()
+            .map(|index| &self.frames[index].super_label);
+        match self.frames.last() {
+            Some(top)
+                if top.super_home_object.is_some()
+                    && below.is_none_or(|label| &top.super_label > label) =>
+            {
+                Some(&top.super_label)
+            }
+            _ => below,
+        }
+    }
+
+    fn pop(&mut self, cold: &mut ColdBindingCells) -> Option<CallFrame> {
+        let frame = self.frames.pop()?;
+        if let Some(top) = self.frames.last() {
+            self.below_top_super_winner.pop();
+            let bytes = InterpreterCore::estimate_call_frame_bytes(top);
+            debug_assert!(
+                self.below_top_bytes >= bytes,
+                "call-stack running total lost a frame (bd-9vouw.72)"
+            );
+            self.below_top_bytes = self.below_top_bytes.saturating_sub(bytes);
+            if let Some(saved) = &top.saved_scope_chain {
+                cold.release_frames(saved);
+            }
+        }
+        Some(frame)
+    }
+
+    /// Remove and return every frame.
+    fn take(&mut self, cold: &mut ColdBindingCells) -> Vec<CallFrame> {
+        if let Some((_, below_top)) = self.frames.split_last() {
+            for frame in below_top {
+                if let Some(saved) = &frame.saved_scope_chain {
+                    cold.release_frames(saved);
+                }
+            }
+        }
+        self.below_top_bytes = 0;
+        self.below_top_super_winner.clear();
+        std::mem::take(&mut self.frames)
+    }
+
+    fn clear(&mut self, cold: &mut ColdBindingCells) {
+        drop(self.take(cold));
+    }
+
+    fn replace(&mut self, frames: Vec<CallFrame>, cold: &mut ColdBindingCells) {
+        self.clear(cold);
+        for frame in frames {
+            self.push(frame, cold);
+        }
+    }
+
+    /// The top frame is measured on demand, so it may change in place.
+    fn last_mut(&mut self) -> Option<&mut CallFrame> {
+        self.frames.last_mut()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -10969,6 +11149,7 @@ struct ModuleExecutionSnapshot {
     call_stack: Vec<CallFrame>,
     ip: usize,
     register_base: usize,
+    register_width: usize,
     catch_frames: Vec<CatchFrame>,
     pending_exception: Option<Value>,
     pending_exception_label: Label,
@@ -12453,7 +12634,7 @@ pub struct InterpreterCore {
     /// Register file (flat, indexed by register number). SEED-SURFACE.
     registers: SeedTrackedField<Vec<Value>>,
     /// Call stack.
-    call_stack: Vec<CallFrame>,
+    call_stack: CallStack,
     /// Object heap. SEED-SURFACE.
     heap: SeedTrackedField<Heap>,
     /// Approximate live non-seed memory tracked for fail-closed budget enforcement.
@@ -12565,6 +12746,13 @@ pub struct InterpreterCore {
     trace_id: String,
     /// Base register offset for current frame.
     register_base: usize,
+    /// Width of the current frame's register window (bd-9vouw.72): the next
+    /// callee's window starts at `register_base + register_width`. It never
+    /// understates the registers the current frame can address: a verified
+    /// frame width, or `max_registers` wherever the exact width is unknown.
+    register_width: usize,
+    /// Run loops currently active on the native stack (bd-9vouw.72).
+    native_run_loop_depth: usize,
     /// Largest stacked-frame prefix ever occupied by this core. This monotonic
     /// high-water mark keeps reduced clears safe when a reusable core later
     /// executes a narrower module: stale values and labels from the older,
@@ -13466,7 +13654,7 @@ impl InterpreterCore {
             host_effect_journal: None,
             timer_effect_authority: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
-            call_stack: Vec::new(),
+            call_stack: CallStack::default(),
             heap: SeedTrackedField::new(Heap::new()),
             estimated_memory_bytes,
             simple_callback_temporary_bytes: 0,
@@ -13501,6 +13689,8 @@ impl InterpreterCore {
             witness_seq: 0,
             trace_id,
             register_base: 0,
+            register_width: max_regs,
+            native_run_loop_depth: 0,
             stacked_register_frame_clear_width_high_water: 0,
             top_level_compact_tier1: None,
             catch_frames: Vec::new(),
@@ -32233,14 +32423,32 @@ impl InterpreterCore {
     /// its body, not only the explicit argument registers it happens to read.
     fn active_execution_context_label(&self) -> Option<&Label> {
         let mut winner = self.active_inline_callback_context_label.as_ref();
-        for frame in self
-            .call_stack
-            .iter()
-            .filter(|frame| frame.super_home_object.is_some())
+        // bd-9vouw.72: the frames' first strict maximum, kept by the call
+        // stack, instead of a scan of every frame on every call.
+        if let Some(label) = self.call_stack.super_label_winner()
+            && winner.is_none_or(|current| label > current)
         {
-            if winner.is_none_or(|current| &frame.super_label > current) {
-                winner = Some(&frame.super_label);
+            winner = Some(label);
+        }
+        #[cfg(test)]
+        {
+            let mut scanned = self.active_inline_callback_context_label.as_ref();
+            for frame in self
+                .call_stack
+                .iter()
+                .filter(|frame| frame.super_home_object.is_some())
+            {
+                if scanned.is_none_or(|current| &frame.super_label > current) {
+                    scanned = Some(&frame.super_label);
+                }
             }
+            debug_assert!(
+                std::ptr::eq(
+                    winner.map_or(std::ptr::null(), |label| label as *const Label),
+                    scanned.map_or(std::ptr::null(), |label| label as *const Label),
+                ),
+                "call-stack super-label prefix drifted from the scan (bd-9vouw.72)"
+            );
         }
         winner
     }
@@ -33018,7 +33226,8 @@ impl InterpreterCore {
         // could not see).
         self.ip = 0;
         self.register_base = 0;
-        self.call_stack.clear();
+        self.register_width = self.config.max_registers as usize;
+        self.call_stack.clear(&mut self.closures.cold_cells);
         self.catch_frames.clear();
         self.pending_exception = None;
         self.pending_exception_label = Label::Public;
@@ -33534,9 +33743,10 @@ impl InterpreterCore {
             generator_delegation: self.generator_delegation.clone(),
             register_labels: self.register_labels.clone(),
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
-            call_stack: self.call_stack.clone(),
+            call_stack: self.call_stack.to_vec(),
             ip: self.ip,
             register_base: self.register_base,
+            register_width: self.register_width,
             catch_frames: self.catch_frames.clone(),
             pending_exception: self.pending_exception.clone(),
             pending_exception_label: self.pending_exception_label.clone(),
@@ -33567,9 +33777,11 @@ impl InterpreterCore {
         self.generator_delegation = snapshot.generator_delegation;
         self.register_labels = snapshot.register_labels;
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
-        self.call_stack = snapshot.call_stack;
+        self.call_stack
+            .replace(snapshot.call_stack, &mut self.closures.cold_cells);
         self.ip = snapshot.ip;
         self.register_base = snapshot.register_base;
+        self.register_width = snapshot.register_width;
         self.catch_frames = snapshot.catch_frames;
         self.pending_exception = snapshot.pending_exception;
         self.pending_exception_label = snapshot.pending_exception_label;
@@ -33621,9 +33833,10 @@ impl InterpreterCore {
         });
         self.register_labels.clear();
         self.register_labels.resize(max_regs, Label::Public);
-        self.call_stack.clear();
+        self.call_stack.clear(&mut self.closures.cold_cells);
         self.ip = 0;
         self.register_base = 0;
+        self.register_width = self.config.max_registers as usize;
         self.catch_frames.clear();
         self.pending_exception = None;
         self.pending_exception_label = Label::Public;
@@ -36552,9 +36765,10 @@ impl InterpreterCore {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.register_labels.fill(Label::Public);
-            self.call_stack.clear();
+            self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
             self.register_base = 0;
+            self.register_width = self.config.max_registers as usize;
             self.catch_frames.clear();
             self.pending_exception = None;
             self.pending_exception_label = Label::Public;
@@ -40638,7 +40852,7 @@ impl InterpreterCore {
         let previous_closure_bytes =
             (!scope_inert_activation).then(|| self.closures_memory_bytes());
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
-        if let Some(mut frame) = self.call_stack.pop() {
+        if let Some(mut frame) = self.call_stack.pop(&mut self.closures.cold_cells) {
             let completion = if frame.derived_constructor {
                 if return_val.is_object_like() {
                     Ok((return_val, return_label))
@@ -40750,6 +40964,7 @@ impl InterpreterCore {
 
     fn restore_call_frame_state(&mut self, frame: &mut CallFrame) {
         self.register_base = frame.register_base;
+        self.register_width = frame.register_width;
         self.suspended_abrupt_completions
             .truncate(frame.saved_suspended_abrupt_depth);
         self.finally_frames.truncate(frame.saved_finally_mode_depth);
@@ -40858,7 +41073,7 @@ impl InterpreterCore {
         }
         let frame = self
             .call_stack
-            .pop()
+            .pop(&mut self.closures.cold_cells)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "async function frame".to_string(),
                 got: "missing call frame".to_string(),
@@ -40881,7 +41096,7 @@ impl InterpreterCore {
         let _ = self.unwind_call_stack_to(async_depth)?;
         let frame = self
             .call_stack
-            .pop()
+            .pop(&mut self.closures.cold_cells)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "async function frame".to_string(),
                 got: "missing async boundary".to_string(),
@@ -41150,9 +41365,11 @@ impl InterpreterCore {
             )
         };
 
-        // Restore execution state
+        // Restore execution state. Async activations enter a full-width
+        // window, so that is the width they resume with.
         self.ip = saved_ip;
         self.register_base = saved_register_base;
+        self.register_width = self.config.max_registers as usize;
 
         // Restore register file
         let reg_start = self.register_base;
@@ -41854,8 +42071,9 @@ impl InterpreterCore {
         let mut restored_pending_return = None;
         let mut restored_suspended_abrupt_depth = None;
         while self.call_stack.len() > target_depth {
-            if let Some(frame) = self.call_stack.pop() {
+            if let Some(frame) = self.call_stack.pop(&mut self.closures.cold_cells) {
                 self.register_base = frame.register_base;
+                self.register_width = frame.register_width;
                 self.finally_frames.truncate(frame.saved_finally_mode_depth);
                 self.restore_scope_chain_for_frame(&frame);
                 let label = frame.saved_pending_exception_label;
@@ -43053,10 +43271,11 @@ impl InterpreterCore {
         let previous_scope_bytes = self.scope_chain_memory_bytes();
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
-        self.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip,
             return_reg,
             register_base: self.register_base,
+            register_width: self.register_width,
             function_index: Some(function_index),
             this_value,
             this_label,
@@ -43083,7 +43302,9 @@ impl InterpreterCore {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
             native_boundary: false,
-        });
+        };
+        self.call_stack
+            .push(pushed_frame, &mut self.closures.cold_cells);
 
         if let Some(environment) = captured_env {
             self.scope_chain.frames = environment;
@@ -43101,7 +43322,7 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        self.enter_stacked_register_frame_for_function(compact_tier1, function_index);
+        self.enter_stacked_register_frame_for_function(compact_tier1, function_index)?;
         for (index, (value, label)) in argument_values.into_iter().zip(argument_labels).enumerate()
         {
             let register = index as u32;
@@ -43310,6 +43531,7 @@ impl InterpreterCore {
                 return_ip: module.instructions.len(),
                 return_reg: 0,
                 register_base: 0,
+                register_width: max_registers,
                 function_index: Some(invocation.function_index),
                 this_value: invocation.this_value,
                 this_label: invocation.this_label,
@@ -43336,6 +43558,7 @@ impl InterpreterCore {
             }],
             ip: func.entry as usize,
             register_base: 0,
+            register_width: max_registers,
             catch_frames: Vec::new(),
             pending_exception: None,
             pending_exception_label: Label::Public,
@@ -43361,9 +43584,13 @@ impl InterpreterCore {
             register_labels: std::mem::take(&mut self.register_labels),
             delegation: self.generator_delegation.take(),
             active_inline_callback_context_label: self.active_inline_callback_context_label.take(),
-            call_stack: std::mem::take(&mut self.call_stack),
+            call_stack: self.call_stack.take(&mut self.closures.cold_cells),
             ip: std::mem::take(&mut self.ip),
             register_base: std::mem::take(&mut self.register_base),
+            register_width: std::mem::replace(
+                &mut self.register_width,
+                self.config.max_registers as usize,
+            ),
             catch_frames: std::mem::take(&mut self.catch_frames),
             pending_exception: self.pending_exception.take(),
             pending_exception_label: std::mem::replace(
@@ -43765,9 +43992,11 @@ impl InterpreterCore {
         self.register_labels = execution.register_labels;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
-        self.call_stack = execution.call_stack;
+        self.call_stack
+            .replace(execution.call_stack, &mut self.closures.cold_cells);
         self.ip = execution.ip;
         self.register_base = execution.register_base;
+        self.register_width = execution.register_width;
         self.catch_frames = execution.catch_frames;
         self.pending_exception = execution.pending_exception;
         self.pending_exception_label = execution.pending_exception_label;
@@ -45363,12 +45592,25 @@ impl InterpreterCore {
         compact_tier1: Option<&CompactTier1Program>,
         trampoline: &[Ir3Instruction],
     ) -> Result<LabeledReturn, InterpreterError> {
+        // bd-9vouw.72: each run loop below the first is a native recursion (a
+        // builtin callback, accessor or cross-module call); JS-to-JS calls
+        // stay in the loop they were made from. The provisioned stack covers
+        // the first loop plus this many nested ones.
+        let native_limit = self.config.max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH);
+        if self.native_run_loop_depth > native_limit {
+            return Err(InterpreterError::StackOverflow {
+                depth: self.native_run_loop_depth,
+                max: native_limit,
+            });
+        }
+        self.native_run_loop_depth += 1;
         // The collector may run only in an armed loop: the top-level script's
         // own loop, or a nested loop a caller armed (`gc_arm_nested`). See
         // `collector::GcState::safe_depth`.
         self.gc_enter_run_loop();
         let result = self.run_loop_labeled_with_trampoline_inner(module, compact_tier1, trampoline);
         self.gc_exit_run_loop();
+        self.native_run_loop_depth -= 1;
         result
     }
 
@@ -45991,10 +46233,11 @@ impl InterpreterCore {
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
 
-                            self.call_stack.push(CallFrame {
+                            let pushed_frame = CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
                                 register_base: self.register_base,
+                                register_width: self.register_width,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
                                 this_label: call_this_label,
@@ -46023,7 +46266,9 @@ impl InterpreterCore {
                                 scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: Some(async_id),
                                 native_boundary: false,
-                            });
+                            };
+                            self.call_stack
+                                .push(pushed_frame, &mut self.closures.cold_cells);
 
                             if let Some(env) = captured_env {
                                 self.scope_chain.frames = env;
@@ -46039,7 +46284,7 @@ impl InterpreterCore {
                             // full register window. Keep their entry reset
                             // unchanged until snapshot width is independently
                             // verified and measured.
-                            self.enter_stacked_register_frame(None);
+                            self.enter_stacked_register_frame(None)?;
                             for (i, (val, label)) in
                                 arg_vals.into_iter().zip(arg_labels).enumerate()
                             {
@@ -46255,10 +46500,11 @@ impl InterpreterCore {
                                 (!scope_inert_activation).then(|| self.closures_memory_bytes());
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
 
-                            self.call_stack.push(CallFrame {
+                            let pushed_frame = CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
                                 register_base: self.register_base,
+                                register_width: self.register_width,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
                                 this_label: call_this_label,
@@ -46291,7 +46537,9 @@ impl InterpreterCore {
                                 },
                                 async_function_id: None,
                                 native_boundary: false,
-                            });
+                            };
+                            self.call_stack
+                                .push(pushed_frame, &mut self.closures.cold_cells);
 
                             if scope_inert_activation {
                                 if let Err(err) =
@@ -46333,7 +46581,10 @@ impl InterpreterCore {
                                 }
                             }
 
-                            self.enter_stacked_register_frame_for_function(compact_tier1, func_idx);
+                            self.enter_stacked_register_frame_for_function(
+                                compact_tier1,
+                                func_idx,
+                            )?;
 
                             // Copy arguments into registers for the callee.
                             for (i, (val, label)) in
@@ -46610,10 +46861,11 @@ impl InterpreterCore {
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
-                            self.call_stack.push(CallFrame {
+                            let pushed_frame = CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
                                 register_base: self.register_base,
+                                register_width: self.register_width,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
                                 this_label: call_this_label,
@@ -46642,7 +46894,9 @@ impl InterpreterCore {
                                 scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: Some(async_id),
                                 native_boundary: false,
-                            });
+                            };
+                            self.call_stack
+                                .push(pushed_frame, &mut self.closures.cold_cells);
 
                             if let Some(env) = captured_env {
                                 self.scope_chain.frames = env;
@@ -46658,7 +46912,7 @@ impl InterpreterCore {
                             // full register window. Keep their entry reset
                             // unchanged until snapshot width is independently
                             // verified and measured.
-                            self.enter_stacked_register_frame(None);
+                            self.enter_stacked_register_frame(None)?;
                             for (i, (val, label)) in
                                 arg_vals.into_iter().zip(arg_labels).enumerate()
                             {
@@ -46787,10 +47041,11 @@ impl InterpreterCore {
                     let previous_scope_bytes = self.scope_chain_memory_bytes();
                     let previous_closure_bytes = self.closures_memory_bytes();
                     let previous_call_stack_bytes = self.call_stack_memory_bytes();
-                    self.call_stack.push(CallFrame {
+                    let pushed_frame = CallFrame {
                         return_ip: self.ip + 1,
                         return_reg: dst,
                         register_base: self.register_base,
+                        register_width: self.register_width,
                         function_index: Some(func_idx),
                         this_value: call_this,
                         this_label: call_this_label,
@@ -46817,7 +47072,9 @@ impl InterpreterCore {
                         scope_inert_virtual_scope_bytes: 0,
                         async_function_id: None,
                         native_boundary: false,
-                    });
+                    };
+                    self.call_stack
+                        .push(pushed_frame, &mut self.closures.cold_cells);
 
                     if let Some(env) = captured_env {
                         self.scope_chain.frames = env;
@@ -46835,7 +47092,7 @@ impl InterpreterCore {
                         return Err(err);
                     }
 
-                    self.enter_stacked_register_frame_for_function(compact_tier1, func_idx);
+                    self.enter_stacked_register_frame_for_function(compact_tier1, func_idx)?;
 
                     for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
                         let reg = i as u32;
@@ -48511,10 +48768,11 @@ impl InterpreterCore {
                             let previous_scope_bytes = self.scope_chain_memory_bytes();
                             let previous_closure_bytes = self.closures_memory_bytes();
                             let previous_call_stack_bytes = self.call_stack_memory_bytes();
-                            self.call_stack.push(CallFrame {
+                            let pushed_frame = CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
                                 register_base: self.register_base,
+                                register_width: self.register_width,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
                                 this_label: Label::Public,
@@ -48543,7 +48801,9 @@ impl InterpreterCore {
                                 scope_inert_virtual_scope_bytes: 0,
                                 async_function_id: None,
                                 native_boundary: false,
-                            });
+                            };
+                            self.call_stack
+                                .push(pushed_frame, &mut self.closures.cold_cells);
 
                             // If calling a closure, restore its captured environment.
                             if let Some(env) = captured_env {
@@ -48562,7 +48822,10 @@ impl InterpreterCore {
                                 return Err(err);
                             }
 
-                            self.enter_stacked_register_frame_for_function(compact_tier1, func_idx);
+                            self.enter_stacked_register_frame_for_function(
+                                compact_tier1,
+                                func_idx,
+                            )?;
 
                             // Arguments occupy r0..rN-1, matching the IR3
                             // lowering's parameter-register allocation
@@ -66913,9 +67176,10 @@ impl InterpreterCore {
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.register_labels.fill(Label::Public);
             self.active_inline_callback_context_label = callback_context_label;
-            self.call_stack.clear();
+            self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
             self.register_base = 0;
+            self.register_width = self.config.max_registers as usize;
             self.catch_frames.clear();
             self.pending_exception = None;
             self.pending_exception_label = Label::Public;
@@ -67151,6 +67415,7 @@ impl InterpreterCore {
         let arg_count = u32::try_from(arguments.len()).unwrap_or(u32::MAX);
         let saved_ip = self.ip;
         let saved_register_base = self.register_base;
+        let saved_register_width = self.register_width;
 
         let previous_context_bytes = self.active_inline_callback_context_memory_bytes();
         let saved_context = std::mem::replace(
@@ -67166,10 +67431,11 @@ impl InterpreterCore {
 
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
         let boundary_index = self.call_stack.len();
-        self.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: saved_ip,
             return_reg: 0,
             register_base: saved_register_base,
+            register_width: saved_register_width,
             function_index: None,
             this_value: Value::Undefined,
             this_label: Label::Public,
@@ -67193,7 +67459,9 @@ impl InterpreterCore {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
             native_boundary: true,
-        });
+        };
+        self.call_stack
+            .push(pushed_frame, &mut self.closures.cold_cells);
         let catch_frames_before = self.catch_frames.len();
 
         let run = (|| -> Result<(Value, Label), InterpreterError> {
@@ -67207,7 +67475,7 @@ impl InterpreterCore {
                     .unwrap_or(usize::MAX)
                     .saturating_add(2)
                     .min(self.config.max_registers as usize),
-            );
+            )?;
             let (receiver_label, argument_labels) = match call_labels {
                 Some(labels) => (Some(labels.receiver), labels.arguments),
                 None => (None, IsolatedArgumentLabels::Public),
@@ -67264,7 +67532,7 @@ impl InterpreterCore {
         };
         self.catch_frames.truncate(catch_frames_before);
         let previous_call_stack_bytes = self.call_stack_memory_bytes();
-        if let Some(boundary) = self.call_stack.pop() {
+        if let Some(boundary) = self.call_stack.pop(&mut self.closures.cold_cells) {
             debug_assert!(
                 boundary.native_boundary,
                 "nested callback lost its boundary frame"
@@ -67274,6 +67542,7 @@ impl InterpreterCore {
         }
         let popped = self.apply_call_stack_memory_delta(previous_call_stack_bytes);
         self.register_base = saved_register_base;
+        self.register_width = saved_register_width;
         self.ip = saved_ip;
 
         let previous_context_bytes = self.active_inline_callback_context_memory_bytes();
@@ -67439,9 +67708,10 @@ impl InterpreterCore {
             self.registers =
                 SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.register_labels.fill(Label::Public);
-            self.call_stack.clear();
+            self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
             self.register_base = 0;
+            self.register_width = self.config.max_registers as usize;
             self.catch_frames.clear();
             self.pending_exception = None;
             self.pending_exception_label = Label::Public;
@@ -74341,8 +74611,14 @@ impl InterpreterCore {
         // frame; restore drops it.
         let stale_entry_publication = self.take_pending_hostcall_result_label();
 
+        // bd-9vouw.72: the staged arguments occupy `register_base..+count`; a
+        // guest callback the delegated builtin runs opens its window above
+        // them.
+        let saved_register_width = self.register_width;
+        self.register_width = self.register_width.max(value_count);
         Ok(DelegatedHostcallScratchFrame {
             register_base,
+            saved_register_width,
             required_len,
             original_register_len,
             original_label_len,
@@ -74365,6 +74641,7 @@ impl InterpreterCore {
     fn restore_delegated_hostcall_scratch(&mut self, frame: DelegatedHostcallScratchFrame) {
         let DelegatedHostcallScratchFrame {
             register_base,
+            saved_register_width,
             required_len,
             original_register_len,
             original_label_len,
@@ -74374,6 +74651,7 @@ impl InterpreterCore {
             saved_carrier_bytes,
             stale_entry_publication,
         } = frame;
+        self.register_width = saved_register_width;
         let current_register_bytes = Self::saturating_sum(
             self.registers
                 .get(register_base..required_len.min(self.registers.len()))
@@ -84030,36 +84308,61 @@ impl InterpreterCore {
     }
 
     /// Advance to and reset one stacked register frame as a value+label unit.
-    fn enter_stacked_register_frame(&mut self, compact_tier1: Option<&CompactTier1Program>) {
+    fn enter_stacked_register_frame(
+        &mut self,
+        compact_tier1: Option<&CompactTier1Program>,
+    ) -> Result<(), InterpreterError> {
         let requested_clear_width = compact_tier1
             .and_then(|program| program.function_frame_clear_width(self.config.max_registers))
             .unwrap_or(self.config.max_registers as usize);
-        self.enter_stacked_register_frame_width(requested_clear_width);
+        self.enter_stacked_register_frame_width(requested_clear_width)
     }
 
     /// Advance to one exact verified callee frame. The shared high-water mark
     /// keeps this safe when a wider function previously occupied the same
-    /// fixed-stride physical frame.
+    /// physical registers.
     fn enter_stacked_register_frame_for_function(
         &mut self,
         compact_tier1: Option<&CompactTier1Program>,
         function_index: u32,
-    ) {
+    ) -> Result<(), InterpreterError> {
         let requested_clear_width = compact_tier1
             .and_then(|program| {
                 program.callee_frame_clear_width(function_index, self.config.max_registers)
             })
             .unwrap_or(self.config.max_registers as usize);
-        self.enter_stacked_register_frame_width(requested_clear_width);
+        self.enter_stacked_register_frame_width(requested_clear_width)
     }
 
-    fn enter_stacked_register_frame_width(&mut self, requested_clear_width: usize) {
-        self.register_base += self.config.max_registers as usize;
+    /// Open a callee window right above the caller's and reset it
+    /// (bd-9vouw.72). `width` must cover every register the new frame can
+    /// address: a verified frame width, a trampoline's operand count, or
+    /// `max_registers`. Refuses, before changing any state, a window that
+    /// would take the register file past `register_file_slot_limit`; the
+    /// callee's `CallFrame` is already pushed and charged, so the refusal
+    /// leaves the usual state for a stack overflow.
+    fn enter_stacked_register_frame_width(&mut self, width: usize) -> Result<(), InterpreterError> {
+        let max_registers = self.config.max_registers as usize;
+        let base = self.register_base.saturating_add(self.register_width);
+        // Every window is physically `max_registers` long
+        // (`clear_current_register_frame_width`), so this bounds the file.
+        if base.saturating_add(max_registers)
+            > register_file_slot_limit(self.config.max_call_depth, max_registers)
+        {
+            let depth = self.effective_call_depth();
+            return Err(InterpreterError::StackOverflow {
+                depth,
+                max: depth.saturating_sub(1),
+            });
+        }
+        self.register_base = base;
+        self.register_width = width.min(max_registers);
         self.stacked_register_frame_clear_width_high_water = self
             .stacked_register_frame_clear_width_high_water
-            .max(requested_clear_width);
+            .max(width);
         let clear_width = self.stacked_register_frame_clear_width_high_water;
         self.clear_current_register_frame_width(clear_width);
+        Ok(())
     }
 
     /// Reset the active stacked register frame as one value+label unit.
@@ -85641,7 +85944,7 @@ impl InterpreterCore {
         let mut seen: BTreeSet<usize> = BTreeSet::new();
         let mut total =
             Self::accumulate_scope_frame_cell_payload_bytes(&self.scope_chain.frames, &mut seen);
-        for frame in &self.call_stack {
+        for frame in self.call_stack.iter() {
             if let Some(saved) = &frame.saved_scope_chain {
                 total = total.saturating_add(Self::accumulate_scope_frame_cell_payload_bytes(
                     saved, &mut seen,
@@ -86123,8 +86426,9 @@ impl InterpreterCore {
     /// whose cells survive through closure aliases.
     ///
     /// bd-9vouw.31: cells held by closures and suspended activations come from
-    /// the incrementally maintained cold-cell ledger; only the live chain and
-    /// the call-frame saved chains are walked. Equal to
+    /// the incrementally maintained cold-cell ledger, as do those of the saved
+    /// caller chains below the top call frame (bd-9vouw.72); only the live
+    /// chain and the top frame's saved chain are walked. Equal to
     /// [`Self::scope_chain_memory_bytes_by_walk`] by construction; unit-test
     /// builds assert that on every call.
     fn scope_chain_memory_bytes(&self) -> u64 {
@@ -86147,8 +86451,10 @@ impl InterpreterCore {
             .saturating_add(self.shared_binding_cell_payloads_memory_bytes())
     }
 
-    /// Payload of the cells reachable from the live scope chain or a call
-    /// frame's saved caller chain that no cold surface holds (bd-9vouw.31).
+    /// Payload of the cells reachable from the live scope chain or the top
+    /// call frame's saved caller chain that no cold surface holds
+    /// (bd-9vouw.31). The saved chains below the top frame are registered in
+    /// the cold ledger by [`CallStack`] (bd-9vouw.72).
     fn live_only_binding_cell_payload_bytes(&self) -> u64 {
         let cold = &self.closures.cold_cells;
         let mut seen: BTreeSet<usize> = BTreeSet::new();
@@ -86157,12 +86463,10 @@ impl InterpreterCore {
             cold,
             &mut seen,
         );
-        for frame in &self.call_stack {
-            if let Some(saved) = &frame.saved_scope_chain {
-                total = total.saturating_add(Self::accumulate_live_only_cell_payload_bytes(
-                    saved, cold, &mut seen,
-                ));
-            }
+        if let Some(saved) = self.call_stack.top_saved_scope_chain() {
+            total = total.saturating_add(Self::accumulate_live_only_cell_payload_bytes(
+                saved, cold, &mut seen,
+            ));
         }
         total
     }
@@ -86300,7 +86604,14 @@ impl InterpreterCore {
     }
 
     fn call_stack_frame_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.call_stack.iter().map(Self::estimate_call_frame_bytes))
+        let bytes = self.call_stack.frame_bytes();
+        #[cfg(test)]
+        debug_assert_eq!(
+            bytes,
+            Self::saturating_sum(self.call_stack.iter().map(Self::estimate_call_frame_bytes)),
+            "call-stack running total drifted from the full walk (bd-9vouw.72)"
+        );
+        bytes
     }
 
     /// Call frames and the interpreter-level abrupt-completion slots are one
@@ -86975,7 +87286,7 @@ impl InterpreterCore {
     }
 
     fn rollback_call_setup_state(&mut self) {
-        if let Some(frame) = self.call_stack.pop() {
+        if let Some(frame) = self.call_stack.pop(&mut self.closures.cold_cells) {
             self.pending_exception = frame.saved_pending_exception;
             self.pending_exception_label = frame.saved_pending_exception_label;
             self.pending_return = frame.saved_pending_return;
@@ -89226,6 +89537,7 @@ impl InterpreterCore {
 
     fn initialize_builtin_subclass_instance(
         &mut self,
+        module: Option<&Ir3Module>,
         object_id: ObjectId,
         builtin_name: &str,
         args: RegRange,
@@ -91720,7 +92032,8 @@ fn execute_lane_with_provisioned_stack(
     hook: Option<Arc<dyn InterpreterHook>>,
     compact_tier1: Option<&CompactTier1Program>,
 ) -> Result<ExecutionResult, InterpreterError> {
-    let stack_bytes = interpreter_execution_stack_bytes(config.max_call_depth)?;
+    let stack_bytes =
+        interpreter_execution_stack_bytes(config.max_call_depth.min(MAX_NATIVE_RUN_LOOP_DEPTH))?;
     std::thread::scope(|scope| {
         let execution = std::thread::Builder::new()
             .name("frankenengine-baseline".to_string())
@@ -103387,10 +103700,11 @@ mod async_runtime_tests_current {
         core.scope_chain
             .push(core.config.max_scope_depth)
             .expect("callee setup scope should fit");
-        core.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: 77,
             return_reg: 0,
             register_base: 0,
+            register_width: core.config.max_registers as usize,
             function_index: Some(0),
             this_value: Value::Undefined,
             this_label: Label::Public,
@@ -103414,7 +103728,9 @@ mod async_runtime_tests_current {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
             native_boundary: false,
-        });
+        };
+        core.call_stack
+            .push(pushed_frame, &mut core.closures.cold_cells);
         core.sync_estimated_memory_bytes()
             .expect("rollback fixture should fit");
 
@@ -105226,6 +105542,7 @@ mod async_runtime_tests_current {
             return_ip: 0,
             return_reg: 0,
             register_base: 0,
+            register_width: core.config.max_registers as usize,
             function_index: None,
             this_value: Value::Undefined,
             this_label: Label::Public,
@@ -105282,7 +105599,7 @@ mod async_runtime_tests_current {
             expected_label_bytes,
             "snapshot call-frame accounting must retain new.target and super labels"
         );
-        core.call_stack.push(frame);
+        core.call_stack.push(frame, &mut core.closures.cold_cells);
         core.sync_estimated_memory_bytes()
             .expect("super payload accounting");
         assert_eq!(core.estimated_memory_bytes(), baseline + frame_bytes);
@@ -120898,10 +121215,11 @@ mod function_prototype_call_apply_tests_current {
                 result_promise: result_promise.0,
             })
             .expect("async object should fit");
-        core.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: 0,
             return_reg: 0,
             register_base: 0,
+            register_width: core.config.max_registers as usize,
             function_index: Some(0),
             this_value: Value::Undefined,
             this_label: Label::Public,
@@ -120925,7 +121243,9 @@ mod function_prototype_call_apply_tests_current {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: Some(async_id),
             native_boundary: false,
-        });
+        };
+        core.call_stack
+            .push(pushed_frame, &mut core.closures.cold_cells);
         core.register_base = core.config.max_registers as usize;
         core.sync_estimated_memory_bytes()
             .expect("completion memory fixture accounting");
@@ -133446,7 +133766,7 @@ mod tests {
         let c = InterpreterConfig::quickjs_defaults();
         assert_eq!(c.instruction_budget, 100_000);
         assert_eq!(c.max_registers, 256);
-        assert_eq!(c.max_call_depth, 256);
+        assert_eq!(c.max_call_depth, 10_000);
         assert_eq!(c.max_heap_objects, 100_000);
         assert_eq!(c.max_total_memory_bytes, 64 * 1024 * 1024);
         assert_eq!(c.max_scope_depth, 512);
@@ -133458,7 +133778,7 @@ mod tests {
         let c = InterpreterConfig::v8_defaults();
         assert_eq!(c.instruction_budget, 1_000_000);
         assert_eq!(c.max_registers, 4096);
-        assert_eq!(c.max_call_depth, 256);
+        assert_eq!(c.max_call_depth, 10_000);
         assert_eq!(c.max_heap_objects, 1_000_000);
         assert_eq!(c.max_total_memory_bytes, 512 * 1024 * 1024);
         assert_eq!(c.max_scope_depth, 512);
@@ -134796,10 +135116,11 @@ mod tests {
                 .expect("scope binding update");
             core.closures.refresh_cell(&binding.state);
         }
-        core.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: 123,
             return_reg: 0,
             register_base: 0,
+            register_width: core.config.max_registers as usize,
             function_index: Some(7),
             this_value: Value::str("receiver"),
             this_label: Label::Public,
@@ -134823,7 +135144,9 @@ mod tests {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
             native_boundary: false,
-        });
+        };
+        core.call_stack
+            .push(pushed_frame, &mut core.closures.cold_cells);
         core.sync_estimated_memory_bytes()
             .expect("seed call-frame state should fit memory budget");
 
@@ -134976,10 +135299,11 @@ mod tests {
             phase: AsyncFunctionPhase::Executing,
             result_promise,
         });
-        core.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: 321,
             return_reg: 0,
             register_base: 0,
+            register_width: core.config.max_registers as usize,
             function_index: Some(7),
             this_value: Value::str("receiver"),
             this_label: Label::Public,
@@ -135003,11 +135327,16 @@ mod tests {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: Some(async_function_id),
             native_boundary: false,
-        });
+        };
+        core.call_stack
+            .push(pushed_frame, &mut core.closures.cold_cells);
         core.sync_estimated_memory_bytes()
             .expect("seed async call-frame state should fit memory budget");
 
-        let frame = core.call_stack.pop().expect("async frame should exist");
+        let frame = core
+            .call_stack
+            .pop(&mut core.closures.cold_cells)
+            .expect("async frame should exist");
         let outcome = core
             .complete_async_frame(frame, Ok(Value::str("done")), Label::Public)
             .expect("async completion should settle promise");
@@ -135163,10 +135492,11 @@ mod tests {
                 value: Value::str("inner"),
                 label: Label::Public,
             }));
-        core.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: 777,
             return_reg: 0,
             register_base: 4,
+            register_width: core.config.max_registers as usize,
             function_index: Some(7),
             this_value: Value::str("receiver"),
             this_label: Label::Public,
@@ -135190,7 +135520,9 @@ mod tests {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
             native_boundary: false,
-        });
+        };
+        core.call_stack
+            .push(pushed_frame, &mut core.closures.cold_cells);
         core.sync_estimated_memory_bytes()
             .expect("seed unwind call-frame state should fit memory budget");
 
@@ -135266,10 +135598,11 @@ mod tests {
                 label: Label::Public,
             })),
         });
-        core.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: 909,
             return_reg: 0,
             register_base: 8,
+            register_width: core.config.max_registers as usize,
             function_index: Some(7),
             this_value: Value::str("receiver"),
             this_label: Label::Public,
@@ -135293,7 +135626,9 @@ mod tests {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
             native_boundary: false,
-        });
+        };
+        core.call_stack
+            .push(pushed_frame, &mut core.closures.cold_cells);
         core.sync_estimated_memory_bytes()
             .expect("seed rollback call-frame state should fit memory budget");
 
@@ -136029,10 +136364,11 @@ mod tests {
             .set_state(Value::str("short"), true)
             .expect("seed binding state");
         let saved_scope = core.scope_chain.snapshot();
-        core.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: 1,
             return_reg: 0,
             register_base: 0,
+            register_width: core.config.max_registers as usize,
             function_index: None,
             this_value: Value::Undefined,
             this_label: Label::Public,
@@ -136056,7 +136392,9 @@ mod tests {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
             native_boundary: false,
-        });
+        };
+        core.call_stack
+            .push(pushed_frame, &mut core.closures.cold_cells);
         core.sync_estimated_memory_bytes()
             .expect("seed shared binding fixture");
 
@@ -144213,10 +144551,11 @@ mod lazy_seed_tests {
         core.scope_chain
             .push(core.config.max_scope_depth)
             .expect("plain call-frame local scope must fit");
-        core.call_stack.push(CallFrame {
+        let pushed_frame = CallFrame {
             return_ip: 1,
             return_reg: 0,
             register_base: 0,
+            register_width: core.config.max_registers as usize,
             function_index: Some(1),
             this_value: Value::Undefined,
             this_label: Label::Public,
@@ -144240,7 +144579,9 @@ mod lazy_seed_tests {
             scope_inert_virtual_scope_bytes: 0,
             async_function_id: None,
             native_boundary: false,
-        });
+        };
+        core.call_stack
+            .push(pushed_frame, &mut core.closures.cold_cells);
         core.sync_estimated_memory_bytes()
             .expect("plain call-frame fixture must fit");
     }

@@ -871,10 +871,8 @@ fn iterator_consumers_refuse_recursive_generators_without_native_stack_abort() {
                 let mut config = delegation_config();
                 config.max_call_depth = 8;
                 let mut core = InterpreterCore::new(config, "iterator-consumer-small-stack");
-                assert!(matches!(
-                    core.execute(&module),
-                    Err(InterpreterError::StackOverflow { max: 8, .. })
-                ));
+                let result = core.execute(&module);
+                assert!(is_depth_refusal(&result, Some(8)), "{result:?}");
             }
         })
         .expect("embedding thread")
@@ -932,4 +930,25 @@ fn same_module_call_and_apply_cannot_hide_live_frames_from_depth_budget() {
         .expect("embedding thread")
         .join()
         .expect("isolated callbacks must preserve caller depth");
+}
+
+/// A call-depth refusal (bd-9vouw.72): the host StackOverflow (with `max` when
+/// given) or, since a stack overflow is a catchable RangeError, the uncaught
+/// RangeError it becomes after a handler boundary (an iterator close, a
+/// builtin's callback, a reviver) rethrew it. Anything else fails, including
+/// a SyntaxError and a native stack abort.
+fn is_depth_refusal<T>(
+    result: &Result<T, frankenengine_engine::baseline_interpreter::InterpreterError>,
+    max: Option<usize>,
+) -> bool {
+    use frankenengine_engine::baseline_interpreter::InterpreterError;
+    match result {
+        Err(InterpreterError::StackOverflow { max: limit, .. }) => {
+            max.is_none_or(|expected| *limit == expected)
+        }
+        Err(InterpreterError::UncaughtException { value }) => {
+            value == "[object]: Maximum call stack size exceeded"
+        }
+        _ => false,
+    }
 }

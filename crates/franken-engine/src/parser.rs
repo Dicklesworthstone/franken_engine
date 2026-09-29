@@ -6334,6 +6334,9 @@ fn try_parse_binary(
     let mut best_op: Option<BinaryOperator> = None;
     let mut best_pos: usize = 0;
     let mut best_len: usize = 0;
+    // Every valid top-level split point, for folding a left-associative
+    // chain in one pass (bd-9vouw.85).
+    let mut split_points: Vec<(usize, usize, BinaryOperator)> = Vec::new();
 
     let mut i: usize = 0;
     while i < bytes.len() {
@@ -6437,6 +6440,24 @@ fn try_parse_binary(
                     best_len = len;
                 }
             }
+            if matches!(
+                (op, is_decimal_exponent_sign(bytes, i)),
+                (BinaryOperator::Add | BinaryOperator::Subtract, true)
+            ) {
+                i += len;
+                continue;
+            }
+            let lhs = expr[..i].trim();
+            let rhs = expr[i + len..].trim();
+            let sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
+                && !ends_with_postfix_update(lhs)
+                && lhs
+                    .as_bytes()
+                    .last()
+                    .is_none_or(|&c| is_operator_context_byte(c));
+            if !lhs.is_empty() && !rhs.is_empty() && !sign {
+                split_points.push((i, len, op));
+            }
             i += len;
             continue;
         }
@@ -6444,6 +6465,49 @@ fn try_parse_binary(
     }
 
     let op = best_op?;
+    // bd-9vouw.85: a left-associative chain (`a + b + ... + z`, `t && t &&
+    // ...`) splits at every top-level operator of the lowest precedence and
+    // folds left, so recursion depth grows with nesting, not with the number
+    // of terms (a 300-term concatenation exceeded the recursion budget).
+    if !op.is_right_associative() {
+        let chain: Vec<(usize, usize, BinaryOperator)> = split_points
+            .into_iter()
+            .filter(|(_, _, candidate)| candidate.precedence() == op.precedence())
+            .collect();
+        if chain.len() > 1 {
+            let mut start = 0;
+            let mut folded: Option<Expression> = None;
+            let mut pending_op = None;
+            for &(position, length, chain_op) in &chain {
+                let operand_src = expr[start..position].trim();
+                let operand =
+                    match parse_expression(operand_src, span, context, recursion_depth + 1) {
+                        Ok(e) => e,
+                        Err(e) => return Some(Err(e)),
+                    };
+                folded = Some(match (folded, pending_op) {
+                    (Some(left), Some(previous)) => Expression::Binary {
+                        operator: previous,
+                        left: Box::new(left),
+                        right: Box::new(operand),
+                    },
+                    _ => operand,
+                });
+                pending_op = Some(chain_op);
+                start = position + length;
+            }
+            let last_src = expr[start..].trim();
+            let last = match parse_expression(last_src, span, context, recursion_depth + 1) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(e)),
+            };
+            return Some(Ok(Expression::Binary {
+                operator: pending_op.expect("a chain has at least two operators"),
+                left: Box::new(folded.expect("a chain has at least two operands")),
+                right: Box::new(last),
+            }));
+        }
+    }
     let lhs_src = expr[..best_pos].trim();
     let rhs_src = expr[best_pos + best_len..].trim();
     let left = match parse_expression(lhs_src, span, context, recursion_depth + 1) {

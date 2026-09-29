@@ -5301,7 +5301,7 @@ impl BuiltinFunction {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 33] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 34] = [
     "Object",
     "Array",
     "Number",
@@ -5341,6 +5341,10 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 33] = [
     // `typeof Proxy` "function" (library feature detection) and the
     // constructor usable as a value. Proxy has no `prototype`.
     "Proxy",
+    // `Symbol(d)`, `Symbol.for` and `Symbol.iterator` stay intercepted at
+    // lowering; the binding makes `Symbol` a value (`var S = Symbol`,
+    // `root.Symbol`-style aliases). Not constructible.
+    "Symbol",
 ];
 
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
@@ -47973,9 +47977,6 @@ impl InterpreterCore {
                                     .symbol_description(symbol)
                                     .map(Value::Str)
                                     .unwrap_or(Value::Undefined),
-                                // Symbol is not a first-class constructor value
-                                // yet, so there is no `constructor` to return.
-                                Some("constructor") => Value::Undefined,
                                 _ => {
                                     let (value, owner) = self.primitive_prototype_get(
                                         module,
@@ -48986,8 +48987,21 @@ impl InterpreterCore {
                                 ),
                             });
                         }
-                        let mut result =
-                            self.dispatch_builtin_function(module, builtin, args, None, None)?;
+                        let standard_name = (builtin.kind
+                            == BuiltinFunctionKind::StandardConstructor)
+                            .then(|| Self::standard_constructor_name(builtin).ok())
+                            .flatten();
+                        if let Some(name @ ("Symbol" | "BigInt")) = standard_name {
+                            return Err(InterpreterError::TypeError {
+                                expected: "constructor".to_string(),
+                                got: format!("{name} is not a constructor"),
+                            });
+                        }
+                        let mut result = if standard_name == Some("Proxy") {
+                            self.dispatch_builtin_hostcall("builtin:Proxy", args, Some(module))?
+                        } else {
+                            self.dispatch_builtin_function(module, builtin, args, None, None)?
+                        };
                         // ES2020 20.1.1.1, 21.1.1.1, 19.3.1.1: `new Number(x)`,
                         // `new String(x)` and `new Boolean(x)` wrap the converted
                         // primitive (bd-9vouw.48); called, they return it.
@@ -91210,7 +91224,7 @@ impl InterpreterCore {
             "prototype" => Value::Object(self.ensure_builtin_prototype(name)?),
             "name" => Value::str(name),
             "length" => Value::Int(match name {
-                "Map" | "Set" | "WeakMap" | "WeakSet" => 0,
+                "Map" | "Set" | "WeakMap" | "WeakSet" | "Symbol" => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
@@ -91220,6 +91234,14 @@ impl InterpreterCore {
             )),
             "asIntN" if name == "BigInt" => {
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsIntN))
+            }
+            // Symbol.iterator, Symbol.toStringTag, ... (ES2020 19.4.2).
+            key if name == "Symbol"
+                && crate::object_model::WellKnownSymbol::from_property_name(key).is_some() =>
+            {
+                let symbol = crate::object_model::WellKnownSymbol::from_property_name(key)
+                    .expect("guarded above");
+                Value::Symbol(symbol.id())
             }
             "BYTES_PER_ELEMENT" if TypedArrayKind::from_type_name(name).is_some() => {
                 let kind = TypedArrayKind::from_type_name(name).expect("guarded above");
@@ -91276,7 +91298,13 @@ impl InterpreterCore {
             "Boolean" => self.dispatch_builtin_hostcall("builtin:Boolean", args, Some(module)),
             "Map" => self.dispatch_builtin_hostcall("builtin:Map", args, Some(module)),
             "Set" => self.dispatch_builtin_hostcall("builtin:Set", args, Some(module)),
-            "Proxy" => self.dispatch_builtin_hostcall("builtin:Proxy", args, Some(module)),
+            // ES2020 26.2.1.1: Proxy called without `new` throws; the
+            // Construct arm builds proxies.
+            "Proxy" => Err(InterpreterError::TypeError {
+                expected: "new Proxy(target, handler)".to_string(),
+                got: "Proxy called without new".to_string(),
+            }),
+            "Symbol" => self.dispatch_builtin_hostcall("builtin:Symbol", args, Some(module)),
             // `RegExp(p, f)` and `new R(p, f)` through a RegExp value: the same
             // hostcall `new RegExp(...)` and literals lower to.
             "RegExp" => self.dispatch_builtin_hostcall("builtin:RegExp", args, Some(module)),

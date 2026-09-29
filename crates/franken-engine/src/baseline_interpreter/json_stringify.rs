@@ -355,6 +355,19 @@ impl InterpreterCore {
             self.json_observe_reachable_value(&result)?;
             value = result;
         }
+        // ES2020 24.5.2.2 step 4: a Number, String, Boolean or BigInt wrapper
+        // serializes as its primitive (bd-9vouw.73).
+        if let Value::Object(object_id) = &value
+            && let Some(
+                primitive @ (Value::Int(_)
+                | Value::Float(_)
+                | Value::Str(_)
+                | Value::Bool(_)
+                | Value::BigInt(_)),
+            ) = self.primitive_wrapper_value(*object_id)
+        {
+            value = primitive.clone();
+        }
         Ok(value)
     }
 

@@ -1,0 +1,168 @@
+//! Primitive wrapper objects (bd-9vouw.73, bd-9vouw.48).
+//!
+//! `Object(primitive)` failed ("boxing primitives through Object() is not
+//! supported yet") and `new Number(x)` / `new String(x)` / `new Boolean(x)`
+//! returned primitives (typeof "number"). A wrapper is now an object whose
+//! prototype is its type's and whose engine-private slot holds the
+//! primitive: the prototype methods unwrap it (thisNumberValue and
+//! friends), conversions and JSON see the primitive, a String wrapper has
+//! its indices and length as own properties, Object.prototype.toString
+//! reports its tag, and console.log prints it like Node (`[Number: 3]`).
+//! lodash's baseGetTag (`symToStringTag in Object(value)`) and the common
+//! `var O = Object(this)` polyfill shape need it.
+//!
+//! Each program runs through the parser, the lowering and the interpreter;
+//! the expected line is what Node v22.2.0 prints for the same program
+//! (`node -e`). Every run also checks the memory-accounting invariant.
+
+#![forbid(unsafe_code)]
+
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+/// (name, program, Node v22.2.0 output)
+const CASES: &[(&str, &str, &str)] = &[
+    (
+        "object_number",
+        r#"const o = Object(1); console.log(typeof o, o instanceof Number, o + 1, o * 2, o == 1, o === 1, String(o), `${o}`);"#,
+        "object true 2 2 true false 1 1",
+    ),
+    (
+        "object_string",
+        r#"const o = Object('ab'); console.log(typeof o, o.length, o[1], o[2], o + 'c', o.toUpperCase(), o == 'ab', o instanceof String);"#,
+        "object 2 b undefined abc AB true true",
+    ),
+    (
+        "object_boolean",
+        r#"const o = Object(false); console.log(typeof o, o ? 'truthy' : 'falsy', o.valueOf(), String(o), o instanceof Boolean);"#,
+        "object truthy false false true",
+    ),
+    (
+        "new_number",
+        r#"const n = new Number(3); console.log(typeof n, n.valueOf(), +n, n + 1, n.toFixed(2), n.toString(2), JSON.stringify(n), JSON.stringify({ n }));"#,
+        r#"object 3 3 4 3.00 11 3 {"n":3}"#,
+    ),
+    (
+        "new_string",
+        r#"const s = new String('hi'); console.log(typeof s, s.length, s[0], s + '!', s.charAt(1), s.slice(0, 1), JSON.stringify([s]), s.valueOf() === 'hi');"#,
+        r#"object 2 h hi! i h ["hi"] true"#,
+    ),
+    (
+        "new_boolean",
+        r#"const b = new Boolean(false); console.log(typeof b, b ? 'truthy' : 'falsy', b.valueOf(), b.toString(), JSON.stringify({ b }), !b);"#,
+        r#"object truthy false false {"b":false} false"#,
+    ),
+    (
+        "called_constructors_stay_primitive",
+        r#"console.log(typeof Number('4'), typeof String(5), typeof Boolean(0), Number('4') + 1);"#,
+        "number string boolean 5",
+    ),
+    (
+        "wrapper_identity",
+        r#"const a = new Number(1), b = new Number(1); console.log(a == b, a === a, a == 1, new String('x') == 'x', Object(a) === a);"#,
+        "false true true true true",
+    ),
+    (
+        "to_string_tags",
+        r#"const t = x => Object.prototype.toString.call(x); console.log(t(Object(1)), t(new Boolean(true)), t(Object('')), t(Object(1n)), t(new String('q')));"#,
+        "[object Number] [object Boolean] [object String] [object BigInt] [object String]",
+    ),
+    (
+        "in_and_own",
+        r#"const s = new String('ab'); console.log('length' in s, 0 in s, 2 in s, 'x' in Object(1), 'toFixed' in Object(1), s.hasOwnProperty('0'), s.hasOwnProperty('length'), s.hasOwnProperty('charAt'));"#,
+        "true true false false true true true false",
+    ),
+    (
+        "bigint_and_symbol_wrappers",
+        r#"const b = Object(5n); const y = Object(Symbol('q')); console.log(typeof b, b + 1n, b.toString(), typeof y, y.toString());"#,
+        "object 6n 5 object Symbol(q)",
+    ),
+    (
+        "console_format",
+        r#"const n = new Number(5); n.extra = 1; console.log(new Number(3), new String('ab'), [Object(true)], n);"#,
+        "[Number: 3] [String: 'ab'] [ [Boolean: true] ] [Number: 5] { extra: 1 }",
+    ),
+    (
+        "lodash_base_get_tag",
+        r#"const symToStringTag = Symbol.toStringTag; const toStr = Object.prototype.toString; function baseGetTag(value) { if (value == null) { return value === undefined ? '[object Undefined]' : '[object Null]'; } return (symToStringTag && symToStringTag in Object(value)) ? 'raw' : toStr.call(value); } console.log(baseGetTag(1), baseGetTag('s'), baseGetTag(true), baseGetTag({}), baseGetTag(null));"#,
+        "[object Number] [object String] [object Boolean] [object Object] [object Null]",
+    ),
+    (
+        "polyfill_object_this",
+        r#"function find(pred) { var O = Object(this); var len = O.length >>> 0; for (var i = 0; i < len; i++) { if (pred(O[i])) return O[i]; } } console.log(find.call('abc', c => c > 'a'), find.call([1, 5, 9], x => x > 3));"#,
+        "b 5",
+    ),
+    (
+        "new_object_primitive",
+        r#"const o = new Object('z'); console.log(typeof o, o.length, String(o));"#,
+        "object 1 z",
+    ),
+    (
+        "wrapper_properties",
+        r#"const n = new Number(7); n.label = 'seven'; console.log(n.label, Object.keys(n).join(), n + 0);"#,
+        "seven label 7",
+    ),
+];
+fn console_output(source: &str) -> Result<String, String> {
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "wrapper.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .map_err(|error| format!("parse: {error:?}"))?;
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "wrapper.js"),
+        &LoweringContext::new("wrapper-trace", "wrapper-decision", "wrapper-policy"),
+    )
+    .map_err(|error| format!("lower: {error:?}"))?
+    .ir3;
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
+    ]
+    .into_iter()
+    .collect();
+    let mut core = InterpreterCore::new(config, "wrapper");
+    let result = core.execute(&module);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes(),
+        "memory accounting drift: {source}"
+    );
+    let result = result.map_err(|error| format!("{error:?}"))?;
+    Ok(result
+        .console_output
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+#[test]
+fn primitive_wrapper_objects_match_node() {
+    let mut mismatches = Vec::new();
+    for (name, source, node) in CASES {
+        match console_output(source) {
+            Ok(output) if output == *node => {}
+            other => mismatches.push(format!("{name}: node {node:?}, got {other:?}")),
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} of {} programs differ from Node:\n{}",
+        mismatches.len(),
+        CASES.len(),
+        mismatches.join("\n")
+    );
+}

@@ -1203,6 +1203,28 @@ impl InterpreterCore {
             base = text;
             braces = ("{".to_string(), "}");
             body = Body::Plain;
+        } else if let Some(primitive) = self.primitive_wrapper_value(id).cloned() {
+            // Node: `[Number: 3]`, `[String: 'ab']`, `[Boolean: false]`,
+            // `[BigInt: 1n]`, `[Symbol: Symbol(q)]` (bd-9vouw.73).
+            let type_name = match &primitive {
+                Value::Bool(_) => "Boolean",
+                Value::Int(_) | Value::Float(_) => "Number",
+                Value::Str(_) => "String",
+                Value::BigInt(_) => "BigInt",
+                _ => "Symbol",
+            };
+            let shown = match &primitive {
+                Value::Str(text) => Self::inspect_string(state, text),
+                Value::BigInt(digits) => format!("{digits}n"),
+                other => self.value_to_string(other),
+            };
+            let text = format!("[{type_name}: {shown}]");
+            if properties.is_empty() {
+                return Ok(text);
+            }
+            base = text;
+            braces = ("{".to_string(), "}");
+            body = Body::Plain;
         } else if internal.as_deref() == Some("RegExp") {
             let text = self.inspect_regexp_source(id);
             if properties.is_empty() || recurse_times > state.depth {

@@ -1226,6 +1226,7 @@ impl InterpreterCore {
                 is_derived_constructor: _,
                 is_default_derived_constructor: _,
                 class_fields,
+                primitive_value,
                 is_array: _,
                 cached_dense_length: _,
                 array_buffer: _,
@@ -1263,6 +1264,9 @@ impl InterpreterCore {
             }
             if let Some(fields) = class_fields {
                 marker.value(fields);
+            }
+            if let Some(value) = primitive_value {
+                marker.value(value);
             }
             if let Some(view) = typed_array {
                 marker.object(view.buffer);

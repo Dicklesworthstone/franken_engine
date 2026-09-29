@@ -21,7 +21,7 @@
 //!   operators and `Array.prototype.join` still do not.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -345,7 +345,7 @@ const NUMERIC_TO_PRIMITIVE_CASES: &[Case] = &[
     ),
 ];
 
-fn run(dir: &PathBuf, id: &str, source: &str) -> Result<Vec<String>, String> {
+fn run(dir: &Path, id: &str, source: &str) -> Result<Vec<String>, String> {
     let input = dir.join(format!("{id}.js"));
     let report = dir.join(format!("{id}.run.json"));
     fs::write(&input, source).expect("write case");

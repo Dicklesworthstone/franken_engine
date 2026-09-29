@@ -4518,7 +4518,9 @@ fn parse_contextual_static_property_key(
                 )
             });
     }
-    Ok(Expression::Identifier(source.to_string()))
+    // `\u` escapes in an IdentifierName key denote the same property name as
+    // the characters they spell (`{ \u0061: 1 }.a`, ES2020 11.6).
+    Ok(Expression::Identifier(canonicalize_identifier(source)))
 }
 
 /// Find `:` at the top level of a pattern element.
@@ -11394,8 +11396,10 @@ fn parse_class_body(
         };
         if !rest.starts_with('#') && class_member_is_field(&rest[field_key_end..]) {
             // `x = {a: 1}.a` was cut after the object literal's `}`: glue
-            // continuation segments back on.
-            while let Some(next) = pending.front()
+            // continuation segments back on. A segment that ended at `;` is
+            // complete, so `[x]; [y] = 42;` stays two fields.
+            while !rest.ends_with(';')
+                && let Some(next) = pending.front()
                 && class_field_continues_with(next)
             {
                 let end = subslice_offset(body, next) + next.len();
@@ -11976,11 +11980,42 @@ fn class_member_is_field(member: &str) -> bool {
         Some(quote @ ('\'' | '"')) => member[1..]
             .find(quote)
             .map_or("", |close| &member[close + 2..]),
-        _ => member,
+        // An IdentifierName key, which may contain `\u{...}` escapes whose
+        // braces are not a method body.
+        _ => skip_identifier_name(member),
     };
     after_key
         .find(['(', '=', ';', '{'])
         .is_none_or(|index| matches!(after_key.as_bytes()[index], b'=' | b';'))
+}
+
+/// `text` after a leading IdentifierName, including `\uXXXX` and `\u{...}`
+/// escapes; `text` itself when it does not start with one.
+fn skip_identifier_name(text: &str) -> &str {
+    let mut rest = text;
+    loop {
+        if let Some(after) = rest.strip_prefix("\\u") {
+            let escape_len = if after.starts_with('{') {
+                after.find('}').map(|close| close + 1)
+            } else {
+                after
+                    .get(..4)
+                    .is_some_and(|hex| hex.chars().all(|c| c.is_ascii_hexdigit()))
+                    .then_some(4)
+            };
+            match escape_len {
+                Some(len) => rest = &after[len..],
+                None => return rest,
+            }
+            continue;
+        }
+        match rest.chars().next() {
+            Some(c) if c.is_alphanumeric() || matches!(c, '_' | '$' | '\u{200c}' | '\u{200d}') => {
+                rest = &rest[c.len_utf8()..];
+            }
+            _ => return rest,
+        }
+    }
 }
 
 /// Split class body into individual method segments.

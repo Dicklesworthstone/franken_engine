@@ -10725,7 +10725,15 @@ fn parse_do_while_statement(
     };
 
     reject_declaration_in_statement_position(&body_src, StatementPosition::Loop, &span, context)?;
-    let body = parse_statement(body_src.trim(), goal, span.clone(), context)?;
+    // An unbraced body's `;` terminates the body statement, it is not part
+    // of its expression (`do e++; while (c)`); a lone `;` stays the empty
+    // statement.
+    let body_src = body_src.trim();
+    let body_src = match body_src.strip_suffix(';') {
+        Some(expression) if !expression.trim().is_empty() => expression.trim_end(),
+        _ => body_src,
+    };
+    let body = parse_statement(body_src, goal, span.clone(), context)?;
 
     let rest = rest.trim();
     let rest = rest.strip_prefix("while").unwrap_or(rest).trim_start();

@@ -914,6 +914,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Uint32Array" => Some("Uint32Array"),
         "Float32Array" => Some("Float32Array"),
         "Float64Array" => Some("Float64Array"),
+        "BigInt64Array" => Some("BigInt64Array"),
+        "BigUint64Array" => Some("BigUint64Array"),
         "Date" => Some("Date"),
         "Promise" => Some("Promise"),
         "RegExp" => Some("RegExp"),
@@ -5259,7 +5261,7 @@ impl BuiltinFunction {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 30] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 32] = [
     "Object",
     "Array",
     "Number",
@@ -5293,6 +5295,8 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 30] = [
     "Uint32Array",
     "Float32Array",
     "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
 ];
 
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
@@ -5861,6 +5865,9 @@ pub enum TypedArrayKind {
     Uint16,
     Float32,
     Float64,
+    /// ES2020 22.2: 64-bit integer elements read as BigInt values.
+    BigInt64,
+    BigUint64,
 }
 
 impl TypedArrayKind {
@@ -5875,6 +5882,8 @@ impl TypedArrayKind {
             "builtin:Uint16Array" => Some(Self::Uint16),
             "builtin:Float32Array" => Some(Self::Float32),
             "builtin:Float64Array" => Some(Self::Float64),
+            "builtin:BigInt64Array" => Some(Self::BigInt64),
+            "builtin:BigUint64Array" => Some(Self::BigUint64),
             _ => None,
         }
     }
@@ -5890,6 +5899,8 @@ impl TypedArrayKind {
             "Uint16Array" => Some(Self::Uint16),
             "Float32Array" => Some(Self::Float32),
             "Float64Array" => Some(Self::Float64),
+            "BigInt64Array" => Some(Self::BigInt64),
+            "BigUint64Array" => Some(Self::BigUint64),
             _ => None,
         }
     }
@@ -5905,6 +5916,8 @@ impl TypedArrayKind {
             Self::Uint16 => "Uint16Array",
             Self::Float32 => "Float32Array",
             Self::Float64 => "Float64Array",
+            Self::BigInt64 => "BigInt64Array",
+            Self::BigUint64 => "BigUint64Array",
         }
     }
 
@@ -5913,8 +5926,14 @@ impl TypedArrayKind {
             Self::Uint8 | Self::Int8 | Self::Uint8Clamped => 1,
             Self::Int16 | Self::Uint16 => 2,
             Self::Int32 | Self::Uint32 | Self::Float32 => 4,
-            Self::Float64 => 8,
+            Self::Float64 | Self::BigInt64 | Self::BigUint64 => 8,
         }
+    }
+
+    /// ES2020 22.2 [[ContentType]] BigInt: elements are BigInts, and a
+    /// BigInt array never mixes with a Number one (set, construction).
+    fn is_bigint(self) -> bool {
+        matches!(self, Self::BigInt64 | Self::BigUint64)
     }
 }
 
@@ -60799,6 +60818,16 @@ impl InterpreterCore {
                 raw.copy_from_slice(slot);
                 Ok(js_number_to_value(f64::from_le_bytes(raw)))
             }
+            TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => {
+                let mut raw = [0u8; 8];
+                raw.copy_from_slice(slot);
+                let digits = if view.kind == TypedArrayKind::BigInt64 {
+                    i64::from_le_bytes(raw).to_string()
+                } else {
+                    u64::from_le_bytes(raw).to_string()
+                };
+                Ok(Value::BigInt(Arc::from(digits.as_str())))
+            }
         }
     }
 
@@ -60845,8 +60874,96 @@ impl InterpreterCore {
             TypedArrayKind::Float64 => {
                 slot.copy_from_slice(&Self::typed_array_number(value).to_le_bytes());
             }
+            TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => {
+                slot.copy_from_slice(&Self::typed_array_bigint_bits(value)?.to_le_bytes());
+            }
         }
         Ok(())
+    }
+
+    /// The low 64 bits of a BigInt element value (ToBigInt64 and ToBigUint64
+    /// store the same bits). Values reach the byte writer already converted
+    /// by `typed_array_prepare_value`; anything else is the TypeError ToBigInt
+    /// raises for a Number.
+    fn typed_array_bigint_bits(value: &Value) -> Result<u64, InterpreterError> {
+        let Value::BigInt(digits) = value else {
+            return Err(InterpreterError::TypeError {
+                expected: "BigInt typed-array element".to_string(),
+                got: format!("{} (Cannot convert it to a BigInt)", value.type_name()),
+            });
+        };
+        let wrapped = bigint_ops::as_uint_n(64, digits.as_ref()).map_err(|error| {
+            InterpreterError::RangeError {
+                message: error.message().to_string(),
+            }
+        })?;
+        wrapped
+            .parse::<u64>()
+            .map_err(|_| InterpreterError::RangeError {
+                message: "BigInt typed-array element does not fit 64 bits".to_string(),
+            })
+    }
+
+    /// ES2020 22.2 IntegerIndexedElementSet: a BigInt array converts the
+    /// value with ToBigInt (a TypeError for a Number, a SyntaxError for a
+    /// string that is not a BigInt literal) before anything is written; a
+    /// Number array converts in the byte writer.
+    fn typed_array_prepare_value(
+        &mut self,
+        kind: TypedArrayKind,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if kind.is_bigint() && !matches!(value, Value::BigInt(_)) {
+            let digits = self.bigint_digits_of(value)?;
+            return Ok(Value::BigInt(Arc::from(digits.as_str())));
+        }
+        Ok(value)
+    }
+
+    /// `typed_array_prepare_value` for every element, in order.
+    fn typed_array_prepare_values(
+        &mut self,
+        kind: TypedArrayKind,
+        values: Vec<Value>,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        values
+            .into_iter()
+            .map(|value| self.typed_array_prepare_value(kind, value))
+            .collect()
+    }
+
+    /// The TypeError for copying between a BigInt and a Number typed array
+    /// (ES2020 22.2.3.23.2 step 21, 22.2.4.3 step 16).
+    fn typed_array_content_type_check(
+        &self,
+        target: TypedArrayKind,
+        source: &Value,
+    ) -> Result<(), InterpreterError> {
+        let Value::Object(source_id) = source else {
+            return Ok(());
+        };
+        let source_kind = self
+            .heap
+            .get(source_id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            .map(|view| view.kind);
+        match source_kind {
+            Some(kind) if kind.is_bigint() != target.is_bigint() => {
+                Err(InterpreterError::TypeError {
+                    expected: format!(
+                        "{} source for a {}",
+                        if target.is_bigint() {
+                            "BigInt"
+                        } else {
+                            "Number"
+                        },
+                        target.type_name()
+                    ),
+                    got: "Cannot mix BigInt and other types, use explicit conversions".to_string(),
+                })
+            }
+            _ => Ok(()),
+        }
     }
 
     fn write_typed_array_element_bytes(
@@ -60902,6 +61019,7 @@ impl InterpreterCore {
         else {
             return Ok(None);
         };
+        let value = self.typed_array_prepare_value(view.kind, value.clone())?;
         if index >= view.length {
             return Ok(Some(true));
         }
@@ -60911,7 +61029,7 @@ impl InterpreterCore {
                 view.byte_offset,
                 bytes,
                 index,
-                value,
+                &value,
             )
         })??;
         Ok(Some(true))
@@ -61058,7 +61176,9 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let (_, target_view) = self.typed_array_receiver_view(receiver, "set")?;
         let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        self.typed_array_content_type_check(target_view.kind, &source)?;
         let values = self.typed_array_source_values(source)?;
+        let values = self.typed_array_prepare_values(target_view.kind, values)?;
         let offset = self.typed_array_offset_arg(target_view.kind, args, 1, "offset")?;
         let end = offset
             .checked_add(values.len())
@@ -61159,6 +61279,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let (target_id, view) = self.typed_array_receiver_view(receiver, "fill")?;
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let value = self.typed_array_prepare_value(view.kind, value)?;
         let start = self.typed_array_relative_index_arg(args, 1, view.length, 0)?;
         let end = self.typed_array_relative_index_arg(args, 2, view.length, view.length)?;
         if start < end {
@@ -77710,7 +77831,9 @@ impl InterpreterCore {
             | "builtin:Int16Array"
             | "builtin:Uint16Array"
             | "builtin:Float32Array"
-            | "builtin:Float64Array" => {
+            | "builtin:Float64Array"
+            | "builtin:BigInt64Array"
+            | "builtin:BigUint64Array" => {
                 let kind = TypedArrayKind::from_builtin_capability(cap).expect(
                     "typed-array constructor branch must use a known typed-array capability",
                 );
@@ -87949,6 +88072,8 @@ impl InterpreterCore {
         kind: TypedArrayKind,
         values: &[Value],
     ) -> Result<ObjectId, InterpreterError> {
+        let values = self.typed_array_prepare_values(kind, values.to_vec())?;
+        let values = values.as_slice();
         let view = self.alloc_typed_array_with_fresh_buffer(kind, values.len())?;
         let buffer = self
             .heap
@@ -88000,6 +88125,7 @@ impl InterpreterCore {
                 );
             }
 
+            self.typed_array_content_type_check(kind, &first_arg)?;
             let values = self.read_array_like_values(object_id);
             return self.alloc_typed_array_from_values(kind, &values);
         }

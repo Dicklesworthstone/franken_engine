@@ -6063,6 +6063,7 @@ struct MemoryComponents {
     async_functions: u64,
     iterators: u64,
     generators: u64,
+    async_generators: u64,
     scope_chain: u64,
     closures: u64,
     promise_runtime: u64,
@@ -12220,8 +12221,9 @@ pub struct InterpreterCore {
     /// halts, or throws. `drain_microtasks` cannot return an error directly, so
     /// the outer execution driver consumes this after the event-loop drain.
     top_level_await_outcome: Option<Result<LabeledReturn, InterpreterError>>,
-    /// Async generator object store.
-    async_generators: Vec<AsyncGeneratorObject>,
+    /// Async generator object store. The collector reclaims entries nothing
+    /// names (bd-9vouw.57).
+    async_generators: ReclaimableTable<AsyncGeneratorObject>,
     /// FIFO request continuations use the existing Promise reaction queue.
     async_generator_runtime: AsyncGeneratorRuntime,
     /// Promise store for ES2020 Promise semantics.
@@ -13055,7 +13057,10 @@ impl InterpreterCore {
             async_resumption_contexts: BTreeMap::new(),
             top_level_await_resumption_contexts: BTreeMap::new(),
             top_level_await_outcome: None,
-            async_generators: Vec::new(),
+            async_generators: ReclaimableTable::new(
+                "async generator",
+                Self::estimate_async_generator_bytes,
+            ),
             async_generator_runtime: AsyncGeneratorRuntime::default(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
@@ -84117,6 +84122,7 @@ impl InterpreterCore {
                 self.iterators.iter().map(Self::estimate_iterator_bytes),
             ),
             generators: Self::estimate_generators_bytes(self.generators.iter()),
+            async_generators: self.async_generators_memory_bytes_by_walk(),
             scope_chain: self.scope_chain_memory_bytes_by_walk(),
             closures: self.closures_memory_bytes_by_walk(),
             promise_runtime: self.promise_runtime_memory_bytes_by_walk(),
@@ -84151,11 +84157,19 @@ impl InterpreterCore {
             Self::estimate_generators_bytes(self.generators.iter()),
             "generator running total drifted from the full walk"
         );
+        let async_generator_bytes = self.async_generators_memory_bytes();
+        #[cfg(test)]
+        debug_assert_eq!(
+            async_generator_bytes,
+            self.async_generators_memory_bytes_by_walk(),
+            "async generator running total drifted from the full walk"
+        );
         self.base_estimated_memory_bytes_with(MemoryComponents {
             heap: heap_bytes,
             async_functions: self.async_functions_memory_bytes(),
             iterators: iterator_bytes,
             generators: generator_bytes,
+            async_generators: async_generator_bytes,
             scope_chain: self.scope_chain_memory_bytes(),
             closures: self.closures_memory_bytes(),
             promise_runtime: self.promise_runtime_memory_bytes(),
@@ -84168,6 +84182,7 @@ impl InterpreterCore {
             async_functions: async_function_bytes,
             iterators: iterator_bytes,
             generators: generator_bytes,
+            async_generators: async_generator_bytes,
             scope_chain: scope_chain_bytes,
             closures: closure_bytes,
             promise_runtime: promise_runtime_bytes,
@@ -84187,7 +84202,7 @@ impl InterpreterCore {
             .saturating_add(generator_bytes)
             .saturating_add(self.generator_delegation_memory_bytes())
             .saturating_add(async_function_bytes)
-            .saturating_add(self.async_generators_memory_bytes())
+            .saturating_add(async_generator_bytes)
             .saturating_add(self.top_level_await_outcome_memory_bytes())
             .saturating_add(self.pending_io_callbacks_memory_bytes())
             .saturating_add(self.pending_child_process_tasks_memory_bytes())
@@ -118385,7 +118400,7 @@ mod function_prototype_call_apply_tests_current {
             .as_ref()
             .expect("retained async-generator owner");
         assert_eq!(core.async_generators.len(), 2);
-        for generator in &core.async_generators {
+        for generator in core.async_generators.iter() {
             // The owner program now lives on the canonical generator
             // activation each async generator points at.
             let activation = &core.generators[generator.generator_id as usize];

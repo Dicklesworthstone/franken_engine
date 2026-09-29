@@ -95,15 +95,35 @@ impl AsyncGeneratorObject {
         }
     }
 
-    /// Visit the promise of every queued request (collector roots).
+    /// Visit the promise of every queued request.
     pub(super) fn for_each_promise(&self, mut visit: impl FnMut(PromiseHandle)) {
         for request in &self.requests {
             visit(request.promise);
         }
     }
+
+    /// Whether this generator will resume without a new request: it runs,
+    /// awaits, is mid-`yield*`, or holds queued requests (collector roots,
+    /// bd-9vouw.57).
+    pub(super) fn pending(&self) -> bool {
+        matches!(
+            self.phase,
+            AsyncGeneratorPhase::Executing | AsyncGeneratorPhase::SuspendedAwait
+        ) || !self.requests.is_empty()
+            || self.awaited.is_some()
+            || self.delegation.is_some()
+    }
 }
 
 impl AsyncGeneratorRuntime {
+    /// Visit the async generator each pending await continuation resumes
+    /// (collector roots, bd-9vouw.57).
+    pub(super) fn for_each_generator(&self, mut visit: impl FnMut(u32)) {
+        for continuation in self.continuations.values() {
+            visit(continuation.generator_id);
+        }
+    }
+
     /// Visit every value a pending await continuation retains (collector
     /// roots, bd-9vouw.57).
     pub(super) fn for_each_value(&self, mut visit: impl FnMut(&Value)) {
@@ -951,17 +971,31 @@ impl InterpreterCore {
     }
 
     pub(super) fn async_generators_memory_bytes(&self) -> u64 {
+        // The table keeps its entries' running total, so this does not walk
+        // every async generator ever created.
+        self.async_generators
+            .estimated_bytes()
+            .saturating_add(self.async_generator_continuations_memory_bytes())
+    }
+
+    /// [`Self::async_generators_memory_bytes`] re-derived by walking every
+    /// entry: the independent memory-accounting oracle.
+    pub(super) fn async_generators_memory_bytes_by_walk(&self) -> u64 {
         Self::saturating_sum(
             self.async_generators
                 .iter()
                 .map(Self::estimate_async_generator_bytes),
         )
-        .saturating_add(Self::saturating_sum(
+        .saturating_add(self.async_generator_continuations_memory_bytes())
+    }
+
+    fn async_generator_continuations_memory_bytes(&self) -> u64 {
+        Self::saturating_sum(
             self.async_generator_runtime
                 .continuations
                 .values()
                 .map(Self::async_generator_continuation_bytes),
-        ))
+        )
     }
 
     pub(super) fn generator_resume(

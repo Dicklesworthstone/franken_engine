@@ -359,6 +359,79 @@ fn abandoned_generators_complete_past_the_byte_budget() {
     );
 }
 
+/// Async-generator programs: an async generator must survive while a value
+/// names it, while it awaits, and while a request promise waits on it,
+/// including across a churn (the `CHURN` placeholder). Expected lines are
+/// Node v22.2.0's.
+const ASYNC_GENERATOR_CASES: &[(&str, &str)] = &[
+    (
+        "async function* g() { yield 1; yield 2; } const it = g(); CHURN \
+         it.next().then(a => it.next()).then(b => console.log(b.value));",
+        "2",
+    ),
+    (
+        "async function* g() { const o = { v: 5 }; await null; yield o.v; } const it = g(); \
+         const p = it.next(); CHURN p.then(r => console.log(r.value));",
+        "5",
+    ),
+    (
+        "async function* g() { yield { v: 3 }; } const p = g().next(); CHURN \
+         p.then(r => console.log(r.value.v));",
+        "3",
+    ),
+    (
+        // The generator is unnamed: only the suspended `for await` holds it
+        // while the top-level churn collects. (A churn inside the async body
+        // would not collect at all: bd-9vouw.77.)
+        "(async () => { let s = 0; for await (const x of (async function* () { yield 1; yield 2; \
+         yield 3; })()) { s += x; } console.log(s); })(); CHURN",
+        "6",
+    ),
+    (
+        "const holder = { it: (async function* () { yield 7; })() }; CHURN \
+         holder.it.next().then(r => console.log(r.value));",
+        "7",
+    ),
+];
+
+fn async_generator_case_sources() -> impl Iterator<Item = (String, &'static str)> {
+    ASYNC_GENERATOR_CASES
+        .iter()
+        .map(|(source, node)| (source.replace("CHURN", CHURN), *node))
+}
+
+#[test]
+fn async_generators_survive_collection_until_unreachable() {
+    for (source, node) in async_generator_case_sources() {
+        let run = run(&source, None);
+        assert_eq!(console_lines(&run, &source), vec![node], "{source}");
+        assert!(run.gc.collections > 0, "no collection ran: {source}");
+    }
+}
+
+/// Each iteration leaves an async generator suspended at its first `yield`
+/// with its backing generator's saved frame. Async generators were roots, so
+/// every one stayed live. One nothing names that neither runs, awaits nor
+/// holds requests can never resume, so it is reclaimed with its generator.
+#[test]
+fn abandoned_async_generators_are_reclaimed() {
+    let source = "async function* g() { yield 1; yield 2; } (async () => { let s = 0; \
+                  for (let i = 0; i < 4000; i++) { const it = g(); s += (await it.next()).value; } \
+                  console.log(s); })();";
+    let run = try_run_with_budgets(source, None, None, Some(2 * 1024 * 1024)).expect("lowers");
+    assert_eq!(console_lines(&run, source), vec!["4000"]);
+    assert!(
+        run.gc.reclaimed_async_generators >= 2_000,
+        "reclaimed only {} async generators",
+        run.gc.reclaimed_async_generators
+    );
+    assert!(
+        run.gc.reclaimed_generators >= 2_000,
+        "reclaimed only {} backing generators",
+        run.gc.reclaimed_generators
+    );
+}
+
 fn promise_case_sources() -> impl Iterator<Item = (String, &'static str)> {
     PROMISE_CASES
         .iter()
@@ -550,6 +623,7 @@ fn stress_collection_preserves_results_and_console_output() {
             .into_iter()
             .chain(promise_case_sources())
             .chain(iterator_case_sources())
+            .chain(async_generator_case_sources())
             .map(|(source, _)| {
                 // The stress run collects at every safe point; a short churn
                 // keeps the O(live) cost per instruction manageable.

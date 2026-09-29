@@ -48,8 +48,10 @@
 //! - Ids are never reused, so a stale id fails loudly.
 //!
 //! Generators are traced the same way: an unreachable generator, suspended
-//! or not, can never resume. Async generators are still roots. WeakMap entries are
-//! ephemerons: a value is kept only while its key is reachable.
+//! or not, can never resume. An async generator is kept while a value names
+//! it, while it runs or awaits, or while requests are queued on it; its
+//! backing generator follows it. WeakMap entries are ephemerons: a value is
+//! kept only while its key is reachable.
 
 use std::collections::HashSet;
 
@@ -78,6 +80,9 @@ pub struct GcStats {
     pub reclaimed_iterators: u64,
     /// Generators released with their suspended executions.
     pub reclaimed_generators: u64,
+    /// Async-generator records released.
+    #[serde(default)]
+    pub reclaimed_async_generators: u64,
 }
 
 /// Collector state carried by `InterpreterCore`.
@@ -180,6 +185,8 @@ struct GcMarker {
     iterator_stack: Vec<u32>,
     generators: ChunkedMarks,
     generator_stack: Vec<u32>,
+    async_generators: ChunkedMarks,
+    async_generator_stack: Vec<u32>,
     visited_frames: HashSet<usize>,
     visited_cells: HashSet<usize>,
 }
@@ -192,6 +199,7 @@ impl GcMarker {
         async_functions_len: usize,
         iterators_len: usize,
         generators_len: usize,
+        async_generators_len: usize,
     ) -> Self {
         Self {
             objects: ChunkedMarks::new(heap_len),
@@ -207,6 +215,8 @@ impl GcMarker {
             iterator_stack: Vec::new(),
             generators: ChunkedMarks::new(generators_len),
             generator_stack: Vec::new(),
+            async_generators: ChunkedMarks::new(async_generators_len),
+            async_generator_stack: Vec::new(),
             visited_frames: HashSet::new(),
             visited_cells: HashSet::new(),
         }
@@ -241,6 +251,14 @@ impl GcMarker {
     fn generator_id(&mut self, id: u32) {
         if self.generators.mark(id as usize) {
             self.generator_stack.push(id);
+        }
+    }
+
+    /// Async-generator table ids: `Value::AsyncGeneratorObject` and the
+    /// running or awaiting async generator.
+    fn async_generator(&mut self, id: u32) {
+        if self.async_generators.mark(id as usize) {
+            self.async_generator_stack.push(id);
         }
     }
 
@@ -312,8 +330,8 @@ impl GcMarker {
             Value::Promise(handle) => self.promise(*handle),
             Value::Iterator(handle) => self.iterator_handle(*handle),
             Value::Generator(id) => self.generator_id(*id),
-            // Async generators and async-function objects index tables
-            // whose entries are all roots.
+            Value::AsyncGeneratorObject(id) => self.async_generator(*id),
+            // Async-function objects index a table whose entries are roots.
             Value::Undefined
             | Value::Null
             | Value::Bool(_)
@@ -323,7 +341,6 @@ impl GcMarker {
             | Value::Str(_)
             | Value::Function(_)
             | Value::AsyncFunctionObject(_)
-            | Value::AsyncGeneratorObject(_)
             | Value::Symbol(_) => {}
         }
     }
@@ -724,6 +741,7 @@ impl InterpreterCore {
             self.async_functions.len(),
             self.iterators.len(),
             self.generators.len(),
+            self.async_generators.len(),
         );
         marker.module_execution(caller);
         let pinned: Vec<Value> = marker
@@ -738,6 +756,12 @@ impl InterpreterCore {
                     .generator_stack
                     .iter()
                     .map(|id| Value::Generator(*id)),
+            )
+            .chain(
+                marker
+                    .async_generator_stack
+                    .iter()
+                    .map(|id| Value::AsyncGeneratorObject(*id)),
             )
             .collect();
         let previous = self.gc_arm_top_level();
@@ -794,6 +818,7 @@ impl InterpreterCore {
             self.async_functions.len(),
             self.iterators.len(),
             self.generators.len(),
+            self.async_generators.len(),
         );
         self.gc_mark_roots(&mut marker)?;
         self.gc_drain(&mut marker);
@@ -891,6 +916,27 @@ impl InterpreterCore {
             reclaimed_bytes = reclaimed_bytes.saturating_add(released);
         }
 
+        // Async generators nothing names that neither run, await nor hold
+        // requests can never be resumed again.
+        let dead_async_generators = self
+            .async_generators
+            .iter_live()
+            .filter(|(id, _)| !marker.async_generators.is_marked(*id))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let mut reclaimed_async_generators = 0u64;
+        if !dead_async_generators.is_empty() {
+            let before = self.recompute_base_estimated_memory_bytes();
+            for id in dead_async_generators {
+                if self.async_generators.reclaim(id).is_some() {
+                    reclaimed_async_generators += 1;
+                }
+            }
+            let released = before.saturating_sub(self.recompute_base_estimated_memory_bytes());
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+            reclaimed_bytes = reclaimed_bytes.saturating_add(released);
+        }
+
         // Iterators nothing names: their state (source array, captured
         // values, next method) is released.
         let dead_iterators = self
@@ -972,6 +1018,7 @@ impl InterpreterCore {
         self.async_functions.estimated_bytes();
         self.iterators.estimated_bytes();
         self.generators.estimated_bytes();
+        self.async_generators.estimated_bytes();
 
         #[cfg(debug_assertions)]
         debug_assert_eq!(
@@ -996,6 +1043,9 @@ impl InterpreterCore {
         stats.reclaimed_generators = stats
             .reclaimed_generators
             .saturating_add(reclaimed_generators);
+        stats.reclaimed_async_generators = stats
+            .reclaimed_async_generators
+            .saturating_add(reclaimed_async_generators);
 
         // Next trigger: halfway between the surviving live set and the
         // budget, so collection cost stays proportional to allocation.
@@ -1018,6 +1068,14 @@ impl InterpreterCore {
             if let Some(generator) = marker.generator_stack.pop() {
                 if let Some(object) = self.generators.get(generator as usize) {
                     marker.generator(object);
+                }
+                continue;
+            }
+            if let Some(id) = marker.async_generator_stack.pop() {
+                if let Some(generator) = self.async_generators.get(id as usize) {
+                    marker.generator_id(generator.generator_id);
+                    generator.for_each_value(|value| marker.value(value));
+                    generator.for_each_promise(|handle| marker.promise(handle.0));
                 }
                 continue;
             }
@@ -1475,10 +1533,17 @@ impl InterpreterCore {
         if let Some(Ok(completion)) = top_level_await_outcome {
             m.labeled_return(completion);
         }
-        for generator in async_generators {
-            m.generator_id(generator.generator_id);
-            generator.for_each_value(|value| m.value(value));
+        // An async generator that runs, awaits or has queued requests will
+        // resume. Otherwise only a value naming it keeps it.
+        for (id, generator) in async_generators.iter_live() {
+            if generator.pending() {
+                m.async_generator(id as u32);
+            }
         }
+        if let Some(id) = async_generator_runtime.active {
+            m.async_generator(id);
+        }
+        async_generator_runtime.for_each_generator(|id| m.async_generator(id));
         async_generator_runtime.for_each_value(|value| m.value(value));
 
         // Promises and queued work, including the handlers they will call.
@@ -1500,9 +1565,6 @@ impl InterpreterCore {
             .for_each(|handle| m.promise(handle.0));
         if let Some((_, handle)) = pending_async_module_import {
             m.promise(handle.0);
-        }
-        for generator in async_generators {
-            generator.for_each_promise(|handle| m.promise(handle.0));
         }
         async_generator_runtime.for_each_promise(|handle| m.promise(handle.0));
         event_loop

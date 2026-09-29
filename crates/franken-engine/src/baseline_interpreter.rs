@@ -90215,10 +90215,22 @@ impl InterpreterCore {
     /// (String, Boolean, BigInt, Symbol) called on a wrapper object of that
     /// type works on the wrapped primitive.
     fn this_primitive_receiver(&self, builtin: &BuiltinFunction, object_id: ObjectId) -> Value {
-        match (
-            builtin.spec_owner(),
-            self.primitive_wrapper_value(object_id),
+        // Every builtin called on an object passes through here: decide from
+        // the owner before touching the heap.
+        let owner = builtin.spec_owner();
+        if !matches!(
+            owner,
+            Some(
+                "Number.prototype"
+                    | "String.prototype"
+                    | "Boolean.prototype"
+                    | "BigInt.prototype"
+                    | "Symbol.prototype"
+            )
         ) {
+            return Value::Object(object_id);
+        }
+        match (owner, self.primitive_wrapper_value(object_id)) {
             (Some("Number.prototype"), Some(value @ (Value::Int(_) | Value::Float(_))))
             | (Some("String.prototype"), Some(value @ Value::Str(_)))
             | (Some("Boolean.prototype"), Some(value @ Value::Bool(_)))

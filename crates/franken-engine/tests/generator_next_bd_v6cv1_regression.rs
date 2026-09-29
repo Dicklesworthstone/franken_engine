@@ -856,7 +856,7 @@ fn generator_builtin_handoffs_keep_instruction_budget_accounting() {
 
 #[test]
 fn iterator_consumers_refuse_recursive_generators_without_native_stack_abort() {
-    use frankenengine_engine::baseline_interpreter::{InterpreterCore, InterpreterError};
+    use frankenengine_engine::baseline_interpreter::InterpreterCore;
     let programs = [
         "function* g(){for(let x of g()){yield x;}}g().next();",
         "function* g(){yield [...g()];}g().next();",

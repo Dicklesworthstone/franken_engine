@@ -36,10 +36,20 @@
 //! are purged; its id is never reused. The closure table releases fully dead
 //! chunks like the heap. Weak side tables keyed by object id drop the entries
 //! of reclaimed objects (mutation labels), and the write-barrier remembered
-//! set restarts empty after each collection. Generators,
-//! iterators, async objects and promises live in their own tables and are not
-//! reclaimed yet, so they are roots. WeakMap entries are ephemerons: a value is
-//! kept only while its key is reachable.
+//! set restarts empty after each collection.
+//!
+//! Promises, iterators, generators and async-function records live in id
+//! tables that are traced too:
+//! - A settled promise, or an iterator, survives only while a reachable value
+//!   or engine table names it.
+//! - Pending promises are roots.
+//! - A completed async-function record survives only while a call frame or
+//!   an await continuation names it.
+//! - Ids are never reused, so a stale id fails loudly.
+//!
+//! Generators are traced the same way: an unreachable generator, suspended
+//! or not, can never resume. Async generators are still roots. WeakMap entries are
+//! ephemerons: a value is kept only while its key is reachable.
 
 use std::collections::HashSet;
 
@@ -64,6 +74,10 @@ pub struct GcStats {
     pub reclaimed_promises: u64,
     /// Completed async-function records released.
     pub reclaimed_async_functions: u64,
+    /// Iterator-table entries released.
+    pub reclaimed_iterators: u64,
+    /// Generators released with their suspended executions.
+    pub reclaimed_generators: u64,
 }
 
 /// Collector state carried by `InterpreterCore`.
@@ -159,6 +173,10 @@ struct GcMarker {
     /// Async-function records named by a call frame or an await
     /// continuation. Records that have not completed are always kept.
     async_functions: ChunkedMarks,
+    iterators: ChunkedMarks,
+    iterator_stack: Vec<u32>,
+    generators: ChunkedMarks,
+    generator_stack: Vec<u32>,
     visited_frames: HashSet<usize>,
     visited_cells: HashSet<usize>,
 }
@@ -169,6 +187,8 @@ impl GcMarker {
         closures_len: usize,
         promises_len: usize,
         async_functions_len: usize,
+        iterators_len: usize,
+        generators_len: usize,
     ) -> Self {
         Self {
             objects: ChunkedMarks::new(heap_len),
@@ -178,6 +198,10 @@ impl GcMarker {
             promises: ChunkedMarks::new(promises_len),
             promise_stack: Vec::new(),
             async_functions: ChunkedMarks::new(async_functions_len),
+            iterators: ChunkedMarks::new(iterators_len),
+            iterator_stack: Vec::new(),
+            generators: ChunkedMarks::new(generators_len),
+            generator_stack: Vec::new(),
             visited_frames: HashSet::new(),
             visited_cells: HashSet::new(),
         }
@@ -196,6 +220,28 @@ impl GcMarker {
     fn promise(&mut self, handle: u32) {
         if self.promises.mark(handle as usize) {
             self.promise_stack.push(handle);
+        }
+    }
+
+    /// Iterator-table handles: `Value::Iterator`, the iterator methods bound
+    /// to one, and `yield*` delegations.
+    fn iterator_handle(&mut self, handle: u32) {
+        if self.iterators.mark(handle as usize) {
+            self.iterator_stack.push(handle);
+        }
+    }
+
+    /// Generator-table ids: `Value::Generator` and the generator behind
+    /// each async generator.
+    fn generator_id(&mut self, id: u32) {
+        if self.generators.mark(id as usize) {
+            self.generator_stack.push(id);
+        }
+    }
+
+    fn delegation(&mut self, delegation: &Option<GeneratorDelegation>) {
+        if let Some(delegation) = delegation {
+            self.iterator_handle(delegation.iterator);
         }
     }
 
@@ -235,6 +281,16 @@ impl GcMarker {
                         self.object(ObjectId(bound));
                     }
                 }
+                // Iterator methods bind an iterator handle; other kinds use
+                // the field as a stream token.
+                if let Some(handle) = builtin.iterator_handle
+                    && matches!(
+                        builtin.kind,
+                        BuiltinFunctionKind::IteratorNext | BuiltinFunctionKind::IteratorSelf
+                    )
+                {
+                    self.iterator_handle(handle);
+                }
             }
             Value::Accessor { get, set } => {
                 if let Some(get) = get {
@@ -249,8 +305,10 @@ impl GcMarker {
             | Value::AsyncFunction(id)
             | Value::AsyncGeneratorFunction(id) => self.closure(*id),
             Value::Promise(handle) => self.promise(*handle),
-            // Generators, iterators and async objects index tables whose
-            // entries are all roots.
+            Value::Iterator(handle) => self.iterator_handle(*handle),
+            Value::Generator(id) => self.generator_id(*id),
+            // Async generators and async-function objects index tables
+            // whose entries are all roots.
             Value::Undefined
             | Value::Null
             | Value::Bool(_)
@@ -259,8 +317,6 @@ impl GcMarker {
             | Value::Float(_)
             | Value::Str(_)
             | Value::Function(_)
-            | Value::Iterator(_)
-            | Value::Generator(_)
             | Value::AsyncFunctionObject(_)
             | Value::AsyncGeneratorObject(_)
             | Value::Symbol(_) => {}
@@ -373,7 +429,7 @@ impl GcMarker {
         let GeneratorExecutionSnapshot {
             registers,
             register_labels: _,
-            delegation: _,
+            delegation,
             active_inline_callback_context_label: _,
             call_stack,
             ip: _,
@@ -392,6 +448,7 @@ impl GcMarker {
             active_generated_function_artifact: _,
             contained_codegen_grant: _,
         } = execution;
+        self.delegation(delegation);
         registers.iter().for_each(|value| self.value(value));
         call_stack.iter().for_each(|frame| self.call_frame(frame));
         if let Some(value) = pending_exception {
@@ -413,7 +470,7 @@ impl GcMarker {
         let ModuleExecutionSnapshot {
             accounted_bytes: _,
             registers,
-            generator_delegation: _,
+            generator_delegation,
             register_labels: _,
             active_inline_callback_context_label: _,
             call_stack,
@@ -432,6 +489,7 @@ impl GcMarker {
             current_module_specifier: _,
             active_generated_function_artifact: _,
         } = execution;
+        self.delegation(generator_delegation);
         registers.iter().for_each(|value| self.value(value));
         call_stack.iter().for_each(|frame| self.call_frame(frame));
         if let Some(value) = pending_exception {
@@ -653,6 +711,8 @@ impl InterpreterCore {
             self.closures.len(),
             self.promise_store.slot_count(),
             self.async_functions.len(),
+            self.iterators.len(),
+            self.generators.len(),
         );
         marker.module_execution(caller);
         let pinned: Vec<Value> = marker
@@ -661,6 +721,13 @@ impl InterpreterCore {
             .map(|id| Value::Object(ObjectId(*id)))
             .chain(marker.closure_stack.iter().map(|id| Value::Closure(*id)))
             .chain(marker.promise_stack.iter().map(|id| Value::Promise(*id)))
+            .chain(marker.iterator_stack.iter().map(|id| Value::Iterator(*id)))
+            .chain(
+                marker
+                    .generator_stack
+                    .iter()
+                    .map(|id| Value::Generator(*id)),
+            )
             .collect();
         let previous = self.gc_arm_top_level();
         self.gc.pinned = pinned;
@@ -714,6 +781,8 @@ impl InterpreterCore {
             self.closures.len(),
             self.promise_store.slot_count(),
             self.async_functions.len(),
+            self.iterators.len(),
+            self.generators.len(),
         );
         self.gc_mark_roots(&mut marker)?;
         self.gc_drain(&mut marker);
@@ -788,6 +857,50 @@ impl InterpreterCore {
             reclaimed_bytes = reclaimed_bytes.saturating_add(released);
         }
 
+        // Generators nothing names can never be resumed: release their
+        // retained invocation and suspended execution.
+        let dead_generators = self
+            .generators
+            .iter_live()
+            .filter(|(id, _)| !marker.generators.is_marked(*id))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let mut reclaimed_generators = 0u64;
+        if !dead_generators.is_empty() {
+            let before = self.recompute_base_estimated_memory_bytes();
+            for id in dead_generators {
+                if let Some(mut generator) = self.generators.reclaim(id) {
+                    self.closures
+                        .replace_activation(&mut generator.execution, None);
+                    reclaimed_generators += 1;
+                }
+            }
+            let released = before.saturating_sub(self.recompute_base_estimated_memory_bytes());
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+            reclaimed_bytes = reclaimed_bytes.saturating_add(released);
+        }
+
+        // Iterators nothing names: their state (source array, captured
+        // values, next method) is released.
+        let dead_iterators = self
+            .iterators
+            .iter_live()
+            .filter(|(id, _)| !marker.iterators.is_marked(*id))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let mut reclaimed_iterators = 0u64;
+        if !dead_iterators.is_empty() {
+            let before = self.recompute_base_estimated_memory_bytes();
+            for id in dead_iterators {
+                if self.iterators.reclaim(id).is_some() {
+                    reclaimed_iterators += 1;
+                }
+            }
+            let released = before.saturating_sub(self.recompute_base_estimated_memory_bytes());
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released);
+            reclaimed_bytes = reclaimed_bytes.saturating_add(released);
+        }
+
         // Completed async-function records no frame or continuation names:
         // nothing resumes or settles through them again.
         let dead_async_functions = self
@@ -830,6 +943,8 @@ impl InterpreterCore {
         // them by one id per object it wrote after allocating.
         self.heap.estimated_bytes();
         self.async_functions.estimated_bytes();
+        self.iterators.estimated_bytes();
+        self.generators.estimated_bytes();
 
         #[cfg(debug_assertions)]
         debug_assert_eq!(
@@ -848,6 +963,12 @@ impl InterpreterCore {
         stats.reclaimed_async_functions = stats
             .reclaimed_async_functions
             .saturating_add(reclaimed_async_functions);
+        stats.reclaimed_iterators = stats
+            .reclaimed_iterators
+            .saturating_add(reclaimed_iterators);
+        stats.reclaimed_generators = stats
+            .reclaimed_generators
+            .saturating_add(reclaimed_generators);
 
         // Next trigger: halfway between the surviving live set and the
         // budget, so collection cost stays proportional to allocation.
@@ -865,6 +986,18 @@ impl InterpreterCore {
         loop {
             if let Some(closure) = marker.closure_stack.pop() {
                 self.gc_trace_closure(marker, closure);
+                continue;
+            }
+            if let Some(generator) = marker.generator_stack.pop() {
+                if let Some(object) = self.generators.get(generator as usize) {
+                    marker.generator(object);
+                }
+                continue;
+            }
+            if let Some(iterator) = marker.iterator_stack.pop() {
+                if let Some(state) = self.iterators.get(iterator as usize) {
+                    marker.iterator(state);
+                }
                 continue;
             }
             if let Some(promise) = marker.promise_stack.pop() {
@@ -1017,7 +1150,8 @@ impl InterpreterCore {
             json_parse_temporary_bytes: _,
             module_snapshot_in_flight_bytes: _,
             temporarily_suspended_execution_bytes: _,
-            iterators,
+            // Traced from the values and delegations that name them.
+            iterators: _,
             iteration_traces: _,
             function_prototypes,
             builtin_prototypes,
@@ -1074,11 +1208,12 @@ impl InterpreterCore {
             active_foreign_module_call_depth: _,
             isolated_async_entry_pending: _,
             pending_captures: _,
-            generators,
+            // Traced from the values that name them.
+            generators: _,
             generator_yielded: _,
             generator_resume_dst: _,
             generator_result_label: _,
-            generator_delegation: _,
+            generator_delegation,
             async_functions,
             async_resumption_contexts,
             top_level_await_resumption_contexts,
@@ -1297,10 +1432,7 @@ impl InterpreterCore {
 
         // Tables whose entries are never reclaimed. Closures are traced from
         // the values that reference them (`gc_trace_closure`).
-        iterators.iter().for_each(|iterator| m.iterator(iterator));
-        generators
-            .iter()
-            .for_each(|generator| m.generator(generator));
+        m.delegation(generator_delegation);
         async_functions
             .iter()
             .for_each(|function| m.async_function(function));
@@ -1308,6 +1440,7 @@ impl InterpreterCore {
             m.labeled_return(completion);
         }
         for generator in async_generators {
+            m.generator_id(generator.generator_id);
             generator.for_each_value(|value| m.value(value));
         }
         async_generator_runtime.for_each_value(|value| m.value(value));

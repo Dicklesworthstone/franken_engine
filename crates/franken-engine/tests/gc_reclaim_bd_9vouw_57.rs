@@ -277,6 +277,88 @@ const PROMISE_CASES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Iterator programs: an iterator must survive while a register, a bound
+/// `next` method or a suspended `yield*` names it, including while its own
+/// loop body churns (the `CHURN` placeholder). Expected values are Node
+/// v22.2.0's `String(<program>)`.
+const ITERATOR_CASES: &[(&str, &str)] = &[
+    (
+        "const it = [1, 2, 3][Symbol.iterator](); it.next(); CHURN String(it.next().value)",
+        "2",
+    ),
+    (
+        "const it = [1, 2, 3].values(); for (const x of it) { break; } CHURN \
+         String([...it].length)",
+        "2",
+    ),
+    (
+        "function* inner() { yield 1; yield 2; } function* outer() { yield* inner(); } \
+         const g = outer(); g.next(); CHURN String(g.next().value)",
+        "2",
+    ),
+    (
+        "let s = ''; for (const k in { a: 1, b: 2 }) { CHURN s += k; } s",
+        "ab",
+    ),
+    (
+        "let s = 0; for (const x of [1, 2, 3]) { CHURN s += x; } String(s)",
+        "6",
+    ),
+    (
+        "const it = new Set([4, 5]).values(); const next = it.next.bind(it); next(); CHURN \
+         String(next().value)",
+        "5",
+    ),
+];
+
+fn iterator_case_sources() -> impl Iterator<Item = (String, &'static str)> {
+    ITERATOR_CASES
+        .iter()
+        .map(|(source, node)| (source.replace("CHURN", CHURN), *node))
+}
+
+#[test]
+fn iterators_survive_collection_until_unreachable() {
+    for (source, node) in iterator_case_sources() {
+        let run = run(&source, None);
+        assert_eq!(value_of(&run, &source), node, "{source}");
+        assert!(run.gc.collections > 0, "no collection ran: {source}");
+    }
+}
+
+/// Every `for...of` allocates an iterator-table entry (32+ bytes charged).
+/// None was ever released: 16,000 loops need at least 512 KB, more than a
+/// 256 KiB budget holds with nothing live. Unnamed iterators are reclaimed.
+#[test]
+fn for_of_loops_complete_past_the_byte_budget() {
+    let source = "let s = 0; const a = [1, 2]; for (let i = 0; i < 16000; i++) { \
+                  for (const x of a) { s += x & 1; } } String(s)";
+    let run = try_run_with_budgets(source, None, None, Some(256 * 1024)).expect("lowers");
+    assert_eq!(value_of(&run, source), "16000");
+    assert!(
+        run.gc.reclaimed_iterators >= 8_000,
+        "reclaimed only {} iterators",
+        run.gc.reclaimed_iterators
+    );
+}
+
+/// Each iteration leaves a generator suspended at its first `yield`, holding
+/// its execution snapshot. Nothing released generators: 8,000 of them (48+
+/// bytes each before the snapshot) cannot fit a 256 KiB budget. A generator
+/// nothing names can never resume, so it is reclaimed.
+#[test]
+fn abandoned_generators_complete_past_the_byte_budget() {
+    let source = "function* g() { yield 1; yield 2; } let s = 0; \
+                  for (let i = 0; i < 8000; i++) { const it = g(); s += it.next().value; } String(s)";
+    let run = try_run_with_budgets(source, None, None, Some(256 * 1024)).expect("lowers");
+    assert_eq!(value_of(&run, source), "8000");
+    assert!(
+        run.gc.reclaimed_generators >= 4_000,
+        "reclaimed only {} generators",
+        run.gc.reclaimed_generators
+    );
+}
+
 fn promise_case_sources() -> impl Iterator<Item = (String, &'static str)> {
     PROMISE_CASES
         .iter()
@@ -467,6 +549,7 @@ fn stress_collection_preserves_results_and_console_output() {
         reachable_cases()
             .into_iter()
             .chain(promise_case_sources())
+            .chain(iterator_case_sources())
             .map(|(source, _)| {
                 // The stress run collects at every safe point; a short churn
                 // keeps the O(live) cost per instruction manageable.
@@ -510,9 +593,9 @@ fn stress_collection_preserves_results_and_console_output() {
             compared += 1;
         }
     }
-    // 50 probes (a few are rejected at lowering), 15 reachability cases and
-    // 10 promise cases.
-    assert!(compared >= 3 * 65, "compared only {compared} runs");
+    // 50 probes (a few are rejected at lowering), 15 reachability cases, 10
+    // promise cases and 6 iterator cases.
+    assert!(compared >= 3 * 71, "compared only {compared} runs");
     assert!(
         collections_by_interval.iter().all(|total| *total > 0),
         "a stress interval never collected: {collections_by_interval:?}"

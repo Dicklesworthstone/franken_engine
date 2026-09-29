@@ -6041,6 +6041,18 @@ impl std::ops::IndexMut<usize> for Heap {
     }
 }
 
+/// The memory components that the running and the by-walk re-derivations of
+/// the base estimate obtain differently: running totals versus full walks.
+struct MemoryComponents {
+    heap: u64,
+    async_functions: u64,
+    iterators: u64,
+    generators: u64,
+    scope_chain: u64,
+    closures: u64,
+    promise_runtime: u64,
+}
+
 /// Entries per chunk of a [`ReclaimableTable`].
 const TABLE_CHUNK_SLOTS: usize = HEAP_CHUNK_SLOTS;
 
@@ -11968,7 +11980,7 @@ pub struct InterpreterCore {
     /// charged until the caller context is restored.
     temporarily_suspended_execution_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
-    iterators: Vec<RuntimeIteratorState>,
+    iterators: ReclaimableTable<RuntimeIteratorState>,
     /// Replay-visible iterator protocol traces keyed by runtime iterator state.
     iteration_traces: Vec<IterationTrace>,
     /// Lazily allocated prototype objects for constructor functions, keyed by
@@ -12165,7 +12177,7 @@ pub struct InterpreterCore {
     /// Pending capture names for the next `CreateClosure` instruction.
     pending_captures: Vec<u32>,
     /// Generator object store.
-    generators: Vec<GeneratorObject>,
+    generators: ReclaimableTable<GeneratorObject>,
     /// bd-hoplz: set by the `Yield` instruction handler so `generator_next` can
     /// distinguish a yield-suspension (`run_loop` exits `Ok(yield_obj)`) from a
     /// completion-by-return (`run_loop` also exits `Ok(return_val)` when the
@@ -12947,7 +12959,7 @@ impl InterpreterCore {
             json_parse_temporary_bytes: 0,
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
-            iterators: Vec::new(),
+            iterators: ReclaimableTable::new("iterator", Self::estimate_iterator_bytes),
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
             builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
@@ -13011,7 +13023,7 @@ impl InterpreterCore {
             active_foreign_module_call_depth: 0,
             isolated_async_entry_pending: false,
             pending_captures: Vec::new(),
-            generators: Vec::new(),
+            generators: ReclaimableTable::new("generator", Self::estimate_generator_bytes),
             generator_yielded: false,
             generator_resume_dst: None,
             generator_result_label: Label::Public,
@@ -32505,7 +32517,7 @@ impl InterpreterCore {
         self.arrow_lexical_this.clear();
         self.closure_module_origins.clear();
         self.closure_generated_function_artifacts.clear();
-        for generator in &mut self.generators {
+        for generator in self.generators.iter_mut() {
             self.closures
                 .replace_activation(&mut generator.execution, None);
         }
@@ -83103,7 +83115,7 @@ impl InterpreterCore {
                 &mut seen,
             ));
         }
-        for generator in &self.generators {
+        for generator in self.generators.iter() {
             if let Some(execution) = &generator.execution {
                 total = total.saturating_add(
                     Self::accumulate_generator_execution_cell_payload_bytes(execution, &mut seen),
@@ -83469,8 +83481,8 @@ impl InterpreterCore {
             )
     }
 
-    fn estimate_generators_bytes(generators: &[GeneratorObject]) -> u64 {
-        Self::saturating_sum(generators.iter().map(Self::estimate_generator_bytes))
+    fn estimate_generators_bytes<'a>(generators: impl Iterator<Item = &'a GeneratorObject>) -> u64 {
+        Self::saturating_sum(generators.map(Self::estimate_generator_bytes))
     }
 
     fn estimate_closure_bytes(closure: &ClosureValue) -> u64 {
@@ -83985,13 +83997,17 @@ impl InterpreterCore {
     /// [`Self::recompute_base_estimated_memory_bytes`], which reads those
     /// components from their running totals.
     fn recompute_base_estimated_memory_bytes_by_walk(&self) -> u64 {
-        self.base_estimated_memory_bytes_with(
-            Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes)),
-            self.async_functions_memory_bytes_by_walk(),
-            self.scope_chain_memory_bytes_by_walk(),
-            self.closures_memory_bytes_by_walk(),
-            self.promise_runtime_memory_bytes_by_walk(),
-        )
+        self.base_estimated_memory_bytes_with(MemoryComponents {
+            heap: Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes)),
+            async_functions: self.async_functions_memory_bytes_by_walk(),
+            iterators: Self::saturating_sum(
+                self.iterators.iter().map(Self::estimate_iterator_bytes),
+            ),
+            generators: Self::estimate_generators_bytes(self.generators.iter()),
+            scope_chain: self.scope_chain_memory_bytes_by_walk(),
+            closures: self.closures_memory_bytes_by_walk(),
+            promise_runtime: self.promise_runtime_memory_bytes_by_walk(),
+        })
     }
 
     /// Runtime re-derivation of the base estimate. Identical algebra to
@@ -84008,23 +84024,41 @@ impl InterpreterCore {
             Self::saturating_sum(self.heap.iter().map(Self::estimate_heap_object_bytes)),
             "heap running total drifted from the full walk"
         );
-        self.base_estimated_memory_bytes_with(
-            heap_bytes,
-            self.async_functions_memory_bytes(),
-            self.scope_chain_memory_bytes(),
-            self.closures_memory_bytes(),
-            self.promise_runtime_memory_bytes(),
-        )
+        let iterator_bytes = self.iterators.estimated_bytes();
+        #[cfg(test)]
+        debug_assert_eq!(
+            iterator_bytes,
+            Self::saturating_sum(self.iterators.iter().map(Self::estimate_iterator_bytes)),
+            "iterator running total drifted from the full walk"
+        );
+        let generator_bytes = self.generators.estimated_bytes();
+        #[cfg(test)]
+        debug_assert_eq!(
+            generator_bytes,
+            Self::estimate_generators_bytes(self.generators.iter()),
+            "generator running total drifted from the full walk"
+        );
+        self.base_estimated_memory_bytes_with(MemoryComponents {
+            heap: heap_bytes,
+            async_functions: self.async_functions_memory_bytes(),
+            iterators: iterator_bytes,
+            generators: generator_bytes,
+            scope_chain: self.scope_chain_memory_bytes(),
+            closures: self.closures_memory_bytes(),
+            promise_runtime: self.promise_runtime_memory_bytes(),
+        })
     }
 
-    fn base_estimated_memory_bytes_with(
-        &self,
-        heap_bytes: u64,
-        async_function_bytes: u64,
-        scope_chain_bytes: u64,
-        closure_bytes: u64,
-        promise_runtime_bytes: u64,
-    ) -> u64 {
+    fn base_estimated_memory_bytes_with(&self, components: MemoryComponents) -> u64 {
+        let MemoryComponents {
+            heap: heap_bytes,
+            async_functions: async_function_bytes,
+            iterators: iterator_bytes,
+            generators: generator_bytes,
+            scope_chain: scope_chain_bytes,
+            closures: closure_bytes,
+            promise_runtime: promise_runtime_bytes,
+        } = components;
         self.symbol_state_memory_bytes()
             .saturating_add(heap_bytes)
             .saturating_add(Self::saturating_sum(
@@ -84036,10 +84070,8 @@ impl InterpreterCore {
             .saturating_add(self.generated_function_realm_globals_memory_bytes())
             .saturating_add(closure_bytes)
             .saturating_add(self.call_stack_memory_bytes())
-            .saturating_add(Self::saturating_sum(
-                self.iterators.iter().map(Self::estimate_iterator_bytes),
-            ))
-            .saturating_add(Self::estimate_generators_bytes(&self.generators))
+            .saturating_add(iterator_bytes)
+            .saturating_add(generator_bytes)
             .saturating_add(self.generator_delegation_memory_bytes())
             .saturating_add(async_function_bytes)
             .saturating_add(self.async_generators_memory_bytes())
@@ -85203,7 +85235,7 @@ impl InterpreterCore {
     }
 
     fn mark_deleted_for_in_iterators(&mut self, object_id: ObjectId, key: &JsString) {
-        for iterator in &mut self.iterators {
+        for iterator in self.iterators.iter_mut() {
             if let RuntimeIteratorState::ForIn(state) = iterator
                 && state.object_id == object_id
             {

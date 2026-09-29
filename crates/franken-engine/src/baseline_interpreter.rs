@@ -43754,7 +43754,7 @@ impl InterpreterCore {
                 ip.checked_sub(module.instructions.len())
                     .and_then(|offset| trampoline.get(offset))
             })
-            .ok_or(InterpreterError::InstructionOutOfBounds {
+            .ok_or_else(|| InterpreterError::InstructionOutOfBounds {
                 ip,
                 count: module.instructions.len() + trampoline.len(),
             })

@@ -5,9 +5,8 @@
 //! keys written with Unicode escapes. Expected strings are Node v22.2.0's
 //! output for the same programs.
 //!
-//! No-claim: fields separated only by a line break (no `;`) still do not
-//! parse; the logical-line merger joins physical lines with a space before
-//! the class body is parsed.
+//! Fields separated only by line breaks parse since bd-9vouw.82 (line breaks
+//! reach the class body).
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
 
@@ -27,6 +26,14 @@ fn fields_without_initializer_are_own_undefined_properties() {
         "class C { a; b = 42; } const c = new C();
          [Object.keys(c).join(), c.a, c.b, Object.prototype.hasOwnProperty.call(c, 'a')].join(' ');",
         "a,b  42 true",
+    );
+}
+
+#[test]
+fn fields_separated_by_line_breaks() {
+    check(
+        "class C {\n  a\n  b = 42\n  c = 3\n}\nconst c = new C();\nObject.keys(c).join();",
+        "a,b,c",
     );
 }
 

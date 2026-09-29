@@ -10709,6 +10709,19 @@ impl CompactTier1Program {
     /// prior value or IFC label. Any malformed descriptor, register span,
     /// fallthrough edge, or cross-function control target disables the
     /// optimization and preserves the legacy full-width reset.
+    /// Every function's `frame_size`, when the whole module verifies against
+    /// it (`verified_function_frame_clear_width`).
+    fn verified_frame_widths(module: &Ir3Module) -> Option<Arc<[u32]>> {
+        Self::verified_function_frame_clear_width(module)?;
+        Some(
+            module
+                .function_table
+                .iter()
+                .map(|function| function.frame_size)
+                .collect(),
+        )
+    }
+
     fn verified_function_frame_clear_width(module: &Ir3Module) -> Option<u32> {
         let instruction_count = u32::try_from(module.instructions.len()).ok()?;
         let main = module.function_table.first()?;
@@ -12784,6 +12797,15 @@ pub struct InterpreterCore {
     /// dispatch through it too (verified frame widths, scope-inert leaves,
     /// compact opcodes) instead of the full-width baseline path.
     top_level_compact_tier1: Option<(usize, CompactTier1Program)>,
+    /// Verified frame widths (`frame_size` per function) of the module the
+    /// running `execute` call was given, with that module's address
+    /// (bd-9vouw.72). A callee window of that module is its function's
+    /// verified width whether or not a compact plan runs, so a plain
+    /// `execute` recurses as deep as the planned path. Held for the whole
+    /// call, event loop included, and restored on return; frames of any
+    /// other module (a required module, a generated function) keep
+    /// `max_registers` windows.
+    entry_frame_widths: Option<(usize, Arc<[u32]>)>,
     /// Stack of active try/catch frames for exception unwinding.
     catch_frames: Vec<CatchFrame>,
     /// A pending exception value during an unwind edge, consumed by
@@ -13710,6 +13732,7 @@ impl InterpreterCore {
             native_run_loop_depth: 0,
             stacked_register_frame_clear_width_high_water: 0,
             top_level_compact_tier1: None,
+            entry_frame_widths: None,
             catch_frames: Vec::new(),
             pending_exception: None,
             pending_exception_label: Label::Public,
@@ -32872,6 +32895,15 @@ impl InterpreterCore {
         self.ensure_vm_dispatch_capability()?;
         let entry_specifier = self.prepare_execution(module)?;
         self.process_exit_code = None;
+        let entry_frame_widths = match compact_tier1 {
+            Some(program) => Some(program.verified_function_frame_clear_widths.clone())
+                .filter(|widths| !widths.is_empty()),
+            None => CompactTier1Program::verified_frame_widths(module),
+        };
+        let previous_entry_frame_widths = std::mem::replace(
+            &mut self.entry_frame_widths,
+            entry_frame_widths.map(|widths| (Self::module_address(module), widths)),
+        );
         let result = match self.run_top_level_execution(module, compact_tier1) {
             // `process.exit(code)` ends the program normally (bd-my9hk): the
             // run completes with that exit code rather than failing.
@@ -32884,6 +32916,7 @@ impl InterpreterCore {
             }
             other => other,
         };
+        self.entry_frame_widths = previous_entry_frame_widths;
         // Final capture opportunity: a request equal to the trace's final
         // event count observes end-of-execution state (bd-fqlfw.3.5.5).
         self.check_state_capture_boundary();
@@ -43306,7 +43339,7 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        self.enter_stacked_register_frame_for_function(compact_tier1, function_index)?;
+        self.enter_stacked_register_frame_for_function(module, compact_tier1, function_index)?;
         for (index, (value, label)) in argument_values.into_iter().zip(argument_labels).enumerate()
         {
             let register = index as u32;
@@ -46555,6 +46588,7 @@ impl InterpreterCore {
                             }
 
                             self.enter_stacked_register_frame_for_function(
+                                module,
                                 compact_tier1,
                                 func_idx,
                             )?;
@@ -47055,7 +47089,11 @@ impl InterpreterCore {
                         return Err(err);
                     }
 
-                    self.enter_stacked_register_frame_for_function(compact_tier1, func_idx)?;
+                    self.enter_stacked_register_frame_for_function(
+                        module,
+                        compact_tier1,
+                        func_idx,
+                    )?;
 
                     for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
                         let reg = i as u32;
@@ -48787,6 +48825,7 @@ impl InterpreterCore {
                             }
 
                             self.enter_stacked_register_frame_for_function(
+                                module,
                                 compact_tier1,
                                 func_idx,
                             )?;
@@ -84260,20 +84299,36 @@ impl InterpreterCore {
         self.enter_stacked_register_frame_width(requested_clear_width)
     }
 
-    /// Advance to one exact verified callee frame. The shared high-water mark
-    /// keeps this safe when a wider function previously occupied the same
-    /// physical registers.
+    /// Advance to one exact verified callee frame: the width the compact plan
+    /// verified or, without one, the width `execute` verified for its entry
+    /// module (bd-9vouw.72). The shared high-water mark keeps this safe when a
+    /// wider function previously occupied the same physical registers.
     fn enter_stacked_register_frame_for_function(
         &mut self,
+        module: &Ir3Module,
         compact_tier1: Option<&CompactTier1Program>,
         function_index: u32,
     ) -> Result<(), InterpreterError> {
+        let max_registers = self.config.max_registers;
         let requested_clear_width = compact_tier1
-            .and_then(|program| {
-                program.callee_frame_clear_width(function_index, self.config.max_registers)
-            })
-            .unwrap_or(self.config.max_registers as usize);
+            .and_then(|program| program.callee_frame_clear_width(function_index, max_registers))
+            .or_else(|| self.entry_frame_width(module, function_index))
+            .unwrap_or(max_registers as usize);
         self.enter_stacked_register_frame_width(requested_clear_width)
+    }
+
+    /// `function_index`'s verified frame width when `module` is the module the
+    /// running `execute` call verified (`entry_frame_widths`).
+    fn entry_frame_width(&self, module: &Ir3Module, function_index: u32) -> Option<usize> {
+        let (address, widths) = self.entry_frame_widths.as_ref()?;
+        if *address != Self::module_address(module) {
+            return None;
+        }
+        widths
+            .get(function_index as usize)
+            .copied()
+            .filter(|width| *width > 0 && *width <= self.config.max_registers)
+            .map(|width| width as usize)
     }
 
     /// Open a callee window right above the caller's and reset it
@@ -125854,7 +125909,7 @@ mod tests {
         let max_registers = config.max_registers as usize;
         let mut narrow_only_core =
             InterpreterCore::new(config.clone(), "tier-i-exact-narrow-frame");
-        narrow_only_core.enter_stacked_register_frame_for_function(Some(&plan), 2);
+        narrow_only_core.enter_stacked_register_frame_for_function(&module, Some(&plan), 2);
         assert_eq!(
             narrow_only_core.stacked_register_frame_clear_width_high_water,
             1
@@ -126561,7 +126616,10 @@ mod tests {
         core.enter_stacked_register_frame(Some(&wide_plan));
         core.write_reg_with_label(7, Value::Int(99), Label::Secret)
             .expect("seed stale wide-frame state");
+        // Returning restores the caller's window: its base and its width
+        // (bd-9vouw.72), so the narrow callee reuses the wide one's slots.
         core.register_base = 0;
+        core.register_width = max_registers;
         core.enter_stacked_register_frame(Some(&narrow_plan));
 
         assert_eq!(core.stacked_register_frame_clear_width_high_water, 8);
@@ -126570,7 +126628,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_tier1_verified_width_preserves_nested_fixed_stride_bd_bridge_5_3() {
+    fn compact_tier1_verified_widths_stack_nested_windows_bd_bridge_5_3() {
         let module = test_module_with_functions(
             vec![
                 Ir3Instruction::LoadInt { dst: 1, value: 1 },
@@ -126643,8 +126701,13 @@ mod tests {
 
         assert_execution_semantics_equal(&compact, &baseline);
         assert_eq!(compact.value, Value::Int(42));
-        assert_eq!(compact_core.registers.len(), max_registers * 3);
-        assert_eq!(baseline_core.registers.len(), max_registers * 3);
+        // A callee window starts right above its caller's verified width
+        // (bd-9vouw.72): main keeps the top frame's max_registers window,
+        // `outer` is 2 wide, and `inner`'s window (physically max_registers
+        // long) starts at max_registers + 2. The plain run uses the same
+        // verified widths as the compact plan.
+        assert_eq!(compact_core.registers.len(), max_registers * 2 + 2);
+        assert_eq!(baseline_core.registers.len(), max_registers * 2 + 2);
     }
 
     #[test]

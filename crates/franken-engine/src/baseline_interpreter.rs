@@ -89133,7 +89133,7 @@ impl InterpreterCore {
             return Ok(());
         };
         let entries = self.array_like_values(*list)?;
-        for pair in entries.chunks_exact(2) {
+        for pair in entries.as_chunks::<2>().0 {
             let (value, label) = self.invoke_inline_method_call_with_argument_label(
                 Some(module),
                 pair[1].clone(),

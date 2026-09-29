@@ -880,6 +880,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "SyntaxError" => Some("SyntaxError"),
         "EvalError" => Some("EvalError"),
         "URIError" => Some("URIError"),
+        "AggregateError" => Some("AggregateError"),
         "EventEmitter" => Some("EventEmitter"),
         "ArrayBuffer" => Some("ArrayBuffer"),
         "DataView" => Some("DataView"),
@@ -5271,7 +5272,7 @@ impl BuiltinFunction {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 29] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 30] = [
     "Object",
     "Array",
     "Number",
@@ -5287,6 +5288,7 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 29] = [
     "SyntaxError",
     "EvalError",
     "URIError",
+    "AggregateError",
     "RegExp",
     "WeakMap",
     "WeakSet",
@@ -6946,8 +6948,9 @@ const READ_ONLY_VALUE_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
     configurable: false,
 };
 
-/// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3).
-const ERROR_PROTOTYPE_NAMES: [&str; 7] = [
+/// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3;
+/// ES2021 20.5.7.3 for AggregateError).
+const ERROR_PROTOTYPE_NAMES: [&str; 8] = [
     "Error",
     "TypeError",
     "RangeError",
@@ -6955,6 +6958,7 @@ const ERROR_PROTOTYPE_NAMES: [&str; 7] = [
     "SyntaxError",
     "EvalError",
     "URIError",
+    "AggregateError",
 ];
 
 /// A property descriptor as read by ES2020 6.2.5.5 ToPropertyDescriptor.
@@ -43204,7 +43208,7 @@ impl InterpreterCore {
                     object.constructor_function = Some(constructor_index);
                 }
             });
-            self.initialize_builtin_subclass_instance(object_id, &parent_name, args)?;
+            self.initialize_builtin_subclass_instance(Some(module), object_id, &parent_name, args)?;
             let result = Value::Object(object_id);
             let args_label = self.join_arg_range_label(args)?;
             let result_label =
@@ -43288,7 +43292,12 @@ impl InterpreterCore {
                 }
             });
             if let Some(parent_name) = builtin_parent.as_deref() {
-                self.initialize_builtin_subclass_instance(object_id, parent_name, args)?;
+                self.initialize_builtin_subclass_instance(
+                    Some(module),
+                    object_id,
+                    parent_name,
+                    args,
+                )?;
             }
             let this_value = Value::Object(object_id);
             (this_value.clone(), Some(this_value), true)
@@ -48769,6 +48778,7 @@ impl InterpreterCore {
                             });
                             if let Some(builtin_name) = builtin_parent.as_deref() {
                                 self.initialize_builtin_subclass_instance(
+                                    Some(module),
                                     this_id,
                                     builtin_name,
                                     args,
@@ -52002,6 +52012,57 @@ impl InterpreterCore {
             self.set_object_property(error_id, "stderr".to_string(), stderr)?;
         }
         Ok(Value::Object(error_id))
+    }
+
+    /// `AggregateError(errors, message, options)` (ES2021 20.5.7.1.1,
+    /// bd-9vouw.75). `new` and a plain call construct alike.
+    fn construct_aggregate_error(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype("AggregateError")?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_aggregate_error(module, error_id, args)?;
+        Ok(Value::Object(error_id))
+    }
+
+    /// Steps 3-7: `message` and `cause` as for the other native errors (they
+    /// are the second and third arguments here), then `errors` =
+    /// IterableToList(errors) as an own non-enumerable array. A non-iterable
+    /// `errors` is a TypeError, not an array-like.
+    fn initialize_aggregate_error(
+        &mut self,
+        module: Option<&Ir3Module>,
+        error_id: ObjectId,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let message_args = RegRange {
+            start: args.start.saturating_add(1),
+            count: args.count.saturating_sub(1),
+        };
+        let message = self.error_message_from_args(message_args)?;
+        self.initialize_error_object(error_id, message)?;
+        self.install_error_cause(error_id, message_args)?;
+        let errors = self.iterable_to_array(
+            module,
+            RegRange {
+                start: args.start,
+                count: args.count.min(1),
+            },
+        )?;
+        let key = RuntimePropertyKey::String(JsString::from("errors"));
+        let mut label = if args.count > 0 {
+            self.get_register_label(args.start)?.clone()
+        } else {
+            Label::Public
+        };
+        if let Some(iteration_label) = self.take_pending_hostcall_result_label() {
+            label = label.join(&iteration_label);
+        }
+        self.set_own_runtime_property_label(error_id, &key, &label)?;
+        self.set_object_property(error_id, "errors".to_string(), errors)?;
+        self.set_own_property_attributes(error_id, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)
     }
 
     /// `builtin:Error` / `builtin:TypeError` / … hostcall arms (bd-bg9l1.27.10).
@@ -57079,11 +57140,17 @@ impl InterpreterCore {
             .map(|value| self.js_value_to_value(value))
             .collect();
         let errors_array = self.alloc_array_from_values(&error_values)?;
-        let error_id = self.alloc_object_with_properties(&[
-            ("name", Value::str("AggregateError")),
-            ("message", Value::str("All promises were rejected")),
-            ("errors", Value::Object(errors_array)),
-        ])?;
+        // bd-9vouw.75: an AggregateError instance, as Promise.any specifies
+        // (ES2021 27.2.4.3.1 step 8), not a plain object named like one.
+        let prototype = self.ensure_builtin_prototype("AggregateError")?;
+        let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.initialize_error_object(error_id, Some("All promises were rejected".to_string()))?;
+        self.set_object_property(error_id, "errors".to_string(), Value::Object(errors_array))?;
+        self.set_own_property_attributes(
+            error_id,
+            &RuntimePropertyKey::String(JsString::from("errors")),
+            NON_ENUMERABLE_DATA_ATTRIBUTES,
+        )?;
         Ok(Self::value_to_js_value(&Value::Object(error_id)))
     }
 
@@ -78380,6 +78447,7 @@ impl InterpreterCore {
             "builtin:SyntaxError" => self.construct_error_object("SyntaxError", args),
             "builtin:EvalError" => self.construct_error_object("EvalError", args),
             "builtin:URIError" => self.construct_error_object("URIError", args),
+            "builtin:AggregateError" => self.construct_aggregate_error(module, args),
             "builtin:StringPrototypePadEnd" => {
                 // String.prototype.padEnd(targetLength[, padString]) implementation
                 if args.count == 0 {
@@ -89601,7 +89669,7 @@ impl InterpreterCore {
                 Some(self.ensure_builtin_prototype("Object")?)
             }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
-            | "URIError" => Some(self.ensure_builtin_prototype("Error")?),
+            | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
             _ => None,
         };
         let prototype = self.alloc_object_with_prototype(parent)?;
@@ -89669,6 +89737,7 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<(), InterpreterError> {
         match builtin_name {
+            "AggregateError" => self.initialize_aggregate_error(module, object_id, args)?,
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => {
                 let message = self.error_message_from_args(args)?;
@@ -90313,7 +90382,7 @@ impl InterpreterCore {
             "name" => Value::str(name),
             "length" => Value::Int(match name {
                 "Map" | "Set" | "WeakMap" | "WeakSet" => 0,
-                "RegExp" => 2,
+                "RegExp" | "AggregateError" => 2,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
             }),
@@ -90372,6 +90441,7 @@ impl InterpreterCore {
         match name {
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => self.construct_error_object(name, args),
+            "AggregateError" => self.construct_aggregate_error(Some(module), args),
             "Number" => self.dispatch_builtin_hostcall("builtin:Number", args, Some(module)),
             "String" => self.dispatch_builtin_hostcall("builtin:String", args, Some(module)),
             "Boolean" => self.dispatch_builtin_hostcall("builtin:Boolean", args, Some(module)),
@@ -90526,7 +90596,7 @@ impl InterpreterCore {
     /// Whether `object_id`'s prototype chain passes through a canonical
     /// builtin error prototype (`Error` or one of the six native errors).
     fn chain_has_error_prototype(&self, object_id: ObjectId) -> bool {
-        const ERROR_PROTOTYPES: [&str; 7] = [
+        const ERROR_PROTOTYPES: [&str; 8] = [
             "Error",
             "TypeError",
             "RangeError",
@@ -90534,6 +90604,7 @@ impl InterpreterCore {
             "SyntaxError",
             "EvalError",
             "URIError",
+            "AggregateError",
         ];
         let mut current = Some(object_id);
         let mut depth = 0u32;

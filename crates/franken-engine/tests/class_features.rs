@@ -206,7 +206,16 @@ fn class_inheritance_lowers_prototype_chain_linkage() {
         prototype_gets >= 2,
         "derived class should load child and parent prototypes"
     );
+    // The link is class machinery (an internal hostcall with the child and
+    // parent prototypes), not a guest-visible `__proto__` store (bd-9vouw.60).
     assert!(ops.iter().any(|op| matches!(
+        op,
+        Ir1Op::HostCall {
+            capability,
+            arg_count: 2,
+        } if capability == "builtin:ClassPrototypeLink"
+    )));
+    assert!(!ops.iter().any(|op| matches!(
         op,
         Ir1Op::SetProperty {
             key: Ir1PropertyKey::Static(name)

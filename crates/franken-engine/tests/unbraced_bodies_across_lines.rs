@@ -34,6 +34,9 @@ fn bodies_and_clauses_on_following_lines() {
         ),
         ("var k = 0;\nwhile (k < 4)\n  k++;\nk;", "4"),
         ("var e = 0;\ndo\n  e++;\nwhile (e < 3);\ne;", "3"),
+        // One line, and an empty-statement body.
+        ("var e = 0; do e++; while (e < 3); e;", "3"),
+        ("var f = 0; do ; while (f++ < 2); f;", "3"),
         ("var n = 0;\nif (!n)\n  // set it\n  n = 7;\nn;", "7"),
     ] {
         assert_eq!(

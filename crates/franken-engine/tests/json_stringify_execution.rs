@@ -410,10 +410,8 @@ fn overdeep_input_hits_the_host_guard_without_leaking_traversal_scratch() {
         .into_iter()
         .collect();
         let mut core = InterpreterCore::new(config, "json-stringify-depth");
-        assert!(matches!(
-            core.execute(&module),
-            Err(InterpreterError::StackOverflow { max: 200, .. })
-        ));
+        let result = core.execute(&module);
+        assert!(is_depth_refusal(&result, Some(200)), "{result:?}");
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -507,5 +505,22 @@ fn large_sparse_arrays_obey_the_instruction_budget_inside_serialization() {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+}
+
+/// A call-depth refusal (bd-9vouw.72): the host StackOverflow (with `max` when
+/// given) or, since a stack overflow is a catchable RangeError, the uncaught
+/// RangeError it becomes after a handler boundary (an iterator close, a
+/// builtin's callback, a reviver) rethrew it. Anything else fails, including
+/// a SyntaxError and a native stack abort.
+fn is_depth_refusal<T>(result: &Result<T, InterpreterError>, max: Option<usize>) -> bool {
+    match result {
+        Err(InterpreterError::StackOverflow { max: limit, .. }) => {
+            max.is_none_or(|expected| *limit == expected)
+        }
+        Err(InterpreterError::UncaughtException { value }) => {
+            value == "[object]: Maximum call stack size exceeded"
+        }
+        _ => false,
     }
 }

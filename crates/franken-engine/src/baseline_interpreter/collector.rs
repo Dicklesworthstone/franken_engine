@@ -19,8 +19,14 @@
 //!   script's completion value, held by the caller across that phase, is
 //!   pinned.
 //! - Nested run loops (callbacks, generator bodies, isolated calls) hold
-//!   caller state in Rust locals, so no collection runs while one is active.
-//!   A single callback that allocates past the budget still fails.
+//!   caller state in Rust locals, so by default no collection runs while one
+//!   is active. A call site that knows what its Rust frames hold may arm the
+//!   nested loop it enters (bd-9vouw.77): async function calls, timer
+//!   callbacks, Promise reaction handlers and async resumption. The caller's
+//!   saved execution and the values the dispatching frames hold are pinned
+//!   on a stack for the duration. Builtins that call guest callbacks while
+//!   holding values only in Rust locals (map's result array, sort's element
+//!   vector) never arm, so no collection runs inside those callbacks.
 //! - Collection is also skipped while host I/O subsystems (streams, sockets,
 //!   http, child processes, URL/crypto objects) hold state. The allocation
 //!   budget then fails exactly as before.
@@ -114,10 +120,39 @@ pub(super) struct GcState {
     /// Values a Rust caller holds across the event-loop phase (the script's
     /// completion value). Roots.
     pinned_values: Vec<Value>,
+    /// One entry per armed nested run loop (bd-9vouw.77): what its callers
+    /// hold in Rust locals. Roots.
+    nested_pins: Vec<NestedPins>,
     /// Planted negative for the root-coverage tests: skip the registers,
     /// call frames, scope chain and realm globals.
     #[cfg(test)]
     drop_execution_roots: bool,
+}
+
+/// State a Rust frame holds outside the interpreter while a nested run loop
+/// it armed for collection runs (bd-9vouw.77).
+pub(super) enum GcPin<'a> {
+    Value(&'a Value),
+    /// Async-function records created from this id on.
+    AsyncFunctionsFrom(usize),
+    ModuleExecution(&'a ModuleExecutionSnapshot),
+    GeneratorExecution(&'a GeneratorExecutionSnapshot),
+}
+
+/// What the Rust frames around one armed nested run loop hold.
+#[derive(Debug, Clone, Default)]
+struct NestedPins {
+    values: Vec<Value>,
+    /// Async-function records with at least this id, which the caller reads
+    /// once the loop returns (the record its isolated call created, and any
+    /// it must reject if the call fails), completed or not.
+    async_functions_from: Option<usize>,
+}
+
+/// Proof that `gc_arm_nested` armed a run loop; `gc_disarm_nested` undoes it.
+#[must_use]
+pub(super) struct NestedGcArm {
+    previous: Option<u32>,
 }
 
 /// Why a due collection did not run.
@@ -717,24 +752,63 @@ impl InterpreterCore {
         }
     }
 
-    /// Mark the next `evaluate_cjs_ir3` as the top-level CommonJS entry.
-    pub(super) fn gc_set_cjs_entry_pending(&mut self, pending: bool) {
-        self.gc.cjs_entry_pending = pending;
+    /// Whether the event loop is between jobs after the script, with no run
+    /// loop active: a job dispatched now is held only by its queue entry.
+    pub(super) fn gc_in_event_loop_phase(&self) -> bool {
+        self.gc.event_loop_armed && self.gc.run_loop_depth == 0
     }
 
-    /// Arm collection for the top-level CommonJS entry's run loop. The saved
-    /// caller execution stays in a Rust local across that loop, so every
-    /// object it references is pinned as a root. Returns the previous safe
-    /// depth for `gc_restore_safe_depth`, or `None` when this evaluation is
-    /// not the top-level entry.
-    pub(super) fn gc_arm_cjs_entry(
-        &mut self,
-        caller: &ModuleExecutionSnapshot,
-    ) -> Option<Option<u32>> {
-        if !std::mem::take(&mut self.gc.cjs_entry_pending) {
+    /// Whether the code running now is at a safe point context: the armed run
+    /// loop itself, or the event loop between jobs.
+    fn gc_context_is_safe(&self) -> bool {
+        self.gc.safe_depth == Some(self.gc.run_loop_depth)
+            || (self.gc.event_loop_armed && self.gc.run_loop_depth == 0)
+    }
+
+    /// Arm the next run loop entered for collection while the current one is
+    /// suspended in a Rust frame (bd-9vouw.77). `pins` is everything that
+    /// frame and its callers hold outside interpreter state; it stays rooted
+    /// until `gc_disarm_nested`. Returns `None`, arming nothing, unless the
+    /// current context is itself safe: a caller that is not at a safe point
+    /// may hold unpinned values of its own.
+    pub(super) fn gc_arm_nested(&mut self, pins: &[GcPin<'_>]) -> Option<NestedGcArm> {
+        if !self.gc_context_is_safe() {
             return None;
         }
-        let mut marker = GcMarker::new(
+        let mut marker = self.gc_new_marker();
+        let mut async_functions_from: Option<usize> = None;
+        for pin in pins {
+            match pin {
+                GcPin::Value(value) => marker.value(value),
+                GcPin::AsyncFunctionsFrom(id) => {
+                    async_functions_from =
+                        Some(async_functions_from.map_or(*id, |from| from.min(*id)));
+                }
+                GcPin::ModuleExecution(execution) => marker.module_execution(execution),
+                GcPin::GeneratorExecution(execution) => marker.generator_execution(execution),
+            }
+        }
+        self.gc.nested_pins.push(NestedPins {
+            values: Self::gc_marked_values(&marker),
+            async_functions_from,
+        });
+        let previous = self
+            .gc
+            .safe_depth
+            .replace(self.gc.run_loop_depth.saturating_add(1));
+        Some(NestedGcArm { previous })
+    }
+
+    /// Undo `gc_arm_nested` once the armed loop has returned.
+    pub(super) fn gc_disarm_nested(&mut self, arm: Option<NestedGcArm>) {
+        if let Some(NestedGcArm { previous }) = arm {
+            self.gc.safe_depth = previous;
+            self.gc.nested_pins.pop();
+        }
+    }
+
+    fn gc_new_marker(&self) -> GcMarker {
+        GcMarker::new(
             self.heap.len(),
             self.closures.len(),
             self.promise_store.slot_count(),
@@ -742,9 +816,13 @@ impl InterpreterCore {
             self.iterators.len(),
             self.generators.len(),
             self.async_generators.len(),
-        );
-        marker.module_execution(caller);
-        let pinned: Vec<Value> = marker
+        )
+    }
+
+    /// The values a marker marked directly, before draining: roots that pin
+    /// everything reachable from them.
+    fn gc_marked_values(marker: &GcMarker) -> Vec<Value> {
+        marker
             .stack
             .iter()
             .map(|id| Value::Object(ObjectId(*id)))
@@ -763,7 +841,29 @@ impl InterpreterCore {
                     .iter()
                     .map(|id| Value::AsyncGeneratorObject(*id)),
             )
-            .collect();
+            .collect()
+    }
+
+    /// Mark the next `evaluate_cjs_ir3` as the top-level CommonJS entry.
+    pub(super) fn gc_set_cjs_entry_pending(&mut self, pending: bool) {
+        self.gc.cjs_entry_pending = pending;
+    }
+
+    /// Arm collection for the top-level CommonJS entry's run loop. The saved
+    /// caller execution stays in a Rust local across that loop, so every
+    /// object it references is pinned as a root. Returns the previous safe
+    /// depth for `gc_restore_safe_depth`, or `None` when this evaluation is
+    /// not the top-level entry.
+    pub(super) fn gc_arm_cjs_entry(
+        &mut self,
+        caller: &ModuleExecutionSnapshot,
+    ) -> Option<Option<u32>> {
+        if !std::mem::take(&mut self.gc.cjs_entry_pending) {
+            return None;
+        }
+        let mut marker = self.gc_new_marker();
+        marker.module_execution(caller);
+        let pinned = Self::gc_marked_values(&marker);
         let previous = self.gc_arm_top_level();
         self.gc.pinned = pinned;
         Some(previous)
@@ -1298,6 +1398,7 @@ impl InterpreterCore {
             module_reentrant_call_depth: _,
             active_foreign_module_call_depth: _,
             isolated_async_entry_pending: _,
+            gc_nested_request,
             pending_captures: _,
             // Traced from the values that name them.
             generators: _,
@@ -1519,6 +1620,26 @@ impl InterpreterCore {
             .pinned_values
             .iter()
             .for_each(|value| m.value(value));
+        self.gc
+            .nested_pins
+            .iter()
+            .flat_map(|pins| pins.values.iter())
+            .chain(gc_nested_request.iter().flatten())
+            .for_each(|value| m.value(value));
+        if let Some(from) = self
+            .gc
+            .nested_pins
+            .iter()
+            .filter_map(|pins| pins.async_functions_from)
+            .min()
+        {
+            for (id, function) in async_functions.iter_live() {
+                if id >= from {
+                    m.async_functions.mark(id);
+                    m.async_function(function);
+                }
+            }
+        }
 
         // Intrinsics.
         function_prototypes.values().for_each(|id| m.object(*id));

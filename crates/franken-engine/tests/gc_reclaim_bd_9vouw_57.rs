@@ -432,6 +432,63 @@ fn abandoned_async_generators_are_reclaimed() {
     );
 }
 
+/// Garbage allocated inside one async function body, timer callback or
+/// Promise reaction handler (bd-9vouw.77). Collection used to run only in the
+/// top-level script's own loop and between event-loop jobs, so each of these
+/// died at the 100,001st object. The map/sort case checks that builtin
+/// callbacks inside an armed body stay correct. Expected lines are Node
+/// v22.2.0's.
+const TASK_CHURN_CASES: &[(&str, &str)] = &[
+    (
+        "(async () => { let s = 0; for (let i = 0; i < 300000; i++) { const g = { i }; \
+         s += g.i & 1; } console.log(s); })();",
+        "150000",
+    ),
+    (
+        "(async () => { await null; let s = 0; for (let i = 0; i < 300000; i++) { \
+         const g = { i }; s += g.i & 1; } console.log(s); })();",
+        "150000",
+    ),
+    (
+        "setTimeout(() => { let s = 0; for (let i = 0; i < 300000; i++) { const g = { i }; \
+         s += g.i & 1; } console.log(s); }, 0);",
+        "150000",
+    ),
+    (
+        "Promise.resolve(7).then(v => { let s = v; for (let i = 0; i < 300000; i++) { \
+         const g = { i }; s += g.i & 1; } console.log(s); });",
+        "150007",
+    ),
+    (
+        "async function inner(k) { await null; let s = k; for (let i = 0; i < 300000; i++) { \
+         const g = { i }; s += g.i & 1; } return s; } \
+         (async () => { const a = await inner(1); const b = await inner(2); console.log(a + b); })();",
+        "300003",
+    ),
+    (
+        "(async () => { await null; const keep = { tag: 'kept' }; \
+         const arr = [3, 1, 2].map(x => ({ x })); let s = 0; \
+         for (let i = 0; i < 300000; i++) { const g = { i }; s += g.i & 1; } \
+         arr.sort((p, q) => p.x - q.x); console.log(keep.tag, arr.map(o => o.x).join(), s); })();",
+        "kept 1,2,3 150000",
+    ),
+    (
+        "let n = 0; const t = setInterval(() => { let s = 0; \
+         for (let i = 0; i < 300000; i++) { const g = { i }; s += g.i & 1; } n++; \
+         if (n === 3) { clearInterval(t); console.log(n, s); } }, 0);",
+        "3 150000",
+    ),
+];
+
+#[test]
+fn garbage_inside_async_bodies_and_callbacks_is_collected() {
+    for (source, node) in TASK_CHURN_CASES {
+        let run = run(source, None);
+        assert_eq!(console_lines(&run, source), vec![*node], "{source}");
+        assert!(run.gc.collections > 0, "no collection ran: {source}");
+    }
+}
+
 fn promise_case_sources() -> impl Iterator<Item = (String, &'static str)> {
     PROMISE_CASES
         .iter()
@@ -624,6 +681,11 @@ fn stress_collection_preserves_results_and_console_output() {
             .chain(promise_case_sources())
             .chain(iterator_case_sources())
             .chain(async_generator_case_sources())
+            .chain(
+                TASK_CHURN_CASES
+                    .iter()
+                    .map(|(source, node)| (source.to_string(), *node)),
+            )
             .map(|(source, _)| {
                 // The stress run collects at every safe point; a short churn
                 // keeps the O(live) cost per instruction manageable.

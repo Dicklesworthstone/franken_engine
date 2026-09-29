@@ -86,6 +86,7 @@ mod reflect_invocation;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
+use collector::GcPin;
 pub use collector::GcStats;
 use object_integrity::ObjectIntegrityOperation;
 use primitive_conversion::PrimitiveConversion;
@@ -12202,6 +12203,10 @@ pub struct InterpreterCore {
     /// runs and consumed by the wrapper's own entry call, which must execute
     /// inline instead of isolating again.
     isolated_async_entry_pending: bool,
+    /// Set by a call site that may let the collector run inside the inline
+    /// call it is about to make (bd-9vouw.77): the values its Rust frames hold
+    /// across that call. The next `invoke_inline_method_call_*` consumes it.
+    gc_nested_request: Option<Vec<Value>>,
     /// Pending capture names for the next `CreateClosure` instruction.
     pending_captures: Vec<u32>,
     /// Generator object store.
@@ -13056,6 +13061,7 @@ impl InterpreterCore {
             module_reentrant_call_depth: 0,
             active_foreign_module_call_depth: 0,
             isolated_async_entry_pending: false,
+            gc_nested_request: None,
             pending_captures: Vec::new(),
             generators: ReclaimableTable::new("generator", Self::estimate_generator_bytes),
             generator_yielded: false,
@@ -40590,6 +40596,9 @@ impl InterpreterCore {
         settlement_label: Label,
         fallback_module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
+        // Set by the event loop when collection may run in the resumed body
+        // (bd-9vouw.77): the values its frame holds.
+        let gc_request = self.gc_nested_request.take();
         let async_function_id = resumption_context.async_function_id;
         let (owner_module, has_isolated_execution) = {
             let function = self
@@ -40616,7 +40625,23 @@ impl InterpreterCore {
             let failure_label = Self::terminal_async_failure_label(&settlement_label);
             let result = self
                 .resume_async_function_after_await(resumption_context, settled, settlement_label)
-                .and_then(|()| self.continue_resumed_async_function(Some(owner_module.as_ref())));
+                .and_then(|()| {
+                    // The resumed frame runs on the live stack. Records it
+                    // creates are read back if it fails.
+                    let gc_arm = gc_request.as_ref().and_then(|held| {
+                        let pins = held
+                            .iter()
+                            .map(GcPin::Value)
+                            .chain(std::iter::once(GcPin::AsyncFunctionsFrom(
+                                async_function_count_before_run,
+                            )))
+                            .collect::<Vec<_>>();
+                        self.gc_arm_nested(&pins)
+                    });
+                    let result = self.continue_resumed_async_function(Some(owner_module.as_ref()));
+                    self.gc_disarm_nested(gc_arm);
+                    result
+                });
             if let Err(error) = result {
                 Self::extend_unique_async_function_ids(
                     &mut abandoned_async_ids,
@@ -40672,7 +40697,25 @@ impl InterpreterCore {
 
         let result = self.sync_estimated_memory_bytes().and_then(|_| {
             self.resume_async_function_after_await(resumption_context, settled, settlement_label)
-                .and_then(|()| self.continue_resumed_async_function(Some(owner_module.as_ref())))
+                .and_then(|()| {
+                    // The caller's execution waits in `caller_execution`.
+                    let gc_arm = gc_request.as_ref().and_then(|held| {
+                        let pins = held
+                            .iter()
+                            .map(GcPin::Value)
+                            .chain(std::iter::once(GcPin::GeneratorExecution(
+                                &caller_execution,
+                            )))
+                            .chain(std::iter::once(GcPin::AsyncFunctionsFrom(
+                                async_function_count_before_run,
+                            )))
+                            .collect::<Vec<_>>();
+                        self.gc_arm_nested(&pins)
+                    });
+                    let result = self.continue_resumed_async_function(Some(owner_module.as_ref()));
+                    self.gc_disarm_nested(gc_arm);
+                    result
+                })
         });
         let mut continuation_execution = self.take_generator_execution();
         continuation_execution.contained_codegen_grant = contained_codegen_grant;
@@ -44402,7 +44445,8 @@ impl InterpreterCore {
         compact_tier1: Option<&CompactTier1Program>,
         trampoline: &[Ir3Instruction],
     ) -> Result<LabeledReturn, InterpreterError> {
-        // The collector may run only in the top-level script's own loop; see
+        // The collector may run only in an armed loop: the top-level script's
+        // own loop, or a nested loop a caller armed (`gc_arm_nested`). See
         // `collector::GcState::safe_depth`.
         self.gc_enter_run_loop();
         let result = self.run_loop_labeled_with_trampoline_inner(module, compact_tier1, trampoline);
@@ -44801,15 +44845,25 @@ impl InterpreterCore {
                         let call_labels =
                             self.clone_isolated_call_labels_from_registers(None, args)?;
                         let arguments = self.call_arguments(args)?;
-                        let (result, result_label) = match self
-                            .invoke_inline_method_call_with_labels(
+                        // An async call from the armed loop may collect inside
+                        // the callee: this handler holds nothing the snapshot
+                        // and the call's pins do not (bd-9vouw.77).
+                        let call = |this: &mut Self| {
+                            this.invoke_inline_method_call_with_labels(
                                 Some(module),
                                 callee_val.clone(),
                                 Value::Undefined,
                                 arguments,
                                 None,
                                 call_labels,
-                            ) {
+                            )
+                        };
+                        let call_result = if isolate_async_call {
+                            self.with_gc_nested_request(Vec::new(), call)
+                        } else {
+                            call(self)
+                        };
+                        let (result, result_label) = match call_result {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                                 None => continue,
@@ -45429,15 +45483,25 @@ impl InterpreterCore {
                         let call_labels =
                             self.clone_isolated_call_labels_from_registers(Some(receiver), args)?;
                         let arguments = self.call_arguments(args)?;
-                        let (result, result_label) = match self
-                            .invoke_inline_method_call_with_labels(
+                        // An async call from the armed loop may collect inside
+                        // the callee: this handler holds nothing the snapshot
+                        // and the call's pins do not (bd-9vouw.77).
+                        let call = |this: &mut Self| {
+                            this.invoke_inline_method_call_with_labels(
                                 Some(module),
                                 callee_val.clone(),
                                 receiver_val,
                                 arguments,
                                 None,
                                 call_labels,
-                            ) {
+                            )
+                        };
+                        let call_result = if isolate_async_call {
+                            self.with_gc_nested_request(Vec::new(), call)
+                        } else {
+                            call(self)
+                        };
+                        let (result, result_label) = match call_result {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(module, err)? {
                                 None => continue,
@@ -57060,13 +57124,21 @@ impl InterpreterCore {
                             if let Some(resumption_context) =
                                 self.async_resumption_contexts.remove(&result_promise.0)
                             {
-                                // Resume the async function
-                                if let Err(err) = self.resume_async_function_task(
-                                    resumption_context,
-                                    Ok(argument.clone()),
-                                    task_label.clone(),
-                                    module,
-                                ) {
+                                // Resume the async function. This loop holds the
+                                // await carrier and the settled value
+                                // (bd-9vouw.77).
+                                let held = vec![
+                                    Value::Promise(result_promise.0),
+                                    self.js_value_to_value(argument),
+                                ];
+                                if let Err(err) = self.with_event_job_gc_request(held, |this| {
+                                    this.resume_async_function_task(
+                                        resumption_context,
+                                        Ok(argument.clone()),
+                                        task_label.clone(),
+                                        module,
+                                    )
+                                }) {
                                     let reason = Self::promise_rejection_from_error(&err);
                                     let _ = self.reject_promise(
                                         *result_promise,
@@ -57100,12 +57172,17 @@ impl InterpreterCore {
                             let Some(handler) = *handler else {
                                 unreachable!("handler.is_some() checked above");
                             };
-                            match self.execute_promise_reaction_handler(
-                                module,
-                                handler,
-                                argument.clone(),
-                                task_label.clone(),
-                            ) {
+                            // This loop holds the derived promise it settles
+                            // with the handler's result (bd-9vouw.77).
+                            let held = vec![Value::Promise(result_promise.0)];
+                            match self.with_event_job_gc_request(held, |this| {
+                                this.execute_promise_reaction_handler(
+                                    module,
+                                    handler,
+                                    argument.clone(),
+                                    task_label.clone(),
+                                )
+                            }) {
                                 Ok(result) => match result {
                                     Value::Promise(source) => {
                                         // A handler returned a native promise:
@@ -57180,12 +57257,18 @@ impl InterpreterCore {
                         if let Some(resumption_context) =
                             self.async_resumption_contexts.remove(&result_promise.0)
                         {
-                            if let Err(err) = self.resume_async_function_task(
-                                resumption_context,
-                                Err(reason.clone()),
-                                task_label.clone(),
-                                module,
-                            ) {
+                            let held = vec![
+                                Value::Promise(result_promise.0),
+                                self.js_value_to_value(reason),
+                            ];
+                            if let Err(err) = self.with_event_job_gc_request(held, |this| {
+                                this.resume_async_function_task(
+                                    resumption_context,
+                                    Err(reason.clone()),
+                                    task_label.clone(),
+                                    module,
+                                )
+                            }) {
                                 let reason = Self::promise_rejection_from_error(&err);
                                 let _ = self.reject_promise(
                                     *result_promise,
@@ -57457,6 +57540,35 @@ impl InterpreterCore {
     /// This creates a minimal execution context to run the timer callback function.
     /// `args` carries the extra trailing `setTimeout(cb, ms, ...args)` arguments
     /// (empty for the legacy direct-scheduled path) (bd-suwvw).
+    /// Run `call`, letting the collector run inside the inline call it makes
+    /// (bd-9vouw.77). `held` are the values this frame and its callers keep in
+    /// Rust locals across that call; the callee, receiver and arguments are
+    /// pinned by the call itself. The request never outlives `call`.
+    fn with_gc_nested_request<T>(
+        &mut self,
+        held: Vec<Value>,
+        call: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        self.gc_nested_request = Some(held);
+        let result = call(self);
+        self.gc_nested_request = None;
+        result
+    }
+
+    /// `with_gc_nested_request` for an event-loop job dispatched between jobs;
+    /// anywhere else `call` runs without one (bd-9vouw.77).
+    fn with_event_job_gc_request<T>(
+        &mut self,
+        held: Vec<Value>,
+        call: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        if self.gc_in_event_loop_phase() {
+            self.with_gc_nested_request(held, call)
+        } else {
+            call(self)
+        }
+    }
+
     fn execute_timer_callback(
         &mut self,
         callback: Value,
@@ -57480,6 +57592,20 @@ impl InterpreterCore {
         // state around the call and runs the closure's IR3 body to completion
         // against its captured environment.
         match module {
+            // Between event-loop jobs the timer queue owns nothing else the
+            // callback could need; its callee and arguments are pinned by the
+            // call (bd-9vouw.77). Elsewhere a caller may hold unpinned values.
+            Some(module) if self.gc_in_event_loop_phase() => self
+                .with_gc_nested_request(Vec::new(), |this| {
+                    this.invoke_inline_method_call_with_argument_label(
+                        Some(module),
+                        callback,
+                        Value::Undefined,
+                        args,
+                        Some(label),
+                    )
+                })
+                .map(|(value, _)| value),
             Some(module) => self
                 .invoke_inline_method_call_with_argument_label(
                     Some(module),
@@ -64775,6 +64901,8 @@ impl InterpreterCore {
         argument_label: Option<Label>,
         call_labels: Option<IsolatedCallLabels>,
     ) -> Result<(Value, Label), InterpreterError> {
+        // A request applies to this call only, whatever path it takes.
+        let gc_request = self.gc_nested_request.take();
         let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
             got: "missing module context".to_string(),
@@ -64874,6 +65002,17 @@ impl InterpreterCore {
             let saved_module_specifier = self
                 .current_module_specifier
                 .replace(callee_module_specifier);
+            // The caller's registers stay live under the callback's frame, so
+            // only what the requesting Rust frames hold needs pinning.
+            let gc_arm = gc_request.as_ref().and_then(|held| {
+                let pins = held
+                    .iter()
+                    .chain([&callee, &receiver])
+                    .chain(arguments.iter())
+                    .map(GcPin::Value)
+                    .collect::<Vec<_>>();
+                self.gc_arm_nested(&pins)
+            });
             let outcome = self.invoke_nested_callback(
                 module,
                 callee,
@@ -64883,6 +65022,7 @@ impl InterpreterCore {
                 call_labels,
                 &mut remaining_label_transport_bytes,
             );
+            self.gc_disarm_nested(gc_arm);
             self.current_module_specifier = saved_module_specifier;
             self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
                 transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
@@ -64937,6 +65077,19 @@ impl InterpreterCore {
         let mut wrapper_memory_committed = false;
         let previous_granted_capabilities =
             self.replace_with_contained_codegen_grant(contained_codegen_grant);
+        // The caller's execution now lives only in `snapshot`, a Rust local:
+        // pin it with what the requesting frames hold (bd-9vouw.77).
+        let gc_arm = gc_request.as_ref().and_then(|held| {
+            let pins = held
+                .iter()
+                .chain([&callee, &receiver])
+                .chain(arguments.iter())
+                .map(GcPin::Value)
+                .chain(std::iter::once(GcPin::ModuleExecution(&snapshot)))
+                .chain(foreign_async_index.map(GcPin::AsyncFunctionsFrom))
+                .collect::<Vec<_>>();
+            self.gc_arm_nested(&pins)
+        });
         let mut result = (|| -> Result<Value, InterpreterError> {
             // An isolated callback is not the suspended delegating generator.
             // In particular, a foreign async callback must not retain its
@@ -64997,6 +65150,7 @@ impl InterpreterCore {
             self.active_foreign_module_call_depth = previous_foreign_call_depth;
             result
         })();
+        self.gc_disarm_nested(gc_arm);
         let mut isolated_async_result_label = None;
         let mut isolated_async_execution_rehomed = false;
         let mut isolated_async_execution_owner = None;

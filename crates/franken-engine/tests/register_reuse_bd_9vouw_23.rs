@@ -13,7 +13,8 @@
 //! the real lowering pipeline for the register high-water assertion.
 
 use frankenengine_engine::HybridRouter;
-use frankenengine_engine::baseline_interpreter::QuickJsLane;
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, QuickJsLane};
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser_api_stability::parse_script;
@@ -43,7 +44,16 @@ fn fixed_lane_value(source: &str) -> String {
     let module = lower_ir0_to_ir3(&ir0, &context)
         .expect("source should lower")
         .ir3;
-    match QuickJsLane::new().execute(&module, "rr-trace") {
+    // The programs call builtins (`Object.keys`, for-of over arrays), which
+    // QuickJsLane::new()'s VM/heap-only grant refuses; the frame is what is
+    // under test, so grant the builtins too.
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities.extend([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+    ]);
+    match QuickJsLane::with_config(config).execute(&module, "rr-trace") {
         Ok(result) => result.value.to_string(),
         Err(err) => format!("ERROR: {err}"),
     }

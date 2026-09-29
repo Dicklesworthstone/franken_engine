@@ -11402,8 +11402,10 @@ fn parse_class_body(
         };
         if !rest.starts_with('#') && class_member_is_field(&rest[field_key_end..]) {
             // `x = {a: 1}.a` was cut after the object literal's `}`: glue
-            // continuation segments back on.
-            while let Some(next) = pending.front()
+            // continuation segments back on. A segment that ended at `;` is
+            // complete, so `[x]; [y] = 42;` stays two fields.
+            while !rest.ends_with(';')
+                && let Some(next) = pending.front()
                 && class_field_continues_with(next)
             {
                 let end = subslice_offset(body, next) + next.len();

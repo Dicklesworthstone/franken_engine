@@ -694,12 +694,25 @@ fn ir0_to_ir1_raw_expression_with_call() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "raw_call.js");
     let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
 
-    let has_call = result
-        .module
-        .ops
+    // An expression the parser did not recognise is not evaluated as its own
+    // source text (it used to be called when the text contained `(`): it
+    // throws a catchable SyntaxError when reached (bd-6vl81).
+    let ops = &result.module.ops;
+    assert!(
+        !ops.iter().any(|op| matches!(op, Ir1Op::Call { .. })),
+        "a raw expression is never called"
+    );
+    let throw_at = ops
         .iter()
-        .any(|op| matches!(op, Ir1Op::Call { .. }));
-    assert!(has_call, "raw expression containing '(' should emit Call");
+        .position(|op| matches!(op, Ir1Op::Throw))
+        .expect("a raw expression throws");
+    assert!(
+        matches!(
+            &ops[throw_at - 1],
+            Ir1Op::HostCall { capability, arg_count: 1 } if capability == "builtin:SyntaxError"
+        ),
+        "the thrown value is a SyntaxError: {ops:?}"
+    );
 }
 
 #[test]

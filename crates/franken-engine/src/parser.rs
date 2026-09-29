@@ -11667,8 +11667,10 @@ fn subslice_offset(whole: &str, part: &str) -> usize {
 /// as two segments.
 fn class_field_continues_with(next: &str) -> bool {
     let next = next.trim_start();
+    // `:` is the rest of a conditional cut at an object literal's `}`
+    // (`x = c ? {} : y`).
     next.starts_with([
-        '.', '(', '[', '?', ',', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '`',
+        '.', '(', '[', '?', ':', ',', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '`',
     ]) || (next.starts_with('=') && !next.starts_with("=>"))
         || (next.starts_with('!') && next.starts_with("!="))
         || starts_with_keyword(next, "in")

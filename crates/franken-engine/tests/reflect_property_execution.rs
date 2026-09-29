@@ -1762,9 +1762,13 @@ fn is_depth_refusal<T>(result: &Result<T, InterpreterError>, max: Option<usize>)
         Err(InterpreterError::StackOverflow { max: limit, .. }) => {
             max.is_none_or(|expected| *limit == expected)
         }
-        Err(InterpreterError::UncaughtException { value }) => {
-            value == "[object]: Maximum call stack size exceeded"
-        }
+        // The same refusal, raised as a catchable RangeError that no handler
+        // caught; how the uncaught value renders depends on the path.
+        Err(InterpreterError::UncaughtException { value }) => matches!(
+            value.as_str(),
+            "[object]: Maximum call stack size exceeded"
+                | "RangeError: Maximum call stack size exceeded"
+        ),
         _ => false,
     }
 }

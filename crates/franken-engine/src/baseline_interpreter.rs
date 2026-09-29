@@ -51853,9 +51853,11 @@ impl InterpreterCore {
     /// Map a host [`InterpreterError`] to the JS error-constructor name it
     /// should surface as when it escapes into a JS `try`/`catch` block
     /// (bd-8enww.4.3). Returns `None` for engine faults and resource limits
-    /// (budget, stack overflow, cancellation, containment, …) which must NOT
-    /// be swallowed by untrusted `catch` blocks — those keep propagating as
-    /// host errors to the eval boundary.
+    /// (budget, memory, cancellation, containment, …) which must NOT be
+    /// swallowed by untrusted `catch` blocks — those keep propagating as host
+    /// errors to the eval boundary. A stack overflow is a RangeError, as in
+    /// every JS engine (bd-9vouw.72): catching one unwinds the frames it
+    /// counted, so the depth limit still holds for whatever runs next.
     fn js_catchable_error_name(err: &InterpreterError) -> Option<&'static str> {
         match err {
             // Language type errors: `null.x`, bad receivers, non-callable
@@ -51864,7 +51866,9 @@ impl InterpreterCore {
             InterpreterError::TypeError { .. } | InterpreterError::ConstAssignment { .. } => {
                 Some("TypeError")
             }
-            InterpreterError::RangeError { .. } => Some("RangeError"),
+            InterpreterError::RangeError { .. } | InterpreterError::StackOverflow { .. } => {
+                Some("RangeError")
+            }
             InterpreterError::HostFilesystem { .. } | InterpreterError::HostProcess { .. } => {
                 Some("Error")
             }
@@ -51880,13 +51884,19 @@ impl InterpreterCore {
     /// [`InterpreterError`] so it can be bound as the catch parameter when a
     /// native runtime error is caught by JS `try`/`catch` (bd-8enww.4.3). The
     /// `message` preserves the interpreter's diagnostic string so logs can
-    /// still distinguish the originating fault.
+    /// still distinguish the originating fault; a stack overflow carries the
+    /// message code tests for (`Maximum call stack size exceeded`).
     fn native_error_to_thrown_value(
         &mut self,
         err: &InterpreterError,
     ) -> Result<Value, InterpreterError> {
         let name = Self::js_catchable_error_name(err).unwrap_or("Error");
-        let message = err.to_string();
+        let message = match err {
+            InterpreterError::StackOverflow { .. } => {
+                "Maximum call stack size exceeded".to_string()
+            }
+            _ => err.to_string(),
+        };
         let prototype = self.ensure_builtin_prototype(name)?;
         let error_id = self.alloc_object_with_prototype(Some(prototype))?;
         self.initialize_error_like_object(error_id, name, message)?;

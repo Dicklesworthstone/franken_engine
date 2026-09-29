@@ -12543,6 +12543,11 @@ pub struct InterpreterCore {
     /// immutable owner-module identity plus the module-local function index.
     /// SEED-SURFACE.
     function_prototypes: SeedTrackedField<BTreeMap<(ContentHash, u32), ObjectId>>,
+    /// Set once a built-in function may have a backing object in
+    /// `function_prototypes`; never cleared. Until then a property read on a
+    /// built-in skips the identity digest (a JSON encoding and two SHA-256
+    /// hashes) that locates one (bd-9vouw.17).
+    builtin_function_backings: bool,
     /// Lazily allocated prototype objects for modeled builtin constructors. SEED-SURFACE.
     builtin_prototypes: SeedTrackedField<BTreeMap<String, ObjectId>>,
     /// Current seed epoch for lazy materialization.
@@ -13539,6 +13544,7 @@ impl InterpreterCore {
             iterators: ReclaimableTable::new("iterator", Self::estimate_iterator_bytes),
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
+            builtin_function_backings: false,
             builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
             seed_epoch: 0,
             pending_lazy_seeds: Vec::new(),
@@ -31570,6 +31576,8 @@ impl InterpreterCore {
             self.registers.value = registers;
             self.heap.value = heap;
             self.function_prototypes.value = function_prototypes;
+            // A restored map may hold built-in backing objects.
+            self.builtin_function_backings = true;
             self.builtin_prototypes.value = builtin_prototypes;
             self.symbol_state.value = symbol_state;
             let committed_seed_surface_bytes = next_seed_surface_bytes
@@ -56499,9 +56507,7 @@ impl InterpreterCore {
                     ["valueOf", "toString"]
                 };
                 let backing = match module {
-                    Some(module) => self
-                        .function_own_property_key(module, &value)?
-                        .and_then(|key| self.function_prototypes.get(&key).copied()),
+                    Some(module) => self.function_own_property_object(module, &value)?,
                     None => None,
                 };
                 let mut primitive = None;
@@ -89761,6 +89767,9 @@ impl InterpreterCore {
         module: &Ir3Module,
         function: &Value,
     ) -> Result<Option<ObjectId>, InterpreterError> {
+        if matches!(function, Value::BuiltinFunction(_)) && !self.builtin_function_backings {
+            return Ok(None);
+        }
         Ok(self
             .function_own_property_key(module, function)?
             .and_then(|key| self.function_prototypes.get(&key).copied()))
@@ -89780,6 +89789,9 @@ impl InterpreterCore {
         }
         let backing = self.alloc_object_with_prototype(None)?;
         self.mutate_function_prototypes(|entries| entries.insert(key, backing));
+        if matches!(function, Value::BuiltinFunction(_)) {
+            self.builtin_function_backings = true;
+        }
         // bd-9vouw.17: from here on the backing object is the authority on the
         // function's own properties, so it starts with the standard `length`
         // and `name` (in that order, as OrdinaryFunctionCreate creates them).

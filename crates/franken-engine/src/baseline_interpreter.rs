@@ -40422,9 +40422,6 @@ impl InterpreterCore {
         let async_function_id = resumption_context.async_function_id;
         let result_register = resumption_context.result_register;
 
-        let previous_register_bytes = self
-            .registers_memory_bytes()
-            .saturating_add(self.register_labels_memory_bytes());
         // Only this async function object changes below, so its own bytes are
         // the component delta (bd-9vouw.31: no walk over every async object).
         let previous_async_bytes = self
@@ -40484,6 +40481,11 @@ impl InterpreterCore {
                 ),
             });
         }
+        // Only the restored range of the register file changes, so its bytes
+        // are the register component delta. Measuring the whole file walked
+        // every live frame twice per await.
+        let previous_register_bytes =
+            self.register_range_memory_bytes(saved_register_base..reg_end);
         let (saved_registers, saved_register_labels) = {
             let async_function = self
                 .async_functions
@@ -40525,9 +40527,7 @@ impl InterpreterCore {
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
         let next_async_bytes = Self::estimate_async_function_bytes(async_function);
-        let next_register_bytes = self
-            .registers_memory_bytes()
-            .saturating_add(self.register_labels_memory_bytes());
+        let next_register_bytes = self.register_range_memory_bytes(reg_start..reg_end);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_register_bytes)
@@ -83632,6 +83632,22 @@ impl InterpreterCore {
 
     fn register_labels_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.register_labels.iter().map(Self::estimate_label_bytes))
+    }
+
+    /// The share of [`Self::registers_memory_bytes`] plus
+    /// [`Self::register_labels_memory_bytes`] owned by `range`, which must lie
+    /// within both files.
+    fn register_range_memory_bytes(&self, range: std::ops::Range<usize>) -> u64 {
+        Self::saturating_sum(
+            self.registers[range.clone()]
+                .iter()
+                .map(Self::estimate_value_bytes),
+        )
+        .saturating_add(Self::saturating_sum(
+            self.register_labels[range]
+                .iter()
+                .map(Self::estimate_label_bytes),
+        ))
     }
 
     fn active_inline_callback_context_memory_bytes(&self) -> u64 {

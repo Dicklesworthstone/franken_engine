@@ -1019,9 +1019,7 @@ fn private_names_are_refused_not_dropped() {
 #[test]
 fn public_class_fields_parse_as_field_members() {
     use frankenengine_engine::ast::MethodKind;
-    // Fields separated only by a line break are bd-9vouw.81: the logical-line
-    // merger joins physical lines before the class body is parsed.
-    let cases: [(&str, &[(&str, bool)]); 6] = [
+    let cases: [(&str, &[(&str, bool)]); 8] = [
         ("class A { y = 2; }", &[("y", false)]),
         (
             "class A { y = 2; m() { return 1; } }",
@@ -1030,12 +1028,20 @@ fn public_class_fields_parse_as_field_members() {
         ("class A { static s = 3; }", &[("s", true)]),
         ("class A { x }", &[("x", false)]),
         (
+            "class A { a = 1\n b = 2\n m() {}\n static c }",
+            &[("a", false), ("b", false), ("m", false), ("c", true)],
+        ),
+        (
             "class A { handler = () => { return 1; }; }",
             &[("handler", false)],
         ),
         (
             "class A { 'q' = 1; get = 1; o = { v: 1 }.v; }",
             &[("q", false), ("get", false), ("o", false)],
+        ),
+        (
+            "class A { t = cond\n ? 1\n : 2\n u = a\n .b }",
+            &[("t", false), ("u", false)],
         ),
     ];
     for (source, expected) in cases {

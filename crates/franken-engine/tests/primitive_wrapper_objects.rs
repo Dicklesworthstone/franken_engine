@@ -106,6 +106,21 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const n = new Number(7); n.label = 'seven'; console.log(n.label, Object.keys(n).join(), n + 0);"#,
         "seven label 7",
     ),
+    (
+        "string_keys_values_entries",
+        r#"console.log(JSON.stringify(Object.keys('ab')), JSON.stringify(Object.values('ab')), JSON.stringify(Object.entries('ab')));"#,
+        r#"["0","1"] ["a","b"] [["0","a"],["1","b"]]"#,
+    ),
+    (
+        "string_wrapper_enumeration",
+        r#"const s = new String('xy'); s.extra = 1; console.log(Object.keys(s).join(), Object.values(s).join(), JSON.stringify(Object.entries(s)));"#,
+        r#"0,1,extra x,y,1 [["0","x"],["1","y"],["extra",1]]"#,
+    ),
+    (
+        "for_in_primitives",
+        r#"const a = []; for (const k in 'abc') a.push(k); const b = []; for (const k in 7) b.push(k); const c = []; for (const k in new String('q')) c.push(k); console.log(a.join(), b.length, c.join());"#,
+        "0,1,2 0 0",
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

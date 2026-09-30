@@ -270,6 +270,14 @@ pub fn is_language_operation_tag(tag: &str) -> bool {
         )
 }
 
+/// HostCall tag the lowering places after a generator's parameter prologue
+/// (bd-9vouw.49). Calling a generator function runs its parameter
+/// initializers and destructuring up to it, so their errors throw from the
+/// call (ES2020 14.4.10: FunctionDeclarationInstantiation precedes
+/// GeneratorStart). It carries no authority and does nothing when reached
+/// any other way.
+pub const GENERATOR_PROLOGUE_CAPABILITY: &str = "generator:prologue";
+
 /// Resolve one exact HostCall tag to its authority, IFC result contract, and
 /// production dispatcher. Unknown tags return `None`, which makes both the
 /// capability gate and provenance analysis fail high.
@@ -296,6 +304,13 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             HostcallDispatchBinding::Promise,
         ),
         "ifc.check_flow" => (
+            None,
+            HostcallResultContract::JoinInputs,
+            HostcallDispatchBinding::Internal,
+        ),
+        // The end of a generator's parameter prologue: the call runs the
+        // generator up to it (bd-9vouw.49); anywhere else it does nothing.
+        GENERATOR_PROLOGUE_CAPABILITY => (
             None,
             HostcallResultContract::JoinInputs,
             HostcallDispatchBinding::Internal,

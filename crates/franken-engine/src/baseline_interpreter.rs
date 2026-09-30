@@ -13116,6 +13116,13 @@ pub struct InterpreterCore {
     generator_resume_dst: Option<u32>,
     /// IFC label of the value yielded by the most recent generator suspension.
     generator_result_label: Label,
+    /// bd-9vouw.49: the generator a call is starting through its parameter
+    /// prologue; `generator_resume_with_async` takes it for that one run.
+    generator_prologue_pending: Option<u32>,
+    /// bd-9vouw.49: whether the running generator activation suspends at its
+    /// `generator:prologue` marker (set only for the run a call started;
+    /// saved and restored around nested generator resumptions).
+    suspend_at_generator_prologue: bool,
     /// Execution-local delegation, transferred with the complete activation
     /// when a nested generator or isolated async continuation runs.
     generator_delegation: Option<GeneratorDelegation>,
@@ -13972,6 +13979,8 @@ impl InterpreterCore {
             generator_yielded: false,
             generator_resume_dst: None,
             generator_result_label: Label::Public,
+            generator_prologue_pending: None,
+            suspend_at_generator_prologue: false,
             generator_delegation: None,
             async_functions: ReclaimableTable::new(
                 "async function",
@@ -44679,6 +44688,47 @@ impl InterpreterCore {
         )
     }
 
+    /// bd-9vouw.49: run a generator a call just created through its
+    /// parameter prologue, up to the `generator:prologue` marker the lowering
+    /// places after it. FunctionDeclarationInstantiation precedes
+    /// GeneratorStart (ES2020 14.4.10), so a throwing parameter initializer or
+    /// destructuring pattern throws from the call, not from the first
+    /// `next()`. Modules lowered without the marker keep the lazy start.
+    fn start_generator_through_prologue(
+        &mut self,
+        module: &Ir3Module,
+        gen_id: u32,
+    ) -> Result<(), InterpreterError> {
+        // The marker is in the module that lowered the generator function,
+        // which is where the generator runs (a required module's generator
+        // called from the main module, a `new Function` body).
+        let lowered_with_marker = self
+            .generators
+            .get(gen_id as usize)
+            .is_some_and(|generator| {
+                generator
+                    .owner_module
+                    .required_capabilities
+                    .iter()
+                    .any(|capability| {
+                        capability.0 == crate::capability::GENERATOR_PROLOGUE_CAPABILITY
+                    })
+            });
+        if !lowered_with_marker {
+            return Ok(());
+        }
+        let previous = self.generator_prologue_pending.replace(gen_id);
+        let outcome = self.generator_resume(
+            module,
+            gen_id,
+            GeneratorResumeKind::Next,
+            Value::Undefined,
+            Label::Public,
+        );
+        self.generator_prologue_pending = previous;
+        outcome.map(|_| ())
+    }
+
     fn generator_resume_with_async(
         &mut self,
         module: &Ir3Module,
@@ -44826,6 +44876,9 @@ impl InterpreterCore {
         let caller_generator_resume_dst = self.generator_resume_dst.take();
         let caller_generator_result_label =
             std::mem::replace(&mut self.generator_result_label, Label::Public);
+        let prologue_start = self.generator_prologue_pending.take() == Some(gen_id);
+        let caller_suspend_at_prologue =
+            std::mem::replace(&mut self.suspend_at_generator_prologue, prologue_start);
         let caller_execution = self.take_generator_execution();
         let previous_granted_capabilities =
             self.replace_with_contained_codegen_grant(contained_codegen_grant);
@@ -44868,6 +44921,7 @@ impl InterpreterCore {
             self.generator_yielded = caller_generator_yielded;
             self.generator_resume_dst = caller_generator_resume_dst;
             self.generator_result_label = caller_generator_result_label;
+            self.suspend_at_generator_prologue = caller_suspend_at_prologue;
             self.async_generator_runtime.active = caller_async_generator;
             let generator = &mut self.generators[generator_index];
             if phase == GeneratorPhase::SuspendedYield {
@@ -44975,6 +45029,7 @@ impl InterpreterCore {
         self.generator_yielded = caller_generator_yielded;
         self.generator_resume_dst = caller_generator_resume_dst;
         self.generator_result_label = caller_generator_result_label;
+        self.suspend_at_generator_prologue = caller_suspend_at_prologue;
         self.async_generator_runtime.active = caller_async_generator;
 
         match result {
@@ -46490,6 +46545,12 @@ impl InterpreterCore {
                             self.pop_generator_object_and_release();
                             return Err(error);
                         }
+                        if let Err(error) = self.start_generator_through_prologue(module, gen_id) {
+                            match self.route_isolated_explicit_throw(module, error)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -46721,6 +46782,17 @@ impl InterpreterCore {
                             self.pop_async_generator_object_and_release();
                             self.pop_generator_object_and_release();
                             return Err(error);
+                        }
+                        // bd-9vouw.49: an async generator binds its parameters
+                        // at the call too, and a parameter error throws from
+                        // the call (it does not reject a later next()).
+                        let backing = self.async_generators[async_gen_id as usize].generator_id;
+                        if let Err(error) = self.start_generator_through_prologue(module, backing) {
+                            self.complete_async_generator_activation(async_gen_id);
+                            match self.route_isolated_explicit_throw(module, error)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
                         }
                         self.ip += 1;
                         continue;
@@ -47130,6 +47202,12 @@ impl InterpreterCore {
                             self.pop_generator_object_and_release();
                             return Err(error);
                         }
+                        if let Err(error) = self.start_generator_through_prologue(module, gen_id) {
+                            match self.route_isolated_explicit_throw(module, error)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -47353,6 +47431,17 @@ impl InterpreterCore {
                             self.pop_generator_object_and_release();
                             return Err(error);
                         }
+                        // bd-9vouw.49: an async generator binds its parameters
+                        // at the call too, and a parameter error throws from
+                        // the call (it does not reject a later next()).
+                        let backing = self.async_generators[async_gen_id as usize].generator_id;
+                        if let Err(error) = self.start_generator_through_prologue(module, backing) {
+                            self.complete_async_generator_activation(async_gen_id);
+                            match self.route_isolated_explicit_throw(module, error)? {
+                                None => continue,
+                                Some(error) => return Err(error),
+                            }
+                        }
                         self.ip += 1;
                         continue;
                     }
@@ -47532,6 +47621,25 @@ impl InterpreterCore {
                             }
                         }
                     }
+                }
+                Ir3Instruction::HostCall {
+                    capability, dst, ..
+                } if self.suspend_at_generator_prologue
+                    && capability.0 == crate::capability::GENERATOR_PROLOGUE_CAPABILITY =>
+                {
+                    // bd-9vouw.49: the call that created this generator ran its
+                    // parameter prologue; suspend here as a yield that produces
+                    // no result. The first next() resumes at the next
+                    // instruction (its argument is discarded, as ES requires).
+                    self.ip += 1;
+                    self.write_reg(dst, Value::Undefined)?;
+                    self.generator_yielded = true;
+                    self.generator_resume_dst = Some(dst);
+                    self.generator_result_label = Label::Public;
+                    return Ok(DispatchOutcome::Complete(LabeledReturn {
+                        value: Value::Undefined,
+                        label: Label::Public,
+                    }));
                 }
                 Ir3Instruction::HostCall { .. } => {
                     return Ok(DispatchOutcome::ReentrantInstruction {

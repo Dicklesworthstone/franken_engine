@@ -40,7 +40,6 @@ enum Expect {
 // focused bugs filed from this corpus's first real run on 2026-09-23).
 const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
-const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 
 /// Case id -> expectation. Every corpus case must appear exactly once.
 /// Filled from the observed verdicts of the first run (2026-09-23): 20 match
@@ -54,8 +53,10 @@ const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 /// with Date methods, RegExp replace and the URI globals (861c1a92c /
 /// 247a2a99c, bd-9vouw.51-.53), 13 with BigInt arithmetic (bd-9vouw.54), 27
 /// once array literal elisions became holes, 32 with `Symbol.hasInstance`,
-/// 30 once `for await` ran the async iteration protocol, and 12 with the
-/// DataView Float64/Int16/BigInt64 accessors (2026-09-28).
+/// 30 once `for await` ran the async iteration protocol, 12 with the
+/// DataView Float64/Int16/BigInt64 accessors (2026-09-28), and 08 and 44 with
+/// the backtracking RegExp matcher for look-around and backreferences
+/// (bd-9vouw.89).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::Pass),
@@ -64,10 +65,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("05_async_order", Expect::Pass),
     ("06_map_set", Expect::Pass),
     ("07_json", Expect::Pass),
-    (
-        "08_regexp_named_lookbehind",
-        Expect::KnownFailure(REGEXP_GRAMMAR),
-    ),
+    ("08_regexp_named_lookbehind", Expect::Pass),
     ("09_regexp_replace", Expect::Pass),
     ("10_proxy_reflect", Expect::Pass),
     ("11_symbol_iter", Expect::Pass),
@@ -106,10 +104,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("41_int_overflow", Expect::Pass),
     ("42_int_overflow_loop", Expect::Pass),
     ("43_arguments_object", Expect::Pass),
-    (
-        "44_regexp_backref_lookahead",
-        Expect::KnownFailure(REGEXP_GRAMMAR),
-    ),
+    ("44_regexp_backref_lookahead", Expect::Pass),
     ("45_date_methods", Expect::Pass),
     ("46_catch_message", Expect::Pass),
     ("47_number_to_string", Expect::Pass),

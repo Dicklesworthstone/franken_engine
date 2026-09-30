@@ -64,7 +64,8 @@ use ghash::universal_hash::UniversalHash as _;
 use ghash::{GHash, universal_hash};
 use hmac::{Hmac, Mac};
 use md5::Md5;
-use regex::{Regex, RegexBuilder};
+use regex::RegexBuilder;
+use regexp_backtrack::{BacktrackRegExp, CompiledRegExp};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
@@ -84,6 +85,8 @@ mod object_integrity;
 mod package_resolution;
 mod primitive_conversion;
 mod reflect_invocation;
+mod regexp_backtrack;
+mod regexp_syntax;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
@@ -6976,6 +6979,9 @@ const REGEXP_CACHE_MAX_PROGRAM_BYTES: usize = 1024 * 1024;
 /// Lazy-DFA transition cache limit for a cached RegExp. It bounds only how
 /// much of the DFA is kept; matching falls back to other engines past it.
 const REGEXP_CACHE_MAX_DFA_BYTES: usize = 512 * 1024;
+/// Backtracking programs kept in the cache stay below this many
+/// instructions (a few hundred KiB at most).
+const REGEXP_CACHE_MAX_BACKTRACK_INSTRUCTIONS: usize = 4096;
 
 /// Not writable, not enumerable, configurable: a function's own `length` and
 /// `name` (ES2020 9.2.4 SetFunctionLength, 9.2.11 SetFunctionName, 17 for
@@ -12875,7 +12881,7 @@ pub struct InterpreterCore {
     recorded_effect_free_grants: BTreeSet<String>,
     /// Recently compiled RegExp patterns by (pattern, flags), oldest first.
     /// Owned by this interpreter so no other execution can observe it.
-    regexp_cache: RefCell<VecDeque<(String, String, Regex)>>,
+    regexp_cache: RefCell<VecDeque<(String, String, CompiledRegExp)>>,
     /// Mandatory runtime security observability surface. The runtime capability
     /// gate feeds real `record_capability_denial` calls here so the
     /// `capability_denial_total` counter and structured security log reflect
@@ -52931,26 +52937,26 @@ impl InterpreterCore {
         let regex = self.compile_regexp_pattern(source, flags)?;
         let mut pieces = Vec::new();
         if input.is_empty() {
-            if !regex.is_match("") {
+            if !regex.is_match("")? {
                 pieces.push(Value::str(""));
             }
             return Ok(pieces);
         }
         let mut last = 0usize;
-        for captures in regex.captures_iter(input) {
-            let Some(whole) = captures.get(0) else {
+        for spans in regex.all_captures(input)? {
+            let Some((start, end)) = spans[0] else {
                 continue;
             };
-            if whole.start() == whole.end()
-                && (whole.start() == 0 || whole.start() >= input.len() || whole.start() == last)
-            {
+            if start == end && (start == 0 || start >= input.len() || start == last) {
                 continue;
             }
-            pieces.push(Value::str(&input[last..whole.start()]));
-            for group in captures.iter().skip(1) {
-                pieces.push(group.map_or(Value::Undefined, |group| Value::str(group.as_str())));
+            pieces.push(Value::str(&input[last..start]));
+            for group in &spans[1..] {
+                pieces.push(
+                    group.map_or(Value::Undefined, |(from, to)| Value::str(&input[from..to])),
+                );
             }
-            last = whole.end();
+            last = end;
         }
         pieces.push(Value::str(&input[last..]));
         Ok(pieces)
@@ -53456,9 +53462,9 @@ impl InterpreterCore {
         &self,
         pattern: &str,
         flags: &str,
-    ) -> Result<Regex, InterpreterError> {
+    ) -> Result<CompiledRegExp, InterpreterError> {
         if pattern.len() > REGEXP_CACHE_MAX_PATTERN_BYTES {
-            return Self::build_regexp(&Self::regexp_builder(pattern, flags)?);
+            return Self::build_regexp(pattern, flags);
         }
         if let Some(regex) = self
             .regexp_cache
@@ -53472,14 +53478,23 @@ impl InterpreterCore {
             return Ok(regex);
         }
         let mut builder = Self::regexp_builder(pattern, flags)?;
-        let Ok(regex) = builder
+        let regex = match builder
             .size_limit(REGEXP_CACHE_MAX_PROGRAM_BYTES)
             .dfa_size_limit(REGEXP_CACHE_MAX_DFA_BYTES)
             .build()
-        else {
-            // Too large for the cache limits, or invalid: the default limits
-            // decide, and report the same error as an uncached compile.
-            return Self::build_regexp(&Self::regexp_builder(pattern, flags)?);
+        {
+            Ok(regex) => CompiledRegExp::Automaton(regex),
+            // Too large for the cache limits, or not expressible by `regex`:
+            // the default limits or the backtracking matcher decide. Only a
+            // small backtracking program is kept.
+            Err(_) => match Self::build_regexp(pattern, flags)? {
+                CompiledRegExp::Backtracking(regexp)
+                    if regexp.program_len() <= REGEXP_CACHE_MAX_BACKTRACK_INSTRUCTIONS =>
+                {
+                    CompiledRegExp::Backtracking(regexp)
+                }
+                uncached => return Ok(uncached),
+            },
         };
         let mut cache = self.regexp_cache.borrow_mut();
         if cache.len() == REGEXP_CACHE_ENTRIES {
@@ -53509,7 +53524,7 @@ impl InterpreterCore {
             }
         }
 
-        let mut builder = RegexBuilder::new(pattern);
+        let mut builder = RegexBuilder::new(&regexp_syntax::js_pattern_to_rust(pattern, flags));
         builder
             .case_insensitive(case_insensitive)
             .multi_line(multi_line)
@@ -53518,12 +53533,18 @@ impl InterpreterCore {
         Ok(builder)
     }
 
-    fn build_regexp(builder: &RegexBuilder) -> Result<Regex, InterpreterError> {
-        builder
-            .build()
-            .map_err(|error| InterpreterError::TypeError {
+    /// Compile under the default limits: the `regex` crate for the patterns
+    /// it can express, the backtracking matcher for look-around,
+    /// backreferences and the rest. A pattern neither accepts is invalid.
+    fn build_regexp(pattern: &str, flags: &str) -> Result<CompiledRegExp, InterpreterError> {
+        if let Ok(regex) = Self::regexp_builder(pattern, flags)?.build() {
+            return Ok(CompiledRegExp::Automaton(regex));
+        }
+        BacktrackRegExp::new(pattern, flags)
+            .map(|regexp| CompiledRegExp::Backtracking(Rc::new(regexp)))
+            .map_err(|message| InterpreterError::TypeError {
                 expected: "valid RegExp pattern".to_string(),
-                got: error.to_string(),
+                got: message,
             })
     }
 
@@ -53544,7 +53565,7 @@ impl InterpreterCore {
         }
         let regex = self.compile_regexp_pattern(&source, &flags)?;
         let input = Self::value_to_primitive_string(input);
-        Ok(Value::Bool(regex.is_match(&input)))
+        Ok(Value::Bool(regex.is_match(&input)?))
     }
 
     fn string_match_value(
@@ -53557,11 +53578,14 @@ impl InterpreterCore {
             if flags.contains('g') {
                 let result_id = self.alloc_array_with_prototype(None)?;
                 let mut count = 0usize;
-                for matched in regex.find_iter(input) {
+                for spans in regex.all_captures(input)? {
+                    let Some((from, to)) = spans[0] else {
+                        continue;
+                    };
                     self.set_object_property(
                         result_id,
                         count.to_string(),
-                        Value::str(matched.as_str().to_string()),
+                        Value::str(&input[from..to]),
                     )?;
                     count = count.saturating_add(1);
                 }
@@ -53581,11 +53605,19 @@ impl InterpreterCore {
                 .map_or(Value::Null, |(result, _)| result));
         }
 
-        let needle = self.value_to_string(pattern);
-        if let Some(index) = input.find(&needle) {
-            self.alloc_match_result_array(&needle, index, input)
-        } else {
-            Ok(Value::Null)
+        // ES2020 21.1.3.11 step 3: any other value is `new RegExp(value)`.
+        let regex = self.compile_regexp_pattern(&self.regexp_create_source(pattern), "")?;
+        Ok(self
+            .regexp_exec_at(&regex, input, 0, false)?
+            .map_or(Value::Null, |(result, _)| result))
+    }
+
+    /// The pattern `RegExpCreate(value, undefined)` compiles: `undefined` is
+    /// the empty pattern, anything else its string.
+    fn regexp_create_source(&self, pattern: &Value) -> String {
+        match pattern {
+            Value::Undefined => String::new(),
+            other => self.value_to_string(other),
         }
     }
 
@@ -53681,19 +53713,21 @@ impl InterpreterCore {
         self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
     }
 
+    /// ES2020 21.1.3.18 String.prototype.search: the index of the first
+    /// match in UTF-16 code units. Any value other than a RegExp is
+    /// `new RegExp(value)`.
     fn string_search_value(&self, input: &str, pattern: &Value) -> Result<Value, InterpreterError> {
-        if let Some((source, flags)) = self.regexp_source_flags_from_value(pattern) {
-            let regex = self.compile_regexp_pattern(&source, &flags)?;
-            return Ok(Value::Int(
-                regex
-                    .find(input)
-                    .map_or(-1, |matched| matched.start() as i64),
-            ));
-        }
-
-        let needle = self.value_to_string(pattern);
+        let (source, flags) = self
+            .regexp_source_flags_from_value(pattern)
+            .unwrap_or_else(|| (self.regexp_create_source(pattern), String::new()));
+        let regex = self.compile_regexp_pattern(&source, &flags)?;
         Ok(Value::Int(
-            input.find(&needle).map_or(-1, |index| index as i64),
+            regex
+                .captures_at(input, 0, false)?
+                .and_then(|spans| spans[0])
+                .map_or(-1, |(from, _)| {
+                    i64::try_from(input[..from].encode_utf16().count()).unwrap_or(i64::MAX)
+                }),
         ))
     }
 
@@ -53714,25 +53748,21 @@ impl InterpreterCore {
         let mut group_names: Vec<Option<String>> = Vec::new();
         if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
-            group_names = regex
-                .capture_names()
-                .skip(1)
-                .map(|name| name.map(str::to_string))
-                .collect();
-            let global = all || flags.contains('g');
-            for captures in regex.captures_iter(input) {
-                let Some(whole) = captures.get(0) else {
+            group_names = regex.group_names().into_iter().skip(1).collect();
+            let found = if all || flags.contains('g') {
+                regex.all_captures(input)?
+            } else {
+                regex.captures_at(input, 0, false)?.into_iter().collect()
+            };
+            for spans in found {
+                let Some((start, end)) = spans[0] else {
                     continue;
                 };
-                let groups = captures
+                let groups = spans[1..]
                     .iter()
-                    .skip(1)
-                    .map(|group| group.map(|group| group.as_str().to_string()))
+                    .map(|group| group.map(|(from, to)| input[from..to].to_string()))
                     .collect();
-                matches.push((whole.start(), whole.end(), groups));
-                if !global {
-                    break;
-                }
+                matches.push((start, end, groups));
             }
         } else {
             let needle = self.value_to_string(search);
@@ -53866,24 +53896,6 @@ impl InterpreterCore {
             index += ch.len_utf8().max(1);
         }
         output
-    }
-
-    fn alloc_match_result_array(
-        &mut self,
-        matched: &str,
-        index: usize,
-        input: &str,
-    ) -> Result<Value, InterpreterError> {
-        let result_id = self.alloc_array_with_prototype(None)?;
-        self.set_object_property(result_id, "0".to_string(), Value::str(matched.to_string()))?;
-        self.set_object_property(result_id, "index".to_string(), Value::Int(index as i64))?;
-        self.set_object_property(
-            result_id,
-            "input".to_string(),
-            Value::str(input.to_string()),
-        )?;
-        self.set_object_property(result_id, "length".to_string(), Value::Int(1))?;
-        Ok(Value::Object(result_id))
     }
 
     /// Coerce a `Number.prototype` receiver to an `f64`, mirroring the
@@ -65717,30 +65729,23 @@ impl InterpreterCore {
     /// `groups`, plus the match's end byte offset.
     fn regexp_exec_at(
         &mut self,
-        regex: &Regex,
+        regex: &CompiledRegExp,
         input: &str,
         start: usize,
         sticky: bool,
     ) -> Result<Option<(Value, usize)>, InterpreterError> {
-        let Some(captures) = regex.captures_at(input, start) else {
+        let Some(spans) = regex.captures_at(input, start, sticky)? else {
             return Ok(None);
         };
-        let Some(whole) = captures.get(0) else {
+        let Some((whole_start, whole_end)) = spans[0] else {
             return Ok(None);
         };
-        if sticky && whole.start() != start {
-            return Ok(None);
-        }
-        let mut values = Vec::with_capacity(captures.len());
-        values.push(Value::str(whole.as_str()));
-        values.extend(
-            captures
-                .iter()
-                .skip(1)
-                .map(|group| group.map_or(Value::Undefined, |group| Value::str(group.as_str()))),
-        );
+        let group_value = |span: Option<(usize, usize)>| {
+            span.map_or(Value::Undefined, |(from, to)| Value::str(&input[from..to]))
+        };
+        let values: Vec<Value> = spans.iter().map(|span| group_value(*span)).collect();
         let result = self.alloc_array_from_values(&values)?;
-        let index = input[..whole.start()].encode_utf16().count();
+        let index = input[..whole_start].encode_utf16().count();
         self.set_object_property(
             result,
             "index".to_string(),
@@ -65748,16 +65753,10 @@ impl InterpreterCore {
         )?;
         self.set_object_property(result, "input".to_string(), Value::str(input))?;
         let named: Vec<(String, Value)> = regex
-            .capture_names()
+            .group_names()
+            .into_iter()
             .enumerate()
-            .filter_map(|(slot, name)| {
-                name.map(|name| {
-                    let value = captures
-                        .get(slot)
-                        .map_or(Value::Undefined, |group| Value::str(group.as_str()));
-                    (name.to_string(), value)
-                })
-            })
+            .filter_map(|(slot, name)| name.map(|name| (name, group_value(spans[slot]))))
             .collect();
         let groups = if named.is_empty() {
             Value::Undefined
@@ -65769,7 +65768,7 @@ impl InterpreterCore {
             Value::Object(groups)
         };
         self.set_object_property(result, "groups".to_string(), groups)?;
-        Ok(Some((Value::Object(result), whole.end())))
+        Ok(Some((Value::Object(result), whole_end)))
     }
 
     /// ES2020 21.2.5.2 RegExp.prototype.exec: a global or sticky RegExp
@@ -94287,12 +94286,13 @@ mod active_builtin_regressions {
         };
         let sensitive = core.compile_regexp_pattern("ab+c", "").unwrap();
         let insensitive = core.compile_regexp_pattern("ab+c", "i").unwrap();
-        assert!(sensitive.is_match("xabbc") && !sensitive.is_match("ABBC"));
-        assert!(insensitive.is_match("ABBC"));
+        assert!(sensitive.is_match("xabbc").unwrap() && !sensitive.is_match("ABBC").unwrap());
+        assert!(insensitive.is_match("ABBC").unwrap());
         assert!(
             core.compile_regexp_pattern("ab+c", "i")
                 .unwrap()
                 .is_match("ABBC")
+                .unwrap()
         );
         assert_eq!(core.regexp_cache.borrow().len(), 2);
 
@@ -94302,22 +94302,32 @@ mod active_builtin_regressions {
                 core.compile_regexp_pattern(&source, "")
                     .unwrap()
                     .is_match(&source)
+                    .unwrap()
             );
         }
         assert_eq!(core.regexp_cache.borrow().len(), REGEXP_CACHE_ENTRIES);
         assert!(!cached(&core, "ab+c"));
 
-        // Unicode `\w{50}` compiles to about 4 MiB: valid and matched, not kept.
-        let large = core.compile_regexp_pattern(r"^\w{50}$", "").unwrap();
-        assert!(large.is_match(&"\u{e9}".repeat(50)));
-        assert!(!cached(&core, r"^\w{50}$"));
+        // `\p{L}{50}` compiles past the cache limits: valid and matched, not
+        // kept. (`\w` is ASCII in JavaScript, bd-9vouw.89, so `\w{50}` is small.)
+        let large = core.compile_regexp_pattern(r"^\p{L}{50}$", "u").unwrap();
+        assert!(large.is_match(&"\u{e9}".repeat(50)).unwrap());
+        assert!(!cached(&core, r"^\p{L}{50}$"));
         let long_source = "a".repeat(REGEXP_CACHE_MAX_PATTERN_BYTES + 1);
         assert!(
             core.compile_regexp_pattern(&long_source, "")
                 .unwrap()
                 .is_match(&long_source)
+                .unwrap()
         );
         assert!(!cached(&core, &long_source));
+
+        // Look-around runs on the backtracking matcher; its small program is
+        // kept like an automaton (bd-9vouw.89).
+        let lookahead = core.compile_regexp_pattern("a(?=b)", "").unwrap();
+        assert!(matches!(lookahead, CompiledRegExp::Backtracking(_)));
+        assert!(lookahead.is_match("ab").unwrap() && !lookahead.is_match("ac").unwrap());
+        assert!(cached(&core, "a(?=b)"));
 
         assert!(matches!(
             core.compile_regexp_pattern("(", ""),

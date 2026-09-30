@@ -57687,6 +57687,7 @@ impl InterpreterCore {
                 &mut self.event_loop.microtasks,
             )
             .expect("preflighted Promise.then mutation must remain valid");
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
         Ok(result)
     }
 
@@ -57737,6 +57738,7 @@ impl InterpreterCore {
             .promise_store
             .then_for_await(handle, label, &mut self.event_loop.microtasks)
             .expect("preflighted await reaction mutation must remain valid");
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
         Ok(result)
     }
 
@@ -57789,6 +57791,7 @@ impl InterpreterCore {
                 &mut self.event_loop.microtasks,
             )
             .expect("preflighted Promise fulfillment must remain valid");
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
         if let Err(error) =
             self.notify_promise_settled(handle, PromiseSettlement::Fulfilled(value), label)
         {
@@ -57862,6 +57865,7 @@ impl InterpreterCore {
                 &mut self.event_loop.microtasks,
             )
             .expect("preflighted Promise rejection must remain valid");
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
         if let Err(error) =
             self.notify_promise_settled(handle, PromiseSettlement::Rejected(reason), label)
         {
@@ -59184,6 +59188,7 @@ impl InterpreterCore {
                 self.promise_store
                     .register_native_adoption(source, target, label)
                     .expect("preflighted native promise adoption must remain valid");
+                self.settle_projected_promise_bytes(next_promise_bytes)?;
                 Ok(())
             }
         }
@@ -59264,7 +59269,7 @@ impl InterpreterCore {
             .saturating_add(self.promise_in_flight_task_bytes);
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.event_loop.microtasks.enqueue(task);
-        Ok(())
+        self.settle_projected_promise_bytes(next_promise_bytes)
     }
 
     /// Build a single-use resolve/reject capability function bound to
@@ -60505,6 +60510,7 @@ impl InterpreterCore {
             return Err(error);
         }
         self.event_loop.microtasks.enqueue(task);
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
         Ok(Value::Undefined)
     }
 
@@ -87870,6 +87876,25 @@ impl InterpreterCore {
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)
     }
 
+    /// A Promise operation that charged its projected bytes before mutating
+    /// (so the budget check stays ahead of every allocation) re-charges the
+    /// actual size once it has run. The projection counts each witness event
+    /// the operation appends, but a witness log that reaches twice its
+    /// retained length drops its oldest 1,024 events on that push
+    /// (bd-9vouw.71), so the runtime can end 64 KiB below the projection.
+    /// Async resumptions account by deltas (bd-j9r60), so nothing else
+    /// re-derives the estimate between these operations: without this the
+    /// over-charge grew by 64 KiB per eviction until a 24,000-await loop
+    /// failed a 2 MiB budget.
+    fn settle_projected_promise_bytes(
+        &mut self,
+        projected_promise_bytes: u64,
+    ) -> Result<(), InterpreterError> {
+        let actual_promise_bytes = self.promise_runtime_memory_bytes();
+        self.apply_memory_component_delta(projected_promise_bytes, actual_promise_bytes)
+            .map(|_| ())
+    }
+
     fn apply_scope_closure_call_stack_memory_delta(
         &mut self,
         previous_scope_bytes: u64,
@@ -98593,6 +98618,35 @@ mod async_runtime_tests_current {
             .dispatch_builtin_hostcall("builtin:ReflectGet", RegRange { start: 0, count: 2 }, None)
             .expect_err("revoked proxy access must fail closed");
         assert!(matches!(err, InterpreterError::TypeError { .. }));
+    }
+
+    #[test]
+    fn promise_witness_eviction_releases_its_projected_charge_bd_9vouw_71() {
+        // then/fulfill charge their projected bytes before mutating. Each
+        // round appends at least two witness events to the Promise store, so
+        // 1,500 rounds cross its 2,048-event bound, where a push drops the
+        // oldest 1,024 events instead of growing the log. The estimate must
+        // track the full walk after every operation: ignoring the eviction
+        // left 64 KiB charged per eviction, and a 24,000-await loop failed
+        // its 2 MiB budget.
+        let mut core = test_interpreter();
+        let entry_drift = core.memory_walk_drift();
+        for round in 0..1_500i64 {
+            let promise = core.create_promise().expect("create");
+            core.register_promise_then(promise, None, None, crate::ifc_artifacts::Label::Public)
+                .expect("then");
+            core.fulfill_promise(
+                promise,
+                crate::object_model::JsValue::Int(round),
+                crate::ifc_artifacts::Label::Public,
+            )
+            .expect("fulfill");
+            assert_eq!(core.memory_walk_drift(), entry_drift, "round {round}");
+        }
+        assert!(
+            core.promise_store.witness_log().len() < 2_048,
+            "the Promise witness log must have dropped events (the case under test)"
+        );
     }
 
     #[test]

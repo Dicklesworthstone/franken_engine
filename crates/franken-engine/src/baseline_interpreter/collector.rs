@@ -1432,6 +1432,9 @@ impl InterpreterCore {
             generator_yielded: _,
             generator_resume_dst: _,
             generator_result_label: _,
+            // A generator id (the object is traced from its value) and a flag.
+            generator_prologue_pending: _,
+            suspend_at_generator_prologue: _,
             generator_delegation,
             async_functions,
             async_resumption_contexts,

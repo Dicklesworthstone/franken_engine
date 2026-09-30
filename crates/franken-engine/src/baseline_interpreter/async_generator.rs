@@ -843,7 +843,7 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
-    fn complete_async_generator_activation(&mut self, id: u32) {
+    pub(super) fn complete_async_generator_activation(&mut self, id: u32) {
         let generator = &mut self.async_generators[id as usize];
         generator.phase = AsyncGeneratorPhase::Completed;
         generator.awaited = None;

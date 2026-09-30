@@ -4203,6 +4203,14 @@ struct ParameterPrologueState {
     child_capture_entries: Vec<(String, BindingId)>,
 }
 
+fn push_generator_prologue_end(body_ops: &mut Vec<Ir1Op>) {
+    body_ops.push(Ir1Op::HostCall {
+        capability: crate::capability::GENERATOR_PROLOGUE_CAPABILITY.to_string(),
+        arg_count: 0,
+    });
+    body_ops.push(Ir1Op::Discard);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_function_parameter_prologue(
     destructure_params: &[(String, &BindingPattern)],
@@ -6440,6 +6448,9 @@ fn lower_statement_to_ir1_with_flow(
                 body_scope,
                 &mut body_label_counter,
             )?;
+            if func.is_generator {
+                push_generator_prologue_end(&mut body_ops);
+            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
                 None,
@@ -6845,6 +6856,9 @@ fn lower_statement_to_ir1_with_flow(
                     m_scope,
                     &mut m_label_counter,
                 )?;
+                if method.is_generator {
+                    push_generator_prologue_end(&mut m_body_ops);
+                }
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     None,
@@ -17699,6 +17713,9 @@ fn lower_expression_to_ir1_inner(
                 body_scope,
                 &mut body_label_counter,
             )?;
+            if *is_generator {
+                push_generator_prologue_end(&mut body_ops);
+            }
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
                 name.as_deref(),
@@ -18509,6 +18526,9 @@ fn lower_expression_to_ir1_inner(
                     m_scope,
                     &mut m_label_counter,
                 )?;
+                if method.is_generator {
+                    push_generator_prologue_end(&mut m_body_ops);
+                }
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     name.as_deref(),

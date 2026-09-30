@@ -24,6 +24,25 @@ fn check(source: &str, node: &str) {
     );
 }
 
+/// Map.prototype, Set.prototype and String.prototype hold their @@iterator
+/// (Map's is `entries`, Set's `values`); only instances and primitives had
+/// it, so `typeof Map.prototype[Symbol.iterator]` was "undefined" (Test262
+/// String/prototype/Symbol.iterator/name and relatives).
+#[test]
+fn collection_and_string_prototypes_have_their_iterator() {
+    check(
+        "[typeof String.prototype[Symbol.iterator], typeof Map.prototype[Symbol.iterator], \
+         typeof Set.prototype[Symbol.iterator], \
+         Map.prototype[Symbol.iterator] === Map.prototype.entries, \
+         Set.prototype[Symbol.iterator] === Set.prototype.values, \
+         Map.prototype[Symbol.iterator] === new Map()[Symbol.iterator], \
+         [...String.prototype[Symbol.iterator].call('ab')].join(), \
+         [...Map.prototype[Symbol.iterator].call(new Map([[1, 2]]))].join(), \
+         Symbol.iterator in Map.prototype].join(' ')",
+        "function function function true true true a,b 1,2 true",
+    );
+}
+
 #[test]
 fn generator_objects_spread_into_arrays() {
     check(

@@ -264,6 +264,8 @@ pub fn is_language_operation_tag(tag: &str) -> bool {
                 | "builtin:ArgumentsObject"
                 | "builtin:ClassPrototypeLink"
                 | "builtin:ConstructSuperSpread"
+                | "builtin:ClassDefineField"
+                | "builtin:ClassInitStaticFields"
         )
 }
 

@@ -9257,11 +9257,15 @@ fn regex_literal_len_at(expr: &str, slash: usize) -> Option<usize> {
         .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '$'))
         .map_or(0, |(index, ch)| index + ch.len_utf8());
     // No next-character check: in expression position `/=` opens a regex too.
-    if !merge_logical_lines_slash_starts_regex(
-        before.chars().next_back(),
-        &before[identifier_start..],
-        None,
-    ) {
+    // After a spread `...` an operand starts (`[.../a/g[Symbol.matchAll](s)]`);
+    // a single `.` before `/` is a member access or `1./2`.
+    if !before.ends_with("...")
+        && !merge_logical_lines_slash_starts_regex(
+            before.chars().next_back(),
+            &before[identifier_start..],
+            None,
+        )
+    {
         return None;
     }
     // A regex literal never spans a line, so a `/` whose "literal" would

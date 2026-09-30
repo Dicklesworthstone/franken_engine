@@ -49,6 +49,17 @@ fn map_iterates_entries_in_insertion_order() {
     );
 }
 
+/// A regex literal right after a spread's `...` was read as a division by the
+/// statement scanner ("empty expression statement").
+#[test]
+fn a_regex_literal_can_follow_a_spread() {
+    check(
+        "[[.../ab/.exec('xab')].join(), [...'q', .../c(d)/.exec('cd')].join(), \
+         (function () { return [...arguments, .../z/g.exec('z')].length; })(1, 2)].join(' ');",
+        "ab q,cd,d 3",
+    );
+}
+
 #[test]
 fn set_iterates_values_in_insertion_order() {
     check("[...new Set([3, 1, 3, 2])].join();", "3,1,2");

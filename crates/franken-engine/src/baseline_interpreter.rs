@@ -5536,11 +5536,13 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
 
 /// `Reflect` members installed on the first-class `Reflect` object; each is
 /// the hostcall the lowering routes a direct `Reflect.<member>(...)` call to.
-const REFLECT_MEMBERS: [&str; 11] = [
+const REFLECT_MEMBERS: [&str; 13] = [
     "apply",
     "construct",
+    "defineProperty",
     "deleteProperty",
     "get",
+    "getOwnPropertyDescriptor",
     "getPrototypeOf",
     "has",
     "isExtensible",
@@ -80015,6 +80017,50 @@ impl InterpreterCore {
                 };
                 self.join_pending_hostcall_stream_label(obj_id)?;
                 self.own_property_descriptor_value(obj_id, &prop_name)
+            }
+
+            // ES2020 26.1.7 Reflect.getOwnPropertyDescriptor: the
+            // Object.getOwnPropertyDescriptor result, except that a non-object
+            // target is a TypeError instead of being converted.
+            "builtin:ReflectGetOwnPropertyDescriptor" => {
+                let target = self.arg_or_undefined(args, 0)?;
+                if !target.is_object_like() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object target for Reflect.getOwnPropertyDescriptor".to_string(),
+                        got: target.type_name().to_string(),
+                    });
+                }
+                self.dispatch_builtin_hostcall_inner(
+                    "builtin:ObjectGetOwnPropertyDescriptor",
+                    args,
+                    module,
+                )
+            }
+
+            // ES2020 26.1.3 Reflect.defineProperty: Object.defineProperty
+            // that reports whether the definition succeeded instead of
+            // throwing. A non-object target or attributes value is still a
+            // TypeError. No-claim: a malformed but object-shaped descriptor
+            // (both `get` and `value`) answers false where the spec throws.
+            "builtin:ReflectDefineProperty" => {
+                let target = self.arg_or_undefined(args, 0)?;
+                let attributes = self.arg_or_undefined(args, 2)?;
+                if !target.is_object_like() || !attributes.is_object_like() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object target and attributes for Reflect.defineProperty"
+                            .to_string(),
+                        got: format!("{}, {}", target.type_name(), attributes.type_name()),
+                    });
+                }
+                match self.dispatch_builtin_hostcall_inner(
+                    "builtin:ObjectDefineProperty",
+                    args,
+                    module,
+                ) {
+                    Ok(_) => Ok(Value::Bool(true)),
+                    Err(InterpreterError::TypeError { .. }) => Ok(Value::Bool(false)),
+                    Err(error) => Err(error),
+                }
             }
 
             "builtin:ObjectGetOwnPropertyDescriptors" => {

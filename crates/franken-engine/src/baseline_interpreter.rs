@@ -961,6 +961,29 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// The early SyntaxError of a regular expression literal (ES2020 12.2.8.1),
+/// or `None` when it may be valid: duplicate or unknown flags, `u` with `v`,
+/// or a pattern that both the backtracking parser and the `regex` crate
+/// reject. A pattern either one accepts is left to the runtime, which runs
+/// it there, so no program that runs today is refused at parse time.
+pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<String> {
+    const FLAGS: &str = "dgimsuvy";
+    let mut seen = [false; FLAGS.len()];
+    let flags_valid = flags.chars().all(|flag| {
+        FLAGS
+            .find(flag)
+            .is_some_and(|index| !std::mem::replace(&mut seen[index], true))
+    }) && !(flags.contains('u') && flags.contains('v'));
+    if !flags_valid {
+        return Some(format!("Invalid regular expression flags '{flags}'"));
+    }
+    let message = BacktrackRegExp::syntax_error(pattern, flags)?;
+    let automaton_accepts = InterpreterCore::regexp_builder(pattern, flags)
+        .is_ok_and(|builder| builder.build().is_ok());
+    (!automaton_accepts)
+        .then(|| format!("Invalid regular expression: /{pattern}/{flags}: {message}"))
+}
+
 /// Canonical key used by the live gate, decision/witness evidence, and E9's
 /// pruned-dispatch table. The runtime accepts several route spellings for one
 /// logical authority; they must retain one evidence identity or alias choice

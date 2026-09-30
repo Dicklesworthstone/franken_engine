@@ -118,6 +118,15 @@ impl BacktrackRegExp {
         })
     }
 
+    /// The SyntaxError message this module's parser gives `pattern` under
+    /// `flags`, or `None` when it parses. Parse only: a valid pattern can
+    /// still be too large to compile. The parser is lenient in some `u`-mode
+    /// corners, so `None` does not prove validity.
+    pub(super) fn syntax_error(pattern: &str, flags: &str) -> Option<String> {
+        let unicode = flags.contains('u') || flags.contains('v');
+        Parser::new(pattern, unicode).pattern().err()
+    }
+
     /// Compiled instructions, a measure of the pattern's memory.
     pub(super) fn program_len(&self) -> usize {
         self.program.len()

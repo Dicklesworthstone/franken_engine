@@ -5430,7 +5430,7 @@ const GLOBAL_OBJECT_MEMBERS: [&str; 16] = [
 
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
 /// list the lowering declares factory hostcalls for).
-const GLOBAL_FUNCTION_VALUES: [&str; 8] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
+const GLOBAL_FUNCTION_VALUES: [&str; 12] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
 
 /// Name of a first-class static builtin, or `None` if `tag` is not one the
 /// shared lowering tables can produce. `None` is also the dispatch guard: a
@@ -77234,11 +77234,19 @@ impl InterpreterCore {
     }
 
     fn throw_querystring_invalid_uri_error(&mut self) -> InterpreterError {
+        self.throw_uri_malformed(Some("ERR_INVALID_URI"))
+    }
+
+    /// Throw a guest `URIError: URI malformed` (ES2020 18.2.6.1.2 Decode),
+    /// with Node's `code` property when `code` is given.
+    fn throw_uri_malformed(&mut self, code: Option<&str>) -> InterpreterError {
         let thrown = (|| {
             let prototype = self.ensure_builtin_prototype("URIError")?;
             let error_id = self.alloc_object_with_prototype(Some(prototype))?;
             self.initialize_error_like_object(error_id, "URIError", "URI malformed".to_string())?;
-            self.set_object_property(error_id, "code".to_string(), Value::str("ERR_INVALID_URI"))?;
+            if let Some(code) = code {
+                self.set_object_property(error_id, "code".to_string(), Value::str(code))?;
+            }
             Ok::<Value, InterpreterError>(Value::Object(error_id))
         })();
         let thrown = match thrown {
@@ -84523,71 +84531,47 @@ impl InterpreterCore {
 
             // builtin:ArrayPrototypeFindIndex - Duplicate removed, consolidated to line 10807
             "builtin:EncodeURIComponent" => {
-                // encodeURIComponent() implementation using shared UTF-8 percent codec
-                if args.count == 0 {
-                    return Ok(Value::str("undefined"));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let input_str = value_to_string_for_uri(&value);
+                // encodeURIComponent(value): slot-0 convention, shared by direct
+                // calls and the first-class value.
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let input_str = self.value_to_string(&value);
                 let encoded = percent_encode_utf8(&input_str, should_encode_uri_component);
 
                 Ok(Value::str(encoded))
             }
 
             "builtin:DecodeURIComponent" => {
-                // decodeURIComponent() implementation using shared UTF-8 percent codec
-                if args.count == 0 {
-                    return Ok(Value::str("undefined"));
+                // decodeURIComponent(value): slot-0 convention, shared by direct
+                // calls and the first-class value. A malformed escape is a
+                // URIError (ES2020 18.2.6.1.2), which callers catch.
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let encoded_str = self.value_to_string(&value);
+                match percent_decode_utf8(&encoded_str, "") {
+                    Some(decoded) => Ok(Value::str(decoded)),
+                    None => Err(self.throw_uri_malformed(None)),
                 }
-
-                let value = self.read_reg(args.start + 1)?;
-                let encoded_str = value_to_string_for_uri(&value);
-
-                let decoded = match percent_decode_utf8(&encoded_str) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        // In JavaScript, decodeURIComponent throws URIError for invalid sequences
-                        // For now, return the original string to avoid breaking existing code
-                        encoded_str
-                    }
-                };
-
-                Ok(Value::str(decoded))
             }
 
             "builtin:EncodeURI" => {
-                // encodeURI() implementation using shared UTF-8 percent codec
-                if args.count == 0 {
-                    return Ok(Value::str("undefined"));
-                }
-
-                let value = self.read_reg(args.start + 1)?;
-                let input_str = value_to_string_for_uri(&value);
+                // encodeURI(value): slot-0 convention, shared by direct
+                // calls and the first-class value.
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let input_str = self.value_to_string(&value);
                 let encoded = percent_encode_utf8(&input_str, should_encode_uri);
 
                 Ok(Value::str(encoded))
             }
 
             "builtin:DecodeURI" => {
-                // decodeURI() implementation using shared UTF-8 percent codec
-                if args.count == 0 {
-                    return Ok(Value::str("undefined"));
+                // decodeURI(value): slot-0 convention, shared by direct
+                // calls and the first-class value. A malformed escape is a
+                // URIError (ES2020 18.2.6.1.2), which callers catch.
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let encoded_str = self.value_to_string(&value);
+                match percent_decode_utf8(&encoded_str, ";/?:@&=+$,#") {
+                    Some(decoded) => Ok(Value::str(decoded)),
+                    None => Err(self.throw_uri_malformed(None)),
                 }
-
-                let value = self.read_reg(args.start + 1)?;
-                let encoded_str = value_to_string_for_uri(&value);
-
-                let decoded = match percent_decode_utf8(&encoded_str) {
-                    Ok(s) => s,
-                    Err(_) => {
-                        // In JavaScript, decodeURI throws URIError for invalid sequences
-                        // For now, return the original string to avoid breaking existing code
-                        encoded_str
-                    }
-                };
-
-                Ok(Value::str(decoded))
             }
 
             "builtin:SetTimeout" | "builtin:SetInterval" | "builtin:SetImmediate" => {
@@ -96104,20 +96088,6 @@ fn unescape_code_units(units: &[u16]) -> Vec<u16> {
 // Shared UTF-8 Percent Codec
 // ---------------------------------------------------------------------------
 
-/// Convert a JavaScript value to string for URI encoding.
-fn value_to_string_for_uri(value: &Value) -> String {
-    match value {
-        Value::Str(s) => s.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Undefined => "undefined".to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Object(_) => "[object Object]".to_string(),
-        _ => "[object Object]".to_string(),
-    }
-}
-
 /// Check if a character should be encoded in a URI context.
 /// Based on RFC 3986 unreserved characters: ALPHA / DIGIT / "-" / "." / "_" / "~"
 fn is_uri_unreserved(c: char) -> bool {
@@ -96165,28 +96135,58 @@ where
 }
 
 /// Percent-decode a URI-encoded string, handling UTF-8 sequences properly.
-fn percent_decode_utf8(encoded: &str) -> Result<String, &'static str> {
-    let mut bytes = Vec::new();
-    let mut chars = encoded.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            // Collect hex digits
-            let hex1 = chars.next().ok_or("Incomplete percent sequence")?;
-            let hex2 = chars.next().ok_or("Incomplete percent sequence")?;
-
-            let hex_str = format!("{}{}", hex1, hex2);
-            let byte_val =
-                u8::from_str_radix(&hex_str, 16).map_err(|_| "Invalid hex in percent sequence")?;
-            bytes.push(byte_val);
-        } else {
-            // Non-percent character - convert to UTF-8 bytes
-            let char_bytes = c.to_string().into_bytes();
-            bytes.extend(char_bytes);
+/// Decode (ES2020 18.2.6.1.2): each `%XX` escape of an ASCII character is
+/// that character unless it is in `reserved` (decodeURI keeps `%2F` and
+/// its kin as written), and a multi-byte sequence must be complete,
+/// well-formed UTF-8 (no overlong forms or surrogates). `None` is the
+/// URIError case.
+fn percent_decode_utf8(encoded: &str, reserved: &str) -> Option<String> {
+    fn escaped_byte(bytes: &[u8], at: usize) -> Option<u8> {
+        if bytes.get(at) != Some(&b'%') {
+            return None;
         }
+        let hex = bytes.get(at + 1..at + 3)?;
+        if !hex.iter().all(u8::is_ascii_hexdigit) {
+            return None;
+        }
+        u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
     }
 
-    String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 sequence")
+    let bytes = encoded.as_bytes();
+    let mut out = String::with_capacity(encoded.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            let ch = encoded[index..].chars().next()?;
+            out.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+        let lead = escaped_byte(bytes, index)?;
+        if lead < 0x80 {
+            let ch = char::from(lead);
+            if reserved.contains(ch) {
+                out.push_str(&encoded[index..index + 3]);
+            } else {
+                out.push(ch);
+            }
+            index += 3;
+            continue;
+        }
+        let length = match lead.leading_ones() {
+            2 => 2,
+            3 => 3,
+            4 => 4,
+            _ => return None,
+        };
+        let mut sequence = Vec::with_capacity(length);
+        for position in 0..length {
+            sequence.push(escaped_byte(bytes, index + position * 3)?);
+        }
+        out.push_str(std::str::from_utf8(&sequence).ok()?);
+        index += length * 3;
+    }
+    Some(out)
 }
 
 // ---------------------------------------------------------------------------

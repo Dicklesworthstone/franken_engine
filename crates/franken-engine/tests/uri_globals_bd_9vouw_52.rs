@@ -37,3 +37,41 @@ fn a_local_binding_shadows_the_global() {
         "local:a"
     );
 }
+
+/// Decode (ES2020 18.2.6.1.2): `decodeURI` keeps the escapes of reserved
+/// characters as written, a malformed escape or ill-formed UTF-8
+/// (truncated, overlong, a surrogate, a 5-byte lead) is a catchable
+/// `URIError: URI malformed`, a missing argument is `undefined`, and the
+/// argument's string form is ToString's (an array joins, 1e21). Before
+/// this, `decodeURI` decoded `%2F` too, every malformed input came back
+/// unchanged (so `try { decodeURIComponent(s) } catch` never caught), and
+/// a call with no argument read a neighboring register.
+#[test]
+fn decode_keeps_reserved_escapes_and_rejects_malformed_input() {
+    assert_eq!(
+        eval_to_string(
+            "[decodeURI('%2F%3B%41%23%3f'), decodeURIComponent('%2F%3B%41%23%3f'), \
+             decodeURI('%C3%A9%20'), encodeURIComponent(), decodeURI(), \
+             encodeURIComponent([1, 2]), encodeURI(1e21)].join('|');"
+        ),
+        "%2F%3BA%23%3f|/;A#?|é |undefined|undefined|1%2C2|1e+21"
+    );
+    assert_eq!(
+        eval_to_string(
+            "function attempt(f) { try { return f(); } catch (e) { \
+             return e.name + ':' + e.message + ':' + (e instanceof URIError); } } \
+             ['%', '%4', '%GG', '%+1', '%C0%80', '%E2%82', '%E2%82%', '%ED%A0%80', \
+             '%F8%80%80%80%80', 'ok%41'].map((s) => attempt(() => decodeURIComponent(s))).join('|');"
+        ),
+        "URIError:URI malformed:true|URIError:URI malformed:true|URIError:URI malformed:true|\
+         URIError:URI malformed:true|URIError:URI malformed:true|URIError:URI malformed:true|\
+         URIError:URI malformed:true|URIError:URI malformed:true|URIError:URI malformed:true|okA"
+    );
+    assert_eq!(
+        eval_to_string(
+            "function safe(s) { try { return decodeURIComponent(s); } catch (e) { return 'raw:' + s; } } \
+             ['a%20b', '%E0%A4%A', 'x%'].map(safe).join('|');"
+        ),
+        "a b|raw:%E0%A4%A|raw:x%"
+    );
+}

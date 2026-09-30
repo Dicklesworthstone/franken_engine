@@ -48,6 +48,20 @@ fn btoa_and_atob_are_first_class_values() {
     );
 }
 
+/// The URI codecs were call-only: path-to-regexp's
+/// `options.decode || decodeURIComponent` threw "decodeURIComponent is not
+/// defined".
+#[test]
+fn uri_codecs_are_first_class_values() {
+    check(
+        "const d = decodeURIComponent; const opts = {}; \
+         const decode = opts.decode || decodeURIComponent; \
+         [d('%41'), decode('%E2%82%AC'), typeof encodeURI, encodeURIComponent.name, \
+         decodeURI.length, [' ', '/'].map(encodeURIComponent).join(), encodeURI('a b/c')].join('|')",
+        "A|€|function|encodeURIComponent|1|%20,%2F|a%20b/c",
+    );
+}
+
 #[test]
 fn btoa_and_atob_errors() {
     check(

@@ -5177,6 +5177,16 @@ fn parse_expression(
         ));
     }
 
+    // Spread element `...AssignmentExpression` (ES2020 12.2.5): the spread
+    // owns the whole element, so it is taken before the arrow, assignment,
+    // conditional and binary splits. After them, `[...a ?? [], 1]` and
+    // `[...c ? x : y]` became a `??` or `?:` whose operand was the spread,
+    // and the array held the operand's value instead of its elements.
+    if let Some(rest) = expression.strip_prefix("...") {
+        let inner = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+        return Ok(Expression::SpreadElement(Box::new(inner)));
+    }
+
     // Arrow function: lowest precedence (lower than assignment).
     if let Some(result) = try_parse_arrow_function(expression, span, context, recursion_depth) {
         return result;
@@ -5427,12 +5437,6 @@ fn parse_primary_expression(
             )?))
         };
         return Ok(Expression::Yield { argument, delegate });
-    }
-
-    // spread element: `...expr`
-    if let Some(rest) = expression.strip_prefix("...") {
-        let inner = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
-        return Ok(Expression::SpreadElement(Box::new(inner)));
     }
 
     // new expression: `new Foo(args)`

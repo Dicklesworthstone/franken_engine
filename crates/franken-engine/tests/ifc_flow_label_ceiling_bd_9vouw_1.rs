@@ -241,17 +241,17 @@ fn guest_conversion_methods_cannot_launder_secrets_bd_9vouw_37() {
     assert_secret_denied(
         "secret_from_to_string_in_concat",
         "const o = { toString(){ return secret } }; console.log('' + o);",
-        Label::TopSecret,
+        Label::Secret,
     );
     assert_secret_denied(
         "secret_from_value_of_in_sum",
         "const o = { valueOf(){ return secret } }; console.log(o + 1);",
-        Label::TopSecret,
+        Label::Secret,
     );
     assert_secret_denied(
         "secret_from_to_string_in_template",
         "const o = { toString(){ return secret } }; console.log(`${o}`);",
-        Label::TopSecret,
+        Label::Secret,
     );
 }
 

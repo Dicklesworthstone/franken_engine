@@ -30542,6 +30542,14 @@ fn simulate_ir2_flow_labels(
                 if hostcall_is_operand_derived && capability == "builtin:CryptoTimingSafeEqual" {
                     result_shape = FlowValueShape::Primitive;
                 }
+                // bd-9vouw.19: `crypto.randomUUID()` returns a string (runtime
+                // crypto_random_uuid); its Secret label is the result
+                // contract. Without the primitive shape, every later finite
+                // operation on the UUID (an fs path, a string method) failed
+                // high to TopSecret instead of carrying the Secret operand.
+                if hostcall_is_operand_derived && capability == "builtin:CryptoRandomUUID" {
+                    result_shape = FlowValueShape::Primitive;
+                }
                 // bd-dign3 follow-up: the zlib sync family returns
                 // engine-owned Buffers; the authenticated BufferObject shape
                 // routes their toString/equals reads through the audited
@@ -32082,6 +32090,17 @@ mod tests {
     fn secret_source_op() -> Ir1Op {
         Ir1Op::HostCall {
             capability: "random_read".to_string(),
+            arg_count: 0,
+        }
+    }
+
+    /// A Secret string, as the keyword string literals these fixtures used to
+    /// load: `crypto.randomUUID()`, whose result the flow analysis knows is a
+    /// primitive. A finite operation on it (a string method, a crypto input)
+    /// joins its Secret label, where an opaque `random_read` value fails high.
+    fn secret_string_op() -> Ir1Op {
+        Ir1Op::HostCall {
+            capability: "builtin:CryptoRandomUUID".to_string(),
             arg_count: 0,
         }
     }
@@ -34366,7 +34385,7 @@ mod tests {
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-callee".into()),
                 },
-                secret_source_op(),
+                secret_string_op(),
                 Ir1Op::LoadLiteral {
                     value: Ir1Literal::String("public-arg".into()),
                 },
@@ -38395,7 +38414,7 @@ mod tests {
 
     #[test]
     fn crypto_set_auth_tag_catch_joins_receiver_and_tag_bd_1by6p() {
-        // bd-9vouw.19: the secret tag is an entropy read made before the
+        // bd-9vouw.19: the secret tag is a UUID string read before the
         // protected region, so only setAuthTag's own failure reaches the catch.
         for (tag_value, expected_label, expected_declassification) in [
             ("public-auth-tag", Label::Internal, false),
@@ -38404,7 +38423,7 @@ mod tests {
             let (tag_setup, tag_op) = if tag_value == "entropy" {
                 (
                     vec![
-                        secret_source_op(),
+                        secret_string_op(),
                         Ir1Op::StoreBinding { binding_id: 9 },
                         Ir1Op::Pop,
                     ],

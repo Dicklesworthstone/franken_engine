@@ -53776,7 +53776,7 @@ impl InterpreterCore {
         let options = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
         let options = self.collation_options(&options)?;
         let ordering =
-            collation::locale_compare(&this_str.as_utf8_projection(), &that_string, &options);
+            collation::locale_compare(this_str.as_utf8_projection(), &that_string, &options);
         Ok(Value::Int(ordering as i64))
     }
 

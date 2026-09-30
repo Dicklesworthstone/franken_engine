@@ -5198,7 +5198,7 @@ fn parse_expression(
     if let Some((end, pattern, flags)) = leading_regexp_literal(expression) {
         let tail = expression[end..].trim_start();
         if tail.is_empty() {
-            return Ok(Expression::RegExpLiteral { pattern, flags });
+            return regexp_literal_expression(pattern, flags, span, context);
         }
         if (tail.starts_with('.') || tail.starts_with('[') || tail.starts_with('('))
             && let Some(result) = try_parse_postfix(expression, span, context, recursion_depth)
@@ -5297,7 +5297,7 @@ fn parse_primary_expression(
 
     // Regex literal: /pattern/flags
     if let Some((pattern, flags)) = parse_regexp_literal(expression) {
-        return Ok(Expression::RegExpLiteral { pattern, flags });
+        return regexp_literal_expression(pattern, flags, span, context);
     }
 
     if let Some(value) = parse_bigint_numeric_literal(expression) {
@@ -9223,6 +9223,26 @@ fn unescape_string_literal(inner: &str) -> Option<String> {
 ///
 /// The pattern may contain escaped slashes (`\/`) or character classes with
 /// slashes (`[/]`). Flags are the standard ECMAScript regex flags: g, i, m, s, u, y.
+/// A regular expression literal, or its early SyntaxError (ES2020 12.2.8.1:
+/// invalid flags, or a pattern the runtime could not run either).
+fn regexp_literal_expression(
+    pattern: String,
+    flags: String,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<Expression> {
+    if let Some(message) = crate::baseline_interpreter::regexp_literal_early_error(&pattern, &flags)
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            message,
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(Expression::RegExpLiteral { pattern, flags })
+}
+
 fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
     let input = input.trim();
     let (end, pattern, flags) = leading_regexp_literal(input)?;
@@ -9302,11 +9322,11 @@ fn leading_regexp_literal(input: &str) -> Option<(usize, String, String)> {
             // Found closing slash
             let pattern = &input[1..i];
             let rest = &input[i + 1..];
-            // Parse flags (g, i, m, s, u, y, d)
+            // Parse flags (d, g, i, m, s, u, v, y)
             let mut flags = String::new();
             let mut end = i + 1;
             for (offset, fc) in rest.char_indices() {
-                if matches!(fc, 'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd') {
+                if matches!(fc, 'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd' | 'v') {
                     flags.push(fc);
                     end = i + 1 + offset + fc.len_utf8();
                 } else {

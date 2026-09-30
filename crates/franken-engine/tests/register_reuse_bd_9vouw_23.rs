@@ -786,3 +786,50 @@ fn calls_inside_one_expression_release_their_temporaries() {
         );
     }
 }
+
+/// underscore 1.13.6 builds `allExports = { __proto__: null, VERSION:
+/// VERSION, ... }` with ~150 entries inside a factory holding its functions.
+/// A literal with a `__proto__:` entry stayed on the batch path, which holds
+/// every entry in a register at once, so it ran the fixed 256-register frame
+/// out ("register 256 out of bounds"). It now builds entry by entry like any
+/// large literal, setting the prototype at its entry.
+#[test]
+fn large_literal_with_a_proto_entry_fits_the_fixed_lane() {
+    let functions: String = (0..150)
+        .map(|i| format!("function fn{i}() {{ return {i}; }}\n"))
+        .collect();
+    let entries: String = (0..150).map(|i| format!("fn{i}: fn{i},\n")).collect();
+    let literal = format!(
+        "function factory() {{\n{functions}var allExports = {{\n__proto__: null,\n{entries}}};\n"
+    );
+    // The fixed lane grants no builtin authority, so it observes the null
+    // prototype through the missing inherited `toString`.
+    let fixed = format!(
+        "{literal}return (allExports.toString === undefined) + ':' + allExports.fn149();\n}}\nfactory();"
+    );
+    assert_eq!(fixed_lane_value(&fixed), "true:149");
+    let full = format!(
+        "{literal}return [Object.getPrototypeOf(allExports) === null, Object.keys(allExports).length,\n\
+         allExports.fn149()].join();\n}}\nfactory();"
+    );
+    check("150-entry literal with __proto__", &full, "true,150,149");
+}
+
+/// A literal with a spread or an accessor is built entry by entry too, and
+/// its `__proto__:` entry was lost there: it built a one-property temporary
+/// whose own prototype it set, then spread nothing from it.
+#[test]
+fn proto_entries_set_the_prototype_on_incrementally_built_literals() {
+    check(
+        "__proto__ with spread and accessor",
+        "var p = { tag: 'p' };\
+         var o1 = { __proto__: p, ...{ a: 1 } };\
+         var o2 = { __proto__: p, get x() { return 1; } };\
+         var o3 = { __proto__: 5, ...{} };\
+         var o4 = { __proto__: null, ...{ b: 2 } };\
+         [Object.getPrototypeOf(o1) === p, o1.a, o1.tag, Object.getPrototypeOf(o2) === p, o2.x,\
+          Object.getPrototypeOf(o3) === Object.prototype, Object.getPrototypeOf(o4) === null,\
+          o4.b, Object.keys(o1).join('')].join();",
+        "true,1,p,true,1,true,true,2,a",
+    );
+}

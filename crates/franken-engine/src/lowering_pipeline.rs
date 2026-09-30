@@ -17377,15 +17377,8 @@ fn lower_expression_to_ir1_inner(
                 .iter()
                 .any(|prop| prop.kind != ObjectPropertyKind::Data);
             // bd-9vouw.23: as for arrays, a large literal is built one entry
-            // at a time so its entries' registers are reused. A literal
-            // `__proto__:` entry sets the prototype, which the batch path
-            // handles, so such literals stay batched.
-            let large_plain = properties.len() > MAX_BATCH_LITERAL_ENTRIES
-                && !properties.iter().any(|prop| {
-                    !prop.computed
-                        && canonical_static_object_property_key(&prop.key)
-                            .is_ok_and(|key| key == "__proto__")
-                });
+            // at a time so its entries' registers are reused.
+            let large_plain = properties.len() > MAX_BATCH_LITERAL_ENTRIES;
             let needs_incremental = has_spread || has_incremental_definition || large_plain;
 
             if needs_incremental {
@@ -17410,6 +17403,30 @@ fn lower_expression_to_ir1_inner(
                         ops.push(Ir1Op::SpreadIntoObject);
                     } else {
                         match prop.kind {
+                            // Annex B.3.1: a non-computed, non-shorthand
+                            // `__proto__: v` sets the prototype; it defines no
+                            // property and is not a NamedEvaluation site.
+                            ObjectPropertyKind::Data
+                                if !prop.computed
+                                    && !prop.shorthand
+                                    && canonical_static_object_property_key(&prop.key)
+                                        .is_ok_and(|key| key == "__proto__") =>
+                            {
+                                lower_expression_to_ir1(
+                                    &prop.value,
+                                    ops,
+                                    bindings,
+                                    binding_lookup,
+                                    binding_index,
+                                    root_scope_id,
+                                    label_counter,
+                                    span_table,
+                                )?;
+                                ops.push(Ir1Op::HostCall {
+                                    capability: OBJECT_LITERAL_PROTOTYPE_CAPABILITY.to_string(),
+                                    arg_count: 2,
+                                });
+                            }
                             ObjectPropertyKind::Data => {
                                 // Normal property - emit key and value, then set.
                                 let static_key = if prop.computed {
@@ -31293,6 +31310,10 @@ const MAX_REGISTER_RESIDENT_FUNCTION_LOCALS: usize = 96;
 /// their entries' temporaries are reused. Smaller literals keep the batch
 /// lowering unchanged.
 const MAX_BATCH_LITERAL_ENTRIES: usize = 64;
+
+/// Sets an incrementally built object literal's prototype for its
+/// `__proto__: v` entry and returns the literal (Annex B.3.1).
+const OBJECT_LITERAL_PROTOTYPE_CAPABILITY: &str = "builtin:ObjectLiteralPrototype";
 
 /// Source-name slot of a spilled non-lexical function-body local's
 /// identity-qualified runtime name (lexical ones keep their source name, as

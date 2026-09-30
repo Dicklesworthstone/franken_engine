@@ -4155,6 +4155,16 @@ fn parse_binding_pattern_inner(
     // Rest element: `...pattern`
     if let Some(rest_source) = trimmed.strip_prefix("...") {
         let inner = parse_binding_pattern(rest_source, span, context)?;
+        // ES2020 13.3.3 / 14.1: a rest element or rest parameter has no
+        // initializer (`[...x = 1]`, `(...args = [])`).
+        if matches!(inner, BindingPattern::AssignmentPattern { .. }) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "a rest element cannot have an initializer",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         return Ok(BindingPattern::Rest(Box::new(inner)));
     }
 
@@ -10038,6 +10048,11 @@ fn try_parse_for_in_of(
 
     let binding = match parse_binding_pattern(binding_src, span, context) {
         Ok(pat) => pat,
+        // Without two top-level `;` the header can only be for-in/of, so the
+        // binding's own error (an early error such as `[...x = 1]` or strict
+        // `var arguments`) is the diagnosis; falling back reported "for
+        // statement header must have three semicolon-separated parts".
+        Err(error) if split_for_header(header).is_none() => return Err(error),
         Err(_) => return Ok(None),
     };
 

@@ -64466,12 +64466,13 @@ impl InterpreterCore {
         Ok(accumulator)
     }
 
+    /// `length` of an array-like receiver, read through its prototype chain
+    /// like [[Get]] (`Object.create(['x', 'y'])` has no own `length`).
     fn array_like_length(&self, array_id: ObjectId) -> Result<usize, InterpreterError> {
-        let object = self
-            .heap
-            .get(array_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
-        Ok(match object.properties.get("length") {
+        if self.heap.get(array_id.0 as usize).is_none() {
+            return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
+        }
+        Ok(match self.chain_data_property(array_id, "length") {
             Some(Value::Int(length)) if *length > 0 => {
                 usize::try_from(*length).unwrap_or(usize::MAX)
             }
@@ -64485,16 +64486,16 @@ impl InterpreterCore {
         array_id: ObjectId,
         element_index: usize,
     ) -> Result<Option<Value>, InterpreterError> {
-        if let Some(value) =
-            self.typed_array_indexed_get_property(array_id, &element_index.to_string())?
-        {
+        let key = element_index.to_string();
+        if let Some(value) = self.typed_array_indexed_get_property(array_id, &key)? {
             return Ok(Some(value));
         }
-        let object = self
-            .heap
-            .get(array_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
-        Ok(object.properties.get(&element_index.to_string()).cloned())
+        if self.heap.get(array_id.0 as usize).is_none() {
+            return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
+        }
+        // Inherited elements count, as for [[Get]]/HasProperty: an object
+        // whose prototype is an array sees that array's elements.
+        Ok(self.chain_data_property(array_id, &key).cloned())
     }
 
     fn set_object_from_entry_pair(

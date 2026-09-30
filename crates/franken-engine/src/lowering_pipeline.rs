@@ -8800,9 +8800,13 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::NewArray { dst });
 
+                // One key register serves every element: each SetProperty
+                // consumes its key before the next is loaded (bd-9vouw.86).
+                let mut element_key_reg = None;
                 for (i, val_reg) in elements.into_iter().enumerate() {
                     let key_str = i.to_string();
-                    let key_reg = alloc_register(&mut register_cursor);
+                    let key_reg = *element_key_reg
+                        .get_or_insert_with(|| alloc_register(&mut register_cursor));
                     let pool_index = push_constant_optimized(&mut constant_pool, &key_str);
                     ir3.instructions.push(Ir3Instruction::LoadStr {
                         dst: key_reg,
@@ -10677,8 +10681,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let operands = elems.clone();
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
+                    // One key register serves every element (bd-9vouw.86).
+                    let mut element_key_reg = None;
                     for (i, val_reg) in elems.into_iter().enumerate() {
-                        let key_reg = alloc_register(&mut fn_reg);
+                        let key_reg =
+                            *element_key_reg.get_or_insert_with(|| alloc_register(&mut fn_reg));
                         let pool_index = push_constant_optimized(&mut constant_pool, i.to_string());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,

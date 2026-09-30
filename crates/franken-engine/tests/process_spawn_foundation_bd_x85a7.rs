@@ -515,6 +515,31 @@ fn authenticated_alias_survives_closure_capture_but_not_parameter_shadowing() {
     );
 }
 
+/// A builtin module's require runs no guest code, so it is no hazard before
+/// the alias: `const path = require('path')` ahead of `require('child_process')`
+/// used to leave `cp` unauthenticated and the program refused at the ambient
+/// `require` gate. A user call before the alias still fails closed: a hoisted
+/// function could observe `cp` before it is initialized.
+#[test]
+fn builtin_module_requires_before_the_alias_keep_it_authenticated() {
+    for source in [
+        "const path = require('path'); const cp = require('child_process'); \
+         cp.execFileSync(path.join('/bin', 'true'), []);",
+        "const qs = require('querystring'); const cp = require('child_process'); \
+         cp.execFileSync('/bin/true', [qs.stringify({ a: 1 })]);",
+    ] {
+        assert_process_spawn_denial(source);
+    }
+    let error = eval_error(
+        "function peek() { return typeof cp; } peek(); const cp = require('child_process'); \
+         cp.spawnSync('/bin/true');",
+    );
+    assert!(
+        error.contains("require") || error.contains("ambient") || error.contains("authority"),
+        "a user call before the alias must keep it unauthenticated: {error}"
+    );
+}
+
 #[test]
 fn unsupported_or_escaped_child_process_aliases_remain_ambient_refused() {
     for source in [

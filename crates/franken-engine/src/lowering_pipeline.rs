@@ -23885,10 +23885,20 @@ fn module_alias_expression_is_predeclaration_call_hazard(
     expression: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
+    // A builtin module's require runs no guest code, so it cannot reach a
+    // hoisted closure that observes a later alias: `const path =
+    // require('path'); const cp = require('child_process');` keeps `cp`.
     matches!(
         expression,
         Expression::OptionalCall { .. } | Expression::New { .. }
     ) || matches!(expression, Expression::Call { .. })
+        && !is_require_fs_module_initializer(expression, binding_lookup)
+        && !is_require_fs_promises_module_initializer(expression, binding_lookup)
+        && !is_require_path_module_initializer(expression, binding_lookup)
+        && !is_require_querystring_module_initializer(expression, binding_lookup)
+        && !is_require_os_module_initializer(expression, binding_lookup)
+        && !is_require_timers_module_initializer(expression, binding_lookup)
+        && !is_require_timers_promises_module_initializer(expression, binding_lookup)
         && !is_require_net_module_initializer(expression, binding_lookup)
         && !is_require_http_module_initializer(expression, binding_lookup)
         && !is_require_https_module_initializer(expression, binding_lookup)

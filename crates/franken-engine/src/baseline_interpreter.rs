@@ -5267,7 +5267,7 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
 /// FrankenEngine is hermetic: local time is UTC, so each local accessor
 /// equals its `UTC` twin and `getTimezoneOffset()` is 0.
-const DATE_PROTOTYPE_METHODS: [&str; 37] = [
+const DATE_PROTOTYPE_METHODS: [&str; 40] = [
     "valueOf",
     "getFullYear",
     "getUTCFullYear",
@@ -5305,6 +5305,9 @@ const DATE_PROTOTYPE_METHODS: [&str; 37] = [
     "setUTCFullYear",
     "toUTCString",
     "toGMTString",
+    "toString",
+    "toDateString",
+    "toTimeString",
 ];
 
 /// ES2020 20.4.1 time-value arithmetic on milliseconds since the epoch (UTC).
@@ -5433,6 +5436,46 @@ mod date_math {
         } else {
             time.trunc() + 0.0
         }
+    }
+
+    pub(super) const WEEK_DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    pub(super) const MONTH_NAMES: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+
+    /// DateString (20.4.4.41.2): `Www Mmm DD YYYY`, a negative year signed
+    /// and every year padded to four digits.
+    pub(super) fn date_string(t: f64) -> String {
+        let year = year_from_time(t) as i64;
+        format!(
+            "{} {} {:02} {}{:04}",
+            WEEK_DAY_NAMES[week_day(t) as usize],
+            MONTH_NAMES[month_from_time(t) as usize],
+            date_from_time(t) as i64,
+            if year < 0 { "-" } else { "" },
+            year.unsigned_abs()
+        )
+    }
+
+    /// TimeString + TimeZoneString (20.4.4.41.1, 20.4.4.41.3) for the
+    /// hermetic UTC local zone: `HH:MM:SS GMT+0000 (Coordinated Universal
+    /// Time)`, which is Node's rendering under `TZ=UTC`.
+    pub(super) fn time_zone_string(t: f64) -> String {
+        format!(
+            "{:02}:{:02}:{:02} GMT+0000 (Coordinated Universal Time)",
+            hour(t) as i64,
+            minute(t) as i64,
+            second(t) as i64
+        )
+    }
+
+    /// ToDateString (20.4.4.41.4): what `Date.prototype.toString` and every
+    /// string conversion of a Date produce.
+    pub(super) fn to_date_string(t: f64) -> String {
+        if t.is_nan() {
+            return "Invalid Date".to_string();
+        }
+        format!("{} {}", date_string(t), time_zone_string(t))
     }
 }
 
@@ -54110,19 +54153,67 @@ impl InterpreterCore {
         let Value::Object(object_id) = receiver else {
             return Value::str(Self::value_to_object_to_string_tag(receiver));
         };
+        Value::str(format!(
+            "[object {}]",
+            self.object_to_string_tag(*object_id)
+        ))
+    }
 
-        let tag = self
-            .heap
-            .get(object_id.0 as usize)
-            .map(|object| {
-                if object.is_array {
-                    "[object Array]"
-                } else {
-                    "[object Object]"
-                }
-            })
-            .unwrap_or("[object Object]");
-        Value::str(tag)
+    /// ES2020 19.1.3.6: the builtinTag of an object from its internal slots
+    /// (Array, Error, Date, RegExp) or, for objects whose prototype supplies a
+    /// standard @@toStringTag (Map, Set, WeakMap, WeakSet, ArrayBuffer,
+    /// DataView, typed arrays), that tag. Every object used to answer
+    /// "[object Object]" (only arrays were told apart), so type checks such as
+    /// `Object.prototype.toString.call(d) === '[object Date]'` failed and
+    /// isPlainObject-style checks accepted Dates and Maps. Error objects have
+    /// no [[ErrorData]] brand here, so an Error is an object whose prototype
+    /// chain reaches a built-in Error prototype. Not modelled: a guest-defined
+    /// @@toStringTag getter, Arguments, JSON and Math.
+    fn object_to_string_tag(&self, object_id: ObjectId) -> &'static str {
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return "Object";
+        };
+        if object.is_array {
+            return "Array";
+        }
+        if let Some(view) = &object.typed_array {
+            return view.kind.type_name();
+        }
+        if object.data_view.is_some() {
+            return "DataView";
+        }
+        if object.array_buffer.is_some() {
+            return "ArrayBuffer";
+        }
+        if let Some(Value::Str(type_tag)) = object.properties.get("__type") {
+            match type_tag.as_ref() {
+                "Date" => return "Date",
+                "RegExp" => return "RegExp",
+                "Map" => return "Map",
+                "Set" => return "Set",
+                "WeakMap" => return "WeakMap",
+                "WeakSet" => return "WeakSet",
+                _ => {}
+            }
+        }
+        let error_prototypes = ERROR_PROTOTYPE_NAMES
+            .iter()
+            .filter_map(|name| self.builtin_prototypes.get(*name).copied())
+            .collect::<Vec<_>>();
+        let mut current = object.prototype;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(prototype) = current else {
+                break;
+            };
+            if error_prototypes.contains(&prototype) {
+                return "Error";
+            }
+            current = self
+                .heap
+                .get(prototype.0 as usize)
+                .and_then(|next| next.prototype);
+        }
+        "Object"
     }
 
     /// Storage key for a Map key / Set value (bd-juodx). Every Map/Set path,
@@ -63895,15 +63986,21 @@ impl InterpreterCore {
                     millisecond(t) as i64
                 )));
             }
+            "toString" => return Ok(Value::str(to_date_string(t))),
+            "toDateString" | "toTimeString" => {
+                if t.is_nan() {
+                    return Ok(Value::str("Invalid Date"));
+                }
+                return Ok(Value::str(if method == "toDateString" {
+                    date_string(t)
+                } else {
+                    time_zone_string(t)
+                }));
+            }
             "toUTCString" | "toGMTString" => {
                 if !t.is_finite() {
                     return Ok(Value::str("Invalid Date"));
                 }
-                const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-                const MONTHS: [&str; 12] = [
-                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
-                    "Dec",
-                ];
                 let year = year_from_time(t) as i64;
                 let year_text = if year < 0 {
                     format!("-{:04}", -year)
@@ -63912,9 +64009,9 @@ impl InterpreterCore {
                 };
                 return Ok(Value::str(format!(
                     "{}, {:02} {} {year_text} {:02}:{:02}:{:02} GMT",
-                    DAYS[week_day(t) as usize],
+                    WEEK_DAY_NAMES[week_day(t) as usize],
                     date_from_time(t) as i64,
-                    MONTHS[month_from_time(t) as usize],
+                    MONTH_NAMES[month_from_time(t) as usize],
                     hour(t) as i64,
                     minute(t) as i64,
                     second(t) as i64
@@ -82847,6 +82944,18 @@ impl InterpreterCore {
             if let Ok(joined) = self.array_join_string(id, ",", &mut active) {
                 return joined;
             }
+        }
+        // A Date converts through Date.prototype.toString: its
+        // @@toPrimitive treats the "default" hint as "string".
+        if let Some(object) = self.heap.get(id.0 as usize)
+            && matches!(object.properties.get("__type"), Some(Value::Str(tag)) if tag.as_ref() == "Date")
+        {
+            let t = match object.properties.get("__timestamp") {
+                Some(Value::Int(millis)) => *millis as f64,
+                Some(Value::Float(millis)) => millis.inner(),
+                _ => f64::NAN,
+            };
+            return date_math::to_date_string(t);
         }
         self.error_object_to_string(id)
             .unwrap_or_else(|| "[object Object]".to_string())

@@ -5385,7 +5385,7 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 34] = [
 
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
 /// list the lowering declares factory hostcalls for).
-const GLOBAL_FUNCTION_VALUES: [&str; 4] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
+const GLOBAL_FUNCTION_VALUES: [&str; 8] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
 
 /// Name of a first-class static builtin, or `None` if `tag` is not one the
 /// shared lowering tables can produce. `None` is also the dispatch guard: a
@@ -63108,6 +63108,84 @@ impl InterpreterCore {
         Ok(Value::Object(error_id))
     }
 
+    /// bd-9vouw.96: `btoa`/`atob` (the HTML Standard's base64 pair, Node
+    /// globals) and ES2020 B.2.1 `escape`/`unescape`, over the argument's
+    /// UTF-16 code units. The argument converts as a template substitution
+    /// does in Node (`${input}`), so a Symbol is a TypeError, and btoa/atob
+    /// without one throw Node's ERR_MISSING_ARGS TypeError.
+    fn string_codec_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        capability: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if args.count == 0 && matches!(capability, "builtin:Btoa" | "builtin:Atob") {
+            return Err(self.throw_buffer_node_error(
+                "TypeError",
+                "ERR_MISSING_ARGS",
+                "The \"input\" argument must be specified".to_string(),
+            ));
+        }
+        if matches!(self.builtin_arg(args, 0)?, Some(Value::Symbol(_))) {
+            return Err(InterpreterError::TypeError {
+                expected: "a value convertible to a string".to_string(),
+                got: "Symbol".to_string(),
+            });
+        }
+        let units: Vec<u16> = if args.count == 0 {
+            "undefined".encode_utf16().collect()
+        } else {
+            match self.primitive_conversion_builtin(module, args, PrimitiveConversion::String)? {
+                Value::Str(text) => text.code_units_vec(),
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "string conversion result".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
+        };
+        let result = match capability {
+            "builtin:Btoa" => match base64_encode_latin1(&units) {
+                Some(encoded) => encoded,
+                None => return Err(self.throw_invalid_character_error("Invalid character")),
+            },
+            "builtin:Atob" => match forgiving_base64_decode(&units) {
+                Ok(decoded) => decoded,
+                Err(message) => return Err(self.throw_invalid_character_error(message)),
+            },
+            "builtin:Escape" => escape_code_units(&units),
+            _ => unescape_code_units(&units),
+        };
+        Ok(Value::Str(JsString::from_code_units(&result)))
+    }
+
+    /// Node throws a DOMException named InvalidCharacterError (legacy code
+    /// 5) from btoa/atob. This engine has no DOMException, so the thrown
+    /// value is an Error with that `name`, Node's message and `code` 5.
+    fn throw_invalid_character_error(&mut self, message: &str) -> InterpreterError {
+        let thrown = (|| -> Result<Value, InterpreterError> {
+            let prototype = self.ensure_builtin_prototype("Error")?;
+            let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+            self.initialize_error_like_object(
+                error_id,
+                "InvalidCharacterError",
+                message.to_string(),
+            )?;
+            self.set_object_property(error_id, "code".to_string(), Value::Int(5))?;
+            Ok(Value::Object(error_id))
+        })();
+        let thrown = match thrown {
+            Ok(value) => value,
+            Err(err) => return err,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: self.uncaught_exception_description(&thrown),
+        }
+    }
+
     fn check_buffer_temporary_bytes(&self, bytes: usize) -> Result<(), InterpreterError> {
         let bytes = u64::try_from(bytes).map_err(|_| InterpreterError::RangeError {
             message: "Buffer temporary allocation exceeds memory accounting range".to_string(),
@@ -84211,6 +84289,9 @@ impl InterpreterCore {
             "builtin:parseFloat" => {
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::ParseFloat)
             }
+            "builtin:Btoa" | "builtin:Atob" | "builtin:Escape" | "builtin:Unescape" => {
+                self.string_codec_builtin(module, cap, args)
+            }
             // Removed duplicate ParseInt - implementation at line 8385 (builtin:parseInt) is identical
             "builtin:ParseFloat" => {
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::ParseFloat)
@@ -95291,6 +95372,142 @@ mod number_to_fixed_tests {
         assert_eq!(number_to_fixed_string(f64::INFINITY, 2), "Infinity");
         assert_eq!(number_to_fixed_string(f64::NEG_INFINITY, 2), "-Infinity");
     }
+}
+
+// ---------------------------------------------------------------------------
+// btoa / atob / escape / unescape (bd-9vouw.96), over UTF-16 code units
+// ---------------------------------------------------------------------------
+
+/// btoa's encoding: the base64 of the code units read as Latin-1 bytes, or
+/// `None` when a unit is above U+00FF.
+fn base64_encode_latin1(units: &[u16]) -> Option<Vec<u16>> {
+    use base64::Engine as _;
+    let bytes = units
+        .iter()
+        .map(|&unit| u8::try_from(unit).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    Some(
+        base64::engine::general_purpose::STANDARD
+            .encode(bytes)
+            .encode_utf16()
+            .collect(),
+    )
+}
+
+/// atob's forgiving-base64 decode (HTML Standard), with the checks and
+/// messages of Node's implementation: ASCII whitespace is ignored, `=` may
+/// only end the input and at most twice, leftover bits are dropped, and the
+/// result's code units are the decoded bytes.
+fn forgiving_base64_decode(units: &[u16]) -> Result<Vec<u16>, &'static str> {
+    const INVALID: &str = "Invalid character";
+    let mut sextets = Vec::with_capacity(units.len());
+    let (mut significant, mut equals) = (0usize, 0usize);
+    for &unit in units {
+        let sextet = match unit {
+            0x09 | 0x0A | 0x0C | 0x0D | 0x20 => continue,
+            0x3D => {
+                equals += 1;
+                significant += 1;
+                if equals > 2 {
+                    return Err(INVALID);
+                }
+                continue;
+            }
+            0x41..=0x5A => unit - 0x41,
+            0x61..=0x7A => unit - 0x61 + 26,
+            0x30..=0x39 => unit - 0x30 + 52,
+            0x2B => 62,
+            0x2F => 63,
+            _ => return Err(INVALID),
+        };
+        if equals > 0 {
+            return Err(INVALID);
+        }
+        significant += 1;
+        sextets.push(sextet);
+    }
+    let mut remainder = significant % 4;
+    if remainder == 0 {
+        remainder = (significant - equals) % 4;
+    } else if equals > 0 {
+        return Err(INVALID);
+    }
+    if remainder == 1 {
+        return Err("The string to be decoded is not correctly encoded.");
+    }
+    let mut decoded = Vec::with_capacity(sextets.len() / 4 * 3 + 2);
+    let (mut buffer, mut bits) = (0u32, 0u32);
+    for sextet in sextets {
+        buffer = (buffer << 6) | u32::from(sextet);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            decoded.push(((buffer >> bits) & 0xFF) as u16);
+            buffer &= (1 << bits) - 1;
+        }
+    }
+    Ok(decoded)
+}
+
+const UPPER_HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
+
+/// ES2020 B.2.1.1 escape: code units outside `A-Za-z0-9@*_+-./` become
+/// `%XX` (below 256) or `%uXXXX`.
+fn escape_code_units(units: &[u16]) -> Vec<u16> {
+    let hex = |nibble: u16| u16::from(UPPER_HEX_DIGITS[usize::from(nibble & 0xF)]);
+    let mut escaped = Vec::with_capacity(units.len());
+    for &unit in units {
+        let kept = matches!(unit, 0x41..=0x5A | 0x61..=0x7A | 0x30..=0x39)
+            || matches!(unit, 0x40 | 0x2A | 0x5F | 0x2B | 0x2D | 0x2E | 0x2F);
+        if kept {
+            escaped.push(unit);
+        } else if unit < 256 {
+            escaped.extend([u16::from(b'%'), hex(unit >> 4), hex(unit)]);
+        } else {
+            escaped.extend([
+                u16::from(b'%'),
+                u16::from(b'u'),
+                hex(unit >> 12),
+                hex(unit >> 8),
+                hex(unit >> 4),
+                hex(unit),
+            ]);
+        }
+    }
+    escaped
+}
+
+/// ES2020 B.2.1.2 unescape: `%uXXXX` and `%XX` become the code unit they
+/// spell; any other `%` stays.
+fn unescape_code_units(units: &[u16]) -> Vec<u16> {
+    let hex_value = |range: &[u16]| {
+        range.iter().try_fold(0u16, |value, &unit| {
+            char::from_u32(u32::from(unit))
+                .and_then(|c| c.to_digit(16))
+                .map(|digit| (value << 4) | digit as u16)
+        })
+    };
+    let mut unescaped = Vec::with_capacity(units.len());
+    let mut k = 0;
+    while k < units.len() {
+        if units[k] == u16::from(b'%') {
+            if units.get(k + 1) == Some(&u16::from(b'u'))
+                && let Some(value) = units.get(k + 2..k + 6).and_then(hex_value)
+            {
+                unescaped.push(value);
+                k += 6;
+                continue;
+            }
+            if let Some(value) = units.get(k + 1..k + 3).and_then(hex_value) {
+                unescaped.push(value);
+                k += 3;
+                continue;
+            }
+        }
+        unescaped.push(units[k]);
+        k += 1;
+    }
+    unescaped
 }
 
 // ---------------------------------------------------------------------------

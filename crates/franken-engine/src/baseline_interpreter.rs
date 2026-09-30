@@ -61259,6 +61259,23 @@ impl InterpreterCore {
         &mut self,
         description: Option<JsString>,
     ) -> Result<SymbolId, InterpreterError> {
+        self.allocate_charged_symbol(|state| state.allocate_private(description))
+    }
+
+    /// A class evaluation's Private Name `#x`, charged like any symbol.
+    fn allocate_class_private_name_symbol(
+        &mut self,
+        description: JsString,
+    ) -> Result<SymbolId, InterpreterError> {
+        self.allocate_charged_symbol(|state| state.allocate_class_private_name(description))
+    }
+
+    /// Runs `allocate` on a copy of the symbol state, within the memory
+    /// budget, and charges the state's growth.
+    fn allocate_charged_symbol(
+        &mut self,
+        allocate: impl FnOnce(&mut RuntimeSymbolState) -> Result<SymbolId, InterpreterError>,
+    ) -> Result<SymbolId, InterpreterError> {
         let previous_symbol_bytes = Self::estimate_symbol_state_bytes(&self.symbol_state);
         let temporary_bytes = self
             .estimated_memory_bytes
@@ -61267,7 +61284,7 @@ impl InterpreterCore {
             return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
         }
         let mut projected = self.symbol_state.value.clone();
-        let symbol = projected.allocate_private(description)?;
+        let symbol = allocate(&mut projected)?;
         let next_symbol_bytes = Self::estimate_symbol_state_bytes(&projected);
         let peak_bytes = self
             .estimated_memory_bytes
@@ -76989,9 +77006,8 @@ impl InterpreterCore {
                         });
                     }
                 };
-                let symbol = self
-                    .mutate_symbol_state(|state| state.allocate_class_private_name(description))?;
-                Ok(Value::Symbol(symbol))
+                self.allocate_class_private_name_symbol(description)
+                    .map(Value::Symbol)
             }
             "builtin:ClassDefineField" | "builtin:ClassInitStaticFields" => {
                 // ES2022 class elements. ClassDefineField(target, key,

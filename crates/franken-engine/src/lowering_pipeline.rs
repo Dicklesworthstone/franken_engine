@@ -41664,23 +41664,25 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_private_member_access_throws_a_catchable_syntax_error() {
-        // Private class members are not implemented. `this.#p` used to
-        // evaluate to the string "this.#p"; it must now throw (Node prints 1,
-        // so this pins the refusal, not parity).
+    fn unrecognised_expression_throws_a_catchable_syntax_error() {
+        // `a::b` (the bind-operator proposal) is not JavaScript, and the
+        // parser leaves it as `Expression::Raw`. Such text used to evaluate
+        // to the string "a::b"; it must throw when it runs. Node rejects the
+        // program before running it, so this pins the refusal, not parity.
+        // (The example was `this.#p` until private names were implemented.)
         assert_eq!(
             raw_fail_closed_eval(
-                "class A { get p() { return this.#p; } } \
+                "class A { get p() { return a::b; } } \
                  let r; try { r = new A().p; } catch (e) { r = e.name + ':' + e.message; } r"
             ),
-            "SyntaxError:unsupported expression syntax: this.#p"
+            "SyntaxError:unsupported expression syntax: a::b"
         );
     }
 
     #[test]
     fn unevaluated_unsupported_expression_does_not_fail_the_program() {
         assert_eq!(
-            raw_fail_closed_eval("function never() { return this.#q; } 'ok'"),
+            raw_fail_closed_eval("function never() { return a::b; } 'ok'"),
             "ok"
         );
     }

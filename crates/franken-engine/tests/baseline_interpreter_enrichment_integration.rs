@@ -347,20 +347,25 @@ fn enrichment_for_in_enumerates_keys_in_order() {
 }
 
 #[test]
-fn enrichment_for_in_type_error_on_non_object() {
-    // for..in on an integer should yield a TypeError.
+fn enrichment_for_in_over_a_number_enumerates_nothing() {
+    // ES2020 13.7.5.12 ForIn/OfHeadEvaluation: for-in over a primitive
+    // enumerates ToObject(value); a Number wrapper has no enumerable keys, so
+    // the loop runs zero times (Node: `for (k in 5) {}` is no error). This
+    // test used to assert the TypeError the engine threw before primitive
+    // wrappers existed.
     let m = test_module(vec![
         Ir3Instruction::LoadInt { dst: 1, value: 5 }, // 0
         Ir3Instruction::ForInInit { src: 1, dst: 2 }, // 1
+        Ir3Instruction::ForInNext {
+            iterator: 2,
+            value_dst: 0,
+            done_target: 4,
+        }, // 2
+        Ir3Instruction::Halt,                         // 3: a key (must not happen)
+        Ir3Instruction::LoadInt { dst: 0, value: 7 }, // 4: done
+        Ir3Instruction::Halt,                         // 5
     ]);
-    let err = qjs_run(&m).unwrap_err();
-    match err {
-        InterpreterError::TypeError { expected, got } => {
-            assert_eq!(expected, "object");
-            assert_eq!(got, "number");
-        }
-        other => panic!("expected TypeError, got: {other:?}"),
-    }
+    assert_eq!(qjs_run(&m).unwrap().value, Value::Int(7));
 }
 
 #[test]

@@ -49140,8 +49140,14 @@ impl InterpreterCore {
                                     &property_key,
                                 )? =>
                             {
-                                self.exotic_own_property_get(module, exotic, &property_key)?
-                                    .unwrap_or(Value::Undefined)
+                                match self.exotic_own_property_get(module, exotic, &property_key)? {
+                                    // IFC: the backing object owns the stored label.
+                                    Some((own, backing)) => {
+                                        primitive_owner = Some(backing);
+                                        own
+                                    }
+                                    None => Value::Undefined,
+                                }
                             }
                             Value::Generator(_) => match property_key {
                                 RuntimePropertyKey::String(ref key) => match key.as_str() {
@@ -49204,11 +49210,13 @@ impl InterpreterCore {
                             // Object.prototype), as for a primitive base.
                             // @@toStringTag is "Promise" (ES2020 25.6.5.5).
                             Value::Promise(promise) => {
-                                if let Some(own) = self.exotic_own_property_get(
+                                if let Some((own, backing)) = self.exotic_own_property_get(
                                     module,
                                     &Value::Promise(promise),
                                     &property_key,
                                 )? {
+                                    // IFC: the backing object owns the stored label.
+                                    primitive_owner = Some(backing);
                                     own
                                 } else if matches!(
                                     &property_key,
@@ -95166,21 +95174,23 @@ impl InterpreterCore {
 
     /// The own property `key` of a promise, generator or async generator
     /// object, read from its backing object with `value` as the receiver
-    /// (an accessor sees it as `this`), or `None` when it has none.
+    /// (an accessor sees it as `this`), with that backing object (the owner
+    /// whose stored label the read joins), or `None` when it has none.
     fn exotic_own_property_get(
         &mut self,
         module: &Ir3Module,
         value: &Value,
         key: &RuntimePropertyKey,
-    ) -> Result<Option<Value>, InterpreterError> {
+    ) -> Result<Option<(Value, ObjectId)>, InterpreterError> {
         if !self.exotic_has_own_property(module, value, key)? {
             return Ok(None);
         }
         let backing = self
             .function_own_property_object(module, value)?
             .expect("checked by exotic_has_own_property");
-        self.proxy_aware_get_runtime_property(Some(module), backing, key, value.clone(), 0)
-            .map(Some)
+        let own =
+            self.proxy_aware_get_runtime_property(Some(module), backing, key, value.clone(), 0)?;
+        Ok(Some((own, backing)))
     }
 
     /// bd-9vouw.17: the object that holds `value`'s own properties for the
@@ -123269,6 +123279,58 @@ mod async_runtime_tests_current {
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Secret,
             "a Secret value written to a Public object property must read back Secret (bd-ojvo1)"
+        );
+    }
+
+    /// A promise's own properties live on a backing object; a Secret value
+    /// stored there must read back Secret too (the read joins the backing
+    /// object's stored label, as bd-ojvo1 does for an object).
+    #[test]
+    fn promise_own_property_read_keeps_the_stored_label() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("cancel".into());
+
+        let mut core = test_interpreter();
+        let promise = core
+            .create_promise()
+            .expect("test promise allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Promise(promise.0);
+            r[2] = Value::Int(42);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Public)
+            .expect("promise label should be settable");
+        core.set_register_label(2, crate::ifc_artifacts::Label::Secret)
+            .expect("written value label should be settable");
+
+        core.execute(&module)
+            .expect("set then get off a promise should execute");
+
+        assert_eq!(core.read_reg(3).expect("dst register"), Value::Int(42));
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "a Secret value written to a promise's own property must read back Secret"
         );
     }
 

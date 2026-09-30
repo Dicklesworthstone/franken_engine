@@ -5775,7 +5775,7 @@ const SLOT0_STATIC_GLOBALS: [&str; 8] = [
     "Map",
     "ArrayBuffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 27] = [
+const SLOT0_STATIC_MEMBERS: [&str; 29] = [
     "keys",
     "values",
     "entries",
@@ -5786,9 +5786,11 @@ const SLOT0_STATIC_MEMBERS: [&str; 27] = [
     "getPrototypeOf",
     "setPrototypeOf",
     "defineProperty",
+    "defineProperties",
     "getOwnPropertyNames",
     "getOwnPropertySymbols",
     "getOwnPropertyDescriptor",
+    "getOwnPropertyDescriptors",
     "fromEntries",
     "groupBy",
     "isView",

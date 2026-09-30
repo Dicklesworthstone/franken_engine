@@ -99,6 +99,9 @@ impl InterpreterCore {
         let value = match kind {
             K::ArrayPush => {
                 let mut len = self.generic_length(m, o)?;
+                if len + u64::from(args.count) > MAX_SAFE_LENGTH {
+                    return Err(Self::generic_length_error());
+                }
                 for index in 0..args.count {
                     let item = arg(self, index)?;
                     self.generic_set(m, o, &Self::generic_index_key(len), item)?;

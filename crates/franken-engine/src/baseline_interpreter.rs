@@ -7093,6 +7093,10 @@ const NON_ENUMERABLE_DATA_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
     configurable: true,
 };
 
+/// Microtasks a drain runs between compactions of the queue's consumed
+/// slots (bd-9vouw.71).
+const MICROTASK_COMPACTION_INTERVAL: u32 = 1024;
+
 /// Most compiled RegExp patterns one interpreter keeps for reuse.
 const REGEXP_CACHE_ENTRIES: usize = 32;
 /// Longest pattern source the RegExp cache keeps compiled.
@@ -60107,10 +60111,21 @@ impl InterpreterCore {
         let mut drained = 0u32;
         #[cfg(test)]
         let entry_drift = self.memory_walk_drift();
+        let mut dequeued_since_compaction = 0u32;
 
         while drained < max_drain {
             // Collector safe point between microtasks (bd-9vouw.57).
             self.gc_event_loop_safe_point();
+            // bd-9vouw.71: a consumed queue slot stays charged until the
+            // queue compacts. A drain of thousands of chained jobs (an await
+            // loop) releases them every MICROTASK_COMPACTION_INTERVAL jobs
+            // rather than only when the drain returns.
+            if dequeued_since_compaction >= MICROTASK_COMPACTION_INTERVAL {
+                dequeued_since_compaction = 0;
+                let previous_promise_bytes = self.promise_runtime_memory_bytes();
+                self.event_loop.microtasks.compact();
+                self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
+            }
             // bd-8nrud: Node ordering — the next-tick queue drains completely
             // before every Promise microtask, including ticks enqueued by the
             // microtask executed on the previous iteration.
@@ -60121,6 +60136,7 @@ impl InterpreterCore {
             };
             let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
             drained += 1;
+            dequeued_since_compaction += 1;
             let task_result = (|| -> Result<(), InterpreterError> {
                 match &task {
                     crate::promise_model::Microtask::PromiseReaction {

@@ -5481,6 +5481,7 @@ fn parse_primary_expression(
     if expression
         .strip_prefix("class")
         .is_some_and(|r| r.starts_with('{') || r.starts_with(' ') || r.starts_with('\t'))
+        && class_expression_is_whole(expression)
     {
         return parse_class_expression(expression, span, context);
     }
@@ -11914,6 +11915,23 @@ fn function_expression_is_whole(rest: &str) -> bool {
         return true;
     };
     match extract_balanced(after_params.trim_start(), '{', '}') {
+        Some((_, after_body)) => after_body.trim().is_empty(),
+        None => true,
+    }
+}
+
+/// Whether the class expression `class ... { body }` that starts
+/// `expression` ends with its body. The body is the first `{`, as
+/// parse_class_parts reads it (a class name cannot contain one). Text after
+/// the body (`class A {}.name`, `class { m() {} }.prototype.m()`) makes the
+/// class the object or callee of that suffix for the member and call
+/// parsing below; it was silently dropped, so the expression was the class
+/// itself. A malformed head counts as whole, so its specific error is kept.
+fn class_expression_is_whole(expression: &str) -> bool {
+    let Some(brace) = expression.find('{') else {
+        return true;
+    };
+    match extract_balanced(&expression[brace..], '{', '}') {
         Some((_, after_body)) => after_body.trim().is_empty(),
         None => true,
     }

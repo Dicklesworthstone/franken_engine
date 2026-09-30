@@ -144,3 +144,18 @@ fn methods_named_get_and_set_are_methods() {
         "gx d1 dollar 5",
     );
 }
+
+/// Text after a class expression's body is a suffix of that expression:
+/// `class A {}.name` is "A" and `class { m() {} }.prototype.m()` calls the
+/// method. The class-expression parse took the body and dropped the rest,
+/// so each of these evaluated to the class itself.
+#[test]
+fn member_access_and_calls_after_a_class_expression() {
+    check(
+        "var n = class A {}.name; var x = class { static y = 5 }.y; \
+         [n, class {}.name === '', typeof class {}.prototype, x, \
+         class { m() { return 1 } }.prototype.m(), class B extends Array {}.name, \
+         new (class { constructor() { this.v = 2 } })().v].join(' ');",
+        "A true object 5 1 B 2",
+    );
+}

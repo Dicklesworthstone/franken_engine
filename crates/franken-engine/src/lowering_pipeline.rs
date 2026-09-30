@@ -18226,7 +18226,9 @@ fn lower_expression_to_ir1_inner(
             super_class,
             body,
         } => {
-            let class_name = name.clone().unwrap_or_else(|| "anonymous".to_string());
+            // An anonymous class expression's `name` is "" (NamedEvaluation
+            // renames it when it is bound: `var C = class {}`).
+            let class_name = name.clone().unwrap_or_default();
             let bid = alloc_internal_binding(
                 bindings,
                 binding_lookup,

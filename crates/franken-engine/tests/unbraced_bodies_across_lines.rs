@@ -52,6 +52,22 @@ fn nested_unbraced_headers_on_following_lines() {
             "var t = 0;\nif (t === 0)\n  for (var q = 0; q < 3; q++)\n    t += q;\nt;",
             "3",
         ),
+        // A `{` inside a header's parentheses (an object literal argument,
+        // a destructuring pattern) is not a braced body; js-yaml's bundled
+        // visitNode writes `if (visitNode(item, visitor, {` across lines.
+        (
+            "function visit(n, ctx) { return n === ctx.stop; }\nfunction f(items) {\n  for (const item of items)\n    if (visit(item, {\n      stop: 3\n    }))\n      return \"hit \" + item;\n  return \"none\";\n}\n[f([1, 2, 3]), f([1])].join();",
+            "hit 3,none",
+        ),
+        (
+            "var seen = [];\nfor (const { k, v } of [{ k: \"a\", v: 1 }, { k: \"b\", v: 2 }])\n  seen.push(k + v);\nseen.join();",
+            "a1,b2",
+        ),
+        (
+            "var o = { a: 1 }, r = \"no\";\nif ({ a: 1 }.a === o.a)\n  r = \"yes\";\nr;",
+            "yes",
+        ),
+        ("var n = 0;\nwhile ([{ x: 1 }][n])\n  n++;\nn;", "1"),
     ] {
         assert_eq!(eval_to_string(source), node, "{source}");
     }

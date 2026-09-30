@@ -11904,6 +11904,9 @@ fn collect_function_local_lexical_bindings(
 /// two paths cannot drift. Keep in sync with `inject_runtime_globals`.
 /// (bd-ylpdp; the YTBG/BotGuard `new Function` + `performance` spine.)
 const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &[
+    // bd-9vouw.17: the sanitized global object.
+    "globalThis",
+    "global",
     "Function",
     "console",
     "performance",
@@ -12076,16 +12079,17 @@ fn required_effect_for_ambient_authority(
 ) -> Option<EffectKind> {
     match identifier {
         "eval" => Some(EffectKind::Eval),
-        "globalThis" => {
-            match member_property {
-                Some("process") => Some(EffectKind::EnvRead), // process.env access
-                Some("console") => None,                      // console is safe
-                Some("require") => Some(EffectKind::FsRead),  // require can access filesystem
-                Some("fetch") => Some(EffectKind::NetConnect), // fetch is network access
-                Some("crypto") => Some(EffectKind::RandomRead), // crypto uses CSPRNG
-                _ => Some(EffectKind::Global),                // generic global access
-            }
-        }
+        // bd-9vouw.17: the global object the runtime binds to `globalThis`
+        // (and Node's `global`) holds only the standard intrinsics, never a
+        // host-authority member, so reading it needs no authority. A static
+        // read of a host member stays gated like the bare identifier.
+        "globalThis" | "global" => match member_property {
+            Some("process") => Some(EffectKind::EnvRead), // process.env access
+            Some("require") => Some(EffectKind::FsRead),  // require can access filesystem
+            Some("fetch") => Some(EffectKind::NetConnect), // fetch is network access
+            Some("crypto") => Some(EffectKind::RandomRead), // crypto uses CSPRNG
+            _ => None,
+        },
         "require" => Some(EffectKind::FsRead), // Node.js require
         "fetch" => Some(EffectKind::NetConnect), // Fetch API
         "process" => match member_property {

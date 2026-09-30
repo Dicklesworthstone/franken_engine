@@ -203,3 +203,48 @@ fn reflect_is_a_first_class_namespace_object() {
         "7|2|true",
     );
 }
+
+/// The global object (bd-9vouw.17): `globalThis` and Node's `global` are one
+/// object holding the standard intrinsics exactly as the bare names resolve,
+/// non-enumerable as in Node. lodash's `freeGlobal` test and a UMD wrapper
+/// that exports onto `globalThis` both work. Expected strings are Node
+/// v22.2.0's.
+#[test]
+fn global_object_holds_the_standard_intrinsics() {
+    check(
+        "[typeof globalThis, typeof global, globalThis === global, \
+          globalThis.Object === Object, globalThis.Math === Math, global.JSON === JSON, \
+          globalThis.setTimeout === setTimeout, globalThis.globalThis === globalThis, \
+          globalThis.Array === Array].join();",
+        "object,object,true,true,true,true,true,true,true",
+    );
+    check(
+        "var freeGlobal = typeof global == 'object' && global && global.Object === Object \
+          && global; typeof freeGlobal;",
+        "object",
+    );
+    check(
+        // Braced: an unbraced `if (..) x; else y;` does not parse yet
+        // (bd-9vouw.88).
+        "(function (root, factory) { if (typeof define === 'function' && define.amd) \
+          { define(factory); } else { root.myLib = factory(); } })(typeof globalThis \
+          !== 'undefined' ? globalThis : this, function () { return 42; }); globalThis.myLib;",
+        "42",
+    );
+    check(
+        "Object.keys(globalThis).indexOf('Object') + ':' + typeof globalThis.parseInt;",
+        "-1:function",
+    );
+}
+
+/// The global object never carries a host-authority binding: a computed
+/// read cannot reach `process` (Node would return its process object), and a
+/// static `globalThis.process` read stays gated at lowering like the bare
+/// identifier (ambient_authority_lowering_rejection_integration).
+#[test]
+fn global_object_exposes_no_host_authority() {
+    check(
+        "var k = 'pro' + 'cess'; [typeof globalThis[k], typeof global['req' + 'uire']].join();",
+        "undefined,undefined",
+    );
+}

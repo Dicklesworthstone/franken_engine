@@ -919,6 +919,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "RegExp" => Some("RegExp"),
         "WeakMap" => Some("WeakMap"),
         "WeakSet" => Some("WeakSet"),
+        "WeakRef" => Some("WeakRef"),
+        "FinalizationRegistry" => Some("FinalizationRegistry"),
         _ => None,
     }
 }
@@ -5337,7 +5339,7 @@ impl BuiltinFunction {
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 34] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 36] = [
     "Object",
     "Array",
     "Number",
@@ -5357,6 +5359,10 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 34] = [
     "RegExp",
     "WeakMap",
     "WeakSet",
+    // ES2021: `new WeakRef(t)` / `new FinalizationRegistry(f)` stay
+    // intercepted at lowering; called without `new` they throw.
+    "WeakRef",
+    "FinalizationRegistry",
     // Binary data constructors: direct `new Uint8Array(...)` stays intercepted
     // at lowering; these bindings make the constructors usable as values
     // (Test262's testTypedArray.js lists all nine at load).
@@ -5397,7 +5403,7 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 16] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 18] = [
     "Array",
     "String",
     "Number",
@@ -5414,6 +5420,8 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 16] = [
     "WeakSet",
     "DataView",
     "ArrayBuffer",
+    "WeakRef",
+    "FinalizationRegistry",
 ];
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].

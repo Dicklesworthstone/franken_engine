@@ -310,7 +310,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let list: Vec<Value> = self
-            .intl_locale_list(module, &locales)?
+            .intl_locale_list(&locales)?
             .into_iter()
             .map(Value::str)
             .collect();

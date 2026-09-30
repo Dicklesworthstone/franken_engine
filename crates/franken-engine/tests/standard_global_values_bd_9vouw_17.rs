@@ -366,10 +366,10 @@ fn free_names_resolve_through_the_global_object() {
     }
 }
 
-/// Resolving through the global object opens no authority or flow: `require`
-/// and `fetch` stay refused at lowering after a program stores functions
-/// under those names, and a secret stored on globalThis cannot reach the
-/// console through the bare name.
+/// Resolving through the global object opens no authority or flow: after a
+/// program stores functions under those names, `require` stays refused at
+/// lowering and `fetch` at its capability check, and a secret stored on
+/// globalThis cannot reach the console through the bare name.
 #[test]
 fn global_object_names_keep_the_ambient_and_flow_gates() {
     for (source, refusal) in [
@@ -379,7 +379,7 @@ fn global_object_names_keep_the_ambient_and_flow_gates() {
         ),
         (
             "globalThis.fetch = function () { return 1; }; fetch('https://example.com');",
-            "ambient authority",
+            "capability denied",
         ),
         (
             "const crypto = require('crypto'); const secret = crypto.randomUUID(); \

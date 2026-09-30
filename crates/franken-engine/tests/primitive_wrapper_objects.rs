@@ -126,6 +126,15 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const r = []; const b = new Boolean(); b.v = Number.prototype.valueOf; for (const f of [() => b.v(), () => Number.prototype.valueOf.call({}), () => Number.prototype.toString.call('x'), () => Number.prototype.valueOf.call(new Number(5)), () => Number.prototype.toString.call(new Number(255), 16)]) { try { r.push(String(f())); } catch (e) { r.push(e.constructor.name); } } console.log(r.join());"#,
         "TypeError,TypeError,TypeError,5,ff",
     ),
+    // Number.prototype, String.prototype and Boolean.prototype are wrapper
+    // objects of +0, "" and false: `Number.prototype.toString(10)` was
+    // "expected Number receiver, got object" (Test262 Number/prototype/
+    // toString/S15.7.4.2_A1_T02 and relatives).
+    (
+        "builtin_prototypes_are_wrappers",
+        r#"console.log(Number.prototype.toString(10), Number.prototype.toString(36), Number.prototype.valueOf(), String.prototype.valueOf() === '', String.prototype.length, Boolean.prototype.valueOf(), Object.prototype.toString.call(Number.prototype), Object.prototype.toString.call(String.prototype), Object.prototype.toString.call(Boolean.prototype), Number.prototype + 1, JSON.stringify([Number.prototype, String.prototype, Boolean.prototype]), Number.prototype.toFixed(2), JSON.stringify(String.prototype.toUpperCase()));"#,
+        r#"0 0 0 true 0 false [object Number] [object String] [object Boolean] 1 [0,"",false] 0.00 """#,
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

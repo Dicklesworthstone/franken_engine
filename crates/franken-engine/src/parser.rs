@@ -3693,6 +3693,12 @@ fn parse_statement_inner(
                     Some(span),
                 ));
             }
+            reject_declaration_in_statement_position(
+                body_src,
+                StatementPosition::Labelled,
+                &span,
+                context,
+            )?;
             let body = parse_statement(body_src, goal, span.clone(), context)?;
             return Ok(Statement::Labeled(LabeledStatement {
                 label: label.to_string(),
@@ -9596,6 +9602,99 @@ fn strip_initial_hashbang(source: &str) -> &str {
         .map_or("", |(_, end)| &source[*end..])
 }
 
+/// Where a single statement is parsed as the body of another statement.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatementPosition {
+    If,
+    Labelled,
+    Loop,
+}
+
+/// `text` after one leading `label:`, if it starts with one.
+fn strip_statement_label(text: &str) -> Option<&str> {
+    let end = text
+        .find(|ch: char| !(ch == '_' || ch == '$' || ch.is_alphanumeric()))
+        .unwrap_or(text.len());
+    let (label, after) = text.split_at(end);
+    if label.is_empty() || !is_identifier(label) || is_unconditional_reserved_keyword(label) {
+        return None;
+    }
+    after.trim_start().strip_prefix(':').map(str::trim_start)
+}
+
+/// `text` starts with `keyword` as a whole word.
+fn starts_with_keyword(text: &str, keyword: &str) -> bool {
+    text.strip_prefix(keyword).is_some_and(|after| {
+        after
+            .chars()
+            .next()
+            .is_none_or(|ch| !(ch == '_' || ch == '$' || ch.is_alphanumeric()))
+    })
+}
+
+/// ES2020 13.6, 13.7, 13.11, 13.13 with Annex B.3.2 / B.3.4: an if, loop,
+/// `with` or labelled body is a Statement, not a Declaration. Sloppy code may
+/// use a plain function declaration as an unlabelled if body or as a
+/// labelled statement; a loop body may never be a (labelled) function.
+fn reject_declaration_in_statement_position(
+    body_src: &str,
+    position: StatementPosition,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let mut rest = body_src.trim_start();
+    let mut labelled = false;
+    while let Some(after) = strip_statement_label(rest) {
+        rest = after;
+        labelled = true;
+    }
+    // `let [`, `let {` or `let name` starts a lexical declaration; `let` alone
+    // (`let = 1`) and longer names (`letter`) are identifiers.
+    let is_let_declaration = rest.strip_prefix("let").is_some_and(|after| {
+        let spaced = after.trim_start_matches([' ', '\t']);
+        spaced.starts_with(['[', '{'])
+            || (spaced.len() < after.len()
+                && spaced
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch == '_' || ch == '$' || ch.is_alphabetic()))
+    });
+    let declaration = if starts_with_keyword(rest, "class") {
+        Some("a class declaration")
+    } else if starts_with_keyword(rest, "const") || is_let_declaration {
+        Some("a lexical declaration")
+    } else if starts_with_keyword(rest, "async")
+        && starts_with_keyword(
+            rest["async".len()..].trim_start_matches([' ', '\t']),
+            "function",
+        )
+    {
+        Some("an async function declaration")
+    } else if starts_with_keyword(rest, "function") {
+        if rest["function".len()..].trim_start().starts_with('*') {
+            Some("a generator declaration")
+        } else if context.strict_mode
+            || position == StatementPosition::Loop
+            || (position == StatementPosition::If && labelled)
+        {
+            Some("a function declaration")
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(declaration) = declaration {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("{declaration} is not allowed in statement position"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 /// ES2020 12.1.1, 13.3.1.1, 14.1.2: strict code cannot bind `eval` or
 /// `arguments` (variable, parameter, catch parameter or function name).
 fn reject_strict_restricted_binding(
@@ -9759,10 +9858,22 @@ fn parse_if_statement(
         }
     };
 
+    reject_declaration_in_statement_position(
+        &consequent_src,
+        StatementPosition::If,
+        &span,
+        context,
+    )?;
     let consequent_stmt = parse_statement(consequent_src.trim(), goal, span.clone(), context)?;
 
     let alternate = if let Some(alt_src) = alternate_src {
         if !alt_src.is_empty() {
+            reject_declaration_in_statement_position(
+                &alt_src,
+                StatementPosition::If,
+                &span,
+                context,
+            )?;
             Some(Box::new(parse_statement(
                 alt_src.trim(),
                 goal,
@@ -10039,6 +10150,7 @@ fn parse_for_statement(
     };
 
     let body_src = rest.trim();
+    reject_declaration_in_statement_position(body_src, StatementPosition::Loop, &span, context)?;
     let body = parse_statement(body_src, goal, span.clone(), context)?;
 
     Ok(Statement::For(ForStatement {
@@ -10102,6 +10214,7 @@ fn try_parse_for_in_of(
     };
 
     let body_src = rest.trim();
+    reject_declaration_in_statement_position(body_src, StatementPosition::Loop, span, context)?;
     let body = parse_statement(body_src, goal, span.clone(), context)?;
 
     if keyword == "in" {
@@ -10245,6 +10358,7 @@ fn parse_while_statement(
         )
     })?;
     let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    reject_declaration_in_statement_position(rest, StatementPosition::Loop, &span, context)?;
     let body = parse_statement(rest.trim(), goal, span.clone(), context)?;
     Ok(Statement::While(WhileStatement {
         condition,
@@ -10326,6 +10440,7 @@ fn parse_do_while_statement(
         )
     };
 
+    reject_declaration_in_statement_position(&body_src, StatementPosition::Loop, &span, context)?;
     let body = parse_statement(body_src.trim(), goal, span.clone(), context)?;
 
     let rest = rest.trim();

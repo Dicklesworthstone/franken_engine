@@ -3,7 +3,7 @@
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::Label;
-use frankenengine_engine::ir_contract::{Ir1Literal, Ir1Module, Ir1Op};
+use frankenengine_engine::ir_contract::{Ir1Module, Ir1Op};
 use frankenengine_engine::lowering_pipeline::lower_ir1_to_ir2;
 
 fn assert_eval(source: &str, expected: &str) {

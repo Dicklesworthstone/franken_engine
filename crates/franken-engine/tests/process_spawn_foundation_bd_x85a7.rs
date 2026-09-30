@@ -311,6 +311,18 @@ fn process_package(source: &str) -> ExtensionPackage {
     }
 }
 
+/// A process package that may also read entropy: bd-9vouw.19 made entropy
+/// (`crypto.randomUUID()`, a Secret-labelled result) the fixtures' non-public
+/// source, and a package reaches `require('crypto')` only with the builtin and
+/// random_read capabilities.
+fn process_package_with_entropy(source: &str) -> ExtensionPackage {
+    let mut package = process_package(source);
+    package
+        .capabilities
+        .extend(["builtin".to_string(), "random_read".to_string()]);
+    package
+}
+
 fn unix_now_ms() -> u64 {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1732,8 +1744,11 @@ fn non_public_request_data_is_blocked_before_the_provider() {
     orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let error = orchestrator
-        .execute(&process_package(
-            "const cp = require('child_process'); cp.execFileSync('secret-tool', []);",
+        .execute(&process_package_with_entropy(
+            // bd-9vouw.19: the non-public command is an entropy read. The
+            // child_process alias comes first: a call before it (here
+            // `crypto.randomUUID()`) would leave it unauthenticated.
+            "const cp = require('child_process'); const crypto = require('crypto'); const secret = crypto.randomUUID(); cp.execFileSync(secret, []);",
         ))
         .expect_err("non-public command data must fail before provider dispatch");
     assert!(error.to_string().contains("declassification"));
@@ -1759,8 +1774,10 @@ fn non_public_mutation_of_a_public_options_alias_is_blocked_by_static_flow_proof
     orchestrator.set_process_spawn(provider.clone(), journal, test_process_authority());
 
     let error = orchestrator
-        .execute(&process_package(
-            "const cp = require('child_process'); const opts = {}; const alias = opts; alias.cwd = 'secret-tool'; cp.execFileSync('tool', [], opts);",
+        .execute(&process_package_with_entropy(
+            // bd-9vouw.19: the non-public cwd is an entropy read, after the
+            // child_process alias (see above).
+            "const cp = require('child_process'); const crypto = require('crypto'); const secret = crypto.randomUUID(); const opts = {}; const alias = opts; alias.cwd = secret; cp.execFileSync('tool', [], opts);",
         ))
         .expect_err("mutating an aliased public options object must not launder its label");
 

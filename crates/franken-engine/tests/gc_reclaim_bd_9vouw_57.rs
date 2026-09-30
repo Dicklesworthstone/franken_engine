@@ -616,6 +616,20 @@ fn await_loop_completes_past_the_byte_budget() {
     assert_eq!(console_lines(&run, source), vec!["287988000"]);
 }
 
+/// The microtask queue kept a consumed slot per job until a drain returned,
+/// and a drain runs up to 10,000 jobs, so an await loop's resident size
+/// followed the jobs run since the last compaction (bd-9vouw.71). With
+/// compaction every 1,024 jobs, 24,000 awaits fit in 768 KiB: on the
+/// previous build they needed at least 1,162,752 bytes; now they need
+/// 508,032.
+#[test]
+fn await_loop_fits_a_small_byte_budget() {
+    let source = "async function f(i) { return i; } (async () => { let s = 0; \
+                  for (let i = 0; i < 24000; i++) { s += await f(i); } console.log(s); })();";
+    let run = try_run_with_budgets(source, None, None, Some(768 * 1024)).expect("lowers");
+    assert_eq!(console_lines(&run, source), vec!["287988000"]);
+}
+
 fn reachable_cases() -> Vec<(String, &'static str)> {
     let cases: &[(&str, &str, &str)] = &[
         (

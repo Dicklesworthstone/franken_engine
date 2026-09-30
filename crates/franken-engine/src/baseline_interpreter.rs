@@ -7490,12 +7490,20 @@ impl HeapObject {
 
     /// Effective attributes of the own property `key` (assumed present). A
     /// frozen object's properties are all non-configurable and non-writable.
+    /// An array's `length` is { writable, not enumerable, not configurable }
+    /// (ES2020 9.4.2.2 ArrayCreate) unless an explicit entry records
+    /// otherwise, so for-in, Object.keys, descriptors and delete agree.
     fn own_property_attributes(&self, key: &RuntimePropertyKey) -> PropertyAttributes {
-        let mut attributes = self
-            .property_attributes
-            .get(key)
-            .copied()
-            .unwrap_or_default();
+        let mut attributes = self.property_attributes.get(key).copied().unwrap_or_else(|| {
+            let mut attributes = PropertyAttributes::default();
+            if self.is_array
+                && matches!(key, RuntimePropertyKey::String(name) if name.as_str() == Some("length"))
+            {
+                attributes.enumerable = false;
+                attributes.configurable = false;
+            }
+            attributes
+        });
         if self.is_frozen {
             attributes.writable = false;
             attributes.configurable = false;
@@ -23606,11 +23614,9 @@ impl InterpreterCore {
     fn ordinary_own_string_key_is_enumerable(&self, object_id: ObjectId, key: &JsString) -> bool {
         self.heap.get(object_id.0 as usize).is_some_and(|object| {
             object.properties.contains_exact_key(key)
-                && !(object.is_array && key.as_str() == Some("length"))
                 && object
-                    .property_attributes
-                    .get(&RuntimePropertyKey::String(key.clone()))
-                    .is_none_or(|attributes| attributes.enumerable)
+                    .own_property_attributes(&RuntimePropertyKey::String(key.clone()))
+                    .enumerable
                 && self.writable_own_runtime_property_visible(object_id, key)
         })
     }
@@ -56950,7 +56956,6 @@ impl InterpreterCore {
             && match key {
                 RuntimePropertyKey::String(name) => {
                     self.writable_own_runtime_property_visible(object_id, name)
-                        && !(object.is_array && name.as_str() == Some("length"))
                 }
                 RuntimePropertyKey::Symbol(_) => true,
             })
@@ -89011,14 +89016,14 @@ impl InterpreterCore {
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
                 for key in object.properties.exact_keys() {
-                    // A non-enumerable own key is not visited but still
-                    // shadows a same-named key further up the chain.
+                    // A non-enumerable own key (an array's `length`) is not
+                    // visited but still shadows a same-named key further up
+                    // the chain.
                     if self.writable_own_runtime_property_visible(id, &key)
                         && seen.insert(key.clone())
                         && object
-                            .property_attributes
-                            .get(&RuntimePropertyKey::String(key.clone()))
-                            .is_none_or(|attributes| attributes.enumerable)
+                            .own_property_attributes(&RuntimePropertyKey::String(key.clone()))
+                            .enumerable
                     {
                         keys.push(key);
                     }

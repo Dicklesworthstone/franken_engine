@@ -18194,8 +18194,15 @@ fn lower_expression_to_ir1_inner(
         } => {
             // Interleave quasis and expressions: quasi[0], expr[0], quasi[1], ..., quasi[N-1]
             for (i, quasi) in quasis.iter().enumerate() {
+                // The parser keeps quasis raw; the string is the cooked
+                // template value (`\n` is a newline, `\\` one backslash).
+                let cooked = crate::parser::cook_template_quasi(quasi).ok_or(
+                    LoweringPipelineError::InvariantViolation {
+                        detail: "template literal quasi has a malformed escape sequence",
+                    },
+                )?;
                 ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(quasi.clone().into()),
+                    value: Ir1Literal::String(cooked),
                 });
                 if i < expressions.len() {
                     lower_expression_to_ir1(

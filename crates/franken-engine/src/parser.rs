@@ -7360,9 +7360,9 @@ fn try_parse_postfix(
             // template literal as a single argument, so the tag saw the
             // concatenated string instead of the strings array and substitutions
             // (→ `t`hello`` yielded undefined). `parse_template_literal` keeps
-            // quasis raw, so cook each via `unescape_string_literal`.
-            // (The strings array's `.raw` property — needed by `String.raw` — is
-            // a follow-up; basic cooked tagged templates work without it.)
+            // quasis raw, so cook each via `cook_template_quasi`; a quasi with
+            // a `NotEscapeSequence` cooks to undefined (ES2018 template
+            // literal revision).
             let Expression::TemplateLiteral {
                 quasis,
                 expressions,
@@ -7377,8 +7377,10 @@ fn try_parse_postfix(
             let cooked_strings: Vec<Option<Expression>> = quasis
                 .iter()
                 .map(|quasi| {
-                    let cooked = unescape_string_literal(quasi).unwrap_or_else(|| quasi.clone());
-                    Some(Expression::StringLiteral(cooked.into()))
+                    Some(
+                        cook_template_quasi(quasi)
+                            .map_or(Expression::UndefinedLiteral, Expression::StringLiteral),
+                    )
                 })
                 .collect();
             // `.raw` array (bd-vl55w): parse_template_literal keeps quasis raw
@@ -9130,100 +9132,70 @@ fn parse_quoted_expression_string(
     Some(JsString::from_code_units(&units))
 }
 
+/// Cook one raw template quasi into its template value (ES2020 11.8.6.1 TV):
+/// escapes decode as in string literals, a backslash before a line terminator
+/// (a line continuation) contributes nothing, and a literal CR LF or CR is
+/// LF. [`parse_template_literal`] keeps quasis raw (the `.raw` strings of a
+/// tagged template) and has already rejected malformed escapes in untagged
+/// templates, so `None` here means a `NotEscapeSequence`.
+pub(crate) fn cook_template_quasi(raw: &str) -> Option<JsString> {
+    if !raw.contains(['\\', '\r']) {
+        return Some(JsString::from(raw));
+    }
+    let mut units = Vec::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            units.push(u16::from(b'\n'));
+            continue;
+        }
+        if ch != '\\' {
+            push_char_utf16(&mut units, ch);
+            continue;
+        }
+        match chars.next()? {
+            '\n' | '\u{2028}' | '\u{2029}' => {}
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+            }
+            'n' => units.push(u16::from(b'\n')),
+            't' => units.push(u16::from(b'\t')),
+            'r' => units.push(u16::from(b'\r')),
+            'b' => units.push(0x0008),
+            'f' => units.push(0x000C),
+            'v' => units.push(0x000B),
+            '0' if !chars.peek().is_some_and(char::is_ascii_digit) => units.push(0),
+            '0'..='9' => return None,
+            'x' => {
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                units.push(u16::try_from(high * 16 + low).ok()?);
+            }
+            'u' => {
+                let value = decode_quoted_unicode_escape(&mut chars)?;
+                if let Ok(unit) = u16::try_from(value) {
+                    units.push(unit);
+                } else {
+                    push_char_utf16(&mut units, char::from_u32(value)?);
+                }
+            }
+            other => push_char_utf16(&mut units, other),
+        }
+    }
+    Some(JsString::from_code_units(&units))
+}
+
 /// Parse a quoted module specifier into its exact ECMAScript UTF-16 value.
 /// Module code is strict, so legacy decimal escapes remain rejected while
 /// lone-surrogate Unicode escapes stay distinct rather than being projected
 /// through UTF-8.
 pub(crate) fn parse_quoted_string(input: &str) -> Option<JsString> {
     parse_quoted_expression_string(input, LegacyDecimalEscapeMode::Reject)
-}
-
-/// Legacy UTF-8 cooker retained for template-literal quasis. Quoted
-/// expression literals use [`parse_quoted_expression_string`] so lone UTF-16
-/// units are never forced through this scalar-only seam.
-fn decode_unicode_escape_value(
-    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-) -> Option<u32> {
-    if chars.peek() == Some(&'{') {
-        chars.next();
-        let mut code: u32 = 0;
-        let mut digits = 0u32;
-        loop {
-            match chars.next()? {
-                '}' => break,
-                c => {
-                    let d = c.to_digit(16)?;
-                    code = code.checked_mul(16)?.checked_add(d)?;
-                    if code > 0x0010_FFFF {
-                        return None;
-                    }
-                    digits += 1;
-                }
-            }
-        }
-        if digits == 0 {
-            return None;
-        }
-        Some(code)
-    } else {
-        let mut code: u32 = 0;
-        for _ in 0..4 {
-            code = code
-                .checked_mul(16)?
-                .checked_add(chars.next()?.to_digit(16)?)?;
-        }
-        Some(code)
-    }
-}
-
-fn unescape_string_literal(inner: &str) -> Option<String> {
-    if !inner.contains('\\') {
-        return Some(inner.to_string());
-    }
-    let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            out.push(ch);
-            continue;
-        }
-        match chars.next()? {
-            'n' => out.push('\n'),
-            't' => out.push('\t'),
-            'r' => out.push('\r'),
-            'b' => out.push('\u{0008}'),
-            'f' => out.push('\u{000C}'),
-            'v' => out.push('\u{000B}'),
-            '0' if !chars.peek().is_some_and(|c| c.is_ascii_digit()) => out.push('\0'),
-            '\\' => out.push('\\'),
-            '\'' => out.push('\''),
-            '"' => out.push('"'),
-            '`' => out.push('`'),
-            'x' => {
-                let high = chars.next()?.to_digit(16)?;
-                let low = chars.next()?.to_digit(16)?;
-                out.push(char::from_u32(high * 16 + low)?);
-            }
-            'u' => {
-                let high = decode_unicode_escape_value(&mut chars)?;
-                let decoded = if (0xD800..=0xDBFF).contains(&high) {
-                    if chars.next()? != '\\' || chars.next()? != 'u' {
-                        return None;
-                    }
-                    let low = decode_unicode_escape_value(&mut chars)?;
-                    if !(0xDC00..=0xDFFF).contains(&low) {
-                        return None;
-                    }
-                    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))?
-                } else {
-                    char::from_u32(high)?
-                };
-                out.push(decoded);
-            }
-            other => out.push(other),
-        }
-    }
-    Some(out)
 }
 
 /// Parse a regex literal: `/pattern/flags`.
@@ -13315,52 +13287,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unescape_combines_surrogate_pair_escapes_into_code_point() {
-        // `"\uD83D\uDE00"` is the standard pre-ES6 spelling of U+1F600;
-        // adjacent high+low surrogate escapes cook to one code point
-        // (bd-k9jb0), in any escape spelling.
+    fn template_quasi_cooks_surrogate_pair_escapes_into_code_point() {
+        // `\uD83D\uDE00` is the pre-ES6 spelling of U+1F600; adjacent high
+        // and low surrogate escapes cook to one code point (bd-k9jb0), in
+        // any escape spelling, with surrounding text preserved.
+        let emoji = Some(JsString::from("\u{1F600}"));
+        for raw in [
+            r"\uD83D\uDE00",
+            r"\uD83D\u{DE00}",
+            r"\u{D83D}\uDE00",
+            r"\u{D83D}\u{DE00}",
+            r"\u{1F600}",
+        ] {
+            assert_eq!(cook_template_quasi(raw), emoji, "{raw}");
+        }
         assert_eq!(
-            unescape_string_literal(r"\uD83D\uDE00").as_deref(),
-            Some("\u{1F600}")
-        );
-        // Mixed 4-hex and braced spellings combine identically.
-        assert_eq!(
-            unescape_string_literal(r"\uD83D\u{DE00}").as_deref(),
-            Some("\u{1F600}")
-        );
-        assert_eq!(
-            unescape_string_literal(r"\u{D83D}\uDE00").as_deref(),
-            Some("\u{1F600}")
-        );
-        assert_eq!(
-            unescape_string_literal(r"\u{D83D}\u{DE00}").as_deref(),
-            Some("\u{1F600}")
-        );
-        // Direct supplementary code point still decodes without pairing.
-        assert_eq!(
-            unescape_string_literal(r"\u{1F600}").as_deref(),
-            Some("\u{1F600}")
-        );
-        // Surrounding content is preserved across the combined pair.
-        assert_eq!(
-            unescape_string_literal(r"a\uD83D\uDE00b").as_deref(),
-            Some("a\u{1F600}b")
+            cook_template_quasi(r"a\uD83D\uDE00b"),
+            Some(JsString::from("a\u{1F600}b"))
         );
     }
 
     #[test]
-    fn unescape_lone_surrogate_escapes_fail_closed() {
-        // Lone surrogate VALUES are unrepresentable in the UTF-8 string
-        // model (bd-neika); decoding stays a fail-closed parse error.
-        assert_eq!(unescape_string_literal(r"\uD83D"), None);
-        assert_eq!(unescape_string_literal(r"\uDE00"), None);
-        assert_eq!(unescape_string_literal(r"\u{D83D}"), None);
-        // High surrogate followed by anything but a low-surrogate escape.
-        assert_eq!(unescape_string_literal(r"\uD83Dx"), None);
-        assert_eq!(unescape_string_literal(r"\uD83D\n"), None);
-        assert_eq!(unescape_string_literal(r"\uD83DA"), None);
-        // Reversed order (low then high) is not a valid pair.
-        assert_eq!(unescape_string_literal(r"\uDE00\uD83D"), None);
+    fn template_quasi_keeps_lone_surrogate_escapes_as_code_units() {
+        // A lone surrogate escape is one code unit of the string value, as
+        // in Node (`\`\uD83D\``.length === 1). The UTF-8 cooker this
+        // replaces could not represent one and failed.
+        assert_eq!(
+            cook_template_quasi(r"\uD83D"),
+            Some(JsString::from_code_units(&[0xD83D]))
+        );
+        assert_eq!(
+            cook_template_quasi(r"\uDE00\uD83Dx"),
+            Some(JsString::from_code_units(&[
+                0xDE00,
+                0xD83D,
+                u16::from(b'x')
+            ]))
+        );
+    }
+
+    #[test]
+    fn template_quasi_cooks_escapes_continuations_and_line_ends() {
+        let cooked = |raw: &str| cook_template_quasi(raw).map(|value| value.to_string());
+        assert_eq!(cooked(r"a\nb\tc").as_deref(), Some("a\nb\tc"));
+        // One backslash from `\\`; `\[`, `\$`, `\`` are the character.
+        assert_eq!(cooked(r"a\\[b\$\`").as_deref(), Some("a\\[b$`"));
+        assert_eq!(cooked(r"\x41\u0042\u{43}\0").as_deref(), Some("ABC\0"));
+        // A backslash before a line terminator contributes nothing.
+        assert_eq!(cooked("x\\\ny").as_deref(), Some("xy"));
+        assert_eq!(cooked("x\\\r\ny").as_deref(), Some("xy"));
+        assert_eq!(cooked("x\\\u{2028}y").as_deref(), Some("xy"));
+        // A literal CR LF or CR is LF in the template value.
+        assert_eq!(cooked("x\r\ny\rz").as_deref(), Some("x\ny\nz"));
+        // NotEscapeSequence shapes do not cook.
+        assert_eq!(cooked(r"\1"), None);
+        assert_eq!(cooked(r"\01"), None);
+        assert_eq!(cooked(r"\xZ1"), None);
+        assert_eq!(cooked(r"\u{110000}"), None);
     }
 
     #[test]

@@ -22,6 +22,18 @@ use super::*;
 
 use date_locale::{DateComponents, Digits, FormatStyle, MonthStyle, TextWidth};
 
+/// Which caller's ToDateTimeOptions `required` / `defaults` apply (ECMA-402
+/// 11.1.2): the DateTimeFormat constructor (any, date) or
+/// Date.prototype.toLocaleDateString (date, date), toLocaleTimeString
+/// (time, time) and toLocaleString (any, all).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DateOptionsFor {
+    Constructor,
+    DateString,
+    TimeString,
+    String,
+}
+
 /// The service constructors on `Intl`.
 const SERVICES: [&str; 4] = ["NumberFormat", "DateTimeFormat", "Collator", "PluralRules"];
 
@@ -107,7 +119,12 @@ impl InterpreterCore {
         let requested = self.intl_locale_list(&locales)?.into_iter().next();
         let resolved = match service {
             "NumberFormat" => self.intl_number_format_options(module, requested, &options)?,
-            "DateTimeFormat" => self.intl_date_time_format_options(module, requested, &options)?,
+            "DateTimeFormat" => self.intl_date_time_format_options(
+                module,
+                requested,
+                &options,
+                DateOptionsFor::Constructor,
+            )?,
             "Collator" => self.intl_collator_options(module, requested, &options)?,
             "PluralRules" => self.intl_plural_rules_options(module, requested, &options)?,
             other => {
@@ -583,6 +600,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         requested: Option<String>,
         options: &Value,
+        caller: DateOptionsFor,
     ) -> Result<Vec<(&'static str, Value)>, InterpreterError> {
         const SERVICE: &str = "DateTimeFormat";
         const NUMERIC: [&str; 2] = ["numeric", "2-digit"];
@@ -653,15 +671,43 @@ impl InterpreterCore {
         )?;
         let date_style = self.intl_string_option(module, options, "dateStyle", &STYLES, SERVICE)?;
         let time_style = self.intl_string_option(module, options, "timeStyle", &STYLES, SERVICE)?;
-        let components = [&weekday, &year, &month, &day, &hour, &minute, &second];
-        let has_components =
-            components.iter().any(|value| value.is_some()) || time_zone_name.is_some();
+        let has_date = [&weekday, &year, &month, &day]
+            .iter()
+            .any(|value| value.is_some());
+        let has_time = [&hour, &minute, &second]
+            .iter()
+            .any(|value| value.is_some());
+        let has_components = has_date || has_time || time_zone_name.is_some();
         if (date_style.is_some() || time_style.is_some()) && has_components {
             return Err(InterpreterError::TypeError {
                 expected: "dateStyle and timeStyle without date-time component options".to_string(),
                 got: "both".to_string(),
             });
         }
+        if (caller == DateOptionsFor::DateString && time_style.is_some())
+            || (caller == DateOptionsFor::TimeString && date_style.is_some())
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "a style the method formats".to_string(),
+                got: "timeStyle for a date string, or dateStyle for a time string".to_string(),
+            });
+        }
+        // ToDateTimeOptions: the required fields decide whether the
+        // defaults are added.
+        let styled = date_style.is_some() || time_style.is_some();
+        let need_defaults = !styled
+            && match caller {
+                DateOptionsFor::DateString => !has_date,
+                DateOptionsFor::TimeString => !has_time,
+                DateOptionsFor::Constructor | DateOptionsFor::String => !has_date && !has_time,
+            };
+        let default_date = need_defaults
+            && matches!(
+                caller,
+                DateOptionsFor::Constructor | DateOptionsFor::DateString | DateOptionsFor::String
+            );
+        let default_time =
+            need_defaults && matches!(caller, DateOptionsFor::TimeString | DateOptionsFor::String);
         let locale = requested.unwrap_or_else(|| "en-US".to_string());
         let english = locale.eq_ignore_ascii_case("en") || locale.eq_ignore_ascii_case("en-US");
         let cycle = match (hour12, hour_cycle.as_deref()) {
@@ -681,20 +727,21 @@ impl InterpreterCore {
             ("numberingSystem", Value::str("latn")),
             ("timeZone", Value::str("UTC")),
         ];
+        let numeric = || Some("numeric".to_string());
+        let (year, month, day) = if default_date {
+            (numeric(), numeric(), numeric())
+        } else {
+            (year, month, day)
+        };
+        let (hour, minute, second) = if default_time {
+            (numeric(), numeric(), numeric())
+        } else {
+            (hour, minute, second)
+        };
         if hour.is_some() || time_style.is_some() {
             resolved.push(("hourCycle", Value::str(cycle)));
             resolved.push(("hour12", Value::Bool(cycle == "h12")));
         }
-        let defaulted = !has_components && date_style.is_none() && time_style.is_none();
-        let (year, month, day) = if defaulted {
-            (
-                Some("numeric".to_string()),
-                Some("numeric".to_string()),
-                Some("numeric".to_string()),
-            )
-        } else {
-            (year, month, day)
-        };
         for (key, value) in [
             ("weekday", weekday),
             ("year", year),
@@ -719,6 +766,33 @@ impl InterpreterCore {
             return Err(Self::intl_refusal(SERVICE, what));
         }
         Ok(resolved)
+    }
+
+    /// Date.prototype.toLocaleString / toLocaleDateString /
+    /// toLocaleTimeString with options (ECMA-402 20.4.1-3): a
+    /// DateTimeFormat over ToDateTimeOptions for the method. `time` is the
+    /// date's finite time value.
+    pub(super) fn date_to_locale_with_options(
+        &mut self,
+        module: &Ir3Module,
+        caller: DateOptionsFor,
+        time: f64,
+        locales: &Value,
+        options: &Value,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(options, Value::Null) {
+            return Err(InterpreterError::TypeError {
+                expected: "an options object for Date.prototype.toLocaleString".to_string(),
+                got: "null".to_string(),
+            });
+        }
+        let requested = self.intl_locale_list(locales)?.into_iter().next();
+        let resolved = self.intl_date_time_format_options(module, requested, options, caller)?;
+        let resolved_id = self.alloc_object_with_properties(&resolved)?;
+        let request = self.intl_date_request_from(resolved_id)?;
+        self.intl_format_date(time, &request)
+            .map(Value::str)
+            .map_err(|what| Self::intl_refusal("DateTimeFormat", what))
     }
 
     /// What a DateTimeFormat formats, read back from its resolved options.
@@ -806,21 +880,49 @@ impl InterpreterCore {
                 request.components.hour12,
             );
         }
-        let date_only = DateComponents {
-            year: Some(Digits::Numeric),
+        // The locale's default numeric date, time or both (the layouts every
+        // formatted locale has), with its default hour cycle.
+        let english = matches!(request.locale.to_ascii_lowercase().as_str(), "en" | "en-us");
+        let numeric = Some(Digits::Numeric);
+        let date = DateComponents {
+            weekday: None,
+            year: numeric,
             month: Some(MonthStyle::Digits(Digits::Numeric)),
-            day: Some(Digits::Numeric),
-            ..request.components
+            day: numeric,
+            hour: None,
+            minute: None,
+            second: None,
+            hour12: english,
+            time_zone_name: None,
         };
-        if request.components == date_only {
-            // The locale's default numeric date (every formatted locale).
-            return date_locale::format_date_locale(
-                fields,
-                locale,
-                date_locale::DateLocaleKind::Date,
-            );
+        let time = DateComponents {
+            year: None,
+            month: None,
+            day: None,
+            hour: numeric,
+            minute: numeric,
+            second: numeric,
+            ..date
+        };
+        let both = DateComponents {
+            hour: numeric,
+            minute: numeric,
+            second: numeric,
+            ..date
+        };
+        let kind = if request.components == date {
+            Some(date_locale::DateLocaleKind::Date)
+        } else if request.components == time {
+            Some(date_locale::DateLocaleKind::Time)
+        } else if request.components == both {
+            Some(date_locale::DateLocaleKind::DateTime)
+        } else {
+            None
+        };
+        match kind {
+            Some(kind) => date_locale::format_date_locale(fields, locale, kind),
+            None => date_locale::format_date_components(fields, locale, &request.components),
         }
-        date_locale::format_date_components(fields, locale, &request.components)
     }
 
     fn intl_collator_options(

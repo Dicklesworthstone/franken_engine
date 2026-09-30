@@ -917,6 +917,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Float64Array" => Some("Float64Array"),
         "BigInt64Array" => Some("BigInt64Array"),
         "BigUint64Array" => Some("BigUint64Array"),
+        // %TypedArray% (ES2020 22.2.1): not a global binding.
+        "TypedArray" => Some("TypedArray"),
         "Date" => Some("Date"),
         "Promise" => Some("Promise"),
         "RegExp" => Some("RegExp"),
@@ -5418,6 +5420,10 @@ impl BuiltinFunction {
     }
 }
 
+/// %TypedArray% (ES2020 22.2.1): the abstract superclass of the typed array
+/// constructors, a standard constructor that is not a global binding.
+const TYPED_ARRAY_INTRINSIC: &str = "TypedArray";
+
 /// bd-9vouw.17: standard constructors bound as first-class global values.
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
@@ -5509,7 +5515,7 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 18] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 19] = [
     "Array",
     "String",
     "Number",
@@ -5528,6 +5534,7 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 18] = [
     "ArrayBuffer",
     "WeakRef",
     "FinalizationRegistry",
+    "TypedArray",
 ];
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
@@ -92519,6 +92526,13 @@ impl InterpreterCore {
             }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
+            // ES2020 22.2.6: the concrete typed array prototypes inherit the
+            // shared methods from %TypedArray.prototype%, whose own
+            // [[Prototype]] is %Object.prototype% (22.2.3).
+            "TypedArray" => Some(self.ensure_builtin_prototype("Object")?),
+            name if TypedArrayKind::from_type_name(name).is_some() => {
+                Some(self.ensure_builtin_prototype("TypedArray")?)
+            }
             _ => None,
         };
         let prototype = self.alloc_object_with_prototype(parent)?;
@@ -93234,6 +93248,7 @@ impl InterpreterCore {
         STANDARD_CONSTRUCTOR_GLOBALS
             .iter()
             .copied()
+            .chain([TYPED_ARRAY_INTRINSIC])
             .find(|name| *name == &*builtin.module_specifier)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "standard constructor".to_string(),
@@ -93254,7 +93269,7 @@ impl InterpreterCore {
             "prototype" => Value::Object(self.ensure_builtin_prototype(name)?),
             "name" => Value::str(name),
             "length" => Value::Int(match name {
-                "Map" | "Set" | "WeakMap" | "WeakSet" | "Symbol" => 0,
+                "Map" | "Set" | "WeakMap" | "WeakSet" | "Symbol" | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
@@ -93284,7 +93299,10 @@ impl InterpreterCore {
                 Value::Int(i64::try_from(kind.element_size()).unwrap_or(i64::MAX))
             }
             // Inherited from %TypedArray% (ES2020 22.2.2).
-            method @ ("from" | "of") if TypedArrayKind::from_type_name(name).is_some() => {
+            method @ ("from" | "of")
+                if name == TYPED_ARRAY_INTRINSIC
+                    || TypedArrayKind::from_type_name(name).is_some() =>
+            {
                 Value::BuiltinFunction(BuiltinFunction::typed_array_static(method))
             }
             _ => {
@@ -93362,6 +93380,11 @@ impl InterpreterCore {
             name if TypedArrayKind::from_type_name(name).is_some() => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }
+            // ES2020 22.2.1.1: %TypedArray% only serves as a superclass.
+            TYPED_ARRAY_INTRINSIC => Err(InterpreterError::TypeError {
+                expected: "a concrete typed array constructor".to_string(),
+                got: "Abstract class TypedArray not directly constructable".to_string(),
+            }),
             "Array" => {
                 let values = self.call_arguments(args)?;
                 if let [length @ (Value::Int(_) | Value::Float(_))] = values.as_slice() {
@@ -93617,6 +93640,10 @@ impl InterpreterCore {
             | "FinalizationRegistry" => {
                 Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)
             }
+            // The shared typed array methods are element-type agnostic.
+            "TypedArray" => {
+                Self::typed_array_prototype_method("Int8Array", key).map(Value::BuiltinFunction)
+            }
             _ => None,
         }
     }
@@ -93671,6 +93698,11 @@ impl InterpreterCore {
             .map(|(name, _)| name.as_str())?;
         if key == "constructor" && matches!(name, "Promise" | "Date") {
             return self.materialized_intrinsic_constructor(name);
+        }
+        if key == "constructor" && name == TYPED_ARRAY_INTRINSIC {
+            return Some(Value::BuiltinFunction(
+                BuiltinFunction::standard_constructor(TYPED_ARRAY_INTRINSIC),
+            ));
         }
         if key == "constructor" {
             return STANDARD_CONSTRUCTOR_GLOBALS
@@ -93727,6 +93759,9 @@ impl InterpreterCore {
             // constructors rather than standard constructor builtins.
             if let Some(name @ ("Promise" | "Date")) = canonical {
                 return self.materialized_intrinsic_constructor(name);
+            }
+            if canonical == Some(TYPED_ARRAY_INTRINSIC) {
+                return Some(constructor(TYPED_ARRAY_INTRINSIC));
             }
             if let Some(name) = canonical.and_then(|name| {
                 STANDARD_CONSTRUCTOR_GLOBALS

@@ -180,3 +180,29 @@ fn typed_array_from_and_of() {
         "TypeError,TypeError,TypeError",
     );
 }
+
+/// %TypedArray% (ES2020 22.2.1): `Object.getPrototypeOf(Int8Array)` was a
+/// plain object, so Test262's testTypedArray.js harness
+/// (`var TypedArray = Object.getPrototypeOf(Int8Array)`) failed on
+/// `TypedArray.prototype`. It is now the abstract constructor the nine
+/// concrete ones inherit from, and its prototype serves the shared methods.
+#[test]
+fn typed_array_intrinsic() {
+    check(
+        "const TA = Object.getPrototypeOf(Int8Array); \
+         [typeof TA, TA.name, TA.length, Object.getPrototypeOf(Int8Array.prototype) === TA.prototype, \
+         Object.getPrototypeOf(TA.prototype) === Object.prototype, TA.prototype.constructor === TA, \
+         new Int8Array(2) instanceof TA, \
+         Object.getPrototypeOf(Int8Array) === Object.getPrototypeOf(BigUint64Array), \
+         typeof TA.prototype.fill, typeof Int8Array.prototype.map, \
+         Int8Array.prototype.hasOwnProperty('map'), TA.prototype.hasOwnProperty('map'), \
+         Uint8Array.prototype.fill === TA.prototype.fill].join(' ')",
+        "function TypedArray 0 true true true true true function function false true true",
+    );
+    check(
+        "const TA = Object.getPrototypeOf(Int8Array); const r = []; \
+         for (const f of [() => new TA(), () => TA(), () => TA.from([1])]) { \
+         try { f(); r.push('ok'); } catch (e) { r.push(e.constructor.name); } } r.join()",
+        "TypeError,TypeError,TypeError",
+    );
+}

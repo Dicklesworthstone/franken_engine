@@ -2793,17 +2793,87 @@ fn text_after_last_top_level_terminator(statement: &str) -> &str {
 }
 
 /// Whether `statement` is a `do` statement whose `while (...)` has not
-/// appeared yet (its body is complete or still to come).
+/// appeared yet (its body is complete or still to come), also as the
+/// unbraced body of other headers: `if (c) do x++; while (x < 3);` is one
+/// if statement, as js-yaml's bundle writes it across three lines.
 fn do_statement_awaits_while(statement: &str) -> bool {
-    starts_with_keyword(statement, "do") && find_top_level_keyword(statement, " while").is_none()
+    let body = unbraced_body_of_header_chain(statement);
+    starts_with_keyword(body, "do") && find_top_level_keyword(body, " while").is_none()
+}
+
+/// `statement` without its leading chain of statement headers (`if (...)`,
+/// `for (...)`, `while (...)`, `with (...)`, `else`, labels): the statement
+/// that is their innermost unbraced body, or `statement` itself.
+fn unbraced_body_of_header_chain(statement: &str) -> &str {
+    let mut rest = strip_leading_labels(statement.trim_start()).trim_start();
+    loop {
+        if let Some(after) = rest
+            .strip_prefix("else")
+            .filter(|after| after.starts_with(char::is_whitespace))
+        {
+            rest = strip_leading_labels(after.trim_start()).trim_start();
+            continue;
+        }
+        if !["if", "for", "while", "with"]
+            .iter()
+            .any(|keyword| starts_with_keyword(rest, keyword))
+        {
+            return rest;
+        }
+        let Some((_, after)) = rest
+            .find('(')
+            .and_then(|open| extract_balanced(&rest[open..], '(', ')'))
+        else {
+            return rest;
+        };
+        rest = strip_leading_labels(after.trim_start()).trim_start();
+    }
 }
 
 /// Whether `statement` ends in a header whose body may be a single unbraced
 /// statement on the next line: `if (...)`, `for (...)`, `while (...)`,
-/// `with (...)`, `else` or `do`. A do statement's trailing `while (...)` is
-/// its condition, not a header.
+/// `with (...)`, `else` or `do`, including a chain of them whose innermost
+/// header is still waiting (`for (...)\n  if (x)\n    return;`, the layout
+/// bundlers emit). A do statement's trailing `while (...)` is its condition,
+/// not a header.
 fn statement_header_takes_unbraced_body(statement: &str) -> bool {
     let tail = text_after_last_top_level_terminator(statement).trim();
+    // Only a `while` tail can be a do statement's condition.
+    let in_do_statement = tail.contains("while")
+        && starts_with_keyword(unbraced_body_of_header_chain(statement), "do");
+    header_chain_takes_unbraced_body(tail, in_do_statement)
+}
+
+/// Whether an `else` on the next line continues `clause`: an `if` statement,
+/// also as the unbraced body of loop headers (`while (c)\n  if (x) a();\n
+/// else b();` pairs the `else` with that `if`).
+fn clause_takes_else(clause: &str) -> bool {
+    let mut rest = clause.trim();
+    loop {
+        if starts_with_keyword(rest, "if") {
+            return true;
+        }
+        if !["for", "while", "with"]
+            .iter()
+            .any(|keyword| starts_with_keyword(rest, keyword))
+        {
+            return false;
+        }
+        let Some((_, after)) = rest
+            .find('(')
+            .and_then(|open| extract_balanced(&rest[open..], '(', ')'))
+        else {
+            return false;
+        };
+        rest = after.trim();
+    }
+}
+
+/// [`statement_header_takes_unbraced_body`] for the text of one header and
+/// whatever follows it: a header whose parentheses end the text waits for
+/// its body, and so does one followed by another such header (its unbraced
+/// body is that nested statement).
+fn header_chain_takes_unbraced_body(tail: &str, in_do_statement: bool) -> bool {
     if tail == "else" || tail == "do" {
         return true;
     }
@@ -2811,19 +2881,29 @@ fn statement_header_takes_unbraced_body(statement: &str) -> bool {
         .strip_prefix("else")
         .filter(|rest| rest.starts_with(char::is_whitespace))
         .map_or(tail, str::trim_start);
-    if header.is_empty() || header.contains('{') {
+    // A braced body shows after the header's parentheses (the recursion
+    // below rejects it); a `{` inside them is an object literal or a
+    // destructuring pattern: `if (visit(item, {\n  depth\n}))\n  return;`.
+    if header.is_empty() {
         return false;
     }
-    if starts_with_keyword(header, "while") && starts_with_keyword(statement, "do") {
+    if starts_with_keyword(header, "while") && in_do_statement {
         return false;
     }
-    ["if", "for", "while", "with"]
+    if !["if", "for", "while", "with"]
         .iter()
         .any(|keyword| starts_with_keyword(header, keyword))
-        && header.find('(').is_some_and(|open| {
-            extract_balanced(&header[open..], '(', ')')
-                .is_some_and(|(_, rest)| rest.trim().is_empty())
-        })
+    {
+        return false;
+    }
+    let Some((_, rest)) = header
+        .find('(')
+        .and_then(|open| extract_balanced(&header[open..], '(', ')'))
+    else {
+        return false;
+    };
+    let rest = rest.trim();
+    rest.is_empty() || header_chain_takes_unbraced_body(rest, false)
 }
 
 /// Whether `statement` ends in a statement header still waiting for its
@@ -2989,8 +3069,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             // own line (`do\n  i++;\nwhile (c);`).
             let clause_continues_statement = result.last().is_some_and(|prev| {
                 previous_clause(prev).is_some_and(|clause| {
-                    (starts_with_keyword(trimmed_line, "else")
-                        && starts_with_keyword(&clause, "if"))
+                    (starts_with_keyword(trimmed_line, "else") && clause_takes_else(&clause))
                         || (starts_with_keyword(trimmed_line, "while")
                             && do_statement_awaits_while(&clause))
                 })
@@ -3605,6 +3684,8 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
+    // Where the current outermost `{` group opened.
+    let mut outer_brace_open = 0usize;
 
     for (index, ch) in line.char_indices() {
         if quotes.active() {
@@ -3625,17 +3706,35 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '[' => bracket_depth = bracket_depth.saturating_add(1),
             ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth = brace_depth.saturating_add(1),
+            '{' => {
+                if brace_depth == 0 {
+                    outer_brace_open = index;
+                }
+                brace_depth = brace_depth.saturating_add(1);
+            }
             '}' => {
                 let was_positive = brace_depth > 0;
                 brace_depth = brace_depth.saturating_sub(1);
+                // An object literal or arrow body inside an unbraced body
+                // (`if (a) o.x = {}; else ...`, `if (a) f = () => {}`)
+                // ends no statement: the `;` after it decides, as it does
+                // for any other expression.
+                let closes_expression_brace = outer_brace_open >= segment_start
+                    && line[segment_start..outer_brace_open].trim_end().ends_with([
+                        '=', '>', ',', '(', '[', '?', '!', '&', '|', '+', '-', '*', '%',
+                    ]);
                 // A closing brace that returns to brace_depth==0 may
                 // terminate a block-level statement (function decl,
                 // if/else, for, while, etc.).  Only split here when the
                 // CURRENT segment starts with a block keyword so we
                 // don't break function expressions or object literals
                 // embedded in larger expressions.
-                if was_positive && brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
+                if was_positive
+                    && brace_depth == 0
+                    && paren_depth == 0
+                    && bracket_depth == 0
+                    && !closes_expression_brace
+                {
                     let seg = line[segment_start..].trim_start();
                     // A labelled statement (`label: for (..) {..}`) is still a
                     // block-terminated statement, so look past any leading
@@ -3675,7 +3774,13 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         // loop, which was glued onto the if and never ran.
                         let block_statement =
                             strip_leading_labels(line[segment_start..after].trim_start());
+                        // `if (a) x = function () {}; else ...`: the `;`
+                        // ends the unbraced consequent, not the statement.
+                        let semicolon_else = rest
+                            .strip_prefix(';')
+                            .is_some_and(|after| starts_with_keyword(after.trim_start(), "else"));
                         let continues = starts_with_keyword(rest, "else")
+                            || semicolon_else
                             || starts_with_keyword(rest, "catch")
                             || starts_with_keyword(rest, "finally")
                             || (starts_with_keyword(rest, "while")
@@ -10398,6 +10503,19 @@ fn parse_if_statement(
     let (consequent_src, alternate_src) = if rest.starts_with('{') {
         if let Some((block_inner, after_block)) = extract_balanced(rest, '{', '}') {
             let after = after_block.trim();
+            // `if (a) {} ; else b`: the `;` is an empty statement after the
+            // if, so this `else` has no if.
+            if after
+                .strip_prefix(';')
+                .is_some_and(|tail| starts_with_keyword(tail.trim_start(), "else"))
+            {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unexpected `else` after an empty statement",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
             (
                 format!("{{{block_inner}}}"),
                 if after.starts_with("else") {

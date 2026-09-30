@@ -7511,6 +7511,124 @@ fn validate_heap_symbol_references(
     Ok(())
 }
 
+/// A JavaScript RegExp pattern (ES2020 21.2.1, with Annex B's literal
+/// braces) in the syntax of the `regex` crate, where the two spell the same
+/// meaning differently:
+/// - in a character class `[` is a literal in JavaScript but opens a nested
+///   class in `regex`, and `&&`, `--` and `~~` are literal pairs, not set
+///   operations (`/[.*+?^${}()|[\]\\]/g`, the usual escapeRegExp, failed to
+///   compile);
+/// - outside a class a `{` that does not start `{n}`, `{n,}` or `{n,m}` is a
+///   literal, an error in `regex`;
+/// - `\d`, `\D`, `\w` and `\W` are ASCII in JavaScript, Unicode in `regex`;
+/// - `.` does not match `\r`, U+2028 or U+2029 (nor `\n`) unless `s` is set;
+/// - `[]` matches nothing and `[^]` any character; `\0` is NUL; `\/` is `/`.
+///
+/// Lone surrogate escapes, look-around and backreferences have no `regex`
+/// spelling and still fail to compile.
+fn js_regexp_pattern_for_regex_crate(pattern: &str, dot_all: bool) -> String {
+    const ANY_CHARACTER: &str = r"[\x{0}-\x{10FFFF}]";
+    let chars: Vec<char> = pattern.chars().collect();
+    let starts_quantifier = |from: usize| {
+        let mut index = from + 1;
+        let digits_start = index;
+        while chars.get(index).is_some_and(char::is_ascii_digit) {
+            index += 1;
+        }
+        if index == digits_start {
+            return false;
+        }
+        if chars.get(index) == Some(&',') {
+            index += 1;
+            while chars.get(index).is_some_and(char::is_ascii_digit) {
+                index += 1;
+            }
+        }
+        chars.get(index) == Some(&'}')
+    };
+    let mut out = String::with_capacity(pattern.len() + 8);
+    let mut in_class = false;
+    let mut index = 0;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch == '\\' {
+            let Some(&next) = chars.get(index + 1) else {
+                out.push('\\');
+                index += 1;
+                continue;
+            };
+            let replacement = match (next, in_class) {
+                ('d', false) => Some("[0-9]"),
+                ('d', true) => Some("0-9"),
+                ('D', false) => Some("[^0-9]"),
+                ('w', false) => Some("[A-Za-z0-9_]"),
+                ('w', true) => Some("A-Za-z0-9_"),
+                ('W', false) => Some("[^A-Za-z0-9_]"),
+                ('/', _) => Some("/"),
+                ('0', _) if !chars.get(index + 2).is_some_and(char::is_ascii_digit) => {
+                    Some(r"\x00")
+                }
+                _ => None,
+            };
+            match replacement {
+                Some(text) => out.push_str(text),
+                None => {
+                    out.push('\\');
+                    out.push(next);
+                }
+            }
+            index += 2;
+            continue;
+        }
+        if in_class {
+            match ch {
+                ']' => {
+                    in_class = false;
+                    out.push(']');
+                }
+                '[' => out.push_str(r"\["),
+                '&' | '-' | '~' if chars.get(index + 1) == Some(&ch) => {
+                    out.push(ch);
+                    out.push('\\');
+                    out.push(ch);
+                    index += 2;
+                    continue;
+                }
+                _ => out.push(ch),
+            }
+            index += 1;
+            continue;
+        }
+        match ch {
+            '[' => {
+                let negated = chars.get(index + 1) == Some(&'^');
+                let body = index + 1 + usize::from(negated);
+                if chars.get(body) == Some(&']') {
+                    // `[]` never matches, `[^]` matches any character.
+                    if negated {
+                        out.push_str(ANY_CHARACTER);
+                    } else {
+                        out.push_str(r"[^\x{0}-\x{10FFFF}]");
+                    }
+                    index = body + 1;
+                    continue;
+                }
+                in_class = true;
+                out.push('[');
+                if negated {
+                    out.push('^');
+                    index += 1;
+                }
+            }
+            '{' if !starts_quantifier(index) => out.push_str(r"\{"),
+            '.' if !dot_all => out.push_str(r"[^\n\r\x{2028}\x{2029}]"),
+            _ => out.push(ch),
+        }
+        index += 1;
+    }
+    out
+}
+
 impl HeapObject {
     fn extensible(&self) -> bool {
         !self.is_non_extensible && !self.is_frozen
@@ -53861,7 +53979,10 @@ impl InterpreterCore {
             }
         }
 
-        let mut builder = RegexBuilder::new(pattern);
+        let mut builder = RegexBuilder::new(&js_regexp_pattern_for_regex_crate(
+            pattern,
+            dot_matches_new_line,
+        ));
         builder
             .case_insensitive(case_insensitive)
             .multi_line(multi_line)

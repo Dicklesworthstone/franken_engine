@@ -326,3 +326,33 @@ fn inspect_keeps_hiding_non_enumerable_function_properties() {
         ],
     );
 }
+
+/// A function's [[Prototype]] is %Function.prototype% (ES2020 19.2.3): a key
+/// the function itself does not hold is read there, then on
+/// Object.prototype. Only the synthesized `call`/`apply`/`bind`/`toString`
+/// were, so `fn.constructor` was undefined, `Function.prototype.constructor`
+/// was Object, and members a program adds to Function.prototype or
+/// Object.prototype (`Function.prototype.method = ...`, getters included),
+/// `valueOf` and `__proto__` did not reach functions.
+#[test]
+fn functions_inherit_from_function_prototype() {
+    router_check(
+        "function f() {} class C {} const arrow = () => 1; const bound = f.bind(null); \
+         [f.constructor === Function, arrow.constructor === Function, C.constructor === Function, \
+         bound.constructor === Function, Math.max.constructor === Function, \
+         Array.constructor === Function, Function.prototype.constructor === Function, \
+         Function.prototype.hasOwnProperty('constructor'), f.hasOwnProperty('constructor'), \
+         new f.constructor('a', 'return a * 2')(21), f.__proto__ === Function.prototype, \
+         Math.max.__proto__ === Function.prototype].join(' ')",
+        "true true true true true true true true false 42 true true",
+    );
+    router_check(
+        "Function.prototype.twice = function (x) { return this(this(x)); }; \
+         Object.prototype.tag = 'o'; function inc(n) { return n + 1; } \
+         Object.defineProperty(Function.prototype, 'self', { get() { return this; }, configurable: true }); \
+         [inc.twice(1), ((s) => s + '!').twice('a'), Math.abs.twice(-3), inc.tag, Math.max.tag, \
+         inc.valueOf() === inc, typeof inc.toLocaleString, inc.self === inc, 'twice' in inc, \
+         inc.hasOwnProperty('twice'), String(inc.missing)].join(' ')",
+        "3 a!! 3 o o true function true true false undefined",
+    );
+}

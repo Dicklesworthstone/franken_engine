@@ -51,8 +51,8 @@ use frankenengine_engine::differential_oracle_perf::{
 };
 use frankenengine_engine::e8_analyzed_subset::{E8AnalyzedSubsetScan, scan_source};
 use frankenengine_engine::evidence_ledger::{
-    EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION, EvidenceChainArtifact, EvidenceVerificationIdentity,
-    RuntimeEvidenceAuthority,
+    CandidateAction, ChosenAction, DecisionType, EVIDENCE_CHAIN_RECEIPT_SCHEMA_VERSION,
+    EvidenceChainArtifact, EvidenceVerificationIdentity, RuntimeEvidenceAuthority,
 };
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
@@ -1133,6 +1133,29 @@ struct ReplayableRunReport {
     instructions_executed: u64,
     console_output: Vec<ConsoleEntry>,
     replay_input: RunReplayInput,
+    // Decision artifacts, re-derived by re-execution (bd-mpu1z).
+    lane: String,
+    lane_reason: String,
+    containment_action: String,
+    expected_loss_millionths: i64,
+    evidence_entries: usize,
+    evidence_chain_artifact: ReportedEvidenceChain,
+}
+
+/// The decision content of a run report's evidence chain. Strict replay
+/// re-derives every decision by re-executing the recorded input, so a forged
+/// decision is a divergence however it is signed (bd-mpu1z). Ids, timestamps
+/// and signatures are per run and not compared.
+#[derive(Debug, Deserialize)]
+struct ReportedEvidenceChain {
+    entries: Vec<ReportedEvidenceDecision>,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+struct ReportedEvidenceDecision {
+    decision_type: DecisionType,
+    candidates: Vec<CandidateAction>,
+    chosen_action: ChosenAction,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1534,6 +1557,9 @@ struct ReplayCommandOutput {
     unsigned_execution_content_match: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     randomness_transcript_match: Option<bool>,
+    /// Re-executed decisions equal the reported ones (bd-mpu1z).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decisions_match: Option<bool>,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -9106,6 +9132,7 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
         ir3_hash_match: None,
         unsigned_execution_content_match: None,
         randomness_transcript_match: None,
+        decisions_match: None,
         observability_mode: default_capture_observability_mode(),
     };
 
@@ -9226,6 +9253,9 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     if !randomness_transcript_match {
         divergences.push("re-executed randomness transcript differs".to_string());
     }
+    let decision_divergences = run_report_decision_divergences(&report, &replayed);
+    let decisions_match = decision_divergences.is_empty();
+    divergences.extend(decision_divergences);
     if args.mode == ReplayMode::Strict
         && let Some(divergence) = divergences.first()
     {
@@ -9255,6 +9285,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         ir3_hash_match: Some(ir3_hash_match),
         unsigned_execution_content_match: Some(unsigned_execution_content_match),
         randomness_transcript_match: Some(randomness_transcript_match),
+        decisions_match: Some(decisions_match),
         observability_mode: default_capture_observability_mode(),
     };
     if let Some(path) = args.out {
@@ -12798,6 +12829,71 @@ fn replay_debug_usage() -> String {
         "  goal (default script).",
     ]
     .join("\n")
+}
+
+/// bd-mpu1z: where the re-executed decisions differ from the ones a run
+/// report claims (containment action, lane, expected loss and every evidence
+/// entry's candidates and chosen action).
+fn run_report_decision_divergences(
+    report: &ReplayableRunReport,
+    replayed: &OrchestratorResult,
+) -> Vec<String> {
+    let mut divergences = Vec::new();
+    let reported_and_actual = [
+        (
+            "containment action",
+            report.containment_action.clone(),
+            replayed.containment_action.to_string(),
+        ),
+        ("lane", report.lane.clone(), replayed.lane.to_string()),
+        (
+            "lane reason",
+            report.lane_reason.clone(),
+            replayed.lane_reason.to_string(),
+        ),
+        (
+            "expected loss (millionths)",
+            report.expected_loss_millionths.to_string(),
+            replayed.expected_loss_millionths.to_string(),
+        ),
+    ];
+    for (field, reported, actual) in reported_and_actual {
+        if reported != actual {
+            divergences.push(format!(
+                "re-executed {field} `{actual}` differs from the reported `{reported}`"
+            ));
+        }
+    }
+    let reported_entries = &report.evidence_chain_artifact.entries;
+    if report.evidence_entries != reported_entries.len()
+        || reported_entries.len() != replayed.evidence_entries.len()
+    {
+        divergences.push(format!(
+            "re-execution produced {} evidence entries; the report claims {} and carries {}",
+            replayed.evidence_entries.len(),
+            report.evidence_entries,
+            reported_entries.len()
+        ));
+        return divergences;
+    }
+    for (index, (reported, actual)) in reported_entries
+        .iter()
+        .zip(&replayed.evidence_entries)
+        .enumerate()
+    {
+        let actual = ReportedEvidenceDecision {
+            decision_type: actual.decision_type,
+            candidates: actual.candidates.clone(),
+            chosen_action: actual.chosen_action.clone(),
+        };
+        if *reported != actual {
+            divergences.push(format!(
+                "evidence entry {index}: re-executed decision `{}` differs from the reported `{}`",
+                actual.chosen_action.action_name, reported.chosen_action.action_name
+            ));
+        }
+    }
+    divergences
 }
 
 fn replay_run_usage() -> String {

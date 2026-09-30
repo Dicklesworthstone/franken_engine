@@ -342,3 +342,22 @@ fn opaque_module_code_keeps_fail_high_top_secret_bd_9vouw_1() {
         other => panic!("{name}: expected UnauthorizedFlow TopSecret -> Internal, got {other:?}"),
     }
 }
+
+/// bd-9vouw.95: a WeakRef holds its target strongly, so a secret stored behind
+/// one keeps its label through `deref()` and still cannot reach the console.
+#[test]
+fn secret_behind_a_weak_ref_cannot_reach_console() {
+    let source =
+        format!("{SECRET}const w = new WeakRef({{ s: secret }}); console.log(w.deref().s);");
+    match lower("secret_through_weak_ref", &source) {
+        Err(LoweringPipelineError::UnauthorizedFlow {
+            source_label,
+            sink_clearance,
+            ..
+        }) => {
+            assert_eq!(source_label, Label::Secret);
+            assert_eq!(sink_clearance, Label::Internal);
+        }
+        other => panic!("a secret behind a WeakRef must be refused, got {other:?}"),
+    }
+}

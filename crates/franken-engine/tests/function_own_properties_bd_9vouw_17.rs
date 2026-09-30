@@ -284,6 +284,20 @@ fn builtin_functions_hold_and_delete_own_properties() {
     );
 }
 
+/// A `new Function` body is lowered as its own module, so its `length` and
+/// `name` come from that module's function table; they were read from the
+/// caller's, which has no entry (or another function's) at that index.
+#[test]
+fn function_constructor_results_have_their_own_length() {
+    router_check(
+        "const f = new Function('a', 'b', 'return a + b'); \
+         const g = Function('x', 'y', 'z', 'return 1'); const h = new Function('return this'); \
+         [f.length, f.name, g.length, h.length, f(2, 3), \
+         (new Function('...r', 'return r.length')).length].join();",
+        "2,anonymous,3,0,5,0",
+    );
+}
+
 #[test]
 fn inspect_keeps_hiding_non_enumerable_function_properties() {
     assert_eq!(

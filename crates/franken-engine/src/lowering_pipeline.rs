@@ -12780,6 +12780,307 @@ fn lower_optional_member_spread_call_to_reflect_apply(
     Ok(())
 }
 
+/// One member or call link of an optional chain (ES2020 12.3.9).
+#[derive(Clone, Copy)]
+enum OptionalChainLink<'a> {
+    Member {
+        object: &'a Expression,
+        property: &'a Expression,
+        computed: bool,
+        optional: bool,
+    },
+    Call {
+        callee: &'a Expression,
+        arguments: &'a [Expression],
+        optional: bool,
+    },
+}
+
+impl<'a> OptionalChainLink<'a> {
+    fn optional(self) -> bool {
+        match self {
+            Self::Member { optional, .. } | Self::Call { optional, .. } => optional,
+        }
+    }
+
+    /// The expression this link applies to.
+    fn inner(self) -> &'a Expression {
+        match self {
+            Self::Member { object, .. } => object,
+            Self::Call { callee, .. } => callee,
+        }
+    }
+}
+
+/// ES2020 12.3.9: an optional link short-circuits the WHOLE rest of its
+/// chain, so `o.x?.y.z` is undefined when `o.x` is nullish. The per-link
+/// desugaring only skipped its own access, and `.z` then read a property of
+/// undefined (TypeError); `o.m?.()` also lost its `this`. This lowers a chain
+/// from its first optional link on (and from the member link before a
+/// leading optional call, whose receiver the call needs) with one skip label.
+/// Everything before that is lowered by the ordinary path, keeping its
+/// ambient-authority checks and special forms. Returns `false` (nothing
+/// emitted) for chains the per-link lowering already gets right (a single
+/// trailing optional link) and for forms it keeps (spread call arguments,
+/// `super` members). With `delete_last` set, the chain is the operand of
+/// `delete`: its last link must be a member, which is deleted, and a
+/// short-circuit yields `true` (`delete o?.a` used to evaluate `o?.a` and
+/// answer `true` without deleting anything).
+#[allow(clippy::too_many_arguments)]
+fn try_lower_optional_chain_to_ir1(
+    expression: &Expression,
+    delete_last: bool,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<bool, LoweringPipelineError> {
+    let mut links = Vec::new();
+    let mut node = expression;
+    loop {
+        match node {
+            Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } => {
+                links.push(OptionalChainLink::Member {
+                    object,
+                    property,
+                    computed: *computed,
+                    optional: false,
+                });
+                node = object.as_ref();
+            }
+            Expression::OptionalMember {
+                object,
+                property,
+                computed,
+                ..
+            } => {
+                links.push(OptionalChainLink::Member {
+                    object,
+                    property,
+                    computed: *computed,
+                    optional: true,
+                });
+                node = object.as_ref();
+            }
+            Expression::Call {
+                callee, arguments, ..
+            } => {
+                links.push(OptionalChainLink::Call {
+                    callee,
+                    arguments,
+                    optional: false,
+                });
+                node = callee.as_ref();
+            }
+            Expression::OptionalCall {
+                callee, arguments, ..
+            } => {
+                links.push(OptionalChainLink::Call {
+                    callee,
+                    arguments,
+                    optional: true,
+                });
+                node = callee.as_ref();
+            }
+            _ => break,
+        }
+    }
+    links.reverse();
+    let Some(first_optional) = links.iter().position(|link| link.optional()) else {
+        return Ok(false);
+    };
+    // A leading optional call on a member (`o.m?.()`) starts one link early so
+    // the member link can keep its object as the call's receiver.
+    let start = match (
+        first_optional.checked_sub(1).map(|index| links[index]),
+        links[first_optional],
+    ) {
+        (Some(OptionalChainLink::Member { .. }), OptionalChainLink::Call { .. }) => {
+            first_optional - 1
+        }
+        _ => first_optional,
+    };
+    if delete_last && !matches!(links.last(), Some(OptionalChainLink::Member { .. })) {
+        return Ok(false);
+    }
+    let continues_past_optional = first_optional + 1 < links.len();
+    if !delete_last && start == first_optional && !continues_past_optional {
+        return Ok(false);
+    }
+    let chain = &links[start..];
+    let prefix = chain[0].inner();
+    let keeps_existing_lowering = matches!(prefix, Expression::Super)
+        || chain.iter().any(|link| {
+            matches!(link, OptionalChainLink::Call { arguments, .. }
+                if arguments.iter().any(|argument| matches!(argument, Expression::SpreadElement(_))))
+        });
+    if keeps_existing_lowering {
+        return Ok(false);
+    }
+
+    lower_expression_to_ir1(
+        prefix,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )?;
+    let result_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        "opt_chain_result",
+    )?;
+    let skip_label = alloc_label(label_counter);
+    let end_label = alloc_label(label_counter);
+    let mut receiver = None;
+    for (index, link) in chain.iter().copied().enumerate() {
+        if link.optional() {
+            let value = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "opt_chain_value",
+            )?;
+            ops.push(Ir1Op::StoreBinding { binding_id: value });
+            ops.push(Ir1Op::Pop);
+            ops.push(Ir1Op::LoadBinding { binding_id: value });
+            ops.push(Ir1Op::JumpIfNullish {
+                label_id: skip_label,
+            });
+            ops.push(Ir1Op::LoadBinding { binding_id: value });
+        }
+        match link {
+            OptionalChainLink::Member {
+                object,
+                property,
+                computed,
+                ..
+            } => {
+                // The same ambient-authority check as a plain member read
+                // (`process.env?.()` still needs env.read).
+                if let Expression::Identifier(object_name) = object
+                    && !has_source_lexical_binding(binding_lookup, object_name)
+                    && !crypto_constants_member_read(object, property, computed, binding_lookup)
+                    && !computed
+                    && let Expression::Identifier(prop_name) = property
+                    && let Some(required_effect) =
+                        required_effect_for_ambient_authority(object_name, Some(prop_name))
+                    && let Err(caller_profile) = check_ambient_authority_allowed(
+                        required_effect,
+                        root_scope_id,
+                        binding_lookup,
+                    )
+                {
+                    return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                        required_effect,
+                        caller_profile,
+                        accessor: format!("{object_name}.{prop_name}"),
+                        span: None,
+                    });
+                }
+                if matches!(chain.get(index + 1), Some(OptionalChainLink::Call { .. })) {
+                    let receiver_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "opt_chain_receiver",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: receiver_binding,
+                    });
+                    receiver = Some(receiver_binding);
+                }
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                if delete_last && index + 1 == chain.len() {
+                    ops.push(Ir1Op::DeleteProperty { key });
+                } else {
+                    ops.push(Ir1Op::GetProperty { key });
+                }
+            }
+            OptionalChainLink::Call { arguments, .. } => {
+                let method_receiver = receiver.take();
+                if let Some(receiver_binding) = method_receiver {
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: receiver_binding,
+                    });
+                }
+                for argument in arguments {
+                    lower_expression_to_ir1(
+                        argument,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                let arg_count = u32::try_from(arguments.len()).map_err(|_| {
+                    LoweringPipelineError::TooManyArguments {
+                        count: arguments.len(),
+                        max: u32::MAX as usize,
+                    }
+                })?;
+                ops.push(if method_receiver.is_some() {
+                    Ir1Op::CallMethod { arg_count }
+                } else {
+                    Ir1Op::Call { arg_count }
+                });
+            }
+        }
+    }
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    ops.push(Ir1Op::Jump {
+        label_id: end_label,
+    });
+    ops.push(Ir1Op::Label { id: skip_label });
+    ops.push(Ir1Op::LoadLiteral {
+        value: if delete_last {
+            Ir1Literal::Boolean(true)
+        } else {
+            Ir1Literal::Undefined
+        },
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    ops.push(Ir1Op::Label { id: end_label });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: result_binding,
+    });
+    Ok(true)
+}
+
 /// Span-recording wrapper around [`lower_expression_to_ir1_inner`]
 /// (bd-fqlfw.1.5).
 ///
@@ -12838,6 +13139,16 @@ fn lower_expression_to_ir1(
         span_table,
     )? || try_lower_logical_expression_to_ir1(
         expression,
+        ops,
+        bindings,
+        binding_lookup,
+        binding_index,
+        root_scope_id,
+        label_counter,
+        span_table,
+    )? || try_lower_optional_chain_to_ir1(
+        expression,
+        false,
         ops,
         bindings,
         binding_lookup,
@@ -13639,6 +13950,21 @@ fn lower_expression_to_ir1_inner(
             operator, argument, ..
         } => {
             if *operator == UnaryOperator::Delete {
+                // `delete o?.a` / `delete o?.a.b` delete through the chain and
+                // answer `true` when it short-circuits.
+                if try_lower_optional_chain_to_ir1(
+                    argument,
+                    true,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )? {
+                    return Ok(());
+                }
                 match argument.as_ref() {
                     Expression::Member {
                         object,

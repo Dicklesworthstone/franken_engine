@@ -137,3 +137,22 @@ fn a_symbol_or_bigint_from_index_throws_a_type_error() {
         "0,0,-1,-1,2,-1,0,0",
     );
 }
+
+/// A typed array's own keys are its indices (ES2020 9.4.5.6); `length`,
+/// `buffer`, `byteLength` and the rest are %TypedArray%.prototype accessors.
+/// Object.keys, JSON.stringify, for-in, spread and getOwnPropertyNames listed
+/// the engine's slots (`__type`, `__typedArrayKind`, `byteLength`, ...)
+/// instead of the elements.
+#[test]
+fn typed_array_own_keys_are_its_indices() {
+    check(
+        r#"const r = [];
+const t = new Uint8Array([5, 6]);
+r.push(Object.keys(t).join(), JSON.stringify(t), Object.entries(t).join('|'), JSON.stringify({ ...t }), Object.getOwnPropertyNames(t).join());
+const k = []; for (const i in new Float64Array(2)) k.push(i); r.push(k.join());
+r.push(String(t.hasOwnProperty('length')), String('length' in t), t.length, t.byteLength, String(Object.getOwnPropertyDescriptor(t, 'length')));
+r.push(Reflect.ownKeys(new Int16Array(3)).join(), JSON.stringify(Object.assign({}, new Uint8Array([9]))), Object.values(new Int8Array([-1, 2])).join());
+r.join(' ; ');"#,
+        r#"0,1 ; {"0":5,"1":6} ; 0,5|1,6 ; {"0":5,"1":6} ; 0,1 ; 0,1 ; false ; true ; 2 ; 2 ; undefined ; 0,1,2 ; {"0":9} ; -1,2"#,
+    );
+}

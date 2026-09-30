@@ -5659,6 +5659,18 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
         .find(|candidate| *candidate == tag)
 }
 
+/// A typed array's heap entries that are not own properties in ES2020
+/// (prototype accessors and engine slots); see own_property_visible.
+const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
+    "__type",
+    "__typedArrayKind",
+    "length",
+    "byteLength",
+    "byteOffset",
+    "buffer",
+    "BYTES_PER_ELEMENT",
+];
+
 const SLOT0_STATIC_GLOBALS: [&str; 6] = ["Object", "JSON", "Array", "String", "Symbol", "Proxy"];
 const SLOT0_STATIC_MEMBERS: [&str; 25] = [
     "keys",
@@ -23608,30 +23620,51 @@ impl InterpreterCore {
         WRITABLE_STATE_VIEW_KEYS.binary_search(&key).is_ok()
     }
 
-    /// Node/Bun expose the ten authoritative views as inherited accessors.
-    /// The heap entries are compatibility mirrors only and must stay hidden
-    /// from own-key reflection, copying, and JSON.
-    fn writable_own_property_visible(&self, object_id: ObjectId, key: &str) -> bool {
-        !((self.writable_streams.contains_key(&object_id)
+    /// Whether an own heap entry takes part in own-key reflection, copying
+    /// and JSON. Node/Bun expose a Writable's ten authoritative views as
+    /// inherited accessors, and a typed array's `length`, `buffer`,
+    /// `byteLength`, `byteOffset` and `BYTES_PER_ELEMENT` are
+    /// %TypedArray%.prototype accessors (ES2020 22.2.3); the engine keeps
+    /// those as heap entries (plus the `__type`/`__typedArrayKind` slots),
+    /// which [[Get]] and `in` still read, but they are not own keys.
+    fn own_property_visible(&self, object_id: ObjectId, key: &str) -> bool {
+        let writable_view = (self.writable_streams.contains_key(&object_id)
             || self.writable_terminal_states.contains_key(&object_id))
-            && Self::is_writable_state_view_key(key))
+            && Self::is_writable_state_view_key(key);
+        let typed_array_slot = TYPED_ARRAY_SLOT_KEYS.contains(&key)
+            && self
+                .heap
+                .get(object_id.0 as usize)
+                .is_some_and(|object| object.typed_array.is_some());
+        !(writable_view || typed_array_slot)
     }
 
-    fn writable_own_runtime_property_visible(&self, object_id: ObjectId, key: &JsString) -> bool {
+    fn own_runtime_property_visible(&self, object_id: ObjectId, key: &JsString) -> bool {
         key.as_str()
-            .is_none_or(|key| self.writable_own_property_visible(object_id, key))
+            .is_none_or(|key| self.own_property_visible(object_id, key))
     }
 
     /// Enumerable own String properties in the baseline object model. Array
     /// length is an own property, but must not enter JSON/Object.keys-style
     /// enumeration. Reflect.ownKeys continues to use the unfiltered own keys.
     fn ordinary_own_string_key_is_enumerable(&self, object_id: ObjectId, key: &JsString) -> bool {
+        if let Some(view) = self
+            .heap
+            .get(object_id.0 as usize)
+            .and_then(|object| object.typed_array.as_ref())
+            && key
+                .as_str()
+                .and_then(Self::typed_array_integer_index_key)
+                .is_some_and(|index| index < view.length)
+        {
+            return true;
+        }
         self.heap.get(object_id.0 as usize).is_some_and(|object| {
             object.properties.contains_exact_key(key)
                 && object
                     .own_property_attributes(&RuntimePropertyKey::String(key.clone()))
                     .enumerable
-                && self.writable_own_runtime_property_visible(object_id, key)
+                && self.own_runtime_property_visible(object_id, key)
         })
     }
 
@@ -55586,7 +55619,7 @@ impl InterpreterCore {
             return true;
         }
         if let RuntimePropertyKey::String(key) = &property_key
-            && !self.writable_own_runtime_property_visible(*object_id, key)
+            && !self.own_runtime_property_visible(*object_id, key)
         {
             return false;
         }
@@ -56091,9 +56124,7 @@ impl InterpreterCore {
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
                 let visible = match key {
-                    RuntimePropertyKey::String(key) => {
-                        self.writable_own_runtime_property_visible(id, key)
-                    }
+                    RuntimePropertyKey::String(key) => self.own_runtime_property_visible(id, key),
                     RuntimePropertyKey::Symbol(_) => true,
                 };
                 (
@@ -56795,23 +56826,30 @@ impl InterpreterCore {
         &self,
         object_id: ObjectId,
     ) -> Result<Vec<Value>, InterpreterError> {
+        let mut keys: Vec<Value> = self
+            .indexed_own_entries(object_id)?
+            .into_iter()
+            .map(|(key, _)| Value::Str(key))
+            .collect();
         let object = self
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        Ok(object
-            .own_runtime_property_keys()
-            .into_iter()
-            .filter_map(|key| match key {
-                RuntimePropertyKey::String(key)
-                    if self.writable_own_runtime_property_visible(object_id, &key) =>
-                {
-                    Some(Value::Str(key))
-                }
-                RuntimePropertyKey::Symbol(symbol) => Some(Value::Symbol(symbol)),
-                RuntimePropertyKey::String(_) => None,
-            })
-            .collect())
+        keys.extend(
+            object
+                .own_runtime_property_keys()
+                .into_iter()
+                .filter_map(|key| match key {
+                    RuntimePropertyKey::String(key)
+                        if self.own_runtime_property_visible(object_id, &key) =>
+                    {
+                        Some(Value::Str(key))
+                    }
+                    RuntimePropertyKey::Symbol(symbol) => Some(Value::Symbol(symbol)),
+                    RuntimePropertyKey::String(_) => None,
+                }),
+        );
+        Ok(keys)
     }
 
     fn proxy_aware_own_property_keys(
@@ -57133,7 +57171,7 @@ impl InterpreterCore {
             && object.own_property_attributes(key).enumerable
             && match key {
                 RuntimePropertyKey::String(name) => {
-                    self.writable_own_runtime_property_visible(object_id, name)
+                    self.own_runtime_property_visible(object_id, name)
                 }
                 RuntimePropertyKey::Symbol(_) => true,
             })
@@ -69930,7 +69968,7 @@ impl InterpreterCore {
         }
         Ok(object.own_runtime_property_keys().iter().all(|key| {
             if let RuntimePropertyKey::String(name) = key
-                && !self.writable_own_runtime_property_visible(object_id, name)
+                && !self.own_runtime_property_visible(object_id, name)
             {
                 return true;
             }
@@ -69951,9 +69989,7 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
     ) -> Result<Value, InterpreterError> {
         let visible = match key {
-            RuntimePropertyKey::String(key) => {
-                self.writable_own_runtime_property_visible(object_id, key)
-            }
+            RuntimePropertyKey::String(key) => self.own_runtime_property_visible(object_id, key),
             RuntimePropertyKey::Symbol(_) => true,
         };
         let source = visible
@@ -76248,7 +76284,7 @@ impl InterpreterCore {
                     })
                     .filter(|key| {
                         !(object.is_array && key.as_str() == Some("length"))
-                            && self.writable_own_runtime_property_visible(object_id, key)
+                            && self.own_runtime_property_visible(object_id, key)
                     })
                     .filter_map(|key| {
                         object
@@ -77628,7 +77664,7 @@ impl InterpreterCore {
                     }
                     Value::Object(obj_id) => {
                         let mut key_values = self
-                            .wrapped_string_index_entries(obj_id)?
+                            .indexed_own_entries(obj_id)?
                             .into_iter()
                             .map(|(key, _)| Value::Str(key))
                             .collect::<Vec<_>>();
@@ -77718,7 +77754,7 @@ impl InterpreterCore {
                     }
                     Value::Object(obj_id) => {
                         let mut values = self
-                            .wrapped_string_index_entries(obj_id)?
+                            .indexed_own_entries(obj_id)?
                             .into_iter()
                             .map(|(_, value)| value)
                             .collect::<Vec<_>>();
@@ -77792,7 +77828,7 @@ impl InterpreterCore {
                         let (obj_id, mut entries) = match value {
                             Value::Str(text) => (None, self.string_index_entries(text)?),
                             Value::Object(obj_id) => {
-                                (Some(*obj_id), self.wrapped_string_index_entries(*obj_id)?)
+                                (Some(*obj_id), self.indexed_own_entries(*obj_id)?)
                             }
                             _ => unreachable!("matched an object or a string"),
                         };
@@ -80525,16 +80561,21 @@ impl InterpreterCore {
                         Ok(Value::Object(array_id))
                     }
                     Value::Object(obj_id) => {
-                        let property_name_values = self
-                            .heap
-                            .get(obj_id.0 as usize)
-                            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
-                            .properties
-                            .exact_keys()
+                        let mut property_name_values = self
+                            .indexed_own_entries(obj_id)?
                             .into_iter()
-                            .filter(|key| self.writable_own_runtime_property_visible(obj_id, key))
-                            .map(Value::Str)
+                            .map(|(key, _)| Value::Str(key))
                             .collect::<Vec<_>>();
+                        property_name_values.extend(
+                            self.heap
+                                .get(obj_id.0 as usize)
+                                .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+                                .properties
+                                .exact_keys()
+                                .into_iter()
+                                .filter(|key| self.own_runtime_property_visible(obj_id, key))
+                                .map(Value::Str),
+                        );
                         self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&property_name_values)?;
                         Ok(Value::Object(array_id))
@@ -80551,9 +80592,7 @@ impl InterpreterCore {
                                 .properties
                                 .exact_keys()
                                 .into_iter()
-                                .filter(|key| {
-                                    self.writable_own_runtime_property_visible(backing, key)
-                                })
+                                .filter(|key| self.own_runtime_property_visible(backing, key))
                                 .map(Value::Str)
                                 .collect::<Vec<_>>(),
                             None => Vec::new(),
@@ -89212,7 +89251,7 @@ impl InterpreterCore {
                     }
                 }
             } else {
-                for (key, _) in self.wrapped_string_index_entries(id)? {
+                for (key, _) in self.indexed_own_entries(id)? {
                     if seen.insert(key.clone()) {
                         keys.push(key);
                     }
@@ -89225,7 +89264,7 @@ impl InterpreterCore {
                     // A non-enumerable own key (an array's `length`) is not
                     // visited but still shadows a same-named key further up
                     // the chain.
-                    if self.writable_own_runtime_property_visible(id, &key)
+                    if self.own_runtime_property_visible(id, &key)
                         && seen.insert(key.clone())
                         && object
                             .own_property_attributes(&RuntimePropertyKey::String(key.clone()))
@@ -90511,15 +90550,30 @@ impl InterpreterCore {
             .collect())
     }
 
-    /// [`Self::string_index_entries`] of a String wrapper; empty otherwise.
-    fn wrapped_string_index_entries(
+    /// The integer-indexed own properties that are not heap entries, in index
+    /// order: a String wrapper's code units ([`Self::string_index_entries`])
+    /// or a typed array's elements (ES2020 9.4.5.6); empty otherwise.
+    fn indexed_own_entries(
         &self,
         object_id: ObjectId,
     ) -> Result<Vec<(JsString, Value)>, InterpreterError> {
-        match self.primitive_wrapper_value(object_id) {
-            Some(Value::Str(text)) => self.string_index_entries(text),
-            _ => Ok(Vec::new()),
+        if let Some(Value::Str(text)) = self.primitive_wrapper_value(object_id) {
+            return self.string_index_entries(text);
         }
+        let Some(view) = self.typed_array_view_for_object(object_id)? else {
+            return Ok(Vec::new());
+        };
+        self.check_temporary_memory_budget(
+            u64::try_from(view.length)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(24)),
+        )?;
+        let values = self.typed_array_values_in_range(&view, 0, view.length)?;
+        Ok(values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| (JsString::from(index.to_string()), value))
+            .collect())
     }
 
     /// A String wrapper's own properties: its code-unit indices and `length`

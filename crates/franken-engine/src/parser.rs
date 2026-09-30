@@ -3786,6 +3786,8 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
+    // Where the current outermost `{` group opened.
+    let mut outer_brace_open = 0usize;
 
     for (index, ch) in line.char_indices() {
         if quotes.active() {
@@ -3806,17 +3808,35 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '[' => bracket_depth = bracket_depth.saturating_add(1),
             ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            '{' => brace_depth = brace_depth.saturating_add(1),
+            '{' => {
+                if brace_depth == 0 {
+                    outer_brace_open = index;
+                }
+                brace_depth = brace_depth.saturating_add(1);
+            }
             '}' => {
                 let was_positive = brace_depth > 0;
                 brace_depth = brace_depth.saturating_sub(1);
+                // An object literal or arrow body inside an unbraced body
+                // (`if (a) o.x = {}; else ...`, `if (a) f = () => {}`)
+                // ends no statement: the `;` after it decides, as it does
+                // for any other expression.
+                let closes_expression_brace = outer_brace_open >= segment_start
+                    && line[segment_start..outer_brace_open].trim_end().ends_with([
+                        '=', '>', ',', '(', '[', '?', '!', '&', '|', '+', '-', '*', '%',
+                    ]);
                 // A closing brace that returns to brace_depth==0 may
                 // terminate a block-level statement (function decl,
                 // if/else, for, while, etc.).  Only split here when the
                 // CURRENT segment starts with a block keyword so we
                 // don't break function expressions or object literals
                 // embedded in larger expressions.
-                if was_positive && brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
+                if was_positive
+                    && brace_depth == 0
+                    && paren_depth == 0
+                    && bracket_depth == 0
+                    && !closes_expression_brace
+                {
                     let seg = line[segment_start..].trim_start();
                     // A labelled statement (`label: for (..) {..}`) is still a
                     // block-terminated statement, so look past any leading
@@ -3856,7 +3876,13 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         // loop, which was glued onto the if and never ran.
                         let block_statement =
                             strip_leading_labels(line[segment_start..after].trim_start());
+                        // `if (a) x = function () {}; else ...`: the `;`
+                        // ends the unbraced consequent, not the statement.
+                        let semicolon_else = rest
+                            .strip_prefix(';')
+                            .is_some_and(|after| starts_with_keyword(after.trim_start(), "else"));
                         let continues = starts_with_keyword(rest, "else")
+                            || semicolon_else
                             || starts_with_keyword(rest, "catch")
                             || starts_with_keyword(rest, "finally")
                             || (starts_with_keyword(rest, "while")
@@ -10700,6 +10726,19 @@ fn parse_if_statement(
     let (consequent_src, alternate_src) = if rest.starts_with('{') {
         if let Some((block_inner, after_block)) = extract_balanced(rest, '{', '}') {
             let after = after_block.trim();
+            // `if (a) {} ; else b`: the `;` is an empty statement after the
+            // if, so this `else` has no if.
+            if after
+                .strip_prefix(';')
+                .is_some_and(|tail| starts_with_keyword(tail.trim_start(), "else"))
+            {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "unexpected `else` after an empty statement",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
             (
                 format!("{{{block_inner}}}"),
                 if after.starts_with("else") {

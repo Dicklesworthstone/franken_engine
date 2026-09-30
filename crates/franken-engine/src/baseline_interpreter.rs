@@ -43906,21 +43906,50 @@ impl InterpreterCore {
         // Builtin parents are represented by their canonical constructor name
         // in the child prototype metadata. Their construction is synchronous,
         // but still allocates from the original `new.target.prototype`.
-        if let Value::Str(parent_name) = &active_callee {
-            let parent_name = parent_name.to_string();
-            let prototype = self.constructor_prototype_for_value(module, &new_target_value)?;
-            let object_id = if parent_name == "Array" {
-                self.alloc_array_with_prototype(Some(prototype))?
-            } else {
-                self.alloc_object_with_prototype(Some(prototype))?
-            };
-            let constructor_index = self.constructor_function_index(&new_target_value)?;
-            self.mutate_heap(|heap| {
-                if let Some(object) = heap.get_mut(object_id.0 as usize) {
-                    object.constructor_function = Some(constructor_index);
-                }
-            });
-            self.initialize_builtin_subclass_instance(Some(module), object_id, &parent_name, args)?;
+        // Builtin parents without a name record (`extends Date`, `extends
+        // Uint8Array`, `extends WeakMap`, ...) are constructed natively and
+        // given new.target's prototype, as `Reflect.construct(parent, args,
+        // new.target)` is; the implicit constructor and `super(x)` failed on
+        // them with "expected constructor function".
+        let builtin_parent_object = match &active_callee {
+            Value::Str(parent_name) => {
+                let parent_name = parent_name.to_string();
+                let prototype = self.constructor_prototype_for_value(module, &new_target_value)?;
+                let object_id = if parent_name == "Array" {
+                    self.alloc_array_with_prototype(Some(prototype))?
+                } else {
+                    self.alloc_object_with_prototype(Some(prototype))?
+                };
+                let constructor_index = self.constructor_function_index(&new_target_value)?;
+                self.mutate_heap(|heap| {
+                    if let Some(object) = heap.get_mut(object_id.0 as usize) {
+                        object.constructor_function = Some(constructor_index);
+                    }
+                });
+                self.initialize_builtin_subclass_instance(
+                    Some(module),
+                    object_id,
+                    &parent_name,
+                    args,
+                )?;
+                Some(object_id)
+            }
+            Value::BuiltinFunction(builtin)
+                if !matches!(
+                    builtin.kind,
+                    BuiltinFunctionKind::BoundFunction | BuiltinFunctionKind::GeneratedFunction
+                ) =>
+            {
+                Some(self.construct_builtin_with_new_target(
+                    module,
+                    builtin,
+                    args,
+                    &new_target_value,
+                )?)
+            }
+            _ => None,
+        };
+        if let Some(object_id) = builtin_parent_object {
             let result = Value::Object(object_id);
             let args_label = self.join_arg_range_label(args)?;
             let result_label =
@@ -49462,33 +49491,22 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_value {
-                        let prototype =
-                            self.constructor_prototype_for_value(module, &new_target_value)?;
-                        let result =
-                            self.dispatch_builtin_function(module, builtin, args, None, None)?;
-                        if let Value::Object(object_id) = result {
-                            self.mutate_heap(|heap| {
-                                if let Some(object) = heap.get_mut(object_id.0 as usize) {
-                                    object.prototype = Some(prototype);
-                                }
-                            });
-                            let result_label = self.join_arg_range_label(args)?;
-                            let result_label = self.join_owned_label_with_temporary_budget(
-                                result_label,
-                                &callee_label,
-                            )?;
-                            let result_label = self.join_owned_label_with_temporary_budget(
-                                result_label,
-                                &new_target_label,
-                            )?;
-                            self.write_reg_with_label(dst, Value::Object(object_id), result_label)?;
-                            self.ip += 1;
-                            continue;
-                        }
-                        return Err(InterpreterError::TypeError {
-                            expected: "object result from constructible builtin target".to_string(),
-                            got: result.type_name().to_string(),
-                        });
+                        let object_id = self.construct_builtin_with_new_target(
+                            module,
+                            builtin,
+                            args,
+                            &new_target_value,
+                        )?;
+                        let result_label = self.join_arg_range_label(args)?;
+                        let result_label = self
+                            .join_owned_label_with_temporary_budget(result_label, &callee_label)?;
+                        let result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            &new_target_label,
+                        )?;
+                        self.write_reg_with_label(dst, Value::Object(object_id), result_label)?;
+                        self.ip += 1;
+                        continue;
                     }
 
                     if let Err(error) = self.enter_constructor_call(
@@ -91184,6 +91202,48 @@ impl InterpreterCore {
             self.install_prototype_constructor(prototype, Value::Closure(closure_id))?;
             Ok(prototype)
         }
+    }
+
+    /// [[Construct]] of a builtin constructor with an explicit new.target
+    /// (`Reflect.construct(B, args, F)`, or `B` as a class's parent): the
+    /// builtin's own construction, then new.target's prototype. `Number`,
+    /// `String` and `Boolean` construct their wrapper objects, as `new` does
+    /// (bd-9vouw.48); `Symbol` and `BigInt` are not constructors.
+    fn construct_builtin_with_new_target(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        new_target: &Value,
+    ) -> Result<ObjectId, InterpreterError> {
+        let standard_name = (builtin.kind == BuiltinFunctionKind::StandardConstructor)
+            .then(|| Self::standard_constructor_name(builtin).ok())
+            .flatten();
+        if let Some(name @ ("Symbol" | "BigInt")) = standard_name {
+            return Err(InterpreterError::TypeError {
+                expected: "constructor".to_string(),
+                got: format!("{name} is not a constructor"),
+            });
+        }
+        let prototype = self.constructor_prototype_for_value(module, new_target)?;
+        let mut result = self.dispatch_builtin_function(module, builtin, args, None, None)?;
+        if matches!(standard_name, Some("Number" | "String" | "Boolean"))
+            && !result.is_object_like()
+        {
+            result = Value::Object(self.alloc_primitive_wrapper(result)?);
+        }
+        let Value::Object(object_id) = result else {
+            return Err(InterpreterError::TypeError {
+                expected: "object result from constructible builtin target".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(object_id.0 as usize) {
+                object.prototype = Some(prototype);
+            }
+        });
+        Ok(object_id)
     }
 
     fn constructor_function_index(&self, value: &Value) -> Result<u32, InterpreterError> {

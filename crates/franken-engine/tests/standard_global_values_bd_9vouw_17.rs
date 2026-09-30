@@ -293,6 +293,99 @@ fn program_bindings_named_global_shadow_the_global_object() {
     );
 }
 
+/// A free name no binding resolves is a property of the global object, own
+/// or inherited (ES2020 8.1.1.4): what a program stores on globalThis,
+/// accessors defined on it and the Object.prototype members (validator's
+/// `{ toString }` export). A sloppy global is such a property, so the two
+/// directions agree; strict code still throws for a name the global object
+/// lacks, and a local binding still shadows it. They were ReferenceErrors,
+/// and `x = 1` was invisible as globalThis.x.
+#[test]
+fn free_names_resolve_through_the_global_object() {
+    for (source, node) in [
+        (
+            "globalThis.foo = 1; [foo, typeof foo, typeof bar].join();",
+            "1,number,undefined",
+        ),
+        (
+            "Object.defineProperty(globalThis, 'lazy', { get() { return 'g'; }, configurable: true }); lazy;",
+            "g",
+        ),
+        (
+            "[typeof toString, toString === Object.prototype.toString, typeof hasOwnProperty, \
+              constructor === Object].join();",
+            "function,true,function,true",
+        ),
+        (
+            "var api = { toString }; api.toString === Object.prototype.toString;",
+            "true",
+        ),
+        (
+            "created = 8; [globalThis.created, delete created, typeof created].join();",
+            "8,true,undefined",
+        ),
+        ("[made] = [9]; globalThis.made;", "9"),
+        (
+            "globalThis.counter = 1; counter += 2; counter++; globalThis.counter;",
+            "4",
+        ),
+        (
+            "'use strict'; globalThis.strictTarget = 1; strictTarget = 5; globalThis.strictTarget;",
+            "5",
+        ),
+        (
+            "'use strict'; let r; try { undeclaredStrict = 1; r = 'no'; } catch (e) { r = e.name; } r;",
+            "ReferenceError",
+        ),
+        (
+            "(function (root) { root.umdLib = { v: 3 }; })(globalThis); umdLib.v;",
+            "3",
+        ),
+        (
+            "globalThis.shadowed = 'global'; function f() { var shadowed = 'local'; return shadowed; } \
+              f() + ':' + shadowed;",
+            "local:global",
+        ),
+        (
+            "let r; try { neverDefinedName; } catch (e) { r = e.name; } r;",
+            "ReferenceError",
+        ),
+    ] {
+        check(source, node);
+    }
+}
+
+/// Resolving through the global object opens no authority or flow: `require`
+/// and `fetch` stay refused at lowering after a program stores functions
+/// under those names, and a secret stored on globalThis cannot reach the
+/// console through the bare name.
+#[test]
+fn global_object_names_keep_the_ambient_and_flow_gates() {
+    for (source, refusal) in [
+        (
+            "globalThis.require = function () { return 1; }; require('fs');",
+            "ambient authority",
+        ),
+        (
+            "globalThis.fetch = function () { return 1; }; fetch('https://example.com');",
+            "ambient authority",
+        ),
+        (
+            "const crypto = require('crypto'); const secret = crypto.randomUUID(); \
+              globalThis.leak = secret; console.log(leak);",
+            "unauthorized flow",
+        ),
+    ] {
+        let result = eval_to_string(source);
+        // The error's Debug form may spell the kind `AmbientAuthority...`.
+        let normalized = result.to_lowercase().replace([' ', '_'], "");
+        assert!(
+            result.starts_with("ERROR") && normalized.contains(&refusal.replace(' ', "")),
+            "`{source}` must be refused ({refusal}), got {result}"
+        );
+    }
+}
+
 /// ES2022 `Object.hasOwn(object, key)`: own properties only (not inherited),
 /// symbol and numeric keys, arrays, a string's own index and `length`, a
 /// function's own `name`; `null` is a TypeError. It was undefined.

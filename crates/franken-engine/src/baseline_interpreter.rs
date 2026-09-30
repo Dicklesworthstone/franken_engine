@@ -5430,7 +5430,7 @@ const GLOBAL_OBJECT_MEMBERS: [&str; 16] = [
 
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
 /// list the lowering declares factory hostcalls for).
-const GLOBAL_FUNCTION_VALUES: [&str; 8] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
+const GLOBAL_FUNCTION_VALUES: [&str; 12] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
 
 /// Name of a first-class static builtin, or `None` if `tag` is not one the
 /// shared lowering tables can produce. `None` is also the dispatch guard: a

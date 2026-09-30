@@ -27008,7 +27008,7 @@ fn global_function_call_capability(
 pub(crate) const STATIC_VALUE_CAPABILITY_PREFIX: &str = "builtin:static-value:";
 
 /// Bare global functions that read as first-class values.
-pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 8] = [
+pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 12] = [
     "parseInt",
     "parseFloat",
     "isNaN",
@@ -27017,6 +27017,10 @@ pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 8] = [
     "atob",
     "escape",
     "unescape",
+    "encodeURIComponent",
+    "decodeURIComponent",
+    "encodeURI",
+    "decodeURI",
 ];
 
 fn static_member_value_capability(
@@ -27089,6 +27093,13 @@ pub(crate) fn global_function_capability(name: &str) -> Option<&'static str> {
         "atob" => Some("builtin:Atob"),
         "escape" => Some("builtin:Escape"),
         "unescape" => Some("builtin:Unescape"),
+        // The URI codecs as values (`options.decode || decodeURIComponent`,
+        // path-to-regexp); direct calls route through
+        // uri_global_call_capability to the same hostcalls.
+        "encodeURIComponent" => Some("builtin:EncodeURIComponent"),
+        "decodeURIComponent" => Some("builtin:DecodeURIComponent"),
+        "encodeURI" => Some("builtin:EncodeURI"),
+        "decodeURI" => Some("builtin:DecodeURI"),
         _ => None,
     }
 }

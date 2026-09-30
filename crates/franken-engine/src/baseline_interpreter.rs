@@ -5671,10 +5671,17 @@ const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
     "BYTES_PER_ELEMENT",
 ];
 
-const SLOT0_STATIC_GLOBALS: [&str; 7] = [
-    "Object", "JSON", "Array", "String", "Symbol", "Proxy", "Map",
+const SLOT0_STATIC_GLOBALS: [&str; 8] = [
+    "Object",
+    "JSON",
+    "Array",
+    "String",
+    "Symbol",
+    "Proxy",
+    "Map",
+    "ArrayBuffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 26] = [
+const SLOT0_STATIC_MEMBERS: [&str; 27] = [
     "keys",
     "values",
     "entries",
@@ -5690,6 +5697,7 @@ const SLOT0_STATIC_MEMBERS: [&str; 26] = [
     "getOwnPropertyDescriptor",
     "fromEntries",
     "groupBy",
+    "isView",
     "parse",
     "stringify",
     "isArray",
@@ -78032,6 +78040,18 @@ impl InterpreterCore {
             }
             "builtin:ObjectGroupBy" | "builtin:MapGroupBy" => {
                 self.group_by_builtin(module, args, cap == "builtin:MapGroupBy")
+            }
+            "builtin:ArrayBufferIsView" => {
+                // ES2020 24.1.3.1: true for a typed array (and so a Buffer)
+                // or a DataView, false for anything else.
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                Ok(Value::Bool(matches!(
+                    value,
+                    Value::Object(object_id)
+                        if self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                            object.typed_array.is_some() || object.data_view.is_some()
+                        })
+                )))
             }
             "builtin:ObjectAssign" => {
                 // Object.assign implementation - copies properties from source objects to target

@@ -984,7 +984,9 @@ fn new_with_a_parenthesised_callee_and_no_argument_list() {
 #[test]
 fn private_names_parse_as_private_members() {
     use frankenengine_engine::ast::MethodKind;
-    let cases: [(&str, &[(&str, bool, MethodKind)]); 5] = [
+    /// Each member's key, whether it is static, and its kind.
+    type Members = &'static [(&'static str, bool, MethodKind)];
+    let cases: [(&str, Members); 5] = [
         (
             "class A { #x = 1; get x() { return this.#x; } }",
             &[

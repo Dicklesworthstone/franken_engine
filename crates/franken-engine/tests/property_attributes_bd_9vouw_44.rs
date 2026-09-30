@@ -47,6 +47,20 @@ fn non_enumerable_properties_are_skipped_by_enumeration() {
     );
 }
 
+/// propertyIsEnumerable reads a Symbol-keyed property's [[Enumerable]] too; it
+/// reported every existing Symbol key enumerable.
+#[test]
+fn property_is_enumerable_reads_symbol_key_attributes() {
+    check(
+        "var o = {}; Object.defineProperty(o, Symbol.iterator, { value: 1, enumerable: false }); \
+         var s = Symbol('s'); o[s] = 2; \
+         [o.propertyIsEnumerable(Symbol.iterator), o.propertyIsEnumerable(s), \
+         Object.prototype.propertyIsEnumerable.call(Set.prototype, Symbol.toStringTag), \
+         o.propertyIsEnumerable('nope')].join(' ')",
+        "false true false false",
+    );
+}
+
 #[test]
 fn non_writable_properties_reject_assignment() {
     check(

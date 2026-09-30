@@ -103,3 +103,32 @@ fn engine_string_conversion_uses_regexp_to_string_and_tags() {
          [object ArrayBuffer] [object DataView] [object Map] [object Object] function"
     );
 }
+
+/// Promises, generator objects, async generator objects and iterators have
+/// no property storage of their own, and ToPrimitive threw a TypeError for
+/// them ("property-key carrier with native conversion methods"), so
+/// `String(promise)` failed; `gen + ''` and templates said "[object Object]",
+/// and a generator object had no Object.prototype members (`it.toString`
+/// was undefined). They now convert through @@toPrimitive / toString /
+/// valueOf read like any [[Get]] (own properties first). Iterators convert
+/// too; their tag ("[object Array Iterator]" in Node) is not asserted here.
+#[test]
+fn exotic_values_convert_through_their_methods() {
+    let source = "function* g() {} async function* ag() {}\n\
+                  const it = g(); const own = g(); own.toString = () => 'mine';\n\
+                  const p = Promise.resolve(1); p[Symbol.toPrimitive] = (hint) => 'P:' + hint;\n\
+                  [String(g()), `${g()}`, g() + '', String(Promise.resolve(1)), `${Promise.resolve(1)}`, \
+                  String(ag()), typeof it.toString, it.toString(), it.hasOwnProperty('next'), \
+                  String(own), `${p}|${p + ''}`, typeof String([1][Symbol.iterator]()), \
+                  typeof String(new Map().keys())].join(' ');";
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "[object Generator] [object Generator] [object Generator] [object Promise] \
+         [object Promise] [object AsyncGenerator] function [object Generator] false mine \
+         P:string|P:default string string"
+    );
+}

@@ -57164,6 +57164,16 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        // A typed array's in-range indices are enumerable own properties
+        // that live in its buffer, not among the heap entries.
+        if let (Some(view), RuntimePropertyKey::String(name)) = (&object.typed_array, key)
+            && name
+                .as_str()
+                .and_then(Self::typed_array_integer_index_key)
+                .is_some_and(|index| index < view.length)
+        {
+            return Ok(true);
+        }
         // Recheck existence per key: an earlier getter may delete a later
         // property, even though that key remains in the ownKeys snapshot.
         // CopyDataProperties and Object.assign copy only [[Enumerable]] keys.

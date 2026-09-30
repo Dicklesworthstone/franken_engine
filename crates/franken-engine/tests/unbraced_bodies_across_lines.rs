@@ -166,6 +166,41 @@ fn do_while_as_an_unbraced_body() {
             "var n = 2, o = [];\nfor (let i = 0; i < 2; i++)\n  if (i) o.push('x');\n  else if (n)\n    do\n      o.push(n);\n    while (--n);\n  else o.push('z');\no.join();",
             "2,1,x",
         ),
+        // The do statement's own body is a header chain (pako's inflate:
+        // `do\n  if (++s.strstart <= max_insert)\n    hash_head = ...;\nwhile
+        // (...)`): `do if (c)` was not seen waiting for its body, so the
+        // body line became a statement of its own.
+        (
+            "var n = 3, hits = 0, m = 5;\ndo\n  if (++hits <= m)\n    m--;\nwhile (--n !== 0);\n[hits, m].join();",
+            "3,2",
+        ),
+        (
+            "var s = 0, k = 2;\ndo\n  for (var i = 0; i < 2; i++)\n    s += i;\nwhile (--k);\ns;",
+            "2",
+        ),
+        (
+            "var n = 2, h = 0;\ndo\n  if (n > 5)\n    h = 1;\n  else\n    h += n;\nwhile (--n);\nh;",
+            "3",
+        ),
+        // A while loop as the body: the condition is the last `while (...)`,
+        // not the first `while` in the text (nor one in an identifier or a
+        // string).
+        (
+            "var a = 0, b = 2;\ndo\n  while (a < 3)\n    a++;\nwhile (--b);\n[a, b].join();",
+            "3,0",
+        ),
+        (
+            "var a = 0, b = 2; do while (a < 3) a++; while (--b); [a, b].join();",
+            "3,0",
+        ),
+        (
+            "var awhile = 0;\ndo awhile++; while (awhile < 2);\nawhile;",
+            "2",
+        ),
+        (
+            "var s = \"\", k = 2;\ndo\n  s += \"while(\";\nwhile (--k);\ns;",
+            "while(while(",
+        ),
     ] {
         assert_eq!(
             eval_to_string(source),

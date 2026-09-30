@@ -1,21 +1,26 @@
-//! Array.prototype methods on a Proxy receiver (ES2020 23.1.3), and concat
-//! with a Proxy argument.
+//! Array.prototype methods (ES2020 23.1.3) on a receiver that is not an
+//! Array: a Proxy, an array-like object, a primitive `this`; and concat
+//! spreading a Proxy or an object with @@isConcatSpreadable.
 //!
 //! The ordinary paths read an array's element storage directly, and a Proxy
 //! has none of its own: `proxy.push(x)` changed nothing, `map` returned `[]`,
 //! `indexOf` gave -1 and `Array.isArray(proxy)` was false, so immer's drafts
-//! and reactive arrays (Vue, MobX, valtio) misbehaved silently. Here the
-//! methods run as the specification writes them, over the proxy's [[Get]],
-//! [[Set]], [[HasProperty]] and [[Delete]], so its traps observe every step
-//! and the target changes.
+//! and reactive arrays (Vue, MobX, valtio) misbehaved silently. On an
+//! array-like they read data properties only, so a `length` getter or an
+//! inherited length counted as 0, element getters read as missing, and a
+//! boolean or number `this` was a TypeError. Here the methods run as the
+//! specification writes them, over [[Get]], [[Set]], [[HasProperty]] and
+//! [[Delete]], so getters and proxy traps observe every step.
 //!
 //! Callbacks and traps run without a nested collection request, so the
 //! arrays and values held here stay reachable while guest code runs.
 //!
-//! No-claim: `values`/`keys`/`entries` (and so for-of) read the elements when
-//! the iterator is created, not lazily; results are ordinary arrays (the
-//! species constructor is not consulted); `flat`, `flatMap`, `copyWithin` and
-//! `toSpliced` keep the ordinary paths.
+//! No-claim: on a proxy `values`/`keys`/`entries` (and so for-of) read the
+//! elements when the iterator is created, not lazily (an array-like keeps the
+//! ordinary lazy iterator); results are ordinary arrays (the species
+//! constructor is not consulted); `flat`, `flatMap`, `copyWithin` and
+//! `toSpliced` keep the ordinary paths, as do functions and typed arrays used
+//! as array-likes.
 
 use super::*;
 
@@ -24,7 +29,7 @@ use std::cmp::Ordering;
 const MAX_SAFE_LENGTH: u64 = (1 << 53) - 1;
 
 impl InterpreterCore {
-    /// The Array.prototype methods `array_method_on_proxy` implements.
+    /// The Array.prototype methods `array_method_generic` implements.
     pub(super) fn has_generic_array_path(kind: BuiltinFunctionKind) -> bool {
         use BuiltinFunctionKind as K;
         matches!(
@@ -65,26 +70,100 @@ impl InterpreterCore {
         )
     }
 
-    /// Whether any argument is a Proxy (concat spreads one generically).
-    pub(super) fn any_proxy_argument(&self, args: RegRange) -> Result<bool, InterpreterError> {
+    /// The object the Array.prototype method `kind` runs on generically, or
+    /// `None` for the ordinary path: a Proxy; an object that is not an
+    /// Array (an arguments object, `{ length: 2, 0: 'a' }`, a String
+    /// wrapper), except for the iterator methods, which stay lazy; a
+    /// primitive `this`, boxed (ToObject); and an Array receiver of a concat
+    /// that must spread generically. Arrays read their element storage, and
+    /// typed arrays and functions keep their own paths.
+    pub(super) fn generic_array_receiver(
+        &mut self,
+        kind: BuiltinFunctionKind,
+        receiver: Option<&Value>,
+        args: RegRange,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        use BuiltinFunctionKind as K;
+        let iterator = matches!(kind, K::ArrayKeys | K::ArrayValues | K::ArrayEntries);
+        match receiver {
+            Some(Value::Object(object_id)) => {
+                let object_id = *object_id;
+                if self.active_proxy_record(object_id)?.is_some() {
+                    return Ok(Some(object_id));
+                }
+                let (is_array, is_typed_array) = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .map_or((true, false), |object| {
+                        (object.is_array, object.typed_array.is_some())
+                    });
+                if is_array || self.builtin_prototypes.get("Array") == Some(&object_id) {
+                    let spread = kind == K::ArrayConcat
+                        && self.concat_spreads_generically(object_id, args)?;
+                    return Ok(spread.then_some(object_id));
+                }
+                Ok((!is_typed_array && !iterator).then_some(object_id))
+            }
+            Some(
+                primitive @ (Value::Bool(_)
+                | Value::Int(_)
+                | Value::Float(_)
+                | Value::Str(_)
+                | Value::BigInt(_)
+                | Value::Symbol(_)),
+            ) if !iterator => Ok(Some(self.alloc_primitive_wrapper(primitive.clone())?)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Whether concat on the Array `receiver` must spread generically: an
+    /// argument is a Proxy, or the receiver or an argument has an
+    /// @@isConcatSpreadable property. Read without running guest code: a
+    /// Proxy on a prototype chain counts as having one.
+    fn concat_spreads_generically(
+        &self,
+        receiver: ObjectId,
+        args: RegRange,
+    ) -> Result<bool, InterpreterError> {
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::IsConcatSpreadable.id());
+        let mut objects = vec![receiver];
         for index in 0..args.count {
-            if let Some(Value::Object(object_id)) = self.builtin_arg(args, index)?
-                && self.active_proxy_record(object_id)?.is_some()
-            {
-                return Ok(true);
+            if let Some(Value::Object(object_id)) = self.builtin_arg(args, index)? {
+                if self.active_proxy_record(object_id)?.is_some() {
+                    return Ok(true);
+                }
+                objects.push(object_id);
+            }
+        }
+        for object_id in objects {
+            let mut current = Some(object_id);
+            for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+                let Some(id) = current else {
+                    break;
+                };
+                if self.proxy_record(id)?.is_some() {
+                    return Ok(true);
+                }
+                let Some(object) = self.heap.get(id.0 as usize) else {
+                    break;
+                };
+                if object.contains_own_runtime_property(&key) {
+                    return Ok(true);
+                }
+                current = self.observable_prototype_link(object, id);
             }
         }
         Ok(false)
     }
 
-    /// The result of the Array.prototype method `kind` called on `proxy` (a
-    /// Proxy, or concat's ordinary receiver of a Proxy argument), or `None`
-    /// when it has no generic path here.
-    pub(super) fn array_method_on_proxy(
+    /// The result of the Array.prototype method `kind` called on `object`
+    /// (chosen by `generic_array_receiver`), or `None` when it has no
+    /// generic path here.
+    pub(super) fn array_method_generic(
         &mut self,
         module: &Ir3Module,
         kind: BuiltinFunctionKind,
-        proxy: ObjectId,
+        object: ObjectId,
         args: RegRange,
     ) -> Result<Option<Value>, InterpreterError> {
         use BuiltinFunctionKind as K;
@@ -92,7 +171,7 @@ impl InterpreterCore {
         // this method holds values in native locals.
         self.gc_nested_request = None;
         let m = Some(module);
-        let o = proxy;
+        let o = object;
         let arg = |core: &Self, index: u32| -> Result<Value, InterpreterError> {
             Ok(core.builtin_arg(args, index)?.unwrap_or(Value::Undefined))
         };
@@ -191,7 +270,7 @@ impl InterpreterCore {
                 let mut n = 0u64;
                 for item in items {
                     let spreadable = match &item {
-                        Value::Object(id) => self.generic_is_array(*id)?,
+                        Value::Object(id) => self.generic_is_concat_spreadable(m, *id)?,
                         _ => false,
                     };
                     let Value::Object(source) = item else {
@@ -318,12 +397,10 @@ impl InterpreterCore {
                     self.generic_get(m, o, &RuntimePropertyKey::String(JsString::from("join")))?;
                 if join.is_callable() {
                     self.invoke_inline_method_call(m, join, Value::Object(o), Vec::new())?
+                } else if self.generic_is_array(o)? {
+                    Value::str("[object Array]")
                 } else {
-                    Value::str(if self.generic_is_array(o)? {
-                        "[object Array]"
-                    } else {
-                        "[object Object]"
-                    })
+                    self.object_prototype_to_string_value(&Value::Object(o))
                 }
             }
             K::ArrayReverse => {
@@ -418,12 +495,9 @@ impl InterpreterCore {
                         got: callback.type_name().to_string(),
                     });
                 }
-                let indices: Vec<u64> = if kind == K::ArrayReduce {
-                    (0..len).collect()
-                } else {
-                    (0..len).rev().collect()
-                };
-                let mut indices = indices.into_iter();
+                let backwards = kind == K::ArrayReduceRight;
+                let mut indices =
+                    (0..len).map(move |step| if backwards { len - 1 - step } else { step });
                 let mut accumulator = if args.count > 1 {
                     Some(arg(self, 1)?)
                 } else {
@@ -473,7 +547,7 @@ impl InterpreterCore {
                 }
                 let len = self.generic_length(m, o)?;
                 let in_place = kind == K::ArraySort;
-                let mut items = Vec::new();
+                let mut items = self.generic_buffer(len)?;
                 for k in 0..len {
                     let key = Self::generic_index_key(k);
                     // toSorted reads holes as undefined; sort skips them.
@@ -497,7 +571,7 @@ impl InterpreterCore {
             }
             K::ArrayToReversed => {
                 let len = self.generic_length(m, o)?;
-                let mut items = Vec::new();
+                let mut items = self.generic_buffer(len)?;
                 for k in (0..len).rev() {
                     items.push(self.generic_get(m, o, &Self::generic_index_key(k))?);
                 }
@@ -517,7 +591,7 @@ impl InterpreterCore {
                     });
                 }
                 let replacement = arg(self, 1)?;
-                let mut items = Vec::new();
+                let mut items = self.generic_buffer(len)?;
                 for k in 0..len {
                     items.push(if k == actual as u64 {
                         replacement.clone()
@@ -529,7 +603,7 @@ impl InterpreterCore {
             }
             K::ArrayKeys | K::ArrayValues | K::ArrayEntries => {
                 let len = self.generic_length(m, o)?;
-                let mut items = Vec::new();
+                let mut items = self.generic_buffer(len)?;
                 for k in 0..len {
                     let index = Self::generic_length_value(k);
                     items.push(match kind {
@@ -778,6 +852,26 @@ impl InterpreterCore {
             expected: "bounded Proxy target chain".to_string(),
             got: format!("depth {MAX_PROTOTYPE_CHAIN_DEPTH}"),
         })
+    }
+
+    /// A buffer for up to `len` elements, charged to the temporary budget
+    /// first: the length is guest-chosen, up to 2^53 - 1.
+    fn generic_buffer(&self, len: u64) -> Result<Vec<Value>, InterpreterError> {
+        self.element_buffer(usize::try_from(len).unwrap_or(usize::MAX))
+    }
+
+    /// IsConcatSpreadable (ES2020 22.1.3.1.1): a defined @@isConcatSpreadable
+    /// decides, else IsArray.
+    fn generic_is_concat_spreadable(
+        &mut self,
+        m: Option<&Ir3Module>,
+        o: ObjectId,
+    ) -> Result<bool, InterpreterError> {
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::IsConcatSpreadable.id());
+        match self.generic_get(m, o, &key)? {
+            Value::Undefined => self.generic_is_array(o),
+            spreadable => Ok(spreadable.is_truthy()),
+        }
     }
 
     fn generic_index_key(index: u64) -> RuntimePropertyKey {

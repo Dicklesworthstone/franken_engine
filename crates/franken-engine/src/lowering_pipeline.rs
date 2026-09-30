@@ -7585,8 +7585,25 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     // `performance.now()` a TypeError on undefined). Shared with the
     // function-body lowering via `PREDECLARED_RUNTIME_GLOBALS` so the two paths
     // cannot drift.
+    //
+    // A binding the program declares with `let`, `const`, `function`, a
+    // parameter or an import is its own, not the runtime global: routing it
+    // made a top-level block's `{ const performance = 'x'; }` overwrite the
+    // injected global (`typeof performance` was then "string" after the
+    // block). Only a `var` or implicit binding of the name is routed.
     for &global_name in PREDECLARED_RUNTIME_GLOBALS {
-        if let Some(binding_id) = name_to_binding_id.get(global_name) {
+        if let Some(binding_id) = name_to_binding_id.get(global_name)
+            && !matches!(
+                binding_kind_by_id.get(binding_id),
+                Some(
+                    BindingKind::Let
+                        | BindingKind::Const
+                        | BindingKind::FunctionDecl
+                        | BindingKind::Parameter
+                        | BindingKind::Import
+                )
+            )
+        {
             scoped_runtime_binding_ids.insert(*binding_id);
         }
     }
@@ -12309,6 +12326,9 @@ fn collect_function_local_lexical_bindings(
 /// two paths cannot drift. Keep in sync with `inject_runtime_globals`.
 /// (bd-ylpdp; the YTBG/BotGuard `new Function` + `performance` spine.)
 const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &[
+    // bd-9vouw.17: the sanitized global object.
+    "globalThis",
+    "global",
     "Function",
     "console",
     "performance",
@@ -12500,16 +12520,17 @@ fn required_effect_for_ambient_authority(
 ) -> Option<EffectKind> {
     match identifier {
         "eval" => Some(EffectKind::Eval),
-        "globalThis" => {
-            match member_property {
-                Some("process") => Some(EffectKind::EnvRead), // process.env access
-                Some("console") => None,                      // console is safe
-                Some("require") => Some(EffectKind::FsRead),  // require can access filesystem
-                Some("fetch") => Some(EffectKind::NetConnect), // fetch is network access
-                Some("crypto") => Some(EffectKind::RandomRead), // crypto uses CSPRNG
-                _ => Some(EffectKind::Global),                // generic global access
-            }
-        }
+        // bd-9vouw.17: the global object the runtime binds to `globalThis`
+        // (and Node's `global`) holds only the standard intrinsics, never a
+        // host-authority member, so reading it needs no authority. A static
+        // read of a host member stays gated like the bare identifier.
+        "globalThis" | "global" => match member_property {
+            Some("process") => Some(EffectKind::EnvRead), // process.env access
+            Some("require") => Some(EffectKind::FsRead),  // require can access filesystem
+            Some("fetch") => Some(EffectKind::NetConnect), // fetch is network access
+            Some("crypto") => Some(EffectKind::RandomRead), // crypto uses CSPRNG
+            _ => None,
+        },
         "require" => Some(EffectKind::FsRead), // Node.js require
         "fetch" => Some(EffectKind::NetConnect), // Fetch API
         "process" => match member_property {

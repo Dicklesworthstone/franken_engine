@@ -5342,6 +5342,29 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 32] = [
     "BigUint64Array",
 ];
 
+/// bd-9vouw.17: realm globals besides the standard constructors and global
+/// functions that the global object carries. `process` is deliberately
+/// absent: it is a host-authority surface reachable only through its gated
+/// identifier.
+const GLOBAL_OBJECT_MEMBERS: [&str; 16] = [
+    "console",
+    "performance",
+    "Promise",
+    "Math",
+    "Date",
+    "Function",
+    "JSON",
+    "Reflect",
+    "Symbol",
+    "setTimeout",
+    "clearTimeout",
+    "setInterval",
+    "clearInterval",
+    "setImmediate",
+    "clearImmediate",
+    "queueMicrotask",
+];
+
 /// bd-9vouw.17: bare global functions bound as first-class values (the same
 /// list the lowering declares factory hostcalls for).
 const GLOBAL_FUNCTION_VALUES: [&str; 4] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
@@ -34741,7 +34764,65 @@ impl InterpreterCore {
             )?;
         }
         self.inject_runtime_global_binding("Reflect", Value::Object(reflect))?;
+        self.seed_global_object()
+    }
 
+    /// bd-9vouw.17: the global object, bound as `globalThis` and as Node's
+    /// `global`, seeded once per realm so every module sees the same
+    /// identity. It holds the standard intrinsics exactly as the bare
+    /// names resolve (`globalThis.Object === Object`), non-enumerable as in
+    /// Node, and never a host-authority binding: `process` stays reachable
+    /// only through the gated identifier. It is a snapshot: a sloppy global
+    /// created later is not a property of it, and a property written to it is
+    /// not a bare global.
+    fn seed_global_object(&mut self) -> Result<(), InterpreterError> {
+        // One global object per realm: a repeated injection keeps its identity.
+        let seeded = self
+            .scope_chain
+            .frames
+            .last()
+            .and_then(|frame| frame.get("globalThis"))
+            .map(|binding| {
+                binding
+                    .state()
+                    .map(|state| matches!(state.value, Value::Object(_)))
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if seeded {
+            return Ok(());
+        }
+        let mut members = Vec::new();
+        for name in GLOBAL_OBJECT_MEMBERS
+            .iter()
+            .chain(STANDARD_CONSTRUCTOR_GLOBALS.iter())
+            .chain(GLOBAL_FUNCTION_VALUES.iter())
+        {
+            if let Some(binding) = self.resolve_runtime_name_binding(name) {
+                let value = binding.state()?.value.clone();
+                members.push((*name, value));
+            }
+        }
+        let global = self.alloc_object_with_properties(&members)?;
+        for (name, _) in &members {
+            self.set_own_property_attributes(
+                global,
+                &RuntimePropertyKey::String(JsString::from(*name)),
+                NON_ENUMERABLE_DATA_ATTRIBUTES,
+            )?;
+        }
+        for name in ["globalThis", "global"] {
+            self.set_object_property(global, name.to_string(), Value::Object(global))?;
+            self.set_own_property_attributes(
+                global,
+                &RuntimePropertyKey::String(JsString::from(name)),
+                NON_ENUMERABLE_DATA_ATTRIBUTES,
+            )?;
+            // A global-frame binding like `console` and `performance`, so a
+            // program's own top-level `global`/`globalThis` binding resolves
+            // the way theirs do (PREDECLARED_RUNTIME_GLOBALS in lowering).
+            self.inject_runtime_global_binding(name, Value::Object(global))?;
+        }
         Ok(())
     }
 

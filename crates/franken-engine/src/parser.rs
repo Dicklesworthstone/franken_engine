@@ -4749,6 +4749,16 @@ fn parse_binding_pattern_inner(
             ));
         }
         let name = canonicalize_identifier(trimmed);
+        // A reserved word spelled with a unicode escape is still reserved
+        // (ES2020 11.6.2): `var` with an escaped `case` is a SyntaxError.
+        if is_unconditional_reserved_keyword(&name) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("keyword `{name}` must not contain escaped characters"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         reject_strict_restricted_binding(&name, context.strict_mode, span, context)?;
         reject_context_reserved_binding(&name, span, context)?;
         return Ok(BindingPattern::Identifier(name));
@@ -5121,6 +5131,7 @@ fn parse_variable_declaration(
         let (name_raw, initializer_raw) = split_var_declarator_assignment(declarator);
         let name = name_raw.trim();
         let pattern = parse_binding_pattern(name, &span, context)?;
+        reject_let_lexical_binding(&pattern, kind, &span, context)?;
 
         let initializer = match initializer_raw {
             Some(initializer_source) => {
@@ -5387,6 +5398,16 @@ fn parse_primary_expression(
 
     if let Some(value) = parse_bigint_numeric_literal(expression) {
         return Ok(Expression::BigIntLiteral(value));
+    }
+    // A numeric literal with the BigInt suffix that is not a BigInt literal
+    // (`0e0n`, `1.5n`, `.5n`) is a SyntaxError (ES2020 11.8.3); it was
+    // evaluated as some other expression.
+    if is_malformed_bigint_literal(expression) {
+        return Err(unsupported_expression_syntax_error(
+            "invalid BigInt literal: no fraction or exponent is allowed",
+            span,
+            context,
+        ));
     }
 
     if let Some(value) = parse_i64_numeric_literal(expression) {
@@ -5809,7 +5830,14 @@ fn try_parse_arrow_function(
             false,
             context,
             |context| {
-                let params = parse_arrow_params(params_src, span, context)?;
+                // An async arrow's parameters reserve `await` (ES2020 14.8:
+                // `async (await) => {}`, `async (x = await) => {}`).
+                let saved_await_context = context.await_context;
+                context.await_context |= is_async;
+                let params = parse_arrow_params(params_src, span, context);
+                context.await_context = saved_await_context;
+                let params = params?;
+                reject_duplicate_params(&params, true, span, context)?;
                 parse_arrow_body(body_src, params, is_async, span, context, recursion_depth)
             },
         ))
@@ -5822,8 +5850,19 @@ fn try_parse_arrow_function(
             return None;
         }
         let body_src = rest[arrow_pos + 2..].trim();
+        // The parameter is a BindingIdentifier: reserved words (`yield` in
+        // strict code, `await` of an async arrow, escaped keywords) are
+        // SyntaxErrors, and an escaped name is canonical.
+        let saved_await_context = context.await_context;
+        context.await_context |= is_async;
+        let pattern = parse_binding_pattern(param_name, span, context);
+        context.await_context = saved_await_context;
+        let pattern = match pattern {
+            Ok(pattern) => pattern,
+            Err(error) => return Some(Err(error)),
+        };
         let params = vec![FunctionParam {
-            pattern: BindingPattern::Identifier(param_name.to_string()),
+            pattern,
             span: span.clone(),
         }];
         Some(parse_arrow_body(
@@ -5846,20 +5885,115 @@ fn parse_arrow_params(
     if params_src.trim().is_empty() {
         return Ok(Vec::new());
     }
+    // ES2020 14.1 FormalParameters: no elision (`(a,,b)`, `(,a)`), a rest
+    // parameter last, and no trailing comma after it (`(...a,)`).
+    fn malformed(
+        message: &str,
+        span: &SourceSpan,
+        context: &ParseExecutionContext<'_>,
+    ) -> ParseError {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            message.to_string(),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    }
     let segments = split_pattern_elements(params_src);
+    if segments.iter().any(|segment| segment.trim().is_empty()) {
+        return Err(malformed(
+            "empty parameter in a parameter list",
+            span,
+            context,
+        ));
+    }
     let mut params = Vec::with_capacity(segments.len());
     for segment in &segments {
-        let seg = segment.trim();
-        if seg.is_empty() {
-            continue;
+        if params
+            .last()
+            .is_some_and(|param: &FunctionParam| matches!(param.pattern, BindingPattern::Rest(_)))
+        {
+            return Err(malformed("a rest parameter must be last", span, context));
         }
-        let pattern = parse_binding_pattern(seg, span, context)?;
+        let pattern = parse_binding_pattern(segment.trim(), span, context)?;
         params.push(FunctionParam {
             pattern,
             span: span.clone(),
         });
     }
+    if params_src.trim_end().ends_with(',')
+        && params
+            .last()
+            .is_some_and(|param| matches!(param.pattern, BindingPattern::Rest(_)))
+    {
+        return Err(malformed(
+            "a rest parameter may not have a trailing comma",
+            span,
+            context,
+        ));
+    }
     Ok(params)
+}
+
+/// ES2020 14.1.2, 14.2.1, 14.3.1: parameter names are unique in strict
+/// code, in arrow functions and methods, and in any non-simple parameter
+/// list (`function f(x = 0, x) {}`); only a sloppy function with simple
+/// parameters may repeat one (`function f(a, a) {}`).
+fn reject_duplicate_params(
+    params: &[FunctionParam],
+    unique_required: bool,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let simple = params
+        .iter()
+        .all(|param| matches!(param.pattern, BindingPattern::Identifier(_)));
+    if !unique_required && !context.strict_mode && simple {
+        return Ok(());
+    }
+    let mut seen = BTreeSet::new();
+    for name in params
+        .iter()
+        .flat_map(|param| param.pattern.binding_names())
+    {
+        if !seen.insert(name) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("duplicate parameter name `{name}` is not allowed here"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// ES2020 14.3.1: a getter has no parameters, and a setter exactly one,
+/// which is not a rest parameter.
+fn reject_accessor_arity(
+    is_getter: bool,
+    params: &[FunctionParam],
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let valid = if is_getter {
+        params.is_empty()
+    } else {
+        params.len() == 1 && !matches!(params[0].pattern, BindingPattern::Rest(_))
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(ParseError::new(
+        ParseErrorCode::UnsupportedSyntax,
+        if is_getter {
+            "a getter must not have parameters"
+        } else {
+            "a setter must have exactly one parameter"
+        },
+        context.source_label.to_string(),
+        Some(span.clone()),
+    ))
 }
 
 /// Parse the body of an arrow function — either `{ block }` or expression.
@@ -5873,7 +6007,16 @@ fn parse_arrow_body(
 ) -> ParseResult<Expression> {
     with_function_context(is_async, false, context, |context| {
         let body = if body_src.starts_with('{') {
-            if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
+            if let Some((block_src, after_block)) = extract_balanced(body_src, '{', '}') {
+                // An arrow function is a whole AssignmentExpression: nothing
+                // follows its block body (`() => {} = 1`, `() => {}.x`).
+                if !after_block.trim().is_empty() {
+                    return Err(unsupported_expression_syntax_error(
+                        "unexpected token after an arrow function body",
+                        span,
+                        context,
+                    ));
+                }
                 reject_use_strict_with_non_simple_params(block_src, &params, span, context)?;
                 let stmts = parse_function_body_statements(
                     block_src,
@@ -6378,6 +6521,9 @@ fn try_parse_assignment(
                     context.source_label.to_string(),
                     Some(span.clone()),
                 )));
+            }
+            if let Err(error) = reject_strict_eval_arguments_target(&left, span, context) {
+                return Some(Err(error));
             }
             let right = match parse_expression(rhs, span, context, recursion_depth + 1) {
                 Ok(e) => e,
@@ -7303,6 +7449,9 @@ fn try_parse_update(
         if !is_simple_update_target(&target) {
             return reject_non_assignable_update_target(&target, span, context);
         }
+        if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
+            return Some(Err(error));
+        }
         // `++x` ⇒ `x += 1` (compound assignment evaluates to the new value).
         return Some(Ok(Expression::Assignment {
             operator: op,
@@ -7328,6 +7477,9 @@ fn try_parse_update(
         let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
         if !is_simple_update_target(&target) {
             return reject_non_assignable_update_target(&target, span, context);
+        }
+        if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
+            return Some(Err(error));
         }
         // `x++` ⇒ `(x += 1) - 1`: write the increment back, evaluate to the old
         // value. `x--` mirrors with `(x -= 1) + 1`.
@@ -7361,6 +7513,63 @@ fn is_simple_update_target(expr: &Expression) -> bool {
 /// left to the paths that split them first: `a + b` in `a + b++` (binary),
 /// `-x` in `-x++` and `await x` in `await x++` (unary / await), and
 /// `undefined`, which is an assignable identifier in sloppy code.
+/// ES2020 12.1.1: a shorthand property `{ x }` is an IdentifierReference,
+/// so it is never a reserved word (`({ if })`), nor in strict code a
+/// strict-mode reserved word (`"use strict"; ({ implements })`), nor
+/// `yield`/`await` where those are reserved.
+fn reject_reserved_identifier_reference(
+    name: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let reserved = is_unconditional_reserved_keyword(name)
+        || (context.await_context && name == "await")
+        || (context.yield_context && name == "yield")
+        || (context.strict_mode
+            && matches!(
+                name,
+                "implements"
+                    | "interface"
+                    | "let"
+                    | "package"
+                    | "private"
+                    | "protected"
+                    | "public"
+                    | "static"
+                    | "yield"
+            ));
+    if reserved {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("`{name}` is a reserved word here and cannot be referenced"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
+/// ES2020 12.15.1, 12.4.1: in strict code `eval` and `arguments` are not
+/// assignment or update targets (`arguments <<= 20`, `eval++`).
+fn reject_strict_eval_arguments_target(
+    target: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if context.strict_mode
+        && let Expression::Identifier(name) = target
+        && matches!(name.as_str(), "eval" | "arguments")
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("`{name}` cannot be assigned in strict mode code"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 fn reject_non_assignable_update_target(
     target: &Expression,
     span: &SourceSpan,
@@ -8437,7 +8646,9 @@ fn parse_object_literal(
         } else {
             // Shorthand property: { x } means { x: x }
             let (key, value) = if is_identifier(p) {
-                let key = Expression::Identifier(canonicalize_identifier(p));
+                let name = canonicalize_identifier(p);
+                reject_reserved_identifier_reference(&name, span, context)?;
+                let key = Expression::Identifier(name);
                 (key.clone(), key)
             } else if assignment_pattern {
                 let value =
@@ -8512,6 +8723,7 @@ fn try_parse_object_accessor(
                         parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
                     let value =
                         parse_function_expression(after, span, context, recursion_depth + 1)?;
+                    reject_object_accessor_arity(kind, &value, span, context)?;
                     return Ok(Some((key, value, true, kind)));
                 }
             }
@@ -8528,10 +8740,26 @@ fn try_parse_object_accessor(
         let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
         let value =
             parse_function_expression(&rest[paren_idx..], span, context, recursion_depth + 1)?;
+        reject_object_accessor_arity(kind, &value, span, context)?;
         return Ok(Some((key, value, false, kind)));
     }
 
     Ok(None)
+}
+
+/// [`reject_accessor_arity`] for an object literal's accessor function, and
+/// its parameter names are unique, as for any method.
+fn reject_object_accessor_arity(
+    kind: ObjectPropertyKind,
+    value: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if let Expression::Function { params, .. } = value {
+        reject_accessor_arity(kind == ObjectPropertyKind::Get, params, span, context)?;
+        reject_duplicate_params(params, true, span, context)?;
+    }
+    Ok(())
 }
 
 /// Try to parse an object-literal method shorthand:
@@ -8569,27 +8797,33 @@ fn try_parse_object_method(
     let method_value = |params_and_body: &str,
                         context: &mut ParseExecutionContext<'_>|
      -> ParseResult<Expression> {
-        if !is_async && !is_generator {
-            return parse_object_method_function_expression(
+        let value = if !is_async && !is_generator {
+            parse_object_method_function_expression(
                 params_and_body,
                 span,
                 context,
                 recursion_depth + 1,
-            );
-        }
-        let source = if is_generator {
-            format!("*{params_and_body}")
+            )?
         } else {
-            params_and_body.to_string()
+            let source = if is_generator {
+                format!("*{params_and_body}")
+            } else {
+                params_and_body.to_string()
+            };
+            parse_function_expression_with_super(
+                &source,
+                span,
+                context,
+                recursion_depth + 1,
+                true,
+                is_async,
+            )?
         };
-        parse_function_expression_with_super(
-            &source,
-            span,
-            context,
-            recursion_depth + 1,
-            true,
-            is_async,
-        )
+        // A method's parameter names are unique (ES2020 14.3.1).
+        if let Expression::Function { params, .. } = &value {
+            reject_duplicate_params(params, true, span, context)?;
+        }
+        Ok(value)
     };
 
     // Computed method: `[expr](params){body}`.
@@ -8840,6 +9074,32 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
         }
         Some(value_u64 as i64)
     }
+}
+
+/// Whether `input` is spelled as a numeric literal ending in the BigInt
+/// suffix `n`: digits (or `.digit`), letters, `.`, `_`, and a sign only
+/// after an exponent `e`. Callers try [`parse_bigint_numeric_literal`] first.
+fn is_malformed_bigint_literal(input: &str) -> bool {
+    let body = input.strip_prefix('-').unwrap_or(input);
+    let Some(digits) = body.strip_suffix('n') else {
+        return false;
+    };
+    let starts_numeric = digits.starts_with(|c: char| c.is_ascii_digit())
+        || (digits.starts_with('.') && digits[1..].starts_with(|c: char| c.is_ascii_digit()));
+    if !starts_numeric {
+        return false;
+    }
+    let mut previous = ' ';
+    for ch in digits.chars() {
+        let allowed = ch.is_ascii_alphanumeric()
+            || matches!(ch, '.' | '_')
+            || (matches!(ch, '+' | '-') && matches!(previous, 'e' | 'E'));
+        if !allowed {
+            return false;
+        }
+        previous = ch;
+    }
+    true
 }
 
 fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
@@ -10691,6 +10951,25 @@ fn reject_strict_restricted_binding(
     Ok(())
 }
 
+/// ES2020 13.3.1.1, 13.7.5.1: `let` is never a lexically bound name, in
+/// sloppy code too (`let let = 1`, `for (const let of xs)`).
+fn reject_let_lexical_binding(
+    pattern: &BindingPattern,
+    kind: VariableDeclarationKind,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if kind != VariableDeclarationKind::Var && pattern.binding_names().contains(&"let") {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "`let` is disallowed as a lexically bound name",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 /// ES2020 11.6.2.2, 12.1.1: strict code reserves `implements`, `interface`,
 /// `let`, `package`, `private`, `protected`, `public`, `static` and
 /// `yield`; async functions and modules reserve `await`. None of them can be
@@ -11323,6 +11602,24 @@ fn try_parse_for_in_of(
         Err(error) if split_for_header(header).is_none() => return Err(error),
         Err(_) => return Ok(None),
     };
+    if let Some(kind) = binding_kind {
+        reject_let_lexical_binding(&binding, kind, span, context)?;
+        // ES2020 13.7.5.1: a for-in/of declaration has no initializer, save
+        // Annex B.3.6's sloppy `for (var x = e in o)`.
+        if let BindingPattern::AssignmentPattern { left, .. } = &binding
+            && !(keyword == "in"
+                && kind == VariableDeclarationKind::Var
+                && !context.strict_mode
+                && matches!(**left, BindingPattern::Identifier(_)))
+        {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("for-{keyword} loop variable declaration may not have an initializer"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+    }
 
     let body_src = rest.trim();
     reject_declaration_in_statement_position(body_src, StatementPosition::Loop, span, context)?;
@@ -12137,6 +12434,7 @@ fn parse_function_expression_with_super(
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
+            reject_duplicate_params(&params, false, span, context)?;
             let body = parse_body_statements(body_src, goal, span, context)?;
             Ok((params, body))
         })
@@ -12193,6 +12491,27 @@ fn parse_class_parts(
             },
             &rest[end..],
         )
+    };
+
+    // The name is a BindingIdentifier in strict code (class code is strict,
+    // ES2020 10.2.1): `class let {}`, `class eval {}` and `class yield {}`
+    // in a generator are SyntaxErrors, and an escaped name is canonical.
+    let name = match name {
+        Some(name) => {
+            let pattern = with_function_strict_mode("", true, context, |context| {
+                parse_binding_pattern(&name, span, context)
+            })?;
+            let BindingPattern::Identifier(name) = pattern else {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("invalid class name `{name}`"),
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            };
+            Some(name)
+        }
+        None => None,
     };
 
     let rest = rest.trim_start();
@@ -12780,6 +13099,10 @@ fn parse_class_body_members(
             with_function_strict_mode(body_src, true, context, |context| {
                 let params = parse_arrow_params(params_src, span, context)?;
                 reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
+                reject_duplicate_params(&params, true, span, context)?;
+                if matches!(kind, MethodKind::Get | MethodKind::Set) {
+                    reject_accessor_arity(kind == MethodKind::Get, &params, span, context)?;
+                }
                 let body = parse_body_statements(body_src, goal, span, context)?;
                 Ok((params, body))
             })
@@ -13418,6 +13741,7 @@ fn parse_function_declaration(
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, &span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, &span, context)?;
+            reject_duplicate_params(&params, false, &span, context)?;
             let body = parse_body_statements(body_src, goal, &span, context)?;
             Ok((params, body))
         })

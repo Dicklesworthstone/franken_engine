@@ -123,6 +123,12 @@ pub(super) struct GcState {
     /// One entry per armed nested run loop (bd-9vouw.77): what its callers
     /// hold in Rust locals. Roots.
     nested_pins: Vec<NestedPins>,
+    /// Builtin dispatches active in the current run loop. A builtin whose
+    /// Rust frame calls another builtin's dispatch holds its own locals
+    /// across it, so only the outermost one may arm a nested loop.
+    builtin_depth: u32,
+    /// `builtin_depth` of each enclosing run loop, restored on exit.
+    builtin_depth_stack: Vec<u32>,
     /// Planted negative for the root-coverage tests: skip the registers,
     /// call frames, scope chain and realm globals.
     #[cfg(test)]
@@ -713,10 +719,22 @@ impl InterpreterCore {
     /// Enter a run loop (tracks the depth that `safe_depth` refers to).
     pub(super) fn gc_enter_run_loop(&mut self) {
         self.gc.run_loop_depth = self.gc.run_loop_depth.saturating_add(1);
+        self.gc.builtin_depth_stack.push(self.gc.builtin_depth);
+        self.gc.builtin_depth = 0;
     }
 
     pub(super) fn gc_exit_run_loop(&mut self) {
         self.gc.run_loop_depth = self.gc.run_loop_depth.saturating_sub(1);
+        self.gc.builtin_depth = self.gc.builtin_depth_stack.pop().unwrap_or(0);
+    }
+
+    /// A builtin dispatch begins in the current run loop (bd-9vouw.77).
+    pub(super) fn gc_enter_builtin(&mut self) {
+        self.gc.builtin_depth = self.gc.builtin_depth.saturating_add(1);
+    }
+
+    pub(super) fn gc_exit_builtin(&mut self) {
+        self.gc.builtin_depth = self.gc.builtin_depth.saturating_sub(1);
     }
 
     /// Allow collection in the next run loop entered (the top-level script's
@@ -779,7 +797,9 @@ impl InterpreterCore {
     /// current context is itself safe: a caller that is not at a safe point
     /// may hold unpinned values of its own.
     pub(super) fn gc_arm_nested(&mut self, pins: &[GcPin<'_>]) -> Option<NestedGcArm> {
-        if !self.gc_context_is_safe() {
+        // A builtin dispatched from inside another builtin's Rust frame may
+        // not arm: the outer builtin's locals are pinned by nobody.
+        if !self.gc_context_is_safe() || self.gc.builtin_depth > 1 {
             return None;
         }
         let mut marker = self.gc_new_marker();
@@ -1852,6 +1872,43 @@ mod tests {
             Ok(Err(error)) => format!("error: {error:?}"),
             Err(_) => "panic".to_string(),
         }
+    }
+
+    /// Only the outermost builtin at a run-loop level may arm a nested loop
+    /// (bd-9vouw.77). A builtin dispatched from inside another builtin's Rust
+    /// frame would leave the outer builtin's locals unpinned. A nested run
+    /// loop starts with no active builtins of its own.
+    #[test]
+    fn only_the_outermost_builtin_of_a_run_loop_arms() {
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "gc-unit");
+        core.gc_enter_run_loop();
+        core.gc.safe_depth = Some(1);
+        core.gc_enter_builtin();
+        let arm = core.gc_arm_nested(&[]);
+        assert!(arm.is_some(), "the outermost builtin arms");
+        core.gc_disarm_nested(arm);
+        core.gc_enter_builtin();
+        assert!(
+            core.gc_arm_nested(&[]).is_none(),
+            "a nested builtin must not arm"
+        );
+        core.gc_exit_builtin();
+
+        core.gc_enter_run_loop();
+        core.gc.safe_depth = Some(2);
+        core.gc_enter_builtin();
+        let arm = core.gc_arm_nested(&[]);
+        assert!(arm.is_some(), "the armed nested loop's own builtin arms");
+        core.gc_disarm_nested(arm);
+        core.gc_exit_builtin();
+        core.gc_exit_run_loop();
+        assert_eq!(
+            core.gc.builtin_depth, 1,
+            "the outer loop's count is restored"
+        );
+        core.gc_exit_builtin();
+        core.gc_exit_run_loop();
+        assert_eq!(core.gc.builtin_depth, 0);
     }
 
     /// The differential must not be vacuous: dropping one root class changes

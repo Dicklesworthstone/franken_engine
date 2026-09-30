@@ -624,23 +624,29 @@ impl InterpreterCore {
                     context,
                 )?
             } else if construct {
-                self.invoke_inline_construct_with_labels(
-                    module,
-                    target,
-                    arguments,
-                    Some(labels),
-                    explicit_new_target,
-                )?
+                // bd-9vouw.77: past argument collection this frame holds
+                // nothing the call does not pin, so the callee may collect.
+                self.with_gc_nested_request(Vec::new(), |core| {
+                    core.invoke_inline_construct_with_labels(
+                        module,
+                        target,
+                        arguments,
+                        Some(labels),
+                        explicit_new_target,
+                    )
+                })?
             } else {
                 let context = self.json_parse_context_label()?;
-                self.invoke_inline_method_call_with_labels(
-                    module,
-                    target,
-                    this_arg,
-                    arguments,
-                    Some(context),
-                    labels,
-                )?
+                self.with_gc_nested_request(Vec::new(), |core| {
+                    core.invoke_inline_method_call_with_labels(
+                        module,
+                        target,
+                        this_arg,
+                        arguments,
+                        Some(context),
+                        labels,
+                    )
+                })?
             };
             let context = self.json_parse_context_label()?;
             let label = self.join_owned_label_with_temporary_budget(label, &context)?;

@@ -487,6 +487,56 @@ const TASK_CHURN_CASES: &[(&str, &str)] = &[
          f(...Array.from({ length: 300 }, (_, v) => ({ v }))).then(t => console.log(t));",
         "150897",
     ),
+    // Entered through builtin:ReflectApply (spread), Function.prototype.apply
+    // and builtin:ReflectConstruct, the callee's own loop collects.
+    (
+        "function f(...r) { let s = 0; for (let i = 0; i < 150000; i++) { const g = { i }; \
+         s += g.i & 1; } return s + r.length; } console.log(f(...[1, 2, 3]));",
+        "75003",
+    ),
+    (
+        "async function f(...r) { let s = 0; for (let i = 0; i < 150000; i++) { \
+         const g = { i }; s += g.i & 1; } await null; return s + r.length; } \
+         f(...[1, 2, 3]).then(v => console.log(v));",
+        "75003",
+    ),
+    (
+        "function f(a, b) { let s = 0; for (let i = 0; i < 150000; i++) { const g = { i }; \
+         s += g.i & 1; } return s + a + b; } console.log(f.apply(null, [1, 2]));",
+        "75003",
+    ),
+    (
+        "class C { constructor(k) { let s = 0; for (let i = 0; i < 150000; i++) { \
+         const g = { i }; s += g.i & 1; } this.s = s + k; } } \
+         console.log(Reflect.construct(C, [1]).s, new C(...[2]).s);",
+        "75001 75002",
+    ),
+    // Array callbacks collect; the array a builtin fills across calls
+    // survives with every object put in it.
+    (
+        "const out = [1, 2, 3].map(x => { let s = 0; for (let i = 0; i < 150000; i++) { \
+         const g = { i }; s += g.i & 1; } return { x, s }; }); \
+         console.log(out.map(o => o.x + ':' + o.s).join());",
+        "1:75000,2:75000,3:75000",
+    ),
+    (
+        "const xs = [{ v: 1 }, { v: 2 }, { v: 3 }, { v: 4 }]; const kept = xs.filter(o => { \
+         let s = 0; for (let i = 0; i < 150000; i++) { const g = { i }; s += g.i & 1; } \
+         return o.v % 2 === 0; }); console.log(kept.map(o => o.v).join());",
+        "2,4",
+    ),
+    (
+        "const ys = [1, 2]; console.log(ys.flatMap(x => { let s = 0; \
+         for (let i = 0; i < 150000; i++) { const g = { i }; s += g.i & 1; } \
+         return [{ x }, { x: x * 10 }]; }).map(o => o.x).join());",
+        "1,10,2,20",
+    ),
+    // One temporary per callback: collection runs between callbacks.
+    (
+        "let n = 0; const zs = Array.from({ length: 150000 }, (_, i) => i); \
+         zs.forEach(i => { const g = { i }; n += g.i & 1; }); console.log(n);",
+        "75000",
+    ),
 ];
 
 #[test]
@@ -698,7 +748,7 @@ fn stress_collection_preserves_results_and_console_output() {
             .map(|(source, _)| {
                 // The stress run collects at every safe point; a short churn
                 // keeps the O(live) cost per instruction manageable.
-                source.replace("300000", "200")
+                source.replace("300000", "200").replace("150000", "200")
             }),
     );
     let mut compared = 0;

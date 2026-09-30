@@ -37437,7 +37437,10 @@ impl InterpreterCore {
         receiver: Option<Value>,
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
-        match builtin.kind {
+        // bd-9vouw.77: count this dispatch so a builtin reached from inside
+        // another builtin's Rust frame never arms a nested loop.
+        self.gc_enter_builtin();
+        let result = match builtin.kind {
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
             | BuiltinFunctionKind::AsyncGeneratorThrow => self.dispatch_async_generator_resume(
@@ -37478,7 +37481,9 @@ impl InterpreterCore {
                 receiver,
                 receiver_register,
             ),
-        }
+        };
+        self.gc_exit_builtin();
+        result
     }
 
     #[inline(never)]
@@ -38668,14 +38673,17 @@ impl InterpreterCore {
                     let Some(element) = self.array_index_value(arr_id, index)? else {
                         continue;
                     };
-                    let mapped = self.invoke_array_callback(
-                        Some(module),
-                        &callback,
-                        this_arg.clone(),
-                        element,
-                        index,
-                        arr_id,
-                    )?;
+                    let mapped =
+                        self.with_gc_nested_request(vec![Value::Object(result)], |core| {
+                            core.invoke_array_callback(
+                                Some(module),
+                                &callback,
+                                this_arg.clone(),
+                                element,
+                                index,
+                                arr_id,
+                            )
+                        })?;
                     self.set_object_property(result, index.to_string(), mapped)?;
                 }
                 self.set_object_property(
@@ -38696,14 +38704,16 @@ impl InterpreterCore {
                     let Some(element) = self.array_index_value(arr_id, index)? else {
                         continue;
                     };
-                    let keep = self.invoke_array_callback(
-                        Some(module),
-                        &callback,
-                        this_arg.clone(),
-                        element.clone(),
-                        index,
-                        arr_id,
-                    )?;
+                    let keep = self.with_gc_nested_request(vec![Value::Object(result)], |core| {
+                        core.invoke_array_callback(
+                            Some(module),
+                            &callback,
+                            this_arg.clone(),
+                            element.clone(),
+                            index,
+                            arr_id,
+                        )
+                    })?;
                     if keep.is_truthy() {
                         self.set_object_property(result, out.to_string(), element)?;
                         out += 1;
@@ -38820,14 +38830,17 @@ impl InterpreterCore {
                     let Some(element) = self.array_index_value(arr_id, index)? else {
                         continue;
                     };
-                    let mapped = self.invoke_array_callback(
-                        Some(module),
-                        &callback,
-                        this_arg.clone(),
-                        element,
-                        index,
-                        arr_id,
-                    )?;
+                    let mapped =
+                        self.with_gc_nested_request(vec![Value::Object(result)], |core| {
+                            core.invoke_array_callback(
+                                Some(module),
+                                &callback,
+                                this_arg.clone(),
+                                element,
+                                index,
+                                arr_id,
+                            )
+                        })?;
                     let nested = if let Value::Object(eid) = &mapped {
                         self.heap
                             .get(eid.0 as usize)
@@ -64817,6 +64830,12 @@ impl InterpreterCore {
         Ok((array_id, callback, this_arg, array_length))
     }
 
+    /// Call an array builtin's callback with `(element, index, array)`. The
+    /// callback may collect (bd-9vouw.77): the call pins the callback, its
+    /// `this` and its arguments, which include the array being iterated. A
+    /// builtin that also holds an array it fills across calls sets a request
+    /// holding it first; that request carries over. The builtin holds nothing
+    /// else across the call.
     fn invoke_array_callback(
         &mut self,
         module: Option<&Ir3Module>,
@@ -64830,12 +64849,15 @@ impl InterpreterCore {
             expected: "array callback index within i64".to_string(),
             got: element_index.to_string(),
         })?;
-        self.invoke_inline_method_call(
-            module,
-            callback.clone(),
-            this_arg,
-            vec![element, Value::Int(index), Value::Object(array_id)],
-        )
+        let held = self.gc_nested_request.take().unwrap_or_default();
+        self.with_gc_nested_request(held, |core| {
+            core.invoke_inline_method_call(
+                module,
+                callback.clone(),
+                this_arg,
+                vec![element, Value::Int(index), Value::Object(array_id)],
+            )
+        })
     }
 
     fn array_prototype_reduce(
@@ -66997,14 +67019,18 @@ impl InterpreterCore {
                     context_label,
                 )?
             } else {
-                self.invoke_inline_method_call_with_labels(
-                    module,
-                    function,
-                    this_arg,
-                    values,
-                    Some(context_label),
-                    labels,
-                )?
+                // bd-9vouw.77: this frame holds nothing the call does not pin
+                // (callee, receiver, arguments), so the callee may collect.
+                self.with_gc_nested_request(Vec::new(), |core| {
+                    core.invoke_inline_method_call_with_labels(
+                        module,
+                        function,
+                        this_arg,
+                        values,
+                        Some(context_label),
+                        labels,
+                    )
+                })?
             };
             self.replace_pending_hostcall_result_label(Some(label))?;
             Ok(value)
@@ -68927,6 +68953,8 @@ impl InterpreterCore {
         call_labels: Option<IsolatedCallLabels>,
         explicit_new_target: Option<(Value, Label)>,
     ) -> Result<(Value, Label), InterpreterError> {
+        // A request applies to this construction only, whatever path it takes.
+        let gc_request = self.gc_nested_request.take();
         let caller_module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed Reflect.construct dispatch".to_string(),
             got: "missing module context".to_string(),
@@ -69109,7 +69137,19 @@ impl InterpreterCore {
                 self.active_foreign_module_call_depth =
                     previous_foreign_call_depth.saturating_add(1);
             }
+            // bd-9vouw.77: the constructor, new target and arguments are in
+            // the wrapper's registers; the caller's execution is in
+            // `snapshot`.
+            let gc_arm = gc_request.as_ref().and_then(|held| {
+                let pins = held
+                    .iter()
+                    .map(GcPin::Value)
+                    .chain(std::iter::once(GcPin::ModuleExecution(&snapshot)))
+                    .collect::<Vec<_>>();
+                self.gc_arm_nested(&pins)
+            });
             let result = self.run_loop_with_trampoline(module, &wrapper_instructions);
+            self.gc_disarm_nested(gc_arm);
             self.module_reentrant_call_depth = previous_reentrant_depth;
             self.active_foreign_module_call_depth = previous_foreign_call_depth;
             result
@@ -75616,6 +75656,7 @@ impl InterpreterCore {
                 }
             }
         }
+        self.gc_enter_builtin();
         let outcome = match cap {
             "builtin:DestructureIteratorInit"
             | "builtin:DestructureIteratorNext"
@@ -75625,6 +75666,7 @@ impl InterpreterCore {
             }
             _ => self.dispatch_builtin_hostcall_inner(cap, args, module),
         };
+        self.gc_exit_builtin();
         // ApplyHostCall and callback-running builtins can complete nested
         // hostcalls. Record the outer builtin in completion order so its
         // deterministic timestamp cannot precede an already-retained inner
@@ -83683,13 +83725,18 @@ impl InterpreterCore {
                         continue;
                     };
 
-                    let mapped_result = self.invoke_array_callback(
-                        module,
-                        &callback,
-                        this_arg.clone(),
-                        element,
-                        index,
-                        array_id,
+                    let mapped_result = self.with_gc_nested_request(
+                        vec![Value::Object(result_array_id)],
+                        |core| {
+                            core.invoke_array_callback(
+                                module,
+                                &callback,
+                                this_arg.clone(),
+                                element,
+                                index,
+                                array_id,
+                            )
+                        },
                     )?;
 
                     // Set result in new array

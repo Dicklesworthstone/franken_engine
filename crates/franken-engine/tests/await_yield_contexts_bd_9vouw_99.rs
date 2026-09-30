@@ -65,6 +65,15 @@ fn generators_and_plain_functions_keep_their_meaning() {
              it.next(21).value",
             "42",
         ),
+        // `await` / `yield` as object-literal keys are names, not operators.
+        (
+            "function* g() { yield { yield: 1 }.yield; } \
+             async function h() { const o = { await: 2 }; return o.await; } \
+             [g().next().value, typeof h, \
+             (function () { 'use strict'; return { yield: 4, static: 5 }.yield; })(), \
+             ({ true: 6, null: 7 }).null].join()",
+            "1,function,4,7",
+        ),
     ] {
         assert_eq!(
             eval(source),

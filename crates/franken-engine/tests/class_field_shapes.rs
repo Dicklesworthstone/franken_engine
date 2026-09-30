@@ -79,3 +79,23 @@ fn escaped_identifier_keys() {
         "1 2 b 7",
     );
 }
+
+#[test]
+fn computed_keys_holding_an_assignment_are_methods_and_accessors() {
+    // `get [x = 1]() {}` was taken for a field: the member scan found the
+    // key's `=` before the parameter list ("malformed class field"; Test262
+    // cpn-class-decl-accessors-computed-property-name-from-assignment-expression-assignment).
+    check(
+        "var x; class C { get [x = 1]() { return 2; } } [new C()[1], x].join();",
+        "2,1",
+    );
+    check(
+        "var k; class D { [k = 'm']() { return 3; } } new D().m();",
+        "3",
+    );
+    check(
+        "var s; class S { static get [s = 'g']() { return 4; } } S.g;",
+        "4",
+    );
+    check("var f; class E { [f = 'p'] = 5; } new E().p;", "5");
+}

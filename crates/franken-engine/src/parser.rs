@@ -12096,9 +12096,19 @@ fn class_member_is_field(member: &str) -> bool {
         // braces are not a method body.
         _ => skip_identifier_name(member),
     };
-    after_key
-        .find(['(', '=', ';', '{'])
-        .is_none_or(|index| matches!(after_key.as_bytes()[index], b'=' | b';'))
+    // Look past a computed key: in `get [x = 1]() {}` or `[k = 'm']() {}` the
+    // `=` belongs to the key expression, not to a field initializer.
+    let mut bracket_depth = 0usize;
+    for byte in after_key.bytes() {
+        match byte {
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
+            b'(' | b'{' if bracket_depth == 0 => return false,
+            b'=' | b';' if bracket_depth == 0 => return true,
+            _ => {}
+        }
+    }
+    true
 }
 
 /// `text` after a leading IdentifierName, including `\uXXXX` and `\u{...}`

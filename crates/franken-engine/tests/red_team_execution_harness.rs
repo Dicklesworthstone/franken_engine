@@ -180,15 +180,21 @@ fn execute_with_frankenengine(
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let structured_log = std::fs::read_to_string(&report_path).unwrap_or_else(|_| {
-        fallback_frankenengine_structured_log(
+    // A completed run's own report is its structured log. A failed run keeps
+    // the harness's fail-closed record, which embeds whatever report frankenctl
+    // wrote (a lowering rejection writes one since bd-9vouw.61).
+    let frankenctl_report = std::fs::read_to_string(&report_path).ok();
+    let structured_log = match frankenctl_report {
+        Some(report) if exit_code == 0 => report,
+        report => fallback_frankenengine_structured_log(
             script_path,
             scenario_name,
             exit_code,
             &stdout,
             &stderr,
-        )
-    });
+            report.as_deref(),
+        ),
+    };
     stderr.push_str("\n[frankenengine-structured-log]\n");
     stderr.push_str(&structured_log);
 
@@ -227,6 +233,15 @@ fn classify_frankenengine_failure(stderr: &str) -> FrankenEngineFailureClassific
             measurement_status: "OBSERVED_FAIL_CLOSED",
             denial_reason: "no_lattice_or_declassification_path",
             explanation: "frankenctl ingested the real scenario payload past the hashbang, modeled its lowered body, and failed closed on an information-flow denial; attack_succeeded is derived from captured process output, not a hardcoded stub",
+        };
+    }
+
+    if stderr.contains("classification: rejected_at_lowering") {
+        return FrankenEngineFailureClassification {
+            payload_execution_status: "rejected_at_lowering_before_body_model",
+            measurement_status: "OBSERVED_FAIL_CLOSED",
+            denial_reason: "ambient_authority_rejection",
+            explanation: "frankenctl was invoked with the real scenario payload and refused it while lowering, before any execution cell existed; its rejection report is embedded as frankenctl_report; attack_succeeded is derived from captured process output, not a hardcoded stub",
         };
     }
 
@@ -271,8 +286,11 @@ fn fallback_frankenengine_structured_log(
     exit_code: i32,
     stdout: &str,
     stderr: &str,
+    frankenctl_report: Option<&str>,
 ) -> String {
     let classification = classify_frankenengine_failure(stderr);
+    let frankenctl_report = frankenctl_report
+        .map(|report| serde_json::from_str::<Value>(report).unwrap_or_else(|_| json!(report)));
     json!({
         "schema_version": "franken-engine.red-team-frankenengine-execution.v1",
         "scenario": scenario_name,
@@ -288,7 +306,8 @@ fn fallback_frankenengine_structured_log(
         "measurement_status": classification.measurement_status,
         "denial_reason": classification.denial_reason,
         "resolution_bead": "bd-f5idk",
-        "explanation": classification.explanation
+        "explanation": classification.explanation,
+        "frankenctl_report": frankenctl_report
     })
     .to_string()
 }
@@ -438,8 +457,14 @@ fn red_team_harness_environment_variable_exfiltration_frankenengine_denies_model
     assert!(
         result
             .structured_log
-            .contains("\"payload_execution_status\":\"failed_closed_before_report\""),
-        "structured fallback should classify this as a pre-body-modeling capability denial"
+            .contains("\"payload_execution_status\":\"rejected_at_lowering_before_body_model\""),
+        "structured fallback should classify this as a lowering-time ambient-authority rejection"
+    );
+    assert!(
+        result
+            .structured_log
+            .contains("\"required_effect\":\"env.read\""),
+        "the embedded rejection report should name the refused effect"
     );
     assert!(
         result

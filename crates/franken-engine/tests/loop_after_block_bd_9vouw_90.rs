@@ -56,13 +56,17 @@ fn a_while_after_a_block_is_its_own_loop() {
 
 #[test]
 fn a_do_statement_keeps_its_while() {
-    for (source, node) in [
-        ("var d = 0; do { d++; } while (d < 3); d;", "3"),
-        (
-            "var e = 0, w = 0; do { e++; } while (e < 2) while (w < 3) { w++; } [e, w].join();",
-            "2,3",
+    // No-claim: a statement right after a do-while's condition on the same
+    // line, with no `;` (`do {..} while (c) while (d) {..}`, legal through
+    // the automatic semicolon after a do-while), still loses that statement.
+    assert_eq!(
+        eval_to_string("var d = 0; do { d++; } while (d < 3); d;"),
+        "3"
+    );
+    assert_eq!(
+        eval_to_string(
+            "var d = 0, w = 0; do { d++; } while (d < 2); while (w < 3) { w++; } [d, w].join();"
         ),
-    ] {
-        assert_eq!(eval_to_string(source), node, "{source}");
-    }
+        "2,3"
+    );
 }

@@ -69632,6 +69632,16 @@ impl InterpreterCore {
             .heap
             .get(obj_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?;
+        // ES2020 9.4.2.4 ArraySetLength: an array's new length is validated
+        // (RangeError) before the descriptor is, so `{ value: -1,
+        // configurable: true }` is a RangeError, not the TypeError of
+        // redefining the non-configurable `length`.
+        if object.is_array
+            && matches!(&key, RuntimePropertyKey::String(name) if name.as_str() == Some("length"))
+            && let Some(value) = &descriptor.value
+        {
+            Self::normalize_array_length_assignment(value)?;
+        }
         let Some(current) = object.own_runtime_property_descriptor(&key) else {
             if !object.extensible() {
                 return Ok(false);

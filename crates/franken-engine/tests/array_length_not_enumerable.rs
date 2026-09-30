@@ -77,6 +77,11 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const a = []; const arr = [1, 2]; Object.defineProperty(arr, 'length', { writable: false }); for (const i in arr) a.push(i); const d = Object.getOwnPropertyDescriptor(arr, 'length'); console.log(a.join(), d.writable, d.enumerable);"#,
         "0,1 false false",
     ),
+    (
+        "define_length_validates_the_value_first",
+        r#"const r = []; for (const d of [{ value: -1, configurable: true }, { value: 1.5 }, { value: 1, configurable: true }, { value: 0 }]) { const a = [1, 2]; try { Object.defineProperty(a, 'length', d); r.push('ok ' + a.length); } catch (e) { r.push(e.constructor.name); } } console.log(r.join());"#,
+        "RangeError,RangeError,TypeError,ok 0",
+    ),
 ];
 
 fn console_output(source: &str) -> Result<String, String> {

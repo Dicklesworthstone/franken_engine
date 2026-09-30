@@ -94234,6 +94234,37 @@ impl InterpreterCore {
         self.mutate_builtin_prototypes(|bp| {
             bp.insert(canonical.to_string(), prototype);
         });
+        // These prototypes carry an own @@toStringTag data property naming
+        // the constructor (ES2020 23.1.3.13, 23.2.3.12, 24.1.4.4, 25.6.5.4,
+        // ...; writable false, enumerable false, configurable true):
+        // `Set.prototype[Symbol.toStringTag]` was undefined. It goes on while
+        // the property map is empty (see alloc_math_global).
+        if matches!(
+            canonical,
+            "Map"
+                | "Set"
+                | "WeakMap"
+                | "WeakSet"
+                | "Promise"
+                | "ArrayBuffer"
+                | "DataView"
+                | "Symbol"
+                | "BigInt"
+                | "WeakRef"
+                | "FinalizationRegistry"
+        ) {
+            let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+            self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
+            self.set_own_property_attributes(
+                prototype,
+                &key,
+                PropertyAttributes {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                },
+            )?;
+        }
         if ERROR_PROTOTYPE_NAMES.contains(&canonical) {
             // ES2020 19.5.3.2-3 / 19.5.6.3.2-3: `name` and `message` live on
             // the prototypes, so instances inherit them and a subclass's

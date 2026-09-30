@@ -37,6 +37,31 @@ fn builtin_objects_report_their_tags() {
     );
 }
 
+/// The prototypes own their @@toStringTag data property (writable false,
+/// enumerable false, configurable true); `Set.prototype[Symbol.toStringTag]`
+/// was undefined (Test262 built-ins/Set/prototype/Symbol.toStringTag and
+/// relatives), though Object.prototype.toString already named the tag.
+#[test]
+fn prototypes_carry_their_to_string_tag() {
+    let source = "var names = ['Map', 'Set', 'WeakMap', 'WeakSet', 'Promise', 'ArrayBuffer', \
+                  'DataView', 'Symbol', 'BigInt', 'WeakRef', 'FinalizationRegistry'];\n\
+                  var d = Object.getOwnPropertyDescriptor(Set.prototype, Symbol.toStringTag);\n\
+                  [names.map(n => globalThis[n].prototype[Symbol.toStringTag]).join(), \
+                  [d.value, d.writable, d.enumerable, d.configurable].join(), \
+                  Object.prototype.toString.call(Object.create(Set.prototype)), \
+                  Reflect.ownKeys(Map.prototype).includes(Symbol.toStringTag), \
+                  Object.keys(Map.prototype).length].join(' ');";
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "Map,Set,WeakMap,WeakSet,Promise,ArrayBuffer,DataView,Symbol,BigInt,WeakRef,\
+         FinalizationRegistry Set,false,false,true [object Set] true 0"
+    );
+}
+
 #[test]
 fn data_to_string_tags_replace_the_builtin_tag() {
     let source = r#"const t = (x) => Object.prototype.toString.call(x);

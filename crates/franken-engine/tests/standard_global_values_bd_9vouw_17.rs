@@ -256,7 +256,10 @@ fn global_object_exposes_no_host_authority() {
 /// top-level block's `const` overwrote the injected global.
 #[test]
 fn program_bindings_named_global_shadow_the_global_object() {
-    check("var global = 5; [global, typeof globalThis].join();", "5,object");
+    check(
+        "var global = 5; [global, typeof globalThis].join();",
+        "5,object",
+    );
     check(
         "const global = Symbol.for('shared'); [global === Symbol.for('shared'), typeof global].join();",
         "true,symbol",
@@ -265,7 +268,10 @@ fn program_bindings_named_global_shadow_the_global_object() {
         "var r; { const global = 'x'; r = global; } r + ':' + typeof global;",
         "x:object",
     );
-    check("function f() { const global = 7; return global; } f();", "7");
+    check(
+        "function f() { const global = 7; return global; } f();",
+        "7",
+    );
     // The same holds for the other runtime globals, whose block-scoped
     // shadows overwrote the injected global before (typeof gave "string").
     check(

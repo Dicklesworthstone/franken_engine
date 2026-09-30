@@ -2641,6 +2641,11 @@ pub enum BuiltinFunctionKind {
     /// `Number.prototype.valueOf` — receiver-aware; returns the primitive number
     /// value (bd-i08nh).
     NumberValueOf,
+    /// `Boolean.prototype.toString` (ES2020 19.3.3.2): "true" or "false" for
+    /// thisBooleanValue(this).
+    BooleanPrototypeToString,
+    /// `Boolean.prototype.valueOf` (ES2020 19.3.3.3): thisBooleanValue(this).
+    BooleanPrototypeValueOf,
     ProxyRevoke,
     /// `Array.prototype.push` — receiver-aware: appends its arguments to the
     /// `this` array and returns the new length. Resolved on array exotic
@@ -4736,6 +4741,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberToFixed => "toFixed",
             BuiltinFunctionKind::NumberToString => "toString",
             BuiltinFunctionKind::NumberValueOf => "valueOf",
+            BuiltinFunctionKind::BooleanPrototypeToString => "toString",
+            BuiltinFunctionKind::BooleanPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
             BuiltinFunctionKind::StringIterator | BuiltinFunctionKind::GeneratorIteratorSelf => {
                 "@@iterator"
@@ -5184,6 +5191,7 @@ impl BuiltinFunction {
             | K::NumberToPrecision
             | K::NumberToString
             | K::NumberValueOf => "Number.prototype",
+            K::BooleanPrototypeToString | K::BooleanPrototypeValueOf => "Boolean.prototype",
             K::PromiseAll
             | K::PromiseAllSettled
             | K::PromiseAny
@@ -5345,9 +5353,9 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 12] = [
-    "Array", "String", "Number", "Map", "Set", "Function", "Date", "RegExp", "Promise", "WeakMap",
-    "WeakSet", "DataView",
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 15] = [
+    "Array", "String", "Number", "Boolean", "BigInt", "Symbol", "Map", "Set", "Function", "Date",
+    "RegExp", "Promise", "WeakMap", "WeakSet", "DataView",
 ];
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
@@ -37704,6 +37712,17 @@ impl InterpreterCore {
                 // number-property seam only routes Int/Float receivers here.
                 Ok(receiver.unwrap_or(Value::Undefined))
             }
+            BuiltinFunctionKind::BooleanPrototypeToString
+            | BuiltinFunctionKind::BooleanPrototypeValueOf => {
+                let value = self.this_boolean_value(receiver.unwrap_or(Value::Undefined))?;
+                Ok(
+                    if builtin.kind == BuiltinFunctionKind::BooleanPrototypeToString {
+                        Value::str(if value { "true" } else { "false" })
+                    } else {
+                        Value::Bool(value)
+                    },
+                )
+            }
             BuiltinFunctionKind::ArrayIsArray => {
                 let arg = self.builtin_arg(args, 0)?;
                 Ok(self.array_is_array_value(arg))
@@ -47653,6 +47672,9 @@ impl InterpreterCore {
                         _ => None,
                     };
 
+                    // The prototype object a primitive base's property came
+                    // from, for the stored-label join below.
+                    let mut primitive_owner = None;
                     let prop = if let Some(value) = inherited_function_standard {
                         value
                     } else if let Some(backing) = function_backing {
@@ -47714,21 +47736,40 @@ impl InterpreterCore {
                                         if *symbol == WellKnownSymbol::Iterator.id()
                                 ) {
                                     Value::BuiltinFunction(BuiltinFunction::string_iterator())
+                                } else if let Some(own) = property_key
+                                    .as_str()
+                                    .and_then(|key| Self::string_own_property_value(&s, key))
+                                {
+                                    own
                                 } else {
-                                    property_key.as_str().map_or(Value::Undefined, |key| {
-                                        Self::string_property_value(&s, key)
-                                    })
+                                    let (value, owner) = self.primitive_prototype_get(
+                                        module,
+                                        "String",
+                                        &property_key,
+                                        Value::Str(s),
+                                    )?;
+                                    primitive_owner = owner;
+                                    value
                                 }
                             }
-                            Value::Int(_) | Value::Float(_) => property_key.as_str().map_or(
-                                Value::Undefined,
-                                // Member access on a number primitive resolves
-                                // Number.prototype methods, else undefined (bd-i08nh).
-                                Self::number_property_value,
-                            ),
-                            Value::BigInt(_) => property_key
-                                .as_str()
-                                .map_or(Value::Undefined, Self::bigint_property_value),
+                            primitive @ (Value::Int(_)
+                            | Value::Float(_)
+                            | Value::Bool(_)
+                            | Value::BigInt(_)) => {
+                                let type_name = match primitive {
+                                    Value::Bool(_) => "Boolean",
+                                    Value::BigInt(_) => "BigInt",
+                                    _ => "Number",
+                                };
+                                let (value, owner) = self.primitive_prototype_get(
+                                    module,
+                                    type_name,
+                                    &property_key,
+                                    primitive,
+                                )?;
+                                primitive_owner = owner;
+                                value
+                            }
                             // Functions are objects: reading `fn.prototype` returns the
                             // function's prototype object (where class instance methods
                             // live), matching what `Construct` links instances to so
@@ -47903,10 +47944,19 @@ impl InterpreterCore {
                                     .symbol_description(symbol)
                                     .map(Value::Str)
                                     .unwrap_or(Value::Undefined),
-                                Some("toString") => {
-                                    Value::BuiltinFunction(BuiltinFunction::symbol_to_string())
+                                // Symbol is not a first-class constructor value
+                                // yet, so there is no `constructor` to return.
+                                Some("constructor") => Value::Undefined,
+                                _ => {
+                                    let (value, owner) = self.primitive_prototype_get(
+                                        module,
+                                        "Symbol",
+                                        &property_key,
+                                        Value::Symbol(symbol),
+                                    )?;
+                                    primitive_owner = owner;
+                                    value
                                 }
-                                _ => Value::Undefined,
                             },
                             other => {
                                 return Err(InterpreterError::TypeError {
@@ -47945,7 +47995,7 @@ impl InterpreterCore {
                     // string and Symbol keys while respecting shadowing.
                     // bd-9vouw.17: a function's backing object is the owner of
                     // its own properties, so their stored labels join too.
-                    if let Some(owner) = object_id.or(function_backing) {
+                    if let Some(owner) = object_id.or(function_backing).or(primitive_owner) {
                         let stored_label = self.runtime_property_label(owner, &property_key);
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
@@ -53869,6 +53919,97 @@ impl InterpreterCore {
         }
     }
 
+    /// `Boolean.prototype` methods (ES2020 19.3.3).
+    fn boolean_prototype_method(key: &str) -> Option<Value> {
+        let kind = match key {
+            "toString" => BuiltinFunctionKind::BooleanPrototypeToString,
+            "valueOf" => BuiltinFunctionKind::BooleanPrototypeValueOf,
+            _ => return None,
+        };
+        Some(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)))
+    }
+
+    /// ES2020 19.3.3 thisBooleanValue. Boolean.prototype is itself a Boolean
+    /// object whose value is false.
+    fn this_boolean_value(&self, receiver: Value) -> Result<bool, InterpreterError> {
+        match receiver {
+            Value::Bool(value) => Ok(value),
+            Value::Object(object_id)
+                if self.builtin_prototypes.get("Boolean") == Some(&object_id) =>
+            {
+                Ok(false)
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "Boolean receiver (thisBooleanValue)".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// A string primitive's own properties: its code-unit indices and
+    /// `length` (the String exotic object's own properties).
+    fn string_own_property_value(receiver: &JsString, key: &str) -> Option<Value> {
+        if Self::canonical_array_index_property(key, receiver.utf16_len()).is_some()
+            || key == "length"
+        {
+            Some(Self::string_property_value(receiver, key))
+        } else {
+            None
+        }
+    }
+
+    /// ES2020 6.2.4.8 GetValue on a primitive base: [[Get]] on ToObject(base)
+    /// with the primitive itself as the receiver, so members a program adds
+    /// to `String.prototype`, `Number.prototype`, `Boolean.prototype`,
+    /// `BigInt.prototype` or `Object.prototype` are found, user definitions
+    /// win over the builtins, and `constructor` is the type's constructor.
+    /// The caller has already resolved the wrapper's own properties (a
+    /// string's indices and length). The canonical prototypes are allocated
+    /// lazily: until a program touches one, nothing can have been added to
+    /// it, and its members are the static builtin tables. Nothing is
+    /// allocated here. Returns the value and the object that supplied it (for
+    /// the stored-label join), if any.
+    fn primitive_prototype_get(
+        &mut self,
+        module: &Ir3Module,
+        type_name: &'static str,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+    ) -> Result<(Value, Option<ObjectId>), InterpreterError> {
+        if let Some(&prototype) = self.builtin_prototypes.get(type_name) {
+            let value =
+                self.proxy_aware_get_runtime_property(Some(module), prototype, key, receiver, 0)?;
+            return Ok((value, Some(prototype)));
+        }
+        if let Some(name) = key.as_str() {
+            if let Some(value) = Self::canonical_prototype_method(type_name, name) {
+                return Ok((value, None));
+            }
+            if name == "constructor" && STANDARD_CONSTRUCTOR_GLOBALS.contains(&type_name) {
+                return Ok((
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor(type_name)),
+                    None,
+                ));
+            }
+        }
+        if let Some(&object_prototype) = self.builtin_prototypes.get("Object") {
+            let value = self.proxy_aware_get_runtime_property(
+                Some(module),
+                object_prototype,
+                key,
+                receiver,
+                0,
+            )?;
+            return Ok((value, Some(object_prototype)));
+        }
+        Ok((
+            key.as_str()
+                .and_then(Self::object_prototype_method)
+                .map_or(Value::Undefined, Value::BuiltinFunction),
+            None,
+        ))
+    }
+
     /// `BigInt.prototype` methods on a BigInt primitive (ES2020 20.2.3).
     fn bigint_property_value(key: &str) -> Value {
         match key {
@@ -55108,6 +55249,11 @@ impl InterpreterCore {
                 Value::AsyncFunction(_) => return matches!(key, "name" | "length"),
                 _ => {}
             }
+        }
+        // A string primitive's own properties are its indices and `length`
+        // (ToObject(this) in Object.prototype.hasOwnProperty).
+        if let (Value::Str(text), Some(key)) = (receiver, property_key.as_str()) {
+            return Self::string_own_property_value(text, key).is_some();
         }
         let Value::Object(object_id) = receiver else {
             return false;
@@ -66852,6 +66998,10 @@ impl InterpreterCore {
             Value::BigInt(_) => Ok(key
                 .as_str()
                 .map_or(Value::Undefined, Self::bigint_property_value)),
+            Value::Bool(_) => Ok(key
+                .as_str()
+                .and_then(Self::boolean_prototype_method)
+                .unwrap_or(Value::Undefined)),
             Value::BuiltinFunction(builtin) => {
                 let Some(property_object) = Self::builtin_function_property_object(&builtin) else {
                     return Ok(Value::Undefined);
@@ -91108,6 +91258,10 @@ impl InterpreterCore {
             "Array" => Self::array_prototype_method(key).map(Value::BuiltinFunction),
             "String" => Self::string_prototype_method(key),
             "Number" => defined(Self::number_property_value(key)),
+            "Boolean" => Self::boolean_prototype_method(key),
+            "BigInt" => defined(Self::bigint_property_value(key)),
+            "Symbol" => (key == "toString")
+                .then(|| Value::BuiltinFunction(BuiltinFunction::symbol_to_string())),
             "Function" => Self::function_prototype_property(key),
             "Promise" => defined(Self::promise_property_value(key)),
             // DataView: the accessors instances already expose, served from

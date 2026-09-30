@@ -10958,23 +10958,35 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     // Function/class declarations write their value directly
                     // to a register rather than through StoreBinding, so mirror
                     // the created callable explicitly when a sibling captures
-                    // this exact declaration binding.
+                    // this exact declaration binding. A class binding is
+                    // lexical: its cell was declared uninitialized, so the
+                    // declaration initializes it (as StoreBinding does for a
+                    // `let`); a StoreScoped into it was a TDZ error, which
+                    // broke every CommonJS wrapper whose functions use a class
+                    // declared beside them.
+                    let publish = |name_pool_index| {
+                        if local_lexical_binding_by_id.contains_key(inner_bid) {
+                            Ir3Instruction::InitBinding {
+                                name_pool_index,
+                                src: dst,
+                            }
+                        } else {
+                            Ir3Instruction::StoreScoped {
+                                src: dst,
+                                name_pool_index,
+                            }
+                        }
+                    };
                     if let Some(name) = child_capture_id_to_name.get(inner_bid) {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
-                        ir3.instructions.push(Ir3Instruction::StoreScoped {
-                            src: dst,
-                            name_pool_index: pool_idx,
-                        });
+                        ir3.instructions.push(publish(pool_idx));
                     }
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PopScope);
                     }
                     if let Some(name) = spilled_name {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
-                        ir3.instructions.push(Ir3Instruction::StoreScoped {
-                            src: dst,
-                            name_pool_index: pool_idx,
-                        });
+                        ir3.instructions.push(publish(pool_idx));
                     }
                     fn_value_stack.push(dst);
                 }

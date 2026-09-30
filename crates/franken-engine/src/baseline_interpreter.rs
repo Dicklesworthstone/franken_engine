@@ -91338,6 +91338,19 @@ impl InterpreterCore {
                 BuiltinFunctionKind::StandardConstructor => {
                     Some(self.standard_constructor_property(builtin, key)?)
                 }
+                // A `new Function` result is a handle to its compiled
+                // artifact; its `length` is that descriptor's parameter count.
+                BuiltinFunctionKind::GeneratedFunction if key == "length" => {
+                    let (owner_program_id, artifact_id) =
+                        Self::parse_generated_function_handle(builtin)?;
+                    let artifact =
+                        self.resolve_generated_function_artifact(owner_program_id, artifact_id)?;
+                    Self::function_name_or_length(
+                        &artifact.compiled_module,
+                        artifact.function_index,
+                        key,
+                    )
+                }
                 _ if key == "name" => Some(Value::str(builtin.spec_name())),
                 _ => builtin.spec_length().map(Value::Int),
             },
@@ -91419,7 +91432,9 @@ impl InterpreterCore {
             (Some("length"), Value::BuiltinFunction(builtin)) => {
                 matches!(
                     builtin.kind,
-                    BuiltinFunctionKind::BoundFunction | BuiltinFunctionKind::StandardConstructor
+                    BuiltinFunctionKind::BoundFunction
+                        | BuiltinFunctionKind::StandardConstructor
+                        | BuiltinFunctionKind::GeneratedFunction
                 ) || builtin.spec_length().is_some()
             }
             (Some("length"), _) => true,

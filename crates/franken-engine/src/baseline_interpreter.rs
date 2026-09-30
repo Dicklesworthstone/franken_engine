@@ -92194,17 +92194,22 @@ impl InterpreterCore {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
                 break;
             }
-            if let Some(name) = self
+            let canonical = self
                 .builtin_prototypes
                 .iter()
                 .find(|(_, prototype)| **prototype == id)
-                .and_then(|(name, _)| {
-                    STANDARD_CONSTRUCTOR_GLOBALS
-                        .iter()
-                        .copied()
-                        .find(|candidate| *candidate == name.as_str())
-                })
-            {
+                .map(|(name, _)| name.as_str());
+            // %Promise.prototype%.constructor is %Promise%, which is not a
+            // standard constructor builtin.
+            if canonical == Some("Promise") {
+                return self.promise_intrinsic_constructor();
+            }
+            if let Some(name) = canonical.and_then(|name| {
+                STANDARD_CONSTRUCTOR_GLOBALS
+                    .iter()
+                    .copied()
+                    .find(|candidate| *candidate == name)
+            }) {
                 return Some(constructor(name));
             }
             current = self.observable_prototype_of(id);

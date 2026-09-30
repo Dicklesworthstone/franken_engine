@@ -636,7 +636,10 @@ fn add_overflow_produces_a_number() {
         Ir3Instruction::Halt,
     ]);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.value, Value::Float(Float64::new(i64::MAX as f64 + 1.0)));
+    assert_eq!(
+        result.value,
+        Value::Float(Float64::new(i64::MAX as f64 + 1.0))
+    );
 }
 
 #[test]
@@ -655,7 +658,10 @@ fn sub_underflow_produces_a_number() {
         Ir3Instruction::Halt,
     ]);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.value, Value::Float(Float64::new(i64::MIN as f64 - 1.0)));
+    assert_eq!(
+        result.value,
+        Value::Float(Float64::new(i64::MIN as f64 - 1.0))
+    );
 }
 
 #[test]
@@ -674,7 +680,10 @@ fn mul_overflow_produces_a_number() {
         Ir3Instruction::Halt,
     ]);
     let result = quickjs_execute(&m).unwrap();
-    assert_eq!(result.value, Value::Float(Float64::new(i64::MAX as f64 * 2.0)));
+    assert_eq!(
+        result.value,
+        Value::Float(Float64::new(i64::MAX as f64 * 2.0))
+    );
 }
 
 #[test]

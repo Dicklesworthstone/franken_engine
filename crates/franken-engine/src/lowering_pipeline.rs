@@ -8800,9 +8800,13 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::NewArray { dst });
 
+                // One key register serves every element: each SetProperty
+                // consumes its key before the next is loaded (bd-9vouw.86).
+                let mut element_key_reg = None;
                 for (i, val_reg) in elements.into_iter().enumerate() {
                     let key_str = i.to_string();
-                    let key_reg = alloc_register(&mut register_cursor);
+                    let key_reg = *element_key_reg
+                        .get_or_insert_with(|| alloc_register(&mut register_cursor));
                     let pool_index = push_constant_optimized(&mut constant_pool, &key_str);
                     ir3.instructions.push(Ir3Instruction::LoadStr {
                         dst: key_reg,
@@ -10677,8 +10681,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let operands = elems.clone();
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
+                    // One key register serves every element (bd-9vouw.86).
+                    let mut element_key_reg = None;
                     for (i, val_reg) in elems.into_iter().enumerate() {
-                        let key_reg = alloc_register(&mut fn_reg);
+                        let key_reg =
+                            *element_key_reg.get_or_insert_with(|| alloc_register(&mut fn_reg));
                         let pool_index = push_constant_optimized(&mut constant_pool, i.to_string());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
@@ -31516,8 +31523,9 @@ fn function_local_register(
 /// bd-9vouw.23: once a batch array or object literal is built, its element
 /// and key registers are dead. When nothing live sits at or above the lowest
 /// of them (no value-stack entry, and it is above the statement floor, pinned
-/// bindings and live slots), move the literal into that register and rewind
-/// the cursor past it. Without this, nested literals in one statement used
+/// bindings and live slots), move the literal to the first register above
+/// the value stack's top and that floor, and rewind the cursor past it.
+/// Without this, nested literals in one statement used
 /// every register until the statement ended (Test262's
 /// harness/byteConversionValues.js needed a 1295-register frame).
 fn compact_batch_literal(
@@ -31529,15 +31537,28 @@ fn compact_batch_literal(
     cursor: &mut Reg,
     high_water: &mut Reg,
 ) -> Reg {
-    let Some(&base) = operands.iter().min() else {
+    let Some(&lowest_operand) = operands.iter().min() else {
         return literal;
     };
-    if base >= literal
-        || base < reserved_below
-        || value_stack.iter().any(|register| *register >= base)
+    if lowest_operand >= literal
+        || lowest_operand < reserved_below
+        || value_stack
+            .iter()
+            .any(|register| *register >= lowest_operand)
     {
         return literal;
     }
+    // bd-9vouw.86: the temporaries between the value stack's top and the
+    // lowest operand are dead as well: nothing names them but the stack,
+    // pinned bindings and live slots, which the floor already excludes (a
+    // member call's receiver copy and property key are consumed before the
+    // call). So the result goes just above the stack top; taking the lowest
+    // operand's register leaked two registers per top-level member call.
+    let base = value_stack
+        .iter()
+        .max()
+        .map_or(reserved_below, |top| top.saturating_add(1))
+        .max(reserved_below);
     instructions.push(Ir3Instruction::Move {
         dst: base,
         src: literal,

@@ -2777,10 +2777,45 @@ fn do_statement_awaits_while(statement: &str) -> bool {
 
 /// Whether `statement` ends in a header whose body may be a single unbraced
 /// statement on the next line: `if (...)`, `for (...)`, `while (...)`,
-/// `with (...)`, `else` or `do`. A do statement's trailing `while (...)` is
-/// its condition, not a header.
+/// `with (...)`, `else` or `do`, including a chain of them whose innermost
+/// header is still waiting (`for (...)\n  if (x)\n    return;`, the layout
+/// bundlers emit). A do statement's trailing `while (...)` is its condition,
+/// not a header.
 fn statement_header_takes_unbraced_body(statement: &str) -> bool {
     let tail = text_after_last_top_level_terminator(statement).trim();
+    header_chain_takes_unbraced_body(tail, starts_with_keyword(statement, "do"))
+}
+
+/// Whether an `else` on the next line continues `clause`: an `if` statement,
+/// also as the unbraced body of loop headers (`while (c)\n  if (x) a();\n
+/// else b();` pairs the `else` with that `if`).
+fn clause_takes_else(clause: &str) -> bool {
+    let mut rest = clause.trim();
+    loop {
+        if starts_with_keyword(rest, "if") {
+            return true;
+        }
+        if !["for", "while", "with"]
+            .iter()
+            .any(|keyword| starts_with_keyword(rest, keyword))
+        {
+            return false;
+        }
+        let Some((_, after)) = rest
+            .find('(')
+            .and_then(|open| extract_balanced(&rest[open..], '(', ')'))
+        else {
+            return false;
+        };
+        rest = after.trim();
+    }
+}
+
+/// [`statement_header_takes_unbraced_body`] for the text of one header and
+/// whatever follows it: a header whose parentheses end the text waits for
+/// its body, and so does one followed by another such header (its unbraced
+/// body is that nested statement).
+fn header_chain_takes_unbraced_body(tail: &str, in_do_statement: bool) -> bool {
     if tail == "else" || tail == "do" {
         return true;
     }
@@ -2791,16 +2826,23 @@ fn statement_header_takes_unbraced_body(statement: &str) -> bool {
     if header.is_empty() || header.contains('{') {
         return false;
     }
-    if starts_with_keyword(header, "while") && starts_with_keyword(statement, "do") {
+    if starts_with_keyword(header, "while") && in_do_statement {
         return false;
     }
-    ["if", "for", "while", "with"]
+    if !["if", "for", "while", "with"]
         .iter()
         .any(|keyword| starts_with_keyword(header, keyword))
-        && header.find('(').is_some_and(|open| {
-            extract_balanced(&header[open..], '(', ')')
-                .is_some_and(|(_, rest)| rest.trim().is_empty())
-        })
+    {
+        return false;
+    }
+    let Some((_, rest)) = header
+        .find('(')
+        .and_then(|open| extract_balanced(&header[open..], '(', ')'))
+    else {
+        return false;
+    };
+    let rest = rest.trim();
+    rest.is_empty() || header_chain_takes_unbraced_body(rest, false)
 }
 
 /// Whether `statement` ends in a statement header still waiting for its
@@ -2966,8 +3008,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             // own line (`do\n  i++;\nwhile (c);`).
             let clause_continues_statement = result.last().is_some_and(|prev| {
                 previous_clause(prev).is_some_and(|clause| {
-                    (starts_with_keyword(trimmed_line, "else")
-                        && starts_with_keyword(&clause, "if"))
+                    (starts_with_keyword(trimmed_line, "else") && clause_takes_else(&clause))
                         || (starts_with_keyword(trimmed_line, "while")
                             && do_statement_awaits_while(&clause))
                 })
@@ -8235,6 +8276,25 @@ fn parse_comma_separated_exprs(
     Ok(exprs)
 }
 
+/// ES2021 NumericLiteralSeparator placement in a literal spelling without
+/// its sign: a literal starts with a digit (or `.` for `.5`), and every `_`
+/// sits between two digits (`1_000`, `0xFF_FF`, `1_000n`). `_n`, `_1` and
+/// `_0x1f` are identifiers, not literals: stripping their underscores used
+/// to read `_n` as `0n` and `_0x1f` as 31.
+fn numeric_separators_are_valid(literal: &str) -> bool {
+    let bytes = literal.as_bytes();
+    if !bytes.contains(&b'_') {
+        return true;
+    }
+    bytes.first().is_some_and(u8::is_ascii_digit)
+        && bytes.iter().enumerate().all(|(index, &byte)| {
+            byte != b'_'
+                || (index > 0
+                    && bytes[index - 1].is_ascii_hexdigit()
+                    && bytes.get(index + 1).is_some_and(u8::is_ascii_hexdigit))
+        })
+}
+
 fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
     // Accept an explicit `+` or `-` sign prefix. try_parse_unary_prefix
     // intentionally skips unary +/- when the next char is a digit so the
@@ -8251,7 +8311,7 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
         (false, input)
     };
 
-    if digits.is_empty() {
+    if digits.is_empty() || !numeric_separators_are_valid(digits) {
         return None;
     }
 
@@ -8319,7 +8379,7 @@ fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
     let digits = digits.strip_suffix('n')?;
     // `e`/`E` are hex digits (`0xFEn`); exponents are rejected by the decimal
     // branch below, which accepts only digits (bd-6vl81).
-    if digits.is_empty() || digits.contains('.') {
+    if digits.is_empty() || digits.contains('.') || !numeric_separators_are_valid(digits) {
         return None;
     }
 
@@ -8423,6 +8483,10 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
     }
 
     // Strip numeric separators
+    let unsigned = trimmed.strip_prefix(['-', '+']).unwrap_or(trimmed);
+    if !numeric_separators_are_valid(unsigned) {
+        return None;
+    }
     let cleaned: String;
     let digits_ref = if trimmed.contains('_') {
         cleaned = trimmed.replace('_', "");
@@ -16378,6 +16442,29 @@ mod tests {
     fn parse_i64_numeric_literal_separators() {
         assert_eq!(parse_i64_numeric_literal("1_000"), Some(1000));
         assert_eq!(parse_i64_numeric_literal("0xFF_FF"), Some(65535));
+    }
+
+    /// `_n`, `_1`, `_0x1f` and `__n` are identifiers: a literal starts with a
+    /// digit and a separator sits between two digits.
+    #[test]
+    fn identifiers_with_leading_underscores_are_not_numeric_literals() {
+        for spelling in ["_1", "_0x1f", "1_", "1__0", "_", "0x_1"] {
+            assert!(parse_i64_numeric_literal(spelling).is_none(), "{spelling}");
+        }
+        for spelling in ["_n", "__n", "_1n", "1_n"] {
+            assert!(
+                parse_bigint_numeric_literal(spelling).is_none(),
+                "{spelling}"
+            );
+        }
+        for spelling in ["_1.5", "1_.5", "-_2.5"] {
+            assert!(parse_f64_numeric_literal(spelling).is_none(), "{spelling}");
+        }
+        assert_eq!(
+            parse_bigint_numeric_literal("1_000n").as_deref(),
+            Some("1000")
+        );
+        assert_eq!(parse_f64_numeric_literal("1_000.5"), Some(1000.5));
     }
 
     #[test]

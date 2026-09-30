@@ -1195,13 +1195,8 @@ fn recursive_proxy_handler_prototype_refuses_without_exhausting_the_host_stack()
             "const p = new Proxy({slot: 17}, {get(target, key) {return target[key];}}); p.slot;",
         );
         for mut core in cores() {
-            assert!(
-                matches!(
-                    core.execute(&module),
-                    Err(InterpreterError::StackOverflow { .. })
-                ),
-                "{operation}"
-            );
+            let result = core.execute(&module);
+            assert!(is_depth_refusal(&result, None), "{operation}: {result:?}");
             assert_eq!(
                 core.estimated_memory_bytes(),
                 core.recompute_estimated_memory_bytes()
@@ -1755,4 +1750,25 @@ fn reflect_define_property_and_get_own_property_descriptor() {
             "true 2 false false {\"value\":1,\"writable\":true,\"enumerable\":true,\"configurable\":true}  true true 3 2",
         ],
     );
+}
+
+/// A call-depth refusal (bd-9vouw.72): the host StackOverflow (with `max` when
+/// given) or, since a stack overflow is a catchable RangeError, the uncaught
+/// RangeError it becomes after a handler boundary (an iterator close, a
+/// builtin's callback, a reviver) rethrew it. Anything else fails, including
+/// a SyntaxError and a native stack abort.
+fn is_depth_refusal<T>(result: &Result<T, InterpreterError>, max: Option<usize>) -> bool {
+    match result {
+        Err(InterpreterError::StackOverflow { max: limit, .. }) => {
+            max.is_none_or(|expected| *limit == expected)
+        }
+        // The same refusal, raised as a catchable RangeError that no handler
+        // caught; how the uncaught value renders depends on the path.
+        Err(InterpreterError::UncaughtException { value }) => matches!(
+            value.as_str(),
+            "[object]: Maximum call stack size exceeded"
+                | "RangeError: Maximum call stack size exceeded"
+        ),
+        _ => false,
+    }
 }

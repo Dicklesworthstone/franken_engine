@@ -358,10 +358,8 @@ fn reviver_introduced_cycles_hit_the_host_depth_guard_without_becoming_syntax_er
     "#,
     );
     for mut core in cores() {
-        assert!(matches!(
-            core.execute(&module),
-            Err(InterpreterError::StackOverflow { .. })
-        ));
+        let result = core.execute(&module);
+        assert!(is_depth_refusal(&result, None), "{result:?}");
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -496,4 +494,25 @@ fn coercion_of_a_deep_object_graph_uses_bounded_provenance_work() {
         "#,
         &["7"],
     );
+}
+
+/// A call-depth refusal (bd-9vouw.72): the host StackOverflow (with `max` when
+/// given) or, since a stack overflow is a catchable RangeError, the uncaught
+/// RangeError it becomes after a handler boundary (an iterator close, a
+/// builtin's callback, a reviver) rethrew it. Anything else fails, including
+/// a SyntaxError and a native stack abort.
+fn is_depth_refusal<T>(result: &Result<T, InterpreterError>, max: Option<usize>) -> bool {
+    match result {
+        Err(InterpreterError::StackOverflow { max: limit, .. }) => {
+            max.is_none_or(|expected| *limit == expected)
+        }
+        // The same refusal, raised as a catchable RangeError that no handler
+        // caught; how the uncaught value renders depends on the path.
+        Err(InterpreterError::UncaughtException { value }) => matches!(
+            value.as_str(),
+            "[object]: Maximum call stack size exceeded"
+                | "RangeError: Maximum call stack size exceeded"
+        ),
+        _ => false,
+    }
 }

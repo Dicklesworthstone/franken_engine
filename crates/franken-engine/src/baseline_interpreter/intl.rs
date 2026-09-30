@@ -13,7 +13,8 @@
 //! refusal at construction, never output that differs from Node's.
 //!
 //! No-claim: no ICU and no locale negotiation (an unsupported locale throws
-//! instead of falling back); no formatToParts, formatRange, BigInt
+//! instead of falling back, except a five-to-eight-letter language such as
+//! `generic`, which falls back to en-US as in Node); no formatToParts, formatRange, BigInt
 //! formatting, RelativeTimeFormat, ListFormat, DisplayNames, Locale or
 //! Segmenter. The methods are own properties of each object, not prototype
 //! accessors, and `instanceof Intl.NumberFormat` is false.
@@ -116,7 +117,16 @@ impl InterpreterCore {
                 got: "null".to_string(),
             });
         }
-        let requested = self.intl_locale_list(&locales)?.into_iter().next();
+        // A well-formed tag whose language subtag has five to eight letters
+        // (`new Intl.Collator('generic')`, fast-levenshtein) names no locale
+        // ICU has data for: Node falls back to its default locale, en-US, as
+        // the service does here. A real language the formatters do not
+        // cover still refuses.
+        let requested = self
+            .intl_locale_list(&locales)?
+            .into_iter()
+            .next()
+            .filter(|tag| !(5..=8).contains(&tag.split('-').next().unwrap_or_default().len()));
         let resolved = match service {
             "NumberFormat" => self.intl_number_format_options(module, requested, &options)?,
             "DateTimeFormat" => self.intl_date_time_format_options(

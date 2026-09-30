@@ -27197,6 +27197,17 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         // factory, not an ambient global binding. The lexical-shadowing check
         // above keeps a user-defined Proxy object's method entirely ordinary.
         ("Proxy", "revocable") => Some("builtin:ProxyRevocable"),
+        // Number statics read as values (`[x].filter(Number.isNaN)`, `const
+        // { isInteger } = Number`); direct calls keep
+        // number_static_builtin_call_capability, which is checked first.
+        // Number.parseInt and Number.parseFloat are the global functions
+        // (ES2020 20.1.2.12-13), so they share those tags and identities.
+        ("Number", "isInteger") => Some("builtin:NumberIsInteger"),
+        ("Number", "isSafeInteger") => Some("builtin:NumberIsSafeInteger"),
+        ("Number", "isFinite") => Some("builtin:NumberIsFinite"),
+        ("Number", "isNaN") => Some("builtin:NumberIsNaN"),
+        ("Number", "parseInt") => Some("builtin:parseInt"),
+        ("Number", "parseFloat") => Some("builtin:parseFloat"),
         _ => None,
     }
 }

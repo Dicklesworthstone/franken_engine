@@ -78,6 +78,7 @@ mod async_generator;
 mod bigint_ops;
 mod builtin_function_lengths;
 mod collector;
+mod date_locale;
 mod inspect;
 mod json_parse;
 mod json_stringify;
@@ -5546,7 +5547,7 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 19] = [
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
 /// FrankenEngine is hermetic: local time is UTC, so each local accessor
 /// equals its `UTC` twin and `getTimezoneOffset()` is 0.
-const DATE_PROTOTYPE_METHODS: [&str; 40] = [
+const DATE_PROTOTYPE_METHODS: [&str; 43] = [
     "valueOf",
     "getFullYear",
     "getUTCFullYear",
@@ -5587,6 +5588,9 @@ const DATE_PROTOTYPE_METHODS: [&str; 40] = [
     "toString",
     "toDateString",
     "toTimeString",
+    "toLocaleString",
+    "toLocaleDateString",
+    "toLocaleTimeString",
 ];
 
 /// ES2020 20.4.1 time-value arithmetic on milliseconds since the epoch (UTC).
@@ -66727,6 +66731,67 @@ impl InterpreterCore {
 
     /// Date.prototype getters, setters and formatters (ES2020 20.4.4) over the
     /// receiver's `__timestamp`. Local time is UTC in this hermetic engine.
+    /// The locale tag and options of a Date toLocale*String call. Local
+    /// time is UTC, so a `timeZone` option must name UTC; component and
+    /// style options (`month: 'long'`, `dateStyle`, `hour12`, ...) are not
+    /// formatted and are refused by name.
+    fn date_locale_request(
+        &self,
+        method: &str,
+        locales: &Value,
+        options: &Value,
+    ) -> Result<Option<String>, InterpreterError> {
+        let refuse = |what: String| InterpreterError::TypeError {
+            expected: format!("a locale and options Date.prototype.{method} formats"),
+            got: what,
+        };
+        let locale = match locales {
+            Value::Undefined => None,
+            Value::Str(tag) => Some(tag.to_string()),
+            Value::Object(list)
+                if self
+                    .heap
+                    .get(list.0 as usize)
+                    .is_some_and(|object| object.is_array) =>
+            {
+                match self.array_like_values(*list)?.into_iter().next() {
+                    None => None,
+                    Some(Value::Str(tag)) => Some(tag.to_string()),
+                    Some(other) => return Err(refuse(format!("locale {}", other.type_name()))),
+                }
+            }
+            other => return Err(refuse(format!("locales {}", other.type_name()))),
+        };
+        match options {
+            Value::Undefined => {}
+            Value::Object(options_id) => {
+                let object = self
+                    .heap
+                    .get(options_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: options_id.0 })?;
+                for (key, value) in &object.properties {
+                    if key.starts_with("__") || matches!(value, Value::Undefined) {
+                        continue;
+                    }
+                    let utc = match value {
+                        Value::Str(zone) => zone.as_str().is_some_and(|zone| {
+                            ["utc", "etc/utc", "gmt", "etc/gmt"]
+                                .contains(&zone.to_ascii_lowercase().as_str())
+                        }),
+                        _ => false,
+                    };
+                    match key.as_str() {
+                        "timeZone" if utc => {}
+                        "localeMatcher" => {}
+                        other => return Err(refuse(format!("option {other}"))),
+                    }
+                }
+            }
+            other => return Err(refuse(format!("options {}", other.type_name()))),
+        }
+        Ok(locale)
+    }
+
     fn date_prototype_method(
         &mut self,
         method: &str,
@@ -66806,6 +66871,33 @@ impl InterpreterCore {
                 )));
             }
             "toString" => return Ok(Value::str(to_date_string(t))),
+            "toLocaleString" | "toLocaleDateString" | "toLocaleTimeString" => {
+                let kind = match method {
+                    "toLocaleDateString" => date_locale::DateLocaleKind::Date,
+                    "toLocaleTimeString" => date_locale::DateLocaleKind::Time,
+                    _ => date_locale::DateLocaleKind::DateTime,
+                };
+                if !t.is_finite() {
+                    return Ok(Value::str("Invalid Date"));
+                }
+                let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let locale = self.date_locale_request(method, &locales, &options)?;
+                let fields = date_locale::DateFields {
+                    year: year_from_time(t) as i64,
+                    month: month_from_time(t) as u32,
+                    day: date_from_time(t) as u32,
+                    hour: hour(t) as u32,
+                    minute: minute(t) as u32,
+                    second: second(t) as u32,
+                };
+                return date_locale::format_date_locale(fields, locale.as_deref(), kind)
+                    .map(Value::str)
+                    .map_err(|what| InterpreterError::TypeError {
+                        expected: format!("a locale Date.prototype.{method} formats"),
+                        got: what,
+                    });
+            }
             "toDateString" | "toTimeString" => {
                 if t.is_nan() {
                     return Ok(Value::str("Invalid Date"));

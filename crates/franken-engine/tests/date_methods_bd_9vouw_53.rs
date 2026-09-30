@@ -100,3 +100,38 @@ fn to_string_forms_and_string_conversion() {
          1582977600123|false|[object Date]|0",
     );
 }
+
+/// `toLocaleString`, `toLocaleDateString` and `toLocaleTimeString` format
+/// the UTC fields (local time is UTC) in the numeric layouts of en-US,
+/// en-GB, de, fr and ja, as Node does with TZ=UTC. They were undefined.
+#[test]
+fn locale_strings() {
+    check(
+        "var d = new Date(Date.UTC(2020, 11, 25, 15, 30, 5)); \
+         [d.toLocaleString(), d.toLocaleDateString(), d.toLocaleTimeString(), \
+         d.toLocaleString('en-GB'), d.toLocaleDateString('de-DE'), d.toLocaleString('ja-JP'), \
+         d.toLocaleString(['fr-FR']), d.toLocaleString('en-US', { timeZone: 'UTC' }), \
+         new Date(NaN).toLocaleString(), typeof d.toLocaleDateString, \
+         d.toLocaleDateString.length, d.toLocaleString.name].join(' | ');",
+        "12/25/2020, 3:30:05 PM | 12/25/2020 | 3:30:05 PM | 25/12/2020, 15:30:05 | 25.12.2020 | \
+         2020/12/25 15:30:05 | 25/12/2020 15:30:05 | 12/25/2020, 3:30:05 PM | Invalid Date | \
+         function | 0 | toLocaleString",
+    );
+}
+
+/// Component options (`{ month: 'long' }`), another time zone or an
+/// unknown locale are a TypeError naming what is not formatted: the
+/// engine's typed refusal, where Node would print a string.
+#[test]
+fn locale_strings_refuse_what_they_do_not_format() {
+    assert_eq!(
+        eval_to_string(
+            "var d = new Date(0); function attempt(f) { try { f(); return 'ok'; } \
+             catch (e) { return e.constructor.name; } } \
+             [attempt(() => d.toLocaleDateString('en-US', { month: 'long' })), \
+             attempt(() => d.toLocaleString('en-US', { timeZone: 'America/New_York' })), \
+             attempt(() => d.toLocaleString('es-ES'))].join();"
+        ),
+        "TypeError,TypeError,TypeError"
+    );
+}

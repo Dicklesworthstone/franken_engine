@@ -171,3 +171,22 @@ fn await_resumes_do_not_rederive_the_whole_estimate_bd_j9r60() {
         |n| n.to_string(),
     );
 }
+
+#[test]
+fn pending_timers_do_not_make_each_turn_walk_the_heap_bd_j9r60() {
+    // The event loop checkpoints microtasks after every macrotask, and that
+    // checkpoint re-derived the whole estimate even when no reaction ran;
+    // the macrotask queue's own estimate also summed every pending task.
+    // Each timer leaves a handle object on the heap, so N timers were
+    // O(N^2). Node v22.2.0 prints n.
+    assert_linear(
+        "timers",
+        |n| {
+            format!(
+                "let n=0; for (let i=0;i<{n};i++){{ \
+                 setTimeout(()=>{{ n++; if (n==={n}) console.log(n) }},0) }}"
+            )
+        },
+        |n| n.to_string(),
+    );
+}

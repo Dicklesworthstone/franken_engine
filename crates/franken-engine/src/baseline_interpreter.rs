@@ -54691,9 +54691,19 @@ impl InterpreterCore {
     /// `Promise.prototype.constructor`; `None` once a program has replaced
     /// the global.
     fn promise_intrinsic_constructor(&self) -> Option<Value> {
+        self.materialized_intrinsic_constructor("Promise")
+    }
+
+    /// The constructor this realm installed as the global `name` when that
+    /// is a materialized constructor (`Date`, `Promise`, `Function`: a
+    /// builtin with its own property object), for the `constructor` of its
+    /// prototype, so `new Date().constructor === Date` (rfdc keys its clone
+    /// handlers by constructor). `None` once a program has replaced the
+    /// global.
+    fn materialized_intrinsic_constructor(&self, name: &str) -> Option<Value> {
         let value = self
             .realm_dynamic_globals
-            .get("Promise")?
+            .get(name)?
             .state
             .borrow()
             .value
@@ -54701,7 +54711,7 @@ impl InterpreterCore {
         matches!(
             &value,
             Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::PromiseConstructor
+                if Self::materialized_global_prototype_name(builtin) == Some(name)
         )
         .then_some(value)
     }
@@ -92996,8 +93006,8 @@ impl InterpreterCore {
             .iter()
             .find(|(_, prototype)| **prototype == object_id)
             .map(|(name, _)| name.as_str())?;
-        if key == "constructor" && name == "Promise" {
-            return self.promise_intrinsic_constructor();
+        if key == "constructor" && matches!(name, "Promise" | "Date") {
+            return self.materialized_intrinsic_constructor(name);
         }
         if key == "constructor" {
             return STANDARD_CONSTRUCTOR_GLOBALS
@@ -93049,10 +93059,11 @@ impl InterpreterCore {
                 .iter()
                 .find(|(_, prototype)| **prototype == id)
                 .map(|(name, _)| name.as_str());
-            // %Promise.prototype%.constructor is %Promise%, which is not a
-            // standard constructor builtin.
-            if canonical == Some("Promise") {
-                return self.promise_intrinsic_constructor();
+            // %Promise.prototype%.constructor is %Promise% and
+            // %Date.prototype%.constructor is %Date%, materialized
+            // constructors rather than standard constructor builtins.
+            if let Some(name @ ("Promise" | "Date")) = canonical {
+                return self.materialized_intrinsic_constructor(name);
             }
             if let Some(name) = canonical.and_then(|name| {
                 STANDARD_CONSTRUCTOR_GLOBALS

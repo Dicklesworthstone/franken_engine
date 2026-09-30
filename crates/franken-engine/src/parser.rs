@@ -5577,7 +5577,17 @@ fn parse_new_expression(
     // the trailing access applies to the constructed object, reusing the existing
     // postfix (member/call/index) machinery (bd-if9uy). The parenthesised form is
     // known-good, so this is a faithful regrouping rather than new parsing logic.
-    if let Some((open, close)) = find_first_top_level_paren_pair(rest) {
+    // A parenthesised callee (`new (K)().m()`, `new (o.K)(a).b`) is not the
+    // argument list: the arguments are the next top-level pair after it.
+    let argument_pair = find_first_top_level_paren_pair(rest).and_then(|(open, close)| {
+        if rest[..open].trim().is_empty() {
+            find_first_top_level_paren_pair(&rest[close + 1..])
+                .map(|(next_open, next_close)| (close + 1 + next_open, close + 1 + next_close))
+        } else {
+            Some((open, close))
+        }
+    });
+    if let Some((open, close)) = argument_pair {
         let callee_src = rest[..open].trim();
         let trailing = rest[close + 1..].trim();
         if !callee_src.is_empty()
@@ -11681,8 +11691,10 @@ fn subslice_offset(whole: &str, part: &str) -> usize {
 /// as two segments.
 fn class_field_continues_with(next: &str) -> bool {
     let next = next.trim_start();
+    // `:` is the rest of a conditional cut at an object literal's `}`
+    // (`x = c ? {} : y`).
     next.starts_with([
-        '.', '(', '[', '?', ',', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '`',
+        '.', '(', '[', '?', ':', ',', '+', '-', '*', '/', '%', '&', '|', '^', '<', '>', '`',
     ]) || (next.starts_with('=') && !next.starts_with("=>"))
         || (next.starts_with('!') && next.starts_with("!="))
         || starts_with_keyword(next, "in")
@@ -11743,6 +11755,204 @@ fn split_class_field_asi(text: &str) -> (&str, Option<&str>) {
         }
     }
     (text, None)
+}
+
+/// ContainsArguments / Contains SuperCall for a class field initializer
+/// (ES2022 15.7.1): the first `arguments` reference or `super(...)` call in
+/// `expression`, looking into arrow functions (they have neither their own
+/// `arguments` nor their own `super`) but not into ordinary functions,
+/// methods or class bodies, which bind their own. Property names
+/// (`o.arguments`, `{ arguments: 1 }`) are not references.
+fn field_initializer_forbidden(expression: &Expression) -> Option<&'static str> {
+    fn in_pattern(pattern: &BindingPattern) -> Option<&'static str> {
+        match pattern {
+            BindingPattern::Identifier(_) => None,
+            BindingPattern::ObjectPattern(properties) => properties.iter().find_map(|property| {
+                property
+                    .computed
+                    .then(|| in_expression(&property.key))
+                    .flatten()
+                    .or_else(|| in_pattern(&property.value))
+            }),
+            BindingPattern::ArrayPattern(elements) => {
+                elements.iter().flatten().find_map(in_pattern)
+            }
+            BindingPattern::Rest(inner) => in_pattern(inner),
+            BindingPattern::AssignmentPattern { left, right } => {
+                in_pattern(left).or_else(|| in_expression(right))
+            }
+        }
+    }
+    fn in_class_heritage(
+        super_class: Option<&Expression>,
+        body: &[MethodDefinition],
+    ) -> Option<&'static str> {
+        // The heritage and computed member keys are evaluated in the
+        // enclosing scope; member bodies are their own functions.
+        super_class.and_then(in_expression).or_else(|| {
+            body.iter()
+                .filter(|member| member.computed)
+                .find_map(|member| in_expression(&member.key))
+        })
+    }
+    fn in_statements(body: &[Statement]) -> Option<&'static str> {
+        body.iter().find_map(in_statement)
+    }
+    fn in_statement(stmt: &Statement) -> Option<&'static str> {
+        match stmt {
+            Statement::VariableDeclaration(declaration) => {
+                declaration.declarations.iter().find_map(|declarator| {
+                    in_pattern(&declarator.pattern)
+                        .or_else(|| declarator.initializer.as_ref().and_then(in_expression))
+                })
+            }
+            Statement::Expression(expression_statement) => {
+                in_expression(&expression_statement.expression)
+            }
+            Statement::Block(block) => in_statements(&block.body),
+            Statement::If(if_statement) => in_expression(&if_statement.condition)
+                .or_else(|| in_statement(&if_statement.consequent))
+                .or_else(|| if_statement.alternate.as_deref().and_then(in_statement)),
+            Statement::For(for_statement) => for_statement
+                .init
+                .as_deref()
+                .and_then(in_statement)
+                .or_else(|| for_statement.condition.as_ref().and_then(in_expression))
+                .or_else(|| for_statement.update.as_ref().and_then(in_expression))
+                .or_else(|| in_statement(&for_statement.body)),
+            Statement::While(loop_statement) => in_expression(&loop_statement.condition)
+                .or_else(|| in_statement(&loop_statement.body)),
+            Statement::DoWhile(loop_statement) => in_statement(&loop_statement.body)
+                .or_else(|| in_expression(&loop_statement.condition)),
+            Statement::With(with_statement) => {
+                in_expression(&with_statement.object).or_else(|| in_statement(&with_statement.body))
+            }
+            Statement::Return(return_statement) => {
+                return_statement.argument.as_ref().and_then(in_expression)
+            }
+            Statement::Throw(throw_statement) => in_expression(&throw_statement.argument),
+            Statement::TryCatch(try_statement) => in_statements(&try_statement.block.body)
+                .or_else(|| {
+                    try_statement
+                        .handler
+                        .as_ref()
+                        .and_then(|handler| in_statements(&handler.body.body))
+                })
+                .or_else(|| {
+                    try_statement
+                        .finalizer
+                        .as_ref()
+                        .and_then(|finalizer| in_statements(&finalizer.body))
+                }),
+            Statement::Switch(switch_statement) => in_expression(&switch_statement.discriminant)
+                .or_else(|| {
+                    switch_statement.cases.iter().find_map(|case| {
+                        case.test
+                            .as_ref()
+                            .and_then(in_expression)
+                            .or_else(|| in_statements(&case.consequent))
+                    })
+                }),
+            Statement::Labeled(labeled) => in_statement(&labeled.body),
+            Statement::ForIn(for_in) => in_pattern(&for_in.binding)
+                .or_else(|| in_expression(&for_in.object))
+                .or_else(|| in_statement(&for_in.body)),
+            Statement::ForOf(for_of) => in_pattern(&for_of.binding)
+                .or_else(|| in_expression(&for_of.iterable))
+                .or_else(|| in_statement(&for_of.body)),
+            Statement::ClassDeclaration(class) => {
+                in_class_heritage(class.super_class.as_deref(), &class.body)
+            }
+            Statement::FunctionDeclaration(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
+            | Statement::Import(_)
+            | Statement::Export(_) => None,
+        }
+    }
+    fn in_expression(expr: &Expression) -> Option<&'static str> {
+        match expr {
+            Expression::Identifier(name) if name == "arguments" => Some("arguments"),
+            Expression::Call {
+                callee, arguments, ..
+            } => {
+                if matches!(callee.as_ref(), Expression::Super) {
+                    Some("super()")
+                } else {
+                    in_expression(callee).or_else(|| arguments.iter().find_map(in_expression))
+                }
+            }
+            Expression::OptionalCall {
+                callee, arguments, ..
+            }
+            | Expression::New { callee, arguments } => {
+                in_expression(callee).or_else(|| arguments.iter().find_map(in_expression))
+            }
+            Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            }
+            | Expression::OptionalMember {
+                object,
+                property,
+                computed,
+                ..
+            } => in_expression(object)
+                .or_else(|| computed.then(|| in_expression(property)).flatten()),
+            Expression::Await(inner) | Expression::SpreadElement(inner) => in_expression(inner),
+            Expression::Yield { argument, .. } => argument.as_deref().and_then(in_expression),
+            Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+                in_expression(left).or_else(|| in_expression(right))
+            }
+            Expression::Unary { argument, .. } => in_expression(argument),
+            Expression::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => in_expression(test)
+                .or_else(|| in_expression(consequent))
+                .or_else(|| in_expression(alternate)),
+            Expression::ArrayLiteral(elements) => elements.iter().flatten().find_map(in_expression),
+            Expression::ObjectLiteral(properties) => properties.iter().find_map(|property| {
+                property
+                    .computed
+                    .then(|| in_expression(&property.key))
+                    .flatten()
+                    .or_else(|| in_expression(&property.value))
+            }),
+            Expression::ArrowFunction { params, body, .. } => params
+                .iter()
+                .find_map(|param| in_pattern(&param.pattern))
+                .or_else(|| match body {
+                    ArrowBody::Expression(body) => in_expression(body),
+                    ArrowBody::Block(block) => in_statements(&block.body),
+                }),
+            Expression::TemplateLiteral { expressions, .. } => {
+                expressions.iter().find_map(in_expression)
+            }
+            Expression::ClassExpression {
+                super_class, body, ..
+            } => in_class_heritage(super_class.as_deref(), body),
+            Expression::Function { .. }
+            | Expression::Identifier(_)
+            | Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::FloatLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral
+            | Expression::UndefinedLiteral
+            | Expression::This
+            | Expression::NewTarget
+            | Expression::ImportMeta
+            | Expression::Raw(_)
+            | Expression::RegExpLiteral { .. }
+            | Expression::Super => None,
+        }
+    }
+    in_expression(expression)
 }
 
 /// Parse one public field `key [= initializer][;]` (ES2022 15.7.10
@@ -11818,6 +12028,17 @@ fn parse_class_field(
     });
     context.super_property_allowed = saved_super_property_allowed;
     let (key, value) = parsed?;
+
+    // ES2022 15.7.1: an initializer may not refer to `arguments` (looking
+    // through arrow functions, not ordinary ones) or call `super(...)`.
+    if let Some(found) = value.as_ref().and_then(field_initializer_forbidden) {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("a class field initializer may not contain `{found}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
 
     // ES2022 15.7.1 early errors: no field named "constructor", and no
     // static field named "prototype".

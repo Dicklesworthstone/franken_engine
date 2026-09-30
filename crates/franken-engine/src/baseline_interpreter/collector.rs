@@ -1363,6 +1363,8 @@ impl InterpreterCore {
             // whole heap.
             pending_lazy_seeds: _,
             pending_arguments_object,
+            argument_overflow,
+            argument_overflow_bytes: _,
             execution_seed_reservation_ledger: _,
             ip: _,
             instructions_executed: _,
@@ -1614,6 +1616,12 @@ impl InterpreterCore {
         if let Some((_, value, _)) = pending_arguments_object {
             m.value(value);
         }
+        // Every active call site's out-of-band arguments (bd-9vouw.50): an
+        // outer builtin may read its list again after a nested call returns.
+        argument_overflow
+            .iter()
+            .flat_map(|overflow| overflow.values.iter())
+            .for_each(|value| m.value(value));
         if let Some(value) = pending_exception {
             m.value(value);
         }

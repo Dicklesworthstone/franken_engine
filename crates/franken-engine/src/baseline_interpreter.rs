@@ -65,7 +65,7 @@ use ghash::{GHash, universal_hash};
 use hmac::{Hmac, Mac};
 use md5::Md5;
 use regex::RegexBuilder;
-use regexp_backtrack::{BacktrackRegExp, CompiledRegExp};
+use regexp_backtrack::{BacktrackRegExp, Captures, CompiledRegExp};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
@@ -54527,35 +54527,39 @@ impl InterpreterCore {
         pattern: &Value,
     ) -> Result<Value, InterpreterError> {
         if let Some((source, flags)) = self.regexp_source_flags_from_value(pattern) {
+            // ES2020 21.2.5.6 @@match: a non-global pattern is one
+            // RegExpExec, so a sticky one matches at (and updates)
+            // `lastIndex`; a global one first sets `lastIndex` to 0, which
+            // is where the exec loop leaves it.
+            if !flags.contains('g') {
+                return self.regexp_prototype_exec(pattern.clone(), &Value::str(input));
+            }
+            if let Value::Object(regexp_id) = pattern {
+                self.set_regexp_last_index(*regexp_id, 0)?;
+            }
             let regex = self.compile_regexp_pattern(&source, &flags)?;
-            if flags.contains('g') {
-                let result_id = self.alloc_array_with_prototype(None)?;
-                let mut count = 0usize;
-                for spans in regex.all_captures(input)? {
-                    let Some((from, to)) = spans[0] else {
-                        continue;
-                    };
-                    self.set_object_property(
-                        result_id,
-                        count.to_string(),
-                        Value::str(&input[from..to]),
-                    )?;
-                    count = count.saturating_add(1);
-                }
-                if count == 0 {
-                    return Ok(Value::Null);
-                }
+            let result_id = self.alloc_array_with_prototype(None)?;
+            let mut count = 0usize;
+            for spans in regex.all_captures(input)? {
+                let Some((from, to)) = spans[0] else {
+                    continue;
+                };
                 self.set_object_property(
                     result_id,
-                    "length".to_string(),
-                    Value::Int(i64::try_from(count).unwrap_or(i64::MAX)),
+                    count.to_string(),
+                    Value::str(&input[from..to]),
                 )?;
-                return Ok(Value::Object(result_id));
+                count = count.saturating_add(1);
             }
-
-            return Ok(self
-                .regexp_exec_at(&regex, input, 0, false)?
-                .map_or(Value::Null, |(result, _)| result));
+            if count == 0 {
+                return Ok(Value::Null);
+            }
+            self.set_object_property(
+                result_id,
+                "length".to_string(),
+                Value::Int(i64::try_from(count).unwrap_or(i64::MAX)),
+            )?;
+            return Ok(Value::Object(result_id));
         }
 
         // ES2020 21.1.3.11 step 3: any other value is `new RegExp(value)`.
@@ -54702,8 +54706,26 @@ impl InterpreterCore {
         if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
             group_names = regex.group_names().into_iter().skip(1).collect();
+            // ES2020 21.2.5.8 @@replace: a global pattern first sets
+            // `lastIndex` to 0 (the exec loop leaves it there); a sticky
+            // one matches only at `lastIndex` and updates it.
+            let regexp_id = match search {
+                Value::Object(id) => Some(*id),
+                _ => None,
+            };
             let found = if all || flags.contains('g') {
+                if flags.contains('g')
+                    && let Some(regexp_id) = regexp_id
+                {
+                    self.set_regexp_last_index(regexp_id, 0)?;
+                }
                 regex.all_captures(input)?
+            } else if flags.contains('y')
+                && let Some(regexp_id) = regexp_id
+            {
+                self.sticky_regexp_captures(regexp_id, &regex, input)?
+                    .into_iter()
+                    .collect()
             } else {
                 regex.captures_at(input, 0, false)?.into_iter().collect()
             };
@@ -67330,17 +67352,7 @@ impl InterpreterCore {
         let sticky = flags.contains('y');
         let tracks_last_index = sticky || flags.contains('g');
         let last_index = if tracks_last_index {
-            let value = self
-                .heap
-                .get(regexp_id.0 as usize)
-                .and_then(|object| object.properties.get("lastIndex").cloned())
-                .unwrap_or(Value::Int(0));
-            let number = Self::coerce_to_float(&value).unwrap_or(0.0);
-            if number.is_finite() && number > 0.0 {
-                number.trunc() as usize
-            } else {
-                0
-            }
+            self.regexp_last_index_start(regexp_id)
         } else {
             0
         };
@@ -67354,22 +67366,82 @@ impl InterpreterCore {
         match found {
             None => {
                 if tracks_last_index {
-                    self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
+                    self.set_regexp_last_index(regexp_id, 0)?;
                 }
                 Ok(Value::Null)
             }
             Some((result, end)) => {
                 if tracks_last_index {
-                    let end_index = text[..end].encode_utf16().count();
-                    self.set_object_property(
-                        regexp_id,
-                        "lastIndex".to_string(),
-                        Value::Int(i64::try_from(end_index).unwrap_or(i64::MAX)),
-                    )?;
+                    self.set_regexp_last_index(regexp_id, text[..end].encode_utf16().count())?;
                 }
                 Ok(result)
             }
         }
+    }
+
+    /// ToLength(R.lastIndex) (ES2020 21.2.5.2.2 step 4) as a UTF-16 index:
+    /// NaN and negatives are 0, and a huge value (Infinity) is past any
+    /// input, so the match fails.
+    fn regexp_last_index_start(&self, regexp_id: ObjectId) -> usize {
+        let value = self
+            .heap
+            .get(regexp_id.0 as usize)
+            .and_then(|object| object.properties.get("lastIndex").cloned())
+            .unwrap_or(Value::Int(0));
+        let number = Self::coerce_to_float(&value).unwrap_or(0.0);
+        if number > 0.0 {
+            number.trunc() as usize
+        } else {
+            0
+        }
+    }
+
+    /// `Set(R, "lastIndex", index, true)` (ES2020 21.2.5.2.2): a RegExp
+    /// whose `lastIndex` was made read-only turns the write into a
+    /// TypeError instead of ignoring it.
+    fn set_regexp_last_index(
+        &mut self,
+        regexp_id: ObjectId,
+        index: usize,
+    ) -> Result<(), InterpreterError> {
+        let key = RuntimePropertyKey::String(JsString::from("lastIndex"));
+        let read_only = self.heap.get(regexp_id.0 as usize).is_some_and(|regexp| {
+            regexp.own_runtime_property_value(&key).is_some()
+                && !regexp.own_property_attributes(&key).writable
+        });
+        if read_only {
+            return Err(InterpreterError::TypeError {
+                expected: "writable RegExp lastIndex".to_string(),
+                got: "read-only lastIndex".to_string(),
+            });
+        }
+        self.set_object_property(
+            regexp_id,
+            "lastIndex".to_string(),
+            Value::Int(i64::try_from(index).unwrap_or(i64::MAX)),
+        )
+    }
+
+    /// RegExpBuiltinExec for a sticky, non-global pattern: it matches only
+    /// at `lastIndex`, which then holds the match end (or 0 on failure).
+    fn sticky_regexp_captures(
+        &mut self,
+        regexp_id: ObjectId,
+        regex: &CompiledRegExp,
+        input: &str,
+    ) -> Result<Option<Captures>, InterpreterError> {
+        let start = self.regexp_last_index_start(regexp_id);
+        let found = if start > input.encode_utf16().count() {
+            None
+        } else {
+            regex.captures_at(input, Self::utf16_index_to_byte_offset(input, start), true)?
+        };
+        let next = found
+            .as_ref()
+            .and_then(|spans| spans[0])
+            .map_or(0, |(_, end)| input[..end].encode_utf16().count());
+        self.set_regexp_last_index(regexp_id, next)?;
+        Ok(found)
     }
 
     /// `WeakMap.prototype.get/set/has/delete` over the WeakMap side storage

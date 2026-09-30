@@ -94719,16 +94719,22 @@ impl InterpreterCore {
             // A promise, generator or async generator object has no heap
             // storage of its own either: its own properties (`p.cancel =
             // fn`, `Object.assign(promise, ...)`) live on a backing object
-            // too. Their ids are the runtime's, not a module's.
+            // too. Their ids are the runtime's, not a module's, so the owner
+            // is a constant (computed once: every `p.then` read asks).
             Value::Promise(id) | Value::Generator(id) | Value::AsyncGeneratorObject(id) => {
-                let kind = match function {
-                    Value::Promise(_) => 6u8,
-                    Value::Generator(_) => 7,
-                    _ => 8,
+                static OWNERS: OnceLock<[ContentHash; 3]> = OnceLock::new();
+                let owners = OWNERS.get_or_init(|| {
+                    let mut digest = Sha256::new();
+                    digest.update(b"FrankenEngine.ExoticObjectOwnProperties.v1");
+                    let base = ContentHash::from_bytes(digest.finalize().into());
+                    [6u8, 7, 8].map(|kind| Self::function_own_property_owner(kind, &base))
+                });
+                let slot = match function {
+                    Value::Promise(_) => 0,
+                    Value::Generator(_) => 1,
+                    _ => 2,
                 };
-                let mut digest = Sha256::new();
-                digest.update(b"FrankenEngine.ExoticObjectOwnProperties.v1");
-                (kind, ContentHash::from_bytes(digest.finalize().into()), *id)
+                return Ok(Some((owners[slot].clone(), *id)));
             }
             _ => return Ok(None),
         };

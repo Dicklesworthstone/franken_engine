@@ -54,6 +54,20 @@ fn slice_is_an_independent_copy() {
     );
 }
 
+/// Every ArrayBuffer (constructed, a typed array's `.buffer`, a slice)
+/// inherits from ArrayBuffer.prototype; none did, so `instanceof
+/// ArrayBuffer` was false and `constructor` was Object.
+#[test]
+fn array_buffers_inherit_from_array_buffer_prototype() {
+    check(
+        "var b = new ArrayBuffer(4); var u = new Uint8Array(4); [b instanceof ArrayBuffer, \
+         Object.getPrototypeOf(b) === ArrayBuffer.prototype, u.buffer instanceof ArrayBuffer, \
+         b.slice(1) instanceof ArrayBuffer, b.constructor === ArrayBuffer, \
+         b.slice(1).constructor === ArrayBuffer].join()",
+        "true,true,true,true,true,true",
+    );
+}
+
 #[test]
 fn slice_is_the_prototype_method_and_checks_its_receiver() {
     check(

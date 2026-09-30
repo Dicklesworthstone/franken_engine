@@ -66970,7 +66970,11 @@ impl InterpreterCore {
         let weak_ref = self.alloc_object_with_prototype(Some(prototype))?;
         self.set_object_property(weak_ref, "__type".to_string(), Value::str("WeakRef"))?;
         self.set_object_property(weak_ref, "__target".to_string(), target)?;
-        self.set_own_property_label(weak_ref, "__target", &label)?;
+        self.set_own_runtime_property_label(
+            weak_ref,
+            &RuntimePropertyKey::String(JsString::from("__target")),
+            &label,
+        )?;
         self.hide_internal_slots(weak_ref, &["__type", "__target"])?;
         Ok(Value::Object(weak_ref))
     }

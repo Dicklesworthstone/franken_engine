@@ -67,3 +67,28 @@ fn short_circuited_arguments_are_not_evaluated_and_the_base_is_read_once() {
         "0 2"
     );
 }
+
+/// `new` may not take an optional chain as its callee (ES2020 12.3.9.1:
+/// `new a?.b()` is a SyntaxError), but a parenthesized callee is an ordinary
+/// operand. The parser rejected any optional chain anywhere in the callee,
+/// so zod's `new (_params?.Err ?? _Err)(issues)` failed to parse.
+#[test]
+fn parenthesized_optional_chain_can_be_constructed() {
+    assert_eq!(
+        eval(
+            "var p = {Err: function (m) { this.m = m; }}, q = undefined; \
+             function E(m) { this.m = 'E' + m; } \
+             [new (p?.Err ?? E)(1).m, new (q?.Err ?? E)(2).m, new (p?.Err)(3).m].join()"
+        ),
+        "1,E2,3"
+    );
+    for source in ["new a?.b()", "new a?.b", "new a.b?.()"] {
+        let error = HybridRouter::default()
+            .eval(&format!("var a = {{b: function () {{}}}}; {source}"))
+            .expect_err(source);
+        assert!(
+            error.to_string().contains("optional chaining"),
+            "{source}: {error}"
+        );
+    }
+}

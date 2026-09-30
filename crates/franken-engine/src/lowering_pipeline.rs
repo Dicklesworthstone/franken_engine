@@ -17378,23 +17378,54 @@ fn lower_expression_to_ir1_inner(
                 .any(|prop| prop.kind != ObjectPropertyKind::Data);
             // bd-9vouw.23: as for arrays, a large literal is built one entry
             // at a time so its entries' registers are reused. A literal
-            // `__proto__:` entry sets the prototype, which the batch path
-            // handles, so such literals stay batched.
+            // `__proto__:` entry sets the prototype, which only a batched
+            // NewObject does. When it is the first entry (bundlers' module
+            // namespace objects: `{ __proto__: null, ...150 exports }`), a
+            // one-entry batch seeds the incremental object, so evaluation
+            // order is kept; a later one keeps the literal batched.
+            let is_proto_entry = |prop: &crate::ast::ObjectProperty| {
+                prop.kind == ObjectPropertyKind::Data
+                    && !prop.computed
+                    && !matches!(&prop.value, Expression::SpreadElement(_))
+                    && canonical_static_object_property_key(&prop.key)
+                        .is_ok_and(|key| key == "__proto__")
+            };
+            let leading_proto = properties.first().is_some_and(is_proto_entry);
             let large_plain = properties.len() > MAX_BATCH_LITERAL_ENTRIES
-                && !properties.iter().any(|prop| {
-                    !prop.computed
-                        && canonical_static_object_property_key(&prop.key)
-                            .is_ok_and(|key| key == "__proto__")
-                });
+                && !properties
+                    .iter()
+                    .skip(usize::from(leading_proto))
+                    .any(is_proto_entry);
             let needs_incremental = has_spread || has_incremental_definition || large_plain;
 
             if needs_incremental {
                 // With spreads/accessors, use incremental approach:
-                // 1. Create empty object
+                // 1. Create the object (seeded with a leading `__proto__`)
                 // 2. For each property: data temp+spread, direct accessor define,
                 //    or source spread
-                ops.push(Ir1Op::NewObject { count: 0 });
-                for prop in properties {
+                let mut remaining = properties.as_slice();
+                if leading_proto && let [proto, rest @ ..] = properties.as_slice() {
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String(canonical_static_object_property_key(
+                            &proto.key,
+                        )?),
+                    });
+                    lower_expression_to_ir1(
+                        &proto.value,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::NewObject { count: 1 });
+                    remaining = rest;
+                } else {
+                    ops.push(Ir1Op::NewObject { count: 0 });
+                }
+                for prop in remaining {
                     if let Expression::SpreadElement(inner) = &prop.value {
                         // Spread property - lower the source object and spread
                         lower_expression_to_ir1(

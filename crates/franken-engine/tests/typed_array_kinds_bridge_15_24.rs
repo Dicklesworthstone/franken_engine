@@ -206,3 +206,28 @@ fn typed_array_intrinsic() {
         "TypeError,TypeError,TypeError",
     );
 }
+
+/// A typed array inherits from its constructor's prototype (ES2020
+/// 22.2.4.2.1 AllocateTypedArray), whichever way it was made: `new`,
+/// `from`/`of`, over a buffer, `subarray`, `map`, `slice`, `filter`. Before
+/// this every typed array's [[Prototype]] was %Object.prototype%, so
+/// `instanceof Uint8Array` was false and `constructor` was Object.
+#[test]
+fn typed_arrays_inherit_from_their_constructor_prototype() {
+    check(
+        "var TA = Object.getPrototypeOf(Int8Array); \
+         var a = new Int8Array(2), f = Float64Array.from([1]), u = Uint8Array.of(1), \
+         s = new Int16Array(new ArrayBuffer(4)), sub = new Uint8Array([1, 2, 3]).subarray(1), \
+         big = new BigInt64Array(1); var m = new Int8Array([1, 2]); \
+         [a instanceof Int8Array, Object.getPrototypeOf(a) === Int8Array.prototype, \
+         a.constructor === Int8Array, f instanceof Float64Array, u instanceof Uint8Array, \
+         s instanceof Int16Array, sub instanceof Uint8Array, sub.constructor.name, \
+         big instanceof BigInt64Array, a instanceof Object, a instanceof TA, \
+         Int8Array.prototype.isPrototypeOf(a), a instanceof Uint8Array, \
+         m.map((x) => x * 2) instanceof Int8Array, m.slice(1).constructor.name, \
+         m.filter(Boolean) instanceof Int8Array, Object.prototype.toString.call(a), a.length, \
+         a[Symbol.iterator] === Int8Array.prototype[Symbol.iterator]].join();",
+        "true,true,true,true,true,true,true,Uint8Array,true,true,true,true,false,true,Int8Array,\
+         true,[object Int8Array],2,true",
+    );
+}

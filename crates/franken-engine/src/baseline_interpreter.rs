@@ -90171,6 +90171,17 @@ impl InterpreterCore {
                 ),
             })?;
         let element_size_i64 = i64::try_from(kind.element_size()).expect("element size fits i64");
+        // ES2020 22.2.4.2.1 AllocateTypedArray: a view inherits from its
+        // constructor's prototype (which inherits %TypedArray.prototype%),
+        // so `instanceof`, `constructor` and Object.getPrototypeOf see its
+        // class. Unlinked, every typed array reported Object. Materialized
+        // before the view's id is taken, since the first use allocates the
+        // prototype objects. Buffers keep their own surface (not linked).
+        let prototype = if is_buffer {
+            None
+        } else {
+            Some(self.ensure_builtin_prototype(kind.type_name())?)
+        };
 
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
@@ -90188,6 +90199,7 @@ impl InterpreterCore {
             );
 
         let mut object = HeapObject::new();
+        object.prototype = prototype;
         object
             .properties
             .insert("__type".to_string(), Value::str(kind.type_name()));
@@ -92789,8 +92801,10 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// An unmapped arguments object (ES2020 9.4.4.6): indexed elements plus a
-    /// non-enumerable `length`.
+    /// An unmapped arguments object (ES2020 9.4.4.6): indexed elements, a
+    /// non-enumerable `length`, and a non-enumerable own @@iterator that is
+    /// %Array.prototype.values%, so `[...arguments]`, `Array.from(arguments)`
+    /// and `for (const a of arguments)` iterate it.
     fn alloc_arguments_object(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
         let object = self.alloc_object_with_prototype(None)?;
         for (index, value) in values.iter().enumerate() {
@@ -92801,15 +92815,23 @@ impl InterpreterCore {
             "length".to_string(),
             Value::Int(i64::try_from(values.len()).unwrap_or(i64::MAX)),
         )?;
+        let iterator_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+        self.set_object_runtime_property(
+            object,
+            iterator_key.clone(),
+            Value::BuiltinFunction(BuiltinFunction::array_values()),
+        )?;
+        let hidden = PropertyAttributes {
+            writable: true,
+            enumerable: false,
+            configurable: true,
+        };
         self.set_own_property_attributes(
             object,
             &RuntimePropertyKey::String(JsString::from("length")),
-            PropertyAttributes {
-                writable: true,
-                enumerable: false,
-                configurable: true,
-            },
+            hidden,
         )?;
+        self.set_own_property_attributes(object, &iterator_key, hidden)?;
         Ok(object)
     }
 

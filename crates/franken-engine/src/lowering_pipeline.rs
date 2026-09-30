@@ -26994,8 +26994,16 @@ fn global_function_call_capability(
 pub(crate) const STATIC_VALUE_CAPABILITY_PREFIX: &str = "builtin:static-value:";
 
 /// Bare global functions that read as first-class values.
-pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 4] =
-    ["parseInt", "parseFloat", "isNaN", "isFinite"];
+pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 8] = [
+    "parseInt",
+    "parseFloat",
+    "isNaN",
+    "isFinite",
+    "btoa",
+    "atob",
+    "escape",
+    "unescape",
+];
 
 fn static_member_value_capability(
     object: &Expression,
@@ -27061,6 +27069,12 @@ pub(crate) fn global_function_capability(name: &str) -> Option<&'static str> {
         // value argument, no receiver (bd-1trl5).
         "Number" => Some("builtin:Number"),
         "Boolean" => Some("builtin:Boolean"),
+        // bd-9vouw.96: the HTML Standard's base64 pair (Node globals) and
+        // ES2020 B.2.1's escape/unescape.
+        "btoa" => Some("builtin:Btoa"),
+        "atob" => Some("builtin:Atob"),
+        "escape" => Some("builtin:Escape"),
+        "unescape" => Some("builtin:Unescape"),
         _ => None,
     }
 }

@@ -443,6 +443,8 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("globalThis", "WeakMap", 0),
     ("globalThis", "WeakRef", 1),
     ("globalThis", "WeakSet", 0),
+    ("globalThis", "atob", 1),
+    ("globalThis", "btoa", 1),
     ("globalThis", "clearImmediate", 1),
     ("globalThis", "clearInterval", 1),
     ("globalThis", "clearTimeout", 1),

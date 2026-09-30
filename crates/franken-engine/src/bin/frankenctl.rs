@@ -4996,8 +4996,38 @@ fn execute_agent_sandbox(args: AgentSandboxArgs) -> Result<i32, String> {
     }
     print_json(&output)?;
 
-    Ok(0)
+    // A contained run must not look like a successful one to the agent
+    // framework consuming this shim (bd-9vouw.60): the report is still
+    // written, and the exit code says the guardplane stopped the agent.
+    Ok(agent_sandbox_exit_code(
+        result
+            .evidence_entries
+            .iter()
+            .filter_map(|entry| entry.metadata.get("hook_requested_action"))
+            .map(String::as_str),
+    ))
 }
+
+/// `agent-sandbox` exit code for a run that produced a report: 0 when the
+/// agent ran to completion, [`AGENT_SANDBOX_EXIT_CONTAINED`] when an in-flight
+/// guardplane hook stopped it. Every non-allow hook action (challenge,
+/// sandbox, suspend, terminate, quarantine) halts execution, and the run's
+/// evidence records it as `hook_requested_action`; the run-level
+/// `containment_action` alone cannot tell, because it is also computed for
+/// runs that completed.
+fn agent_sandbox_exit_code<'a>(hook_requested_actions: impl IntoIterator<Item = &'a str>) -> i32 {
+    if hook_requested_actions
+        .into_iter()
+        .any(|action| !action.eq_ignore_ascii_case("allow"))
+    {
+        AGENT_SANDBOX_EXIT_CONTAINED
+    } else {
+        0
+    }
+}
+
+/// Documented `agent-sandbox` exit code for a guardplane-contained run.
+const AGENT_SANDBOX_EXIT_CONTAINED: i32 = 3;
 
 fn resolve_run_explain_path(args: &RunArgs) -> Option<PathBuf> {
     if !args.explain {
@@ -12565,6 +12595,10 @@ fn agent_sandbox_usage() -> String {
         "  A post-evidence lifecycle failure exits 2 and emits the same",
         "  structured, explicitly uncommitted exact-chain failure report as run.",
         "",
+        "  exit codes: 0 = the agent ran to completion (allow/challenge/sandbox),",
+        "  3 = the guardplane contained it (suspend/terminate/quarantine; the",
+        "  report is still written), 2 = refused or failed closed.",
+        "",
         "  --instruction-budget overrides the interpreter instruction budget",
         "  (default 100000, at most 10000000000).",
         EXECUTION_LIMITS_HELP,
@@ -13447,6 +13481,23 @@ mod tests {
             }
             other => panic!("expected agent-sandbox command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn agent_sandbox_exit_code_separates_contained_from_completed_runs() {
+        assert_eq!(agent_sandbox_exit_code([]), 0, "no hook stop");
+        assert_eq!(agent_sandbox_exit_code(["allow"]), 0);
+        for contained in ["challenge", "sandbox", "suspend", "terminate", "quarantine"] {
+            assert_eq!(
+                agent_sandbox_exit_code([contained]),
+                AGENT_SANDBOX_EXIT_CONTAINED,
+                "{contained}"
+            );
+        }
+        assert_ne!(
+            AGENT_SANDBOX_EXIT_CONTAINED, 2,
+            "2 means refused/failed closed"
+        );
     }
 
     #[test]

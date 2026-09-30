@@ -262,6 +262,7 @@ pub fn is_language_operation_tag(tag: &str) -> bool {
                 | "builtin:DestructureIteratorDone"
                 | "builtin:ClassMembersNonEnumerable"
                 | "builtin:ArgumentsObject"
+                | "builtin:ClassPrototypeLink"
         )
 }
 

@@ -82,6 +82,31 @@ fn setters_normalize_through_make_day() {
 /// string conversions of a Date, which go through toString. Without them
 /// `d.toString()` reached Object.prototype.toString ("[object Date]") while
 /// `d + ''` rendered "[object Object]", so `d == d.toString()` was false.
+/// A setter ToNumbers each argument it takes exactly once, in order, after
+/// reading the time value and even when that is NaN: an object's valueOf
+/// runs (it was skipped, so `setHours(0, { valueOf })` gave NaN), a Symbol
+/// throws, and an argument past the setter's own is not read (Test262
+/// Date/prototype/setHours/arg-min-to-number, setDate/arg-coercion-order,
+/// setUTCFullYear/date-value-read-before-tonumber-when-date-is-valid).
+#[test]
+fn setter_arguments_are_to_numbered_once_in_order() {
+    check(
+        "var d = new Date(2016, 6), calls = 0; \
+         var r1 = d.setHours(0, { valueOf() { calls++; return 2; } }); \
+         var nd = new Date(NaN), n1 = 0; var r2 = nd.setDate({ valueOf() { n1++; return 0; } }); \
+         var dt = new Date(0), n2 = 0; \
+         var r3 = dt.setUTCFullYear({ valueOf() { n2++; dt.setTime(NaN); return 1; } }); \
+         var sym; try { new Date(0).setMinutes(Symbol()); sym = 'none'; } \
+         catch (e) { sym = e.constructor.name; } \
+         var n3 = 0; new Date(0).setDate(1, { valueOf() { n3++; return 0; } }); \
+         var log = []; new Date(0).setHours({ valueOf() { log.push('h'); return 1; } }, \
+         { valueOf() { log.push('m'); return 2; } }); \
+         [calls, r1 === new Date(2016, 6, 1, 0, 2).getTime(), n1, r2, nd.getTime(), n2, \
+         r3 === dt.getTime(), dt.getUTCFullYear(), sym, n3, log.join('')].join();",
+        "1,true,1,NaN,NaN,1,true,1,TypeError,0,hm",
+    );
+}
+
 #[test]
 fn to_string_forms_and_string_conversion() {
     check(

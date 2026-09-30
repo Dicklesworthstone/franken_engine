@@ -38351,7 +38351,7 @@ impl InterpreterCore {
                         module, caller, time, &locales, &options,
                     );
                 }
-                self.date_prototype_method(&method, receiver, args)
+                self.date_prototype_method(Some(module), &method, receiver, args)
             }
             BuiltinFunctionKind::NumberToPrecision | BuiltinFunctionKind::NumberToExponential => {
                 let exponential = builtin.kind == BuiltinFunctionKind::NumberToExponential;
@@ -67618,6 +67618,7 @@ impl InterpreterCore {
 
     fn date_prototype_method(
         &mut self,
+        module: Option<&Ir3Module>,
         method: &str,
         receiver: Value,
         args: RegRange,
@@ -67753,9 +67754,34 @@ impl InterpreterCore {
                 )));
             }
             _ => {
-                let mut values = Vec::with_capacity(args.count as usize);
-                for index in 0..args.count {
+                // Each argument the setter takes is ToNumber'd, in order,
+                // after the time value is read and even when it is NaN
+                // (ES2020 20.4.4.20-28): an object's valueOf runs exactly
+                // once, a Symbol or BigInt throws. Arguments were read as
+                // primitives only, so `setHours(0, { valueOf })` saw NaN.
+                let arity = match method {
+                    "setHours" | "setUTCHours" => 4,
+                    "setMinutes" | "setUTCMinutes" | "setFullYear" | "setUTCFullYear" => 3,
+                    "setSeconds" | "setUTCSeconds" | "setMonth" | "setUTCMonth" => 2,
+                    _ => 1,
+                };
+                // Guest valueOf may run; no collection while native locals
+                // hold the receiver.
+                self.gc_nested_request = None;
+                let mut values = Vec::with_capacity(args.count.min(arity) as usize);
+                for index in 0..args.count.min(arity) {
                     let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    let value = if value.is_object_like() {
+                        self.coerce_runtime_primitive(module, value, false)?
+                    } else {
+                        value
+                    };
+                    if matches!(value, Value::Symbol(_) | Value::BigInt(_)) {
+                        return Err(InterpreterError::TypeError {
+                            expected: format!("number argument for Date.prototype.{method}"),
+                            got: value.type_name().to_string(),
+                        });
+                    }
                     values.push(Self::coerce_to_float(&value).unwrap_or(f64::NAN));
                 }
                 let arg =

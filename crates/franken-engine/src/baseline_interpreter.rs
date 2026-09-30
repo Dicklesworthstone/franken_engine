@@ -73743,6 +73743,29 @@ impl InterpreterCore {
                     _ => Ok(Value::Object(self.alloc_arguments_object(&[])?)),
                 }
             }
+            "builtin:ObjectLiteralPrototype" => {
+                // Annex B.3.1: an object literal's `__proto__: v` entry sets
+                // the literal's prototype when `v` is an object or null and
+                // is ignored otherwise. args = (object, value); the object is
+                // returned so a literal built entry by entry keeps it on the
+                // stack (bd-9vouw.23). The IFC mutation label joins as a
+                // prototype store would.
+                let object = self.arg_or_undefined(args, 0)?;
+                let value = self.arg_or_undefined(args, 1)?;
+                let link = match value {
+                    Value::Object(prototype_id) => Some(Some(prototype_id)),
+                    Value::Null => Some(None),
+                    _ => None,
+                };
+                if let (Value::Object(object_id), Some(link)) = (&object, link) {
+                    let label = self
+                        .get_register_label(args.start)?
+                        .join(self.get_register_label(args.start + 1)?);
+                    self.join_object_mutation_label(*object_id, &label)?;
+                    self.store_prototype_link(*object_id, link);
+                }
+                Ok(object)
+            }
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are
                 // non-enumerable. args = (constructor, constructor.prototype).

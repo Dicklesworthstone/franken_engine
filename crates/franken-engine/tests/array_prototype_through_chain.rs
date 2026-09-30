@@ -94,6 +94,14 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"var re = /abc/; re[Symbol.isConcatSpreadable] = true; re.length = 2; re[0] = 1; re[1] = 2; var a = [1, 2]; a[Symbol.isConcatSpreadable] = false; var al = { length: 1, 0: 'z', [Symbol.isConcatSpreadable]: true }; console.log(JSON.stringify([0].concat(re)), [].concat(a).length, JSON.stringify([9].concat(a)), JSON.stringify(Array.prototype.concat.call(al, al)));"#,
         r#"[0,1,2] 1 [9,[1,2]] ["z","z"]"#,
     ),
+    // An Array's index/count arguments and join's separator are ToNumber'd /
+    // ToString'd with guest calls: an object argument's valueOf/toString
+    // runs (the element-storage paths read it as NaN / "[object Object]").
+    (
+        "object_index_arguments",
+        r#"var n = { valueOf() { return 1; } }; console.log([1, 2, 3].slice(n).join(), [1, 2, 3].indexOf(2, n), [1, 2, 3].at(n), new Array(3).fill(0, n).join(), [3, 2, 1].includes(3, n), [1, 2].join({ toString() { return '+'; } }), [1, 2, 3].splice(n, n).join(), [1, 2].with(n, 9).join(), [{ a: 1 }].indexOf({ a: 1 }));"#,
+        "2,3 1 2 ,0,0 false 1+2 2 1,9 -1",
+    ),
     (
         "arguments_and_plain_array_likes",
         r#"function f() { return Array.prototype.slice.call(arguments, 1).concat(Array.prototype.map.call(arguments, (x) => x * 10)); } var o2 = { length: 2 }; Array.prototype.push.call(o2, 'a'); var s = { length: 2, 0: 'b', 1: 'a' }; Array.prototype.sort.call(s); var sorted = s[0] + s[1]; Array.prototype.reverse.call(s); console.log(f(1, 2, 3).join(), JSON.stringify(o2), sorted, s[0] + s[1], Array.prototype.reduceRight.call({ length: 3, 0: 'a', 1: 'b', 2: 'c' }, (acc, v) => acc + v));"#,

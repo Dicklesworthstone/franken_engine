@@ -869,3 +869,36 @@ fn top_level_member_calls_keep_two_registers_each() {
         "20 more top-level member calls widened the frame by {growth}"
     );
 }
+
+/// A large object literal whose first entry is `__proto__:` was kept on the
+/// batched path (only a batched NewObject sets the prototype), so its 128th
+/// entry ran the frame out of registers. Bundlers emit exactly this for
+/// module namespace objects (underscore's `allExports = { __proto__: null,
+/// VERSION, restArguments, ... }`). The leading `__proto__` now seeds the
+/// incremental object. A `__proto__` before a spread is kept too.
+#[test]
+fn large_literal_with_leading_proto_entry() {
+    let props = (0..200)
+        .map(|i| format!("p{i}: {i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "var base = {{z: 7}}; var o = {{ __proto__: null, {props} }}; \
+         var q = {{ __proto__: base, {props} }}; \
+         [Object.keys(o).length, Object.getPrototypeOf(o), o.p199, q.z, Object.keys(q).length].join()"
+    );
+    check("large literal with leading __proto__", &source, "200,,199,7,200");
+    // The 256-register lane is the one that overflowed.
+    assert_eq!(fixed_lane_value(&source), "200,,199,7,200");
+    check(
+        "__proto__ before a spread",
+        "var base = {z: 1}; var o = {__proto__: base, ...{a: 2}}; \
+         [o.z, o.a, Object.getPrototypeOf(o) === base, Object.keys(o).join()].join()",
+        "1,2,true,a",
+    );
+    check(
+        "__proto__ after another entry",
+        "var base = {z: 3}; var o = {a: 1, __proto__: base}; [o.z, Object.keys(o).join()].join()",
+        "3,a",
+    );
+}

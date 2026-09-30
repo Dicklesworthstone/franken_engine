@@ -5694,6 +5694,12 @@ const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
     "BYTES_PER_ELEMENT",
 ];
 
+/// The heap entries of an ArrayBuffer and a DataView that model internal
+/// slots and prototype accessors, not own properties (see
+/// `own_property_visible`).
+const ARRAY_BUFFER_SLOT_KEYS: [&str; 2] = ["__type", "byteLength"];
+const DATA_VIEW_SLOT_KEYS: [&str; 4] = ["__type", "buffer", "byteLength", "byteOffset"];
+
 const SLOT0_STATIC_GLOBALS: [&str; 6] = ["Object", "JSON", "Array", "String", "Symbol", "Proxy"];
 const SLOT0_STATIC_MEMBERS: [&str; 25] = [
     "keys",
@@ -23732,19 +23738,25 @@ impl InterpreterCore {
     /// and JSON. Node/Bun expose a Writable's ten authoritative views as
     /// inherited accessors, and a typed array's `length`, `buffer`,
     /// `byteLength`, `byteOffset` and `BYTES_PER_ELEMENT` are
-    /// %TypedArray%.prototype accessors (ES2020 22.2.3); the engine keeps
-    /// those as heap entries (plus the `__type`/`__typedArrayKind` slots),
-    /// which [[Get]] and `in` still read, but they are not own keys.
+    /// %TypedArray%.prototype accessors (ES2020 22.2.3), as are an
+    /// ArrayBuffer's `byteLength` (24.1.4.1) and a DataView's `buffer`,
+    /// `byteLength` and `byteOffset` (24.3.4); the engine keeps those as heap
+    /// entries (plus the `__type`/`__typedArrayKind` slots), which [[Get]]
+    /// and `in` still read, but they are not own keys.
     fn own_property_visible(&self, object_id: ObjectId, key: &str) -> bool {
         let writable_view = (self.writable_streams.contains_key(&object_id)
             || self.writable_terminal_states.contains_key(&object_id))
             && Self::is_writable_state_view_key(key);
-        let typed_array_slot = TYPED_ARRAY_SLOT_KEYS.contains(&key)
-            && self
-                .heap
-                .get(object_id.0 as usize)
-                .is_some_and(|object| object.typed_array.is_some());
-        !(writable_view || typed_array_slot)
+        let binary_slot = self.heap.get(object_id.0 as usize).is_some_and(|object| {
+            if object.typed_array.is_some() {
+                TYPED_ARRAY_SLOT_KEYS.contains(&key)
+            } else if object.data_view.is_some() {
+                DATA_VIEW_SLOT_KEYS.contains(&key)
+            } else {
+                object.array_buffer.is_some() && ARRAY_BUFFER_SLOT_KEYS.contains(&key)
+            }
+        });
+        !(writable_view || binary_slot)
     }
 
     fn own_runtime_property_visible(&self, object_id: ObjectId, key: &JsString) -> bool {

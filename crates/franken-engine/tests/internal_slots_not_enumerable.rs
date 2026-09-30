@@ -95,3 +95,23 @@ fn builtin_objects_still_work() {
         "0,1,1,true,0,0,a,g",
     );
 }
+
+/// An ArrayBuffer's `byteLength` and a DataView's `buffer`, `byteLength` and
+/// `byteOffset` are prototype accessors (ES2020 24.1.4.1, 24.3.4): no own key,
+/// no JSON or spread output and `hasOwnProperty` false, while reads and `in`
+/// still see them. A user property stays an own key.
+#[test]
+fn array_buffer_and_data_view_slots_are_not_own_keys() {
+    check(
+        "const dv = new DataView(new ArrayBuffer(4), 1, 2); [JSON.stringify(Object.keys(dv)), \
+         JSON.stringify(Reflect.ownKeys(dv)), dv.byteLength, dv.byteOffset, dv.buffer.byteLength, \
+         JSON.stringify(dv), 'byteLength' in dv, dv.hasOwnProperty('byteLength')].join(' ')",
+        "[] [] 2 1 4 {} true false",
+    );
+    check(
+        "const b = new ArrayBuffer(8); b.extra = 1; [JSON.stringify(Object.getOwnPropertyNames(b)), \
+         JSON.stringify(Reflect.ownKeys(b)), b.byteLength, JSON.stringify(b), JSON.stringify({...b}), \
+         Object.entries(b).length, b.hasOwnProperty('byteLength'), 'byteLength' in b].join(' ')",
+        "[\"extra\"] [\"extra\"] 8 {\"extra\":1} {\"extra\":1} 1 false true",
+    );
+}

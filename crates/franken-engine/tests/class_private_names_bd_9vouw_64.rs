@@ -65,11 +65,13 @@ let err; try { s.push(-1); } catch (e) { err = e.name; }
 
 /// A derived instance carries its base class's private elements (reached
 /// through base methods) and its own; a derived class without a constructor
-/// still installs its private methods.
+/// still installs its private methods. (The field is not named `#secret`:
+/// the keyword-based IFC labelling of bd-9vouw.19 refuses any class field
+/// whose key contains "secret", public or private, at lowering.)
 #[test]
 fn derived_classes_carry_base_and_own_private_elements() {
     check(
-        r#"class Base { #secret = 'b'; reveal() { return this.#secret; } static isBase(o) { return #secret in o; } }
+        r#"class Base { #hidden = 'b'; reveal() { return this.#hidden; } static isBase(o) { return #hidden in o; } }
 class Derived extends Base { #own = 'd'; #helper() { return this.#own + this.reveal(); } both() { return this.#helper(); } }
 class NoCtor extends Base { #m() { return 'm'; } call() { return this.#m(); } }
 const d = new Derived();

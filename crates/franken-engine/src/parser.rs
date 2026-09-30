@@ -5059,6 +5059,15 @@ fn parse_primary_expression(
     }
 
     if is_identifier(expression) {
+        // `import` is only an ImportCall callee (handled with its arguments)
+        // or `import.meta`; a bare reference is a SyntaxError.
+        if expression == "import" {
+            return Err(unsupported_expression_syntax_error(
+                "`import` must be called: import(specifier)",
+                span,
+                context,
+            ));
+        }
         return Ok(Expression::Identifier(canonicalize_identifier(expression)));
     }
 
@@ -5366,6 +5375,17 @@ fn parse_new_expression(
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
     // `rest` is everything after `new `, e.g. `Foo(a, b)` or `Foo` or `Foo.Bar()`
+    //
+    // An ImportCall is not a constructor target (`new import('')`).
+    if let Some(after) = rest.trim_start().strip_prefix("import")
+        && after.trim_start().starts_with('(')
+    {
+        return Err(unsupported_expression_syntax_error(
+            "import() cannot be used with `new`",
+            span,
+            context,
+        ));
+    }
     //
     // A member / call / index chain that follows the constructor's argument list
     // binds to the NEW RESULT, not the callee: per ES2020 §13.3, `new X(a).b`
@@ -6532,7 +6552,7 @@ fn try_parse_update(
         }
         let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
         if !is_simple_update_target(&target) {
-            return None;
+            return reject_non_assignable_update_target(&target, span, context);
         }
         // `++x` ⇒ `x += 1` (compound assignment evaluates to the new value).
         return Some(Ok(Expression::Assignment {
@@ -6558,7 +6578,7 @@ fn try_parse_update(
         }
         let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
         if !is_simple_update_target(&target) {
-            return None;
+            return reject_non_assignable_update_target(&target, span, context);
         }
         // `x++` ⇒ `(x += 1) - 1`: write the increment back, evaluate to the old
         // value. `x--` mirrors with `(x -= 1) + 1`.
@@ -6583,6 +6603,47 @@ fn try_parse_update(
 /// is not an update expression.
 fn is_simple_update_target(expr: &Expression) -> bool {
     matches!(expr, Expression::Identifier(_) | Expression::Member { .. })
+}
+
+/// ES2020 12.4.1 / 12.5.1: calls, optional chains, `this`, `new.target`,
+/// `import.meta`, literals and function/class expressions are complete
+/// operands that can never be assigned, so `f()++`, `++f()`, `a?.b++`,
+/// `new.target++` and `1++` are early errors. Other non-simple operands are
+/// left to the paths that split them first: `a + b` in `a + b++` (binary),
+/// `-x` in `-x++` and `await x` in `await x++` (unary / await), and
+/// `undefined`, which is an assignable identifier in sloppy code.
+fn reject_non_assignable_update_target(
+    target: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> Option<ParseResult<Expression>> {
+    if matches!(
+        target,
+        Expression::Call { .. }
+            | Expression::OptionalCall { .. }
+            | Expression::OptionalMember { .. }
+            | Expression::This
+            | Expression::NewTarget
+            | Expression::ImportMeta
+            | Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::FloatLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral
+            | Expression::TemplateLiteral { .. }
+            | Expression::RegExpLiteral { .. }
+            | Expression::ArrowFunction { .. }
+            | Expression::Function { .. }
+            | Expression::ClassExpression { .. }
+    ) {
+        return Some(Err(unsupported_expression_syntax_error(
+            "invalid update target: this expression cannot be incremented or decremented",
+            span,
+            context,
+        )));
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -6739,19 +6800,36 @@ fn try_parse_postfix(
                 context,
             )));
         }
+        let arguments =
+            match parse_comma_separated_exprs(args_src, span, context, recursion_depth + 1) {
+                Ok(a) => a,
+                Err(e) => return Some(Err(e)),
+            };
         let callee = if callee_src == "super" && !optional {
             Expression::Super
+        } else if callee_src == "import" {
+            // ImportCall (ES2020 12.3.10): exactly one specifier; Node v22
+            // also accepts an options argument. No spread, no optional call.
+            if optional
+                || arguments.is_empty()
+                || arguments.len() > 2
+                || arguments
+                    .iter()
+                    .any(|argument| matches!(argument, Expression::SpreadElement(_)))
+            {
+                return Some(Err(unsupported_expression_syntax_error(
+                    "import() takes one specifier and an optional options argument",
+                    span,
+                    context,
+                )));
+            }
+            Expression::Identifier("import".to_string())
         } else {
             match parse_expression(callee_src, span, context, recursion_depth + 1) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             }
         };
-        let arguments =
-            match parse_comma_separated_exprs(args_src, span, context, recursion_depth + 1) {
-                Ok(a) => a,
-                Err(e) => return Some(Err(e)),
-            };
         return Some(Ok(if optional {
             Expression::OptionalCall {
                 callee: Box::new(callee),

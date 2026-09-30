@@ -48170,9 +48170,28 @@ impl InterpreterCore {
                                 }
                                 _ => Value::Undefined,
                             },
-                            Value::Promise(_) => property_key
-                                .as_str()
-                                .map_or(Value::Undefined, Self::promise_property_value),
+                            // [[Get]] of a promise walks %Promise.prototype%
+                            // (members a program adds, `constructor`, then
+                            // Object.prototype), as for a primitive base.
+                            // @@toStringTag is "Promise" (ES2020 25.6.5.5).
+                            Value::Promise(promise) => {
+                                if matches!(
+                                    &property_key,
+                                    RuntimePropertyKey::Symbol(symbol)
+                                        if *symbol == WellKnownSymbol::ToStringTag.id()
+                                ) {
+                                    Value::str("Promise")
+                                } else {
+                                    let (value, owner) = self.primitive_prototype_get(
+                                        module,
+                                        "Promise",
+                                        &property_key,
+                                        Value::Promise(promise),
+                                    )?;
+                                    primitive_owner = owner;
+                                    value
+                                }
+                            }
                             Value::Symbol(symbol) => match property_key.as_str() {
                                 Some("description") => self
                                     .symbol_description(symbol)
@@ -54310,6 +54329,13 @@ impl InterpreterCore {
             if let Some(value) = Self::canonical_prototype_method(type_name, name) {
                 return Ok((value, None));
             }
+            if name == "constructor" && type_name == "Promise" {
+                return Ok((
+                    self.promise_intrinsic_constructor()
+                        .unwrap_or(Value::Undefined),
+                    None,
+                ));
+            }
             if name == "constructor" && STANDARD_CONSTRUCTOR_GLOBALS.contains(&type_name) {
                 return Ok((
                     Value::BuiltinFunction(BuiltinFunction::standard_constructor(type_name)),
@@ -54346,6 +54372,26 @@ impl InterpreterCore {
             )),
             _ => Value::Undefined,
         }
+    }
+
+    /// %Promise%, the constructor this realm installed as the global
+    /// `Promise`, for `promise.constructor` and
+    /// `Promise.prototype.constructor`; `None` once a program has replaced
+    /// the global.
+    fn promise_intrinsic_constructor(&self) -> Option<Value> {
+        let value = self
+            .realm_dynamic_globals
+            .get("Promise")?
+            .state
+            .borrow()
+            .value
+            .clone();
+        matches!(
+            &value,
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::PromiseConstructor
+        )
+        .then_some(value)
     }
 
     fn promise_property_value(key: &str) -> Value {
@@ -92027,6 +92073,9 @@ impl InterpreterCore {
             .iter()
             .find(|(_, prototype)| **prototype == object_id)
             .map(|(name, _)| name.as_str())?;
+        if key == "constructor" && name == "Promise" {
+            return self.promise_intrinsic_constructor();
+        }
         if key == "constructor" {
             return STANDARD_CONSTRUCTOR_GLOBALS
                 .iter()

@@ -267,6 +267,7 @@ pub fn is_language_operation_tag(tag: &str) -> bool {
                 | "builtin:ConstructSuperSpread"
                 | "builtin:ClassDefineField"
                 | "builtin:ClassInitStaticFields"
+                | "builtin:PrivateNameCreate"
         )
 }
 

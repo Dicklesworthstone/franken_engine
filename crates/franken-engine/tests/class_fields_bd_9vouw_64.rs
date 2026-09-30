@@ -7,9 +7,10 @@
 //! once the class body is defined. Expected strings are Node v22.2.0's output
 //! for the same programs.
 //!
-//! No-claim: private names (`#x`, `#m()`, `#x in o`) and static blocks are
-//! still refused at parse time; the franken-core twin lane does not parse
-//! fields.
+//! Private names (`#x`, `#m()`, `#x in o`) and static blocks are covered by
+//! `class_private_names_bd_9vouw_64.rs`.
+//!
+//! No-claim: the franken-core twin lane does not parse fields.
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
 

@@ -2108,6 +2108,29 @@ struct ParseExecutionContext<'a> {
     /// module top-level and inside async function/arrow/method bodies; false at
     /// script top-level and inside non-async functions.
     await_context: bool,
+    /// Private-name scopes of the class bodies being parsed, innermost last
+    /// (ES2022 15.7.1 AllPrivateIdentifiersValid).
+    private_name_scopes: Vec<PrivateNameScope>,
+}
+
+/// The private names one class body declares and the `#x` references met
+/// while parsing it. A reference the body does not declare must be declared
+/// by an enclosing class body.
+#[derive(Default)]
+struct PrivateNameScope {
+    declared: BTreeMap<String, PrivateNameDeclaration>,
+    referenced: BTreeSet<String>,
+}
+
+/// What a private name was declared as, for the duplicate-declaration early
+/// error: only a getter and a setter of the same placement may share a name.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrivateNameDeclaration {
+    Field { is_static: bool },
+    Method { is_static: bool },
+    Getter { is_static: bool },
+    Setter { is_static: bool },
+    Accessor,
 }
 
 impl<'a> ParseExecutionContext<'a> {
@@ -3333,6 +3356,7 @@ fn parse_source(
         strict_mode: goal == ParseGoal::Module,
         super_property_allowed: false,
         await_context: goal == ParseGoal::Module,
+        private_name_scopes: Vec::new(),
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -4996,6 +5020,15 @@ fn parse_primary_expression(
 ) -> ParseResult<Expression> {
     let expression = expression.trim();
 
+    // ES2022: a private name is an operand only in `o.#x` and `#x in o`.
+    if whole_private_name(expression).is_some() {
+        return Err(unsupported_expression_syntax_error(
+            "a private name is only valid in `o.#x` or `#x in o`",
+            span,
+            context,
+        ));
+    }
+
     let legacy_decimal_escapes = legacy_decimal_escape_mode(context);
     if let Some(value) = parse_quoted_expression_string(expression, legacy_decimal_escapes) {
         return Ok(Expression::StringLiteral(value));
@@ -6537,9 +6570,20 @@ fn try_parse_binary(
     }
     let lhs_src = expr[..best_pos].trim();
     let rhs_src = expr[best_pos + best_len..].trim();
-    let left = match parse_expression(lhs_src, span, context, recursion_depth + 1) {
-        Ok(e) => e,
-        Err(e) => return Some(Err(e)),
+    // ES2022 `#x in obj`: a private name is an operand only here.
+    let private_in_operand = matches!(op, BinaryOperator::In)
+        .then(|| whole_private_name(lhs_src))
+        .flatten();
+    let left = if let Some(name) = private_in_operand {
+        if let Err(error) = record_private_name_reference(&name, span, context) {
+            return Some(Err(error));
+        }
+        Expression::Identifier(name)
+    } else {
+        match parse_expression(lhs_src, span, context, recursion_depth + 1) {
+            Ok(e) => e,
+            Err(e) => return Some(Err(e)),
+        }
     };
     let right = match parse_expression(rhs_src, span, context, recursion_depth + 1) {
         Ok(e) => e,
@@ -6611,16 +6655,19 @@ fn star_follows_function_keyword(bytes: &[u8], star: usize) -> bool {
 fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, usize)> {
     let remaining = bytes.len() - i;
 
-    // Check for keyword operators first (instanceof, in).
+    // Check for keyword operators first (instanceof, in). A `#` before one
+    // makes it a private name (`this.#in`), not an operator.
     if remaining >= 10 && &bytes[i..i + 10] == b"instanceof" {
-        let before_ok = i == 0 || !is_identifier_continue(bytes[i - 1] as char);
+        let before_ok =
+            i == 0 || !(is_identifier_continue(bytes[i - 1] as char) || bytes[i - 1] == b'#');
         let after_ok = i + 10 >= bytes.len() || !is_identifier_continue(bytes[i + 10] as char);
         if before_ok && after_ok {
             return Some((BinaryOperator::Instanceof, 10));
         }
     }
     if remaining >= 2 && &bytes[i..i + 2] == b"in" {
-        let before_ok = i == 0 || !is_identifier_continue(bytes[i - 1] as char);
+        let before_ok =
+            i == 0 || !(is_identifier_continue(bytes[i - 1] as char) || bytes[i - 1] == b'#');
         let after_ok = i + 2 >= bytes.len() || !is_identifier_continue(bytes[i + 2] as char);
         if before_ok && after_ok {
             return Some((BinaryOperator::In, 2));
@@ -6770,6 +6817,14 @@ fn try_parse_unary_prefix(
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
+            // ES2022 13.5.1.1: `delete o.#x` is an early error.
+            if matches!(op, UnaryOperator::Delete) && is_private_member_expression(&arg) {
+                return Some(Err(unsupported_expression_syntax_error(
+                    "private fields can not be deleted",
+                    span,
+                    context,
+                )));
+            }
             return Some(Ok(Expression::Unary {
                 operator: op,
                 argument: Box::new(arg),
@@ -7217,12 +7272,49 @@ fn try_parse_postfix(
         } else {
             (object_src, false)
         };
-        if optional && !is_identifier(property_src) {
+        // ES2022 `o.#x` / `o?.#x`: a private member is a computed member whose
+        // key is the class's private name, held by the hidden binding `#x`.
+        let private_name = whole_private_name(property_src);
+        if optional && !is_identifier(property_src) && private_name.is_none() {
             return Some(Err(optional_chaining_syntax_error(
                 "optional chaining property access requires an identifier after `?.`",
                 span,
                 context,
             )));
+        }
+        if let Some(name) = private_name
+            && !object_src.is_empty()
+        {
+            if object_src == "super" {
+                return Some(Err(unsupported_expression_syntax_error(
+                    "super has no private members (`super.#x`)",
+                    span,
+                    context,
+                )));
+            }
+            let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
+                Ok(e) => parenthesized_chain_boundary(object_src, e),
+                Err(e) => return Some(Err(e)),
+            };
+            if let Err(error) = record_private_name_reference(&name, span, context) {
+                return Some(Err(error));
+            }
+            let property = Box::new(Expression::Identifier(name));
+            return Some(Ok(if optional {
+                Expression::OptionalMember {
+                    object: Box::new(object),
+                    property,
+                    computed: true,
+                    span: Some(*span),
+                }
+            } else {
+                Expression::Member {
+                    object: Box::new(object),
+                    property,
+                    computed: true,
+                    span: Some(*span),
+                }
+            }));
         }
         if object_src == "super" && !context.super_property_allowed {
             return Some(Err(unsupported_expression_syntax_error(
@@ -11522,17 +11614,19 @@ fn parse_class_parts(
     })?;
 
     let mut methods = parse_class_body(body_src, span, context)?;
-    // A derived class with instance fields but no constructor gets the
-    // implicit `constructor(...args) { super(...args); }` (ES2022 15.7.14
-    // step 10.a) as real code: the fields initialize when its super() returns,
-    // which the engine's forwarding default constructor never runs.
+    // A derived class with instance fields or private methods but no
+    // constructor gets the implicit `constructor(...args) { super(...args); }`
+    // (ES2022 15.7.14 step 10.a) as real code: the instance elements
+    // initialize when its super() returns, which the engine's forwarding
+    // default constructor never runs.
     if super_class.is_some()
         && !methods
             .iter()
             .any(|method| method.kind == MethodKind::Constructor)
-        && methods
-            .iter()
-            .any(|method| method.kind == MethodKind::Field && !method.is_static)
+        && methods.iter().any(|method| {
+            !method.is_static
+                && (method.kind == MethodKind::Field || method.private_name().is_some())
+        })
     {
         let mut implicit =
             parse_class_body("constructor(...args) { super(...args); }", span, context)?;
@@ -11576,8 +11670,197 @@ fn parse_class_expression(
     })
 }
 
-/// Parse the contents of a class body into a list of MethodDefinitions.
+/// Parse the contents of a class body into a list of MethodDefinitions. The
+/// body opens a private-name scope: every `#x` referenced in it must be
+/// declared by it or by an enclosing class body (ES2022 15.7.1
+/// AllPrivateIdentifiersValid).
 fn parse_class_body(
+    body: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Vec<MethodDefinition>> {
+    context
+        .private_name_scopes
+        .push(PrivateNameScope::default());
+    let parsed = parse_class_body_members(body, span, context);
+    let scope = context.private_name_scopes.pop().unwrap_or_default();
+    let methods = parsed?;
+    for name in scope.referenced {
+        if scope.declared.contains_key(&name) {
+            continue;
+        }
+        match context.private_name_scopes.last_mut() {
+            Some(outer) => {
+                outer.referenced.insert(name);
+            }
+            None => return Err(undeclared_private_name_error(&name, span, context)),
+        }
+    }
+    Ok(methods)
+}
+
+/// Length of the private name `#IdentifierName` that `text` starts with, or
+/// 0 when it does not start with one.
+fn private_name_prefix_len(text: &str) -> usize {
+    let Some(after_hash) = text.strip_prefix('#') else {
+        return 0;
+    };
+    if !after_hash.chars().next().is_some_and(is_identifier_start) && !after_hash.starts_with("\\u")
+    {
+        return 0;
+    }
+    let name_len = after_hash.len() - skip_identifier_name(after_hash).len();
+    if name_len == 0 { 0 } else { name_len + 1 }
+}
+
+/// `text` as a private name (`#x`, escapes canonicalized) when it is exactly
+/// one, else `None`.
+fn whole_private_name(text: &str) -> Option<String> {
+    let text = text.trim();
+    let len = private_name_prefix_len(text);
+    (len > 0 && len == text.len()).then(|| format!("#{}", canonicalize_identifier(&text[1..])))
+}
+
+/// Whether `expression` is `o.#x` or `o?.#x`.
+fn is_private_member_expression(expression: &Expression) -> bool {
+    match expression {
+        Expression::Member {
+            property,
+            computed: true,
+            ..
+        }
+        | Expression::OptionalMember {
+            property,
+            computed: true,
+            ..
+        } => matches!(property.as_ref(), Expression::Identifier(name) if name.starts_with('#')),
+        _ => false,
+    }
+}
+
+/// Record a `#x` reference in the innermost class body's private-name scope.
+/// Outside every class body it is an early SyntaxError.
+fn record_private_name_reference(
+    name: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    match context.private_name_scopes.last_mut() {
+        Some(scope) => {
+            scope.referenced.insert(name.to_string());
+            Ok(())
+        }
+        None => Err(undeclared_private_name_error(name, span, context)),
+    }
+}
+
+fn undeclared_private_name_error(
+    name: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseError {
+    ParseError::new(
+        ParseErrorCode::UnsupportedSyntax,
+        format!("Private field '{name}' must be declared in an enclosing class"),
+        context.source_label.to_string(),
+        Some(span.clone()),
+    )
+}
+
+/// Declare a private name in the innermost class body. ES2022 15.7.1 early
+/// errors: no element is named `#constructor`, and a name is declared once,
+/// except that one getter and one setter of the same placement pair up.
+fn declare_private_name(
+    name: &str,
+    declaration: PrivateNameDeclaration,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let conflict = if name == "#constructor" {
+        Some("classes may not have a private element named '#constructor'".to_string())
+    } else if let Some(scope) = context.private_name_scopes.last_mut() {
+        use PrivateNameDeclaration::{Accessor, Getter, Setter};
+        let merged = match (scope.declared.get(name).copied(), declaration) {
+            (None, declaration) => Some(declaration),
+            (Some(Getter { is_static: a }), Setter { is_static: b })
+            | (Some(Setter { is_static: a }), Getter { is_static: b })
+                if a == b =>
+            {
+                Some(Accessor)
+            }
+            _ => None,
+        };
+        match merged {
+            Some(merged) => {
+                scope.declared.insert(name.to_string(), merged);
+                None
+            }
+            None => Some(format!("private name '{name}' is declared more than once")),
+        }
+    } else {
+        Some(format!(
+            "private name '{name}' declared outside a class body"
+        ))
+    };
+    match conflict {
+        None => Ok(()),
+        Some(message) => Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            message,
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )),
+    }
+}
+
+/// Parse `static { ... }` (ES2022 15.7.10 ClassStaticBlock) into a
+/// [`MethodKind::StaticBlock`] member. The block is strict code that runs
+/// with the class as `this` and a [[HomeObject]], so `super.x` is allowed.
+fn parse_class_static_block(
+    block: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<MethodDefinition> {
+    let malformed = |context: &ParseExecutionContext<'_>| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("malformed class static block: `static {block}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
+    let Some((body_src, after)) = extract_balanced(block, '{', '}') else {
+        return Err(malformed(context));
+    };
+    if !after.trim().is_empty() {
+        return Err(malformed(context));
+    }
+    let saved_super_property_allowed = context.super_property_allowed;
+    context.super_property_allowed = true;
+    let parsed = with_await_context(false, context, |context| {
+        with_function_strict_mode(body_src, true, context, |context| {
+            parse_body_statements(body_src, ParseGoal::Script, span, context)
+        })
+    });
+    context.super_property_allowed = saved_super_property_allowed;
+    Ok(MethodDefinition {
+        key: Expression::Identifier("static".to_string()),
+        kind: MethodKind::StaticBlock,
+        params: Vec::new(),
+        body: BlockStatement {
+            body: parsed?,
+            span: span.clone(),
+        },
+        is_static: true,
+        computed: false,
+        span: span.clone(),
+        is_async: false,
+        is_generator: false,
+    })
+}
+
+/// The class elements of a class body (see [`parse_class_body`]).
+fn parse_class_body_members(
     body: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
@@ -11600,6 +11883,15 @@ fn parse_class_body(
         if segment.is_empty() || segment == ";" {
             continue;
         }
+        // ES2022 `static { ... }`.
+        if let Some(block) = segment
+            .strip_prefix("static")
+            .map(str::trim_start)
+            .filter(|after| after.starts_with('{'))
+        {
+            methods.push(parse_class_static_block(block, span, context)?);
+            continue;
+        }
         let static_prefix = segment
             .strip_prefix("static ")
             .map(str::trim_start)
@@ -11612,9 +11904,17 @@ fn parse_class_body(
         let field_key_end = if rest.starts_with('[') {
             extract_balanced(rest, '[', ']').map_or(0, |(_, after)| rest.len() - after.len())
         } else {
-            0
+            private_name_prefix_len(rest)
         };
-        if !rest.starts_with('#') && class_member_is_field(&rest[field_key_end..]) {
+        if rest.starts_with('#') && field_key_end == 0 {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("invalid private name in class element `{segment}`"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+        if class_member_is_field(&rest[field_key_end..]) {
             // `x = {a: 1}.a` was cut after the object literal's `}`: glue
             // continuation segments back on. A segment that ended at `;` is
             // complete, so `[x]; [y] = 42;` stays two fields.
@@ -11672,23 +11972,21 @@ fn parse_class_body(
 
         // Extract method name (up to `(`). A computed key `[expr]` may itself
         // contain parentheses, so the search starts after its closing `]`.
+        let private_key_len = private_name_prefix_len(rest);
         let key_end = if rest.starts_with('[') {
             extract_balanced(rest, '[', ']').map_or(0, |(_, after)| rest.len() - after.len())
         } else {
-            0
+            private_key_len
         };
-        // Private names (`#x`, `#m() {}`) have no representation in this AST
-        // yet. They used to be dropped silently (`this.#x` became the string
-        // "this.#x"): refuse them instead of producing a wrong answer. A
-        // field reached only after a get/set/async/`*` prefix (`get = 1` is
-        // a field named "get" and was handled above) is malformed.
-        if rest.starts_with('#') || class_member_is_field(&rest[key_end..]) {
+        // A field reached only after a get/set/async/`*` prefix (`get = 1`
+        // is a field named "get" and was handled above) is malformed, and so
+        // is a `#` that starts no private name.
+        if (rest.starts_with('#') && private_key_len == 0)
+            || class_member_is_field(&rest[key_end..])
+        {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
-                format!(
-                    "class private names are not supported yet: `{}`",
-                    segment.trim()
-                ),
+                format!("malformed class element: `{}`", segment.trim()),
                 context.source_label.to_string(),
                 Some(span.clone()),
             ));
@@ -11710,7 +12008,25 @@ fn parse_class_body(
         } else {
             kind
         };
-        let (key, computed) = if let Some(inner) = method_name
+        let (key, computed) = if private_key_len > 0 {
+            // `#m() {}`, `get #x() {}`: keyed by the private name (see
+            // MethodKind::Field).
+            let Some(name) = whole_private_name(method_name) else {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("malformed private method: `{}`", segment.trim()),
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            };
+            let declaration = match kind {
+                MethodKind::Get => PrivateNameDeclaration::Getter { is_static },
+                MethodKind::Set => PrivateNameDeclaration::Setter { is_static },
+                _ => PrivateNameDeclaration::Method { is_static },
+            };
+            declare_private_name(&name, declaration, span, context)?;
+            (Expression::Identifier(name), true)
+        } else if let Some(inner) = method_name
             .strip_prefix('[')
             .and_then(|name| name.strip_suffix(']'))
         {
@@ -12086,8 +12402,13 @@ fn parse_class_field(
             Some(span.clone()),
         )
     };
+    // A private field `#x` is a computed member keyed by the private name
+    // (see MethodKind::Field).
+    let private_len = private_name_prefix_len(text);
     let computed = key_end > 0;
-    let (key_src, after_key) = if computed {
+    let (key_src, after_key) = if private_len > 0 {
+        (&text[..private_len], &text[private_len..])
+    } else if computed {
         (&text[1..key_end - 1], &text[key_end..])
     } else {
         let key_len = match text.chars().next() {
@@ -12116,7 +12437,9 @@ fn parse_class_field(
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = true;
     let parsed = with_function_strict_mode("", true, context, |context| {
-        let key = if computed {
+        let key = if private_len > 0 {
+            Expression::Identifier(format!("#{}", canonicalize_identifier(&key_src[1..])))
+        } else if computed {
             parse_expression(key_src.trim(), span, context, 1)?
         } else {
             parse_contextual_static_property_key(
@@ -12136,6 +12459,16 @@ fn parse_class_field(
     });
     context.super_property_allowed = saved_super_property_allowed;
     let (key, value) = parsed?;
+    if private_len > 0
+        && let Expression::Identifier(name) = &key
+    {
+        declare_private_name(
+            name,
+            PrivateNameDeclaration::Field { is_static },
+            span,
+            context,
+        )?;
+    }
 
     // ES2022 15.7.1: an initializer may not refer to `arguments` (looking
     // through arrow functions, not ordinary ones) or call `super(...)`.
@@ -17096,6 +17429,7 @@ mod tests {
             strict_mode: false,
             super_property_allowed: false,
             await_context: false,
+            private_name_scopes: Vec::new(),
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)
     }

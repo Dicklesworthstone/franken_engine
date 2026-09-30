@@ -974,28 +974,119 @@ fn new_with_a_parenthesised_callee_and_no_argument_list() {
 }
 
 // ---------------------------------------------------------------------------
-// Class fields (bd-9vouw.64): public fields parse, private names are refused
-// (never dropped)
+// Class fields and private names (bd-9vouw.64)
 // ---------------------------------------------------------------------------
 
+/// Private elements parse as members keyed by `Identifier("#name")` with
+/// `computed: true`; `o.#x` is a computed member with that key. The early
+/// errors of ES2022 15.7.1 (undeclared names, duplicates, `#constructor`),
+/// 13.5.1.1 (`delete o.#x`) and a bare `#x` are parse errors.
 #[test]
-fn private_names_are_refused_not_dropped() {
-    for source in [
-        "class A { #x = 1; get x() { return this.#x; } }",
-        "class A { #m() {} }",
-        "class A { static #s() {} }",
-        "class A { y = 1; #z; }",
+fn private_names_parse_as_private_members() {
+    use frankenengine_engine::ast::MethodKind;
+    let cases: [(&str, &[(&str, bool, MethodKind)]); 5] = [
+        (
+            "class A { #x = 1; get x() { return this.#x; } }",
+            &[
+                ("#x", false, MethodKind::Field),
+                ("x", false, MethodKind::Get),
+            ],
+        ),
+        ("class A { #m() {} }", &[("#m", false, MethodKind::Method)]),
+        (
+            "class A { static #s() {} }",
+            &[("#s", true, MethodKind::Method)],
+        ),
+        (
+            "class A { y = 1; #z; }",
+            &[
+                ("y", false, MethodKind::Field),
+                ("#z", false, MethodKind::Field),
+            ],
+        ),
+        (
+            "class A { get #v() { return 1; } set #v(x) {} static { A.k = 1; } }",
+            &[
+                ("#v", false, MethodKind::Get),
+                ("#v", false, MethodKind::Set),
+                ("static", true, MethodKind::StaticBlock),
+            ],
+        ),
+    ];
+    for (source, expected) in cases {
+        let tree = parser()
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        let Statement::ClassDeclaration(class) = &tree.body[0] else {
+            panic!("expected a class declaration: {source}");
+        };
+        let members: Vec<(String, bool, MethodKind, bool)> = class
+            .body
+            .iter()
+            .map(|member| {
+                let Expression::Identifier(name) = &member.key else {
+                    panic!("{source}: unexpected key {:?}", member.key);
+                };
+                (name.clone(), member.is_static, member.kind, member.computed)
+            })
+            .collect();
+        let expected: Vec<(String, bool, MethodKind, bool)> = expected
+            .iter()
+            .map(|(name, is_static, kind)| {
+                (name.to_string(), *is_static, *kind, name.starts_with('#'))
+            })
+            .collect();
+        assert_eq!(members, expected, "{source}");
+    }
+
+    let tree = parser()
+        .parse(
+            "class A { #x; m(o) { return o?.#x + this.#x + (#x in o); } }",
+            ParseGoal::Script,
+        )
+        .expect("private member accesses parse");
+    let rendered = format!("{:?}", tree.body[0]);
+    assert!(!rendered.contains("Raw("), "{rendered}");
+    assert!(
+        rendered.contains("OptionalMember") && rendered.contains("Identifier(\"#x\")"),
+        "{rendered}"
+    );
+
+    for (source, message) in [
+        ("class A { m() { return this.#y; } }", "must be declared"),
+        ("this.#x;", "must be declared"),
+        ("class A { #x; #x; }", "declared more than once"),
+        ("class A { #x; #x() {} }", "declared more than once"),
+        (
+            "class A { get #x() {} static set #x(v) {} }",
+            "declared more than once",
+        ),
+        ("class A { #constructor() {} }", "#constructor"),
+        (
+            "class A { #x; m() { delete this.#x; } }",
+            "can not be deleted",
+        ),
+        (
+            "class A extends B { #x; m() { return super.#x; } }",
+            "super",
+        ),
+        ("class A { #x; m() { return #x; } }", "only valid"),
     ] {
         let error = parser().parse(source, ParseGoal::Script).expect_err(source);
-        assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
         assert!(
-            error
-                .message
-                .contains("class private names are not supported yet"),
+            error.message.contains(message),
             "{source}: {}",
             error.message
         );
     }
+
+    // An inner class reads the private names of the class around it.
+    parser()
+        .parse(
+            "class A { #x = 1; m() { return class { n(o) { return o.#x; } }; } }",
+            ParseGoal::Script,
+        )
+        .expect("an enclosing class's private name is in scope");
 
     // Methods, accessors, default parameters, string and computed keys and
     // stray `;` separators still parse, with every member kept.

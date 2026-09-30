@@ -2203,6 +2203,11 @@ pub enum Value {
 enum RuntimeSymbolKind {
     Private,
     Global,
+    /// An ES2022 Private Name (`#x`) of one class evaluation. It keys
+    /// [`HeapObject::private_elements`], never a property, and only the
+    /// class's hidden `#x` binding holds it: guest code never sees it as a
+    /// value.
+    ClassPrivateName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2234,6 +2239,7 @@ impl Serialize for RuntimeSymbolRecordRef<'_> {
             match record.kind {
                 RuntimeSymbolKind::Private => "private",
                 RuntimeSymbolKind::Global => "global",
+                RuntimeSymbolKind::ClassPrivateName => "class-private-name",
             },
         )?;
         wire.serialize_field("description", &record.description)?;
@@ -2361,13 +2367,17 @@ impl<'de> Deserialize<'de> for RuntimeSymbolState {
                 .ok_or_else(|| D::Error::custom("Symbol description field is required"))?
                 .0;
             let (kind, registry_key) = match record.kind.as_str() {
-                "private" => {
+                kind @ ("private" | "class-private-name") => {
                     if record.registry_key.is_some() {
                         return Err(D::Error::custom(
                             "private Symbol record forbids registry_key",
                         ));
                     }
-                    (RuntimeSymbolKind::Private, None)
+                    if kind == "private" {
+                        (RuntimeSymbolKind::Private, None)
+                    } else {
+                        (RuntimeSymbolKind::ClassPrivateName, None)
+                    }
                 }
                 "global" => {
                     let registry_key = record
@@ -2436,7 +2446,7 @@ impl RuntimeSymbolState {
                 ));
             }
             match record.kind {
-                RuntimeSymbolKind::Private => {
+                RuntimeSymbolKind::Private | RuntimeSymbolKind::ClassPrivateName => {
                     if record.registry_key.is_some() {
                         return Err("private Symbol has a registry key".to_string());
                     }
@@ -2467,6 +2477,19 @@ impl RuntimeSymbolState {
         description: Option<JsString>,
     ) -> Result<SymbolId, InterpreterError> {
         self.allocate(RuntimeSymbolKind::Private, description, None)
+    }
+
+    fn allocate_class_private_name(
+        &mut self,
+        description: JsString,
+    ) -> Result<SymbolId, InterpreterError> {
+        self.allocate(RuntimeSymbolKind::ClassPrivateName, Some(description), None)
+    }
+
+    fn is_class_private_name(&self, id: SymbolId) -> bool {
+        self.symbols
+            .get(&id)
+            .is_some_and(|record| matches!(record.kind, RuntimeSymbolKind::ClassPrivateName))
     }
 
     fn intern_global(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
@@ -6966,6 +6989,44 @@ pub struct HeapObject {
     /// rather than the unset default link to %Object.prototype% /
     /// %Array.prototype% (bd-9vouw.34).
     is_null_prototype: bool,
+    /// ES2022 [[PrivateElements]]: private fields, methods and accessors,
+    /// keyed by class private name. They are not properties: no reflection,
+    /// enumeration, Proxy trap, prototype walk or integrity level
+    /// (`Object.freeze`) reaches them.
+    private_elements: BTreeMap<SymbolId, PrivateElement>,
+}
+
+/// One ES2022 PrivateElement (6.2.10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum PrivateElement {
+    /// A private field and the IFC label of its value.
+    Field { value: Value, label: Label },
+    /// A private method: read-only.
+    Method { function: Value },
+    /// A private accessor; a missing half throws when used.
+    Accessor {
+        get: Option<Value>,
+        set: Option<Value>,
+    },
+}
+
+impl PrivateElement {
+    fn values(&self) -> impl Iterator<Item = &Value> {
+        let (first, second) = match self {
+            Self::Field { value, .. } => (Some(value), None),
+            Self::Method { function } => (Some(function), None),
+            Self::Accessor { get, set } => (get.as_ref(), set.as_ref()),
+        };
+        first.into_iter().chain(second)
+    }
+}
+
+/// Serialized form of one [[PrivateElements]] entry.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateElementWire {
+    symbol_id: u32,
+    element: PrivateElement,
 }
 
 /// The boolean attributes of an own property (ES2020 6.1.7.1). `writable` is
@@ -7133,6 +7194,7 @@ impl Serialize for HeapObject {
                 + usize::from(!self.property_attributes.is_empty())
                 + usize::from(self.class_fields.is_some())
                 + usize::from(self.primitive_value.is_some())
+                + usize::from(!self.private_elements.is_empty())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -7171,6 +7233,17 @@ impl Serialize for HeapObject {
         }
         if let Some(value) = &self.primitive_value {
             object.serialize_field("primitive_value", value)?;
+        }
+        if !self.private_elements.is_empty() {
+            let elements = self
+                .private_elements
+                .iter()
+                .map(|(symbol, element)| PrivateElementWire {
+                    symbol_id: symbol.0,
+                    element: element.clone(),
+                })
+                .collect::<Vec<_>>();
+            object.serialize_field("private_elements", &elements)?;
         }
         if !self.property_labels.is_empty() {
             object.serialize_field("property_labels", &self.property_labels)?;
@@ -7236,6 +7309,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             #[serde(default)]
             primitive_value: Option<Value>,
             #[serde(default)]
+            private_elements: Vec<PrivateElementWire>,
+            #[serde(default)]
             property_labels: OrderedStringMap<Label>,
             #[serde(default)]
             property_attributes: Vec<PropertyAttributesWire>,
@@ -7300,6 +7375,26 @@ impl<'de> Deserialize<'de> for HeapObject {
                 ));
             }
         }
+        let mut private_elements = BTreeMap::new();
+        for record in wire.private_elements {
+            let well_formed = record.symbol_id != 0
+                && !matches!(
+                    record.element,
+                    PrivateElement::Accessor {
+                        get: None,
+                        set: None
+                    }
+                );
+            if !well_formed
+                || private_elements
+                    .insert(SymbolId(record.symbol_id), record.element)
+                    .is_some()
+            {
+                return Err(D::Error::custom(
+                    "private elements need unique nonzero names and an accessor half",
+                ));
+            }
+        }
         let mut object = Self {
             properties: wire.properties,
             property_labels: wire.property_labels,
@@ -7321,6 +7416,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_default_derived_constructor: wire.is_default_derived_constructor,
             class_fields: wire.class_fields,
             primitive_value: wire.primitive_value,
+            private_elements,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -7387,6 +7483,7 @@ impl<'de> Deserialize<'de> for HeapObject {
 
 pub(crate) fn heap_object_contains_symbols(object: &HeapObject) -> bool {
     !object.properties.baseline_symbol_key_order().is_empty()
+        || !object.private_elements.is_empty()
         || object
             .derived_constructor_parent
             .as_ref()
@@ -7495,6 +7592,17 @@ fn validate_heap_symbol_references(
                     validate_symbol_value(state, setter)?;
                 }
             }
+        }
+    }
+    for (name, element) in &object.private_elements {
+        if !state.is_class_private_name(*name) {
+            return Err(format!(
+                "private element keyed by non-private-name Symbol {}",
+                name.0
+            ));
+        }
+        for value in element.values() {
+            validate_symbol_value(state, value)?;
         }
     }
     Ok(())
@@ -47777,6 +47885,27 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
+                    // ES2022 `o.#x` (PrivateGet): never a property lookup, so
+                    // no prototype walk, Proxy trap or property hook.
+                    if let Some(name) = self.class_private_name_key(&key_val) {
+                        let (value, value_label) = self.private_get(module, &obj_val, name)?;
+                        let mut label = self.binary_operation_label(obj, key)?;
+                        label = self.join_owned_label_with_temporary_budget(label, &value_label)?;
+                        if let Value::Closure(closure_id) = &value
+                            && let Some(method) = self.closure_method_metadata.get(closure_id)
+                        {
+                            label = self.join_owned_label_with_temporary_budget(
+                                label,
+                                &method.definition_label,
+                            )?;
+                        }
+                        let prior_dst_label = self.get_register_label(dst)?;
+                        label =
+                            self.join_owned_label_with_temporary_budget(label, prior_dst_label)?;
+                        self.write_reg_with_label(dst, value, label)?;
+                        self.ip += 1;
+                        continue;
+                    }
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let object_id = match &obj_val {
                         Value::Object(object_id) => Some(*object_id),
@@ -48249,6 +48378,23 @@ impl InterpreterCore {
                 Ir3Instruction::SetProperty { obj, key, val } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
+                    // ES2022 `o.#x = v` (PrivateSet). The value keeps its own
+                    // label; the write joins into the object's mutation
+                    // label as an ordinary store does.
+                    if let Some(name) = self.class_private_name_key(&key_val) {
+                        let set_val = self.read_reg(val)?;
+                        let value_label = self.get_register_label(val)?.clone();
+                        if let Value::Object(oid) = &obj_val {
+                            let mutation_label = self
+                                .get_register_label(obj)?
+                                .join(self.get_register_label(key)?)
+                                .join(self.get_register_label(val)?);
+                            self.join_object_mutation_label(*oid, &mutation_label)?;
+                        }
+                        self.private_set(module, &obj_val, name, set_val, value_label)?;
+                        self.ip += 1;
+                        continue;
+                    }
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let has_hook_target = matches!(&obj_val, Value::Object(_))
                         || matches!(
@@ -48575,6 +48721,14 @@ impl InterpreterCore {
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
+                    // `delete o.#x` is an early error; a private name that
+                    // reaches here anyway deletes nothing.
+                    if self.class_private_name_key(&key_val).is_some() {
+                        return Err(InterpreterError::TypeError {
+                            expected: "a deletable property key".to_string(),
+                            got: "a class private name".to_string(),
+                        });
+                    }
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let has_hook_target = matches!(&obj_val, Value::Object(_))
                         || matches!(
@@ -48947,7 +49101,14 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::InOp { dst, lhs, rhs } => {
                     let result_label = self.binary_operation_label(lhs, rhs)?;
-                    let result = self.eval_in_operator(module, lhs, rhs)?;
+                    // ES2022 `#x in o`: a brand check, not a property lookup.
+                    let result = match self.class_private_name_key(&self.read_reg(lhs)?) {
+                        Some(name) => {
+                            let target = self.read_reg(rhs)?;
+                            Value::Bool(self.private_in(module, &target, name)?)
+                        }
+                        None => self.eval_in_operator(module, lhs, rhs)?,
+                    };
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
@@ -67330,6 +67491,18 @@ impl InterpreterCore {
         )
     }
 
+    /// A class private name reaches a function only through its captured
+    /// `#x` binding, which the callback mini-interpreters never load, so a
+    /// private member access there is an engine fault, not guest behavior.
+    fn reject_private_name_in_simple_callback(&self, key: &Value) -> Result<(), InterpreterError> {
+        match self.class_private_name_key(key) {
+            Some(_) => Err(InterpreterError::InternalError {
+                details: "private member access in a callback mini-interpreter".to_string(),
+            }),
+            None => Ok(()),
+        }
+    }
+
     /// Property subset used by the two isolated callback mini-interpreters.
     /// Preserve their historical own-property-only behavior while keeping
     /// dynamic string identity exact and honoring the legacy-hook boundary.
@@ -67338,6 +67511,7 @@ impl InterpreterCore {
         object_value: Value,
         key_value: &Value,
     ) -> Result<Value, InterpreterError> {
+        self.reject_private_name_in_simple_callback(key_value)?;
         let key = self.executable_property_key_from_value(key_value);
         self.preflight_legacy_property_key_for_hook(&key)?;
         match object_value {
@@ -67395,6 +67569,7 @@ impl InterpreterCore {
         key_value: &Value,
         property_value: Value,
     ) -> Result<(), InterpreterError> {
+        self.reject_private_name_in_simple_callback(key_value)?;
         let key = self.executable_property_key_from_value(key_value);
         self.preflight_legacy_property_key_for_hook(&key)?;
         let object_id = match &object_value {
@@ -69665,6 +69840,14 @@ impl InterpreterCore {
     fn inferred_method_name(&self, key: &RuntimePropertyKey) -> JsString {
         match key {
             RuntimePropertyKey::String(name) => name.clone(),
+            // ES2022 SetFunctionName: a Private Name names a function by its
+            // description, `#m`.
+            RuntimePropertyKey::Symbol(symbol)
+                if self.symbol_state.is_class_private_name(*symbol) =>
+            {
+                self.symbol_description(*symbol)
+                    .unwrap_or_else(|| JsString::from(""))
+            }
             RuntimePropertyKey::Symbol(symbol) => self.symbol_description(*symbol).map_or_else(
                 || JsString::from(""),
                 |description| {
@@ -76776,12 +76959,35 @@ impl InterpreterCore {
                 }
                 Ok(Value::Undefined)
             }
+            "builtin:PrivateNameCreate" => {
+                // ES2022 15.7.14 step 7: a new Private Name per class
+                // evaluation, described by its source spelling `#x`.
+                let description = match self.arg_or_undefined(args, 0)? {
+                    Value::Str(description)
+                        if description
+                            .as_str()
+                            .is_some_and(|name| name.starts_with('#')) =>
+                    {
+                        description
+                    }
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "private name description `#name`".to_string(),
+                            got: other.type_name().to_string(),
+                        });
+                    }
+                };
+                let symbol = self
+                    .mutate_symbol_state(|state| state.allocate_class_private_name(description))?;
+                Ok(Value::Symbol(symbol))
+            }
             "builtin:ClassDefineField" | "builtin:ClassInitStaticFields" => {
-                // ES2022 class fields. ClassDefineField(target, key,
-                // initializer) records a field on the class prototype
+                // ES2022 class elements. ClassDefineField(target, key,
+                // function, kind) records a field, private method or
+                // accessor half, or static block on the class prototype
                 // (instance) or on the constructor (static);
-                // ClassInitStaticFields(class) then defines the static ones
-                // on the class, in order, once its methods exist.
+                // ClassInitStaticFields(class) then installs the static ones
+                // on the class once its methods exist.
                 let module = module.ok_or_else(|| InterpreterError::InternalError {
                     details: format!("{cap} needs the executing module"),
                 })?;
@@ -76799,11 +77005,20 @@ impl InterpreterCore {
                 if cap == "builtin:ClassDefineField" {
                     let key = self.arg_or_undefined(args, 1)?;
                     let initializer = self.arg_or_undefined(args, 2)?;
+                    let kind = match self.arg_or_undefined(args, 3)? {
+                        Value::Int(kind @ 0..=4) => kind,
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "class element kind 0..=4".to_string(),
+                                got: format!("{other:?}"),
+                            });
+                        }
+                    };
                     let label = self
                         .get_register_label(args.start)?
                         .join(self.get_register_label(args.start + 1)?)
                         .join(self.get_register_label(args.start + 2)?);
-                    self.record_class_field(target_id, key, initializer, label)?;
+                    self.record_class_field(target_id, kind, key, initializer, label)?;
                 } else if let Some(fields) = self
                     .heap
                     .get(target_id.0 as usize)
@@ -86006,6 +86221,15 @@ impl InterpreterCore {
                     .map(Self::estimate_execution_seed_value_bytes)
                     .unwrap_or(0),
             )
+            .saturating_add(Self::saturating_sum(object.private_elements.values().map(
+                |element| {
+                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::saturating_sum(
+                        element
+                            .values()
+                            .map(Self::estimate_execution_seed_value_bytes),
+                    ))
+                },
+            )))
             .saturating_add(
                 object
                     .derived_constructor_parent_label
@@ -87312,6 +87536,12 @@ impl InterpreterCore {
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
+            .saturating_add(Self::saturating_sum(
+                object
+                    .private_elements
+                    .values()
+                    .map(Self::estimate_private_element_bytes),
+            ))
             .saturating_add(
                 object
                     .derived_constructor_parent_label
@@ -87319,6 +87549,19 @@ impl InterpreterCore {
                     .map(Self::estimate_label_bytes)
                     .unwrap_or(0),
             )
+    }
+
+    /// Footprint of one [[PrivateElements]] entry.
+    fn estimate_private_element_bytes(element: &PrivateElement) -> u64 {
+        let label = match element {
+            PrivateElement::Field { label, .. } => Self::estimate_label_bytes(label),
+            PrivateElement::Method { .. } | PrivateElement::Accessor { .. } => 0,
+        };
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(label)
+            .saturating_add(Self::saturating_sum(
+                element.values().map(Self::estimate_value_bytes),
+            ))
     }
 
     fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
@@ -90614,33 +90857,52 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// `builtin:ClassDefineField(target, key, initializer)`: append the field
-    /// to `target`'s list and give the initializer `target` as its
-    /// [[HomeObject]], so `super.x` in an initializer resolves like it does in
-    /// a method of the same class.
+    /// `builtin:ClassDefineField(target, key, function, kind)`: append the
+    /// element `[kind, key, function]` to `target`'s list and give the
+    /// function `target` as its [[HomeObject]], so `super.x` in a field
+    /// initializer, private method or static block resolves like it does in a
+    /// method of the same class. A private accessor half is named `get #x` /
+    /// `set #x` (ES2022 15.4.5).
     fn record_class_field(
         &mut self,
         target: ObjectId,
+        kind: i64,
         key: Value,
-        initializer: Value,
+        function: Value,
         definition_label: Label,
     ) -> Result<(), InterpreterError> {
-        let Value::Closure(closure_id) = initializer else {
-            return Err(InterpreterError::TypeError {
-                expected: "fresh closure for a class field initializer".to_string(),
-                got: initializer.type_name().to_string(),
-            });
+        let closure_id = match &function {
+            Value::Closure(closure_id)
+            | Value::GeneratorFunction(closure_id)
+            | Value::AsyncFunction(closure_id)
+            | Value::AsyncGeneratorFunction(closure_id) => *closure_id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "fresh closure for a class element".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
         };
         if self.closure_method_metadata.contains_key(&closure_id) {
             return Err(InterpreterError::TypeError {
-                expected: "unregistered class field initializer".to_string(),
+                expected: "unregistered class element function".to_string(),
                 got: format!("closure#{closure_id} already has a [[HomeObject]]"),
             });
         }
         let property_key = self.executable_property_key_from_value(&key);
+        let name = self.inferred_method_name(&property_key);
+        let name = match kind {
+            crate::lowering_pipeline::CLASS_ELEMENT_PRIVATE_GETTER => {
+                JsString::from("get ").concat(&name)
+            }
+            crate::lowering_pipeline::CLASS_ELEMENT_PRIVATE_SETTER => {
+                JsString::from("set ").concat(&name)
+            }
+            _ => name,
+        };
         let metadata = ClosureMethodMetadata {
             home_object: target,
-            name: self.inferred_method_name(&property_key),
+            name,
             definition_label,
         };
         let metadata_bytes = Self::estimate_closure_method_metadata_entry_bytes(&metadata);
@@ -90655,17 +90917,21 @@ impl InterpreterCore {
             Some(Value::Object(list)) => self.array_like_values(list)?,
             _ => Vec::new(),
         };
+        entries.push(Value::Int(kind));
         entries.push(key);
-        entries.push(Value::Closure(closure_id));
+        entries.push(function);
         let list = self.alloc_array_from_values(&entries)?;
         self.set_class_fields_slot(target, Some(Value::Object(list)))
     }
 
-    /// ES2022 InitializeInstanceElements / static field definition: run each
-    /// initializer of `fields` with `receiver` as `this`, in declaration
-    /// order, and define its result as an own enumerable, writable,
+    /// ES2022 InitializeInstanceElements (7.3.34) / the static elements of
+    /// ClassDefinitionEvaluation (15.7.14 steps 34-35): first give `target`
+    /// every private method and accessor of `fields`, then run each field
+    /// initializer and static block in declaration order with `receiver` as
+    /// `this`. A public field's value becomes an own enumerable, writable,
     /// configurable data property of `target` (CreateDataPropertyOrThrow: a
-    /// non-extensible target throws). The value's IFC label is stored with it.
+    /// non-extensible target throws), a private field's a private element;
+    /// the value's IFC label is stored with it.
     fn run_class_field_initializers(
         &mut self,
         module: &Ir3Module,
@@ -90673,25 +90939,313 @@ impl InterpreterCore {
         target: ObjectId,
         fields: &Value,
     ) -> Result<(), InterpreterError> {
+        use crate::lowering_pipeline::{
+            CLASS_ELEMENT_FIELD, CLASS_ELEMENT_PRIVATE_GETTER, CLASS_ELEMENT_PRIVATE_METHOD,
+            CLASS_ELEMENT_PRIVATE_SETTER, CLASS_ELEMENT_STATIC_BLOCK,
+        };
         let Value::Object(list) = fields else {
             return Ok(());
         };
         let entries = self.array_like_values(*list)?;
-        for pair in entries.as_chunks::<2>().0 {
+        let elements = entries.as_chunks::<3>().0;
+
+        let mut methods: Vec<(SymbolId, PrivateElement)> = Vec::new();
+        for [kind, key, function] in elements {
+            let (Value::Int(kind), Value::Symbol(name)) = (kind, key) else {
+                continue;
+            };
+            let function = function.clone();
+            let element = match *kind {
+                CLASS_ELEMENT_PRIVATE_METHOD => PrivateElement::Method { function },
+                CLASS_ELEMENT_PRIVATE_GETTER => PrivateElement::Accessor {
+                    get: Some(function),
+                    set: None,
+                },
+                CLASS_ELEMENT_PRIVATE_SETTER => PrivateElement::Accessor {
+                    get: None,
+                    set: Some(function),
+                },
+                _ => continue,
+            };
+            // A getter and a setter of one name form one accessor.
+            if let PrivateElement::Accessor {
+                get: new_get,
+                set: new_set,
+            } = &element
+                && let Some((_, PrivateElement::Accessor { get, set })) =
+                    methods.iter_mut().find(|(existing, _)| existing == name)
+            {
+                if new_get.is_some() {
+                    get.clone_from(new_get);
+                }
+                if new_set.is_some() {
+                    set.clone_from(new_set);
+                }
+                continue;
+            }
+            methods.push((*name, element));
+        }
+        for (name, element) in methods {
+            self.add_private_element(target, name, element)?;
+        }
+
+        for [kind, key, function] in elements {
+            let Value::Int(kind) = kind else {
+                continue;
+            };
+            if !matches!(*kind, CLASS_ELEMENT_FIELD | CLASS_ELEMENT_STATIC_BLOCK) {
+                continue;
+            }
             let (value, label) = self.invoke_inline_method_call_with_argument_label(
                 Some(module),
-                pair[1].clone(),
+                function.clone(),
                 receiver.clone(),
                 Vec::new(),
                 None,
             )?;
-            let key = self.executable_property_key_from_value(&pair[0]);
+            if *kind == CLASS_ELEMENT_STATIC_BLOCK {
+                continue;
+            }
+            if let Value::Symbol(name) = key
+                && self.symbol_state.is_class_private_name(*name)
+            {
+                self.add_private_element(target, *name, PrivateElement::Field { value, label })?;
+                continue;
+            }
+            let key = self.executable_property_key_from_value(key);
             self.run_pre_runtime_property_access_hook(module, target, &key)?;
             self.set_own_runtime_property_label(target, &key, &label)?;
             self.set_object_runtime_property(target, key.clone(), value)?;
             self.set_own_property_attributes(target, &key, PropertyAttributes::DEFAULT)?;
         }
         Ok(())
+    }
+
+    /// The description of a class private name, `#x`, for error messages.
+    fn private_name_text(&self, name: SymbolId) -> String {
+        self.symbol_description(name)
+            .map(|description| description.to_string())
+            .unwrap_or_else(|| "#<private>".to_string())
+    }
+
+    /// ES2022 PrivateFieldAdd / PrivateMethodOrAccessorAdd (7.3.28-29): give
+    /// `target` the private element `name`. An object that already has it
+    /// (a base constructor returned an object that was initialized before)
+    /// throws a TypeError. Integrity levels do not apply: private elements
+    /// are not properties.
+    fn add_private_element(
+        &mut self,
+        target: ObjectId,
+        name: SymbolId,
+        element: PrivateElement,
+    ) -> Result<(), InterpreterError> {
+        let index = target.0 as usize;
+        let object = self
+            .heap
+            .get(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: target.0 })?;
+        if object.private_elements.contains_key(&name) {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "an object not yet initialized with private member {}",
+                    self.private_name_text(name)
+                ),
+                got: "an object that already has it".to_string(),
+            });
+        }
+        for value in element.values() {
+            validate_symbol_value(&self.symbol_state, value).map_err(|got| {
+                InterpreterError::TypeError {
+                    expected: "resolved Symbol value".to_string(),
+                    got,
+                }
+            })?;
+        }
+        self.apply_memory_component_delta(0, Self::estimate_private_element_bytes(&element))?;
+        self.mutate_heap(|heap| heap[index].private_elements.insert(name, element));
+        Ok(())
+    }
+
+    /// The object holding `value`'s [[PrivateElements]]: an object itself, a
+    /// function's own-property backing object (none before it has one), no
+    /// primitive.
+    fn private_elements_holder(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        match value {
+            Value::Object(object_id) => Ok(Some(*object_id)),
+            Value::Function(_)
+            | Value::Closure(_)
+            | Value::GeneratorFunction(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::BuiltinFunction(_) => self.function_own_property_object(module, value),
+            _ => Ok(None),
+        }
+    }
+
+    /// The private element `name` of `value`, with its holder.
+    fn find_private_element(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+        name: SymbolId,
+    ) -> Result<Option<(ObjectId, PrivateElement)>, InterpreterError> {
+        let Some(holder) = self.private_elements_holder(module, value)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .heap
+            .get(holder.0 as usize)
+            .and_then(|object| object.private_elements.get(&name))
+            .map(|element| (holder, element.clone())))
+    }
+
+    /// ES2022 PrivateGet (7.3.31): `value.#x`. A field reads its value and
+    /// label, a method is itself, an accessor calls its getter.
+    fn private_get(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        name: SymbolId,
+    ) -> Result<(Value, Label), InterpreterError> {
+        match self.find_private_element(module, value, name)? {
+            Some((_, PrivateElement::Field { value, label })) => Ok((value, label)),
+            Some((_, PrivateElement::Method { function })) => Ok((function, Label::Public)),
+            Some((
+                _,
+                PrivateElement::Accessor {
+                    get: Some(getter), ..
+                },
+            )) => self.invoke_inline_method_call_with_argument_label(
+                Some(module),
+                getter,
+                value.clone(),
+                Vec::new(),
+                None,
+            ),
+            Some((_, PrivateElement::Accessor { get: None, .. })) => {
+                Err(InterpreterError::TypeError {
+                    expected: format!("a getter for {}", self.private_name_text(name)),
+                    got: "an accessor defined without one".to_string(),
+                })
+            }
+            None => Err(InterpreterError::TypeError {
+                expected: format!(
+                    "an object whose class declared private member {}",
+                    self.private_name_text(name)
+                ),
+                got: value.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// ES2022 PrivateSet (7.3.32): `value.#x = new_value`. A field is
+    /// updated (its label with it), a method is read-only, an accessor calls
+    /// its setter.
+    fn private_set(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        name: SymbolId,
+        new_value: Value,
+        new_label: Label,
+    ) -> Result<(), InterpreterError> {
+        match self.find_private_element(module, value, name)? {
+            Some((holder, previous @ PrivateElement::Field { .. })) => {
+                validate_symbol_value(&self.symbol_state, &new_value).map_err(|got| {
+                    InterpreterError::TypeError {
+                        expected: "resolved Symbol value".to_string(),
+                        got,
+                    }
+                })?;
+                let element = PrivateElement::Field {
+                    value: new_value,
+                    label: new_label,
+                };
+                self.apply_memory_component_delta(
+                    Self::estimate_private_element_bytes(&previous),
+                    Self::estimate_private_element_bytes(&element),
+                )?;
+                let index = holder.0 as usize;
+                self.mutate_heap(|heap| heap[index].private_elements.insert(name, element));
+                Ok(())
+            }
+            Some((_, PrivateElement::Method { .. })) => Err(InterpreterError::TypeError {
+                expected: format!("a writable private member {}", self.private_name_text(name)),
+                got: "a private method".to_string(),
+            }),
+            Some((
+                _,
+                PrivateElement::Accessor {
+                    set: Some(setter), ..
+                },
+            )) => {
+                self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    setter,
+                    value.clone(),
+                    vec![new_value],
+                    Some(new_label),
+                )?;
+                Ok(())
+            }
+            Some((_, PrivateElement::Accessor { set: None, .. })) => {
+                Err(InterpreterError::TypeError {
+                    expected: format!("a setter for {}", self.private_name_text(name)),
+                    got: "an accessor defined without one".to_string(),
+                })
+            }
+            None => Err(InterpreterError::TypeError {
+                expected: format!(
+                    "an object whose class declared private member {}",
+                    self.private_name_text(name)
+                ),
+                got: value.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// ES2022 `#x in value` (13.10.1): whether `value` has the private
+    /// element; a primitive `value` throws a TypeError.
+    fn private_in(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+        name: SymbolId,
+    ) -> Result<bool, InterpreterError> {
+        let is_object = matches!(
+            value,
+            Value::Object(_)
+                | Value::Function(_)
+                | Value::Closure(_)
+                | Value::GeneratorFunction(_)
+                | Value::AsyncFunction(_)
+                | Value::AsyncGeneratorFunction(_)
+                | Value::BuiltinFunction(_)
+        );
+        if !is_object {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "an object on the right of `{} in`",
+                    self.private_name_text(name)
+                ),
+                got: value.type_name().to_string(),
+            });
+        }
+        Ok(self.find_private_element(module, value, name)?.is_some())
+    }
+
+    /// `key` when it is a class private name (`o.#x`, `#x in o`).
+    fn class_private_name_key(&self, key: &Value) -> Option<SymbolId> {
+        match key {
+            Value::Symbol(symbol) if self.symbol_state.is_class_private_name(*symbol) => {
+                Some(*symbol)
+            }
+            _ => None,
+        }
     }
 
     /// Run the instance fields of the derived constructor on top of the call

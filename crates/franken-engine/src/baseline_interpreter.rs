@@ -48753,6 +48753,7 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
+                    let key_val = self.to_property_key_primitive(module, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let object_id = match &obj_val {
                         Value::Object(object_id) => Some(*object_id),
@@ -49261,6 +49262,7 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
+                    let key_val = self.to_property_key_primitive(module, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let has_hook_target = matches!(&obj_val, Value::Object(_))
                         || matches!(
@@ -49595,6 +49597,7 @@ impl InterpreterCore {
                             got: "a class private name".to_string(),
                         });
                     }
+                    let key_val = self.to_property_key_primitive(module, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let has_hook_target = matches!(&obj_val, Value::Object(_))
                         || matches!(
@@ -52629,7 +52632,9 @@ impl InterpreterCore {
         lhs: u32,
         rhs: u32,
     ) -> Result<Value, InterpreterError> {
-        let key = self.executable_property_key_from_value(&self.read_reg(lhs)?);
+        let key_value = self.read_reg(lhs)?;
+        let key_value = self.to_property_key_primitive(module, key_value)?;
+        let key = self.executable_property_key_from_value(&key_value);
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
@@ -62838,6 +62843,23 @@ impl InterpreterCore {
 
     /// Convert a dynamic IR value to the private exact string-key carrier.
     /// This is the executable key path for dynamic and builtin consumers.
+    /// ToPropertyKey (ES2020 7.1.19) of a computed member key: an object is
+    /// ToPrimitive'd with the string hint (its toString runs), so `o[k]`
+    /// with `k = { toString() { return 'key' } }` reads "key"; it read
+    /// "[object#13]" (the object's heap id). A primitive is returned as is.
+    fn to_property_key_primitive(
+        &mut self,
+        module: &Ir3Module,
+        key: Value,
+    ) -> Result<Value, InterpreterError> {
+        if !key.is_object_like() {
+            return Ok(key);
+        }
+        // Guest code may run: no collection while native locals hold values.
+        self.gc_nested_request = None;
+        self.coerce_runtime_primitive(Some(module), key, true)
+    }
+
     fn executable_property_key_from_value(&self, value: &Value) -> RuntimePropertyKey {
         if let Value::Symbol(symbol) = value {
             return RuntimePropertyKey::Symbol(*symbol);

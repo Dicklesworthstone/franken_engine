@@ -8490,6 +8490,14 @@ struct ColdBindingCell {
 struct ColdBindingCells {
     cells: BTreeMap<usize, ColdBindingCell>,
     payload_bytes: u64,
+    /// Registered bindings maps, by address: how many registrations hold
+    /// each, and the map itself. A map's cells are registered by its first
+    /// registration and released by its last, so re-registering a scope that
+    /// is already held (the global scope, at every call) costs O(1), not
+    /// O(bindings). Holding the `Rc` makes every structural write elsewhere
+    /// copy the map first (`Rc::make_mut`), so a registered map's bindings
+    /// cannot change while it is held.
+    maps: BTreeMap<usize, (usize, Rc<BTreeMap<String, ScopeBinding>>)>,
 }
 
 impl ColdBindingCells {
@@ -8533,18 +8541,45 @@ impl ColdBindingCells {
         }
     }
 
+    fn map_key(frame: &ScopeFrame) -> usize {
+        Rc::as_ptr(&frame.bindings) as usize
+    }
+
+    /// Whether every cell of `frame` is charged here: its map is held.
+    fn holds_frame(&self, frame: &ScopeFrame) -> bool {
+        self.maps.contains_key(&Self::map_key(frame))
+    }
+
     fn register_frames(&mut self, frames: &[ScopeFrame]) {
         for frame in frames {
-            for binding in frame.bindings.values() {
-                self.register_cell(&binding.state);
+            match self.maps.entry(Self::map_key(frame)) {
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().0 += 1;
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((1, Rc::clone(&frame.bindings)));
+                    for binding in frame.bindings.values() {
+                        self.register_cell(&binding.state);
+                    }
+                }
             }
         }
     }
 
     fn release_frames(&mut self, frames: &[ScopeFrame]) {
         for frame in frames {
-            for binding in frame.bindings.values() {
-                self.release_cell(&binding.state);
+            let std::collections::btree_map::Entry::Occupied(mut entry) =
+                self.maps.entry(Self::map_key(frame))
+            else {
+                debug_assert!(false, "released a scope map the ledger does not hold");
+                continue;
+            };
+            entry.get_mut().0 -= 1;
+            if entry.get().0 == 0 {
+                let (_, bindings) = entry.remove();
+                for binding in bindings.values() {
+                    self.release_cell(&binding.state);
+                }
             }
         }
     }
@@ -86792,6 +86827,11 @@ impl InterpreterCore {
     ) -> u64 {
         let mut total = 0u64;
         for frame in frames {
+            // A held map's cells are all charged by the ledger; skipping it
+            // keeps a call's accounting from visiting every global binding.
+            if cold.holds_frame(frame) {
+                continue;
+            }
             for binding in frame.bindings.values() {
                 if !cold.contains(&binding.state)
                     && seen.insert(Rc::as_ptr(&binding.state) as usize)

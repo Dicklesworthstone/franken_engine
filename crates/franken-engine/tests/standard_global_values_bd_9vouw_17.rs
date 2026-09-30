@@ -308,4 +308,14 @@ fn object_has_own() {
          has(o, 'a'), typeof Object.hasOwn, Object.hasOwn.name, Object.hasOwn.length, t].join();",
         "true,false,true,true,true,true,true,true,true,true,true,function,hasOwn,2,TypeError",
     );
+    // Object.prototype.hasOwnProperty, which now shares the helper: a
+    // nullish `this` is a TypeError (ToObject), a primitive is boxed.
+    check(
+        "var r = []; for (const v of [undefined, null]) { try { \
+         Object.prototype.hasOwnProperty.call(v, 'x'); r.push('no'); } \
+         catch (e) { r.push(e.constructor.name); } } \
+         r.join() + ' ' + Object.prototype.hasOwnProperty.call('ab', 'length') + ' ' + \
+         Object.prototype.hasOwnProperty.call(5, 'x');",
+        "TypeError,TypeError true false",
+    );
 }

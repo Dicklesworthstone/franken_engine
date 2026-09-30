@@ -41171,6 +41171,13 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ObjectHasOwnProperty => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                // ES2020 19.1.3.2 step 2: ToObject(this value).
+                if matches!(receiver, Value::Undefined | Value::Null) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object receiver for Object.prototype.hasOwnProperty".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
                 let Some(property) = self.builtin_arg(args, 0)? else {
                     return Ok(Value::Bool(false));
                 };

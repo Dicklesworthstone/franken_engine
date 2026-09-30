@@ -5821,6 +5821,15 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
         .find(|candidate| *candidate == tag)
 }
 
+/// Where a collection constructor reads its seed values from.
+enum CollectionSeedSource {
+    /// Values read without an observable iterator (an ordinary array, or
+    /// no iterable at all).
+    Values(std::vec::IntoIter<Value>),
+    /// A for-of iterator over any other iterable.
+    Iterator(Value),
+}
+
 /// A typed array's heap entries that are not own properties in ES2020
 /// (prototype accessors and engine slots); see own_property_visible.
 const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
@@ -81506,7 +81515,12 @@ impl InterpreterCore {
 
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
-                    self.seed_map_entries_from_iterable(entries_id, Some(map_id), iterable, false)?;
+                    self.seed_map_entries_from_iterable(
+                        module,
+                        entries_id,
+                        Some(map_id),
+                        iterable,
+                    )?;
                 }
 
                 Ok(Value::Object(map_id))
@@ -81524,7 +81538,13 @@ impl InterpreterCore {
 
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
-                    self.seed_set_values_from_iterable(values_id, Some(set_id), iterable, false)?;
+                    self.seed_set_values_from_iterable(
+                        module,
+                        values_id,
+                        Some(set_id),
+                        iterable,
+                        false,
+                    )?;
                 }
 
                 Ok(Value::Object(set_id))
@@ -81549,12 +81569,7 @@ impl InterpreterCore {
                     self.weakmap_storage
                         .insert(weakmap_id, WeakMapStorage::new());
 
-                    if args.count > 0 {
-                        let iterable = self.read_reg(args.start)?;
-                        self.seed_weakmap_from_iterable(weakmap_id, iterable)?;
-                    }
-
-                    Ok(Value::Object(weakmap_id))
+                    Ok(weakmap_id)
                 })();
                 if outcome.is_err() {
                     if let Some(weakmap_id) = published_weakmap {
@@ -81563,7 +81578,16 @@ impl InterpreterCore {
                     self.rollback_heap_to_len(previous_heap_len);
                     self.estimated_memory_bytes = previous_estimated_bytes;
                 }
-                outcome
+                let weakmap_id = outcome?;
+                // Seeding runs after that rollback boundary: it can run guest
+                // code (a user iterator, an entry getter) whose allocations
+                // the program may keep, so a seeding error must not roll the
+                // heap back. The seed's own application is atomic.
+                if args.count > 0 {
+                    let iterable = self.read_reg(args.start)?;
+                    self.seed_weakmap_from_iterable(module, weakmap_id, iterable)?;
+                }
+                Ok(Value::Object(weakmap_id))
             }
             "builtin:WeakRef" => self.construct_weak_ref(args),
             "builtin:FinalizationRegistry" => self.construct_finalization_registry(args),
@@ -81584,7 +81608,7 @@ impl InterpreterCore {
                 // Note: In a full implementation, WeakSet would use weak references
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
-                    self.seed_set_values_from_iterable(values_id, None, iterable, true)?;
+                    self.seed_set_values_from_iterable(module, values_id, None, iterable, true)?;
                 }
 
                 Ok(Value::Object(weakset_id))
@@ -85314,13 +85338,6 @@ impl InterpreterCore {
         }
     }
 
-    fn weakmap_object_key(key: Value) -> Option<String> {
-        match key {
-            Value::Object(object_id) => Some(format!("o:{}", object_id.0)),
-            _ => None,
-        }
-    }
-
     fn increment_collection_size(&mut self, collection_id: ObjectId) {
         let collection_index = collection_id.0 as usize;
         self.mutate_heap(|heap| {
@@ -85332,33 +85349,125 @@ impl InterpreterCore {
         });
     }
 
+    /// Where a collection constructor reads its seed values (ES2020
+    /// 23.1.1.1, 23.2.1.1, 23.3.1.1, 23.4.1.1): `undefined` and `null` seed
+    /// nothing, and anything else goes through the for-of iteration
+    /// protocol, so another Map or Set, a generator, a `keys()`/`values()`
+    /// iterator or a user iterable all seed, and a non-iterable is a
+    /// TypeError. (Seeding read indexed properties instead, so
+    /// `new Set(otherSet)` and `new Map(generator())` were silently empty.)
+    fn collection_seed_source(
+        &mut self,
+        module: Option<&Ir3Module>,
+        iterable: Value,
+    ) -> Result<CollectionSeedSource, InterpreterError> {
+        if matches!(iterable, Value::Undefined | Value::Null) {
+            return Ok(CollectionSeedSource::Values(Vec::new().into_iter()));
+        }
+        // An array iterated by the builtin %Array.prototype.values% yields
+        // its elements (holes as undefined) with no observable step, so read
+        // them without allocating an iterator.
+        if let Value::Object(array_id) = iterable
+            && self
+                .heap
+                .get(array_id.0 as usize)
+                .is_some_and(|object| object.is_array)
+            && !self.array_from_has_explicit_iterator(array_id)?
+        {
+            let values = self.array_like_values(array_id)?;
+            return Ok(CollectionSeedSource::Values(values.into_iter()));
+        }
+        Ok(CollectionSeedSource::Iterator(
+            self.init_for_of_iterator(module, iterable)?,
+        ))
+    }
+
+    /// The next seed value; entries are validated one at a time, as they
+    /// are produced, so an invalid entry stops even an endless iterator.
+    fn next_collection_seed(
+        &mut self,
+        module: Option<&Ir3Module>,
+        source: &mut CollectionSeedSource,
+    ) -> Result<Option<Value>, InterpreterError> {
+        match source {
+            CollectionSeedSource::Values(values) => Ok(values.next()),
+            CollectionSeedSource::Iterator(iterator) => {
+                self.advance_for_of_iterator(module, iterator.clone())
+            }
+        }
+    }
+
+    /// An entry the constructor rejects ends the seeding with IteratorClose
+    /// (the iterator's `return`), then the error.
+    fn close_collection_seed<T>(
+        &mut self,
+        module: Option<&Ir3Module>,
+        source: CollectionSeedSource,
+        error: InterpreterError,
+    ) -> Result<T, InterpreterError> {
+        match source {
+            CollectionSeedSource::Values(_) => Err(error),
+            CollectionSeedSource::Iterator(iterator) => {
+                self.array_from_close_after_error(module, iterator, error)
+            }
+        }
+    }
+
+    /// Fold the pending hostcall label (a yielded value's, or an entry
+    /// read's) into `label`, as ForOfNext does for a loop variable, so the
+    /// seeded collection carries what flowed into it; `finish_collection_seed`
+    /// hands the join back as the constructor's result label.
+    fn observe_collection_seed_label(&mut self, label: &mut Label) {
+        if let Some(observed) = self.take_pending_hostcall_result_label() {
+            *label = label.join(&observed);
+        }
+    }
+
+    fn finish_collection_seed(&mut self, label: Label) -> Result<(), InterpreterError> {
+        self.replace_pending_hostcall_result_label(Some(label))
+    }
+
+    /// `Get(entry, "0")` and `Get(entry, "1")` of a Map or WeakMap seed
+    /// entry, which must be an object (ES2020 23.1.1.2
+    /// AddEntriesFromIterable): `new Map(['ab'])` is a TypeError, and an
+    /// array-like `{ 0: k, 1: v }` is an entry.
+    fn collection_seed_entry(
+        &mut self,
+        module: Option<&Ir3Module>,
+        entry: &Value,
+    ) -> Result<(Value, Value), InterpreterError> {
+        if !entry.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "entry object ([key, value]) in the Map iterable".to_string(),
+                got: entry.type_name().to_string(),
+            });
+        }
+        // A function entry has no "0" or "1" unless a program set them.
+        let Value::Object(entry_id) = entry else {
+            return Ok((Value::Undefined, Value::Undefined));
+        };
+        let key = self.proxy_aware_get_property(module, *entry_id, "0", entry.clone(), 0)?;
+        let value = self.proxy_aware_get_property(module, *entry_id, "1", entry.clone(), 0)?;
+        Ok((key, value))
+    }
+
     fn seed_map_entries_from_iterable(
         &mut self,
+        module: Option<&Ir3Module>,
         entries_id: ObjectId,
         size_owner: Option<ObjectId>,
         iterable: Value,
-        weak_keys_only: bool,
     ) -> Result<(), InterpreterError> {
-        let Ok(entries) = self.collect_for_of_values(&iterable) else {
-            return Ok(());
-        };
-
-        for entry in entries {
-            let Ok(pair) = self.collect_for_of_values(&entry) else {
-                continue;
+        let mut label = Label::Public;
+        let mut source = self.collection_seed_source(module, iterable)?;
+        while let Some(entry) = self.next_collection_seed(module, &mut source)? {
+            self.observe_collection_seed_label(&mut label);
+            let (key, value) = match self.collection_seed_entry(module, &entry) {
+                Ok(pair) => pair,
+                Err(error) => return self.close_collection_seed(module, source, error),
             };
-            let Some(key) = pair.first().cloned() else {
-                continue;
-            };
-            let value = pair.get(1).cloned().unwrap_or(Value::Undefined);
-            let key_str = if weak_keys_only {
-                Self::weakmap_object_key(key)
-            } else {
-                Some(Self::collection_key_repr(&key))
-            };
-            let Some(key_str) = key_str else {
-                continue;
-            };
+            self.observe_collection_seed_label(&mut label);
+            let key_str = Self::collection_key_repr(&key);
 
             // Charged like `map_collection_set`: a raw insert here left the
             // entries (and a duplicate key's replacement growth) out of the
@@ -85375,31 +85484,37 @@ impl InterpreterCore {
             }
         }
 
-        Ok(())
+        self.finish_collection_seed(label)
     }
 
     fn seed_set_values_from_iterable(
         &mut self,
+        module: Option<&Ir3Module>,
         values_id: ObjectId,
         size_owner: Option<ObjectId>,
         iterable: Value,
         weak_values_only: bool,
     ) -> Result<(), InterpreterError> {
-        let Ok(values) = self.collect_for_of_values(&iterable) else {
-            return Ok(());
-        };
-
-        for value in values {
+        let mut label = Label::Public;
+        let mut source = self.collection_seed_source(module, iterable)?;
+        while let Some(value) = self.next_collection_seed(module, &mut source)? {
+            self.observe_collection_seed_label(&mut label);
             // A Set stores the member itself (as `add` does) so iteration can
-            // yield it; a WeakSet is not iterable and keeps a presence marker.
+            // yield it; a WeakSet is not iterable and keeps a presence marker
+            // under the key `WeakSet.prototype.add` uses, and a value that
+            // cannot be weakly held is a TypeError, as for `add`.
             let (value_str, stored) = if weak_values_only {
-                (Self::weakmap_object_key(value), Value::Bool(true))
+                if !value.is_object_like() {
+                    let error = InterpreterError::TypeError {
+                        expected: "object WeakSet value".to_string(),
+                        got: value.type_name().to_string(),
+                    };
+                    return self.close_collection_seed(module, source, error);
+                }
+                (Self::collection_key_repr(&value), Value::Bool(true))
             } else {
                 let value = Self::collection_canonical_member(value);
-                (Some(Self::collection_key_repr(&value)), value)
-            };
-            let Some(value_str) = value_str else {
-                continue;
+                (Self::collection_key_repr(&value), value)
             };
 
             let values_index = values_id.0 as usize;
@@ -85431,33 +85546,51 @@ impl InterpreterCore {
             }
         }
 
-        Ok(())
+        self.finish_collection_seed(label)
+    }
+
+    /// A WeakMap seed entry's key and value. As for `WeakMap.prototype.set`,
+    /// the key is an object, or a function keyed by its own-property backing
+    /// object; anything else is a TypeError instead of being skipped.
+    fn weakmap_seed_entry(
+        &mut self,
+        module: Option<&Ir3Module>,
+        entry: &Value,
+    ) -> Result<(ObjectId, Value), InterpreterError> {
+        let (key, value) = self.collection_seed_entry(module, entry)?;
+        let key_id = match (&key, module) {
+            (Value::Object(id), _) => Some(*id),
+            (function, Some(module)) if function.is_callable() => {
+                self.ensure_function_own_property_object(module, function)?
+            }
+            _ => None,
+        };
+        key_id
+            .map(|key_id| (key_id, value))
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "object WeakMap key".to_string(),
+                got: key.type_name().to_string(),
+            })
     }
 
     fn seed_weakmap_from_iterable(
         &mut self,
+        module: Option<&Ir3Module>,
         weakmap_id: ObjectId,
         iterable: Value,
     ) -> Result<(), InterpreterError> {
-        let Ok(entries) = self.collect_for_of_values(&iterable) else {
-            return Ok(());
-        };
-
         let mut updates = BTreeMap::new();
-        for entry in entries {
-            let Ok(pair) = self.collect_for_of_values(&entry) else {
-                continue;
-            };
-            let Some(key) = pair.first().cloned() else {
-                continue;
-            };
-            let value = pair.get(1).cloned().unwrap_or(Value::Undefined);
-
-            // WeakMap only accepts object keys
-            let Value::Object(key_object_id) = key else {
-                continue; // Skip non-object keys
-            };
-            updates.insert(key_object_id.0, value);
+        let mut label = Label::Public;
+        let mut source = self.collection_seed_source(module, iterable)?;
+        while let Some(entry) = self.next_collection_seed(module, &mut source)? {
+            self.observe_collection_seed_label(&mut label);
+            match self.weakmap_seed_entry(module, &entry) {
+                Ok((key_id, value)) => {
+                    updates.insert(key_id.0, value);
+                }
+                Err(error) => return self.close_collection_seed(module, source, error),
+            }
+            self.observe_collection_seed_label(&mut label);
         }
 
         let Some(storage) = self.weakmap_storage.get(&weakmap_id) else {
@@ -85484,7 +85617,7 @@ impl InterpreterCore {
             storage.set(key, value);
         }
 
-        Ok(())
+        self.finish_collection_seed(label)
     }
 
     fn validate_weakmap_receiver(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
@@ -92708,10 +92841,10 @@ impl InterpreterCore {
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
                     self.seed_map_entries_from_iterable(
+                        module,
                         entries_id,
                         Some(object_id),
                         iterable,
-                        false,
                     )?;
                 }
             }
@@ -92728,6 +92861,7 @@ impl InterpreterCore {
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
                     self.seed_set_values_from_iterable(
+                        module,
                         values_id,
                         Some(object_id),
                         iterable,
@@ -109923,7 +110057,7 @@ mod async_runtime_tests_current {
         let (mut weakmap_probe, weakmap_id, _key_id, iterable_id) = weakmap_fixture();
         let weakmap_baseline = weakmap_probe.estimated_memory_bytes();
         weakmap_probe
-            .seed_weakmap_from_iterable(weakmap_id, Value::Object(iterable_id))
+            .seed_weakmap_from_iterable(None, weakmap_id, Value::Object(iterable_id))
             .expect("unbounded WeakMap seed probe");
         let weakmap_delta = weakmap_probe
             .estimated_memory_bytes()
@@ -109939,7 +110073,11 @@ mod async_runtime_tests_current {
         weakmap_one_short.config.max_total_memory_bytes =
             weakmap_one_short_baseline + weakmap_delta - 1;
         assert!(matches!(
-            weakmap_one_short.seed_weakmap_from_iterable(weakmap_id, Value::Object(iterable_id)),
+            weakmap_one_short.seed_weakmap_from_iterable(
+                None,
+                weakmap_id,
+                Value::Object(iterable_id)
+            ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert!(
@@ -109956,7 +110094,7 @@ mod async_runtime_tests_current {
         let weakmap_exact_baseline = weakmap_exact.estimated_memory_bytes();
         weakmap_exact.config.max_total_memory_bytes = weakmap_exact_baseline + weakmap_delta;
         weakmap_exact
-            .seed_weakmap_from_iterable(weakmap_id, Value::Object(iterable_id))
+            .seed_weakmap_from_iterable(None, weakmap_id, Value::Object(iterable_id))
             .expect("WeakMap value fits exact ceiling");
         assert!(
             weakmap_exact.weakmap_storage[&weakmap_id]

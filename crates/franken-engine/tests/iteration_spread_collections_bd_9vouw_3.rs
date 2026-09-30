@@ -94,3 +94,45 @@ fn arguments_objects_are_iterable() {
         r#"1,2 2 12 ["0","1"] true false 3"#,
     );
 }
+
+/// Map, Set, WeakMap and WeakSet seed from any iterable through the
+/// iteration protocol (ES2020 23.1.1.1ff.): another collection, a generator,
+/// a `keys()`/`values()` iterator, a user iterable, a string, an array with
+/// holes. A Map entry is any object (`Get(entry, "0")`, `Get(entry, "1")`),
+/// and a non-iterable, a non-object entry or a value that cannot be weakly
+/// held is a TypeError. Seeding read indexed properties instead, so
+/// `new Map(otherMap)`, `new Set(generator())` and `new Set(map.keys())`
+/// were silently empty and the errors were skipped.
+#[test]
+fn collections_seed_from_any_iterable() {
+    check(
+        "function* g() { yield ['k', 'v']; yield ['k2', 'v2']; } \
+         var m = new Map([[1, 'a'], [2, 'b']]); \
+         var it = { [Symbol.iterator]() { var i = 0; return { next() { \
+         return i++ < 2 ? { value: [i, i * 10], done: false } : { done: true }; } }; } }; \
+         var holes = [1, 2]; holes[5] = 6; \
+         [new Map(m).get(2), new Set(new Set([1, 2])).size, new Map(g()).get('k2'), \
+         new Set(m.keys()).size, [...new Set(m.values())].join(''), new Map([[1, 2]].values()).get(1), \
+         new Map(it).get(2), new Map([{ 0: 'a', 1: 'b' }]).get('a'), new Set('abca').size, \
+         new Set(holes).size, new Map(undefined).size, new Set(null).size].join();",
+        "b,2,v2,2,ab,2,20,b,3,4,0,0",
+    );
+    check(
+        "function attempt(f) { try { f(); return 'ok'; } catch (e) { return e.constructor.name; } } \
+         var k = {}; var fn = function () {}; \
+         [attempt(() => new Map(5)), attempt(() => new Set({ length: 2, 0: 'a' })), \
+         attempt(() => new Map(['ab'])), attempt(() => new Map([1])), \
+         attempt(() => new WeakMap([[1, 'x']])), attempt(() => new WeakMap([1])), \
+         attempt(() => new WeakSet([1])), new WeakSet(new Set([k])).has(k), \
+         new WeakMap(new Map([[k, 1], [fn, 2]])).get(fn), new WeakSet([fn]).has(fn)].join();",
+        "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,true,2,true",
+    );
+    // A failed WeakMap seed keeps what the program's iterator allocated.
+    check(
+        "function attempt(f) { try { f(); return 'ok'; } catch (e) { return e.constructor.name; } } \
+         var saved; var leaky = { [Symbol.iterator]() { return { next() { \
+         saved = { kept: true }; return { value: 1, done: false }; } }; } }; \
+         [attempt(() => new WeakMap(leaky)), saved.kept, JSON.stringify(saved)].join(' ');",
+        r#"TypeError true {"kept":true}"#,
+    );
+}

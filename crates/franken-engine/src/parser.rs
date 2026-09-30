@@ -2950,7 +2950,7 @@ fn has_top_level_open_brace(text: &str) -> bool {
 fn do_statement_awaits_while(statement: &str) -> bool {
     let awaits = |text: &str| {
         let body = unbraced_body_of_header_chain(text);
-        starts_with_keyword(body, "do") && find_top_level_keyword(body, " while").is_none()
+        starts_with_keyword(body, "do") && do_condition_while_index(&body["do".len()..]).is_none()
     };
     // `if (a) x(); else if (b)\n  do\n    y();\n  while (c);` (pako's
     // deflate): the do statement is the last else clause's body.
@@ -3017,6 +3017,13 @@ fn statement_header_takes_unbraced_body(statement: &str) -> bool {
 /// else b();` pairs the `else` with that `if`).
 fn clause_takes_else(clause: &str) -> bool {
     let mut rest = clause.trim();
+    // `do\n  if (c) x();\n  else y();\nwhile (d);`: the if is the body.
+    if let Some(body) = rest
+        .strip_prefix("do")
+        .filter(|body| body.starts_with(char::is_whitespace))
+    {
+        rest = body.trim_start();
+    }
     loop {
         if starts_with_keyword(rest, "if") {
             return true;
@@ -3045,10 +3052,21 @@ fn header_chain_takes_unbraced_body(tail: &str, in_do_statement: bool) -> bool {
     if tail == "else" || tail == "do" {
         return true;
     }
-    let header = tail
-        .strip_prefix("else")
+    // A do statement's unbraced body can itself be a header chain (pako's
+    // inflate: `do\n  if (c)\n    x();\nwhile (d);`); a `while` right after
+    // `do` heads that body, it is not the do statement's condition.
+    let (header, in_do_statement) = match tail
+        .strip_prefix("do")
         .filter(|rest| rest.starts_with(char::is_whitespace))
-        .map_or(tail, str::trim_start);
+    {
+        Some(body) => (body.trim_start(), false),
+        None => (
+            tail.strip_prefix("else")
+                .filter(|rest| rest.starts_with(char::is_whitespace))
+                .map_or(tail, str::trim_start),
+            in_do_statement,
+        ),
+    };
     // A braced body shows after the header's parentheses (the recursion
     // below rejects it); a `{` inside them is an object literal or a
     // destructuring pattern: `if (visit(item, {\n  depth\n}))\n  return;`.
@@ -11552,6 +11570,37 @@ fn parse_with_statement(
     }))
 }
 
+/// Where the condition of a do statement with an unbraced body starts in
+/// the text after `do`: the last top-level `while (...)` that ends it (only
+/// a `;` may follow). The first `while` anywhere was taken, so a while loop
+/// as the body (`do while (a) a--; while (b);`) lost its body, and a
+/// `while` inside a string or an identifier (`awhile`) split the statement.
+fn do_condition_while_index(after_do: &str) -> Option<usize> {
+    let mut found = None;
+    let mut offset = 0;
+    while let Some(at) = find_top_level_keyword(&after_do[offset..], "while") {
+        let index = offset + at;
+        offset = index + "while".len();
+        let rest = &after_do[offset..];
+        if after_do[..index]
+            .chars()
+            .next_back()
+            .is_some_and(is_identifier_continue)
+            || rest.starts_with(is_identifier_continue)
+        {
+            continue;
+        }
+        let rest = rest.trim_start();
+        if rest.starts_with('(')
+            && let Some((_, tail)) = extract_balanced(rest, '(', ')')
+            && matches!(tail.trim(), "" | ";")
+        {
+            found = Some(index);
+        }
+    }
+    found
+}
+
 fn parse_do_while_statement(
     statement: &str,
     goal: ParseGoal,
@@ -11574,8 +11623,7 @@ fn parse_do_while_statement(
         })?;
         (format!("{{{inner}}}"), r.to_string())
     } else {
-        // Find "while" keyword at top level.
-        let while_idx = after_do.find("while").ok_or_else(|| {
+        let while_idx = do_condition_while_index(after_do).ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "do-while statement requires 'while' after body",

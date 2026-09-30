@@ -17,18 +17,28 @@ fn eval_to_string(source: &str) -> String {
 }
 
 fn check(source: &str, node: &str) {
-    assert_eq!(eval_to_string(source), node, "`{source}` must match Node v22.2.0");
+    assert_eq!(
+        eval_to_string(source),
+        node,
+        "`{source}` must match Node v22.2.0"
+    );
 }
 
 #[test]
 fn generator_objects_spread_into_arrays() {
-    check("function* g() { yield 1; yield 2; } [...g()].join();", "1,2");
+    check(
+        "function* g() { yield 1; yield 2; } [...g()].join();",
+        "1,2",
+    );
     check(
         "function* g() { yield* [1, 2]; yield 3; } [...g()].join();",
         "1,2,3",
     );
     check("function* g() {} [...g()].length;", "0");
-    check("function* g() { yield 'b'; } ['a', ...g(), 'c'].join('');", "abc");
+    check(
+        "function* g() { yield 'b'; } ['a', ...g(), 'c'].join('');",
+        "abc",
+    );
 }
 
 #[test]
@@ -66,5 +76,21 @@ fn set_iterates_values_in_insertion_order() {
     check(
         "let t = 0; for (const v of new Set([1, 2, 2, 3])) t += v; t;",
         "6",
+    );
+}
+
+/// An arguments object has an own, non-enumerable @@iterator that is
+/// %Array.prototype.values% (ES2020 9.4.4.6), so it spreads, converts and
+/// iterates like an array. It had none: `[...arguments]` threw "expected
+/// callable Symbol.iterator method".
+#[test]
+fn arguments_objects_are_iterable() {
+    check(
+        "(function () { let s = ''; for (const a of arguments) s += a; \
+         return [[...arguments].join(), Array.from(arguments).length, s, \
+         JSON.stringify(Object.keys(arguments)), arguments[Symbol.iterator] === Array.prototype.values, \
+         Object.getOwnPropertyDescriptor(arguments, Symbol.iterator).enumerable, \
+         [...arguments, .../z/g.exec('z')].length].join(' '); })(1, 2);",
+        r#"1,2 2 12 ["0","1"] true false 3"#,
     );
 }

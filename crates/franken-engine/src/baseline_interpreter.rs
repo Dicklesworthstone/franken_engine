@@ -92919,8 +92919,10 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// An unmapped arguments object (ES2020 9.4.4.6): indexed elements plus a
-    /// non-enumerable `length`.
+    /// An unmapped arguments object (ES2020 9.4.4.6): indexed elements, a
+    /// non-enumerable `length`, and a non-enumerable own @@iterator that is
+    /// %Array.prototype.values%, so `[...arguments]`, `Array.from(arguments)`
+    /// and `for (const a of arguments)` iterate it.
     fn alloc_arguments_object(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
         let object = self.alloc_object_with_prototype(None)?;
         for (index, value) in values.iter().enumerate() {
@@ -92931,15 +92933,23 @@ impl InterpreterCore {
             "length".to_string(),
             Value::Int(i64::try_from(values.len()).unwrap_or(i64::MAX)),
         )?;
+        let iterator_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+        self.set_object_runtime_property(
+            object,
+            iterator_key.clone(),
+            Value::BuiltinFunction(BuiltinFunction::array_values()),
+        )?;
+        let hidden = PropertyAttributes {
+            writable: true,
+            enumerable: false,
+            configurable: true,
+        };
         self.set_own_property_attributes(
             object,
             &RuntimePropertyKey::String(JsString::from("length")),
-            PropertyAttributes {
-                writable: true,
-                enumerable: false,
-                configurable: true,
-            },
+            hidden,
         )?;
+        self.set_own_property_attributes(object, &iterator_key, hidden)?;
         Ok(object)
     }
 

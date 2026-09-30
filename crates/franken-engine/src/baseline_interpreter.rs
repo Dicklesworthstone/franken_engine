@@ -37864,7 +37864,7 @@ impl InterpreterCore {
                     .as_deref()
                     .unwrap_or_default()
                     .to_string();
-                self.weakmap_method(&method, receiver.unwrap_or(Value::Undefined), args)
+                self.weakmap_method(module, &method, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::WeakSetMethod => {
                 let method = builtin
@@ -67683,14 +67683,26 @@ impl InterpreterCore {
 
     fn weakmap_method(
         &mut self,
+        module: &Ir3Module,
         method: &str,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let weakmap_id = self.validate_weakmap_receiver(receiver.clone())?;
         let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let key_id = match key {
+        // A function is an object and a valid key (immer and memoizers key
+        // WeakMaps by function): its identity is its own-property backing
+        // object, created for `set` and only looked up otherwise.
+        let key_id = match &key {
             Value::Object(id) => Some(id.0),
+            function if function.is_callable() => {
+                let backing = if method == "set" {
+                    self.ensure_function_own_property_object(module, function)?
+                } else {
+                    self.function_own_property_object(module, function)?
+                };
+                backing.map(|id| id.0)
+            }
             _ => None,
         };
         let Some(storage) = self.weakmap_storage.get(&weakmap_id) else {

@@ -61,6 +61,16 @@ fn weakmap_methods() {
          [wm.get(k), wm.has(k2), wm.delete(k), wm.has(k), wm.get({})].join();",
         "1,true,true,false,",
     );
+    // Functions are objects and valid keys (immer keys a WeakMap by
+    // function); `set` threw "expected object WeakMap key, got function".
+    check(
+        "const wm = new WeakMap(); const f = function () {}; const g = () => 1; class C {} \
+         wm.set(f, 'fn').set(g, 'arrow').set(C, 'class').set(Math.max, 'builtin'); \
+         const ws = new WeakSet([f]); \
+         [wm.get(f), wm.get(g), wm.get(C), wm.get(Math.max), wm.has(function () {}), \
+         wm.delete(g), wm.has(g), ws.has(f), wm.get(() => 2)].join();",
+        "fn,arrow,class,builtin,false,true,false,true,",
+    );
 }
 
 /// `WeakSet.prototype.add/has/delete` over object identity, and `WeakMap` /

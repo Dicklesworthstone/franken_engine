@@ -2461,9 +2461,11 @@ fn eval_lane_router_for_ir3(
 /// Accommodate those widths without increasing the caller's memory budget or
 /// changing raw-interpreter limits. The runtime already accounts register
 /// payloads, but not the shallow stacked value/label carriers, so reserve all
-/// *additional* carriers at the maximum call depth before allocating any core.
-/// This conservative reservation prevents wide recursive functions from
-/// turning automatic frame sizing into an unaccounted allocation channel.
+/// *additional* carriers for the deepest full-width register file the core
+/// admits (`max_call_depth + 1` windows, capped by `register_file_slot_limit`,
+/// bd-9vouw.72) before allocating any core. This conservative reservation
+/// prevents wide recursive functions from turning automatic frame sizing into
+/// an unaccounted allocation channel.
 fn reserve_eval_register_capacity(
     config: &mut InterpreterConfig,
     required_registers: u32,
@@ -2474,9 +2476,14 @@ fn reserve_eval_register_capacity(
     }
     let carrier_bytes = (std::mem::size_of::<baseline_interpreter::Value>()
         + std::mem::size_of::<ifc_artifacts::Label>()) as u64;
-    let frame_count = u64::try_from(config.max_call_depth)
-        .unwrap_or(u64::MAX)
-        .saturating_add(1);
+    // Full-width windows the register file can hold at the raised width.
+    let frame_count = u64::try_from(config.max_call_depth.saturating_add(1).min(
+        baseline_interpreter::register_file_slot_limit(
+            config.max_call_depth,
+            required_registers as usize,
+        ) / (required_registers as usize).max(1),
+    ))
+    .unwrap_or(u64::MAX);
     let reservation = u64::from(extra_registers)
         .saturating_mul(frame_count)
         .saturating_mul(carrier_bytes);

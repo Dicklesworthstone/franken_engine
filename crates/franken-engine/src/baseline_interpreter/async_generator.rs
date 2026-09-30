@@ -848,11 +848,21 @@ impl InterpreterCore {
         generator.phase = AsyncGeneratorPhase::Completed;
         generator.awaited = None;
         generator.delegation = None;
-        let backing = &mut self.generators[generator.generator_id as usize];
+        let backing_index = generator.generator_id as usize;
+        // A backing generator started through its parameter prologue at the
+        // call (bd-9vouw.49) holds an activation even before the first
+        // next(); release it and any pending invocation as one delta.
+        let retained_bytes = Self::estimate_generator_bytes(&self.generators[backing_index]);
+        let backing = &mut self.generators[backing_index];
         backing.phase = GeneratorPhase::Completed;
         backing.invocation = None;
-        backing.execution = None;
         backing.resume_dst = None;
+        self.closures
+            .replace_activation(&mut self.generators[backing_index].execution, None);
+        let released_bytes = retained_bytes.saturating_sub(Self::estimate_generator_bytes(
+            &self.generators[backing_index],
+        ));
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
     }
 
     /// Async requests may finish or suspend without executing enough bytecode

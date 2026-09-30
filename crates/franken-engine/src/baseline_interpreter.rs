@@ -2576,6 +2576,10 @@ pub enum BuiltinFunctionKind {
     /// `Number.prototype.valueOf` — receiver-aware; returns the primitive number
     /// value (bd-i08nh).
     NumberValueOf,
+    /// `Boolean.prototype.toString` on a boolean primitive (bd-9vouw.87).
+    BooleanToString,
+    /// `Boolean.prototype.valueOf` on a boolean primitive (bd-9vouw.87).
+    BooleanValueOf,
     ProxyRevoke,
     /// `Array.prototype.push` — receiver-aware: appends its arguments to the
     /// `this` array and returns the new length. Resolved on array exotic
@@ -4657,6 +4661,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberToFixed => "toFixed",
             BuiltinFunctionKind::NumberToString => "toString",
             BuiltinFunctionKind::NumberValueOf => "valueOf",
+            BuiltinFunctionKind::BooleanToString => "toString",
+            BuiltinFunctionKind::BooleanValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
             BuiltinFunctionKind::StringIterator | BuiltinFunctionKind::GeneratorIteratorSelf => {
                 "@@iterator"
@@ -36753,6 +36759,23 @@ impl InterpreterCore {
                 // number-property seam only routes Int/Float receivers here.
                 Ok(receiver.unwrap_or(Value::Undefined))
             }
+            // ES2020 19.3.3.2-3 (bd-9vouw.87): thisBooleanValue of a boolean
+            // primitive; any other receiver is a TypeError.
+            BuiltinFunctionKind::BooleanToString | BuiltinFunctionKind::BooleanValueOf => {
+                match receiver {
+                    Some(Value::Bool(value)) => {
+                        Ok(if builtin.kind == BuiltinFunctionKind::BooleanToString {
+                            Value::str(if value { "true" } else { "false" })
+                        } else {
+                            Value::Bool(value)
+                        })
+                    }
+                    other => Err(InterpreterError::TypeError {
+                        expected: "Boolean receiver".to_string(),
+                        got: other.map_or("undefined", |value| value.type_name()).to_string(),
+                    }),
+                }
+            }
             BuiltinFunctionKind::ArrayIsArray => {
                 let arg = self.builtin_arg(args, 0)?;
                 Ok(self.array_is_array_value(arg))
@@ -46266,6 +46289,9 @@ impl InterpreterCore {
                             Value::BigInt(_) => property_key
                                 .as_str()
                                 .map_or(Value::Undefined, Self::bigint_property_value),
+                            Value::Bool(_) => property_key
+                                .as_str()
+                                .map_or(Value::Undefined, Self::boolean_property_value),
                             // Functions are objects: reading `fn.prototype` returns the
                             // function's prototype object (where class instance methods
                             // live), matching what `Construct` links instances to so
@@ -52064,6 +52090,20 @@ impl InterpreterCore {
             )),
             "toString" => Value::BuiltinFunction(BuiltinFunction::number_to_string()),
             "valueOf" => Value::BuiltinFunction(BuiltinFunction::number_value_of()),
+            _ => Value::Undefined,
+        }
+    }
+
+    /// `Boolean.prototype` members on a boolean primitive (ES2020 19.3.3,
+    /// bd-9vouw.87); any other key reads as undefined.
+    fn boolean_property_value(key: &str) -> Value {
+        match key {
+            "toString" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::BooleanToString,
+            )),
+            "valueOf" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::BooleanValueOf,
+            )),
             _ => Value::Undefined,
         }
     }
@@ -64352,6 +64392,9 @@ impl InterpreterCore {
             Value::BigInt(_) => Ok(key
                 .as_str()
                 .map_or(Value::Undefined, Self::bigint_property_value)),
+            Value::Bool(_) => Ok(key
+                .as_str()
+                .map_or(Value::Undefined, Self::boolean_property_value)),
             Value::BuiltinFunction(builtin) => {
                 let Some(property_object) = Self::builtin_function_property_object(&builtin) else {
                     return Ok(Value::Undefined);

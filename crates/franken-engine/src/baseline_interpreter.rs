@@ -54716,6 +54716,18 @@ impl InterpreterCore {
                 let offset = input[..start].encode_utf16().count();
                 arguments.push(Value::Int(i64::try_from(offset).unwrap_or(i64::MAX)));
                 arguments.push(Value::str(input));
+                // ES2020 21.2.5.8 step 14.l: with named groups the replacer
+                // also receives the groups object, as its last argument.
+                if group_names.iter().any(Option::is_some) {
+                    let named = self.alloc_object_with_prototype(None)?;
+                    for (name, group) in group_names.iter().zip(&groups) {
+                        if let Some(name) = name {
+                            let value = group.clone().map_or(Value::Undefined, Value::str);
+                            self.set_object_property(named, name.clone(), value)?;
+                        }
+                    }
+                    arguments.push(Value::Object(named));
+                }
                 self.preflight_inline_method_call_with_argument_label(
                     module,
                     replace,

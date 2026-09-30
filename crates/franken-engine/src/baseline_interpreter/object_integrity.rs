@@ -267,7 +267,19 @@ impl InterpreterCore {
                 BuiltinFunction::standard_constructor(TYPED_ARRAY_INTRINSIC),
             ));
         }
-        Ok(Value::Object(self.ensure_builtin_prototype("Function")?))
+        // ES2020 25.2.2, 25.7.2; ES2018 25.3.2: %GeneratorFunction%,
+        // %AsyncFunction% and %AsyncGeneratorFunction% inherit from %Function%.
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && FUNCTION_KIND_INTRINSICS.contains(&&*builtin.module_specifier)
+        {
+            return Ok(Value::BuiltinFunction(
+                BuiltinFunction::function_constructor(),
+            ));
+        }
+        Ok(Value::Object(self.ensure_builtin_prototype(
+            Self::function_intrinsic_prototype_name(function).unwrap_or("Function"),
+        )?))
     }
 
     /// [[SetPrototypeOf]] of a user function value (`Object.setPrototypeOf(D,

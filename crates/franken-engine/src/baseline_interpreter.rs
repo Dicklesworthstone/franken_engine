@@ -931,6 +931,11 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "WeakSet" => Some("WeakSet"),
         "WeakRef" => Some("WeakRef"),
         "FinalizationRegistry" => Some("FinalizationRegistry"),
+        // %GeneratorFunction%, %AsyncFunction%, %AsyncGeneratorFunction%:
+        // not global bindings (FUNCTION_KIND_INTRINSICS).
+        "GeneratorFunction" => Some("GeneratorFunction"),
+        "AsyncFunction" => Some("AsyncFunction"),
+        "AsyncGeneratorFunction" => Some("AsyncGeneratorFunction"),
         _ => None,
     }
 }
@@ -5488,6 +5493,15 @@ const TYPED_ARRAY_INTRINSIC: &str = "TypedArray";
 /// Array.prototype algorithm (`some`, `indexOf`, ...): they are distinct
 /// functions whose receiver must be a typed array.
 const TYPED_ARRAY_PROTOTYPE_SPECIFIER: &str = "%TypedArray%.prototype";
+/// %GeneratorFunction%, %AsyncFunction% and %AsyncGeneratorFunction% (ES2020
+/// 25.2, 25.7; ES2018 25.3): standard constructors that are not global
+/// bindings, reached as the `constructor` of their prototypes, which are the
+/// [[Prototype]] of generator, async and async generator functions.
+const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
+    "GeneratorFunction",
+    "AsyncFunction",
+    "AsyncGeneratorFunction",
+];
 
 /// bd-9vouw.17: standard constructors bound as first-class global values.
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
@@ -48872,13 +48886,13 @@ impl InterpreterCore {
                         _ => None,
                     };
                     // A function whose own properties lack the key continues
-                    // its [[Get]] on %Function.prototype% (after the match).
-                    let function_base = (function_backing.is_none()
-                        && matches!(
-                            obj_val,
-                            Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)
-                        ))
-                    .then(|| obj_val.clone());
+                    // its [[Get]] on its intrinsic prototype (after the match).
+                    let function_base = if function_backing.is_none() {
+                        Self::function_intrinsic_prototype_name(&obj_val)
+                            .map(|prototype| (prototype, obj_val.clone()))
+                    } else {
+                        None
+                    };
 
                     // The prototype object a primitive base's property came
                     // from, for the stored-label join below.
@@ -49215,20 +49229,28 @@ impl InterpreterCore {
                         }
                     };
                     // ES2020 19.2.3: a function's [[Prototype]] is
-                    // %Function.prototype%, so a key that neither its own
+                    // %Function.prototype% (a generator, async or async
+                    // generator function's is its kind's prototype, which
+                    // inherits from it), so a key that neither its own
                     // properties nor its synthesized members supply is read
                     // there, then on Object.prototype: `fn.constructor` is
-                    // Function, and `valueOf`, `__proto__` and members a
-                    // program adds (`Function.prototype.method = ...`) reach
-                    // every function. They read undefined.
+                    // Function (`g.constructor` GeneratorFunction), and
+                    // `valueOf`, `__proto__` and members a program adds
+                    // (`Function.prototype.method = ...`) reach every
+                    // function. They read undefined.
                     let prop = match function_base {
-                        Some(function) if matches!(prop, Value::Undefined) => {
+                        Some((prototype, function)) if matches!(prop, Value::Undefined) => {
                             if property_key.as_str() == Some("__proto__") {
                                 self.function_value_prototype(Some(module), &function)?
                             } else {
+                                // The kind prototypes exist once read, so
+                                // Function.prototype's members are behind them.
+                                if prototype != "Function" {
+                                    self.ensure_builtin_prototype(prototype)?;
+                                }
                                 let (value, owner) = self.primitive_prototype_get(
                                     module,
-                                    "Function",
+                                    prototype,
                                     &property_key,
                                     function,
                                 )?;
@@ -52837,7 +52859,13 @@ impl InterpreterCore {
         {
             return Ok(true);
         }
-        if let Some(&function_prototype) = self.builtin_prototypes.get("Function") {
+        // A generator, async or async generator function's kind prototype
+        // inherits from Function.prototype.
+        let kind_prototype = Self::function_intrinsic_prototype_name(function)
+            .and_then(|name| self.builtin_prototypes.get(name))
+            .or_else(|| self.builtin_prototypes.get("Function"))
+            .copied();
+        if let Some(function_prototype) = kind_prototype {
             return self.proxy_aware_has_runtime_property(Some(module), function_prototype, key, 0);
         }
         self.object_prototype_has_property(module, key)
@@ -55750,7 +55778,10 @@ impl InterpreterCore {
                     None,
                 ));
             }
-            if name == "constructor" && STANDARD_CONSTRUCTOR_GLOBALS.contains(&type_name) {
+            if name == "constructor"
+                && (STANDARD_CONSTRUCTOR_GLOBALS.contains(&type_name)
+                    || FUNCTION_KIND_INTRINSICS.contains(&type_name))
+            {
                 return Ok((
                     Value::BuiltinFunction(BuiltinFunction::standard_constructor(type_name)),
                     None,
@@ -94259,6 +94290,11 @@ impl InterpreterCore {
             "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function" => {
                 Some(self.ensure_builtin_prototype("Object")?)
             }
+            // ES2020 25.2.3, 25.7.3; ES2018 25.3.3: their [[Prototype]] is
+            // %Function.prototype%.
+            "GeneratorFunction" | "AsyncFunction" | "AsyncGeneratorFunction" => {
+                Some(self.ensure_builtin_prototype("Function")?)
+            }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
             // ES2020 22.2.6: the concrete typed array prototypes inherit the
@@ -94305,6 +94341,9 @@ impl InterpreterCore {
                 | "BigInt"
                 | "WeakRef"
                 | "FinalizationRegistry"
+                | "GeneratorFunction"
+                | "AsyncFunction"
+                | "AsyncGeneratorFunction"
         ) {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
             self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
@@ -94695,6 +94734,20 @@ impl InterpreterCore {
             let func_idx = self.closure_function_index(closure_id)?;
             Ok(Self::function_name_or_length(owner_module, func_idx, key)
                 .unwrap_or(Value::Undefined))
+        }
+    }
+
+    /// The canonical prototype a function value's [[Prototype]] defaults to:
+    /// %GeneratorFunction.prototype%, %AsyncFunction.prototype% or
+    /// %AsyncGeneratorFunction.prototype% for those kinds, else
+    /// %Function.prototype%; `None` for a non-function.
+    pub(super) fn function_intrinsic_prototype_name(value: &Value) -> Option<&'static str> {
+        match value {
+            Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => Some("Function"),
+            Value::GeneratorFunction(_) => Some("GeneratorFunction"),
+            Value::AsyncFunction(_) => Some("AsyncFunction"),
+            Value::AsyncGeneratorFunction(_) => Some("AsyncGeneratorFunction"),
+            _ => None,
         }
     }
 
@@ -95104,6 +95157,7 @@ impl InterpreterCore {
             .iter()
             .copied()
             .chain([TYPED_ARRAY_INTRINSIC])
+            .chain(FUNCTION_KIND_INTRINSICS)
             .find(|name| *name == &*builtin.module_specifier)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "standard constructor".to_string(),
@@ -95248,6 +95302,13 @@ impl InterpreterCore {
             TYPED_ARRAY_INTRINSIC => Err(InterpreterError::TypeError {
                 expected: "a concrete typed array constructor".to_string(),
                 got: "Abstract class TypedArray not directly constructable".to_string(),
+            }),
+            // Creating a generator or async function from source text is
+            // not supported (the Function constructor's contained-codegen
+            // path compiles ordinary functions only): a typed refusal.
+            name if FUNCTION_KIND_INTRINSICS.contains(&name) => Err(InterpreterError::TypeError {
+                expected: "the Function constructor".to_string(),
+                got: format!("{name} from source text is not supported"),
             }),
             "Array" => {
                 let values = self.call_arguments(args)?;
@@ -95630,6 +95691,7 @@ impl InterpreterCore {
             return STANDARD_CONSTRUCTOR_GLOBALS
                 .iter()
                 .copied()
+                .chain(FUNCTION_KIND_INTRINSICS)
                 .find(|candidate| *candidate == name)
                 .map(|name| Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)));
         }
@@ -95694,6 +95756,7 @@ impl InterpreterCore {
                 STANDARD_CONSTRUCTOR_GLOBALS
                     .iter()
                     .copied()
+                    .chain(FUNCTION_KIND_INTRINSICS)
                     .find(|candidate| *candidate == name)
             }) {
                 return Some(constructor(name));

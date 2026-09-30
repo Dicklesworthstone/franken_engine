@@ -356,3 +356,50 @@ fn functions_inherit_from_function_prototype() {
         "3 a!! 3 o o true function true true false undefined",
     );
 }
+
+/// Generator, async and async generator functions inherit from
+/// %GeneratorFunction.prototype%, %AsyncFunction.prototype% and
+/// %AsyncGeneratorFunction.prototype% (ES2020 25.2.3, 25.7.3; ES2018 25.3.3),
+/// which inherit from Function.prototype, carry an @@toStringTag and have
+/// the intrinsic constructors as `constructor`. Every function's
+/// [[Prototype]] was Function.prototype, so `is-generator-function`'s
+/// `getProto(fn) === getProto(function* () {})` said every function was a
+/// generator function, and `fn.constructor.name === 'AsyncFunction'` threw.
+#[test]
+fn generator_and_async_functions_have_their_kind_prototypes() {
+    router_check(
+        "function* g() {} async function a() {} async function* ag() {} function f() {} \
+         const GF = Object.getPrototypeOf(g), AF = Object.getPrototypeOf(a), AGF = Object.getPrototypeOf(ag); \
+         const isGen = (fn) => Object.getPrototypeOf(fn) === Object.getPrototypeOf(function* () {}); \
+         [g.constructor.name, a.constructor.name, ag.constructor.name, GF === Function.prototype, \
+         Object.getPrototypeOf(GF) === Function.prototype, Object.getPrototypeOf(AGF) === Function.prototype, \
+         GF.constructor === g.constructor, AF.constructor.length, typeof AF.constructor, \
+         Object.getPrototypeOf(a.constructor) === Function, g[Symbol.toStringTag], a[Symbol.toStringTag], \
+         Object.prototype.toString.call(AGF), isGen(g), isGen(f), isGen(a), \
+         g.constructor === Function, AF.hasOwnProperty('constructor'), g instanceof Function, \
+         'call' in g, typeof ag.call, g.__proto__ === GF].join(' ')",
+        "GeneratorFunction AsyncFunction AsyncGeneratorFunction false true true true 1 function true \
+         GeneratorFunction AsyncFunction [object AsyncGeneratorFunction] true false false false true \
+         true true function true",
+    );
+    router_check(
+        "function* g() {} async function a() {} \
+         Function.prototype.hello = function () { return 'hi ' + this.name; }; [g.hello(), a.hello()].join(' ')",
+        "hi g hi a",
+    );
+    // Deviation, pinned: Node compiles `new AsyncFunction('return 1')` and
+    // `GeneratorFunction('yield 1')`; creating these kinds from source text is
+    // not supported here, and the constructors refuse with a TypeError.
+    assert_eq!(
+        HybridRouter::default()
+            .eval(
+                "async function a() {} function* g() {} const r = []; \
+                 try { new a.constructor('return 1'); r.push('ok'); } catch (e) { r.push(e.constructor.name); } \
+                 try { g.constructor('yield 1'); r.push('ok'); } catch (e) { r.push(e.constructor.name); } \
+                 r.join(' ')"
+            )
+            .map(|outcome| outcome.value)
+            .unwrap_or_else(|err| format!("ERROR: {err:?}")),
+        "TypeError TypeError"
+    );
+}

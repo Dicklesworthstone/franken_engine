@@ -842,7 +842,7 @@ fn line_looks_like_typescript_construct(line: &str) -> bool {
         || trimmed.starts_with("export interface ")
         || trimmed.starts_with("enum ")
         || trimmed.starts_with("export enum ")
-        || trimmed.starts_with("namespace ")
+        || (trimmed.starts_with("namespace ") && namespace_keyword_starts_declaration(trimmed, 0))
         || trimmed.starts_with("export namespace ")
         || trimmed.starts_with("abstract class ")
         || trimmed.starts_with("export abstract class ")
@@ -1891,7 +1891,10 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
     let mut state = LexicalRewriteState::Code;
 
     while let Some((index, _)) = next_code_scan_char(source, &mut scan_cursor, &mut state) {
-        if !is_statement_start(source, index) || !starts_with_keyword(source, index, "namespace") {
+        if !is_statement_start(source, index)
+            || !starts_with_keyword(source, index, "namespace")
+            || !namespace_keyword_starts_declaration(source, index)
+        {
             continue;
         }
 
@@ -1938,6 +1941,29 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
     }
 
     Ok(rendered)
+}
+
+/// Whether the `namespace` at `start` begins a TypeScript namespace
+/// declaration: a name on the same line, then `{` or `.` (`namespace Demo {`,
+/// `namespace A.B {`). Anything else is an ordinary identifier, which plain
+/// JavaScript assigns (`namespace = parse(namespace);` in the uuid package's
+/// v35), so such a file is neither taken for TypeScript nor refused by
+/// namespace lowering.
+fn namespace_keyword_starts_declaration(source: &str, start: usize) -> bool {
+    let after_keyword = start + "namespace".len();
+    let rest = &source[after_keyword..];
+    let name_start = after_keyword + (rest.len() - rest.trim_start_matches([' ', '\t']).len());
+    if name_start == after_keyword {
+        return false;
+    }
+    let Some(name_end) = skip_identifier(source, name_start) else {
+        return false;
+    };
+    if matches!(&source[name_start..name_end], "in" | "instanceof") {
+        return false;
+    }
+    next_code_token_index(source, name_end)
+        .is_none_or(|index| source[index..].starts_with(['{', '.']))
 }
 
 fn parse_simple_namespace_declaration(
@@ -2799,6 +2825,36 @@ const route = "/api/x";"#;
 
         assert!(output.normalized_source.contains("const Demo = (() => {"));
         assert!(output.normalized_source.contains("ns.value = 1;"));
+    }
+
+    #[test]
+    fn a_variable_named_namespace_is_javascript() {
+        // The uuid package's v35: `namespace` is a parameter it reassigns.
+        let source = "function generate(value, namespace) {\n  namespace = parse(namespace);\n  return namespace;\n}";
+        assert_eq!(
+            classify_source_language(Some("uuid.js"), source),
+            SourceLanguage::JavaScript
+        );
+        assert_eq!(
+            classify_source_language(None, "namespace Demo {\n  export const a = 1;\n}"),
+            SourceLanguage::TypeScript
+        );
+        // In a TypeScript file the same assignment stays code; a real
+        // declaration next to it still lowers.
+        let output = normalize_typescript_to_es2020(
+            "namespace Demo { export const value = 1; }\nvar namespace = 'a';\nnamespace = namespace + '!';\nnamespace\n.length;",
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("an identifier named namespace is not a declaration");
+        assert!(output.normalized_source.contains("const Demo = (() => {"));
+        assert!(
+            output
+                .normalized_source
+                .contains("namespace = namespace + '!';")
+        );
     }
 
     #[test]

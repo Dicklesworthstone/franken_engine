@@ -136,3 +136,19 @@ fn collections_seed_from_any_iterable() {
         r#"TypeError true {"kept":true}"#,
     );
 }
+
+/// A spread element owns its whole operand (`...AssignmentExpression`):
+/// `[...a ?? [], 2]`, `[...b || []]`, `[...c ? x : y]` and `[...d = [5]]`
+/// spread the operand's value. The operator splits ran first, so the
+/// element became a `??`, `||`, `?:` or `=` whose operand was the spread,
+/// and the array held the operand's value itself (zod's
+/// `[...def.checks ?? [], ...chks]` built a nested array and failed).
+#[test]
+fn a_spread_operand_can_contain_operators() {
+    check(
+        "var a; var b = [1]; var c = true; var d; \
+         JSON.stringify([[...a ?? [], 2], [...b || [], 2], [0, ...b ?? [], 2], \
+         [...c ? [1, 2] : [], 3], [...b && [7, 8]], [...d = [5]], d]);",
+        "[[2],[1,2],[0,1,2],[1,2,3],[7,8],[5],[5]]",
+    );
+}

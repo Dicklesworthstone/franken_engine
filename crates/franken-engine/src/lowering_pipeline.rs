@@ -18988,6 +18988,8 @@ fn collection_constructor_capability(
         "Set" => Some("builtin:Set"),
         "WeakMap" => Some("builtin:WeakMap"),
         "WeakSet" => Some("builtin:WeakSet"),
+        "WeakRef" => Some("builtin:WeakRef"),
+        "FinalizationRegistry" => Some("builtin:FinalizationRegistry"),
         _ => None,
     }
 }

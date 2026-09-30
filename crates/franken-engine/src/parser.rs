@@ -3238,6 +3238,14 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
 const PARSE_STACK_BYTES_PER_RECURSION_LEVEL: usize = 64 * 1024;
 const PARSE_STACK_BASE_BYTES: usize = 4 * 1024 * 1024;
 
+/// Terms of a folded left-associative operator chain charged as one level of
+/// the recursion budget (bd-9vouw.85). Measured on a debug frankenctl: a
+/// top-level chain of `+`, string, call or product terms overflowed the parse
+/// stack above (4 MiB + 256 levels of 64 KiB) at 1,790-1,800 terms, about
+/// 5.5 terms per level; 4 keeps the longest admitted chain (~1,000 terms at
+/// top level) about 40% below that.
+const FOLDED_CHAIN_TERMS_PER_RECURSION_LEVEL: u64 = 4;
+
 /// Run `run` on a scoped thread whose stack is provisioned from the recursion
 /// budget, falling back to the caller stack if the thread cannot be spawned
 /// (mirrors franken-core; bd-rucba).
@@ -6463,16 +6471,28 @@ fn try_parse_binary(
             .filter(|(_, _, candidate)| candidate.precedence() == op.precedence())
             .collect();
         if chain.len() > 1 {
+            // The folded tree is still one Binary node per operator, and the
+            // parse-event, materialization and lowering walkers recurse down
+            // its left spine: a debug build overflowed the provisioned parse
+            // stack at ~1,790 terms and aborted. So the chain is charged one
+            // budget level per FOLDED_CHAIN_TERMS_PER_RECURSION_LEVEL terms,
+            // and a chain too long for the budget fails closed with the
+            // budget error, as every chain past 255 terms did before.
+            let terms = u64::try_from(chain.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1);
+            let operand_depth = recursion_depth
+                .saturating_add(1)
+                .saturating_add(terms.div_ceil(FOLDED_CHAIN_TERMS_PER_RECURSION_LEVEL));
             let mut start = 0;
             let mut folded: Option<Expression> = None;
             let mut pending_op = None;
             for &(position, length, chain_op) in &chain {
                 let operand_src = expr[start..position].trim();
-                let operand =
-                    match parse_expression(operand_src, span, context, recursion_depth + 1) {
-                        Ok(e) => e,
-                        Err(e) => return Some(Err(e)),
-                    };
+                let operand = match parse_expression(operand_src, span, context, operand_depth) {
+                    Ok(e) => e,
+                    Err(e) => return Some(Err(e)),
+                };
                 folded = Some(match (folded, pending_op) {
                     (Some(left), Some(previous)) => Expression::Binary {
                         operator: previous,
@@ -6485,7 +6505,7 @@ fn try_parse_binary(
                 start = position + length;
             }
             let last_src = expr[start..].trim();
-            let last = match parse_expression(last_src, span, context, recursion_depth + 1) {
+            let last = match parse_expression(last_src, span, context, operand_depth) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };

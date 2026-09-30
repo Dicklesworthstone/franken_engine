@@ -61,3 +61,24 @@ fn three_hundred_comma_sequence() {
         "300,300",
     );
 }
+
+#[test]
+fn nine_hundred_additions() {
+    let source = format!("const q = 1; String({});", vec!["q"; 900].join(" + "));
+    check(&source, "900");
+}
+
+#[test]
+fn chains_and_nesting_past_the_budget_fail_closed() {
+    // A folded chain is charged one recursion level per four terms, so one
+    // too long for the budget is a parse error. Folding without the charge
+    // let a 10,000-term chain reach the parse thread's walkers, which
+    // overflowed its stack and aborted the process (a debug build at ~1,790
+    // terms).
+    let chain = format!("const q = 1; String({});", vec!["q"; 10_000].join(" + "));
+    let result = eval_to_string(&chain);
+    assert!(result.contains("recursion budget exceeded"), "{result}");
+    let nested = format!("String({}1{});", "(".repeat(300), ")".repeat(300));
+    let result = eval_to_string(&nested);
+    assert!(result.contains("recursion budget exceeded"), "{result}");
+}

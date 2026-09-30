@@ -13421,6 +13421,11 @@ pub struct InterpreterCore {
     /// environment for the duration of one top-level realm. Realm rotation
     /// clears the map before seed-backed heap ObjectIds can be reused.
     realm_dynamic_globals: BTreeMap<String, ScopeBinding>,
+    /// The realm's global object (`globalThis`, bd-9vouw.17): seeded once per
+    /// realm and bound in every module's scope chain. A free identifier that
+    /// no binding resolves reads and writes its properties, own or inherited,
+    /// as a global environment's object record does. Cleared with the realm.
+    realm_global_object: Option<ObjectId>,
     /// Engine-owned sanitized outer environment for `Function`-constructor
     /// artifacts. Binding cells persist for one top-level realm, while every
     /// invocation receives fresh frame structure that shares only these
@@ -13877,7 +13882,9 @@ impl InterpreterCore {
                 .cloned()
                 .map(RuntimeNameReference::Resolved)
                 .unwrap_or(RuntimeNameReference::Unresolvable)
-        } else if self.realm_dynamic_globals.contains_key(name) {
+        } else if self.realm_dynamic_globals.contains_key(name)
+            || self.global_object_binding(None, name)?.is_some()
+        {
             // A global-object Reference retains the realm object and property
             // name, not the current property cell. If RHS code replaces that
             // property, PutValue must target the replacement.
@@ -13960,6 +13967,104 @@ impl InterpreterCore {
         }
     }
 
+    /// The realm global object and the key of its property `name`, when a
+    /// free identifier no binding resolves names one (ES2020 8.1.1.4.1
+    /// HasBinding of the global object record): an own property
+    /// (`globalThis.x = 1; x`), an accessor defined on it, or one it
+    /// inherits from Object.prototype (`toString`).
+    fn global_object_binding(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+    ) -> Result<Option<(ObjectId, RuntimePropertyKey)>, InterpreterError> {
+        let Some(global) = self.realm_global_object else {
+            return Ok(None);
+        };
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        if self.heap.get(global.0 as usize).is_none()
+            || !self.proxy_aware_has_runtime_property(module, global, &key, 0)?
+        {
+            return Ok(None);
+        }
+        Ok(Some((global, key)))
+    }
+
+    /// An own data property of the global object, read without running
+    /// guest code.
+    fn global_object_data_property(&self, name: &str) -> Option<Value> {
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        match self
+            .heap
+            .get(self.realm_global_object?.0 as usize)?
+            .own_runtime_property_descriptor(&key)?
+        {
+            BaselineSymbolProperty::Data(value) => Some(value),
+            BaselineSymbolProperty::Accessor { .. } => None,
+        }
+    }
+
+    /// GetBindingValue of a global-object binding: an ordinary [[Get]]
+    /// (getters run), with the label stored on the property it read.
+    fn load_global_object_name(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+    ) -> Result<Option<(Value, Label)>, InterpreterError> {
+        let Some((global, key)) = self.global_object_binding(module, name)? else {
+            return Ok(None);
+        };
+        if let Some(module) = module {
+            self.run_pre_runtime_property_access_hook(module, global, &key)?;
+        }
+        let value =
+            self.proxy_aware_get_runtime_property(module, global, &key, Value::Object(global), 0)?;
+        let label = self.runtime_property_label(global, &key);
+        Ok(Some((value, label)))
+    }
+
+    /// SetMutableBinding of a global-object binding, and the property a
+    /// sloppy write to an unresolvable name creates: an ordinary [[Set]] that
+    /// stores the written value's label on the property, as SetProperty does.
+    fn put_global_object_name(
+        &mut self,
+        module: Option<&Ir3Module>,
+        global: ObjectId,
+        name: &str,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        if let Some(module) = module {
+            self.run_pre_runtime_property_access_hook(module, global, &key)?;
+        }
+        self.join_object_mutation_label(global, label)?;
+        let previous_label = self.own_stored_runtime_property_label(global, &key);
+        self.set_own_runtime_property_label(global, &key, label)?;
+        let committed = match self.proxy_aware_set_runtime_property(
+            module,
+            global,
+            &key,
+            value,
+            Value::Object(global),
+            0,
+        ) {
+            Ok(committed) => committed,
+            Err(error) => {
+                self.set_own_runtime_property_label(global, &key, &previous_label)?;
+                return Err(error);
+            }
+        };
+        let owns_property = self
+            .heap
+            .get(global.0 as usize)
+            .is_some_and(|object| object.contains_own_runtime_property(&key));
+        if !committed || !owns_property {
+            // A non-writable property or an inherited setter keeps no own value.
+            self.set_own_runtime_property_label(global, &key, &previous_label)?;
+        }
+        Ok(())
+    }
+
     fn put_resolved_runtime_name_binding(
         &mut self,
         name: &str,
@@ -14001,8 +14106,10 @@ impl InterpreterCore {
 
     fn put_unresolvable_runtime_name(
         &mut self,
+        module: Option<&Ir3Module>,
         name: &str,
         value: Value,
+        label: &Label,
         strict: bool,
     ) -> Result<(), InterpreterError> {
         if strict {
@@ -14108,7 +14215,7 @@ impl InterpreterCore {
             return Ok(());
         }
 
-        self.put_realm_runtime_name(name, value)
+        self.put_realm_runtime_name_labeled(module, name, value, label)
     }
 
     /// Execute `delete name` for an identifier without a source lexical
@@ -14131,6 +14238,14 @@ impl InterpreterCore {
             self.realm_dynamic_globals.contains_key(name)
         };
         if !present {
+            // A global-object binding deletes the property ([[Delete]]: an
+            // inherited one is `true` without effect, a non-configurable one
+            // `false`).
+            if !in_generated_artifact
+                && let Some((global, key)) = self.global_object_binding(None, name)?
+            {
+                return self.proxy_aware_delete_runtime_property(None, global, &key, 0);
+            }
             // Genuinely missing name: `delete` of an unresolvable Reference is
             // `true` with no side effect.
             return Ok(true);
@@ -14162,12 +14277,28 @@ impl InterpreterCore {
     }
 
     fn put_realm_runtime_name(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
+        self.put_realm_runtime_name_labeled(None, name, value, &Label::Public)
+    }
+
+    fn put_realm_runtime_name_labeled(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
         // Write the realm global object directly. If RHS code created or
         // replaced this property after the Reference was captured, it is still
         // the property this PutValue updates; a newly appearing lexical binding
         // must not steal the write.
         if let Some(binding) = self.realm_dynamic_globals.get(name).cloned() {
             return self.put_resolved_runtime_name_binding(name, binding, value);
+        }
+        // Once the realm has its global object, a sloppy global is a property
+        // of it (`x = 1; globalThis.x`), readable through the fallback in
+        // LoadName.
+        if let Some(global) = self.realm_global_object {
+            return self.put_global_object_name(module, global, name, value, label);
         }
 
         let previous_scope_bytes = self.scope_chain_memory_bytes();
@@ -14202,10 +14333,29 @@ impl InterpreterCore {
         value: Value,
         strict: bool,
     ) -> Result<(), InterpreterError> {
+        self.put_runtime_name_labeled(None, name, value, &Label::Public, strict)
+    }
+
+    /// [`Self::put_runtime_name`] with the written value's label, which a
+    /// global-object property stores.
+    fn put_runtime_name_labeled(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+        value: Value,
+        label: &Label,
+        strict: bool,
+    ) -> Result<(), InterpreterError> {
         if let Some(binding) = self.resolve_runtime_name_binding(name) {
             self.put_resolved_runtime_name_binding(name, binding, value)
+        } else if self.active_generated_function_artifact.is_none()
+            && self.global_object_binding(module, name)?.is_some()
+        {
+            // A property of the global object is a binding, in strict code
+            // too (`globalThis.x = 1; x = 2`).
+            self.put_realm_runtime_name_labeled(module, name, value, label)
         } else {
-            self.put_unresolvable_runtime_name(name, value, strict)
+            self.put_unresolvable_runtime_name(module, name, value, label, strict)
         }
     }
 
@@ -14216,6 +14366,25 @@ impl InterpreterCore {
         &mut self,
         name: &str,
         value: Value,
+        strict: bool,
+        reference_token: u32,
+    ) -> Result<(), InterpreterError> {
+        self.put_runtime_name_with_status_labeled(
+            None,
+            name,
+            value,
+            &Label::Public,
+            strict,
+            reference_token,
+        )
+    }
+
+    fn put_runtime_name_with_status_labeled(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+        value: Value,
+        label: &Label,
         strict: bool,
         reference_token: u32,
     ) -> Result<(), InterpreterError> {
@@ -14238,10 +14407,10 @@ impl InterpreterCore {
                                 .to_string(),
                     });
                 }
-                self.put_realm_runtime_name(name, value)
+                self.put_realm_runtime_name_labeled(module, name, value, label)
             }
             RuntimeNameReference::Unresolvable => {
-                self.put_unresolvable_runtime_name(name, value, strict)
+                self.put_unresolvable_runtime_name(module, name, value, label, strict)
             }
         }
     }
@@ -14330,6 +14499,7 @@ impl InterpreterCore {
             last_post_run_epoch: None,
             scope_chain,
             realm_dynamic_globals: BTreeMap::new(),
+            realm_global_object: None,
             generated_function_realm_globals: None,
             generated_function_realm_generation: 0,
             runtime_name_references: Vec::new(),
@@ -34977,6 +35147,7 @@ impl InterpreterCore {
         // Heap-backed realm values are recreated after the authoritative seed
         // reset. Keeping their binding cells here would retain stale ObjectIds.
         self.realm_dynamic_globals.clear();
+        self.realm_global_object = None;
         self.generated_function_realm_generation = next_generation;
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
         Ok(())
@@ -35066,6 +35237,12 @@ impl InterpreterCore {
             frame.replace_bindings(scope_checkpoint);
         }
         self.realm_dynamic_globals = realm_checkpoint;
+        if self
+            .realm_global_object
+            .is_some_and(|global| global.0 as usize >= heap_checkpoint)
+        {
+            self.realm_global_object = None;
+        }
         self.estimated_memory_bytes = memory_checkpoint;
     }
 
@@ -35220,24 +35397,33 @@ impl InterpreterCore {
     /// identity. It holds the standard intrinsics exactly as the bare
     /// names resolve (`globalThis.Object === Object`), non-enumerable as in
     /// Node, and never a host-authority binding: `process` stays reachable
-    /// only through the gated identifier. It is a snapshot: a sloppy global
-    /// created later is not a property of it, and a property written to it is
-    /// not a bare global.
+    /// only through the gated identifier. Its intrinsic members are a
+    /// snapshot of the bindings, which resolve first; a free name no binding
+    /// resolves reads and writes its properties (`realm_global_object`).
     fn seed_global_object(&mut self) -> Result<(), InterpreterError> {
         // One global object per realm: a repeated injection keeps its identity.
-        let seeded = self
+        let bound = self
             .scope_chain
             .frames
             .last()
             .and_then(|frame| frame.get("globalThis"))
             .map(|binding| {
-                binding
-                    .state()
-                    .map(|state| matches!(state.value, Value::Object(_)))
+                binding.state().map(|state| match state.value {
+                    Value::Object(global) => Some(global),
+                    _ => None,
+                })
             })
             .transpose()?
-            .unwrap_or(false);
-        if seeded {
+            .flatten();
+        if let Some(global) = bound {
+            self.realm_global_object.get_or_insert(global);
+            return Ok(());
+        }
+        // A module's fresh scope chain binds the realm's existing object.
+        if let Some(global) = self.realm_global_object {
+            for name in ["globalThis", "global"] {
+                self.inject_runtime_global_binding(name, Value::Object(global))?;
+            }
             return Ok(());
         }
         let mut members = Vec::new();
@@ -35271,6 +35457,7 @@ impl InterpreterCore {
             // the way theirs do (PREDECLARED_RUNTIME_GLOBALS in lowering).
             self.inject_runtime_global_binding(name, Value::Object(global))?;
         }
+        self.realm_global_object = Some(global);
         Ok(())
     }
 
@@ -50984,8 +51171,29 @@ impl InterpreterCore {
                     allow_missing,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
-                    let val = self.load_runtime_name(name.as_ref(), allow_missing)?;
-                    self.write_reg(dst, val)?;
+                    match self.load_runtime_name(name.as_ref(), false) {
+                        Err(InterpreterError::UndefinedBinding { .. }) => {
+                            match self.load_global_object_name(Some(module), name.as_ref())? {
+                                Some((val, label)) => {
+                                    // As a property read: the stored label,
+                                    // never lowering what dst already holds.
+                                    let prior_dst_label = self.get_register_label(dst)?;
+                                    let label = self.join_owned_label_with_temporary_budget(
+                                        label,
+                                        prior_dst_label,
+                                    )?;
+                                    self.write_reg_with_label(dst, val, label)?;
+                                }
+                                None if allow_missing => self.write_reg(dst, Value::Undefined)?,
+                                None => {
+                                    return Err(InterpreterError::UndefinedBinding {
+                                        name: name.into_owned(),
+                                    });
+                                }
+                            }
+                        }
+                        loaded => self.write_reg(dst, loaded?)?,
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::ResolveNameStatus {
@@ -51064,7 +51272,14 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
-                    self.put_runtime_name(name.as_ref(), val, strict)?;
+                    let label = self.get_register_label(src)?.clone();
+                    self.put_runtime_name_labeled(
+                        Some(module),
+                        name.as_ref(),
+                        val,
+                        &label,
+                        strict,
+                    )?;
                     self.ip += 1;
                 }
                 Ir3Instruction::PutNameWithStatus {
@@ -51077,7 +51292,15 @@ impl InterpreterCore {
                     let val = self.read_reg(src)?;
                     let reference_token =
                         Self::runtime_name_reference_token(self.read_reg(status)?)?;
-                    self.put_runtime_name_with_status(name.as_ref(), val, strict, reference_token)?;
+                    let label = self.get_register_label(src)?.clone();
+                    self.put_runtime_name_with_status_labeled(
+                        Some(module),
+                        name.as_ref(),
+                        val,
+                        &label,
+                        strict,
+                        reference_token,
+                    )?;
                     self.ip += 1;
                 }
                 Ir3Instruction::InitBinding {
@@ -69595,7 +69818,22 @@ impl InterpreterCore {
                     allow_missing,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = self.load_runtime_name(name.as_ref(), allow_missing)?;
+                    let value = match self.load_runtime_name(name.as_ref(), false) {
+                        // This lane runs no guest code: a data property of the
+                        // global object only, as its GetProperty reads.
+                        Err(InterpreterError::UndefinedBinding { .. }) => {
+                            match self.global_object_data_property(name.as_ref()) {
+                                Some(value) => value,
+                                None if allow_missing => Value::Undefined,
+                                None => {
+                                    return Err(InterpreterError::UndefinedBinding {
+                                        name: name.into_owned(),
+                                    });
+                                }
+                            }
+                        }
+                        loaded => loaded?,
+                    };
                     Self::write_local_register(&mut local_registers, dst, value)?;
                     instruction_pointer += 1;
                 }
@@ -140687,14 +140925,15 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0k19b-sloppy-global");
         let result = core.execute(&sloppy).expect("sloppy PutName execution");
         assert_eq!(result.value, Value::Int(7));
-        let binding = core
-            .realm_dynamic_globals
-            .get("bd_0k19b_sloppy_global")
-            .expect("sloppy PutName global binding");
-        assert_eq!(binding.kind, BindingKind::Var);
+        // A sloppy global is a property of the realm's global object.
+        assert!(
+            !core
+                .realm_dynamic_globals
+                .contains_key("bd_0k19b_sloppy_global")
+        );
         assert_eq!(
-            binding.value().expect("global binding value"),
-            Value::Int(7)
+            core.global_object_data_property("bd_0k19b_sloppy_global"),
+            Some(Value::Int(7))
         );
         assert_eq!(
             core.estimated_memory_bytes(),
@@ -140929,12 +141168,9 @@ mod tests {
                 if name == "bd_0k19b_frozen_missing"
         ));
         assert_eq!(
-            core.realm_dynamic_globals
-                .get("bd_0k19b_frozen_missing")
-                .expect("RHS-created realm global survives the strict PutValue error")
-                .value()
-                .expect("realm global value"),
-            Value::Int(1)
+            core.global_object_data_property("bd_0k19b_frozen_missing"),
+            Some(Value::Int(1)),
+            "RHS-created realm global survives the strict PutValue error"
         );
         assert_eq!(
             core.estimated_memory_bytes(),

@@ -72632,21 +72632,35 @@ impl InterpreterCore {
         outcome
     }
 
-    fn construct_url_search_params(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+    /// `new URLSearchParams(init)` (URL Standard 6.1): a string (less a
+    /// leading `?`) is form-urlencoded; an object with an @@iterator (an
+    /// array, a Map, a generator) yields the pairs, each an iterable of
+    /// exactly two items; any other object is a record whose own enumerable
+    /// string keys name the pairs. (Only strings and URLSearchParams were
+    /// accepted, so `new URLSearchParams({ q: 'x' })` threw.)
+    fn construct_url_search_params(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
         let initializer = self.builtin_arg(args, 0)?;
+        let mut lifecycle_label = None;
         let pairs = match initializer {
             None | Some(Value::Undefined) => Vec::new(),
-            Some(Value::Object(object_id)) => {
-                let state = self.url_search_params.get(&object_id).ok_or_else(|| {
-                    InterpreterError::TypeError {
-                        expected: "string or branded URLSearchParams initializer".to_string(),
-                        got: "object".to_string(),
-                    }
-                })?;
+            Some(Value::Object(object_id)) if self.url_search_params.contains_key(&object_id) => {
+                let state = &self.url_search_params[&object_id];
                 self.check_temporary_memory_budget(Self::estimate_url_search_params_state_bytes(
                     state,
                 ))?;
                 state.pairs.clone()
+            }
+            Some(value) if value.is_object_like() => {
+                // The initializer's reachable labels, and what its iterator
+                // or getters produce, flow into the pairs.
+                let mut label = self.join_arg_range_with_object_mutation_label(args)?;
+                let pairs = self.url_search_params_object_pairs(module, value, &mut label)?;
+                lifecycle_label = Some(label);
+                pairs
             }
             Some(value) => {
                 let input_bound = self.url_value_to_string_upper_bound(&value);
@@ -72660,9 +72674,150 @@ impl InterpreterCore {
                     .collect()
             }
         };
-        let lifecycle_label = self.join_arg_range_label(args)?;
-        let object_id = self.allocate_url_search_params_state(pairs, None, lifecycle_label)?;
+        let Some(lifecycle_label) = lifecycle_label else {
+            let lifecycle_label = self.join_arg_range_label(args)?;
+            let object_id = self.allocate_url_search_params_state(pairs, None, lifecycle_label)?;
+            return Ok(Value::Object(object_id));
+        };
+        let object_id =
+            self.allocate_url_search_params_state(pairs, None, lifecycle_label.clone())?;
+        self.finish_collection_seed(lifecycle_label)?;
         Ok(Value::Object(object_id))
+    }
+
+    fn url_search_params_object_pairs(
+        &mut self,
+        module: Option<&Ir3Module>,
+        init: Value,
+        label: &mut Label,
+    ) -> Result<Vec<(String, String)>, InterpreterError> {
+        let backing = self.iterator_carrier_backing_id(&init, "URLSearchParams initializer")?;
+        let iterable = match backing {
+            _ if matches!(init, Value::Iterator(_) | Value::Generator(_)) => true,
+            None => false,
+            Some(object) if self.array_from_has_explicit_iterator(object)? => self
+                .lookup_symbol_iterator_method(module, object, init.clone())?
+                .is_some(),
+            Some(object) => {
+                let map = self.collection_storage_id(object, "Map", "__entries");
+                let set = self.collection_storage_id(object, "Set", "__values");
+                map.is_some()
+                    || set.is_some()
+                    || self
+                        .heap
+                        .get(object.0 as usize)
+                        .is_some_and(|object| object.is_array)
+            }
+        };
+        self.observe_collection_seed_label(label);
+        let mut pairs = Vec::new();
+        let mut retained_bytes = 0u64;
+        if iterable {
+            let mut source = self.collection_seed_source(module, init)?;
+            while let Some(entry) = self.next_collection_seed(module, &mut source)? {
+                self.observe_collection_seed_label(label);
+                let pair = match self.url_search_params_sequence_pair(module, entry, label) {
+                    Ok(pair) => pair,
+                    Err(error) => return self.close_collection_seed(module, source, error),
+                };
+                retained_bytes = retained_bytes.saturating_add(
+                    Self::estimate_url_pair_storage_bytes(std::slice::from_ref(&pair)),
+                );
+                if let Err(error) = self.check_temporary_memory_budget(retained_bytes) {
+                    return self.close_collection_seed(module, source, error);
+                }
+                pairs.push(pair);
+            }
+            return Ok(pairs);
+        }
+        let Some(object) = backing else {
+            return Ok(pairs);
+        };
+        // A later key whose name converts to an earlier one's (lone
+        // surrogates become U+FFFD) replaces its value in place.
+        let mut positions: BTreeMap<String, usize> = BTreeMap::new();
+        for key in self.proxy_own_enumerable_string_keys(module, object)? {
+            let value = self.proxy_aware_get_runtime_property(
+                module,
+                object,
+                &RuntimePropertyKey::String(key.clone()),
+                init.clone(),
+                0,
+            )?;
+            self.observe_collection_seed_label(label);
+            let name = key.to_string();
+            let value = self.url_search_params_usv_string(module, value)?;
+            self.observe_collection_seed_label(label);
+            let pair = (name, value);
+            retained_bytes = retained_bytes.saturating_add(Self::estimate_url_pair_storage_bytes(
+                std::slice::from_ref(&pair),
+            ));
+            self.check_temporary_memory_budget(retained_bytes)?;
+            match positions.get(&pair.0) {
+                Some(&position) => pairs[position].1 = pair.1,
+                None => {
+                    positions.insert(pair.0.clone(), pairs.len());
+                    pairs.push(pair);
+                }
+            }
+        }
+        Ok(pairs)
+    }
+
+    /// One `[name, value]` of a URLSearchParams sequence initializer: an
+    /// iterable read to its end, which must have produced exactly two items.
+    fn url_search_params_sequence_pair(
+        &mut self,
+        module: Option<&Ir3Module>,
+        entry: Value,
+        label: &mut Label,
+    ) -> Result<(String, String), InterpreterError> {
+        if !entry.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "iterable [name, value] pair in the URLSearchParams initializer"
+                    .to_string(),
+                got: entry.type_name().to_string(),
+            });
+        }
+        let mut items = self.collection_seed_source(module, entry)?;
+        let (mut name, mut value) = (None, None);
+        let mut count = 0usize;
+        while let Some(item) = self.next_collection_seed(module, &mut items)? {
+            self.observe_collection_seed_label(label);
+            count = count.saturating_add(1);
+            if count <= 2 {
+                let text = self.url_search_params_usv_string(module, item)?;
+                self.observe_collection_seed_label(label);
+                *(if count == 1 { &mut name } else { &mut value }) = Some(text);
+            }
+        }
+        match (name, value) {
+            (Some(name), Some(value)) if count == 2 => Ok((name, value)),
+            _ => Err(InterpreterError::TypeError {
+                expected: "[name, value] pair of exactly two items".to_string(),
+                got: format!("{count} items"),
+            }),
+        }
+    }
+
+    /// ToString of a URLSearchParams name or value (objects through
+    /// ToPrimitive; a Symbol is a TypeError).
+    fn url_search_params_usv_string(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<String, InterpreterError> {
+        let primitive = if value.is_object_like() {
+            self.coerce_runtime_primitive(module, value, true)?
+        } else {
+            value
+        };
+        if matches!(primitive, Value::Symbol(_)) {
+            return Err(Self::symbol_to_string_error());
+        }
+        let text = self.value_to_string(&primitive);
+        self.check_temporary_memory_budget(Self::estimate_string_bytes(&text))?;
+        Ok(text)
     }
 
     fn url_search_params_receiver_id(
@@ -78858,7 +79013,7 @@ impl InterpreterCore {
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::String)
             }
             "builtin:Url" => self.construct_url(args),
-            "builtin:UrlSearchParams" => self.construct_url_search_params(args),
+            "builtin:UrlSearchParams" => self.construct_url_search_params(module, args),
             "builtin:UrlFileUrlToPath" => self.legacy_url_file_url_to_path(args),
             "builtin:UrlFormat" => self.legacy_url_format(args),
             "builtin:UrlParse" => self.legacy_url_parse(args),
@@ -108392,7 +108547,8 @@ mod async_runtime_tests_current {
         pair_amplification_refused.config.max_total_memory_bytes =
             baseline_bytes.saturating_add(former_three_x_check);
         assert!(matches!(
-            pair_amplification_refused.construct_url_search_params(RegRange { start: 0, count: 1 }),
+            pair_amplification_refused
+                .construct_url_search_params(None, RegRange { start: 0, count: 1 }),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(pair_amplification_refused.heap.len(), baseline_heap_len);

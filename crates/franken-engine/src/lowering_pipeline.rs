@@ -31501,8 +31501,9 @@ fn function_local_register(
 /// bd-9vouw.23: once a batch array or object literal is built, its element
 /// and key registers are dead. When nothing live sits at or above the lowest
 /// of them (no value-stack entry, and it is above the statement floor, pinned
-/// bindings and live slots), move the literal into that register and rewind
-/// the cursor past it. Without this, nested literals in one statement used
+/// bindings and live slots), move the literal to the first register above
+/// the value stack's top and that floor, and rewind the cursor past it.
+/// Without this, nested literals in one statement used
 /// every register until the statement ended (Test262's
 /// harness/byteConversionValues.js needed a 1295-register frame).
 fn compact_batch_literal(
@@ -31514,15 +31515,28 @@ fn compact_batch_literal(
     cursor: &mut Reg,
     high_water: &mut Reg,
 ) -> Reg {
-    let Some(&base) = operands.iter().min() else {
+    let Some(&lowest_operand) = operands.iter().min() else {
         return literal;
     };
-    if base >= literal
-        || base < reserved_below
-        || value_stack.iter().any(|register| *register >= base)
+    if lowest_operand >= literal
+        || lowest_operand < reserved_below
+        || value_stack
+            .iter()
+            .any(|register| *register >= lowest_operand)
     {
         return literal;
     }
+    // bd-9vouw.86: the temporaries between the value stack's top and the
+    // lowest operand are dead as well: nothing names them but the stack,
+    // pinned bindings and live slots, which the floor already excludes (a
+    // member call's receiver copy and property key are consumed before the
+    // call). So the result goes just above the stack top; taking the lowest
+    // operand's register leaked two registers per top-level member call.
+    let base = value_stack
+        .iter()
+        .max()
+        .map_or(reserved_below, |top| top.saturating_add(1))
+        .max(reserved_below);
     instructions.push(Ir3Instruction::Move {
         dst: base,
         src: literal,

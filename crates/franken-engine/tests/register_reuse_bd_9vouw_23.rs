@@ -673,21 +673,11 @@ fn calls_inside_one_expression_release_their_temporaries() {
             "60",
         ),
     ] {
-        let top_level = fixed_lane_value(&format!("{prelude} {expression};"));
-        if matches!(name, "method_calls" | "builtin_calls") {
-            // Ratchet, known limit (bd-9vouw.86): at top level each member
-            // call's receiver (`o` in `o.m(1)`, `Math` in `Math.max(1, 2)`)
-            // is a synthetic binding in a pinned register until the
-            // statement ends, so 60 of them in one top-level expression
-            // still overflow. The function-body case below reuses one
-            // register per call. Promote to `node` when fixed.
-            assert_eq!(
-                top_level, "ERROR: register 256 out of bounds (max 256)",
-                "{name} at top level: promote the bd-9vouw.86 ratchet to Node's value"
-            );
-        } else {
-            assert_eq!(top_level, node, "{name} at top level");
-        }
+        assert_eq!(
+            fixed_lane_value(&format!("{prelude} {expression};")),
+            node,
+            "{name} at top level"
+        );
         assert_eq!(
             fixed_lane_value(&format!(
                 "{prelude} (function () {{ return {expression}; }})();"
@@ -764,5 +754,27 @@ fn binary_operators_release_their_operand_registers() {
         )),
         max_function_frame_size("function g() { return 1 + 1; }"),
         "function-body chain frame"
+    );
+}
+
+#[test]
+fn top_level_member_calls_keep_two_registers_each() {
+    // bd-9vouw.86: at top level a member call's receiver is a root-scope
+    // synthetic binding with its own register, and its result stays on the
+    // value stack until the array literal is built. Its other temporaries
+    // (the receiver copy, the property key, the callee, the argument copies)
+    // are dead once it returns; the call's result used to land above the
+    // first two, so each call kept five registers and 60 of them overflowed
+    // the 256-register frame.
+    let program = |calls: usize| {
+        format!(
+            "var o = {{ m(a) {{ return a * 2; }} }}; var r = [{}].length;",
+            repeated("o.m(1)", calls)
+        )
+    };
+    let growth = main_frame_size(&program(40)) - main_frame_size(&program(20));
+    assert!(
+        growth <= 2 * 20,
+        "20 more top-level member calls widened the frame by {growth}"
     );
 }

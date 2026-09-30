@@ -11164,9 +11164,8 @@ fn parse_switch_statement(
     let mut cases = Vec::with_capacity(4);
     let mut remaining = body_src.trim();
     while !remaining.is_empty() {
-        if remaining.starts_with("case ") {
-            let after_case = remaining.strip_prefix("case ").unwrap_or(remaining);
-            let colon_idx = after_case.find(':').ok_or_else(|| {
+        if let Some(after_case) = strip_case_keyword(remaining) {
+            let colon_idx = find_ternary_colon(after_case).ok_or_else(|| {
                 ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     "switch case requires a colon after test expression",
@@ -11251,10 +11250,12 @@ fn split_at_next_case(s: &str) -> (&str, &str) {
             _ => {}
         }
         if depth_brace == 0 {
-            // Check for "case " or "default" at keyword boundary.
-            let before_ok = i == 0 || !is_identifier_continue(bytes[i - 1] as char);
+            // Check for `case` or `default` at a keyword boundary. After a
+            // `.` they are property names (`exports.default`, `o.case`).
+            let before_ok =
+                i == 0 || (!is_identifier_continue(bytes[i - 1] as char) && bytes[i - 1] != b'.');
             if before_ok {
-                if i + 5 <= bytes.len() && &bytes[i..i + 5] == b"case " {
+                if bytes[i] == b'c' && strip_case_keyword(&s[i..]).is_some() {
                     return (&s[..i], &s[i..]);
                 }
                 if i + 7 <= bytes.len() && &bytes[i..i + 7] == b"default" {
@@ -11269,6 +11270,20 @@ fn split_at_next_case(s: &str) -> (&str, &str) {
         i += 1;
     }
     (s, "")
+}
+
+/// The clause text after a leading `case` keyword, or `None` when `text`
+/// does not start with one. The keyword ends at any character that cannot
+/// continue an identifier: minified code writes `case"x":`, `case'x':`,
+/// `case(1):` and `case-1:` without a space, and a switch whose labels were
+/// not recognised ran neither the matching case nor `default`
+/// (bd-9vouw.91; dayjs format tokens).
+fn strip_case_keyword(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix("case")?;
+    match rest.chars().next() {
+        Some(ch) if !is_identifier_continue(ch) && ch != '\\' => Some(rest),
+        _ => None,
+    }
 }
 
 fn parse_break_statement(statement: &str, span: SourceSpan) -> ParseResult<Statement> {

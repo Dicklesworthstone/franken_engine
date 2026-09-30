@@ -38777,10 +38777,12 @@ impl InterpreterCore {
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayLastIndexOf => {
-                // ES2020 23.1.3.16: last index strictly equal to the search
-                // element, scanning backward, else -1. (Explicit fromIndex is a
-                // bd-962ev.1 follow-up; the whole-array backward scan is the
-                // common case.)
+                // ES2020 22.1.3.17: last index strictly equal to the search
+                // element, scanning backward from fromIndex (default len - 1;
+                // a negative one counts from the end, one below -len finds
+                // nothing), else -1. fromIndex was ignored, so
+                // `[1, 2, 1].lastIndexOf(1, 1)` answered 2, and a Symbol or
+                // BigInt fromIndex did not throw.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(arr_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -38788,18 +38790,33 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let len = self.array_like_length(arr_id)?;
+                let len = i64::try_from(self.array_like_length(arr_id)?).unwrap_or(i64::MAX);
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let start = match self.builtin_arg(args, 1)? {
+                    Some(value) => {
+                        Self::require_number_coercible_index(
+                            &value,
+                            "Array.prototype.lastIndexOf",
+                        )?;
+                        let from = Self::value_as_integer(&value);
+                        if from >= 0 {
+                            from.min(len - 1)
+                        } else {
+                            len.saturating_add(from)
+                        }
+                    }
+                    None => len - 1,
+                };
                 let mut found = -1i64;
-                for index in (0..len).rev() {
+                let mut index = start;
+                while index >= 0 {
                     // Holes are skipped, as in indexOf.
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
-                        continue;
-                    };
-                    if Self::values_equal(&element, &search) {
-                        found = i64::try_from(index).unwrap_or(i64::MAX);
+                    let element = self.array_index_value(arr_id, index as usize)?;
+                    if element.is_some_and(|element| Self::values_equal(&element, &search)) {
+                        found = index;
                         break;
                     }
+                    index -= 1;
                 }
                 Ok(Value::Int(found))
             }

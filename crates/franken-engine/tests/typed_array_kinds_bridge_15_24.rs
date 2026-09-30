@@ -129,4 +129,11 @@ fn a_symbol_or_bigint_from_index_throws_a_type_error() {
         check(&probe(call), "TypeError");
     }
     check("[1, 2, 1].indexOf(1, 1)", "2");
+    // lastIndexOf searches backward from fromIndex (it used to ignore it).
+    check(
+        "[[1, 2, 1].lastIndexOf(1, 1), [1, 2, 1].lastIndexOf(1, -2), [1, 2, 1].lastIndexOf(1, -4), \
+         [1, 2, 1].lastIndexOf(1, -Infinity), [1, 2, 1].lastIndexOf(1, 99), [].lastIndexOf(1), \
+         [1, 2, 1].lastIndexOf(1, '1'), [1, 2, 1].lastIndexOf(1, 1.7)].join()",
+        "0,0,-1,-1,2,-1,0,0",
+    );
 }

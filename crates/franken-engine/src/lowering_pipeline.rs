@@ -13630,7 +13630,10 @@ fn try_lower_arrow_expression_to_ir1(
             &mut Vec::new(),
         )?,
         ArrowBody::Block(block) => {
-            for stmt in &block.body {
+            // Function declarations are hoisted (ES2020 14.1.22
+            // FunctionDeclarationInstantiation), as in function bodies: a
+            // helper declared after the arrow's `return` was undefined.
+            for stmt in hoisted_statement_order(&block.body) {
                 lower_statement_to_ir1(
                     stmt,
                     &mut body_ops,

@@ -44799,6 +44799,24 @@ impl InterpreterCore {
             .generated_function_artifact
             .map(|handle| self.contained_codegen_grant_for_artifact(handle))
             .transpose()?;
+        // A generator body that reads `arguments` gets the object of its
+        // invocation's full argument list (bd-9vouw.25): the call only
+        // created the generator, so no call setup staged it, and the body
+        // saw an empty arguments object. Staged below, once this activation
+        // is complete, for the generator's single frame.
+        let arguments_object = if matches!(
+            module.instructions.get(func.entry as usize),
+            Some(Ir3Instruction::HostCall { capability, .. })
+                if capability.0 == crate::lowering_pipeline::ARGUMENTS_OBJECT_CAPABILITY
+        ) {
+            let label = invocation
+                .argument_labels
+                .iter()
+                .fold(Label::Public, |joined, label| joined.join(label));
+            Some((self.alloc_arguments_object(&invocation.arguments)?, label))
+        } else {
+            None
+        };
         let (arguments, argument_labels) = self.materialize_generator_arguments(
             &func,
             invocation.arguments,
@@ -44891,6 +44909,9 @@ impl InterpreterCore {
             contained_codegen_grant,
         };
         self.check_temporary_memory_budget(Self::estimate_generator_execution_bytes(&execution))?;
+        if let Some((object, label)) = arguments_object {
+            self.pending_arguments_object = Some((1, Value::Object(object), label));
+        }
         Ok(execution)
     }
 

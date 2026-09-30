@@ -86,6 +86,25 @@ fn binary_constructors_are_values() {
 /// receiver's kind (map converts: 300 wraps to 44 in a Uint8Array); reverse
 /// and sort reorder in place (a subarray view only its own window), and sort
 /// without a comparator is numeric (-0 before 0, NaN last).
+/// %TypedArray%.prototype.some and its siblings that share an Array.prototype
+/// algorithm are distinct functions that ValidateTypedArray(this): another
+/// receiver is a TypeError (Test262 TypedArray/prototype/some/
+/// this-is-not-object and this-is-not-typedarray-instance). They were
+/// Array.prototype's functions themselves; `toString` still is.
+#[test]
+fn typed_array_methods_require_a_typed_array() {
+    check(
+        "var TA = Object.getPrototypeOf(Int8Array.prototype); var r = []; \
+         for (const v of [42, 'x', {}, [1]]) { try { TA.some.call(v, () => true); r.push('none'); } \
+         catch (e) { r.push(e.constructor.name); } } \
+         [r.join(), new Int8Array([1, 2]).some(x => x > 1), \
+         Int8Array.prototype.indexOf === Array.prototype.indexOf, \
+         Int8Array.prototype.toString === Array.prototype.toString, \
+         Array.prototype.some.call(42, () => true), new Uint8Array([3, 4]).join('-')].join(' ')",
+        "TypeError,TypeError,TypeError,TypeError true false true false 3-4",
+    );
+}
+
 #[test]
 fn typed_arrays_have_the_array_methods() {
     check(

@@ -126,6 +126,14 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const r = []; const b = new Boolean(); b.v = Number.prototype.valueOf; for (const f of [() => b.v(), () => Number.prototype.valueOf.call({}), () => Number.prototype.toString.call('x'), () => Number.prototype.valueOf.call(new Number(5)), () => Number.prototype.toString.call(new Number(255), 16)]) { try { r.push(String(f())); } catch (e) { r.push(e.constructor.name); } } console.log(r.join());"#,
         "TypeError,TypeError,TypeError,5,ff",
     ),
+    // A computed member key that is an object goes through ToPropertyKey
+    // (its toString runs, preferred over valueOf); `o[k]` read the key
+    // "[object#13]", the object's heap id, for get, set, `in` and delete.
+    (
+        "object_property_keys",
+        r#"var k = { toString() { return 'key'; } }; var o = {}; o[k] = 1; var a = {}; a[{}] = 2; var d = new Date(0); var c = {}; c[d] = 'd'; var both = { toString() { return 'ts'; }, valueOf() { return 'vo'; } }; c[both] = 3; var has = k in o; delete o[k]; console.log(Object.keys(a).join(), has, 'key' in o, Object.keys(c).length, c[d], c.ts, c[both]);"#,
+        "[object Object] true false 2 d 3 3",
+    ),
     // A String.prototype method ToStrings an object `this` (its toString,
     // else valueOf, runs) and concat ToStrings object arguments; both read
     // "[object Object]".

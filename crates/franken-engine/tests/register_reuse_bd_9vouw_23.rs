@@ -433,3 +433,163 @@ fn locals_declared_after_wide_statements_do_not_ratchet_the_frame() {
         "undefined:5"
     );
 }
+
+fn max_function_frame_size(source: &str) -> u32 {
+    let tree = parse_script(source).expect("source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "register_reuse_bd_9vouw_23.js");
+    let context = LoweringContext::new("rr-trace", "rr-decision", "rr-policy");
+    let module = lower_ir0_to_ir3(&ir0, &context)
+        .expect("source should lower")
+        .ir3;
+    module
+        .function_table
+        .iter()
+        .map(|function| function.frame_size)
+        .max()
+        .expect("at least the main function")
+}
+
+fn chained_calls(statements: usize) -> String {
+    let body =
+        "[].concat(xs).filter(Boolean).map(id).filter(Boolean).forEach(add);\n".repeat(statements);
+    format!(
+        "(function (xs) {{ var total = 0; function id(x) {{ return x; }} \
+         function add(x) {{ total += x; }}\n{body}return total; }})([1, 0, 2]);"
+    )
+}
+
+#[test]
+fn expression_temporaries_release_their_registers_in_function_bodies() {
+    // Method-call receivers, `?:` results and `&&`/`||`/switch operands live
+    // in internal bindings. Each one pinned a register for the rest of its
+    // function body, so ten statements of five-link call chains overflowed
+    // the frame, and minimist 1.2.8's parseArgs needed 589 registers.
+    assert_eq!(fixed_lane_value(&chained_calls(10)), "30");
+    assert_eq!(fixed_lane_value(&chained_calls(15)), "45");
+    assert_eq!(
+        max_function_frame_size(&chained_calls(5)),
+        max_function_frame_size(&chained_calls(15)),
+        "a statement's temporaries are free once it ends"
+    );
+    let ternaries: String = (0..300)
+        .map(|i| format!("t = (t > {i} ? t - 1 : t + 2) || (t && 7);\n"))
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var t = 0;\n{ternaries}return t; }})();"
+        )),
+        "300"
+    );
+    let cases: String = (0..200)
+        .map(|i| format!("case {i}: out.push([{i}].concat([0]).length); break;\n"))
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var out = [];\n\
+             for (var i = 0; i < 5; i++) {{ switch (i * 3) {{\n{cases}default: out.push('d'); }} }}\n\
+             return out.join(','); }})();"
+        )),
+        "2,2,2,2,2"
+    );
+}
+
+#[test]
+fn reused_local_registers_keep_values_across_loops_handlers_and_finally() {
+    // Filler statements allocate and free many registers inside each block,
+    // so a local whose register were released too early would be clobbered.
+    let filler = |prefix: &str, suffix: &str| -> String {
+        (0..120)
+            .map(|i| format!("var {prefix}{i} = [{i}].concat([1]){suffix};\n"))
+            .collect()
+    };
+    // `base` is written before the loop and read inside it on every
+    // iteration; `prev` is read one iteration after its write (not assigned
+    // on the first pass), so it keeps a register for the whole body.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var base = 10; var out = [];\n\
+             for (var k = 0; k < 3; k++) {{\n  if (k > 0) out.push(prev);\n{}  var prev = base + k;\n}}\n\
+             return out.join(',') + ':' + base; }})();",
+            filler("f", ".length + (base ? 1 : 0)")
+        )),
+        "10,11:10"
+    );
+    // `continue` leaves the try through its finally block.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var seen = 0; var log = [];\n\
+             for (var i = 0; i < 4; i++) {{\n  try {{ if (i % 2) continue; log.push('b' + i); }}\n\
+             finally {{ {} seen = seen + 1; }}\n}}\n\
+             return log.join(',') + ':' + seen; }})();",
+            filler("g", ".join('-')")
+        )),
+        "b0,b2:4"
+    );
+    // A catch handler reads a local written before the try.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var before = 'kept'; var r = '';\n{}\
+             try {{ null.x; }} catch (e) {{ r = before + ':' + e.name; }}\n\
+             return r; }})();",
+            filler("h", ".length")
+        )),
+        "kept:TypeError"
+    );
+}
+
+#[test]
+fn statements_after_a_switch_still_reuse_registers() {
+    // A switch stored its discriminant and left the value on the lowering
+    // stack, so statement-boundary reuse stayed off for the rest of the body:
+    // every statement after one `switch` kept all its temporaries.
+    let tail: String = (0..300)
+        .map(|i| format!("out.push([{i}].concat([0]).length);\n"))
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "var out = []; switch (out.length) {{ case 0: out.push(1); }}\n{tail}out.length;"
+        )),
+        "301"
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var out = []; switch (out.length) {{ case 0: out.push(1); }}\n\
+             {tail}return out.length; }})();"
+        )),
+        "301"
+    );
+}
+
+#[test]
+fn return_and_throw_statements_release_their_temporaries() {
+    // Test262's S11.7.3_A4_T4 is 500 top-level `if (c) { throw new
+    // Test262Error(...) }` statements: a throw (like a return) consumed its
+    // operand without ending the statement, so every one kept its
+    // temporaries and the main frame needed 4226 registers.
+    let checks: String = (0..500)
+        .map(|i| format!("if ({i} >>> 16 !== 0) {{ throw new Error('#{i}: ' + ({i} >>> 16)); }}\n"))
+        .collect();
+    assert_eq!(fixed_lane_value(&format!("{checks}'ok';")), "ok");
+    assert_eq!(
+        fixed_lane_value(&format!("(function () {{\n{checks}return 'ok'; }})();")),
+        "ok"
+    );
+    let returns: String = (0..300)
+        .map(|i| format!("if (n === {i}) {{ return 'r' + ({i} * 2); }}\n"))
+        .collect();
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function (n) {{\n{returns}return 'none'; }})(299);"
+        )),
+        "r598"
+    );
+    // The returned value is captured before the finally block reuses the
+    // return statement's registers.
+    assert_eq!(
+        fixed_lane_value(
+            "(function () { try { return [1, 2].concat([3]).join('-'); } \
+             finally { var t = [9].concat([8]).join('+'); } })();"
+        ),
+        "1-2-3"
+    );
+}

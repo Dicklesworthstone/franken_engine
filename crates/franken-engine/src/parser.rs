@@ -2108,6 +2108,11 @@ struct ParseExecutionContext<'a> {
     /// module top-level and inside async function/arrow/method bodies; false at
     /// script top-level and inside non-async functions.
     await_context: bool,
+    /// Whether the code being parsed is a generator body, where `yield` is
+    /// an operator (and cannot be an identifier or a unary operand).
+    /// Outside one, `yield` is an identifier in sloppy code and reserved in
+    /// strict code (ES2020 12.1.1, 14.4.1).
+    yield_context: bool,
     /// Private-name scopes of the class bodies being parsed, innermost last
     /// (ES2022 15.7.1 AllPrivateIdentifiersValid).
     private_name_scopes: Vec<PrivateNameScope>,
@@ -3531,6 +3536,7 @@ fn parse_source(
         strict_mode: goal == ParseGoal::Module,
         super_property_allowed: false,
         await_context: goal == ParseGoal::Module,
+        yield_context: false,
         private_name_scopes: Vec::new(),
     };
 
@@ -5296,7 +5302,44 @@ fn parse_primary_expression(
         }
     }
 
+    // Inside an async function or module `await` is an operator and needs
+    // its operand: a bare `await` is a SyntaxError (ES2020 14.7.1, 15.2.1.1).
+    if expression == "await" && context.await_context {
+        return Err(unsupported_expression_syntax_error(
+            "`await` is reserved here and needs an operand",
+            span,
+            context,
+        ));
+    }
+
     // yield expression: `yield expr` or `yield* expr` (delegation)
+    if let Some(rest) = expression.strip_prefix("yield")
+        && (rest.starts_with(' ')
+            || rest.starts_with('*')
+            || rest.is_empty()
+            || rest.starts_with(';')
+            || rest.starts_with(')')
+            || rest.starts_with('}'))
+        && !context.yield_context
+    {
+        // Outside a generator `yield` is an IdentifierReference, reserved in
+        // strict code (ES2020 12.1.1); it never starts a yield expression.
+        if context.strict_mode {
+            return Err(unsupported_expression_syntax_error(
+                "`yield` is a reserved word in strict mode code",
+                span,
+                context,
+            ));
+        }
+        if !rest.trim().is_empty() {
+            return Err(unsupported_expression_syntax_error(
+                "a `yield` expression is only valid in a generator",
+                span,
+                context,
+            ));
+        }
+        return Ok(Expression::Identifier("yield".to_string()));
+    }
     if let Some(rest) = expression.strip_prefix("yield")
         && (rest.starts_with(' ')
             || rest.starts_with('*')
@@ -5690,7 +5733,7 @@ fn parse_arrow_body(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
-    with_await_context(is_async, context, |context| {
+    with_function_context(is_async, false, context, |context| {
         let body = if body_src.starts_with('{') {
             if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
                 reject_use_strict_with_non_simple_params(block_src, &params, span, context)?;
@@ -7005,6 +7048,9 @@ fn try_parse_unary_prefix(
                     context,
                 )));
             }
+            if let Some(error) = unparenthesized_yield_operand(rest, &arg, span, context) {
+                return Some(Err(error));
+            }
             return Some(Ok(Expression::Unary {
                 operator: op,
                 argument: Box::new(arg),
@@ -7034,6 +7080,9 @@ fn try_parse_unary_prefix(
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
+            if let Some(error) = unparenthesized_yield_operand(rest, &arg, span, context) {
+                return Some(Err(error));
+            }
             return Some(Ok(Expression::Unary {
                 operator: op,
                 argument: Box::new(arg),
@@ -7042,6 +7091,25 @@ fn try_parse_unary_prefix(
     }
 
     None
+}
+
+/// A unary operator's operand is a UnaryExpression, which a yield expression
+/// is not: `void yield` in a generator is a SyntaxError, `void (yield)` is
+/// fine (ES2020 12.5).
+fn unparenthesized_yield_operand(
+    operand_src: &str,
+    operand: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> Option<ParseError> {
+    (matches!(operand, Expression::Yield { .. }) && !operand_src.trim_start().starts_with('('))
+        .then(|| {
+            unsupported_expression_syntax_error(
+                "a `yield` expression cannot be the operand of a unary operator",
+                span,
+                context,
+            )
+        })
 }
 
 /// Try to parse a prefix or postfix update expression (`++x`, `--x`, `x++`,
@@ -10255,15 +10323,21 @@ fn with_function_strict_mode<T>(
     result
 }
 
-fn with_await_context<T>(
-    await_context: bool,
+/// Run `operation` with the `await` / `yield` contexts of a function body:
+/// async bodies take `await` expressions, generator bodies `yield` ones.
+/// Every function, method and static block sets both, so a nested plain
+/// function does not inherit its enclosing generator's `yield`.
+fn with_function_context<T>(
+    is_async: bool,
+    is_generator: bool,
     context: &mut ParseExecutionContext<'_>,
     operation: impl FnOnce(&mut ParseExecutionContext<'_>) -> ParseResult<T>,
 ) -> ParseResult<T> {
-    let saved_await_context = context.await_context;
-    context.await_context = await_context;
+    let saved = (context.await_context, context.yield_context);
+    context.await_context = is_async;
+    context.yield_context = is_generator;
     let result = operation(context);
-    context.await_context = saved_await_context;
+    (context.await_context, context.yield_context) = saved;
     result
 }
 
@@ -10453,6 +10527,7 @@ fn reject_context_reserved_binding(
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
     let reserved = (context.await_context && name == "await")
+        || (context.yield_context && name == "yield")
         || (context.strict_mode
             && matches!(
                 name,
@@ -11821,7 +11896,7 @@ fn parse_function_expression_with_super(
     let goal = ParseGoal::Script;
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
-    let parsed = with_await_context(is_async, context, |context| {
+    let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
@@ -12138,7 +12213,7 @@ fn parse_class_static_block(
     }
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = true;
-    let parsed = with_await_context(false, context, |context| {
+    let parsed = with_function_context(false, false, context, |context| {
         with_function_strict_mode(body_src, true, context, |context| {
             parse_body_statements(body_src, ParseGoal::Script, span, context)
         })
@@ -12471,7 +12546,7 @@ fn parse_class_body_members(
         // `super.x` / `super.m()` are valid in their bodies.
         let saved_super_property_allowed = context.super_property_allowed;
         context.super_property_allowed = true;
-        let parsed = with_await_context(is_async, context, |context| {
+        let parsed = with_function_context(is_async, is_generator, context, |context| {
             with_function_strict_mode(body_src, true, context, |context| {
                 let params = parse_arrow_params(params_src, span, context)?;
                 reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
@@ -13109,7 +13184,7 @@ fn parse_function_declaration(
         )?;
     }
     let goal = ParseGoal::Script; // Function bodies use script goal.
-    let (params, body_stmts) = with_await_context(is_async, context, |context| {
+    let (params, body_stmts) = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, &span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, &span, context)?;
@@ -17849,6 +17924,7 @@ mod tests {
             strict_mode: false,
             super_property_allowed: false,
             await_context: false,
+            yield_context: false,
             private_name_scopes: Vec::new(),
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)

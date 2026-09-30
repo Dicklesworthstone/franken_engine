@@ -113,3 +113,23 @@ fn number_to_locale_string() {
         "RangeError,TypeError",
     );
 }
+
+/// localeCompare orders strings as ICU's root collation does (collation.rs):
+/// letters case-insensitively first, then accents, then case (lowercase
+/// first); punctuation before digits before letters; `numeric`,
+/// `sensitivity` and `ignorePunctuation` options; an unknown sensitivity is
+/// a RangeError. It compared code units, so `sort((a, b) =>
+/// a.localeCompare(b))` put every capitalized word first.
+#[test]
+fn string_locale_compare_orders_like_icu() {
+    check(
+        "const words = ['banana', 'Apple', 'apple', 'éclair', 'eclair', 'Zebra', 'zebra', 'item10', 'item2', 'a b', 'a-b']; \
+         let r; try { 'a'.localeCompare('b', undefined, { sensitivity: 'loud' }); r = 'no'; } \
+         catch (e) { r = e.constructor.name; } \
+         [words.slice().sort((a, b) => a.localeCompare(b)).join('|'), \
+         ['10', '9', 'x2', 'x10'].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).join(), \
+         'Straße'.localeCompare('strasse'), 'résumé'.localeCompare('resume', 'en', { sensitivity: 'base' }), \
+         'a'.localeCompare('B'), r].join(' ');",
+        "a b|a-b|apple|Apple|banana|eclair|éclair|item10|item2|zebra|Zebra 9,10,x2,x10 1 0 -1 RangeError",
+    );
+}

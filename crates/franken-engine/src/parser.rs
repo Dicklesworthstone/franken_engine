@@ -3907,6 +3907,26 @@ fn starts_with_keyword(text: &str, kw: &str) -> bool {
             .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
 }
 
+/// The rest of a class element after the modifier `keyword` (`static`,
+/// `async`), or `None` when `keyword` is not a modifier there: it begins a
+/// longer name (`statics`) or is the element's own name (`async() {}`,
+/// `static = 1`). Minified code puts the element name right after it
+/// (`async#k()`, `static*g()`, `async[k]()`); `async` must not be followed by
+/// a line break (`async` then `m(){}` on the next line is a field and a
+/// method).
+fn class_element_modifier<'a>(element: &'a str, keyword: &str, same_line: bool) -> Option<&'a str> {
+    let after = element.strip_prefix(keyword)?;
+    if after.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '\\')) {
+        return None;
+    }
+    let name = after.trim_start();
+    let gap = &after[..after.len() - name.len()];
+    if same_line && gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+        return None;
+    }
+    (!name.is_empty() && !name.starts_with(['(', '=', ';', '}'])).then_some(name)
+}
+
 /// The rest of a class element after a `get` / `set` accessor modifier, or
 /// `None` when `keyword` is not a modifier there: `get() {}` and `set$(v) {}`
 /// are ordinary methods named `get` and `set$` (Map-like classes).
@@ -12376,10 +12396,7 @@ fn parse_class_body_members(
             methods.push(parse_class_static_block(block, span, context)?);
             continue;
         }
-        let static_prefix = segment
-            .strip_prefix("static ")
-            .map(str::trim_start)
-            .filter(|after| !after.is_empty() && !after.starts_with(['=', ';']));
+        let static_prefix = class_element_modifier(segment, "static", false);
         let is_static = static_prefix.is_some();
         let mut rest = static_prefix.unwrap_or(segment);
 
@@ -12426,13 +12443,9 @@ fn parse_class_body_members(
 
         // Method modifiers (ES2020 14.4-14.7): `async m(){}`, `*m(){}`,
         // `async *m(){}`. `async(){}` names a method `async`.
-        let (is_async, rest) = match rest.strip_prefix("async") {
-            Some(after)
-                if after.starts_with([' ', '\t']) && !after.trim_start().starts_with('(') =>
-            {
-                (true, after.trim_start())
-            }
-            _ => (false, rest),
+        let (is_async, rest) = match class_element_modifier(rest, "async", true) {
+            Some(after) => (true, after),
+            None => (false, rest),
         };
         let (is_generator, rest) = match rest.strip_prefix('*') {
             Some(after) => (true, after.trim_start()),

@@ -65,7 +65,7 @@ use ghash::{GHash, universal_hash};
 use hmac::{Hmac, Mac};
 use md5::Md5;
 use regex::RegexBuilder;
-use regexp_backtrack::{BacktrackRegExp, CompiledRegExp};
+use regexp_backtrack::{BacktrackRegExp, Captures, CompiledRegExp};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
@@ -67638,7 +67638,7 @@ impl InterpreterCore {
         regexp_id: ObjectId,
         regex: &CompiledRegExp,
         input: &str,
-    ) -> Result<Option<Vec<Option<(usize, usize)>>>, InterpreterError> {
+    ) -> Result<Option<Captures>, InterpreterError> {
         let start = self.regexp_last_index_start(regexp_id);
         let found = if start > input.encode_utf16().count() {
             None

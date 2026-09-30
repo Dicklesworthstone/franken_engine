@@ -106,6 +106,49 @@ fn completed_statements_are_not_extended() {
     }
 }
 
+/// A do statement as the unbraced body of an `if` or a loop, which js-yaml's
+/// bundle writes as `if (...)\n  do\n    ch = ...;\n  while (...);`. The
+/// splitter recognised a do statement waiting for its `while` only when the
+/// clause began with `do`, so the `;` after the do body ended the whole if
+/// statement ("do-while statement requires 'while' after body") and the
+/// `while` became a loop of its own.
+#[test]
+fn do_while_as_an_unbraced_body() {
+    for (source, node) in [
+        (
+            "var x = 0, c = true;\nif (c)\n  do\n    x++;\n  while (x < 3);\nx;",
+            "3",
+        ),
+        (
+            "var x = 0, c = true;\nif (c) do x++; while (x < 3);\nx;",
+            "3",
+        ),
+        (
+            "var x = 0, c = true;\nif (c) do { x++; } while (x < 3);\nx;",
+            "3",
+        ),
+        (
+            "var x = 0, c = false;\nif (c)\n  do\n    x++;\n  while (x < 3);\nelse x = 9;\nx;",
+            "9",
+        ),
+        (
+            "var x = 0, n = 0;\nwhile (n++ < 2)\n  do x++; while (x % 3);\n[x, n].join();",
+            "6,3",
+        ),
+        (
+            "var s = \"ab#cd\\nef\", p = 2, ch = s.charCodeAt(p), hits = [];\nif (ch === 35)\n  do\n    ch = s.charCodeAt(++p);\n  while (ch !== 10 && ch === ch);\nhits.push(p);\nwhile (p < 4) p++;\n[p, hits].join();",
+            "5,5",
+        ),
+        ("var x = 0;\nl: do x++; while (x < 2);\nx;", "2"),
+    ] {
+        assert_eq!(
+            eval_to_string(source),
+            node,
+            "`{source}` must match Node v22.2.0"
+        );
+    }
+}
+
 #[test]
 fn empty_statement_bodies() {
     // `while (x);` / `for (...);` failed with "empty expression statement":

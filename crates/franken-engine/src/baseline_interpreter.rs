@@ -917,6 +917,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Float64Array" => Some("Float64Array"),
         "BigInt64Array" => Some("BigInt64Array"),
         "BigUint64Array" => Some("BigUint64Array"),
+        // %TypedArray% (ES2020 22.2.1): not a global binding.
+        "TypedArray" => Some("TypedArray"),
         "Date" => Some("Date"),
         "Promise" => Some("Promise"),
         "RegExp" => Some("RegExp"),
@@ -3407,6 +3409,10 @@ pub enum BuiltinFunctionKind {
     /// `[@@search]` and `[@@split]` (ES2020 21.2.5); the `@@name` travels in
     /// `module_specifier`. Append only.
     RegExpSymbolMethod,
+    /// `%TypedArray%.from` / `%TypedArray%.of` (ES2020 22.2.2.1-2), reached
+    /// as `Uint8Array.from`; the method name travels in `module_specifier`
+    /// and the element type comes from the `this` constructor. Append only.
+    TypedArrayStaticMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4333,6 +4339,16 @@ impl BuiltinFunction {
         }
     }
 
+    /// `%TypedArray%.from` or `%TypedArray%.of` (`method` is "from" / "of").
+    fn typed_array_static(method: &str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArrayStaticMethod,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn map_set() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapSet,
@@ -5140,6 +5156,11 @@ impl BuiltinFunction {
                 .map(|(name, _)| *name)
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or("@@regexp"),
+            BuiltinFunctionKind::TypedArrayStaticMethod => ["from", "of"]
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("from"),
             // Anonymous built-in closures in the spec.
             BuiltinFunctionKind::PromiseThenFinally
             | BuiltinFunctionKind::PromiseCatchFinally
@@ -5331,6 +5352,7 @@ impl BuiltinFunction {
             K::WeakRefDeref => "WeakRef.prototype",
             K::FinalizationRegistryMethod => "FinalizationRegistry.prototype",
             K::RegExpSymbolMethod => "RegExp.prototype",
+            K::TypedArrayStaticMethod => "TypedArray",
             K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
             K::SetTimeout
             | K::SetInterval
@@ -5397,6 +5419,10 @@ impl BuiltinFunction {
         }
     }
 }
+
+/// %TypedArray% (ES2020 22.2.1): the abstract superclass of the typed array
+/// constructors, a standard constructor that is not a global binding.
+const TYPED_ARRAY_INTRINSIC: &str = "TypedArray";
 
 /// bd-9vouw.17: standard constructors bound as first-class global values.
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
@@ -5489,7 +5515,7 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 18] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 19] = [
     "Array",
     "String",
     "Number",
@@ -5508,6 +5534,7 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 18] = [
     "ArrayBuffer",
     "WeakRef",
     "FinalizationRegistry",
+    "TypedArray",
 ];
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
@@ -37805,6 +37832,12 @@ impl InterpreterCore {
                 receiver.unwrap_or(Value::Undefined),
                 args,
             ),
+            BuiltinFunctionKind::TypedArrayStaticMethod => self.typed_array_static_call(
+                module,
+                builtin,
+                receiver.unwrap_or(Value::Undefined),
+                args,
+            ),
             BuiltinFunctionKind::RegExpPrototypeToString => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 match self.regexp_source_flags_from_value(&receiver) {
@@ -67106,6 +67139,67 @@ impl InterpreterCore {
         }
     }
 
+    /// `%TypedArray%.from(source[, mapFn[, thisArg]])` and
+    /// `%TypedArray%.of(...items)` (ES2020 22.2.2.1-2). The element type is
+    /// the `this` constructor's (`Uint8Array.from`), so an unbound call is a
+    /// TypeError, as in Node. `from` collects its source exactly as
+    /// `Array.from` does (iterables, array-likes, the mapper and its
+    /// `thisArg`), then converts every value to the element type.
+    fn typed_array_static_call(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let kind = match &receiver {
+            Value::BuiltinFunction(constructor)
+                if constructor.kind == BuiltinFunctionKind::StandardConstructor =>
+            {
+                Self::standard_constructor_name(constructor)
+                    .ok()
+                    .and_then(TypedArrayKind::from_type_name)
+            }
+            _ => None,
+        };
+        let Some(kind) = kind else {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "typed array constructor as this of %TypedArray%.{}",
+                    builtin.display_name()
+                ),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let values = if builtin.display_name() == "of" {
+            let mut items = Vec::with_capacity(args.count as usize);
+            for index in 0..args.count {
+                items.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+            }
+            items
+        } else {
+            if let Some(mapper) = self.builtin_arg(args, 1)?
+                && !matches!(mapper, Value::Undefined)
+                && !mapper.is_callable()
+            {
+                return Err(InterpreterError::TypeError {
+                    expected: "callable %TypedArray%.from mapper".to_string(),
+                    got: mapper.type_name().to_string(),
+                });
+            }
+            let Value::Object(list) = self.array_from_builtin(Some(module), args)? else {
+                return Err(InterpreterError::TypeError {
+                    expected: "array from %TypedArray%.from source".to_string(),
+                    got: "non-array".to_string(),
+                });
+            };
+            self.array_like_values(list)?
+        };
+        Ok(Value::Object(
+            self.alloc_typed_array_from_values(kind, &values)?,
+        ))
+    }
+
     /// ES2020 21.1.3.11/.12/.17/.18/.19 step 2: a String method whose pattern
     /// argument is an object calls that object's `@@match` / `@@matchAll` /
     /// `@@replace` / `@@search` / `@@split` method with the receiver and the
@@ -90067,6 +90161,17 @@ impl InterpreterCore {
                 ),
             })?;
         let element_size_i64 = i64::try_from(kind.element_size()).expect("element size fits i64");
+        // ES2020 22.2.4.2.1 AllocateTypedArray: a view inherits from its
+        // constructor's prototype (which inherits %TypedArray.prototype%),
+        // so `instanceof`, `constructor` and Object.getPrototypeOf see its
+        // class. Unlinked, every typed array reported Object. Materialized
+        // before the view's id is taken, since the first use allocates the
+        // prototype objects. Buffers keep their own surface (not linked).
+        let prototype = if is_buffer {
+            None
+        } else {
+            Some(self.ensure_builtin_prototype(kind.type_name())?)
+        };
 
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
@@ -90084,6 +90189,7 @@ impl InterpreterCore {
             );
 
         let mut object = HeapObject::new();
+        object.prototype = prototype;
         object
             .properties
             .insert("__type".to_string(), Value::str(kind.type_name()));
@@ -92540,6 +92646,13 @@ impl InterpreterCore {
             }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
+            // ES2020 22.2.6: the concrete typed array prototypes inherit the
+            // shared methods from %TypedArray.prototype%, whose own
+            // [[Prototype]] is %Object.prototype% (22.2.3).
+            "TypedArray" => Some(self.ensure_builtin_prototype("Object")?),
+            name if TypedArrayKind::from_type_name(name).is_some() => {
+                Some(self.ensure_builtin_prototype("TypedArray")?)
+            }
             _ => None,
         };
         let prototype = self.alloc_object_with_prototype(parent)?;
@@ -93255,6 +93368,7 @@ impl InterpreterCore {
         STANDARD_CONSTRUCTOR_GLOBALS
             .iter()
             .copied()
+            .chain([TYPED_ARRAY_INTRINSIC])
             .find(|name| *name == &*builtin.module_specifier)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "standard constructor".to_string(),
@@ -93275,7 +93389,7 @@ impl InterpreterCore {
             "prototype" => Value::Object(self.ensure_builtin_prototype(name)?),
             "name" => Value::str(name),
             "length" => Value::Int(match name {
-                "Map" | "Set" | "WeakMap" | "WeakSet" | "Symbol" => 0,
+                "Map" | "Set" | "WeakMap" | "WeakSet" | "Symbol" | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
@@ -93303,6 +93417,13 @@ impl InterpreterCore {
             "BYTES_PER_ELEMENT" if TypedArrayKind::from_type_name(name).is_some() => {
                 let kind = TypedArrayKind::from_type_name(name).expect("guarded above");
                 Value::Int(i64::try_from(kind.element_size()).unwrap_or(i64::MAX))
+            }
+            // Inherited from %TypedArray% (ES2020 22.2.2).
+            method @ ("from" | "of")
+                if name == TYPED_ARRAY_INTRINSIC
+                    || TypedArrayKind::from_type_name(name).is_some() =>
+            {
+                Value::BuiltinFunction(BuiltinFunction::typed_array_static(method))
             }
             _ => {
                 if let Some(value) = Self::function_prototype_property(key) {
@@ -93379,6 +93500,11 @@ impl InterpreterCore {
             name if TypedArrayKind::from_type_name(name).is_some() => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }
+            // ES2020 22.2.1.1: %TypedArray% only serves as a superclass.
+            TYPED_ARRAY_INTRINSIC => Err(InterpreterError::TypeError {
+                expected: "a concrete typed array constructor".to_string(),
+                got: "Abstract class TypedArray not directly constructable".to_string(),
+            }),
             "Array" => {
                 let values = self.call_arguments(args)?;
                 if let [length @ (Value::Int(_) | Value::Float(_))] = values.as_slice() {
@@ -93634,6 +93760,10 @@ impl InterpreterCore {
             | "FinalizationRegistry" => {
                 Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)
             }
+            // The shared typed array methods are element-type agnostic.
+            "TypedArray" => {
+                Self::typed_array_prototype_method("Int8Array", key).map(Value::BuiltinFunction)
+            }
             _ => None,
         }
     }
@@ -93688,6 +93818,11 @@ impl InterpreterCore {
             .map(|(name, _)| name.as_str())?;
         if key == "constructor" && matches!(name, "Promise" | "Date") {
             return self.materialized_intrinsic_constructor(name);
+        }
+        if key == "constructor" && name == TYPED_ARRAY_INTRINSIC {
+            return Some(Value::BuiltinFunction(
+                BuiltinFunction::standard_constructor(TYPED_ARRAY_INTRINSIC),
+            ));
         }
         if key == "constructor" {
             return STANDARD_CONSTRUCTOR_GLOBALS
@@ -93744,6 +93879,9 @@ impl InterpreterCore {
             // constructors rather than standard constructor builtins.
             if let Some(name @ ("Promise" | "Date")) = canonical {
                 return self.materialized_intrinsic_constructor(name);
+            }
+            if canonical == Some(TYPED_ARRAY_INTRINSIC) {
+                return Some(constructor(TYPED_ARRAY_INTRINSIC));
             }
             if let Some(name) = canonical.and_then(|name| {
                 STANDARD_CONSTRUCTOR_GLOBALS

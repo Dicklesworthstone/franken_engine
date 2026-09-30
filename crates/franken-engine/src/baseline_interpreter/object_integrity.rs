@@ -254,6 +254,19 @@ impl InterpreterCore {
                     .unwrap_or(Value::Object(prototype)));
             }
         }
+        // ES2020 22.2.5: every concrete typed array constructor's
+        // [[Prototype]] is %TypedArray%.
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && Self::standard_constructor_name(builtin)
+                .ok()
+                .and_then(TypedArrayKind::from_type_name)
+                .is_some()
+        {
+            return Ok(Value::BuiltinFunction(
+                BuiltinFunction::standard_constructor(TYPED_ARRAY_INTRINSIC),
+            ));
+        }
         Ok(Value::Object(self.ensure_builtin_prototype("Function")?))
     }
 

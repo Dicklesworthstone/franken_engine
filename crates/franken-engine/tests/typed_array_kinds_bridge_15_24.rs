@@ -6,8 +6,9 @@
 //! load (it lists all nine constructors). Expected strings are what Node
 //! v22.2.0 prints for the same programs.
 //!
-//! Elements are read back by index (TypedArray.prototype.join is not
-//! implemented yet; see BRIDGE-15.24).
+//! The kind tests read elements back by index; `typed_arrays_have_the_array_methods`
+//! covers the %TypedArray%.prototype methods, which all used to throw
+//! "unsupported TypedArray method".
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
 
@@ -76,5 +77,63 @@ fn binary_constructors_are_values() {
     check(
         "Float64Array.name + ':' + Float64Array.length + ':' + Int8Array.BYTES_PER_ELEMENT;",
         "Float64Array:3:1",
+    );
+}
+
+/// ES2020 22.2.3: join / toString / indexOf / lastIndexOf / includes / at /
+/// forEach / reduce / reduceRight / find / findIndex / some / every behave as
+/// their Array.prototype namesakes; map and filter build a typed array of the
+/// receiver's kind (map converts: 300 wraps to 44 in a Uint8Array); reverse
+/// and sort reorder in place (a subarray view only its own window), and sort
+/// without a comparator is numeric (-0 before 0, NaN last).
+#[test]
+fn typed_arrays_have_the_array_methods() {
+    check(
+        r#"const a = new Uint8Array([3, 1, 2]);
+const r = [];
+r.push(a.join('-'), a.toString(), String(a), `${a}`, a + '', a.indexOf(1), a.lastIndexOf(9), a.includes(2), a.at(-1));
+let s = 0; a.forEach((x, i, o) => { s += x * (i + 1); r.push(o === a); });
+r.push(s, a.reduce((p, x) => p + x, 0), a.reduceRight((p, x) => p + String(x), ''), a.find(x => x < 3), a.findIndex(x => x === 2), a.some(x => x > 2), a.every(x => x > 0));
+const m = a.map(x => x * 100);
+r.push(Object.prototype.toString.call(m), m.join(), a.filter(x => x !== 1).join(), Object.prototype.toString.call(a.filter(() => true)));
+r.push(a.reverse() === a, a.join(), a.sort().join(), new Uint8Array([10, 9, 1, 100]).sort().join(), new Int8Array([5, -3, 0]).sort((x, y) => y - x).join());
+const f = new Float64Array([2.5, NaN, -0, 0, -1]);
+r.push(Array.from(f.sort()).map(x => Object.is(x, -0) ? '-0' : String(x)).join(), new Float32Array([1.5, 2]).map(x => x / 2).join());
+const big = new Uint8Array([1, 2, 3, 4, 5]); big.subarray(1, 4).reverse(); r.push(big.join());
+let threw; try { a.map(0); threw = 'no'; } catch (e) { threw = e instanceof TypeError; } r.push(threw);
+r.join(' ');"#,
+        "3-1-2 3,1,2 3,1,2 3,1,2 3,1,2 1 -1 true 2 true true true 11 6 213 1 2 true true \
+         [object Uint8Array] 44,100,200 3,2 [object Uint8Array] true 2,1,3 1,2,3 1,9,10,100 5,0,-3 \
+         -1,-0,0,2.5,NaN 0.75,1 1,4,3,2,5 true",
+    );
+}
+
+#[test]
+fn a_symbol_or_bigint_from_index_throws_a_type_error() {
+    // ToIntegerOrInfinity(fromIndex) throws for a Symbol or BigInt. Arrays
+    // read it as 0; typed arrays reach the same generic search methods, and
+    // Test262 TypedArray/prototype/indexOf/return-abrupt-tointeger-fromindex-symbol
+    // expects the throw.
+    let probe = |call: &str| {
+        format!(
+            "(() => {{ try {{ {call}; return 'no throw'; }} catch (e) {{ return e.name; }} }})()"
+        )
+    };
+    for call in [
+        "[1, 2].indexOf(7, Symbol('1'))",
+        "[1, 2].includes(7, Symbol('1'))",
+        "[1, 2].lastIndexOf(7, Symbol('1'))",
+        "[1, 2].indexOf(7, 1n)",
+        "new Float64Array(1).indexOf(7, Symbol('1'))",
+    ] {
+        check(&probe(call), "TypeError");
+    }
+    check("[1, 2, 1].indexOf(1, 1)", "2");
+    // lastIndexOf searches backward from fromIndex (it used to ignore it).
+    check(
+        "[[1, 2, 1].lastIndexOf(1, 1), [1, 2, 1].lastIndexOf(1, -2), [1, 2, 1].lastIndexOf(1, -4), \
+         [1, 2, 1].lastIndexOf(1, -Infinity), [1, 2, 1].lastIndexOf(1, 99), [].lastIndexOf(1), \
+         [1, 2, 1].lastIndexOf(1, '1'), [1, 2, 1].lastIndexOf(1, 1.7)].join()",
+        "0,0,-1,-1,2,-1,0,0",
     );
 }

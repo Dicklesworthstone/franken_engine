@@ -28827,6 +28827,16 @@ fn ir2_catch_region_events(ops: &[Ir2Op]) -> Result<CatchRegionEvents, LoweringP
         let Some(catch_label) = region.catch_label else {
             continue;
         };
+        // Even a data-independent engine failure can disclose internal error
+        // details. Direct operands may raise this floor, but never lower it.
+        labels.entry(catch_label).or_insert(Label::Internal);
+        // An empty `try {}` protects no operation: its EndTry is the op its
+        // region would start at, so the region would end before it began
+        // (and flow simulation refused `try {} catch {}` as improperly
+        // nested). Nothing in it can throw, so it has no region events.
+        if end_index == region.start_index {
+            continue;
+        }
         starts
             .entry(region.start_index)
             .or_default()
@@ -28836,9 +28846,6 @@ fn ir2_catch_region_events(ops: &[Ir2Op]) -> Result<CatchRegionEvents, LoweringP
                 detail: "multiple catch regions share one EndTry marker",
             });
         }
-        // Even a data-independent engine failure can disclose internal error
-        // details. Direct operands may raise this floor, but never lower it.
-        labels.entry(catch_label).or_insert(Label::Internal);
     }
 
     Ok((starts, ends, labels))

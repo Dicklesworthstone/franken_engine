@@ -53,3 +53,21 @@ fn catch_bindings_are_fresh_on_each_entry_in_a_loop() {
         .value;
     assert_eq!(value, "7+8 0+1 14+16 0+1 10+20 3+3+4+4");
 }
+
+/// An empty `try {}` with a catch clause protects nothing. Lowering refused
+/// the whole program ("catch region termination is not properly nested"):
+/// the empty region ended at the op it would have started at. Expected
+/// string is Node v22.2.0's output.
+#[test]
+fn an_empty_try_block_with_a_catch_clause_runs() {
+    let source = "try {} catch {} finally {} var a = 'ok1';\n\
+                  try {} catch (e) {} var b = 'ok2';\n\
+                  function g() { try {} catch { return 'never'; } finally { return 'fin'; } }\n\
+                  var c = (() => { try { try {} catch {} throw 3; } catch (e) { return 'outer' + e; } })();\n\
+                  [a, b, g(), c].join();";
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(value, "ok1,ok2,fin,outer3");
+}

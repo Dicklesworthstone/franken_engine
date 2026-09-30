@@ -95,3 +95,52 @@ fn modifier_names_stay_ordinary_method_names() {
         "ag",
     );
 }
+
+/// Minified code writes the element name right after a modifier:
+/// lru-cache's `async#K(t, e = {}) { let i = await this.#q(t, e); ... }` was
+/// read as a method named `async#K`, so its `await` was rejected. `static=4`
+/// and `async=5` stay instance fields named `static` and `async`.
+#[test]
+fn modifiers_without_whitespace_before_the_name() {
+    check(
+        "class C{static#p=1;static*g(){yield C.#p}async#k(x){return await x}\
+         run(){return this.#k(2)}static['s'+1](){return 's'}async['a'](){return 'a'}\
+         static async*ag(){yield 3}static=4;async=5} const c=new C(); \
+         [[...C.g()].join(), c.run() instanceof Promise, c.a() instanceof Promise, \
+         typeof C.ag().next, C.s1(), c.static, c.async, Object.keys(c).join()].join(' ');",
+        "1 true true function s 4 5 static,async",
+    );
+    // The same forms in an object literal were "invalid object shorthand
+    // property".
+    check(
+        "const k = 'z'; const o = {async*g(){yield 1}, async[k](){return 2}, \
+         get['b'](){return 3}, set['c'](v){this._c=v}, get\"q\"(){return 'q'}}; o.c = 7; \
+         [typeof o.g().next, o.z() instanceof Promise, o.b, o._c, o.q].join(' ');",
+        "function true 3 7 q",
+    );
+}
+
+/// `get` / `set` directly followed by `(` name an ordinary method (Map-like
+/// classes such as lru-cache). They used to become accessors with an empty
+/// name, so `new Cache().get(k)` threw "expected function, got undefined".
+#[test]
+fn methods_named_get_and_set_are_methods() {
+    check(
+        "class Cache { constructor() { this.m = new Map(); } get(k) { return this.m.get(k); } \
+         set(k, v) { this.m.set(k, v); return this; } static get() { return 'S'; } \
+         static set(v) { return v * 2; } } \
+         const c = new Cache().set('a', 1).set('b', 2); \
+         [c.get('a'), c.get('b'), Cache.get(), Cache.set(21), \
+         Object.getOwnPropertyNames(Cache.prototype).join(), \
+         typeof Object.getOwnPropertyDescriptor(Cache.prototype, 'get').value].join(' ');",
+        "1 2 S 42 constructor,get,set function",
+    );
+    // Accessors keep working, including across a line break and for names
+    // that merely start with `get` / `set`.
+    check(
+        "class D { get\nx() { return 'gx'; } set$(v) { return 'd' + v; } \
+         get $() { return 'dollar'; } set y(v) { this._y = v; } } \
+         const d = new D(); d.y = 5; [d.x, d.set$(1), d.$, d._y].join(' ');",
+        "gx d1 dollar 5",
+    );
+}

@@ -3933,6 +3933,38 @@ fn starts_with_keyword(text: &str, kw: &str) -> bool {
             .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
 }
 
+/// The rest of a class element after the modifier `keyword` (`static`,
+/// `async`), or `None` when `keyword` is not a modifier there: it begins a
+/// longer name (`statics`) or is the element's own name (`async() {}`,
+/// `static = 1`). Minified code puts the element name right after it
+/// (`async#k()`, `static*g()`, `async[k]()`); `async` must not be followed by
+/// a line break (`async` then `m(){}` on the next line is a field and a
+/// method).
+fn class_element_modifier<'a>(element: &'a str, keyword: &str, same_line: bool) -> Option<&'a str> {
+    let after = element.strip_prefix(keyword)?;
+    if after.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '\\')) {
+        return None;
+    }
+    let name = after.trim_start();
+    let gap = &after[..after.len() - name.len()];
+    if same_line && gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+        return None;
+    }
+    (!name.is_empty() && !name.starts_with(['(', '=', ';', '}'])).then_some(name)
+}
+
+/// The rest of a class element after a `get` / `set` accessor modifier, or
+/// `None` when `keyword` is not a modifier there: `get() {}` and `set$(v) {}`
+/// are ordinary methods named `get` and `set$` (Map-like classes).
+fn class_accessor_prefix<'a>(element: &'a str, keyword: &str) -> Option<&'a str> {
+    let after = element.strip_prefix(keyword)?;
+    if after.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '\\')) {
+        return None;
+    }
+    let after = after.trim_start();
+    (!after.starts_with('(')).then_some(after)
+}
+
 fn starts_with_export_block_statement(text: &str) -> bool {
     let Some(rest) = text.strip_prefix("export") else {
         return false;
@@ -8369,6 +8401,10 @@ fn parse_object_literal(
 
 fn object_accessor_tail<'a>(part: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = part.strip_prefix(prefix)?;
+    // Minified: `get['k'](){}`, `set"k"(v){}`.
+    if rest.starts_with(['[', '\'', '"']) {
+        return Some(rest);
+    }
     let first = rest.chars().next()?;
     first.is_whitespace().then(|| rest.trim_start())
 }
@@ -8434,6 +8470,8 @@ fn try_parse_object_method(
     // Method modifiers (ES2020 14.4-14.7): `*name(){}`, `async name(){}`,
     // `async *name(){}`. `async(){}` / `async: v` name a property `async`.
     let (is_async, part) = match part.strip_prefix("async") {
+        // Minified: `async*g(){}`, `async[k](){}`.
+        Some(rest) if rest.starts_with(['*', '[', '\'', '"']) => (true, rest),
         Some(rest)
             if rest.starts_with([' ', '\t'])
                 && !rest.trim_start().starts_with(['(', ':', ',', '=']) =>
@@ -12410,10 +12448,7 @@ fn parse_class_body_members(
             methods.push(parse_class_static_block(block, span, context)?);
             continue;
         }
-        let static_prefix = segment
-            .strip_prefix("static ")
-            .map(str::trim_start)
-            .filter(|after| !after.is_empty() && !after.starts_with(['=', ';']));
+        let static_prefix = class_element_modifier(segment, "static", false);
         let is_static = static_prefix.is_some();
         let mut rest = static_prefix.unwrap_or(segment);
 
@@ -12460,13 +12495,9 @@ fn parse_class_body_members(
 
         // Method modifiers (ES2020 14.4-14.7): `async m(){}`, `*m(){}`,
         // `async *m(){}`. `async(){}` names a method `async`.
-        let (is_async, rest) = match rest.strip_prefix("async") {
-            Some(after)
-                if after.starts_with([' ', '\t']) && !after.trim_start().starts_with('(') =>
-            {
-                (true, after.trim_start())
-            }
-            _ => (false, rest),
+        let (is_async, rest) = match class_element_modifier(rest, "async", true) {
+            Some(after) => (true, after),
+            None => (false, rest),
         };
         let (is_generator, rest) = match rest.strip_prefix('*') {
             Some(after) => (true, after.trim_start()),
@@ -12477,12 +12508,12 @@ fn parse_class_body_members(
         let rest = if is_async || is_generator {
             kind = MethodKind::Method;
             rest
-        } else if starts_with_keyword(rest, "get") {
+        } else if let Some(after) = class_accessor_prefix(rest, "get") {
             kind = MethodKind::Get;
-            rest.strip_prefix("get").unwrap_or(rest).trim_start()
-        } else if starts_with_keyword(rest, "set") {
+            after
+        } else if let Some(after) = class_accessor_prefix(rest, "set") {
             kind = MethodKind::Set;
-            rest.strip_prefix("set").unwrap_or(rest).trim_start()
+            after
         } else {
             kind = MethodKind::Method;
             rest

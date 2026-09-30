@@ -361,3 +361,20 @@ fn secret_behind_a_weak_ref_cannot_reach_console() {
         other => panic!("a secret behind a WeakRef must be refused, got {other:?}"),
     }
 }
+
+/// bd-9vouw.19: class elements named like secrets are ordinary names. The
+/// keyword heuristic refused `secret = 'b'` and `#secret` (and a `token` or
+/// `password` field) at lowering, because the key lowers as a string literal.
+#[test]
+fn class_elements_named_like_secrets_lower_and_run_bd_9vouw_19() {
+    assert_eq!(
+        eval_console(
+            "class_elements_named_like_secrets",
+            "console.log([new (class B { secret = 'b'; reveal() { return this.secret; } })().reveal(), \
+             new (class A { #secret = 'a'; get() { return this.#secret; } })().get(), \
+             new (class T { token = 1; password = 2; api_key = 3; credential = 4; \
+             sum() { return this.token + this.password + this.api_key + this.credential; } })().sum()].join());"
+        ),
+        "b,a,10"
+    );
+}

@@ -229,7 +229,7 @@ fn round_half_expand(magnitude: f64, shift: usize, minimum: u32, maximum: u32) -
 fn group_digits(integer: &str, separator: char) -> String {
     let mut out = String::with_capacity(integer.len() + integer.len() / 3);
     for (index, digit) in integer.chars().enumerate() {
-        if index > 0 && (integer.len() - index) % 3 == 0 {
+        if index > 0 && (integer.len() - index).is_multiple_of(3) {
             out.push(separator);
         }
         out.push(digit);

@@ -121,6 +121,11 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const a = []; for (const k in 'abc') a.push(k); const b = []; for (const k in 7) b.push(k); const c = []; for (const k in new String('q')) c.push(k); console.log(a.join(), b.length, c.join());"#,
         "0,1,2 0 0",
     ),
+    (
+        "number_methods_reject_other_receivers",
+        r#"const r = []; const b = new Boolean(); b.v = Number.prototype.valueOf; for (const f of [() => b.v(), () => Number.prototype.valueOf.call({}), () => Number.prototype.toString.call('x'), () => Number.prototype.valueOf.call(new Number(5)), () => Number.prototype.toString.call(new Number(255), 16)]) { try { r.push(String(f())); } catch (e) { r.push(e.constructor.name); } } console.log(r.join());"#,
+        "TypeError,TypeError,TypeError,5,ff",
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

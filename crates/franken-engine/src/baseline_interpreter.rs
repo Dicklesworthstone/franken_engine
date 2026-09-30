@@ -37732,8 +37732,10 @@ impl InterpreterCore {
                 // thrown. This path previously returned the literal string
                 // "RangeError" for an out-of-range radix and silently defaulted
                 // a non-finite radix to 10. (bd-i08nh, bd-cxmtb)
+                // thisNumberValue: a non-Number receiver is a TypeError
+                // (`Number.prototype.toString.call('x')`), not NaN.
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let num = Self::number_receiver_to_f64(&receiver);
+                let num = self.this_number_value(&receiver)?;
                 let radix = match self.builtin_arg(args, 0)? {
                     Some(Value::Undefined) | None => 10,
                     Some(arg) => Self::value_as_integer(&arg),
@@ -37751,9 +37753,18 @@ impl InterpreterCore {
                 }
             }
             BuiltinFunctionKind::NumberValueOf => {
-                // ES2020 20.1.3.7: return the primitive number value itself. The
-                // number-property seam only routes Int/Float receivers here.
-                Ok(receiver.unwrap_or(Value::Undefined))
+                // ES2020 20.1.3.7 thisNumberValue: a number (a Number wrapper
+                // arrives unwrapped) is returned as it is; any other receiver,
+                // such as a Boolean wrapper borrowing the method, is a
+                // TypeError.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                match receiver {
+                    Value::Int(_) | Value::Float(_) => Ok(receiver),
+                    other => {
+                        let number = self.this_number_value(&other)?;
+                        Ok(Value::Float(number.into()))
+                    }
+                }
             }
             BuiltinFunctionKind::BooleanPrototypeToString
             | BuiltinFunctionKind::BooleanPrototypeValueOf => {

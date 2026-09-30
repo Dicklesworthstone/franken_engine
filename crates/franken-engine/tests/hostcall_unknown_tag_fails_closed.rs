@@ -15,13 +15,20 @@ use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
 };
 
-/// Create an InterpreterCore with minimal capabilities for testing.
+/// Create an InterpreterCore with minimal capabilities for testing: VM
+/// dispatch and heap allocation, which running any module needs (the realm
+/// allocates its intrinsics before the first instruction). Without the
+/// second, every test here stopped at `HeapAllocate` before reaching the
+/// hostcall it checks, so the fail-closed property went untested.
 fn minimal_interpreter() -> InterpreterCore {
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities.clear(); // No capabilities granted
+    config.granted_capabilities.clear();
     config
         .granted_capabilities
         .insert(RuntimeCapability::VmDispatch);
+    config
+        .granted_capabilities
+        .insert(RuntimeCapability::HeapAllocate);
     InterpreterCore::new(config, "unknown-capability-test")
 }
 
@@ -32,6 +39,9 @@ fn interpreter_with_capability(cap: RuntimeCapability) -> InterpreterCore {
     config
         .granted_capabilities
         .insert(RuntimeCapability::VmDispatch);
+    config
+        .granted_capabilities
+        .insert(RuntimeCapability::HeapAllocate);
     config.granted_capabilities.insert(cap);
     InterpreterCore::new(config, "granted-capability-test")
 }

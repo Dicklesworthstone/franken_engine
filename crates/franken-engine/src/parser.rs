@@ -7275,6 +7275,14 @@ fn try_parse_postfix(
         // ES2022 `o.#x` / `o?.#x`: a private member is a computed member whose
         // key is the class's private name, held by the hidden binding `#x`.
         let private_name = whole_private_name(property_src);
+        // `o.# x`: a private name has no whitespace after its `#`.
+        if private_name.is_none() && property_src.starts_with('#') {
+            return Some(Err(unsupported_expression_syntax_error(
+                "invalid private name after `.`",
+                span,
+                context,
+            )));
+        }
         if optional && !is_identifier(property_src) && private_name.is_none() {
             return Some(Err(optional_chaining_syntax_error(
                 "optional chaining property access requires an identifier after `?.`",
@@ -11843,12 +11851,34 @@ fn parse_class_static_block(
         })
     });
     context.super_property_allowed = saved_super_property_allowed;
+    let body = parsed?;
+    // ES2022 15.7.1 ClassStaticBlockBody early errors: no `return`, no
+    // `break`/`continue` that leaves the block, and (as for a field
+    // initializer) no `arguments` or `super()`.
+    let forbidden = static_block_jump_error(&body).or_else(|| {
+        field_initializer_forbidden(&Expression::ArrowFunction {
+            params: Vec::new(),
+            body: ArrowBody::Block(BlockStatement {
+                body: body.clone(),
+                span: span.clone(),
+            }),
+            is_async: false,
+        })
+    });
+    if let Some(found) = forbidden {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("a class static block may not contain `{found}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
     Ok(MethodDefinition {
         key: Expression::Identifier("static".to_string()),
         kind: MethodKind::StaticBlock,
         params: Vec::new(),
         body: BlockStatement {
-            body: parsed?,
+            body,
             span: span.clone(),
         },
         is_static: true,
@@ -11857,6 +11887,80 @@ fn parse_class_static_block(
         is_async: false,
         is_generator: false,
     })
+}
+
+/// A `return`, or a `break`/`continue` whose target is outside, in the
+/// statements of a class static block (nested functions and classes are
+/// their own scope and are not entered).
+fn static_block_jump_error(body: &[Statement]) -> Option<&'static str> {
+    fn walk(
+        statement: &Statement,
+        loops: u32,
+        breakable: u32,
+        labels: &mut Vec<String>,
+    ) -> Option<&'static str> {
+        let each = |statements: &[Statement], labels: &mut Vec<String>| {
+            statements
+                .iter()
+                .find_map(|statement| walk(statement, loops, breakable, labels))
+        };
+        match statement {
+            Statement::Return(_) => Some("return"),
+            Statement::Break(jump) => match &jump.label {
+                None if breakable == 0 => Some("break"),
+                Some(label) if !labels.contains(label) => Some("break"),
+                _ => None,
+            },
+            Statement::Continue(jump) => match &jump.label {
+                None if loops == 0 => Some("continue"),
+                Some(label) if !labels.contains(label) => Some("continue"),
+                _ => None,
+            },
+            Statement::Block(block) => each(&block.body, labels),
+            Statement::If(branch) => {
+                walk(&branch.consequent, loops, breakable, labels).or_else(|| {
+                    branch
+                        .alternate
+                        .as_deref()
+                        .and_then(|alternate| walk(alternate, loops, breakable, labels))
+                })
+            }
+            Statement::For(looped) => walk(&looped.body, loops + 1, breakable + 1, labels),
+            Statement::While(looped) => walk(&looped.body, loops + 1, breakable + 1, labels),
+            Statement::DoWhile(looped) => walk(&looped.body, loops + 1, breakable + 1, labels),
+            Statement::ForIn(looped) => walk(&looped.body, loops + 1, breakable + 1, labels),
+            Statement::ForOf(looped) => walk(&looped.body, loops + 1, breakable + 1, labels),
+            Statement::With(with) => walk(&with.body, loops, breakable, labels),
+            Statement::TryCatch(attempt) => each(&attempt.block.body, labels)
+                .or_else(|| {
+                    attempt
+                        .handler
+                        .as_ref()
+                        .and_then(|handler| each(&handler.body.body, labels))
+                })
+                .or_else(|| {
+                    attempt
+                        .finalizer
+                        .as_ref()
+                        .and_then(|finalizer| each(&finalizer.body, labels))
+                }),
+            Statement::Switch(switch) => switch.cases.iter().find_map(|case| {
+                case.consequent
+                    .iter()
+                    .find_map(|statement| walk(statement, loops, breakable + 1, labels))
+            }),
+            Statement::Labeled(labeled) => {
+                labels.push(labeled.label.clone());
+                let found = walk(&labeled.body, loops, breakable, labels);
+                labels.pop();
+                found
+            }
+            _ => None,
+        }
+    }
+    let mut labels = Vec::new();
+    body.iter()
+        .find_map(|statement| walk(statement, 0, 0, &mut labels))
 }
 
 /// The class elements of a class body (see [`parse_class_body`]).

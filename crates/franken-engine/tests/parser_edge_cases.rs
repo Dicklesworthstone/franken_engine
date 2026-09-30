@@ -1071,6 +1071,18 @@ fn private_names_parse_as_private_members() {
             "super",
         ),
         ("class A { #x; m() { return #x; } }", "only valid"),
+        ("class A { #x; m() { this.# x; } }", "invalid private name"),
+        // ES2022 15.7.1 ClassStaticBlockBody early errors.
+        ("class A { static { return; } }", "`return`"),
+        ("class A { static { arguments; } }", "`arguments`"),
+        (
+            "label: while (false) { class C { static { break; } } }",
+            "`break`",
+        ),
+        (
+            "label: while (false) { class C { static { continue label; } } }",
+            "`continue`",
+        ),
     ] {
         let error = parser().parse(source, ParseGoal::Script).expect_err(source);
         assert!(
@@ -1078,6 +1090,15 @@ fn private_names_parse_as_private_members() {
             "{source}: {}",
             error.message
         );
+    }
+    for source in [
+        "class A { static { for (;;) { break; } } }",
+        "class A { static { x: { break x; } } }",
+        "class A { static { function f() { return arguments; } } }",
+    ] {
+        parser()
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
     }
 
     // An inner class reads the private names of the class around it.

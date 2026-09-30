@@ -355,10 +355,7 @@ fn secret_behind_a_weak_ref_cannot_reach_console() {
             sink_clearance,
             ..
         }) => {
-            assert!(
-                matches!(source_label, Label::Secret | Label::TopSecret),
-                "{source_label:?}"
-            );
+            assert_eq!(source_label, Label::Secret);
             assert_eq!(sink_clearance, Label::Internal);
         }
         other => panic!("a secret behind a WeakRef must be refused, got {other:?}"),

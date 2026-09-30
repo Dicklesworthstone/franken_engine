@@ -91078,6 +91078,11 @@ impl InterpreterCore {
                 return Ok(Value::Undefined);
             }
         }
+        // A closure's descriptor lives in the module that created it: a
+        // `new Function` body or a required module has its own function
+        // table, and the caller's entry at the same index is another function.
+        let foreign_owner = self.foreign_closure_module(&Value::Closure(closure_id), module)?;
+        let owner_module = foreign_owner.as_deref().unwrap_or(module);
         if let Some(metadata) = self.closure_method_metadata.get(&closure_id) {
             return Ok(match key {
                 "name" => Value::Str(metadata.name.clone()),
@@ -91085,7 +91090,8 @@ impl InterpreterCore {
                 // their `length` is the parameter count like any function.
                 "length" => {
                     let func_idx = self.closure_function_index(closure_id)?;
-                    Self::function_name_or_length(module, func_idx, key).unwrap_or(Value::Undefined)
+                    Self::function_name_or_length(owner_module, func_idx, key)
+                        .unwrap_or(Value::Undefined)
                 }
                 "prototype" => Value::Undefined,
                 _ => Value::Undefined,
@@ -91097,7 +91103,8 @@ impl InterpreterCore {
             ))
         } else {
             let func_idx = self.closure_function_index(closure_id)?;
-            Ok(Self::function_name_or_length(module, func_idx, key).unwrap_or(Value::Undefined))
+            Ok(Self::function_name_or_length(owner_module, func_idx, key)
+                .unwrap_or(Value::Undefined))
         }
     }
 
@@ -91331,6 +91338,19 @@ impl InterpreterCore {
                 BuiltinFunctionKind::StandardConstructor => {
                     Some(self.standard_constructor_property(builtin, key)?)
                 }
+                // A `new Function` result is a handle to its compiled
+                // artifact; its `length` is that descriptor's parameter count.
+                BuiltinFunctionKind::GeneratedFunction if key == "length" => {
+                    let (owner_program_id, artifact_id) =
+                        Self::parse_generated_function_handle(builtin)?;
+                    let artifact =
+                        self.resolve_generated_function_artifact(owner_program_id, artifact_id)?;
+                    Self::function_name_or_length(
+                        &artifact.compiled_module,
+                        artifact.function_index,
+                        key,
+                    )
+                }
                 _ if key == "name" => Some(Value::str(builtin.spec_name())),
                 _ => builtin.spec_length().map(Value::Int),
             },
@@ -91412,7 +91432,9 @@ impl InterpreterCore {
             (Some("length"), Value::BuiltinFunction(builtin)) => {
                 matches!(
                     builtin.kind,
-                    BuiltinFunctionKind::BoundFunction | BuiltinFunctionKind::StandardConstructor
+                    BuiltinFunctionKind::BoundFunction
+                        | BuiltinFunctionKind::StandardConstructor
+                        | BuiltinFunctionKind::GeneratedFunction
                 ) || builtin.spec_length().is_some()
             }
             (Some("length"), _) => true,

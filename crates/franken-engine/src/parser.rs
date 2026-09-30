@@ -4207,6 +4207,7 @@ fn parse_binding_pattern_inner(
                 Some(span.clone()),
             ));
         }
+        reject_strict_restricted_binding(trimmed, context.strict_mode, span, context)?;
         return Ok(BindingPattern::Identifier(canonicalize_identifier(trimmed)));
     }
 
@@ -9595,6 +9596,25 @@ fn strip_initial_hashbang(source: &str) -> &str {
         .map_or("", |(_, end)| &source[*end..])
 }
 
+/// ES2020 12.1.1, 13.3.1.1, 14.1.2: strict code cannot bind `eval` or
+/// `arguments` (variable, parameter, catch parameter or function name).
+fn reject_strict_restricted_binding(
+    name: &str,
+    strict: bool,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if strict && matches!(name, "eval" | "arguments") {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("`{name}` cannot be a binding name in strict mode code"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 /// ES2020 14.1.2, 14.2.1, 14.3.1: a function whose own body has a
 /// "use strict" directive must have simple parameters (no default, pattern or
 /// rest parameter).
@@ -11211,6 +11231,14 @@ fn parse_function_declaration(
             Some(span.clone()),
         )
     })?;
+    if let Some(name) = name.as_deref() {
+        reject_strict_restricted_binding(
+            name,
+            context.strict_mode || has_use_strict_directive(body_src),
+            &span,
+            context,
+        )?;
+    }
     let goal = ParseGoal::Script; // Function bodies use script goal.
     let (params, body_stmts) = with_await_context(is_async, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {

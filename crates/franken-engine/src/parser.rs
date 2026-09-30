@@ -8394,6 +8394,10 @@ fn parse_object_literal(
 
 fn object_accessor_tail<'a>(part: &'a str, prefix: &str) -> Option<&'a str> {
     let rest = part.strip_prefix(prefix)?;
+    // Minified: `get['k'](){}`, `set"k"(v){}`.
+    if rest.starts_with(['[', '\'', '"']) {
+        return Some(rest);
+    }
     let first = rest.chars().next()?;
     first.is_whitespace().then(|| rest.trim_start())
 }
@@ -8459,6 +8463,8 @@ fn try_parse_object_method(
     // Method modifiers (ES2020 14.4-14.7): `*name(){}`, `async name(){}`,
     // `async *name(){}`. `async(){}` / `async: v` name a property `async`.
     let (is_async, part) = match part.strip_prefix("async") {
+        // Minified: `async*g(){}`, `async[k](){}`.
+        Some(rest) if rest.starts_with(['*', '[', '\'', '"']) => (true, rest),
         Some(rest)
             if rest.starts_with([' ', '\t'])
                 && !rest.trim_start().starts_with(['(', ':', ',', '=']) =>

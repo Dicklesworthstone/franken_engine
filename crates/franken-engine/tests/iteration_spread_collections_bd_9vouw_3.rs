@@ -152,3 +152,17 @@ fn a_spread_operand_can_contain_operators() {
         "[[2],[1,2],[0,1,2],[1,2,3],[7,8],[5],[5]]",
     );
 }
+
+/// The same for a spread argument: `f(...c > 0 ? [a, b] : [b, a])` spreads
+/// the conditional's array. bun emits this shape without parentheses
+/// (date-fns' formatDistance), and it passed one argument, so date-fns
+/// printed "almost NaN years".
+#[test]
+fn a_spread_argument_can_contain_operators() {
+    check(
+        "var c = 5; var a; function n() { return arguments.length; } \
+         [n(...c > 0 ? [1, 2, 3] : []), Math.max(...c > 0 ? [7, 9] : [1]), n(...a ?? [1, 2]), \
+         n(0, ...a || [4, 5], 6), [].concat(...c ? [[1], [2]] : []).length].join();",
+        "3,9,2,4,2",
+    );
+}

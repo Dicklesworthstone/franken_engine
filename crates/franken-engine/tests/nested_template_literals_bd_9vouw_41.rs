@@ -55,6 +55,20 @@ console.log(`${[1, 2].map(n => `${n > 1 ? `>` : `<`},`).join('')}`, f(1, 2));"#,
 console.log(o.s, o.t);"#,
         "x}y p1q",
     ),
+    (
+        // js-yaml's renderSingleQuoted: a quote inside a regex literal in a
+        // substitution is pattern text, not the start of a string.
+        "regex_with_quote_in_substitution",
+        r#"var v = "a'b"; function q() { return `'${v.replace(/'/g, "''")}'`; }
+console.log(q());"#,
+        "'a''b'",
+    ),
+    (
+        "regex_class_and_division_in_substitutions",
+        r#"var s = "a/b`c}d";
+console.log(`${s.split(/[/`}]/).join("-")}`, `${6 / 2}|${[1,2].map(x => x * 2).join()}`);"#,
+        "a-b-c-d 3|2,4",
+    ),
 ];
 
 #[test]

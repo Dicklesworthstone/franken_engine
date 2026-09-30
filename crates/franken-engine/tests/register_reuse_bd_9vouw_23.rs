@@ -786,3 +786,74 @@ fn calls_inside_one_expression_release_their_temporaries() {
         );
     }
 }
+
+fn operator_chain(item: &str, count: usize) -> String {
+    vec![item; count].join(" + ")
+}
+
+#[test]
+fn binary_operators_release_their_operand_registers() {
+    // Long chains on the fixed 256-register lane, which bd-9vouw.85 lets
+    // parse past 255 terms: operator results reuse their dead operands
+    // (pure_op_result_register, 247074d4b), so 600 terms, calls inside a
+    // chain and `valueOf` operands in left-to-right order all fit. Before
+    // that reuse a 128-term `1 + 1 + ... + 1` overflowed the frame. Node
+    // values.
+    let prelude = "function f(a, b) { return a + b; } var log = []; var i; \
+                   function o(n) { return { valueOf() { log.push(n); return n; } }; } \
+                   function inOrder(count) { for (var k = 0; k < count; k++) { \
+                   if (log[k] !== k + 1) return false; } return log.length === count; }";
+    let strings = (0..600)
+        .map(|index| format!("'{}'", index % 10))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let value_of_calls = (1..=150)
+        .map(|n| format!("o({n})"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    for (name, expression, node) in [
+        ("literals", operator_chain("1", 600), "600"),
+        ("strings", format!("({strings}).length"), "600"),
+        ("products", operator_chain("3 * 3", 200), "1800"),
+        ("calls", operator_chain("f(1, 2)", 150), "450"),
+        ("comparisons", operator_chain("(1 < 2)", 200), "200"),
+        (
+            "updates",
+            format!("(i = 0, {})", operator_chain("i++", 150)),
+            "11175",
+        ),
+        (
+            // ToPrimitive still runs left to right, one operand at a time.
+            "value_of_order",
+            format!("(log = [], ({value_of_calls}) * (inOrder(150) ? 1 : -1))"),
+            "11325",
+        ),
+    ] {
+        assert_eq!(
+            fixed_lane_value(&format!("{prelude} {expression};")),
+            node,
+            "{name} at top level"
+        );
+        assert_eq!(
+            fixed_lane_value(&format!(
+                "{prelude} (function () {{ return {expression}; }})();"
+            )),
+            node,
+            "{name} in a function body"
+        );
+    }
+    // The chain's length no longer shows in the frame width.
+    assert_eq!(
+        main_frame_size(&format!("var x = {};", operator_chain("1", 100))),
+        main_frame_size("var x = 1 + 1;"),
+        "top-level chain frame"
+    );
+    assert_eq!(
+        max_function_frame_size(&format!(
+            "function g() {{ return {}; }}",
+            operator_chain("1", 100)
+        )),
+        max_function_frame_size("function g() { return 1 + 1; }"),
+        "function-body chain frame"
+    );
+}

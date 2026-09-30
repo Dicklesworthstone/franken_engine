@@ -3371,6 +3371,8 @@ pub enum BuiltinFunctionKind {
     /// V8's `Error.captureStackTrace(target[, constructorOpt])`, which npm
     /// error classes call unguarded. Append only.
     ErrorCaptureStackTrace,
+    /// `ArrayBuffer.prototype.slice` (ES2020 24.1.4.3). Append only.
+    ArrayBufferSlice,
 }
 
 impl BuiltinFunctionKind {
@@ -5081,6 +5083,7 @@ impl BuiltinFunction {
             }
             BuiltinFunctionKind::ErrorPrototypeToString => "toString",
             BuiltinFunctionKind::ErrorCaptureStackTrace => "captureStackTrace",
+            BuiltinFunctionKind::ArrayBufferSlice => "slice",
             // Anonymous built-in closures in the spec.
             BuiltinFunctionKind::PromiseThenFinally
             | BuiltinFunctionKind::PromiseCatchFinally
@@ -5268,6 +5271,7 @@ impl BuiltinFunction {
             K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
             K::ErrorPrototypeToString => "Error.prototype",
             K::ErrorCaptureStackTrace => "Error",
+            K::ArrayBufferSlice => "ArrayBuffer.prototype",
             K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
             K::SetTimeout
             | K::SetInterval
@@ -5419,9 +5423,23 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 15] = [
-    "Array", "String", "Number", "Boolean", "BigInt", "Symbol", "Map", "Set", "Function", "Date",
-    "RegExp", "Promise", "WeakMap", "WeakSet", "DataView",
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 16] = [
+    "Array",
+    "String",
+    "Number",
+    "Boolean",
+    "BigInt",
+    "Symbol",
+    "Map",
+    "Set",
+    "Function",
+    "Date",
+    "RegExp",
+    "Promise",
+    "WeakMap",
+    "WeakSet",
+    "DataView",
+    "ArrayBuffer",
 ];
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
@@ -5726,10 +5744,17 @@ const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
 const ARRAY_BUFFER_SLOT_KEYS: [&str; 2] = ["__type", "byteLength"];
 const DATA_VIEW_SLOT_KEYS: [&str; 4] = ["__type", "buffer", "byteLength", "byteOffset"];
 
-const SLOT0_STATIC_GLOBALS: [&str; 7] = [
-    "Object", "JSON", "Array", "String", "Symbol", "Proxy", "Map",
+const SLOT0_STATIC_GLOBALS: [&str; 8] = [
+    "Object",
+    "JSON",
+    "Array",
+    "String",
+    "Symbol",
+    "Proxy",
+    "Map",
+    "ArrayBuffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 26] = [
+const SLOT0_STATIC_MEMBERS: [&str; 27] = [
     "keys",
     "values",
     "entries",
@@ -5745,6 +5770,7 @@ const SLOT0_STATIC_MEMBERS: [&str; 26] = [
     "getOwnPropertyDescriptor",
     "fromEntries",
     "groupBy",
+    "isView",
     "parse",
     "stringify",
     "isArray",
@@ -39493,6 +39519,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::ErrorPrototypeToString => {
                 self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
             }
+            BuiltinFunctionKind::ArrayBufferSlice => {
+                self.array_buffer_slice(receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::ErrorCaptureStackTrace => {
                 // V8 Error.captureStackTrace(target[, constructorOpt]): give
                 // `target` a non-enumerable `stack` whose first line is
@@ -55817,6 +55846,9 @@ impl InterpreterCore {
                 iterator_handle: None,
                 bound_object: None,
             }),
+            ("ArrayBuffer", "slice") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ArrayBufferSlice,
+            )),
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
             ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
             ("DataView", "getInt32") => Some(BuiltinFunction::data_view_get_int32()),
@@ -62501,6 +62533,49 @@ impl InterpreterCore {
         let values = self.typed_array_values_in_range(&view, start, end.max(start))?;
         let result = self.alloc_typed_array_from_values(view.kind, &values)?;
         Ok(Value::Object(result))
+    }
+
+    /// ES2020 24.1.4.3 ArrayBuffer.prototype.slice(start, end): a new
+    /// ArrayBuffer holding a copy of the bytes from `start` to `end`
+    /// (relative indices clamped to byteLength, as for typed arrays). The new
+    /// buffer is charged like the constructor's, and its bytes keep the
+    /// source bytes' IFC label.
+    fn array_buffer_slice(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let source = match receiver {
+            Value::Object(object_id)
+                if self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                    object.array_buffer.is_some()
+                        && object.typed_array.is_none()
+                        && object.data_view.is_none()
+                }) =>
+            {
+                object_id
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "ArrayBuffer receiver for ArrayBuffer.prototype.slice".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let length = self.with_array_buffer_bytes(source, <[u8]>::len)?;
+        let (first, last) = self.typed_array_method_range(args, 0, 1, length)?;
+        let copied =
+            self.with_array_buffer_bytes(source, |bytes| bytes[first..last.max(first)].to_vec())?;
+        let label = self
+            .heap
+            .get(source.0 as usize)
+            .and_then(|object| object.array_buffer.as_ref())
+            .map(|backing| backing.label.clone())
+            .unwrap_or(Label::Public);
+        let created = self.alloc_array_buffer_object(copied.len())?;
+        self.with_array_buffer_bytes_mut(created, |bytes| bytes.copy_from_slice(&copied))?;
+        self.join_binary_storage_label(created, &label)?;
+        Ok(Value::Object(created))
     }
 
     fn typed_array_fill(
@@ -78437,6 +78512,18 @@ impl InterpreterCore {
             "builtin:ObjectGroupBy" | "builtin:MapGroupBy" => {
                 self.group_by_builtin(module, args, cap == "builtin:MapGroupBy")
             }
+            "builtin:ArrayBufferIsView" => {
+                // ES2020 24.1.3.1: true for a typed array (and so a Buffer)
+                // or a DataView, false for anything else.
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                Ok(Value::Bool(matches!(
+                    value,
+                    Value::Object(object_id)
+                        if self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                            object.typed_array.is_some() || object.data_view.is_some()
+                        })
+                )))
+            }
             "builtin:ObjectAssign" => {
                 // Object.assign implementation - copies properties from source objects to target
                 // ES2020 19.1.2.1: ToObject(target) throws for undefined and
@@ -89134,6 +89221,11 @@ impl InterpreterCore {
             ),
         })?;
 
+        // Every ArrayBuffer (constructed, a view's `.buffer`, a slice) inherits
+        // from %ArrayBuffer.prototype%: `instanceof ArrayBuffer`, `constructor`
+        // and the prototype's methods. Materialized before the buffer's id is
+        // taken, since the first call allocates the prototype object.
+        let prototype = self.ensure_builtin_prototype("ArrayBuffer")?;
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
             return Err(
@@ -89150,6 +89242,7 @@ impl InterpreterCore {
             );
 
         let mut object = HeapObject::new();
+        object.prototype = Some(prototype);
         object
             .properties
             .insert("__type".to_string(), Value::str("ArrayBuffer"));
@@ -92766,7 +92859,8 @@ impl InterpreterCore {
             "Promise" => defined(Self::promise_property_value(key)),
             // DataView: the accessors instances already expose, served from
             // the canonical prototype too.
-            "Map" | "Set" | "Date" | "RegExp" | "WeakMap" | "WeakSet" | "DataView" => {
+            "Map" | "Set" | "Date" | "RegExp" | "WeakMap" | "WeakSet" | "DataView"
+            | "ArrayBuffer" => {
                 Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)
             }
             _ => None,

@@ -1,4 +1,5 @@
-//! Array.prototype methods on a Proxy receiver (ES2020 23.1.3).
+//! Array.prototype methods on a Proxy receiver (ES2020 23.1.3), and concat
+//! with a Proxy argument.
 //!
 //! The ordinary paths read an array's element storage directly, and a Proxy
 //! has none of its own: `proxy.push(x)` changed nothing, `map` returned `[]`,
@@ -64,8 +65,21 @@ impl InterpreterCore {
         )
     }
 
-    /// The result of the Array.prototype method `kind` called on the Proxy
-    /// `proxy`, or `None` when it has no generic path here.
+    /// Whether any argument is a Proxy (concat spreads one generically).
+    pub(super) fn any_proxy_argument(&self, args: RegRange) -> Result<bool, InterpreterError> {
+        for index in 0..args.count {
+            if let Some(Value::Object(object_id)) = self.builtin_arg(args, index)?
+                && self.active_proxy_record(object_id)?.is_some()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The result of the Array.prototype method `kind` called on `proxy` (a
+    /// Proxy, or concat's ordinary receiver of a Proxy argument), or `None`
+    /// when it has no generic path here.
     pub(super) fn array_method_on_proxy(
         &mut self,
         module: &Ir3Module,

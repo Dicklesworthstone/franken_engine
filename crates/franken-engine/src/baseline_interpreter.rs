@@ -37963,10 +37963,13 @@ impl InterpreterCore {
         if let Some(Value::Object(object_id)) = receiver {
             receiver = Some(self.this_primitive_receiver(builtin, object_id));
         }
-        // Array.prototype methods on a Proxy run over its traps.
+        // Array.prototype methods on a Proxy run over its traps, and so
+        // does a concat that spreads one.
         if Self::has_generic_array_path(builtin.kind)
             && let Some(Value::Object(object_id)) = receiver
-            && self.active_proxy_record(object_id)?.is_some()
+            && (self.active_proxy_record(object_id)?.is_some()
+                || (builtin.kind == BuiltinFunctionKind::ArrayConcat
+                    && self.any_proxy_argument(args)?))
             && let Some(result) =
                 self.array_method_on_proxy(module, builtin.kind, object_id, args)?
         {

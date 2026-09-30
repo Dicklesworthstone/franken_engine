@@ -3380,6 +3380,10 @@ pub enum BuiltinFunctionKind {
     /// `FinalizationRegistry.prototype.register` / `unregister` (ES2021
     /// 26.2.3); the method name travels in `module_specifier`. Append only.
     FinalizationRegistryMethod,
+    /// `RegExp.prototype[@@match]`, `[@@matchAll]`, `[@@replace]`,
+    /// `[@@search]` and `[@@split]` (ES2020 21.2.5); the `@@name` travels in
+    /// `module_specifier`. Append only.
+    RegExpSymbolMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4295,6 +4299,17 @@ impl BuiltinFunction {
         }
     }
 
+    /// `RegExp.prototype[@@match]` and its siblings; `key` is a
+    /// [`REGEXP_SYMBOL_METHODS`] key such as `"@@split"`.
+    fn regexp_symbol_method(key: &str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::RegExpSymbolMethod,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(key),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn map_set() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapSet,
@@ -5097,6 +5112,11 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or("finalizationRegistryMethod"),
+            BuiltinFunctionKind::RegExpSymbolMethod => REGEXP_SYMBOL_METHODS
+                .iter()
+                .map(|(name, _)| *name)
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("@@regexp"),
             // Anonymous built-in closures in the spec.
             BuiltinFunctionKind::PromiseThenFinally
             | BuiltinFunctionKind::PromiseCatchFinally
@@ -5287,6 +5307,7 @@ impl BuiltinFunction {
             K::ArrayBufferSlice => "ArrayBuffer.prototype",
             K::WeakRefDeref => "WeakRef.prototype",
             K::FinalizationRegistryMethod => "FinalizationRegistry.prototype",
+            K::RegExpSymbolMethod => "RegExp.prototype",
             K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
             K::SetTimeout
             | K::SetInterval
@@ -5346,7 +5367,10 @@ impl BuiltinFunction {
         match self.display_name() {
             "@@iterator" => "[Symbol.iterator]",
             "@@asyncIterator" => "[Symbol.asyncIterator]",
-            name => name,
+            name => REGEXP_SYMBOL_METHODS
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map_or(name, |(_, spec_name)| spec_name),
         }
     }
 }
@@ -7180,6 +7204,30 @@ const READ_ONLY_VALUE_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
     enumerable: false,
     configurable: false,
 };
+
+/// `RegExp.prototype`'s symbol-keyed methods (ES2020 21.2.5.6-11): the key a
+/// [`BuiltinFunctionKind::RegExpSymbolMethod`] carries, and its `name`.
+const REGEXP_SYMBOL_METHODS: [(&str, &str); 5] = [
+    ("@@match", "[Symbol.match]"),
+    ("@@matchAll", "[Symbol.matchAll]"),
+    ("@@replace", "[Symbol.replace]"),
+    ("@@search", "[Symbol.search]"),
+    ("@@split", "[Symbol.split]"),
+];
+
+/// The [`REGEXP_SYMBOL_METHODS`] key of a well-known symbol, if it names one.
+fn regexp_symbol_method_key(symbol: SymbolId) -> Option<&'static str> {
+    [
+        (WellKnownSymbol::Match, "@@match"),
+        (WellKnownSymbol::MatchAll, "@@matchAll"),
+        (WellKnownSymbol::Replace, "@@replace"),
+        (WellKnownSymbol::Search, "@@search"),
+        (WellKnownSymbol::Split, "@@split"),
+    ]
+    .into_iter()
+    .find(|(well_known, _)| well_known.id() == symbol)
+    .map(|(_, key)| key)
+}
 
 /// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3;
 /// ES2021 20.5.7.3 for AggregateError).
@@ -37728,6 +37776,12 @@ impl InterpreterCore {
                 let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.regexp_prototype_exec(receiver.unwrap_or(Value::Undefined), &input)
             }
+            BuiltinFunctionKind::RegExpSymbolMethod => self.regexp_symbol_method_call(
+                module,
+                builtin,
+                receiver.unwrap_or(Value::Undefined),
+                args,
+            ),
             BuiltinFunctionKind::RegExpPrototypeToString => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 match self.regexp_source_flags_from_value(&receiver) {
@@ -37947,6 +38001,14 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StringReplaceAll => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                if let Some(result) = self.string_pattern_protocol_call(
+                    module,
+                    &receiver,
+                    args,
+                    WellKnownSymbol::Replace,
+                )? {
+                    return Ok(result);
+                }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_replace_all_method(module, &value, args)
             }
@@ -37982,6 +38044,14 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StringSplit => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                if let Some(result) = self.string_pattern_protocol_call(
+                    module,
+                    &receiver,
+                    args,
+                    WellKnownSymbol::Split,
+                )? {
+                    return Ok(result);
+                }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_split_impl(&value, args)
             }
@@ -38012,22 +38082,54 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StringReplace => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                if let Some(result) = self.string_pattern_protocol_call(
+                    module,
+                    &receiver,
+                    args,
+                    WellKnownSymbol::Replace,
+                )? {
+                    return Ok(result);
+                }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_replace_method(module, &value, args)
             }
             BuiltinFunctionKind::StringMatch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                if let Some(result) = self.string_pattern_protocol_call(
+                    module,
+                    &receiver,
+                    args,
+                    WellKnownSymbol::Match,
+                )? {
+                    return Ok(result);
+                }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_match_impl(&value, args)
             }
             BuiltinFunctionKind::StringMatchAll => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                if let Some(result) = self.string_pattern_protocol_call(
+                    module,
+                    &receiver,
+                    args,
+                    WellKnownSymbol::MatchAll,
+                )? {
+                    return Ok(result);
+                }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.string_match_all_value(&value, &pattern)
             }
             BuiltinFunctionKind::StringSearch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                if let Some(result) = self.string_pattern_protocol_call(
+                    module,
+                    &receiver,
+                    args,
+                    WellKnownSymbol::Search,
+                )? {
+                    return Ok(result);
+                }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_search_impl(&value, args)
             }
@@ -55247,6 +55349,16 @@ impl InterpreterCore {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::typed_array_values()));
             }
         }
+        // RegExp.prototype's symbol-keyed methods (ES2020 21.2.5.6-11), once
+        // own and inherited properties have had their chance to shadow them.
+        if let RuntimePropertyKey::Symbol(symbol) = key
+            && let Some(method) = regexp_symbol_method_key(*symbol)
+            && self.chain_has_regexp_prototype(object_id)
+        {
+            return Ok(Value::BuiltinFunction(
+                BuiltinFunction::regexp_symbol_method(method),
+            ));
+        }
         let Some(key_text) = key.as_str() else {
             self.nondeterminism_trace.witness_deterministic(
                 NondeterminismSource::PropertyResolution,
@@ -66837,6 +66949,148 @@ impl InterpreterCore {
         };
         self.set_object_property(result, "groups".to_string(), groups)?;
         Ok(Some((Value::Object(result), whole_end)))
+    }
+
+    /// RegExp.prototype[@@match], [@@matchAll], [@@replace], [@@search] and
+    /// [@@split] (ES2020 21.2.5.6-11) on a RegExp receiver: the algorithms
+    /// String.prototype.match and its siblings run for a RegExp argument, so
+    /// `re[Symbol.split](s, n)` and `s.split(re, n)` agree.
+    fn regexp_symbol_method_call(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let method = builtin.display_name();
+        let Some((source, flags)) = self.regexp_source_flags_from_value(&receiver) else {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "RegExp receiver for RegExp.prototype.{}",
+                    builtin.spec_name()
+                ),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let input = self.value_to_string(&input);
+        match method {
+            "@@match" => self.string_match_value(&input, &receiver),
+            "@@matchAll" => self.string_match_all_value(&JsString::from(input), &receiver),
+            "@@search" => self.string_search_value(&input, &receiver),
+            "@@split" => {
+                let limit =
+                    Self::split_limit(self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined));
+                let mut pieces = if limit == 0 {
+                    Vec::new()
+                } else {
+                    self.regexp_split_pieces(&input, &source, &flags)?
+                };
+                pieces.truncate(limit);
+                Ok(Value::Object(self.alloc_array_from_values(&pieces)?))
+            }
+            "@@replace" => {
+                let replacement = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let label = self.join_arg_range_label(args)?;
+                self.string_replace_js(Some(module), &input, &receiver, &replacement, false, label)
+            }
+            _ => Err(InterpreterError::TypeError {
+                expected: "RegExp.prototype symbol method".to_string(),
+                got: method.to_string(),
+            }),
+        }
+    }
+
+    /// ES2020 21.1.3.11/.12/.17/.18/.19 step 2: a String method whose pattern
+    /// argument is an object calls that object's `@@match` / `@@matchAll` /
+    /// `@@replace` / `@@search` / `@@split` method with the receiver and the
+    /// remaining arguments. `None` means the ordinary algorithm runs: the
+    /// argument is not an object, has no such method, or its method is this
+    /// realm's RegExp.prototype builtin (whose algorithm the caller runs
+    /// directly). The method's result carries the join of its inputs' labels
+    /// and its own.
+    fn string_pattern_protocol_call(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+        args: RegRange,
+        symbol: WellKnownSymbol,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if matches!(receiver, Value::Undefined | Value::Null) {
+            return Ok(None);
+        }
+        let Some(pattern @ Value::Object(pattern_id)) = self.builtin_arg(args, 0)? else {
+            return Ok(None);
+        };
+        let key = RuntimePropertyKey::Symbol(symbol.id());
+        if self.regexp_uses_builtin_symbol_method(pattern_id, &key) {
+            return Ok(None);
+        }
+        let method = self.prototype_chain_get_with_receiver_runtime(
+            Some(module),
+            pattern_id,
+            &key,
+            pattern.clone(),
+        )?;
+        match &method {
+            Value::Undefined | Value::Null => return Ok(None),
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::RegExpSymbolMethod
+                    && regexp_symbol_method_key(symbol.id()) == Some(builtin.display_name()) =>
+            {
+                return Ok(None);
+            }
+            callable if callable.is_callable() => {}
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("callable {} method", symbol.name()),
+                    got: other.type_name().to_string(),
+                });
+            }
+        }
+        let mut arguments = vec![receiver.clone()];
+        for index in 1..args.count {
+            arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+        }
+        let label = self.join_arg_range_label(args)?;
+        let (result, result_label) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            method,
+            pattern,
+            arguments,
+            Some(label.clone()),
+        )?;
+        self.replace_pending_hostcall_result_label(Some(label.join(&result_label)))?;
+        Ok(Some(result))
+    }
+
+    /// Whether `object_id` is a RegExp whose `key` method is certainly the
+    /// builtin: no own property shadows it, its prototype is
+    /// %RegExp.prototype% (or none), and %RegExp.prototype% has no own `key`
+    /// property. The common `s.split(/,/)` then skips the property walk.
+    fn regexp_uses_builtin_symbol_method(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> bool {
+        if self.regexp_source_flags_from_object(object_id).is_none() {
+            return false;
+        }
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return false;
+        };
+        if object.own_runtime_property_value(key).is_some() {
+            return false;
+        }
+        let regexp_prototype = self.builtin_prototypes.get("RegExp").copied();
+        match object.prototype {
+            None => true,
+            Some(prototype) if Some(prototype) == regexp_prototype => self
+                .heap
+                .get(prototype.0 as usize)
+                .is_some_and(|prototype| prototype.own_runtime_property_value(key).is_none()),
+            Some(_) => false,
+        }
     }
 
     /// ES2020 21.2.5.2 RegExp.prototype.exec: a global or sticky RegExp
@@ -93127,6 +93381,33 @@ impl InterpreterCore {
 
     /// Whether `object_id`'s prototype chain passes through a canonical
     /// builtin error prototype (`Error` or one of the six native errors).
+    /// Whether `object_id` is a RegExp or inherits from %RegExp.prototype%,
+    /// so the RegExp.prototype methods reach it.
+    fn chain_has_regexp_prototype(&self, object_id: ObjectId) -> bool {
+        if self.regexp_source_flags_from_object(object_id).is_some() {
+            return true;
+        }
+        let Some(&regexp_prototype) = self.builtin_prototypes.get("RegExp") else {
+            return false;
+        };
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        while let Some(id) = current {
+            if id == regexp_prototype {
+                return true;
+            }
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                return false;
+            }
+            current = self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.prototype);
+            depth += 1;
+        }
+        false
+    }
+
     fn chain_has_error_prototype(&self, object_id: ObjectId) -> bool {
         const ERROR_PROTOTYPES: [&str; 8] = [
             "Error",

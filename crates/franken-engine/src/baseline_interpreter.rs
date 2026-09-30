@@ -49011,6 +49011,14 @@ impl InterpreterCore {
                         }
                         _ => None,
                     };
+                    // A function whose own properties lack the key continues
+                    // its [[Get]] on %Function.prototype% (after the match).
+                    let function_base = (function_backing.is_none()
+                        && matches!(
+                            obj_val,
+                            Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)
+                        ))
+                    .then(|| obj_val.clone());
 
                     // The prototype object a primitive base's property came
                     // from, for the stored-label join below.
@@ -49345,6 +49353,30 @@ impl InterpreterCore {
                                 });
                             }
                         }
+                    };
+                    // ES2020 19.2.3: a function's [[Prototype]] is
+                    // %Function.prototype%, so a key that neither its own
+                    // properties nor its synthesized members supply is read
+                    // there, then on Object.prototype: `fn.constructor` is
+                    // Function, and `valueOf`, `__proto__` and members a
+                    // program adds (`Function.prototype.method = ...`) reach
+                    // every function. They read undefined.
+                    let prop = match function_base {
+                        Some(function) if matches!(prop, Value::Undefined) => {
+                            if property_key.as_str() == Some("__proto__") {
+                                self.function_value_prototype(Some(module), &function)?
+                            } else {
+                                let (value, owner) = self.primitive_prototype_get(
+                                    module,
+                                    "Function",
+                                    &property_key,
+                                    function,
+                                )?;
+                                primitive_owner = owner;
+                                value
+                            }
+                        }
+                        _ => prop,
                     };
                     if let Value::Closure(closure_id) = &prop
                         && let Some(method) = self.closure_method_metadata.get(closure_id)
@@ -55908,6 +55940,12 @@ impl InterpreterCore {
                 return Ok((
                     self.promise_intrinsic_constructor()
                         .unwrap_or(Value::Undefined),
+                    None,
+                ));
+            }
+            if name == "constructor" && type_name == "Function" {
+                return Ok((
+                    Value::BuiltinFunction(BuiltinFunction::function_constructor()),
                     None,
                 ));
             }
@@ -95899,6 +95937,12 @@ impl InterpreterCore {
         if key == "constructor" && matches!(name, "Promise" | "Date") {
             return self.materialized_intrinsic_constructor(name);
         }
+        // %Function.prototype%.constructor is %Function% (ES2020 19.2.3.1).
+        if key == "constructor" && name == "Function" {
+            return Some(Value::BuiltinFunction(
+                BuiltinFunction::function_constructor(),
+            ));
+        }
         if key == "constructor" && name == TYPED_ARRAY_INTRINSIC {
             return Some(Value::BuiltinFunction(
                 BuiltinFunction::standard_constructor(TYPED_ARRAY_INTRINSIC),
@@ -95959,6 +96003,11 @@ impl InterpreterCore {
             // constructors rather than standard constructor builtins.
             if let Some(name @ ("Promise" | "Date")) = canonical {
                 return self.materialized_intrinsic_constructor(name);
+            }
+            if canonical == Some("Function") {
+                return Some(Value::BuiltinFunction(
+                    BuiltinFunction::function_constructor(),
+                ));
             }
             if canonical == Some(TYPED_ARRAY_INTRINSIC) {
                 return Some(constructor(TYPED_ARRAY_INTRINSIC));

@@ -39,6 +39,23 @@ fn trim_end_keeps_leading() {
     assert_eq!(ev("'  hi  '.trimEnd()"), "  hi");
 }
 
+// Annex B B.2.2.15-16: trimLeft/trimRight are the trimStart/trimEnd function
+// objects themselves, so their names are "trimStart"/"trimEnd". marked 4.3.0
+// calls trimRight while lexing. Expected value is Node v22.2.0's.
+#[test]
+fn trim_left_and_right_are_trim_start_and_end() {
+    assert_eq!(
+        ev(
+            "var s = '  ab  '; JSON.stringify([s.trimLeft(), s.trimRight(), \
+            String.prototype.trimLeft === String.prototype.trimStart, \
+            String.prototype.trimRight === String.prototype.trimEnd, \
+            String.prototype.trimLeft.name, String.prototype.trimRight.name, \
+            typeof ''.trimLeft])"
+        ),
+        r#"["ab  ","  ab",true,true,"trimStart","trimEnd","function"]"#
+    );
+}
+
 #[test]
 fn replace_all_replaces_every_occurrence() {
     assert_eq!(ev("'aaa'.replaceAll('a','b')"), "bbb");

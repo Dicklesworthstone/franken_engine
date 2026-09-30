@@ -54152,8 +54152,12 @@ impl InterpreterCore {
                 BuiltinFunctionKind::StringPrototypeConcat,
             )),
             "trim" => Value::BuiltinFunction(BuiltinFunction::string_trim()),
-            "trimStart" => Value::BuiltinFunction(BuiltinFunction::string_trim_start()),
-            "trimEnd" => Value::BuiltinFunction(BuiltinFunction::string_trim_end()),
+            // Annex B: trimLeft and trimRight are the same function objects
+            // as trimStart and trimEnd, named "trimStart"/"trimEnd".
+            "trimStart" | "trimLeft" => {
+                Value::BuiltinFunction(BuiltinFunction::string_trim_start())
+            }
+            "trimEnd" | "trimRight" => Value::BuiltinFunction(BuiltinFunction::string_trim_end()),
             "replaceAll" => Value::BuiltinFunction(BuiltinFunction::string_replace_all()),
             "codePointAt" => Value::BuiltinFunction(BuiltinFunction::string_code_point_at()),
             "localeCompare" => Value::BuiltinFunction(BuiltinFunction::string_locale_compare()),

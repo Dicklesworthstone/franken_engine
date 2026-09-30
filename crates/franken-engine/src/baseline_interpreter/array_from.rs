@@ -219,7 +219,7 @@ impl InterpreterCore {
     // This non-observable inspection only distinguishes a missing native
     // fallback from an explicitly installed nullish method. Never run `has`
     // traps, repeat the getter, or skip an exotic prototype boundary.
-    fn array_from_has_explicit_iterator(
+    pub(super) fn array_from_has_explicit_iterator(
         &mut self,
         object: ObjectId,
     ) -> Result<bool, InterpreterError> {
@@ -330,7 +330,7 @@ impl InterpreterCore {
         }
     }
 
-    fn array_from_close_after_error<T>(
+    pub(super) fn array_from_close_after_error<T>(
         &mut self,
         module: Option<&Ir3Module>,
         iterator: Value,

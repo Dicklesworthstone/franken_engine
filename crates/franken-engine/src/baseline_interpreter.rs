@@ -83,6 +83,7 @@ mod object_integrity;
 mod package_resolution;
 mod primitive_conversion;
 mod reflect_invocation;
+mod regexp_syntax;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
@@ -51884,7 +51885,7 @@ impl InterpreterCore {
             }
         }
 
-        let mut builder = RegexBuilder::new(pattern);
+        let mut builder = RegexBuilder::new(&regexp_syntax::js_pattern_to_rust(pattern, flags));
         builder
             .case_insensitive(case_insensitive)
             .multi_line(multi_line)
@@ -90808,10 +90809,11 @@ mod active_builtin_regressions {
         assert_eq!(core.regexp_cache.borrow().len(), REGEXP_CACHE_ENTRIES);
         assert!(!cached(&core, "ab+c"));
 
-        // Unicode `\w{50}` compiles to about 4 MiB: valid and matched, not kept.
-        let large = core.compile_regexp_pattern(r"^\w{50}$", "").unwrap();
+        // `\p{L}{50}` compiles past the cache limits: valid and matched, not
+        // kept. (`\w` is ASCII in JavaScript, bd-9vouw.89, so `\w{50}` is small.)
+        let large = core.compile_regexp_pattern(r"^\p{L}{50}$", "u").unwrap();
         assert!(large.is_match(&"\u{e9}".repeat(50)));
-        assert!(!cached(&core, r"^\w{50}$"));
+        assert!(!cached(&core, r"^\p{L}{50}$"));
         let long_source = "a".repeat(REGEXP_CACHE_MAX_PATTERN_BYTES + 1);
         assert!(
             core.compile_regexp_pattern(&long_source, "")

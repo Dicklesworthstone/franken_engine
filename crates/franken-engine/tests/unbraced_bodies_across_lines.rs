@@ -18,6 +18,45 @@ fn eval_to_string(source: &str) -> String {
     }
 }
 
+/// A loop or `if` whose unbraced body is another header with its own
+/// unbraced body on the following line, the layout bundlers (bun, esbuild)
+/// emit for single-statement bodies: `for (...)\n  if (x)\n    return;`.
+/// Only the first header was joined with its next line, so the inner `if`
+/// got an empty consequent ("empty expression statement"); 9 of 37 bundled
+/// npm packages (immer, zod, marked, underscore, decimal.js, ...) stopped
+/// there. An `else` line pairs with such a nested `if`.
+#[test]
+fn nested_unbraced_headers_on_following_lines() {
+    for (source, node) in [
+        (
+            "var a = [1, 2], hit = 0, i;\nfor (i = 2;i-- !== 0; )\n  if (a[i] === 2)\n    hit++;\nhit;",
+            "1",
+        ),
+        (
+            "function f(a) {\n  var i;\n  for (i = 2;i-- !== 0; )\n    if (!a[i])\n      return false;\n  return true;\n}\n[f([1, 1]), f([0, 1])].join();",
+            "true,false",
+        ),
+        (
+            "var n = 0;\nfor (var i = 0; i < 3; i++)\n  for (var j = 0; j < 2; j++)\n    n++;\nn;",
+            "6",
+        ),
+        (
+            "var i = 3, c = 0;\nwhile (i-- !== 0)\n  if (i % 2)\n    c++;\n  else\n    c += 10;\nc;",
+            "21",
+        ),
+        (
+            "var o = {a: 1, b: 2}, s = '';\nfor (var k in o)\n  if (o[k] > 1)\n    s += k;\ns;",
+            "b",
+        ),
+        (
+            "var t = 0;\nif (t === 0)\n  for (var q = 0; q < 3; q++)\n    t += q;\nt;",
+            "3",
+        ),
+    ] {
+        assert_eq!(eval_to_string(source), node, "{source}");
+    }
+}
+
 #[test]
 fn bodies_and_clauses_on_following_lines() {
     for (source, node) in [

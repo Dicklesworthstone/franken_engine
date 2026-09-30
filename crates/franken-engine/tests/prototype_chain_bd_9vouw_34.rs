@@ -264,3 +264,18 @@ fn symbol_has_instance_decides_instanceof() {
         "true,false,true",
     );
 }
+
+/// `Date` and `Promise` are materialized constructors (a builtin with its own
+/// property object), not standard-constructor builtins, so a date's
+/// `constructor` walked on to Object.prototype and was `Object`; `new
+/// d.constructor(d)` still happened to work. rfdc keys its clone handlers by
+/// `o.constructor`, so every Date was cloned as a plain object.
+#[test]
+fn date_constructor_is_the_date_global() {
+    check(
+        "var d = new Date(0); var m = new Map; m.set(Date, 1); \
+         [d.constructor === Date, Date.prototype.constructor === Date, m.get(d.constructor), \
+         Object.getPrototypeOf(d).constructor.name].join()",
+        "true,true,1,Date",
+    );
+}

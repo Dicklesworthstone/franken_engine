@@ -3645,10 +3645,17 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                     if starts_with_block {
                         let after = index.saturating_add(1);
                         let rest = line[after..].trim_start();
+                        // A `while` continues only a do statement still
+                        // waiting for its condition (bd-9vouw.90): after
+                        // `if (a) {..}` or any other block it starts a new
+                        // loop, which was glued onto the if and never ran.
+                        let block_statement =
+                            strip_leading_labels(line[segment_start..after].trim_start());
                         let continues = starts_with_keyword(rest, "else")
                             || starts_with_keyword(rest, "catch")
                             || starts_with_keyword(rest, "finally")
-                            || starts_with_keyword(rest, "while");
+                            || (starts_with_keyword(rest, "while")
+                                && do_statement_awaits_while(block_statement));
                         if !rest.is_empty() && !continues {
                             push_segment(&mut out, line, segment_start, after);
                             segment_start = after;

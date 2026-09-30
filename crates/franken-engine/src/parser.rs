@@ -8861,6 +8861,18 @@ fn try_parse_object_method(
             legacy_decimal_escape_mode(context),
             "object-method",
         )?
+    } else if name.starts_with(|ch: char| ch.is_ascii_digit() || ch == '.')
+        && let Ok(
+            numeric @ (Expression::NumericLiteral(_)
+            | Expression::FloatLiteral(_)
+            | Expression::BigIntLiteral(_)),
+        ) = parse_expression(name, span, context, recursion_depth + 1)
+    {
+        // A NumericLiteral name (`{ 1(a) {} }`, mobx's error table): the key
+        // is ToPropertyKey of the number ("0x10" names "16"), so it is
+        // evaluated like a computed key; the method name is the same string.
+        let value = method_value(&part[paren_idx..], context)?;
+        return Ok(Some((numeric, value, true)));
     } else {
         return Ok(None);
     };

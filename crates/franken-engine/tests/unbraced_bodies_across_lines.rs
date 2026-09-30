@@ -182,3 +182,47 @@ fn empty_statement_bodies() {
         );
     }
 }
+
+/// An unbraced consequent that ends in an object literal or a function body
+/// (zod: `if (mime.length === 0) _json.not = {}; else if ...`). The splitter
+/// ended the `if` at that closing brace, so `; else ...` became a statement
+/// of its own ("unseparated expression sequence").
+#[test]
+fn unbraced_consequent_ending_in_a_brace() {
+    for (source, node) in [
+        (
+            "var j = {}; if (1) j.x = {}; else j.y = 2; JSON.stringify(j);",
+            r#"{"x":{}}"#,
+        ),
+        (
+            "var j = {}, m = [7]; if (m.length === 0) j.not = {}; else if (m.length === 1) \
+             j.c = m[0]; else j.a = m.map((v) => ({ c: v })); JSON.stringify(j);",
+            r#"{"c":7}"#,
+        ),
+        (
+            "var j = {}, m = [];\nif (m.length === 0)\n  j.not = {};\nelse if (m.length === 1)\n  \
+             j.c = m[0];\nelse\n  j.a = 1;\nJSON.stringify(j);",
+            r#"{"not":{}}"#,
+        ),
+        (
+            "var f; if (0) f = function () { return 1; }; else f = () => { return 2; }; f();",
+            "2",
+        ),
+        (
+            "var o, n = 0; if (1) o = { a: 1 }, n = 5; [o.a, n].join();",
+            "1,5",
+        ),
+    ] {
+        assert_eq!(
+            eval_to_string(source),
+            node,
+            "`{source}` must match Node v22.2.0"
+        );
+    }
+    // `if (a) {}; else b` stays a syntax error: that `;` is an empty
+    // statement after the if.
+    assert!(
+        eval_to_string("var b = 0; if (1) { b = 1 }; else b = 2; b;").starts_with("ERROR"),
+        "an else after `{{}};` has no if"
+    );
+}

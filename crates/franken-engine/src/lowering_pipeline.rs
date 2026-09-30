@@ -6536,6 +6536,14 @@ fn lower_statement_to_ir1_with_flow(
             if let Some(source_name) = &cls.name {
                 binding_lookup.insert(lexical_binding_sentinel(source_name), 0);
             }
+            let private_names = declare_class_private_names(
+                &cls.body,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+            )?;
             let class_name = cls.name.clone().unwrap_or_else(|| "anonymous".to_string());
             // Find the constructor method, if any.
             let constructor = cls.body.iter().find(|m| m.kind == MethodKind::Constructor);
@@ -6919,6 +6927,12 @@ fn lower_statement_to_ir1_with_flow(
                         value: Ir1Literal::String(method_key),
                     });
                     Ir1PropertyKey::Dynamic
+                } else if method.kind == MethodKind::StaticBlock {
+                    // A static block has no key.
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                    Ir1PropertyKey::Dynamic
                 } else {
                     Ir1PropertyKey::Static(method_key)
                 };
@@ -6975,22 +6989,21 @@ fn lower_statement_to_ir1_with_flow(
                     rest_param_index: m_rest_param_index,
                 });
 
-                match method.kind {
-                    MethodKind::Get => ops.push(Ir1Op::DefineAccessor {
+                match (class_element_record_kind(method), method.kind) {
+                    // [target, key, function, kind]: fields, static blocks
+                    // and private methods are recorded and installed at
+                    // construction (instance) or after the class body
+                    // (static).
+                    (Some(element), _) => push_class_element_record(ops, element),
+                    (None, MethodKind::Get) => ops.push(Ir1Op::DefineAccessor {
                         key: property_key,
                         kind: AccessorKind::Get,
                     }),
-                    MethodKind::Set => ops.push(Ir1Op::DefineAccessor {
+                    (None, MethodKind::Set) => ops.push(Ir1Op::DefineAccessor {
                         key: property_key,
                         kind: AccessorKind::Set,
                     }),
-                    // [target, key, initializer]: recorded, run at construction
-                    // (instance) or after the class body (static).
-                    MethodKind::Field => ops.push(Ir1Op::HostCall {
-                        capability: CLASS_DEFINE_FIELD_CAPABILITY.to_string(),
-                        arg_count: 3,
-                    }),
-                    _ => {
+                    (None, _) => {
                         // Stack is now: [target_obj, method_fn]. DefineMethod
                         // (not SetProperty) records the method's [[HomeObject]]
                         // so `super.m()` in its body resolves (bd-9vouw.24).
@@ -7004,6 +7017,7 @@ fn lower_statement_to_ir1_with_flow(
             }
             push_class_members_non_enumerable(ops, &cls.body, bid);
             push_class_static_field_initialization(ops, &cls.body, bid);
+            restore_shadowed_private_names(binding_lookup, private_names);
         }
         Statement::Import(_) | Statement::Export(_) => {
             // Handled at top level only.
@@ -13445,7 +13459,7 @@ fn name_class_field_initializer(
     body_ops: &mut [Ir1Op],
     name: &str,
 ) {
-    if field.kind != MethodKind::Field || field.computed {
+    if field.kind != MethodKind::Field || (field.computed && field.private_name().is_none()) {
         return;
     }
     let [
@@ -18195,6 +18209,14 @@ fn lower_expression_to_ir1_inner(
                 root_scope_id,
                 "class_expression",
             )?;
+            let private_names = declare_class_private_names(
+                body,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+            )?;
             let ctor_self_snapshot = name.as_deref().map(|self_name| {
                 expose_class_expression_self_binding(binding_lookup, self_name, bid)
             });
@@ -18587,6 +18609,12 @@ fn lower_expression_to_ir1_inner(
                         value: Ir1Literal::String(method_key),
                     });
                     Ir1PropertyKey::Dynamic
+                } else if method.kind == MethodKind::StaticBlock {
+                    // A static block has no key.
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                    Ir1PropertyKey::Dynamic
                 } else {
                     Ir1PropertyKey::Static(method_key)
                 };
@@ -18662,21 +18690,18 @@ fn lower_expression_to_ir1_inner(
                     is_arrow: false,
                     rest_param_index: m_rest_param_index,
                 });
-                match method.kind {
-                    MethodKind::Get => ops.push(Ir1Op::DefineAccessor {
+                match (class_element_record_kind(method), method.kind) {
+                    (Some(element), _) => push_class_element_record(ops, element),
+                    (None, MethodKind::Get) => ops.push(Ir1Op::DefineAccessor {
                         key: property_key,
                         kind: AccessorKind::Get,
                     }),
-                    MethodKind::Set => ops.push(Ir1Op::DefineAccessor {
+                    (None, MethodKind::Set) => ops.push(Ir1Op::DefineAccessor {
                         key: property_key,
                         kind: AccessorKind::Set,
                     }),
-                    MethodKind::Field => ops.push(Ir1Op::HostCall {
-                        capability: CLASS_DEFINE_FIELD_CAPABILITY.to_string(),
-                        arg_count: 3,
-                    }),
                     // DefineMethod records [[HomeObject]] for `super` (bd-9vouw.24).
-                    _ => ops.push(Ir1Op::DefineMethod { key: property_key }),
+                    (None, _) => ops.push(Ir1Op::DefineMethod { key: property_key }),
                 }
                 // Discard (not Pop): DefineMethod and DefineAccessor leave the
                 // target object; this discards the method definition completion
@@ -18685,6 +18710,7 @@ fn lower_expression_to_ir1_inner(
             }
             push_class_members_non_enumerable(ops, body, bid);
             push_class_static_field_initialization(ops, body, bid);
+            restore_shadowed_private_names(binding_lookup, private_names);
 
             ops.push(Ir1Op::LoadBinding { binding_id: bid });
         }
@@ -18725,18 +18751,131 @@ pub(crate) const CLASS_MEMBERS_NON_ENUMERABLE_CAPABILITY: &str =
 /// `builtin:ClassPrototypeLink` in the interpreter.
 pub(crate) const CLASS_PROTOTYPE_LINK_CAPABILITY: &str = "builtin:ClassPrototypeLink";
 
-/// Internal hostcall recording a class field (args: target, key,
-/// initializer): on the class prototype for an instance field, on the
-/// constructor for a static one. The initializer gets the target as its
-/// [[HomeObject]].
+/// Internal hostcall recording a class element that is installed later
+/// (args: target, key, function, kind): a field (its initializer), a private
+/// method or accessor half, or a static block. It is recorded on the class
+/// prototype for an instance element, on the constructor for a static one,
+/// and the function gets the target as its [[HomeObject]]. `kind` is one of
+/// the `CLASS_ELEMENT_*` values.
 pub(crate) const CLASS_DEFINE_FIELD_CAPABILITY: &str = "builtin:ClassDefineField";
-/// Internal hostcall running a class's static field initializers once its
-/// body is defined (arg: the class).
+/// Internal hostcall installing a class's static elements once its body is
+/// defined (arg: the class): private methods first, then fields and static
+/// blocks in order.
 pub(crate) const CLASS_INIT_STATIC_FIELDS_CAPABILITY: &str = "builtin:ClassInitStaticFields";
+/// Internal hostcall creating a new class private name (arg: its
+/// description `#x`) each time a class definition is evaluated.
+pub(crate) const PRIVATE_NAME_CREATE_CAPABILITY: &str = "builtin:PrivateNameCreate";
 
-/// ES2022 15.7.14 steps 31-32: static fields are defined on the class, in
-/// order, after every method (so after the members became non-enumerable;
-/// fields stay enumerable).
+/// `kind` operands of `builtin:ClassDefineField`.
+pub(crate) const CLASS_ELEMENT_FIELD: i64 = 0;
+pub(crate) const CLASS_ELEMENT_PRIVATE_METHOD: i64 = 1;
+pub(crate) const CLASS_ELEMENT_PRIVATE_GETTER: i64 = 2;
+pub(crate) const CLASS_ELEMENT_PRIVATE_SETTER: i64 = 3;
+pub(crate) const CLASS_ELEMENT_STATIC_BLOCK: i64 = 4;
+
+/// The `builtin:ClassDefineField` kind of a class element that is recorded
+/// rather than defined as a property when the class body is evaluated.
+fn class_element_record_kind(method: &crate::ast::MethodDefinition) -> Option<i64> {
+    match method.kind {
+        MethodKind::Field => Some(CLASS_ELEMENT_FIELD),
+        MethodKind::StaticBlock => Some(CLASS_ELEMENT_STATIC_BLOCK),
+        _ if method.private_name().is_none() => None,
+        MethodKind::Get => Some(CLASS_ELEMENT_PRIVATE_GETTER),
+        MethodKind::Set => Some(CLASS_ELEMENT_PRIVATE_SETTER),
+        _ => Some(CLASS_ELEMENT_PRIVATE_METHOD),
+    }
+}
+
+/// Record the element whose [target, key, function] are on the stack.
+fn push_class_element_record(ops: &mut Vec<Ir1Op>, kind: i64) {
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Integer(kind),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: CLASS_DEFINE_FIELD_CAPABILITY.to_string(),
+        arg_count: 4,
+    });
+}
+
+/// The lookup entries a class body's private names shadowed while it was
+/// lowered: a private name is visible only inside its class body.
+struct ShadowedPrivateNames(Vec<(String, Option<BindingId>)>);
+
+/// ES2022 15.7.14 steps 6-7: every evaluation of a class definition creates
+/// a new Private Name for each private name its body declares. The name is
+/// held by a hidden binding `#x` of the scope the class is evaluated in
+/// (source code cannot spell that identifier), so the class's methods,
+/// initializers and nested functions reach it through the ordinary capture
+/// machinery, and `o.#x` evaluates as the computed member `o[#x]`.
+fn declare_class_private_names(
+    body: &[crate::ast::MethodDefinition],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+) -> Result<ShadowedPrivateNames, LoweringPipelineError> {
+    let mut shadowed = Vec::new();
+    let mut declared = BTreeSet::new();
+    for name in body
+        .iter()
+        .filter_map(crate::ast::MethodDefinition::private_name)
+    {
+        if !declared.insert(name) {
+            continue;
+        }
+        for key in [
+            name.to_string(),
+            lexical_binding_sentinel(name),
+            capture_origin_sentinel(name),
+        ] {
+            let previous = binding_lookup.remove(&key);
+            shadowed.push((key, previous));
+        }
+        binding_lookup.insert(lexical_binding_sentinel(name), 0);
+        let binding_id = alloc_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            name,
+            BindingKind::Let,
+        )
+        .map_err(LoweringPipelineError::SemanticViolation)?;
+        binding_lookup.insert(capture_origin_sentinel(name), binding_id);
+        ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(name.to_string().into()),
+        });
+        ops.push(Ir1Op::HostCall {
+            capability: PRIVATE_NAME_CREATE_CAPABILITY.to_string(),
+            arg_count: 1,
+        });
+        ops.push(Ir1Op::StoreBinding { binding_id });
+        ops.push(Ir1Op::Discard);
+    }
+    Ok(ShadowedPrivateNames(shadowed))
+}
+
+fn restore_shadowed_private_names(
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    shadowed: ShadowedPrivateNames,
+) {
+    for (key, previous) in shadowed.0.into_iter().rev() {
+        match previous {
+            Some(binding_id) => {
+                binding_lookup.insert(key, binding_id);
+            }
+            None => {
+                binding_lookup.remove(&key);
+            }
+        }
+    }
+}
+
+/// ES2022 15.7.14 steps 31-35: static private methods are installed on the
+/// class, then static fields and static blocks run in order, after every
+/// method (so after the members became non-enumerable; fields stay
+/// enumerable).
 fn push_class_static_field_initialization(
     ops: &mut Vec<Ir1Op>,
     body: &[crate::ast::MethodDefinition],
@@ -18744,7 +18883,7 @@ fn push_class_static_field_initialization(
 ) {
     if !body
         .iter()
-        .any(|method| method.kind == MethodKind::Field && method.is_static)
+        .any(|method| method.is_static && class_element_record_kind(method).is_some())
     {
         return;
     }
@@ -18768,10 +18907,9 @@ fn push_class_members_non_enumerable(
     body: &[crate::ast::MethodDefinition],
     class_binding: BindingId,
 ) {
-    if body
-        .iter()
-        .all(|method| matches!(method.kind, MethodKind::Constructor | MethodKind::Field))
-    {
+    if body.iter().all(|method| {
+        method.kind == MethodKind::Constructor || class_element_record_kind(method).is_some()
+    }) {
         return;
     }
     ops.push(Ir1Op::LoadBinding {
@@ -41526,23 +41664,25 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_private_member_access_throws_a_catchable_syntax_error() {
-        // Private class members are not implemented. `this.#p` used to
-        // evaluate to the string "this.#p"; it must now throw (Node prints 1,
-        // so this pins the refusal, not parity).
+    fn unrecognised_expression_throws_a_catchable_syntax_error() {
+        // `a::b` (the bind-operator proposal) is not JavaScript, and the
+        // parser leaves it as `Expression::Raw`. Such text used to evaluate
+        // to the string "a::b"; it must throw when it runs. Node rejects the
+        // program before running it, so this pins the refusal, not parity.
+        // (The example was `this.#p` until private names were implemented.)
         assert_eq!(
             raw_fail_closed_eval(
-                "class A { get p() { return this.#p; } } \
+                "class A { get p() { return a::b; } } \
                  let r; try { r = new A().p; } catch (e) { r = e.name + ':' + e.message; } r"
             ),
-            "SyntaxError:unsupported expression syntax: this.#p"
+            "SyntaxError:unsupported expression syntax: a::b"
         );
     }
 
     #[test]
     fn unevaluated_unsupported_expression_does_not_fail_the_program() {
         assert_eq!(
-            raw_fail_closed_eval("function never() { return this.#q; } 'ok'"),
+            raw_fail_closed_eval("function never() { return a::b; } 'ok'"),
             "ok"
         );
     }

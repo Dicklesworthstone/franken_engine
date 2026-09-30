@@ -1318,7 +1318,16 @@ pub enum MethodKind {
     /// initializer): the initializer runs as a method of the class, with the
     /// instance (or, static, the constructor) as `this`. Every analysis that
     /// walks method keys and bodies therefore sees field initializers too.
+    ///
+    /// A private element (`#x = 1`, `#m() {}`, `get #x() {}`) of any kind has
+    /// `computed: true` and the key `Identifier("#x")`: source text cannot
+    /// spell a computed key that is a bare `#name`, and the key evaluates to
+    /// the class's private name through the hidden binding `#x`.
     Field,
+    /// ES2022 `static { ... }` block. Its `params` are empty and its `body`
+    /// the block's statements; it runs once, in element order with the
+    /// static fields, with the class as `this`. Its `key` is unused.
+    StaticBlock,
 }
 
 /// Property definition kind inside an object literal.
@@ -1360,6 +1369,19 @@ pub struct MethodDefinition {
     /// `*m() {}` / `async *m() {}` (ES2020 14.4, 14.5).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_generator: bool,
+}
+
+impl MethodDefinition {
+    /// The private name (`#x`) of a private field, method or accessor (see
+    /// [`MethodKind::Field`]).
+    pub fn private_name(&self) -> Option<&str> {
+        match &self.key {
+            Expression::Identifier(name) if self.computed && name.starts_with('#') => {
+                Some(name.as_str())
+            }
+            _ => None,
+        }
+    }
 }
 
 /// ES2015 class declaration: `class Foo extends Bar { constructor() { } method() { } }`

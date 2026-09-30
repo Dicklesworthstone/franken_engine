@@ -13,9 +13,10 @@
 //! - `KnownFailure` cases must still fail and name the bead that owns the fix.
 //!   When a fix lands the case starts passing, and this test fails until the
 //!   case is moved to `Pass` — so the ledger cannot silently go stale;
-//! - `DeniedByDesign` cases must be refused by the ambient-authority membrane;
-//! - `OutOfScope` cases exercise syntax beyond the ES2020 target and must still
-//!   fail; if one starts passing it moves to `Pass`.
+//! - `DeniedByDesign` cases must be refused by the ambient-authority membrane.
+//!
+//! The one `OutOfScope` case (ES2022 private class fields, beyond the ES2020
+//! target) moved to `Pass` with bd-9vouw.64, and the category went with it.
 //!
 //! Retire this test once the BRIDGE-12 Test262 harness runs on every push and
 //! covers these constructs.
@@ -32,8 +33,6 @@ enum Expect {
     /// Names the bead that owns the fix.
     KnownFailure(&'static str),
     DeniedByDesign,
-    /// Names the construct and why it is outside the ES2020 target.
-    OutOfScope(&'static str),
 }
 
 // Owning beads for the known failures (BRIDGE semantic leaves, plus the two
@@ -55,7 +54,8 @@ const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 /// 247a2a99c, bd-9vouw.51-.53), 13 with BigInt arithmetic (bd-9vouw.54), 27
 /// once array literal elisions became holes, 32 with `Symbol.hasInstance`,
 /// 30 once `for await` ran the async iteration protocol, and 12 with the
-/// DataView Float64/Int16/BigInt64 accessors (2026-09-28).
+/// DataView Float64/Int16/BigInt64 accessors (2026-09-28). 33 matches Node
+/// with ES2022 private class elements (bd-9vouw.64, 2026-09-30).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::Pass),
@@ -92,10 +92,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("30_async_iter", Expect::Pass),
     ("31_object_entries_order", Expect::Pass),
     ("32_instanceof_hasinstance", Expect::Pass),
-    (
-        "33_class_private_post2020",
-        Expect::OutOfScope("ES2022 class private fields; the target is ES2020"),
-    ),
+    ("33_class_private_post2020", Expect::Pass),
     ("34_string_unicode", Expect::Pass),
     ("35_math", Expect::Pass),
     ("36_closures_in_loops", Expect::Pass),
@@ -229,9 +226,6 @@ fn js_probe_corpus_matches_node_ledger_bd_9vouw_5() {
             )),
             Some(Expect::KnownFailure(_)) if denied => problems.push(format!(
                 "{id}: listed as KnownFailure but refused by the ambient-authority membrane"
-            )),
-            Some(Expect::OutOfScope(reason)) if matches => problems.push(format!(
-                "{id}: now matches Node — move it to Pass ({reason})"
             )),
             Some(Expect::DeniedByDesign) if !denied => {
                 problems.push(format!(

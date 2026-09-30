@@ -1236,7 +1236,11 @@ impl InterpreterCore {
                 is_non_extensible: _,
                 is_import_meta: _,
                 is_null_prototype: _,
+                private_elements,
             } = object;
+            for value in private_elements.values().flat_map(PrivateElement::values) {
+                marker.value(value);
+            }
             // Every value store of the property map: well-formed and
             // exact-only string keys, and Symbol-keyed data and accessors
             // (kept in a separate sidecar that `values()` does not visit).

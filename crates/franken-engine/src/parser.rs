@@ -4038,7 +4038,7 @@ fn parse_statement_inner(
     // ES2020 §14.5 ExpressionStatement is an Expression, which includes the
     // comma operator. Declarations (`let a = 1, b = 2`) are handled earlier, so
     // any comma reaching here is a genuine sequence (bd-j4l7k).
-    let expression = parse_expression_allowing_sequence(statement, &span, context)?;
+    let expression = parse_expression_allowing_sequence(statement, &span, context, 1)?;
     Ok(Statement::Expression(ExpressionStatement {
         expression,
         span,
@@ -5902,7 +5902,12 @@ fn parse_template_literal(
                 ));
             }
             let expr_src = &inner[start..i];
-            let expr = parse_expression(expr_src.trim(), span, context, recursion_depth + 1)?;
+            let expr = parse_expression_allowing_sequence(
+                expr_src.trim(),
+                span,
+                context,
+                recursion_depth + 1,
+            )?;
             expressions.push(expr);
             i += 1; // skip closing `}`
             continue;
@@ -7347,7 +7352,12 @@ fn try_parse_postfix(
                 Err(e) => return Some(Err(e)),
             }
         };
-        let property = match parse_expression(prop_src.trim(), span, context, recursion_depth + 1) {
+        let property = match parse_expression_allowing_sequence(
+            prop_src.trim(),
+            span,
+            context,
+            recursion_depth + 1,
+        ) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
         };
@@ -10496,7 +10506,7 @@ fn parse_if_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     let rest = rest.trim();
     // Split consequent from optional else.
@@ -10717,22 +10727,26 @@ fn build_sequence_expression(operands: Vec<Expression>, span: &SourceSpan) -> Ex
 /// expression would otherwise fall through to `Expression::Raw` (a string) and
 /// fault at runtime (bd-qxkli / bd-j4l7k). Here we detect a top-level comma and
 /// apply the same `build_sequence_expression` desugar; a single-expression input
-/// parses unchanged. Used for the contexts where ES2020 permits a top-level
-/// sequence: C-style `for`-header condition/update clauses and bare expression
-/// statements. (Comma-separated list contexts — call arguments, array/object
-/// literals, variable declarators — split on their commas before reaching here.)
+/// parses unchanged. Used wherever the grammar has an Expression rather than
+/// an AssignmentExpression: expression statements, `return`/`throw`
+/// arguments, `if`/`while`/`do-while`/`switch` heads, `case` tests, C-style
+/// `for` clauses, the right side of `for-in`, template substitutions and
+/// computed member keys. Minified code writes `if (a = f(), a)` constantly.
+/// (Comma-separated list contexts — call arguments, array/object literals,
+/// variable declarators — split on their commas before reaching here.)
 fn parse_expression_allowing_sequence(
     src: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
 ) -> ParseResult<Expression> {
     if split_top_level_commas(src).len() > 1 {
-        let operands = parse_comma_separated_exprs(src, span, context, 1)?;
+        let operands = parse_comma_separated_exprs(src, span, context, recursion_depth)?;
         if operands.len() > 1 {
             return Ok(build_sequence_expression(operands, span));
         }
     }
-    parse_expression(src, span, context, 1)
+    parse_expression(src, span, context, recursion_depth)
 }
 
 /// Split a C-style `for` header into `(init, condition, update)` on the first
@@ -10862,14 +10876,14 @@ fn parse_for_statement(
         None
     } else {
         Some(parse_expression_allowing_sequence(
-            cond_src, &span, context,
+            cond_src, &span, context, 1,
         )?)
     };
     let update = if update_src.is_empty() {
         None
     } else {
         Some(parse_expression_allowing_sequence(
-            update_src, &span, context,
+            update_src, &span, context, 1,
         )?)
     };
 
@@ -10929,6 +10943,50 @@ fn try_parse_for_in_of(
 
     let binding = match parse_binding_pattern(binding_src, span, context) {
         Ok(pat) => pat,
+        // A member target (`for (o.a of xs)`, `for (this.#k in o)`) is not a
+        // binding pattern. The loop binds a fresh block-scoped name and
+        // assigns the target from it at the start of each iteration, which
+        // is when the spec evaluates the target reference.
+        Err(_)
+            if binding_kind.is_none()
+                && !lhs.starts_with(['[', '{'])
+                && split_for_header(header).is_none() =>
+        {
+            let binding = BindingPattern::Identifier(FOR_IN_OF_TARGET_BINDING.to_string());
+            let assign = parse_expression(
+                &format!("{lhs} = {FOR_IN_OF_TARGET_BINDING}"),
+                span,
+                context,
+                1,
+            )?;
+            let body_src = rest.trim();
+            reject_declaration_in_statement_position(
+                body_src,
+                StatementPosition::Loop,
+                span,
+                context,
+            )?;
+            let body = parse_statement(body_src, goal, span.clone(), context)?;
+            let body = Statement::Block(BlockStatement {
+                body: vec![
+                    Statement::Expression(ExpressionStatement {
+                        expression: assign,
+                        span: span.clone(),
+                    }),
+                    body,
+                ],
+                span: span.clone(),
+            });
+            return Ok(Some(for_in_of_statement(
+                keyword,
+                binding,
+                Some(VariableDeclarationKind::Let),
+                rhs,
+                body,
+                span,
+                context,
+            )?));
+        }
         // Without two top-level `;` the header can only be for-in/of, so the
         // binding's own error (an early error such as `[...x = 1]` or strict
         // `var arguments`) is the diagnosis; falling back reported "for
@@ -10940,27 +10998,52 @@ fn try_parse_for_in_of(
     let body_src = rest.trim();
     reject_declaration_in_statement_position(body_src, StatementPosition::Loop, span, context)?;
     let body = parse_statement(body_src, goal, span.clone(), context)?;
+    Ok(Some(for_in_of_statement(
+        keyword,
+        binding,
+        binding_kind,
+        rhs,
+        body,
+        span,
+        context,
+    )?))
+}
 
+/// The per-iteration binding of a for-in/of loop whose head is a member
+/// target; see `try_parse_for_in_of`.
+const FOR_IN_OF_TARGET_BINDING: &str = "__franken_for_target";
+
+fn for_in_of_statement(
+    keyword: &str,
+    binding: BindingPattern,
+    binding_kind: Option<VariableDeclarationKind>,
+    rhs: &str,
+    body: Statement,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Statement> {
     if keyword == "in" {
-        let object = parse_expression(rhs, span, context, 1)?;
-        Ok(Some(Statement::ForIn(ForInStatement {
+        // for-in's right side is an Expression, so a comma sequence is allowed
+        // there; for-of's is an AssignmentExpression.
+        let object = parse_expression_allowing_sequence(rhs, span, context, 1)?;
+        Ok(Statement::ForIn(ForInStatement {
             binding,
             binding_kind,
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
             object,
             body: Box::new(body),
             span: span.clone(),
-        })))
+        }))
     } else {
         let iterable = parse_expression(rhs, span, context, 1)?;
-        Ok(Some(Statement::ForOf(ForOfStatement {
+        Ok(Statement::ForOf(ForOfStatement {
             binding,
             binding_kind,
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
             iterable,
             body: Box::new(body),
             span: span.clone(),
-        })))
+        }))
     }
 }
 
@@ -11081,7 +11164,7 @@ fn parse_while_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
     reject_declaration_in_statement_position(rest, StatementPosition::Loop, &span, context)?;
     let body = parse_statement(rest.trim(), goal, span.clone(), context)?;
     Ok(Statement::While(WhileStatement {
@@ -11185,7 +11268,7 @@ fn parse_do_while_statement(
             Some(span.clone()),
         )
     })?;
-    let condition = parse_expression(condition_src.trim(), &span, context, 1)?;
+    let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     Ok(Statement::DoWhile(DoWhileStatement {
         body: Box::new(body),
@@ -11208,7 +11291,7 @@ fn parse_return_statement(
         // includes the comma/sequence operator (`return a, b, c` yields `c`).
         // Use the sequence-aware parser so it doesn't fall to Expression::Raw
         // (bd-h5m8u; mirrors bd-qxkli/bd-j4l7k).
-        Some(parse_expression_allowing_sequence(body, &span, context)?)
+        Some(parse_expression_allowing_sequence(body, &span, context, 1)?)
     };
     Ok(Statement::Return(ReturnStatement { argument, span }))
 }
@@ -11231,7 +11314,7 @@ fn parse_throw_statement(
     // ES2020 §14.14: ThrowStatement argument is an Expression (sequence
     // operator included), so `throw a, b, c` throws `c` rather than falling to
     // Expression::Raw (bd-h5m8u).
-    let argument = parse_expression_allowing_sequence(body, &span, context)?;
+    let argument = parse_expression_allowing_sequence(body, &span, context, 1)?;
     Ok(Statement::Throw(ThrowStatement { argument, span }))
 }
 
@@ -11405,7 +11488,7 @@ fn parse_switch_statement(
             Some(span.clone()),
         )
     })?;
-    let discriminant = parse_expression(disc_src.trim(), &span, context, 1)?;
+    let discriminant = parse_expression_allowing_sequence(disc_src.trim(), &span, context, 1)?;
 
     let rest = rest.trim();
     let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
@@ -11431,7 +11514,9 @@ fn parse_switch_statement(
                 )
             })?;
             let test_src = after_case[..colon_idx].trim();
-            let test = Some(parse_expression(test_src, &span, context, 1)?);
+            let test = Some(parse_expression_allowing_sequence(
+                test_src, &span, context, 1,
+            )?);
             let after_colon = after_case[colon_idx + 1..].trim();
             let (consequent_src, next) = split_at_next_case(after_colon);
             let consequent = parse_body_statements(consequent_src.trim(), goal, &span, context)?;

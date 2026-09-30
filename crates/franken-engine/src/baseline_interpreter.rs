@@ -61813,6 +61813,43 @@ impl InterpreterCore {
     }
 
     /// Coerce a value to f64 for floating-point operations.
+    /// ES2020 ToNumber for a `Math.*` argument (bd-9vouw.63). Numbers pass
+    /// through unchanged (so integer fast paths keep their `Int`); other
+    /// primitives convert (`'5'` -> 5, `true` -> 1, `null` -> 0, `undefined`
+    /// -> NaN); objects convert through ToPrimitive with hint "number" when a
+    /// module is available for the reentrant call (NaN otherwise); Symbol and
+    /// BigInt throw TypeError. Arms read their arguments through this in
+    /// argument order, so observable `valueOf` calls happen left to right.
+    fn math_argument_value(
+        &mut self,
+        register: u32,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let value = self.read_reg(register)?;
+        if matches!(value, Value::Int(_) | Value::Float(_)) {
+            return Ok(value);
+        }
+        let primitive = if value.is_object_like() && module.is_some() {
+            self.coerce_runtime_primitive_with_hint(module, value, "number")?
+        } else {
+            value
+        };
+        match primitive {
+            Value::Int(_) | Value::Float(_) => Ok(primitive),
+            Value::Symbol(_) => Err(InterpreterError::TypeError {
+                expected: "value convertible to a number".to_string(),
+                got: "Symbol (Cannot convert a Symbol value to a number)".to_string(),
+            }),
+            Value::BigInt(_) => Err(InterpreterError::TypeError {
+                expected: "value convertible to a number".to_string(),
+                got: "BigInt (Cannot convert a BigInt value to a number)".to_string(),
+            }),
+            other => Ok(Value::Float(Float64::new(
+                Self::coerce_to_float(&other).unwrap_or(f64::NAN),
+            ))),
+        }
+    }
+
     fn coerce_to_float(value: &Value) -> Option<f64> {
         match value {
             Value::Int(n) => Some(*n as f64),
@@ -75769,7 +75806,7 @@ impl InterpreterCore {
             "builtin:MathAbs" => {
                 // Math.abs implementation - returns absolute value of the argument
                 if args.count > 0 {
-                    let arg = self.read_reg(args.start)?;
+                    let arg = self.math_argument_value(args.start, module)?;
                     match arg {
                         Value::Int(n) => {
                             // Use saturating_abs to handle i64::MIN safely (returns i64::MAX)
@@ -75788,7 +75825,7 @@ impl InterpreterCore {
             "builtin:MathCeil" => {
                 // Math.ceil implementation - returns ceiling (smallest integer >= x)
                 if args.count > 0 {
-                    let arg = self.read_reg(args.start)?;
+                    let arg = self.math_argument_value(args.start, module)?;
                     match arg {
                         Value::Int(n) => Ok(Value::Int(n)), // Integer is already its own ceiling
                         Value::Float(f) => {
@@ -75809,7 +75846,7 @@ impl InterpreterCore {
             "builtin:MathFloor" => {
                 // Math.floor implementation - returns floor (largest integer <= x)
                 if args.count > 0 {
-                    let arg = self.read_reg(args.start)?;
+                    let arg = self.math_argument_value(args.start, module)?;
                     match arg {
                         Value::Int(n) => Ok(Value::Int(n)), // Integer is already its own floor
                         Value::Float(f) => {
@@ -75830,7 +75867,7 @@ impl InterpreterCore {
             "builtin:MathRound" => {
                 // Math.round implementation - returns nearest integer
                 if args.count > 0 {
-                    let arg = self.read_reg(args.start)?;
+                    let arg = self.math_argument_value(args.start, module)?;
                     match arg {
                         Value::Int(n) => Ok(Value::Int(n)), // Integer is already rounded
                         other => {
@@ -76007,8 +76044,8 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let base = self.read_reg(args.start)?;
-                let exponent = self.read_reg(args.start + 1)?;
+                let base = self.math_argument_value(args.start, module)?;
+                let exponent = self.math_argument_value(args.start + 1, module)?;
 
                 let base_num = match base {
                     Value::Int(i) => i as f64,
@@ -76166,7 +76203,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let arg = self.read_reg(args.start)?;
+                let arg = self.math_argument_value(args.start, module)?;
                 let num = match arg {
                     Value::Int(i) => i as f64,
                     Value::Float(f) => f.inner(),
@@ -76294,7 +76331,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let arg = self.read_reg(args.start)?;
+                let arg = self.math_argument_value(args.start, module)?;
                 let num = match arg {
                     Value::Int(i) => i as f64,
                     Value::Float(f) => f.inner(),
@@ -76314,7 +76351,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let arg = self.read_reg(args.start)?;
+                let arg = self.math_argument_value(args.start, module)?;
                 let num = match arg {
                     Value::Int(i) => i as f64,
                     Value::Float(f) => f.inner(),
@@ -76353,7 +76390,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let arg = self.read_reg(args.start)?;
+                let arg = self.math_argument_value(args.start, module)?;
                 let num = match arg {
                     Value::Int(i) => i as f64,
                     Value::Float(f) => f.inner(),
@@ -76379,7 +76416,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let arg = self.read_reg(args.start)?;
+                let arg = self.math_argument_value(args.start, module)?;
                 let num = match arg {
                     Value::Int(i) => i as f64,
                     Value::Float(f) => f.inner(),
@@ -76399,7 +76436,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let arg = self.read_reg(args.start)?;
+                let arg = self.math_argument_value(args.start, module)?;
                 let num = match arg {
                     Value::Int(i) => i as f64,
                     Value::Float(f) => f.inner(),
@@ -76757,7 +76794,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let arg = self.read_reg(args.start)?;
+                let arg = self.math_argument_value(args.start, module)?;
                 let num = match arg {
                     Value::Int(i) => return Ok(Value::Int(i)), // Already truncated
                     Value::Float(f) => f.inner(),
@@ -77185,7 +77222,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let arg = self.read_reg(args.start)?;
+                let arg = self.math_argument_value(args.start, module)?;
                 let num = match arg {
                     Value::Int(i) => {
                         if i > 0 {
@@ -77913,8 +77950,8 @@ impl InterpreterCore {
                     return Ok(Value::Float(f64::NAN.into()));
                 }
 
-                let y_val = self.read_reg(args.start)?;
-                let x_val = self.read_reg(args.start + 1)?;
+                let y_val = self.math_argument_value(args.start, module)?;
+                let x_val = self.math_argument_value(args.start + 1, module)?;
 
                 let y = match y_val {
                     Value::Int(n) => n as f64,
@@ -77952,7 +77989,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(f64::NAN.into()));
                 }
 
-                let x_val = self.read_reg(args.start)?;
+                let x_val = self.math_argument_value(args.start, module)?;
                 let x = match x_val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -77969,7 +78006,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(f64::NAN.into()));
                 }
 
-                let x_val = self.read_reg(args.start)?;
+                let x_val = self.math_argument_value(args.start, module)?;
                 let x = match x_val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -78345,7 +78382,7 @@ impl InterpreterCore {
 
                 // Process all arguments
                 for i in 0..args.count {
-                    let arg_val = self.read_reg(args.start + i)?;
+                    let arg_val = self.math_argument_value(args.start + i, module)?;
                     let num_val = match arg_val {
                         Value::Int(n) => n as f64,
                         Value::Float(f) => f.inner(),
@@ -78482,8 +78519,8 @@ impl InterpreterCore {
                     return Ok(Value::Int(0));
                 }
 
-                let x_val = self.read_reg(args.start)?;
-                let y_val = self.read_reg(args.start + 1)?;
+                let x_val = self.math_argument_value(args.start, module)?;
+                let y_val = self.math_argument_value(args.start + 1, module)?;
 
                 // ECMA `Math.imul` is ToUint32 on both operands, then a
                 // wrapping 32-bit signed multiply. `f64 as i32` saturates, so
@@ -78809,7 +78846,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -78884,7 +78921,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -78905,7 +78942,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -78973,7 +79010,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -79029,7 +79066,7 @@ impl InterpreterCore {
                 // saturates, so float/string operands must route through
                 // `js_to_uint32` (modular) — e.g. `Math.clz32(2**32)` is `32`
                 // (ToUint32 = 0), not `0`, and `Math.clz32(-1.5)` is `0`.
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as u32,
                     Value::Float(f) => Self::js_to_uint32(f.inner()),
@@ -79149,7 +79186,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -79236,7 +79273,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -79354,7 +79391,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
@@ -79463,7 +79500,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(Float64::new(f64::NAN)));
                 }
 
-                let val = self.read_reg(args.start)?;
+                let val = self.math_argument_value(args.start, module)?;
                 let num = match val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),

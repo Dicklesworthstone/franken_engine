@@ -88,6 +88,14 @@ S / J
         r#"const out = []; for (const f of [() => new Intl.NumberFormat('en', { style: 'bogus' }), () => Intl.getCanonicalLocales('not a locale'), () => new Intl.DateTimeFormat('en', { dateStyle: 'medium', year: 'numeric' }), () => new Intl.NumberFormat('en', { style: 'currency' }), () => new Intl.DateTimeFormat('en', { month: 'bogus' })]) { try { f(); out.push('none'); } catch (e) { out.push(e.constructor.name); } } console.log(out.join());"#,
         r#"RangeError,RangeError,TypeError,TypeError,RangeError"#,
     ),
+    // A five-to-eight-letter language names no ICU locale: Node falls back
+    // to en-US (fast-levenshtein builds `new Intl.Collator('generic', ...)`
+    // in a try/catch and logged a warning when it threw).
+    (
+        "unknown_language_falls_back",
+        r#"console.log(new Intl.Collator('generic').resolvedOptions().locale, new Intl.Collator('generic', { sensitivity: 'base' }).compare('a', 'A'), new Intl.NumberFormat('generic').format(1234.5), new Intl.DateTimeFormat('abcdefgh').resolvedOptions().locale, new Intl.PluralRules('generic').select(1), Intl.getCanonicalLocales('generic').join());"#,
+        "en-US 0 1,234.5 en-US one generic",
+    ),
     (
         "date_to_locale_with_options",
         r#"const d = new Date(Date.UTC(2026, 8, 30, 15, 4, 5)); console.log([d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }), d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), d.toLocaleDateString(undefined, { timeZone: 'UTC' }), d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), d.toLocaleTimeString('en-US', { hour12: false }), d.toLocaleString('en-US', { timeZone: 'UTC' }), d.toLocaleString('de-DE', { timeZone: 'UTC' }), d.toLocaleDateString('en-GB', { timeZone: 'UTC' }), d.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }), d.toLocaleDateString('en-US', { dateStyle: 'long' }), d.toLocaleTimeString('en-US', { timeStyle: 'short' }), d.toLocaleDateString('en-US', { hour: 'numeric' }), d.toLocaleTimeString('en-US', { weekday: 'short' }), d.toLocaleString('en-US', { month: 'long' })].join(' | ')); for (const f of [() => d.toLocaleDateString('en-US', { timeStyle: 'short' }), () => d.toLocaleTimeString('en-US', { dateStyle: 'short' })]) { try { f(); console.log('none'); } catch (e) { console.log(e.constructor.name); } } console.log(new Date(NaN).toLocaleDateString('en-US', { month: 'long' }));"#,

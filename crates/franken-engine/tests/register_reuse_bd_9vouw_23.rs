@@ -887,7 +887,11 @@ fn large_literal_with_leading_proto_entry() {
          var q = {{ __proto__: base, {props} }}; \
          [Object.keys(o).length, Object.getPrototypeOf(o), o.p199, q.z, Object.keys(q).length].join()"
     );
-    check("large literal with leading __proto__", &source, "200,,199,7,200");
+    check(
+        "large literal with leading __proto__",
+        &source,
+        "200,,199,7,200",
+    );
     // The 256-register lane is the one that overflowed.
     assert_eq!(fixed_lane_value(&source), "200,,199,7,200");
     check(

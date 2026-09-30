@@ -27160,6 +27160,9 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         ("Object", "getOwnPropertyDescriptor") => Some("builtin:ObjectGetOwnPropertyDescriptor"),
         ("Object", "getOwnPropertyDescriptors") => Some("builtin:ObjectGetOwnPropertyDescriptors"),
         ("Object", "fromEntries") => Some("builtin:ObjectFromEntries"),
+        // ES2024 grouping (bd-9vouw.95): items, callback in slots 0 and 1.
+        ("Object", "groupBy") => Some("builtin:ObjectGroupBy"),
+        ("Map", "groupBy") => Some("builtin:MapGroupBy"),
         // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
         // calling convention (handler reads args.start+1.., guards count<N
         // counting a slot-0 receiver) — they are wired via

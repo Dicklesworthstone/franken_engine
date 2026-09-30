@@ -96,6 +96,22 @@ fn modifier_names_stay_ordinary_method_names() {
     );
 }
 
+/// Minified code writes the element name right after a modifier:
+/// lru-cache's `async#K(t, e = {}) { let i = await this.#q(t, e); ... }` was
+/// read as a method named `async#K`, so its `await` was rejected. `static=4`
+/// and `async=5` stay instance fields named `static` and `async`.
+#[test]
+fn modifiers_without_whitespace_before_the_name() {
+    check(
+        "class C{static#p=1;static*g(){yield C.#p}async#k(x){return await x}\
+         run(){return this.#k(2)}static['s'+1](){return 's'}async['a'](){return 'a'}\
+         static async*ag(){yield 3}static=4;async=5} const c=new C(); \
+         [[...C.g()].join(), c.run() instanceof Promise, c.a() instanceof Promise, \
+         typeof C.ag().next, C.s1(), c.static, c.async, Object.keys(c).join()].join(' ');",
+        "1 true true function s 4 5 static,async",
+    );
+}
+
 /// `get` / `set` directly followed by `(` name an ordinary method (Map-like
 /// classes such as lru-cache). They used to become accessors with an empty
 /// name, so `new Cache().get(k)` threw "expected function, got undefined".

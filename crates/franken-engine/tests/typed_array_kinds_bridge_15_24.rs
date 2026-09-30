@@ -156,3 +156,27 @@ r.join(' ; ');"#,
         r#"0,1 ; {"0":5,"1":6} ; 0,5|1,6 ; {"0":5,"1":6} ; 0,1 ; 0,1 ; false ; true ; 2 ; 2 ; undefined ; 0,1,2 ; {"0":9} ; -1,2"#,
     );
 }
+
+/// `%TypedArray%.from` and `%TypedArray%.of` (ES2020 22.2.2.1-2): `typeof
+/// Uint8Array.from` was "undefined" and `Uint8Array.from([1, 2])` threw
+/// "expected function, got undefined". The element type is the `this`
+/// constructor's; `from` takes iterables, array-likes and a mapper.
+#[test]
+fn typed_array_from_and_of() {
+    check(
+        "[Uint8Array.from([1, 2, 3]).join(), Uint8Array.of(4, 5, 300).join(), \
+         Float64Array.from('12', Number).join(), \
+         Int16Array.from(new Set([7, 8]), (x) => x * 2).join(), \
+         Int8Array.from({ length: 2, 0: 9 }).join(), BigInt64Array.of(1n, 2n).join(), \
+         BigUint64Array.from([3n]).join(), Uint8Array.from.name, Uint8Array.from.length, \
+         Uint8Array.of.length, Uint8Array.from([1]) instanceof Uint8Array, \
+         Int32Array.from.call(Float32Array, [1.5])[0]].join(' ')",
+        "1,2,3 4,5,44 1,2 14,16 9,0 1,2 3 from 1 0 true 1.5",
+    );
+    check(
+        "let r = []; for (const f of [() => { const g = Uint8Array.from; g([1]); }, \
+         () => Uint8Array.from([1], 5), () => BigInt64Array.of(1)]) { \
+         try { f(); r.push('ok'); } catch (e) { r.push(e.constructor.name); } } r.join()",
+        "TypeError,TypeError,TypeError",
+    );
+}

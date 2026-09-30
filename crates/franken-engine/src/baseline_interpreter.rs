@@ -3407,6 +3407,10 @@ pub enum BuiltinFunctionKind {
     /// `[@@search]` and `[@@split]` (ES2020 21.2.5); the `@@name` travels in
     /// `module_specifier`. Append only.
     RegExpSymbolMethod,
+    /// `%TypedArray%.from` / `%TypedArray%.of` (ES2020 22.2.2.1-2), reached
+    /// as `Uint8Array.from`; the method name travels in `module_specifier`
+    /// and the element type comes from the `this` constructor. Append only.
+    TypedArrayStaticMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4333,6 +4337,16 @@ impl BuiltinFunction {
         }
     }
 
+    /// `%TypedArray%.from` or `%TypedArray%.of` (`method` is "from" / "of").
+    fn typed_array_static(method: &str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::TypedArrayStaticMethod,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn map_set() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapSet,
@@ -5140,6 +5154,11 @@ impl BuiltinFunction {
                 .map(|(name, _)| *name)
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or("@@regexp"),
+            BuiltinFunctionKind::TypedArrayStaticMethod => ["from", "of"]
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("from"),
             // Anonymous built-in closures in the spec.
             BuiltinFunctionKind::PromiseThenFinally
             | BuiltinFunctionKind::PromiseCatchFinally
@@ -5331,6 +5350,7 @@ impl BuiltinFunction {
             K::WeakRefDeref => "WeakRef.prototype",
             K::FinalizationRegistryMethod => "FinalizationRegistry.prototype",
             K::RegExpSymbolMethod => "RegExp.prototype",
+            K::TypedArrayStaticMethod => "TypedArray",
             K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
             K::SetTimeout
             | K::SetInterval
@@ -37805,6 +37825,12 @@ impl InterpreterCore {
                 receiver.unwrap_or(Value::Undefined),
                 args,
             ),
+            BuiltinFunctionKind::TypedArrayStaticMethod => self.typed_array_static_call(
+                module,
+                builtin,
+                receiver.unwrap_or(Value::Undefined),
+                args,
+            ),
             BuiltinFunctionKind::RegExpPrototypeToString => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 match self.regexp_source_flags_from_value(&receiver) {
@@ -67024,6 +67050,67 @@ impl InterpreterCore {
         }
     }
 
+    /// `%TypedArray%.from(source[, mapFn[, thisArg]])` and
+    /// `%TypedArray%.of(...items)` (ES2020 22.2.2.1-2). The element type is
+    /// the `this` constructor's (`Uint8Array.from`), so an unbound call is a
+    /// TypeError, as in Node. `from` collects its source exactly as
+    /// `Array.from` does (iterables, array-likes, the mapper and its
+    /// `thisArg`), then converts every value to the element type.
+    fn typed_array_static_call(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let kind = match &receiver {
+            Value::BuiltinFunction(constructor)
+                if constructor.kind == BuiltinFunctionKind::StandardConstructor =>
+            {
+                Self::standard_constructor_name(constructor)
+                    .ok()
+                    .and_then(TypedArrayKind::from_type_name)
+            }
+            _ => None,
+        };
+        let Some(kind) = kind else {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "typed array constructor as this of %TypedArray%.{}",
+                    builtin.display_name()
+                ),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let values = if builtin.display_name() == "of" {
+            let mut items = Vec::with_capacity(args.count as usize);
+            for index in 0..args.count {
+                items.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+            }
+            items
+        } else {
+            if let Some(mapper) = self.builtin_arg(args, 1)?
+                && !matches!(mapper, Value::Undefined)
+                && !mapper.is_callable()
+            {
+                return Err(InterpreterError::TypeError {
+                    expected: "callable %TypedArray%.from mapper".to_string(),
+                    got: mapper.type_name().to_string(),
+                });
+            }
+            let Value::Object(list) = self.array_from_builtin(Some(module), args)? else {
+                return Err(InterpreterError::TypeError {
+                    expected: "array from %TypedArray%.from source".to_string(),
+                    got: "non-array".to_string(),
+                });
+            };
+            self.array_like_values(list)?
+        };
+        Ok(Value::Object(
+            self.alloc_typed_array_from_values(kind, &values)?,
+        ))
+    }
+
     /// ES2020 21.1.3.11/.12/.17/.18/.19 step 2: a String method whose pattern
     /// argument is an object calls that object's `@@match` / `@@matchAll` /
     /// `@@replace` / `@@search` / `@@split` method with the receiver and the
@@ -93195,6 +93282,10 @@ impl InterpreterCore {
             "BYTES_PER_ELEMENT" if TypedArrayKind::from_type_name(name).is_some() => {
                 let kind = TypedArrayKind::from_type_name(name).expect("guarded above");
                 Value::Int(i64::try_from(kind.element_size()).unwrap_or(i64::MAX))
+            }
+            // Inherited from %TypedArray% (ES2020 22.2.2).
+            method @ ("from" | "of") if TypedArrayKind::from_type_name(name).is_some() => {
+                Value::BuiltinFunction(BuiltinFunction::typed_array_static(method))
             }
             _ => {
                 if let Some(value) = Self::function_prototype_property(key) {

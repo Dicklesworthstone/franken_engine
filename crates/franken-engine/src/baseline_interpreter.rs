@@ -38785,6 +38785,14 @@ impl InterpreterCore {
                     });
                 };
                 let mut next_index = self.array_like_length(arr_id)?;
+                // ES2020 23.1.3.20 step 4: the new length must stay a safe
+                // integer.
+                if (next_index as u64).saturating_add(u64::from(args.count)) > (1 << 53) - 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "an array length of at most 2^53 - 1 after push".to_string(),
+                        got: format!("{next_index} + {}", args.count),
+                    });
+                }
                 for i in 0..args.count {
                     let reg =
                         args.start
@@ -39545,7 +39553,7 @@ impl InterpreterCore {
                     Some(callback) => Some(callback),
                 };
                 if len > 1 {
-                    let mut elements = Vec::with_capacity(len);
+                    let mut elements = self.element_buffer(len)?;
                     for index in 0..len {
                         elements.push(
                             self.array_index_value(arr_id, index)?
@@ -39740,7 +39748,7 @@ impl InterpreterCore {
                     items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
                     k += 1;
                 }
-                let mut elements: Vec<Value> = Vec::with_capacity(len);
+                let mut elements: Vec<Value> = self.element_buffer(len)?;
                 for i in 0..len {
                     elements.push(
                         self.array_index_value(arr_id, i)?
@@ -39816,7 +39824,7 @@ impl InterpreterCore {
                     Some(Value::Undefined) | None => None,
                     Some(callback) => Some(callback),
                 };
-                let mut elements = Vec::with_capacity(len);
+                let mut elements = self.element_buffer(len)?;
                 for index in 0..len {
                     elements.push(
                         self.array_index_value(arr_id, index)?
@@ -39936,7 +39944,7 @@ impl InterpreterCore {
                     items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
                     k += 1;
                 }
-                let mut elements: Vec<Value> = Vec::with_capacity(len);
+                let mut elements: Vec<Value> = self.element_buffer(len)?;
                 for i in 0..len {
                     elements.push(
                         self.array_index_value(arr_id, i)?
@@ -63378,7 +63386,7 @@ impl InterpreterCore {
             return self.typed_array_values_in_range(&view, 0, view.length);
         }
         let length = self.array_like_length(obj_id)?;
-        let mut values = Vec::with_capacity(length);
+        let mut values = self.element_buffer(length)?;
         for index in 0..length {
             values.push(
                 self.array_index_value(obj_id, index)?
@@ -66298,6 +66306,17 @@ impl InterpreterCore {
 
     /// `length` of an array-like receiver, read through its prototype chain
     /// like [[Get]] (`Object.create(['x', 'y'])` has no own `length`).
+    /// An empty buffer for `len` elements of an array-like, charged to the
+    /// temporary budget first: the length is guest-chosen (up to 2^53 - 1,
+    /// `{ length: 2 ** 53 - 1 }`), and an unchecked `with_capacity` of it
+    /// aborted the process ("memory allocation of ... bytes failed").
+    fn element_buffer(&self, len: usize) -> Result<Vec<Value>, InterpreterError> {
+        self.check_temporary_memory_budget(
+            (len as u64).saturating_mul(std::mem::size_of::<Value>() as u64),
+        )?;
+        Ok(Vec::with_capacity(len))
+    }
+
     fn array_like_length(&self, array_id: ObjectId) -> Result<usize, InterpreterError> {
         if self.heap.get(array_id.0 as usize).is_none() {
             return Err(InterpreterError::ObjectNotFound { id: array_id.0 });

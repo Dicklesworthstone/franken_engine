@@ -134,3 +134,31 @@ fn array_prototype_through_the_chain_matches_node() {
         mismatches.join("\n")
     );
 }
+
+/// An array-like's length is guest-chosen, up to 2^53 - 1. Methods that
+/// copy the elements sized a buffer by it unchecked, so
+/// `splice.call({ length: 2 ** 53 + 2 }, ...)` aborted the whole process
+/// (Test262 splice/length-and-deleteCount-exceeding-integer-limit). The
+/// buffer is now charged to the memory budget first: the run ends with a
+/// budget error instead. (Node, which does not copy, returns a two-element
+/// array; that is not claimed.) `push` past 2^53 - 1 is Node's TypeError.
+#[test]
+fn huge_array_like_lengths_are_budgeted_not_fatal() {
+    for source in [
+        "var arrayLike = { '9007199254740989': 'a', length: 2 ** 53 + 2 }; Array.prototype.splice.call(arrayLike, 9007199254740989, 2 ** 53 + 4);",
+        "Array.prototype.sort.call({ length: 2 ** 53 - 1 });",
+        "Array.prototype.toSorted.call({ length: 2 ** 40 });",
+    ] {
+        let error = console_output(source).expect_err(source);
+        assert!(
+            error.contains("MemoryBudgetExceeded"),
+            "`{source}` must end with a budget error, got {error}"
+        );
+    }
+    assert_eq!(
+        console_output(
+            "var o = { length: 2 ** 53 - 1 }; try { Array.prototype.push.call(o, 1); console.log('none'); } catch (e) { console.log(e.constructor.name, o.length); }"
+        ),
+        Ok("TypeError 9007199254740991".to_string())
+    );
+}

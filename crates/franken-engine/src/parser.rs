@@ -8293,7 +8293,14 @@ fn parse_object_literal(
             } else {
                 key_src
             };
-            let key = parse_expression(key_src_inner, span, context, recursion_depth + 1)?;
+            // An IdentifierName key is a name, not a reference: `{ await: 1 }`
+            // in an async function and `{ yield: 1 }` in a generator are
+            // ordinary keys (object methods already read their names so).
+            let key = if !computed && is_identifier(key_src_inner) {
+                Expression::Identifier(canonicalize_identifier(key_src_inner))
+            } else {
+                parse_expression(key_src_inner, span, context, recursion_depth + 1)?
+            };
             let value = if assignment_pattern {
                 parse_assignment_target_expression(value_src, span, context, recursion_depth + 1)?
             } else {

@@ -34360,6 +34360,8 @@ impl InterpreterCore {
     /// live on its bound property object, like `Date`.
     fn alloc_promise_global(&mut self) -> Result<Value, InterpreterError> {
         let properties = self.alloc_object_with_properties(&[
+            ("length", Value::Int(1)),
+            ("name", Value::str("Promise")),
             (
                 "resolve",
                 Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
@@ -34386,6 +34388,7 @@ impl InterpreterCore {
             ),
         ])?;
         self.mark_builtin_members_non_enumerable(properties)?;
+        self.mark_materialized_constructor_name_and_length(properties)?;
         Ok(Value::BuiltinFunction(
             BuiltinFunction::promise_constructor(properties),
         ))
@@ -34586,8 +34589,28 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Gives a materialized constructor's property object the standard own
+    /// `length` and `name` (ES2020 17: non-writable, non-enumerable,
+    /// configurable). `Date.name` and `Promise.length` were undefined, so
+    /// `Object.getPrototypeOf(d).constructor.name` was not "Date".
+    fn mark_materialized_constructor_name_and_length(
+        &mut self,
+        properties: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        for key in ["length", "name"] {
+            self.set_own_property_attributes(
+                properties,
+                &RuntimePropertyKey::String(JsString::from(key)),
+                FUNCTION_NAME_LENGTH_ATTRIBUTES,
+            )?;
+        }
+        Ok(())
+    }
+
     fn alloc_date_global(&mut self) -> Result<Value, InterpreterError> {
         let properties = self.alloc_object_with_properties(&[
+            ("length", Value::Int(7)),
+            ("name", Value::str("Date")),
             (
                 "now",
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateNow)),
@@ -34602,6 +34625,7 @@ impl InterpreterCore {
             ),
         ])?;
         self.mark_builtin_members_non_enumerable(properties)?;
+        self.mark_materialized_constructor_name_and_length(properties)?;
         Ok(Value::BuiltinFunction(BuiltinFunction::date_constructor(
             properties,
         )))
@@ -54691,9 +54715,19 @@ impl InterpreterCore {
     /// `Promise.prototype.constructor`; `None` once a program has replaced
     /// the global.
     fn promise_intrinsic_constructor(&self) -> Option<Value> {
+        self.materialized_intrinsic_constructor("Promise")
+    }
+
+    /// The constructor this realm installed as the global `name` when that
+    /// is a materialized constructor (`Date`, `Promise`, `Function`: a
+    /// builtin with its own property object), for the `constructor` of its
+    /// prototype, so `new Date().constructor === Date` (rfdc keys its clone
+    /// handlers by constructor). `None` once a program has replaced the
+    /// global.
+    fn materialized_intrinsic_constructor(&self, name: &str) -> Option<Value> {
         let value = self
             .realm_dynamic_globals
-            .get("Promise")?
+            .get(name)?
             .state
             .borrow()
             .value
@@ -54701,7 +54735,7 @@ impl InterpreterCore {
         matches!(
             &value,
             Value::BuiltinFunction(builtin)
-                if builtin.kind == BuiltinFunctionKind::PromiseConstructor
+                if Self::materialized_global_prototype_name(builtin) == Some(name)
         )
         .then_some(value)
     }
@@ -92996,8 +93030,8 @@ impl InterpreterCore {
             .iter()
             .find(|(_, prototype)| **prototype == object_id)
             .map(|(name, _)| name.as_str())?;
-        if key == "constructor" && name == "Promise" {
-            return self.promise_intrinsic_constructor();
+        if key == "constructor" && matches!(name, "Promise" | "Date") {
+            return self.materialized_intrinsic_constructor(name);
         }
         if key == "constructor" {
             return STANDARD_CONSTRUCTOR_GLOBALS
@@ -93049,10 +93083,11 @@ impl InterpreterCore {
                 .iter()
                 .find(|(_, prototype)| **prototype == id)
                 .map(|(name, _)| name.as_str());
-            // %Promise.prototype%.constructor is %Promise%, which is not a
-            // standard constructor builtin.
-            if canonical == Some("Promise") {
-                return self.promise_intrinsic_constructor();
+            // %Promise.prototype%.constructor is %Promise% and
+            // %Date.prototype%.constructor is %Date%, materialized
+            // constructors rather than standard constructor builtins.
+            if let Some(name @ ("Promise" | "Date")) = canonical {
+                return self.materialized_intrinsic_constructor(name);
             }
             if let Some(name) = canonical.and_then(|name| {
                 STANDARD_CONSTRUCTOR_GLOBALS

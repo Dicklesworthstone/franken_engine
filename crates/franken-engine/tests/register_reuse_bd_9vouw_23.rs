@@ -446,13 +446,20 @@ fn large_literal_with_a_proto_entry_fits_the_fixed_lane() {
         .map(|i| format!("function fn{i}() {{ return {i}; }}\n"))
         .collect();
     let entries: String = (0..150).map(|i| format!("fn{i}: fn{i},\n")).collect();
-    let source = format!(
-        "function factory() {{\n{functions}var allExports = {{\n__proto__: null,\n{entries}}};\n\
-         return [Object.getPrototypeOf(allExports) === null, Object.keys(allExports).length,\n\
+    let literal = format!(
+        "function factory() {{\n{functions}var allExports = {{\n__proto__: null,\n{entries}}};\n"
+    );
+    // The fixed lane grants no builtin authority, so it observes the null
+    // prototype through the missing inherited `toString`.
+    let fixed = format!(
+        "{literal}return (allExports.toString === undefined) + ':' + allExports.fn149();\n}}\nfactory();"
+    );
+    assert_eq!(fixed_lane_value(&fixed), "true:149");
+    let full = format!(
+        "{literal}return [Object.getPrototypeOf(allExports) === null, Object.keys(allExports).length,\n\
          allExports.fn149()].join();\n}}\nfactory();"
     );
-    assert_eq!(fixed_lane_value(&source), "true,150,149");
-    check("150-entry literal with __proto__", &source, "true,150,149");
+    check("150-entry literal with __proto__", &full, "true,150,149");
 }
 
 /// A literal with a spread or an accessor is built entry by entry too, and

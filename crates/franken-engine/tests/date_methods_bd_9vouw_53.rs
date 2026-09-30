@@ -53,7 +53,10 @@ fn iso_json_and_utc_strings() {
         "JSON.stringify({d: new Date(0)}) + '|' + new Date(0).toJSON();",
         "{\"d\":\"1970-01-01T00:00:00.000Z\"}|1970-01-01T00:00:00.000Z",
     );
-    check("new Date(0).toUTCString();", "Thu, 01 Jan 1970 00:00:00 GMT");
+    check(
+        "new Date(0).toUTCString();",
+        "Thu, 01 Jan 1970 00:00:00 GMT",
+    );
     check(
         "var r; try { new Date(NaN).toISOString(); r = 'no'; } catch (e) { r = e instanceof RangeError; } \
          r + ':' + new Date(NaN).toJSON() + ':' + isNaN(new Date(NaN).getFullYear());",
@@ -72,5 +75,28 @@ fn setters_normalize_through_make_day() {
         "var d = new Date(0); d.setTime(86400000); d.getDate() + ':' + d.setMonth(13) + ':' + \
          d.toISOString();",
         "2:34300800000:1971-02-02T00:00:00.000Z",
+    );
+}
+
+/// Date.prototype.toString / toDateString / toTimeString (20.4.4.41) and the
+/// string conversions of a Date, which go through toString. Without them
+/// `d.toString()` reached Object.prototype.toString ("[object Date]") while
+/// `d + ''` rendered "[object Object]", so `d == d.toString()` was false.
+#[test]
+fn to_string_forms_and_string_conversion() {
+    check(
+        "var d = new Date(1582977600123); var e = new Date(-62198755200000); \
+         [d.toString(), d.toDateString(), d.toTimeString(), e.toString(), \
+         new Date(NaN).toString(), new Date(NaN).toTimeString()].join('|');",
+        "Sat Feb 29 2020 12:00:00 GMT+0000 (Coordinated Universal Time)|Sat Feb 29 2020|\
+         12:00:00 GMT+0000 (Coordinated Universal Time)|\
+         Fri Jan 01 -0001 00:00:00 GMT+0000 (Coordinated Universal Time)|Invalid Date|Invalid Date",
+    );
+    check(
+        "var d = new Date(1582977600123); [d == d.toString(), String(d) === d.toString(), \
+         `${d}` === d.toString(), d + 1, d - 0, d == 1582977600123, \
+         Object.prototype.toString.call(d), Date.prototype.toString.length].join('|');",
+        "true|true|true|Sat Feb 29 2020 12:00:00 GMT+0000 (Coordinated Universal Time)1|\
+         1582977600123|false|[object Date]|0",
     );
 }

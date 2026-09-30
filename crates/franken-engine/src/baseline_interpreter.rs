@@ -3277,6 +3277,8 @@ pub enum BuiltinFunctionKind {
     /// 22.2.3); the method name travels in `module_specifier` (one of
     /// [`TYPED_ARRAY_METHODS`]). Append only.
     TypedArrayMethod,
+    /// `String.prototype.matchAll` (ES2020 21.1.3.12). Append only.
+    StringMatchAll,
 }
 
 impl BuiltinFunctionKind {
@@ -4664,6 +4666,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringSubstr => "substr",
             BuiltinFunctionKind::StringReplace => "replace",
             BuiltinFunctionKind::StringMatch => "match",
+            BuiltinFunctionKind::StringMatchAll => "matchAll",
             BuiltinFunctionKind::StringSearch => "search",
             BuiltinFunctionKind::StringRepeat => "repeat",
             BuiltinFunctionKind::StringPadStart => "padStart",
@@ -5051,6 +5054,7 @@ impl BuiltinFunction {
             | K::StringLastIndexOf
             | K::StringLocaleCompare
             | K::StringMatch
+            | K::StringMatchAll
             | K::StringNormalize
             | K::StringPadEnd
             | K::StringPadStart
@@ -37248,6 +37252,12 @@ impl InterpreterCore {
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_match_impl(&value, args)
             }
+            BuiltinFunctionKind::StringMatchAll => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.string_match_all_value(&value, &pattern)
+            }
             BuiltinFunctionKind::StringSearch => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
@@ -52682,6 +52692,9 @@ impl InterpreterCore {
             "substr" => Value::BuiltinFunction(BuiltinFunction::string_substr()),
             "replace" => Value::BuiltinFunction(BuiltinFunction::string_replace()),
             "match" => Value::BuiltinFunction(BuiltinFunction::string_match()),
+            "matchAll" => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::StringMatchAll,
+            )),
             "search" => Value::BuiltinFunction(BuiltinFunction::string_search()),
             "repeat" => Value::BuiltinFunction(BuiltinFunction::string_repeat()),
             "padStart" => Value::BuiltinFunction(BuiltinFunction::string_pad_start()),
@@ -52875,6 +52888,98 @@ impl InterpreterCore {
         }
     }
 
+    /// A RegExp object with the given source and flags and `lastIndex` 0.
+    fn alloc_regexp_object(
+        &mut self,
+        source: String,
+        flags: String,
+    ) -> Result<ObjectId, InterpreterError> {
+        let regexp_prototype = self.ensure_builtin_prototype("RegExp")?;
+        let regexp_id = self.alloc_object_with_prototype(Some(regexp_prototype))?;
+        self.set_object_property(regexp_id, "__type".to_string(), Value::str("RegExp"))?;
+        self.set_object_property(regexp_id, "source".to_string(), Value::str(source))?;
+        self.set_object_property(regexp_id, "flags".to_string(), Value::str(flags))?;
+        self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
+        // `lastIndex` is an own non-enumerable property; `source` and `flags`
+        // stand in for prototype accessors.
+        self.hide_internal_slots(regexp_id, &["__type", "source", "flags", "lastIndex"])?;
+        Ok(regexp_id)
+    }
+
+    /// ES2020 21.1.3.12 String.prototype.matchAll: an iterator over every
+    /// match of a global RegExp (a RegExp without `g` is a TypeError; any
+    /// other pattern becomes `new RegExp(pattern, "g")`), each result shaped
+    /// like RegExp.prototype.exec's (index, input, groups). It ran on a
+    /// private clone, so the argument's own `lastIndex` is untouched; an empty
+    /// match advances the clone by one. It was missing ("expected function,
+    /// got undefined"). No-claim: the matches are collected when matchAll is
+    /// called (the spec's %RegExpStringIteratorPrototype% is lazy), and the
+    /// iterator is an array iterator.
+    fn string_match_all_value(
+        &mut self,
+        input: &JsString,
+        pattern: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let (source, flags, last_index) = match self.regexp_source_flags_from_value(pattern) {
+            Some((source, flags)) => {
+                if !flags.contains('g') {
+                    return Err(InterpreterError::TypeError {
+                        expected: "global RegExp for String.prototype.matchAll".to_string(),
+                        got: format!("RegExp with flags \"{flags}\""),
+                    });
+                }
+                let last_index = match pattern {
+                    Value::Object(id) => self
+                        .heap
+                        .get(id.0 as usize)
+                        .and_then(|object| object.properties.get("lastIndex").cloned())
+                        .unwrap_or(Value::Int(0)),
+                    _ => Value::Int(0),
+                };
+                (source, flags, last_index)
+            }
+            None => {
+                let source = match pattern {
+                    Value::Undefined => String::new(),
+                    other => self.value_to_string(other),
+                };
+                (source, "g".to_string(), Value::Int(0))
+            }
+        };
+        let clone = self.alloc_regexp_object(source, flags)?;
+        self.set_object_property(clone, "lastIndex".to_string(), last_index)?;
+        let subject = Value::Str(input.clone());
+        let mut results = Vec::new();
+        // Each iteration either ends or moves lastIndex forward, so the loop
+        // is bounded by the input length; the bound is a backstop.
+        for _ in 0..=input.len().saturating_add(1) {
+            let result = self.regexp_prototype_exec(Value::Object(clone), &subject)?;
+            let Value::Object(result_id) = result else {
+                break;
+            };
+            let empty_match = matches!(
+                self.heap
+                    .get(result_id.0 as usize)
+                    .and_then(|object| object.properties.get("0")),
+                Some(Value::Str(matched)) if matched.is_empty()
+            );
+            if empty_match {
+                let next = match self
+                    .heap
+                    .get(clone.0 as usize)
+                    .and_then(|object| object.properties.get("lastIndex"))
+                {
+                    Some(Value::Int(index)) => index.saturating_add(1),
+                    _ => 1,
+                };
+                self.set_object_property(clone, "lastIndex".to_string(), Value::Int(next))?;
+            }
+            results.push(result);
+        }
+        let array = self.alloc_array_from_values(&results)?;
+        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+    }
+
     fn string_search_value(&self, input: &str, pattern: &Value) -> Result<Value, InterpreterError> {
         if let Some((source, flags)) = self.regexp_source_flags_from_value(pattern) {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
@@ -52905,8 +53010,14 @@ impl InterpreterCore {
         label: Label,
     ) -> Result<Value, InterpreterError> {
         let mut matches: Vec<(usize, usize, Vec<Option<String>>)> = Vec::new();
+        let mut group_names: Vec<Option<String>> = Vec::new();
         if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
+            group_names = regex
+                .capture_names()
+                .skip(1)
+                .map(|name| name.map(str::to_string))
+                .collect();
             let global = all || flags.contains('g');
             for captures in regex.captures_iter(input) {
                 let Some(whole) = captures.get(0) else {
@@ -52979,7 +53090,7 @@ impl InterpreterCore {
                 )?;
                 self.value_to_string(&result)
             } else {
-                Self::get_substitution(matched, input, start, end, &groups, &template)
+                Self::get_substitution(matched, input, start, end, &groups, &group_names, &template)
             };
             output.push_str(&replacement);
             self.check_string_limit(output.len())?;
@@ -52990,16 +53101,21 @@ impl InterpreterCore {
         Ok(Value::str(output))
     }
 
-    /// ES2020 21.1.3.17.1 GetSubstitution: `$$`, `$&`, `` $` ``, `$'`, `$n` and
-    /// `$nn` (named `$<name>` stays literal).
+    /// ES2020 21.1.3.17.1 GetSubstitution: `$$`, `$&`, `` $` ``, `$'`, `$n`,
+    /// `$nn`, and `$<name>` when the pattern has named groups (the group's
+    /// text, empty for an unknown or unmatched name; `$<` without a closing
+    /// `>`, or with no named groups, stays literal). `names[i]` names
+    /// `groups[i]`.
     fn get_substitution(
         matched: &str,
         input: &str,
         start: usize,
         end: usize,
         groups: &[Option<String>],
+        names: &[Option<String>],
         template: &str,
     ) -> String {
+        let has_named_groups = names.iter().any(Option::is_some);
         let bytes = template.as_bytes();
         let group = |index: usize| {
             (1..=groups.len())
@@ -53013,6 +53129,15 @@ impl InterpreterCore {
                 let next = bytes[index + 1];
                 let expansion = match next {
                     b'$' => Some(("$".to_string(), 2)),
+                    b'<' if has_named_groups => template[index + 2..].find('>').map(|close| {
+                        let name = &template[index + 2..index + 2 + close];
+                        let text = names
+                            .iter()
+                            .position(|candidate| candidate.as_deref() == Some(name))
+                            .and_then(|position| groups.get(position).cloned().flatten())
+                            .unwrap_or_default();
+                        (text, close + 3)
+                    }),
                     b'&' => Some((matched.to_string(), 2)),
                     b'`' => Some((input[..start].to_string(), 2)),
                     b'\'' => Some((input[end..].to_string(), 2)),
@@ -79259,20 +79384,7 @@ impl InterpreterCore {
                     (_, other) => self.value_to_string(other),
                 };
 
-                // Create RegExp object
-                let regexp_prototype = self.ensure_builtin_prototype("RegExp")?;
-                let regexp_id = self.alloc_object_with_prototype(Some(regexp_prototype))?;
-
-                // Set RegExp metadata
-                self.set_object_property(regexp_id, "__type".to_string(), Value::str("RegExp"))?;
-                self.set_object_property(regexp_id, "source".to_string(), Value::str(pattern))?;
-                self.set_object_property(regexp_id, "flags".to_string(), Value::str(flags))?;
-                self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
-                // `lastIndex` is an own non-enumerable property; `source` and
-                // `flags` stand in for prototype accessors.
-                self.hide_internal_slots(regexp_id, &["__type", "source", "flags", "lastIndex"])?;
-
-                Ok(Value::Object(regexp_id))
+                Ok(Value::Object(self.alloc_regexp_object(pattern, flags)?))
             }
 
             "builtin:ArrayPrototypeReduceRight" => self.array_prototype_reduce_right(args, module),

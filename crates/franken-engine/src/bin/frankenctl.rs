@@ -73,7 +73,9 @@ use frankenengine_engine::non_use_certificate::{
     emit_certificate_bundle_with_runtime_authority,
 };
 use frankenengine_engine::package_intake::{PackageIntakeReport, onboard_package};
-use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
+use frankenengine_engine::parser::{
+    CanonicalEs2020Parser, ParseBudgetKind, ParseEventIr, ParserOptions,
+};
 use frankenengine_engine::parser_oracle::{
     DEFAULT_FIXTURE_CATALOG_PATH, OracleGateMode, OraclePartition, ParserOracleConfig,
     run_parser_oracle,
@@ -375,7 +377,17 @@ struct RunArgs {
     /// cannot run ordinary programs; the override is bounded by
     /// [`MAX_RUN_INSTRUCTION_BUDGET`] and recorded for exact replay.
     instruction_budget: Option<u64>,
+    /// Override the parser token budget (bd-9vouw.58). The default (65,536)
+    /// is below what ordinary packages need (lodash 4.17.21: 121,349
+    /// tokens); the override is bounded by [`MAX_RUN_PARSER_TOKEN_COUNT`],
+    /// applies to required modules too, and is recorded for exact replay.
+    parser_max_token_count: Option<u64>,
 }
+
+/// Upper bound for `frankenctl run --parser-max-tokens`. The source-byte
+/// budget still applies, so this only keeps an operator typo from removing
+/// the bound.
+const MAX_RUN_PARSER_TOKEN_COUNT: u64 = 1 << 24;
 
 /// Upper bound for `frankenctl run --instruction-budget`. Budget exhaustion
 /// stays a typed fail-closed error at any value; this bound only keeps an
@@ -1003,6 +1015,10 @@ struct RunReplayInput {
     /// for default-budget runs, so earlier reports keep their exact bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     instruction_budget: Option<u64>,
+    /// `--parser-max-tokens` override used by the run (bd-9vouw.58); absent
+    /// for default-budget runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parser_max_token_count: Option<u64>,
     ir3_hash: String,
     randomness_transcript: NondeterminismTrace,
     unsigned_execution_content: UnsignedExecutionContent,
@@ -2252,6 +2268,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut certificate_out: Option<PathBuf> = None;
     let mut cell_close_budget_ms: Option<u64> = None;
     let mut instruction_budget: Option<u64> = None;
+    let mut parser_max_token_count: Option<u64> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -2271,6 +2288,18 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
                     ));
                 }
                 instruction_budget = Some(budget);
+            }
+            "--parser-max-tokens" => {
+                let tokens = parse_positive_u64(
+                    &next_arg(args, &mut index, "--parser-max-tokens")?,
+                    "--parser-max-tokens",
+                )?;
+                if tokens > MAX_RUN_PARSER_TOKEN_COUNT {
+                    return Err(format!(
+                        "--parser-max-tokens must be at most {MAX_RUN_PARSER_TOKEN_COUNT}"
+                    ));
+                }
+                parser_max_token_count = Some(tokens);
             }
             "--data-contract" => {
                 data_contract = Some(PathBuf::from(next_arg(
@@ -2338,6 +2367,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         certificate_out,
         cell_close_budget_ms,
         instruction_budget,
+        parser_max_token_count,
     }))
 }
 
@@ -4385,6 +4415,9 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     if let Some(cell_close_budget_ms) = args.cell_close_budget_ms {
         orchestrator_config.cell_close_budget_ms = cell_close_budget_ms;
     }
+    if let Some(tokens) = args.parser_max_token_count {
+        orchestrator_config.parser_options.budget.max_token_count = tokens;
+    }
     let replay_cell_close_budget_ms = orchestrator_config.cell_close_budget_ms;
     let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
         fresh_runtime_evidence_producer_id("frankenctl.run", &source_hash.to_hex())?,
@@ -4502,6 +4535,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         policy_epoch: result.epoch.as_u64(),
         cell_close_budget_ms: replay_cell_close_budget_ms,
         instruction_budget: args.instruction_budget,
+        parser_max_token_count: args.parser_max_token_count,
         ir3_hash: result.ir4_witness.executed_ir3_hash.to_hex(),
         randomness_transcript: result.nondeterminism_trace.clone(),
         unsigned_execution_content,
@@ -6681,6 +6715,20 @@ fn format_orchestration_error(command: &str, input: &Path, error: &OrchestratorE
     let mut detail = format!("{command} failed for `{}`: {error}", input.display());
     if let Some(classification) = classify_run_error(error) {
         detail.push_str(format!("\nclassification: {classification}").as_str());
+    }
+    if command == "run"
+        && let OrchestratorError::Parse(parse_error) = error.primary_error()
+        && let Some(witness) = parse_error.witness.as_deref()
+        && witness.budget_kind == Some(ParseBudgetKind::TokenCount)
+    {
+        detail.push_str(
+            format!(
+                "\nhint: the parser token budget is {}; raise it with --parser-max-tokens <n> \
+                 (at most {MAX_RUN_PARSER_TOKEN_COUNT})",
+                witness.max_token_count
+            )
+            .as_str(),
+        );
     }
     detail
 }
@@ -8974,7 +9022,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         metadata: BTreeMap::new(),
     };
     let source_hash = ContentHash::compute(input.source.as_bytes());
-    let orchestrator_config = OrchestratorConfig {
+    let mut orchestrator_config = OrchestratorConfig {
         parse_goal,
         trace_id_prefix: "frankenctl-run".to_string(),
         policy_id: input.policy_id.clone(),
@@ -8982,6 +9030,9 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
         cell_close_budget_ms: input.cell_close_budget_ms,
         ..OrchestratorConfig::default()
     };
+    if let Some(tokens) = input.parser_max_token_count {
+        orchestrator_config.parser_options.budget.max_token_count = tokens;
+    }
     let evidence_authority = RuntimeEvidenceAuthority::generate_runtime_owned(
         fresh_runtime_evidence_producer_id("frankenctl.replay", &source_hash.to_hex())?,
         orchestrator_config.epoch,
@@ -12319,11 +12370,16 @@ fn run_usage() -> String {
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
-        "      [--instruction-budget <n>]",
+        "      [--instruction-budget <n>] [--parser-max-tokens <n>]",
         "",
         "  --instruction-budget overrides the interpreter instruction budget (default",
         "  100000, at most 10000000000). Exhaustion still fails closed; the value is",
         "  recorded in the report's replay input so strict replay reuses it.",
+        "",
+        "  --parser-max-tokens overrides the parser token budget for the entry file",
+        "  and required modules (default 65536, at most 16777216; lodash.js needs",
+        "  121349). Exhaustion still fails closed; the value is recorded in the",
+        "  report's replay input so strict replay reuses it.",
         "",
         "  --emit-trace writes the run's recorded nondeterminism trace — the",
         "  exact input `frankenctl replay debug --trace` consumes, enabling",

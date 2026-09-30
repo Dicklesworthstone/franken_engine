@@ -56628,11 +56628,18 @@ impl InterpreterCore {
         &mut self,
         module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
-        const MAX_TURNS: u32 = 10_000; // Safety limit to prevent infinite loops
-        let mut turns = 0;
+        // bd-9vouw.58: a run gets as many event-loop turns as instructions
+        // (at least the historical 10,000), so the operator's
+        // --instruction-budget bounds timer-driven work as it bounds straight
+        // code. A turn can run no IR instruction (a builtin interval callback),
+        // so turns keep their own bound. A fixed 10,000 failed 10,001
+        // setTimeout callbacks that Node runs, as an internal invariant
+        // violation.
+        let max_turns = self.config.instruction_budget.max(10_000);
+        let mut turns: u64 = 0;
 
         while (self.event_loop.has_pending_work() || !self.next_tick_queue.is_empty())
-            && turns < MAX_TURNS
+            && turns < max_turns
         {
             if self
                 .config
@@ -56705,15 +56712,14 @@ impl InterpreterCore {
             self.drain_runtime_checkpoint(module)?;
             self.raise_unhandled_rejection()?;
         }
-        if turns >= MAX_TURNS
+        if turns >= max_turns
             && self.event_loop.has_pending_work()
             && !(self.event_loop.microtasks.is_empty()
                 && self.only_unref_or_cancelled_timers_pending())
         {
-            return Err(InterpreterError::InternalError {
-                details: format!(
-                    "event loop turn limit exceeded with ref'd work still pending ({MAX_TURNS} turns)"
-                ),
+            return Err(InterpreterError::BudgetExhausted {
+                executed: turns,
+                budget: max_turns,
             });
         }
         Ok(())

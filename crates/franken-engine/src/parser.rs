@@ -2285,6 +2285,7 @@ fn line_ends_with_update_operator(line: &str) -> bool {
 fn merge_logical_lines_requires_continuation(
     last_significant: Option<char>,
     trailing_identifier: &str,
+    trailing_identifier_follows_dot: bool,
 ) -> bool {
     if matches!(
         last_significant,
@@ -2296,10 +2297,16 @@ fn merge_logical_lines_requires_continuation(
     // `return` and `yield` are restricted productions (ES2020 11.9.1): a line
     // break after them ends the statement (`return\n  x` returns undefined),
     // so they do not continue onto the next line.
-    matches!(
+    if matches!(
         trailing_identifier,
         "throw" | "typeof" | "void" | "delete" | "case"
-    )
+    ) {
+        return true;
+    }
+    // A declaration keyword with no binding yet cannot end a statement
+    // (`var // note\n  a = 1`, moment.js). After a `.` the word is a property
+    // name (`cfg.const`), which can.
+    !trailing_identifier_follows_dot && matches!(trailing_identifier, "var" | "let" | "const")
 }
 
 /// Whether `line` starts with an operator that can only continue an
@@ -2868,6 +2875,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut accumulating = false;
     let mut last_significant: Option<char> = None;
     let mut trailing_identifier = String::new();
+    let mut trailing_identifier_follows_dot = false;
 
     for (line_idx, physical_line) in physical_lines.iter().copied().enumerate() {
         let line_no = (line_idx as u64).saturating_add(1);
@@ -3143,6 +3151,9 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 }
                 ch if ch.is_ascii_whitespace() => {}
                 ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
+                    if trailing_identifier.is_empty() {
+                        trailing_identifier_follows_dot = last_significant == Some('.');
+                    }
                     trailing_identifier.push(ch);
                     last_significant = Some(ch);
                 }
@@ -3188,6 +3199,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 || !merge_logical_lines_requires_continuation(
                     last_significant,
                     trailing_identifier.as_str(),
+                    trailing_identifier_follows_dot,
                 ))
         {
             if let Some(logical_line) = logical_line_from_buffer(

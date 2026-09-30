@@ -561,3 +561,23 @@ read([0x40, 0x49, 0x0f, 0xdb], 0, false, 23, 4)"#,
         "3.1415927410125732",
     );
 }
+
+#[test]
+fn declaration_keyword_before_a_line_comment_continues() {
+    // `var` with its first binding on the next line, after a comment:
+    // moment 2.29.4's firstWeekOffset. Line breaks reach function bodies since
+    // this change, and a line ending in `var` ended the statement there
+    // ("var declaration must include at least one binding"). A declaration
+    // keyword with no binding cannot end a statement; the same word as a
+    // property name (`cfg.const`) can.
+    check("var // c\n  a = 1;\na;", "1");
+    check("let // c\n  b = 2;\nb;", "2");
+    check("const // c\n  k = 3;\nk;", "3");
+    check(
+        "function f(dow, doy) {\n  var // first-week day\n    fwd = 7 + dow - doy,\n    \
+         // first-week day local weekday\n    fwdlw = (7 + fwd - dow) % 7;\n  \
+         return -fwdlw + fwd - 1;\n}\nf(1, 4);",
+        "0",
+    );
+    check("var cfg = { const: 4 };\nvar v = cfg.const\nv;", "4");
+}

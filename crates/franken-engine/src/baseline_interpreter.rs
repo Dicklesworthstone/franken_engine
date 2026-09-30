@@ -49175,6 +49175,16 @@ impl InterpreterCore {
                                         .unwrap_or(Value::Undefined),
                                 }
                             }
+                            ref exotic @ (Value::Generator(_) | Value::AsyncGeneratorObject(_))
+                                if self.exotic_has_own_property(
+                                    module,
+                                    exotic,
+                                    &property_key,
+                                )? =>
+                            {
+                                self.exotic_own_property_get(module, exotic, &property_key)?
+                                    .unwrap_or(Value::Undefined)
+                            }
                             Value::Generator(_) => match property_key {
                                 RuntimePropertyKey::String(ref key) => match key.as_str() {
                                     Some("next") => {
@@ -49236,7 +49246,13 @@ impl InterpreterCore {
                             // Object.prototype), as for a primitive base.
                             // @@toStringTag is "Promise" (ES2020 25.6.5.5).
                             Value::Promise(promise) => {
-                                if matches!(
+                                if let Some(own) = self.exotic_own_property_get(
+                                    module,
+                                    &Value::Promise(promise),
+                                    &property_key,
+                                )? {
+                                    own
+                                } else if matches!(
                                     &property_key,
                                     RuntimePropertyKey::Symbol(symbol)
                                         if *symbol == WellKnownSymbol::ToStringTag.id()
@@ -49531,6 +49547,26 @@ impl InterpreterCore {
                             let property_object = self
                                 .ensure_function_own_property_object(module, function)?
                                 .expect("user function values always have a backing-object key");
+                            let mutation_label = self
+                                .get_register_label(obj)?
+                                .join(self.get_register_label(key)?)
+                                .join(self.get_register_label(val)?);
+                            self.join_object_mutation_label(property_object, &mutation_label)?;
+                            self.set_backing_object_property(
+                                module,
+                                property_object,
+                                &property_key,
+                                val,
+                                set_val,
+                            )?;
+                        }
+                        // A promise, generator or async generator object keeps
+                        // assigned properties (`p.cancel = fn`) on its backing
+                        // object; the assignment threw "expected object".
+                        ref exotic if Self::has_exotic_backing_object(exotic) => {
+                            let property_object = self
+                                .ensure_function_own_property_object(module, exotic)?
+                                .expect("promise and generator values have a backing-object key");
                             let mutation_label = self
                                 .get_register_label(obj)?
                                 .join(self.get_register_label(key)?)
@@ -52749,6 +52785,9 @@ impl InterpreterCore {
             | Value::AsyncGeneratorObject(_)
             | Value::Iterator(_)
             | Value::AsyncFunctionObject(_)) => {
+                if self.exotic_has_own_property(module, object_like, &key)? {
+                    return Ok(Value::Bool(true));
+                }
                 let supplied = match object_like {
                     Value::Promise(_) => key.as_str().is_some_and(|name| {
                         !matches!(Self::promise_property_value(name), Value::Undefined)
@@ -80584,8 +80623,11 @@ impl InterpreterCore {
                         Ok(Value::Object(array_id))
                     }
                     // bd-9vouw.17: a function's enumerable own properties are
-                    // on its backing object (`length`/`name` are not enumerable).
-                    ref function if function.is_callable() => {
+                    // on its backing object (`length`/`name` are not enumerable),
+                    // as are a promise's or generator object's.
+                    ref function
+                        if function.is_callable() || Self::has_exotic_backing_object(function) =>
+                    {
                         let key_values = match self.own_property_holder(module, function, false)? {
                             Some(backing) => self
                                 .heap
@@ -94946,6 +94988,20 @@ impl InterpreterCore {
                 digest.update(&identity);
                 (5u8, ContentHash::from_bytes(digest.finalize().into()), 0)
             }
+            // A promise, generator or async generator object has no heap
+            // storage of its own either: its own properties (`p.cancel =
+            // fn`, `Object.assign(promise, ...)`) live on a backing object
+            // too. Their ids are the runtime's, not a module's.
+            Value::Promise(id) | Value::Generator(id) | Value::AsyncGeneratorObject(id) => {
+                let kind = match function {
+                    Value::Promise(_) => 6u8,
+                    Value::Generator(_) => 7,
+                    _ => 8,
+                };
+                let mut digest = Sha256::new();
+                digest.update(b"FrankenEngine.ExoticObjectOwnProperties.v1");
+                (kind, ContentHash::from_bytes(digest.finalize().into()), *id)
+            }
             _ => return Ok(None),
         };
         Ok(Some((
@@ -95100,6 +95156,49 @@ impl InterpreterCore {
         })
     }
 
+    /// Whether `value` is a promise, generator or async generator object,
+    /// whose own properties live on a backing object (see
+    /// `function_own_property_key`).
+    fn has_exotic_backing_object(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Promise(_) | Value::Generator(_) | Value::AsyncGeneratorObject(_)
+        )
+    }
+
+    /// Whether a promise, generator or async generator object has the own
+    /// property `key` (on its backing object). Runs no guest code.
+    fn exotic_has_own_property(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        Ok(self
+            .function_own_property_object(module, value)?
+            .and_then(|backing| self.heap.get(backing.0 as usize))
+            .is_some_and(|object| object.contains_own_runtime_property(key)))
+    }
+
+    /// The own property `key` of a promise, generator or async generator
+    /// object, read from its backing object with `value` as the receiver
+    /// (an accessor sees it as `this`), or `None` when it has none.
+    fn exotic_own_property_get(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if !self.exotic_has_own_property(module, value, key)? {
+            return Ok(None);
+        }
+        let backing = self
+            .function_own_property_object(module, value)?
+            .expect("checked by exotic_has_own_property");
+        self.proxy_aware_get_runtime_property(Some(module), backing, key, value.clone(), 0)
+            .map(Some)
+    }
+
     /// bd-9vouw.17: the object that holds `value`'s own properties for the
     /// Object.* reflection built-ins: an object itself, a built-in's property
     /// object, or a function's backing object (created and seeded on demand
@@ -95119,7 +95218,7 @@ impl InterpreterCore {
         {
             return Ok(Some(object));
         }
-        if !value.is_callable() {
+        if !value.is_callable() && !Self::has_exotic_backing_object(value) {
             return Ok(None);
         }
         let Some(module) = module else {

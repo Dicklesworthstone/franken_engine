@@ -6,9 +6,12 @@
 //! function, got undefined" and `p.constructor` was undefined. Expected
 //! strings are Node v22.2.0's completion values for the same programs.
 //!
-//! No-claim: `Promise.prototype[Symbol.toStringTag]` read on the prototype
-//! object itself is still undefined; `constructor` is `undefined` once a
-//! program replaces the global `Promise`.
+//! A promise also holds own properties (`p.cancel = fn`,
+//! `Object.defineProperty(p, ...)`, an own `constructor`), as do generator
+//! objects; they live on a backing object.
+//!
+//! No-claim: `constructor` is `undefined` once a program replaces the global
+//! `Promise`.
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
 
@@ -28,6 +31,26 @@ fn promise_constructor_and_to_string_tag() {
         "const p = Promise.resolve(1); [p.constructor === Promise, Promise.prototype.constructor === Promise, \
          typeof p.constructor, p[Symbol.toStringTag], Object.prototype.toString.call(p)].join(' ')",
         "true true function Promise [object Promise]",
+    );
+}
+
+/// Promises and generator objects had no storage for own properties: `p.cancel
+/// = fn` (cancelable-promise helpers, promises carrying a child process),
+/// `Object.defineProperty(p, ...)` and `Object.assign(promise, ...)` threw
+/// "expected object, got object".
+#[test]
+fn promises_and_generator_objects_hold_own_properties() {
+    check(
+        "var p = Promise.resolve(1); p.cancel = () => 'c'; \
+         Object.defineProperty(p, 'tag', { value: 't', enumerable: false }); \
+         var q = new Promise(() => {}); q.constructor = function Fake() {}; \
+         var r = Object.assign(Promise.resolve(2), { a: 1 }); \
+         function* g() { yield 1; } var it = g(); it.extra = 5; \
+         [typeof p.cancel, p.cancel(), Object.keys(p).join(), 'cancel' in p, p.hasOwnProperty('cancel'), \
+         p.tag, Object.getOwnPropertyDescriptor(p, 'tag').enumerable, q.constructor.name, \
+         q.hasOwnProperty('constructor'), r.a, it.extra, Object.keys(it).join(), it.next().value, \
+         typeof p.then].join(' ')",
+        "function c cancel true true t false Fake true 1 5 extra 1 function",
     );
 }
 

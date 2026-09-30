@@ -8693,6 +8693,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     elements.push(pop_lowering_value(&mut value_stack)?);
                 }
                 elements.reverse();
+                let operands = elements.clone();
 
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::NewArray { dst });
@@ -8718,6 +8719,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     *count,
                 );
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                let dst = compact_batch_literal(
+                    &mut ir3.instructions,
+                    dst,
+                    &operands,
+                    &value_stack,
+                    reserved_below,
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 value_stack.push(dst);
             }
             Ir1Op::NewObject { count } => {
@@ -8735,6 +8748,10 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     properties.push((key, val));
                 }
                 properties.reverse();
+                let operands = properties
+                    .iter()
+                    .flat_map(|(key, val)| [*key, *val])
+                    .collect::<Vec<_>>();
 
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::NewObject { dst });
@@ -8746,6 +8763,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         val: val_reg,
                     });
                 }
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                let dst = compact_batch_literal(
+                    &mut ir3.instructions,
+                    dst,
+                    &operands,
+                    &value_stack,
+                    reserved_below,
+                    &mut register_cursor,
+                    &mut register_high_water,
+                );
                 value_stack.push(dst);
             }
             Ir1Op::ArrayPush => {
@@ -10469,6 +10498,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         elems.push(pop_lowering_value(&mut fn_value_stack)?);
                     }
                     elems.reverse();
+                    let operands = elems.clone();
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
                     for (i, val_reg) in elems.into_iter().enumerate() {
@@ -10491,6 +10521,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         dst,
                         *count,
                     );
+                    let reserved_below = fn_statement_register_floor
+                        .max(fn_pinned_register_high)
+                        .max(live_status_register_ceiling(&fn_live_status_registers));
+                    let dst = compact_batch_literal(
+                        &mut ir3.instructions,
+                        dst,
+                        &operands,
+                        &fn_value_stack,
+                        reserved_below,
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewObject { count } => {
@@ -10507,6 +10549,10 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         properties.push((key, val));
                     }
                     properties.reverse();
+                    let operands = properties
+                        .iter()
+                        .flat_map(|(key, val)| [*key, *val])
+                        .collect::<Vec<_>>();
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::NewObject { dst });
                     for (key_reg, val_reg) in properties {
@@ -10516,6 +10562,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             val: val_reg,
                         });
                     }
+                    let reserved_below = fn_statement_register_floor
+                        .max(fn_pinned_register_high)
+                        .max(live_status_register_ceiling(&fn_live_status_registers));
+                    let dst = compact_batch_literal(
+                        &mut ir3.instructions,
+                        dst,
+                        &operands,
+                        &fn_value_stack,
+                        reserved_below,
+                        &mut fn_reg,
+                        &mut fn_register_high_water,
+                    );
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::ArrayPush => {
@@ -30794,6 +30852,40 @@ fn function_local_register(
             alloc_pinned_register(cursor, pinned_high, high_water)
         }
     })
+}
+
+/// bd-9vouw.23: once a batch array or object literal is built, its element
+/// and key registers are dead. When nothing live sits at or above the lowest
+/// of them (no value-stack entry, and it is above the statement floor, pinned
+/// bindings and live slots), move the literal into that register and rewind
+/// the cursor past it. Without this, nested literals in one statement used
+/// every register until the statement ended (Test262's
+/// harness/byteConversionValues.js needed a 1295-register frame).
+fn compact_batch_literal(
+    instructions: &mut Vec<Ir3Instruction>,
+    literal: Reg,
+    operands: &[Reg],
+    value_stack: &[Reg],
+    reserved_below: Reg,
+    cursor: &mut Reg,
+    high_water: &mut Reg,
+) -> Reg {
+    let Some(&base) = operands.iter().min() else {
+        return literal;
+    };
+    if base >= literal
+        || base < reserved_below
+        || value_stack.iter().any(|register| *register >= base)
+    {
+        return literal;
+    }
+    instructions.push(Ir3Instruction::Move {
+        dst: base,
+        src: literal,
+    });
+    *high_water = (*high_water).max(*cursor);
+    *cursor = base.saturating_add(1);
+    base
 }
 
 /// bd-9vouw.23: lowest register a statement-boundary rewind may return to

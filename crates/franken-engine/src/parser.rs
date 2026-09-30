@@ -8335,6 +8335,25 @@ fn parse_comma_separated_exprs(
     Ok(exprs)
 }
 
+/// ES2021 NumericLiteralSeparator placement in a literal spelling without
+/// its sign: a literal starts with a digit (or `.` for `.5`), and every `_`
+/// sits between two digits (`1_000`, `0xFF_FF`, `1_000n`). `_n`, `_1` and
+/// `_0x1f` are identifiers, not literals: stripping their underscores used
+/// to read `_n` as `0n` and `_0x1f` as 31.
+fn numeric_separators_are_valid(literal: &str) -> bool {
+    let bytes = literal.as_bytes();
+    if !bytes.contains(&b'_') {
+        return true;
+    }
+    bytes.first().is_some_and(u8::is_ascii_digit)
+        && bytes.iter().enumerate().all(|(index, &byte)| {
+            byte != b'_'
+                || (index > 0
+                    && bytes[index - 1].is_ascii_hexdigit()
+                    && bytes.get(index + 1).is_some_and(u8::is_ascii_hexdigit))
+        })
+}
+
 fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
     // Accept an explicit `+` or `-` sign prefix. try_parse_unary_prefix
     // intentionally skips unary +/- when the next char is a digit so the
@@ -8351,7 +8370,7 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
         (false, input)
     };
 
-    if digits.is_empty() {
+    if digits.is_empty() || !numeric_separators_are_valid(digits) {
         return None;
     }
 
@@ -8419,7 +8438,7 @@ fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
     let digits = digits.strip_suffix('n')?;
     // `e`/`E` are hex digits (`0xFEn`); exponents are rejected by the decimal
     // branch below, which accepts only digits (bd-6vl81).
-    if digits.is_empty() || digits.contains('.') {
+    if digits.is_empty() || digits.contains('.') || !numeric_separators_are_valid(digits) {
         return None;
     }
 
@@ -8523,6 +8542,10 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
     }
 
     // Strip numeric separators
+    let unsigned = trimmed.strip_prefix(['-', '+']).unwrap_or(trimmed);
+    if !numeric_separators_are_valid(unsigned) {
+        return None;
+    }
     let cleaned: String;
     let digits_ref = if trimmed.contains('_') {
         cleaned = trimmed.replace('_', "");
@@ -16815,6 +16838,29 @@ mod tests {
     fn parse_i64_numeric_literal_separators() {
         assert_eq!(parse_i64_numeric_literal("1_000"), Some(1000));
         assert_eq!(parse_i64_numeric_literal("0xFF_FF"), Some(65535));
+    }
+
+    /// `_n`, `_1`, `_0x1f` and `__n` are identifiers: a literal starts with a
+    /// digit and a separator sits between two digits.
+    #[test]
+    fn identifiers_with_leading_underscores_are_not_numeric_literals() {
+        for spelling in ["_1", "_0x1f", "1_", "1__0", "_", "0x_1"] {
+            assert!(parse_i64_numeric_literal(spelling).is_none(), "{spelling}");
+        }
+        for spelling in ["_n", "__n", "_1n", "1_n"] {
+            assert!(
+                parse_bigint_numeric_literal(spelling).is_none(),
+                "{spelling}"
+            );
+        }
+        for spelling in ["_1.5", "1_.5", "-_2.5"] {
+            assert!(parse_f64_numeric_literal(spelling).is_none(), "{spelling}");
+        }
+        assert_eq!(
+            parse_bigint_numeric_literal("1_000n").as_deref(),
+            Some("1000")
+        );
+        assert_eq!(parse_f64_numeric_literal("1_000.5"), Some(1000.5));
     }
 
     #[test]

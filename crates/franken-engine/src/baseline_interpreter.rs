@@ -51986,10 +51986,77 @@ impl InterpreterCore {
             ref function if function.is_callable() => Ok(Value::Bool(
                 self.function_has_property(module, function, &key)?,
             )),
+            // Promises, generators, iterators and async objects are objects
+            // without a heap backing: [[HasProperty]] sees the members their
+            // [[Get]] supplies, then their prototype's chain. lodash tests
+            // `Symbol.toStringTag in Object(Promise.resolve())` at load, and
+            // every such `in` threw "expected object, got object".
+            ref object_like @ (Value::Promise(_)
+            | Value::Generator(_)
+            | Value::AsyncGeneratorObject(_)
+            | Value::Iterator(_)
+            | Value::AsyncFunctionObject(_)) => {
+                let supplied = match object_like {
+                    Value::Promise(_) => key.as_str().is_some_and(|name| {
+                        !matches!(Self::promise_property_value(name), Value::Undefined)
+                    }),
+                    Value::Generator(_) | Value::AsyncGeneratorObject(_) => match &key {
+                        RuntimePropertyKey::String(_) => key
+                            .as_str()
+                            .is_some_and(|name| matches!(name, "next" | "return" | "throw")),
+                        RuntimePropertyKey::Symbol(symbol) => {
+                            let iterator = if matches!(object_like, Value::Generator(_)) {
+                                WellKnownSymbol::Iterator
+                            } else {
+                                WellKnownSymbol::AsyncIterator
+                            };
+                            *symbol == iterator.id()
+                        }
+                    },
+                    Value::Iterator(handle) => !matches!(
+                        self.iterator_runtime_property_value(*handle, &key),
+                        Value::Undefined
+                    ),
+                    _ => false,
+                };
+                if supplied {
+                    return Ok(Value::Bool(true));
+                }
+                if matches!(object_like, Value::Promise(_))
+                    && let Some(&promise_prototype) = self.builtin_prototypes.get("Promise")
+                {
+                    return Ok(Value::Bool(self.proxy_aware_has_runtime_property(
+                        Some(module),
+                        promise_prototype,
+                        &key,
+                        0,
+                    )?));
+                }
+                Ok(Value::Bool(
+                    self.object_prototype_has_property(module, &key)?,
+                ))
+            }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
                 got: other.type_name().to_string(),
             }),
+        }
+    }
+
+    /// Whether Object.prototype (allocated, or the builtins it supplies
+    /// virtually) has `key`.
+    fn object_prototype_has_property(
+        &mut self,
+        module: &Ir3Module,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        match self.builtin_prototypes.get("Object").copied() {
+            Some(object_prototype) => {
+                self.proxy_aware_has_runtime_property(Some(module), object_prototype, key, 0)
+            }
+            None => Ok(key.as_str().is_some_and(|name| {
+                name == "constructor" || Self::object_prototype_method(name).is_some()
+            })),
         }
     }
 
@@ -52036,14 +52103,7 @@ impl InterpreterCore {
         if let Some(&function_prototype) = self.builtin_prototypes.get("Function") {
             return self.proxy_aware_has_runtime_property(Some(module), function_prototype, key, 0);
         }
-        match self.builtin_prototypes.get("Object").copied() {
-            Some(object_prototype) => {
-                self.proxy_aware_has_runtime_property(Some(module), object_prototype, key, 0)
-            }
-            None => Ok(key.as_str().is_some_and(|name| {
-                name == "constructor" || Self::object_prototype_method(name).is_some()
-            })),
-        }
+        self.object_prototype_has_property(module, key)
     }
 
     fn derive_iteration_engine_id(&self, label: &str, canonical: String) -> EngineObjectId {

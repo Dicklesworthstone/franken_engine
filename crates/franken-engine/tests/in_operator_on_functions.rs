@@ -5,6 +5,12 @@
 //! (`'call' in f` was false), claimed a `prototype` for arrows, and failed
 //! with "expected object, got function" on builtins (`'from' in Array`).
 //! Expected lines are Node v22.2.0's (`node -e`).
+//!
+//! The same held for promises, generators, async generators and builtin
+//! iterators, which are objects in JS but not heap objects here: `in` threw
+//! "expected object, got object". lodash's getTag evaluates
+//! `Symbol.toStringTag in Object(value)` for every value it inspects, so any
+//! lodash call that saw a promise threw.
 
 #![forbid(unsafe_code)]
 
@@ -38,6 +44,38 @@ const CASES: &[(&str, &str, &str)] = &[
         "true false true",
     ),
 ];
+
+/// Object-like values without a heap object: what they supply themselves
+/// (promise methods, generator next/return/throw and @@iterator, iterator
+/// methods) and what they inherit from Object.prototype.
+const OBJECT_LIKE_CASES: &[(&str, &str, &str)] = &[
+    (
+        "in_promise",
+        r#"var p = Promise.resolve(); console.log(['then' in p,'catch' in p,'finally' in p,'x' in p,'hasOwnProperty' in p,'constructor' in p].join());"#,
+        "true,true,true,false,true,true",
+    ),
+    (
+        "in_generator",
+        r#"function* g() { yield 1; } var it = g(); console.log(['next' in it,'return' in it,'throw' in it, Symbol.iterator in it,'x' in it,'toString' in it].join());"#,
+        "true,true,true,true,false,true",
+    ),
+    (
+        "in_async_generator",
+        r#"async function* ag() { yield 1; } var a = ag(); console.log(['next' in a, Symbol.asyncIterator in a, 'x' in a, 'hasOwnProperty' in a].join());"#,
+        "true,true,false,true",
+    ),
+    (
+        "in_builtin_iterators",
+        r#"var it = [1, 2][Symbol.iterator](); var m = new Map([[1, 2]]).entries(); console.log(['next' in it, Symbol.iterator in it, 'x' in it, 'next' in m, 'toString' in m].join());"#,
+        "true,true,false,true,true",
+    ),
+    (
+        "lodash_get_tag_probe",
+        r#"var tag = Symbol.toStringTag in Object(Promise.resolve()); console.log(typeof tag);"#,
+        "boolean",
+    ),
+];
+
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
@@ -80,10 +118,9 @@ fn console_output(source: &str) -> Result<String, String> {
         .join("\n"))
 }
 
-#[test]
-fn in_operator_on_functions_matches_node() {
+fn assert_cases_match_node(cases: &[(&str, &str, &str)]) {
     let mut mismatches = Vec::new();
-    for (name, source, node) in CASES {
+    for (name, source, node) in cases {
         match console_output(source) {
             Ok(output) if output == *node => {}
             other => mismatches.push(format!("{name}: node {node:?}, got {other:?}")),
@@ -93,7 +130,17 @@ fn in_operator_on_functions_matches_node() {
         mismatches.is_empty(),
         "{} of {} programs differ from Node:\n{}",
         mismatches.len(),
-        CASES.len(),
+        cases.len(),
         mismatches.join("\n")
     );
+}
+
+#[test]
+fn in_operator_on_functions_matches_node() {
+    assert_cases_match_node(CASES);
+}
+
+#[test]
+fn in_operator_on_object_like_values_matches_node() {
+    assert_cases_match_node(OBJECT_LIKE_CASES);
 }

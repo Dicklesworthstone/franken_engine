@@ -3498,6 +3498,11 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                 }
             }
             ';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                // `if (a) x(); else y();`: an `else` never starts a statement,
+                // so this `;` ends the consequent, not the if statement.
+                if starts_with_keyword(line[index + ch.len_utf8()..].trim_start(), "else") {
+                    continue;
+                }
                 push_segment(&mut out, line, segment_start, index);
                 segment_start = index.saturating_add(ch.len_utf8());
             }
@@ -3638,10 +3643,14 @@ fn parse_statement_inner(
         || statement.starts_with("return ")
         || statement.starts_with("return;")
         || statement.starts_with("return(")
+        || keyword_followed_by_expression_start(statement, "return")
     {
         return self::parse_return_statement(statement, span, context);
     }
-    if statement.starts_with("throw ") || statement.starts_with("throw(") {
+    if statement.starts_with("throw ")
+        || statement.starts_with("throw(")
+        || keyword_followed_by_expression_start(statement, "throw")
+    {
         return self::parse_throw_statement(statement, span, context);
     }
     if statement.starts_with("try ") || statement.starts_with("try{") {
@@ -9702,16 +9711,6 @@ fn strip_statement_label(text: &str) -> Option<&str> {
     after.trim_start().strip_prefix(':').map(str::trim_start)
 }
 
-/// `text` starts with `keyword` as a whole word.
-fn starts_with_keyword(text: &str, keyword: &str) -> bool {
-    text.strip_prefix(keyword).is_some_and(|after| {
-        after
-            .chars()
-            .next()
-            .is_none_or(|ch| !(ch == '_' || ch == '$' || ch.is_alphanumeric()))
-    })
-}
-
 /// ES2020 13.6, 13.7, 13.11, 13.13 with Annex B.3.2 / B.3.4: an if, loop,
 /// `with` or labelled body is a Statement, not a Declaration. Sloppy code may
 /// use a plain function declaration as an unlabelled if body or as a
@@ -9964,7 +9963,17 @@ fn parse_if_statement(
     } else {
         // Single-statement consequent: find "else" boundary.
         if let Some(else_idx) = find_top_level_else(rest) {
-            let cons = rest[..else_idx].trim().to_string();
+            // The statement splitter keeps `if (a) x(); else y();` together,
+            // so the consequent arrives with the `;` that ends it; parsed as
+            // part of an expression it became a Raw node that threw a
+            // SyntaxError only when the branch ran. A lone `;` is the empty
+            // statement and stays.
+            let cons = rest[..else_idx].trim();
+            let cons = match cons.strip_suffix(';') {
+                Some(body) if !body.trim().is_empty() => body.trim_end(),
+                _ => cons,
+            }
+            .to_string();
             let alt = rest[else_idx + 4..].trim().to_string();
             (cons, Some(alt))
         } else {
@@ -10009,11 +10018,28 @@ fn parse_if_statement(
     }))
 }
 
+/// `return` / `throw` written directly against a token that can only start
+/// an expression, as minifiers emit them: `return'x'`, `return"y"`,
+/// `return[1]`, `return{a:1}`, `return!0`, `return-1`, `throw"e"`,
+/// `return/re/.test(s)`. These fell through to expression parsing and threw
+/// "unsupported expression syntax" when the function ran. A line break after
+/// the keyword is not included: `return` + newline is a restricted
+/// production (ASI returns undefined).
+fn keyword_followed_by_expression_start(statement: &str, keyword: &str) -> bool {
+    statement.strip_prefix(keyword).is_some_and(|after| {
+        after.starts_with(['\'', '"', '`', '[', '{', '!', '-', '+', '~', '/', '\t'])
+    })
+}
+
 /// Find the index of a top-level "else" keyword (not inside braces/parens/quotes).
+/// An `else` belongs to the nearest unmatched `if` (ES2020 13.6), so one that
+/// closes an unbraced nested `if` in the consequent (`if (a) if (b) x; else
+/// y;`) is skipped: the outer `if` then has no `else`.
 fn find_top_level_else(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut depth_brace: i64 = 0;
     let mut depth_paren: i64 = 0;
+    let mut unmatched_ifs = 0usize;
     let mut quotes = QuoteState::default();
     let mut i = 0;
     while i < bytes.len() {
@@ -10055,17 +10081,28 @@ fn find_top_level_else(s: &str) -> Option<usize> {
             }
             _ => {}
         }
-        if depth_brace == 0
-            && depth_paren == 0
-            && i + 4 <= bytes.len()
-            && &bytes[i..i + 4] == b"else"
-        {
-            // Ensure "else" is a keyword boundary.
-            let before_ok = i == 0 || !is_identifier_continue(bytes[i - 1] as char);
-            let after_ok = i + 4 >= bytes.len() || !is_identifier_continue(bytes[i + 4] as char);
-            if before_ok && after_ok {
+        let keyword_at = |keyword: &[u8]| {
+            depth_brace == 0
+                && depth_paren == 0
+                && bytes[i..].starts_with(keyword)
+                && (i == 0
+                    || !(is_identifier_continue(bytes[i - 1] as char) || bytes[i - 1] == b'.'))
+                && bytes
+                    .get(i + keyword.len())
+                    .is_none_or(|next| !is_identifier_continue(*next as char))
+        };
+        if keyword_at(b"if") {
+            unmatched_ifs += 1;
+            i += 2;
+            continue;
+        }
+        if keyword_at(b"else") {
+            if unmatched_ifs == 0 {
                 return Some(i);
             }
+            unmatched_ifs -= 1;
+            i += 4;
+            continue;
         }
         i += 1;
     }

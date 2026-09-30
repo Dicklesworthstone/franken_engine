@@ -136,3 +136,49 @@ fn carried_values_are_reclaimed() {
                   const f = await Promise.resolve(() => 1); s += f(); } console.log(s); })();";
     assert_eq!(console_lines(source, Some(64)), vec!["3000".to_string()]);
 }
+
+/// Promise.all, allSettled, race and any take any iterable (ES2020
+/// 25.6.4.1 GetIterator): a Set, a generator, a Map's `values()`. A
+/// non-iterable argument or a throwing iterator rejects the returned
+/// promise. The combinators read an object's indexed properties instead,
+/// so `Promise.all(set)` resolved to `[]`, a generator or iterator was one
+/// input, and `Promise.all(5)` resolved to `[5]`. Node v22.2.0 output.
+#[test]
+fn combinators_take_any_iterable() {
+    let cases = [
+        (
+            "Promise.all(new Set([1, Promise.resolve(2)])).then((v) => console.log('set', v.join()));",
+            "set 1,2",
+        ),
+        (
+            "function* g() { yield 1; yield Promise.resolve(2); } \
+             Promise.all(g()).then((v) => console.log('gen', v.join()));",
+            "gen 1,2",
+        ),
+        (
+            "var m = new Map([['a', 1]]); Promise.allSettled(m.values()).then((v) => \
+             console.log('settled', v.length, v[0].status, v[0].value));",
+            "settled 1 fulfilled 1",
+        ),
+        (
+            "Promise.race(new Set([new Promise(() => {}), 'now'])).then((v) => console.log('race', v));",
+            "race now",
+        ),
+        (
+            "Promise.any(new Set([Promise.reject(1), 2])).then((v) => console.log('any', v));",
+            "any 2",
+        ),
+        (
+            "Promise.all(5).catch((e) => console.log('not iterable', e instanceof TypeError));",
+            "not iterable true",
+        ),
+        (
+            "var it = { [Symbol.iterator]() { return { next() { throw new Error('boom'); } }; } }; \
+             Promise.all(it).catch((e) => console.log('threw', e.message));",
+            "threw boom",
+        ),
+    ];
+    for (source, node) in cases {
+        assert_eq!(console_lines(source, None).join("\n"), node, "`{source}`");
+    }
+}

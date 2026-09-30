@@ -58708,7 +58708,8 @@ impl InterpreterCore {
     }
 
     fn collect_promise_combinator_inputs(
-        &self,
+        &mut self,
+        module: Option<&Ir3Module>,
         args: RegRange,
     ) -> Result<Vec<Value>, InterpreterError> {
         if args.count == 0 {
@@ -58716,10 +58717,7 @@ impl InterpreterCore {
         }
         let first = self.read_reg(args.start)?;
         if args.count == 1 {
-            if let Value::Object(id) = first {
-                return Ok(self.read_array_like_values(id));
-            }
-            return Ok(vec![first]);
+            return self.promise_combinator_iterable_values(module, first);
         }
         let mut values = Vec::with_capacity(args.count as usize);
         for i in 0..args.count {
@@ -58733,6 +58731,59 @@ impl InterpreterCore {
             values.push(self.read_reg(reg)?);
         }
         Ok(values)
+    }
+
+    /// IterableToList of a Promise combinator's argument (ES2020 25.6.4.1
+    /// steps 3-5): an ordinary array with the builtin iterator is read
+    /// directly; anything else goes through the for-of protocol, so a Set, a
+    /// Map's `values()`, a generator or a user iterable work, and a
+    /// non-iterable is an error the caller turns into a rejection. (An
+    /// object's indexed properties were read instead, so `Promise.all(set)`
+    /// resolved to `[]`, and a non-object, a generator included, was a
+    /// single input.)
+    fn promise_combinator_iterable_values(
+        &mut self,
+        module: Option<&Ir3Module>,
+        iterable: Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        if let Value::Object(array_id) = iterable
+            && self
+                .heap
+                .get(array_id.0 as usize)
+                .is_some_and(|object| object.is_array)
+            && !self.array_from_has_explicit_iterator(array_id)?
+        {
+            return self.array_like_values(array_id);
+        }
+        let iterator = self.init_for_of_iterator(module, iterable)?;
+        let mut values = Vec::new();
+        while let Some(value) = self.advance_for_of_iterator(module, iterator.clone())? {
+            values.push(value);
+        }
+        Ok(values)
+    }
+
+    /// IfAbruptRejectPromise for a combinator's iterable: a guest-visible
+    /// failure (not iterable, a throwing iterator) rejects the returned
+    /// promise instead of throwing; a resource refusal stays an interpreter
+    /// error.
+    fn reject_promise_combinator_input(
+        &mut self,
+        error: InterpreterError,
+    ) -> Result<Value, InterpreterError> {
+        let (thrown, label) = if matches!(error, InterpreterError::UncaughtException { .. }) {
+            match self.take_pending_exception_slot() {
+                Some(slot) => slot,
+                None => return Err(error),
+            }
+        } else if Self::js_catchable_error_name(&error).is_some() {
+            (self.native_error_to_thrown_value(&error)?, Label::Public)
+        } else {
+            return Err(error);
+        };
+        let promise = self.create_promise()?;
+        self.reject_promise(promise, Self::value_to_js_value(&thrown), label)?;
+        Ok(Value::Promise(promise.0))
     }
 
     fn read_array_like_values(&self, obj_id: ObjectId) -> Vec<Value> {
@@ -59400,8 +59451,12 @@ impl InterpreterCore {
         &mut self,
         kind: PromiseCombinatorKind,
         args: RegRange,
+        module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        let inputs = self.collect_promise_combinator_inputs(args)?;
+        let inputs = match self.collect_promise_combinator_inputs(module, args) {
+            Ok(inputs) => inputs,
+            Err(error) => return self.reject_promise_combinator_input(error),
+        };
         for input in &inputs {
             if let Value::Promise(handle) = input {
                 // The combinator observes every input's rejection, as the
@@ -59960,7 +60015,7 @@ impl InterpreterCore {
         &mut self,
         cap: &str,
         args: RegRange,
-        _module: Option<&Ir3Module>,
+        module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         let label = self.clone_active_execution_context_label()?;
         match cap {
@@ -60096,12 +60151,18 @@ impl InterpreterCore {
                     self.register_promise_then(handle, then_finally, catch_finally, label)?;
                 Ok(Value::Promise(result.0))
             }
-            "promise:all" => self.dispatch_promise_combinator(PromiseCombinatorKind::All, args),
-            "promise:race" => self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args),
-            "promise:allSettled" => {
-                self.dispatch_promise_combinator(PromiseCombinatorKind::AllSettled, args)
+            "promise:all" => {
+                self.dispatch_promise_combinator(PromiseCombinatorKind::All, args, module)
             }
-            "promise:any" => self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args),
+            "promise:race" => {
+                self.dispatch_promise_combinator(PromiseCombinatorKind::Race, args, module)
+            }
+            "promise:allSettled" => {
+                self.dispatch_promise_combinator(PromiseCombinatorKind::AllSettled, args, module)
+            }
+            "promise:any" => {
+                self.dispatch_promise_combinator(PromiseCombinatorKind::Any, args, module)
+            }
             _ => {
                 // Unknown promise sub-capability — return undefined.
                 Ok(Value::Undefined)
@@ -82606,7 +82667,7 @@ impl InterpreterCore {
             }
 
             "builtin:PromiseAll" => {
-                self.dispatch_promise_combinator(PromiseCombinatorKind::All, args)
+                self.dispatch_promise_combinator(PromiseCombinatorKind::All, args, module)
             }
 
             "builtin:FunctionPrototypeApply" => {
@@ -110918,7 +110979,7 @@ mod async_runtime_tests_current {
         let combinator_baseline = combinator_probe.estimated_memory_bytes();
         let combinator_snapshot_bytes = combinator_probe.promise_runtime_memory_bytes();
         combinator_probe
-            .dispatch_promise_combinator(PromiseCombinatorKind::All, combinator_args)
+            .dispatch_promise_combinator(PromiseCombinatorKind::All, combinator_args, None)
             .expect("unbounded Promise.all probe");
         let combinator_delta = combinator_probe
             .estimated_memory_bytes()
@@ -110931,8 +110992,11 @@ mod async_runtime_tests_current {
         combinator_one_short.config.max_total_memory_bytes =
             combinator_one_short_baseline + combinator_peak_delta - 1;
         assert!(matches!(
-            combinator_one_short
-                .dispatch_promise_combinator(PromiseCombinatorKind::All, combinator_args),
+            combinator_one_short.dispatch_promise_combinator(
+                PromiseCombinatorKind::All,
+                combinator_args,
+                None
+            ),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(combinator_one_short.promise_store.len(), 2);
@@ -110949,7 +111013,7 @@ mod async_runtime_tests_current {
         combinator_exact.config.max_total_memory_bytes =
             combinator_exact_baseline + combinator_peak_delta;
         combinator_exact
-            .dispatch_promise_combinator(PromiseCombinatorKind::All, combinator_args)
+            .dispatch_promise_combinator(PromiseCombinatorKind::All, combinator_args, None)
             .expect("Promise.all fits exact physical ceiling");
         assert_eq!(combinator_exact.promise_store.len(), 3);
         assert_eq!(combinator_exact.promise_combinators.len(), 1);

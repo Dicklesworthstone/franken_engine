@@ -7503,8 +7503,25 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     // `performance.now()` a TypeError on undefined). Shared with the
     // function-body lowering via `PREDECLARED_RUNTIME_GLOBALS` so the two paths
     // cannot drift.
+    //
+    // A binding the program declares with `let`, `const`, `function`, a
+    // parameter or an import is its own, not the runtime global: routing it
+    // made a top-level block's `{ const performance = 'x'; }` overwrite the
+    // injected global (`typeof performance` was then "string" after the
+    // block). Only a `var` or implicit binding of the name is routed.
     for &global_name in PREDECLARED_RUNTIME_GLOBALS {
-        if let Some(binding_id) = name_to_binding_id.get(global_name) {
+        if let Some(binding_id) = name_to_binding_id.get(global_name)
+            && !matches!(
+                binding_kind_by_id.get(binding_id),
+                Some(
+                    BindingKind::Let
+                        | BindingKind::Const
+                        | BindingKind::FunctionDecl
+                        | BindingKind::Parameter
+                        | BindingKind::Import
+                )
+            )
+        {
             scoped_runtime_binding_ids.insert(*binding_id);
         }
     }

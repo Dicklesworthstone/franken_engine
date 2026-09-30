@@ -59,3 +59,20 @@ fn valid_literals_still_run() {
         Ok("true,true,true,true,true,true,true,true".to_string())
     );
 }
+
+/// `new RegExp(pattern, flags)` is a SyntaxError for invalid flags or a
+/// pattern that does not parse (ES2020 21.2.3.2.2), with the literal's
+/// rule; code validates user patterns this way. The constructor accepted
+/// anything and failed only at the first match.
+#[test]
+fn the_constructor_throws_syntax_errors() {
+    assert_eq!(
+        eval(
+            "function valid(p, f) { try { new RegExp(p, f); return true; } \
+             catch (e) { return e instanceof SyntaxError ? false : 'other'; } } \
+             [valid('['), valid('a', 'gg'), valid('(?<a>x)(?<a>y)'), valid('a('), valid('a+'), \
+             valid('\\\\d{2,}', 'giu'), valid('x', 'uv'), valid('[a-z]', 'v')].join()"
+        ),
+        Ok("false,false,false,false,true,true,false,true".to_string())
+    );
+}

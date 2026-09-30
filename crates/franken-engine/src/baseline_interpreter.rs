@@ -5858,8 +5858,9 @@ const SLOT0_STATIC_GLOBALS: [&str; 8] = [
     "Map",
     "ArrayBuffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 29] = [
+const SLOT0_STATIC_MEMBERS: [&str; 30] = [
     "keys",
+    "hasOwn",
     "values",
     "entries",
     "assign",
@@ -41156,28 +41157,11 @@ impl InterpreterCore {
                 let Some(property) = self.builtin_arg(args, 0)? else {
                     return Ok(Value::Bool(false));
                 };
-                if let Value::Object(object_id) = &receiver {
-                    self.join_pending_hostcall_stream_label(*object_id)?;
-                }
-                // A function's own properties live on its backing object; once
-                // that exists it decides, so a deleted `name` is gone
-                // (bd-9vouw.17).
-                let key = self.executable_property_key_from_value(&property);
-                let own = match self.function_own_property_exists(module, &receiver, &key)? {
-                    Some(own) => own,
-                    None => {
-                        self.object_own_property_contains(&receiver, &property)
-                            || self
-                                .function_own_property_object(module, &receiver)?
-                                .is_some_and(|backing| {
-                                    self.object_own_property_contains(
-                                        &Value::Object(backing),
-                                        &property,
-                                    )
-                                })
-                    }
-                };
-                Ok(Value::Bool(own))
+                Ok(Value::Bool(self.value_has_own_property(
+                    Some(module),
+                    &receiver,
+                    &property,
+                )?))
             }
             BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -67383,6 +67367,34 @@ impl InterpreterCore {
     /// constructor's `__values` storage, keyed by object identity. A
     /// non-object value cannot be a member: `add` throws, `has` and `delete`
     /// report false.
+    /// HasOwnProperty(O, P) for `hasOwnProperty` and `Object.hasOwn`. A
+    /// function's own properties live on its backing object; once that
+    /// exists it decides, so a deleted `name` is gone (bd-9vouw.17).
+    fn value_has_own_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        receiver: &Value,
+        property: &Value,
+    ) -> Result<bool, InterpreterError> {
+        if let Value::Object(object_id) = receiver {
+            self.join_pending_hostcall_stream_label(*object_id)?;
+        }
+        let Some(module) = module else {
+            return Ok(self.object_own_property_contains(receiver, property));
+        };
+        let key = self.executable_property_key_from_value(property);
+        if let Some(own) = self.function_own_property_exists(module, receiver, &key)? {
+            return Ok(own);
+        }
+        if self.object_own_property_contains(receiver, property) {
+            return Ok(true);
+        }
+        let backing = self.function_own_property_object(module, receiver)?;
+        Ok(backing.is_some_and(|backing| {
+            self.object_own_property_contains(&Value::Object(backing), property)
+        }))
+    }
+
     fn weakset_method(
         &mut self,
         method: &str,
@@ -79341,6 +79353,20 @@ impl InterpreterCore {
                     self.read_reg(args.start)?
                 };
                 self.object_from_entries_value(module, source)
+            }
+            // ES2022 20.1.2.13 Object.hasOwn(O, P): HasOwnProperty of
+            // ToObject(O); `null` and `undefined` are a TypeError.
+            "builtin:ObjectHasOwn" => {
+                let object = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                if matches!(object, Value::Undefined | Value::Null) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object for Object.hasOwn".to_string(),
+                        got: object.type_name().to_string(),
+                    });
+                }
+                let property = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let own = self.value_has_own_property(module, &object, &property)?;
+                Ok(Value::Bool(own))
             }
             "builtin:ObjectGroupBy" | "builtin:MapGroupBy" => {
                 self.group_by_builtin(module, args, cap == "builtin:MapGroupBy")

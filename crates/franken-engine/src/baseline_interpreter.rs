@@ -3372,6 +3372,11 @@ pub enum BuiltinFunctionKind {
     ErrorCaptureStackTrace,
     /// `ArrayBuffer.prototype.slice` (ES2020 24.1.4.3). Append only.
     ArrayBufferSlice,
+    /// `WeakRef.prototype.deref` (ES2021 26.1.3.2). Append only.
+    WeakRefDeref,
+    /// `FinalizationRegistry.prototype.register` / `unregister` (ES2021
+    /// 26.2.3); the method name travels in `module_specifier`. Append only.
+    FinalizationRegistryMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -5083,6 +5088,12 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ErrorPrototypeToString => "toString",
             BuiltinFunctionKind::ErrorCaptureStackTrace => "captureStackTrace",
             BuiltinFunctionKind::ArrayBufferSlice => "slice",
+            BuiltinFunctionKind::WeakRefDeref => "deref",
+            BuiltinFunctionKind::FinalizationRegistryMethod => ["register", "unregister"]
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("finalizationRegistryMethod"),
             // Anonymous built-in closures in the spec.
             BuiltinFunctionKind::PromiseThenFinally
             | BuiltinFunctionKind::PromiseCatchFinally
@@ -5271,6 +5282,8 @@ impl BuiltinFunction {
             K::ErrorPrototypeToString => "Error.prototype",
             K::ErrorCaptureStackTrace => "Error",
             K::ArrayBufferSlice => "ArrayBuffer.prototype",
+            K::WeakRefDeref => "WeakRef.prototype",
+            K::FinalizationRegistryMethod => "FinalizationRegistry.prototype",
             K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
             K::SetTimeout
             | K::SetInterval
@@ -39426,6 +39439,22 @@ impl InterpreterCore {
             BuiltinFunctionKind::ArrayBufferSlice => {
                 self.array_buffer_slice(receiver.unwrap_or(Value::Undefined), args)
             }
+            BuiltinFunctionKind::WeakRefDeref => {
+                self.weak_ref_deref(&receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::FinalizationRegistryMethod => {
+                let method = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.finalization_registry_method(
+                    &method,
+                    receiver.unwrap_or(Value::Undefined),
+                    args,
+                )
+            }
             BuiltinFunctionKind::ErrorCaptureStackTrace => {
                 // V8 Error.captureStackTrace(target[, constructorOpt]): give
                 // `target` a non-enumerable `stack` whose first line is
@@ -49427,10 +49456,16 @@ impl InterpreterCore {
                                 got: format!("{name} is not a constructor"),
                             });
                         }
-                        let mut result = if standard_name == Some("Proxy") {
-                            self.dispatch_builtin_hostcall("builtin:Proxy", args, Some(module))?
-                        } else {
-                            self.dispatch_builtin_function(module, builtin, args, None, None)?
+                        let mut result = match standard_name {
+                            Some(name @ ("Proxy" | "WeakRef" | "FinalizationRegistry")) => self
+                                .dispatch_builtin_hostcall(
+                                    &format!("builtin:{name}"),
+                                    args,
+                                    Some(module),
+                                )?,
+                            _ => {
+                                self.dispatch_builtin_function(module, builtin, args, None, None)?
+                            }
                         };
                         // ES2020 20.1.1.1, 21.1.1.1, 19.3.1.1: `new Number(x)`,
                         // `new String(x)` and `new Boolean(x)` wrap the converted
@@ -55742,6 +55777,17 @@ impl InterpreterCore {
             ("RegExp", "toString") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::RegExpPrototypeToString,
             )),
+            ("WeakRef", "deref") => {
+                Some(BuiltinFunction::new_kind(BuiltinFunctionKind::WeakRefDeref))
+            }
+            ("FinalizationRegistry", method @ ("register" | "unregister")) => {
+                Some(BuiltinFunction {
+                    kind: BuiltinFunctionKind::FinalizationRegistryMethod,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                    iterator_handle: None,
+                    bound_object: None,
+                })
+            }
             ("WeakSet", method @ ("add" | "has" | "delete")) => Some(BuiltinFunction {
                 kind: BuiltinFunctionKind::WeakSetMethod,
                 module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
@@ -56017,6 +56063,8 @@ impl InterpreterCore {
                 "Set" => return "Set",
                 "WeakMap" => return "WeakMap",
                 "WeakSet" => return "WeakSet",
+                "WeakRef" => return "WeakRef",
+                "FinalizationRegistry" => return "FinalizationRegistry",
                 _ => {}
             }
         }
@@ -66765,6 +66813,173 @@ impl InterpreterCore {
             }
             other => Err(InterpreterError::TypeError {
                 expected: "WeakSet method".to_string(),
+                got: other.to_string(),
+            }),
+        }
+    }
+
+    /// ES2021 CanBeHeldWeakly: an object, or a Symbol outside the global
+    /// registry (`Symbol.for`).
+    fn can_be_held_weakly(&self, value: &Value) -> bool {
+        match value {
+            Value::Symbol(symbol) => self.symbol_state.key_for(*symbol).is_none(),
+            other => other.is_object_like(),
+        }
+    }
+
+    /// `new WeakRef(target)` (ES2021 26.1.1.1). The target is held strongly:
+    /// when a target is collected is not observable, and holding it keeps
+    /// replay deterministic, so `deref()` always returns it. The slot keeps
+    /// the target register's IFC label.
+    fn construct_weak_ref(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let target = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        if !self.can_be_held_weakly(&target) {
+            return Err(InterpreterError::TypeError {
+                expected: "WeakRef target that is an object or a non-registered symbol".to_string(),
+                got: target.type_name().to_string(),
+            });
+        }
+        let label = if args.count > 0 {
+            self.get_register_label(args.start)?.clone()
+        } else {
+            Label::Public
+        };
+        let prototype = self.ensure_builtin_prototype("WeakRef")?;
+        let weak_ref = self.alloc_object_with_prototype(Some(prototype))?;
+        self.set_object_property(weak_ref, "__type".to_string(), Value::str("WeakRef"))?;
+        self.set_object_property(weak_ref, "__target".to_string(), target)?;
+        self.set_own_property_label(weak_ref, "__target", &label)?;
+        self.hide_internal_slots(weak_ref, &["__type", "__target"])?;
+        Ok(Value::Object(weak_ref))
+    }
+
+    /// `WeakRef.prototype.deref()` (ES2021 26.1.3.2).
+    fn weak_ref_deref(&self, receiver: &Value) -> Result<Value, InterpreterError> {
+        let target = match receiver {
+            Value::Object(weak_ref) => self
+                .heap
+                .get(weak_ref.0 as usize)
+                .filter(|object| {
+                    matches!(
+                        object.properties.get("__type"),
+                        Some(Value::Str(tag)) if tag.as_ref() == "WeakRef"
+                    )
+                })
+                .and_then(|object| object.properties.get("__target").cloned()),
+            _ => None,
+        };
+        target.ok_or_else(|| InterpreterError::TypeError {
+            expected: "WeakRef receiver for WeakRef.prototype.deref".to_string(),
+            got: receiver.type_name().to_string(),
+        })
+    }
+
+    /// `new FinalizationRegistry(cleanup)` (ES2021 26.2.1.1). Cleanup
+    /// callbacks never run: collection is not observable, and a registry that
+    /// never calls back is conformant and replay-deterministic. It keeps only
+    /// the unregister tokens, for `unregister`'s result.
+    fn construct_finalization_registry(
+        &mut self,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let cleanup = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        if !cleanup.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable FinalizationRegistry cleanup".to_string(),
+                got: cleanup.type_name().to_string(),
+            });
+        }
+        let prototype = self.ensure_builtin_prototype("FinalizationRegistry")?;
+        let registry = self.alloc_object_with_prototype(Some(prototype))?;
+        let tokens = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(
+            registry,
+            "__type".to_string(),
+            Value::str("FinalizationRegistry"),
+        )?;
+        self.set_object_property(registry, "__tokens".to_string(), Value::Object(tokens))?;
+        self.hide_internal_slots(registry, &["__type", "__tokens"])?;
+        Ok(Value::Object(registry))
+    }
+
+    /// `register(target, holdings[, token])` and `unregister(token)` (ES2021
+    /// 26.2.3.2-3).
+    fn finalization_registry_method(
+        &mut self,
+        method: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let tokens = match &receiver {
+            Value::Object(registry) => {
+                self.collection_storage_id(*registry, "FinalizationRegistry", "__tokens")
+            }
+            _ => None,
+        }
+        .ok_or_else(|| InterpreterError::TypeError {
+            expected: format!(
+                "FinalizationRegistry receiver for FinalizationRegistry.prototype.{method}"
+            ),
+            got: receiver.type_name().to_string(),
+        })?;
+        let invalid_token = |token: &Value| InterpreterError::TypeError {
+            expected: "unregister token that is an object or a non-registered symbol".to_string(),
+            got: token.type_name().to_string(),
+        };
+        match method {
+            "register" => {
+                let target = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let holdings = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let token = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
+                if !self.can_be_held_weakly(&target) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "FinalizationRegistry target that is an object or a \
+                                   non-registered symbol"
+                            .to_string(),
+                        got: target.type_name().to_string(),
+                    });
+                }
+                if Self::collection_key_repr(&target) == Self::collection_key_repr(&holdings) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "FinalizationRegistry holdings that are not the target"
+                            .to_string(),
+                        got: "the target itself".to_string(),
+                    });
+                }
+                match &token {
+                    Value::Undefined => {}
+                    token if self.can_be_held_weakly(token) => {
+                        self.set_object_property(
+                            tokens,
+                            Self::collection_key_repr(token),
+                            token.clone(),
+                        )?;
+                    }
+                    token => return Err(invalid_token(token)),
+                }
+                Ok(Value::Undefined)
+            }
+            "unregister" => {
+                let token = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                if !self.can_be_held_weakly(&token) {
+                    return Err(invalid_token(&token));
+                }
+                let key =
+                    RuntimePropertyKey::String(JsString::from(Self::collection_key_repr(&token)));
+                Ok(Value::Bool(
+                    self.remove_object_runtime_property(tokens, &key)?,
+                ))
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "FinalizationRegistry method".to_string(),
                 got: other.to_string(),
             }),
         }
@@ -80688,6 +80903,8 @@ impl InterpreterCore {
                 }
                 outcome
             }
+            "builtin:WeakRef" => self.construct_weak_ref(args),
+            "builtin:FinalizationRegistry" => self.construct_finalization_registry(args),
             "builtin:WeakSet" => {
                 // WeakSet([iterable]) constructor implementation (simplified)
                 let weakset_prototype = self.ensure_builtin_prototype("WeakSet")?;
@@ -92558,10 +92775,15 @@ impl InterpreterCore {
             "Map" => self.dispatch_builtin_hostcall("builtin:Map", args, Some(module)),
             "Set" => self.dispatch_builtin_hostcall("builtin:Set", args, Some(module)),
             // ES2020 26.2.1.1: Proxy called without `new` throws; the
-            // Construct arm builds proxies.
+            // Construct arm builds proxies. So do WeakRef and
+            // FinalizationRegistry (ES2021 26.1.1.1, 26.2.1.1).
             "Proxy" => Err(InterpreterError::TypeError {
                 expected: "new Proxy(target, handler)".to_string(),
                 got: "Proxy called without new".to_string(),
+            }),
+            "WeakRef" | "FinalizationRegistry" => Err(InterpreterError::TypeError {
+                expected: format!("new {name}(...)"),
+                got: format!("Constructor {name} requires 'new'"),
             }),
             "Symbol" => self.dispatch_builtin_hostcall("builtin:Symbol", args, Some(module)),
             // `RegExp(p, f)` and `new R(p, f)` through a RegExp value: the same
@@ -92792,8 +93014,16 @@ impl InterpreterCore {
             "Promise" => defined(Self::promise_property_value(key)),
             // DataView: the accessors instances already expose, served from
             // the canonical prototype too.
-            "Map" | "Set" | "Date" | "RegExp" | "WeakMap" | "WeakSet" | "DataView"
-            | "ArrayBuffer" => {
+            "Map"
+            | "Set"
+            | "Date"
+            | "RegExp"
+            | "WeakMap"
+            | "WeakSet"
+            | "DataView"
+            | "ArrayBuffer"
+            | "WeakRef"
+            | "FinalizationRegistry" => {
                 Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)
             }
             _ => None,

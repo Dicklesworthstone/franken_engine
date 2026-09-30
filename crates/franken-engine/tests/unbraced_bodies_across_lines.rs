@@ -156,6 +156,16 @@ fn do_while_as_an_unbraced_body() {
             "5,5",
         ),
         ("var x = 0;\nl: do x++; while (x < 2);\nx;", "2"),
+        // The do statement is the body of the last `else if` (pako's
+        // deflate): its `while` lines up with the else clause, not the if.
+        (
+            "var count = 3, out = [];\nif (false) out.push('a');\nelse if (count > 0)\n  do\n    out.push(count);\n  while (--count !== 0);\nelse out.push('z');\nout.join();",
+            "3,2,1",
+        ),
+        (
+            "var n = 2, o = [];\nfor (let i = 0; i < 2; i++)\n  if (i) o.push('x');\n  else if (n)\n    do\n      o.push(n);\n    while (--n);\n  else o.push('z');\no.join();",
+            "2,1,x",
+        ),
     ] {
         assert_eq!(
             eval_to_string(source),

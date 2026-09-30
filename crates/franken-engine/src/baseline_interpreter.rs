@@ -5393,7 +5393,7 @@ impl BuiltinFunction {
             name => REGEXP_SYMBOL_METHODS
                 .iter()
                 .find(|(key, _)| *key == name)
-                .map_or(name, |(_, spec_name)| spec_name),
+                .map_or(name, |(_, spec_name)| *spec_name),
         }
     }
 }

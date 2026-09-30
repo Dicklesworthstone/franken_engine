@@ -124,6 +124,8 @@ const ACCEPTED: &[&str] = &[
     "var i = [() => {}, 1];",
     "var c, j = c ? () => {} : 0;",
     "(() => {})();",
+    "var f1, g1; if (f1) f1 = () => {}; else g1 = () => {};",
+    "class K { h = () => {}; m() {} }",
     "'use strict'; var o = {}; o.eval = 2; o.arguments = 3;",
     "for (const x of [1]) {}",
     "function g2(a, b = a, ...rest) {}",

@@ -974,31 +974,24 @@ fn new_with_a_parenthesised_callee_and_no_argument_list() {
 }
 
 // ---------------------------------------------------------------------------
-// Class fields and private names (bd-9vouw.64): refused, never dropped
+// Class fields (bd-9vouw.64): public fields parse, private names are refused
+// (never dropped)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn class_fields_and_private_names_are_refused_not_dropped() {
+fn private_names_are_refused_not_dropped() {
     for source in [
-        "class A { y = 2; }",
-        "class A { y = 2; m() { return 1; } }",
-        "class A { static s = 3; }",
-        "class A { x }",
-        "class A { a = 1\n b = 2 }",
-        "class A { handler = () => { return 1; }; }",
-        "class A { 'q' = 1; }",
-        "class A { [k] = 1; }",
-        "class A { get = 1; }",
         "class A { #x = 1; get x() { return this.#x; } }",
         "class A { #m() {} }",
         "class A { static #s() {} }",
+        "class A { y = 1; #z; }",
     ] {
         let error = parser().parse(source, ParseGoal::Script).expect_err(source);
         assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
         assert!(
             error
                 .message
-                .contains("class fields and private names are not supported yet"),
+                .contains("class private names are not supported yet"),
             "{source}: {}",
             error.message
         );
@@ -1016,4 +1009,114 @@ fn class_fields_and_private_names_are_refused_not_dropped() {
         panic!("expected a class declaration");
     };
     assert_eq!(class.body.len(), 8);
+}
+
+/// ES2022 public fields become `MethodKind::Field` members in source order,
+/// including fields separated only by line breaks (ASI), a field named `get`,
+/// arrow initializers whose body contains `}`, and an initializer continued
+/// after an object literal. A derived class with instance fields and no
+/// constructor gets the implicit `constructor(...args) { super(...args); }`.
+#[test]
+fn public_class_fields_parse_as_field_members() {
+    use frankenengine_engine::ast::MethodKind;
+    let cases: [(&str, &[(&str, bool)]); 8] = [
+        ("class A { y = 2; }", &[("y", false)]),
+        (
+            "class A { y = 2; m() { return 1; } }",
+            &[("y", false), ("m", false)],
+        ),
+        ("class A { static s = 3; }", &[("s", true)]),
+        ("class A { x }", &[("x", false)]),
+        (
+            "class A { a = 1\n b = 2\n m() {}\n static c }",
+            &[("a", false), ("b", false), ("m", false), ("c", true)],
+        ),
+        (
+            "class A { handler = () => { return 1; }; }",
+            &[("handler", false)],
+        ),
+        (
+            "class A { 'q' = 1; get = 1; o = { v: 1 }.v; }",
+            &[("q", false), ("get", false), ("o", false)],
+        ),
+        (
+            "class A { t = cond\n ? 1\n : 2\n u = a\n .b }",
+            &[("t", false), ("u", false)],
+        ),
+    ];
+    for (source, expected) in cases {
+        let tree = parser()
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        let Statement::ClassDeclaration(class) = &tree.body[0] else {
+            panic!("expected a class declaration: {source}");
+        };
+        let members: Vec<(String, bool, bool)> = class
+            .body
+            .iter()
+            .map(|member| {
+                let name = match &member.key {
+                    Expression::Identifier(name) => name.clone(),
+                    Expression::StringLiteral(name) => name.to_string(),
+                    other => format!("{other:?}"),
+                };
+                (name, member.is_static, member.kind == MethodKind::Field)
+            })
+            .collect();
+        assert_eq!(members.len(), expected.len(), "{source}: {members:?}");
+        for ((name, is_static, _), (expected_name, expected_static)) in members.iter().zip(expected)
+        {
+            assert_eq!(
+                (name.as_str(), *is_static),
+                (*expected_name, *expected_static),
+                "{source}"
+            );
+        }
+        assert!(
+            members
+                .iter()
+                .filter(|(name, ..)| name != "m")
+                .all(|(_, _, is_field)| *is_field),
+            "{source}: {members:?}"
+        );
+    }
+
+    let tree = parser()
+        .parse("class B extends A { x = 1; }", ParseGoal::Script)
+        .expect("a derived class with a field parses");
+    let Statement::ClassDeclaration(class) = &tree.body[0] else {
+        panic!("expected a class declaration");
+    };
+    assert_eq!(class.body.len(), 2);
+    assert_eq!(class.body[0].kind, MethodKind::Constructor);
+    assert_eq!(class.body[1].kind, MethodKind::Field);
+
+    for source in [
+        "class A { constructor = 1; }",
+        "class A { 'constructor'; }",
+        "class A { static prototype = 1; }",
+    ] {
+        parser().parse(source, ParseGoal::Script).expect_err(source);
+    }
+}
+
+#[test]
+fn for_header_with_a_fourth_part_is_a_parse_error() {
+    // Test262 S12.6.3_A7.1_T1: `for(a; b; c; d)` is an early SyntaxError. The
+    // fourth part used to stay in the update clause, which became an
+    // expression that threw only when the loop ran.
+    for source in [
+        "for(var index=0; index<10; index++; index--);",
+        "for (;;;) {}",
+    ] {
+        let err = parser().parse(source, ParseGoal::Script).unwrap_err();
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+    }
+    // A `;` nested in the update clause is not a fourth part.
+    parser()
+        .parse(
+            "for (var i = 0; i < 1; (() => { i++; })()) {}",
+            ParseGoal::Script,
+        )
+        .expect("nested `;` in the update clause");
 }

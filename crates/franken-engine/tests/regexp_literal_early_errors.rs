@@ -8,9 +8,11 @@
 //! the backtracking parser and the `regex` crate reject. Verdicts are Node
 //! v22.2.0's (`new Function(src)` throws SyntaxError / values below).
 //!
-//! No-claim: the backtracking parser is lenient in some `u`-mode corners
-//! (identity escapes such as `\-` or `\a`), so those invalid literals still
-//! parse; a literal either engine accepts is left to the runtime.
+//! No-claim: a literal either engine accepts is left to the runtime. The
+//! backtracking parser is lenient in some `u`-mode corners (identity escapes
+//! such as `\-` or `\a`), and the `regex` crate accepts nested quantifiers
+//! (`/a**/`, which Node rejects as "Nothing to repeat"), so those invalid
+//! literals still parse.
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
 
@@ -34,7 +36,6 @@ fn invalid_literals_are_early_syntax_errors() {
         "/[z-a]/",
         "/\\p{Nope}/u",
         "/(/",
-        "/a**/",
         "/a/uv",
         // Never evaluated, still refused.
         "function never() { return /(?<a>x)(?<a>y)/; } 1",

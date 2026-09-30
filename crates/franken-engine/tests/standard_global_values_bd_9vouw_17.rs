@@ -292,3 +292,30 @@ fn program_bindings_named_global_shadow_the_global_object() {
         "x:function",
     );
 }
+
+/// ES2022 `Object.hasOwn(object, key)`: own properties only (not inherited),
+/// symbol and numeric keys, arrays, a string's own index and `length`, a
+/// function's own `name`; `null` is a TypeError. It was undefined.
+#[test]
+fn object_has_own() {
+    check(
+        "var sym = Symbol('s'); var o = { a: 1, [sym]: 2, 1: 'x' }; var h = Object.create(o); \
+         h.b = 2; function fn() {} const has = Object.hasOwn; var t; \
+         try { Object.hasOwn(null, 'a'); t = 'no'; } catch (e) { t = e.constructor.name; } \
+         [Object.hasOwn(o, 'a'), Object.hasOwn(h, 'a'), Object.hasOwn(h, 'b'), Object.hasOwn(o, sym), \
+         Object.hasOwn(o, 1), Object.hasOwn([5], 0), Object.hasOwn([5], 'length'), \
+         Object.hasOwn('abc', 'length'), Object.hasOwn('abc', 1), Object.hasOwn(fn, 'name'), \
+         has(o, 'a'), typeof Object.hasOwn, Object.hasOwn.name, Object.hasOwn.length, t].join();",
+        "true,false,true,true,true,true,true,true,true,true,true,function,hasOwn,2,TypeError",
+    );
+    // Object.prototype.hasOwnProperty, which now shares the helper: a
+    // nullish `this` is a TypeError (ToObject), a primitive is boxed.
+    check(
+        "var r = []; for (const v of [undefined, null]) { try { \
+         Object.prototype.hasOwnProperty.call(v, 'x'); r.push('no'); } \
+         catch (e) { r.push(e.constructor.name); } } \
+         r.join() + ' ' + Object.prototype.hasOwnProperty.call('ab', 'length') + ' ' + \
+         Object.prototype.hasOwnProperty.call(5, 'x');",
+        "TypeError,TypeError true false",
+    );
+}

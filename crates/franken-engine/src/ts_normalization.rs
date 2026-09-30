@@ -1956,6 +1956,11 @@ fn namespace_keyword_starts_declaration(source: &str, start: usize) -> bool {
     if name_start == after_keyword {
         return false;
     }
+    // `namespace {` on one line is a declaration missing its name (an
+    // identifier cannot be followed by a block there); lowering refuses it.
+    if source[name_start..].starts_with('{') {
+        return true;
+    }
     let Some(name_end) = skip_identifier(source, name_start) else {
         return false;
     };

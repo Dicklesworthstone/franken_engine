@@ -5911,7 +5911,7 @@ const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
 const ARRAY_BUFFER_SLOT_KEYS: [&str; 2] = ["__type", "byteLength"];
 const DATA_VIEW_SLOT_KEYS: [&str; 4] = ["__type", "buffer", "byteLength", "byteOffset"];
 
-const SLOT0_STATIC_GLOBALS: [&str; 8] = [
+const SLOT0_STATIC_GLOBALS: [&str; 9] = [
     "Object",
     "JSON",
     "Array",
@@ -5920,8 +5920,9 @@ const SLOT0_STATIC_GLOBALS: [&str; 8] = [
     "Proxy",
     "Map",
     "ArrayBuffer",
+    "Number",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 30] = [
+const SLOT0_STATIC_MEMBERS: [&str; 36] = [
     "keys",
     "hasOwn",
     "values",
@@ -5952,6 +5953,12 @@ const SLOT0_STATIC_MEMBERS: [&str; 30] = [
     "for",
     "keyFor",
     "revocable",
+    "isInteger",
+    "isSafeInteger",
+    "isFinite",
+    "isNaN",
+    "parseInt",
+    "parseFloat",
 ];
 
 /// Owner global and member name for a slot-0 static hostcall tag, for

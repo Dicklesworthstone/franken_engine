@@ -93466,6 +93466,17 @@ impl InterpreterCore {
         };
         let prototype = self.ensure_builtin_prototype(type_name)?;
         let object_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.set_primitive_wrapper_value(object_id, value)?;
+        Ok(object_id)
+    }
+
+    /// Give `object_id` the [[NumberData]] (StringData, BooleanData, ...)
+    /// `value`, charging its bytes.
+    fn set_primitive_wrapper_value(
+        &mut self,
+        object_id: ObjectId,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
         let index = object_id.0 as usize;
         let previous = self
             .heap
@@ -93477,7 +93488,7 @@ impl InterpreterCore {
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
-        Ok(object_id)
+        Ok(())
     }
 
     /// ES2020 thisNumberValue / thisStringValue / thisBooleanValue /
@@ -94132,6 +94143,19 @@ impl InterpreterCore {
         self.mutate_builtin_prototypes(|bp| {
             bp.insert(canonical.to_string(), prototype);
         });
+        // Number.prototype, String.prototype and Boolean.prototype are
+        // themselves wrapper objects of +0, "" and false (ES2020 20.1.3,
+        // 21.1.3, 19.3.3): `Number.prototype.toString(10)` is "0", not a
+        // TypeError for a non-Number receiver.
+        let wrapped = match canonical {
+            "Number" => Some(Value::Int(0)),
+            "String" => Some(Value::str("")),
+            "Boolean" => Some(Value::Bool(false)),
+            _ => None,
+        };
+        if let Some(value) = wrapped {
+            self.set_primitive_wrapper_value(prototype, value)?;
+        }
         // These prototypes carry an own @@toStringTag data property naming
         // the constructor (ES2020 23.1.3.13, 23.2.3.12, 24.1.4.4, 25.6.5.4,
         // ...; writable false, enumerable false, configurable true):

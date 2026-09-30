@@ -747,8 +747,9 @@ fn capability_profile_display_includes_kind_and_count() {
     let ec = CapabilityProfile::engine_core();
     assert_eq!(ec.to_string(), "EngineCoreCaps[7]");
 
+    // Every RuntimeCapability; RandomRead (bd-opsnv) made it 22.
     let full = CapabilityProfile::full();
-    assert_eq!(full.to_string(), "FullCaps[21]");
+    assert_eq!(full.to_string(), "FullCaps[22]");
 
     let co = CapabilityProfile::compute_only();
     assert_eq!(co.to_string(), "ComputeOnlyCaps[0]");

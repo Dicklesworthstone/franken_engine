@@ -134,7 +134,19 @@ fn test_malformed_very_long_capability_tag_fails() {
     let result = core.execute(&module);
     match result {
         Err(InterpreterError::CapabilityDenied { capability }) => {
-            assert_eq!(capability, very_long_tag);
+            // An overlong tag is recorded as a SHA-256 commitment to the whole
+            // tag followed by a bounded display prefix (bd-hxukn, bd-lvoff).
+            let marker = format!(
+                "<TRUNCATED:sha256:{}>:",
+                ContentHash::compute(very_long_tag.as_bytes()).to_hex()
+            );
+            let display = capability
+                .strip_prefix(&marker)
+                .unwrap_or_else(|| panic!("denial must commit to the full tag: {capability}"));
+            assert!(
+                !display.is_empty() && very_long_tag.starts_with(display),
+                "denial display must be a prefix of the tag: {capability}"
+            );
         }
         other => panic!(
             "Expected CapabilityDenied for very long capability tag, got: {:?}",
@@ -196,21 +208,24 @@ fn test_attack_scenario_future_dangerous_fails() {
 
 #[test]
 fn test_properly_granted_capability_still_passes() {
-    // Verify that properly granted capabilities still work
-    let mut core = interpreter_with_capability(RuntimeCapability::HeapAllocate);
-    let module = module_with_hostcall("heap.allocate");
-
+    // A registered tag passes the gate when its authority is granted and is
+    // denied when it is not. (`heap.allocate` is no hostcall tag since the
+    // typed-capability registry, so it was denied either way.)
+    let mut core = interpreter_with_capability(RuntimeCapability::Console);
+    let module = module_with_hostcall("console:log");
     let result = core.execute(&module);
-    // This should succeed (not fail with CapabilityDenied)
-    // Note: It might fail with other errors like UnsupportedOperation, which is fine
-    // We just want to ensure it doesn't fail with CapabilityDenied
     if let Err(InterpreterError::CapabilityDenied { capability }) = result {
         panic!(
-            "Properly granted capability 'heap.allocate' was denied: {}",
+            "Properly granted capability 'console:log' was denied: {}",
             capability
         );
     }
-    // Any other result (success or different error) is acceptable for this test
+
+    let mut ungranted = minimal_interpreter();
+    match ungranted.execute(&module_with_hostcall("console:log")) {
+        Err(InterpreterError::CapabilityDenied { .. }) => {}
+        other => panic!("console:log without the Console grant must be denied, got: {other:?}"),
+    }
 }
 
 #[test]

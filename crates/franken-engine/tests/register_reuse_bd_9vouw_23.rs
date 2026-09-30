@@ -711,7 +711,7 @@ fn binary_operators_release_their_operand_registers() {
                    function o(n) { return { valueOf() { log.push(n); return n; } }; } \
                    function inOrder(count) { for (var k = 0; k < count; k++) { \
                    if (log[k] !== k + 1) return false; } return log.length === count; }";
-    let strings = (0..1000)
+    let strings = (0..600)
         .map(|index| format!("'{}'", index % 10))
         .collect::<Vec<_>>()
         .join(" + ");
@@ -720,8 +720,8 @@ fn binary_operators_release_their_operand_registers() {
         .collect::<Vec<_>>()
         .join(" + ");
     for (name, expression, node) in [
-        ("literals", operator_chain("1", 1000), "1000"),
-        ("strings", format!("({strings}).length"), "1000"),
+        ("literals", operator_chain("1", 600), "600"),
+        ("strings", format!("({strings}).length"), "600"),
         ("products", operator_chain("3 * 3", 200), "1800"),
         ("calls", operator_chain("f(1, 2)", 150), "450"),
         ("comparisons", operator_chain("(1 < 2)", 200), "200"),

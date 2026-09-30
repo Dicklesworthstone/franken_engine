@@ -817,8 +817,12 @@ fn source_looks_typescript(source: &str) -> bool {
     // Comments never make a file TypeScript: a Test262 header reading
     // "... identified as constructors ..." used to classify plain JavaScript
     // as TS, and TS normalization then mangled a `? 'null' : typeof value`
-    // ternary into a parse failure (bd-9vouw.28).
-    let code = crate::parser::strip_comments_to_whitespace(source);
+    // ternary into a parse failure (bd-9vouw.28). Neither do string,
+    // template or regex literals: marked's `"!:"` and path-to-regexp's
+    // `/[{}()\[\]+?!:*\\]/g` read as definite-assignment assertions, and TS
+    // normalization then rewrote their class constructors into invalid code.
+    let code =
+        crate::parser::blank_quoted_literals(&crate::parser::strip_comments_to_whitespace(source));
     if source_contains_type_only_import_export_syntax(&code)
         || contains_as_const_assertion(&code)
         || code.contains("!:")
@@ -851,11 +855,50 @@ fn line_looks_like_typescript_construct(line: &str) -> bool {
     {
         return true;
     }
-    if trimmed.starts_with("type ") && trimmed.contains('=') {
+    if line_declares_type_alias(trimmed) {
         return true;
     }
 
     looks_like_typed_variable_declaration(trimmed)
+}
+
+/// `type Name = ...` or `type Name<T> = ...`, not an assignment to a
+/// variable named `type` (yargs-parser: `type = DefaultValuesForTypeKey.STRING;`).
+fn line_declares_type_alias(line: &str) -> bool {
+    let Some(rest) = line
+        .strip_prefix("type")
+        .filter(|rest| rest.starts_with(|c: char| c.is_ascii_whitespace()))
+    else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    let name_len = rest
+        .find(|c: char| !is_identifier_char(c))
+        .unwrap_or(rest.len());
+    if name_len == 0 {
+        return false;
+    }
+    let mut rest = rest[name_len..].trim_start();
+    if rest.starts_with('<') {
+        let mut depth = 0usize;
+        let Some(close) = rest.char_indices().find_map(|(index, c)| {
+            match c {
+                '<' => depth += 1,
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                _ => {}
+            }
+            None
+        }) else {
+            return false;
+        };
+        rest = rest[close + 1..].trim_start();
+    }
+    rest.starts_with('=') && !rest.starts_with("==")
 }
 
 fn looks_like_typed_variable_declaration(line: &str) -> bool {
@@ -4219,6 +4262,38 @@ abstract class Base { }"#;
             classify_source_language(None, "class Message { note = \" implements \"; }"),
             SourceLanguage::JavaScript
         );
+    }
+
+    /// Real packages that were classified as TypeScript and then mangled by
+    /// TS normalization: `!:` in a string (marked) or a regex class
+    /// (path-to-regexp), and an assignment to a variable named `type`
+    /// (yargs-parser). A real type alias still classifies as TypeScript.
+    #[test]
+    fn classify_source_language_ignores_literal_text_and_type_assignments() {
+        for source in [
+            "var he = { html: h(\"!:\") };\nvar E = class { constructor(e) { this.o = e; } };",
+            "var escape = (s) => s.replace(/[{}()\\[\\]+?!:*\\\\]/g, \"\\\\$&\");",
+            "var t = `a\ninterface Foo {}\n!: b`;",
+            "var type;\nif (x)\n  type = kinds.STRING;",
+        ] {
+            assert_eq!(
+                classify_source_language(None, source),
+                SourceLanguage::JavaScript,
+                "{source}"
+            );
+        }
+        for source in [
+            "type UserId = string;",
+            "type Pair<A, B> = [A, B];",
+            "type Nested<T extends Array<number>> = T;",
+            "let value!: string;",
+        ] {
+            assert_eq!(
+                classify_source_language(None, source),
+                SourceLanguage::TypeScript,
+                "{source}"
+            );
+        }
     }
 
     #[test]

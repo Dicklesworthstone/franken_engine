@@ -2755,6 +2755,24 @@ fn quoted_byte_mask(s: &str) -> Vec<bool> {
         .collect()
 }
 
+/// `text` with its string, template and regular-expression literals
+/// (delimiters and template substitutions included) replaced by spaces byte
+/// for byte, line breaks kept, so a scan for code syntax (TypeScript
+/// sniffing) never reads literal text such as marked's `"!:"` or
+/// path-to-regexp's `/[{}()\[\]+?!:*\\]/g`.
+pub(crate) fn blank_quoted_literals(text: &str) -> String {
+    let mask = quoted_byte_mask(text);
+    let mut out = String::with_capacity(text.len());
+    for (index, ch) in text.char_indices() {
+        if mask[index] && ch != '\n' {
+            push_blanked(&mut out, ch);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Emit `len_utf8()` spaces for a blanked (comment) character, preserving the
 /// byte length of the original source so downstream byte offsets stay aligned.
 #[inline]

@@ -3342,6 +3342,9 @@ pub enum BuiltinFunctionKind {
     TypedArrayMethod,
     /// `String.prototype.matchAll` (ES2020 21.1.3.12). Append only.
     StringMatchAll,
+    /// V8's `Error.captureStackTrace(target[, constructorOpt])`, which npm
+    /// error classes call unguarded. Append only.
+    ErrorCaptureStackTrace,
 }
 
 impl BuiltinFunctionKind {
@@ -5051,6 +5054,7 @@ impl BuiltinFunction {
                 static_hostcall_name(&self.module_specifier).unwrap_or("anonymous")
             }
             BuiltinFunctionKind::ErrorPrototypeToString => "toString",
+            BuiltinFunctionKind::ErrorCaptureStackTrace => "captureStackTrace",
             // Anonymous built-in closures in the spec.
             BuiltinFunctionKind::PromiseThenFinally
             | BuiltinFunctionKind::PromiseCatchFinally
@@ -5237,6 +5241,7 @@ impl BuiltinFunction {
             K::BigIntAsIntN | K::BigIntAsUintN => "BigInt",
             K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
             K::ErrorPrototypeToString => "Error.prototype",
+            K::ErrorCaptureStackTrace => "Error",
             K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
             K::SetTimeout
             | K::SetInterval
@@ -39227,6 +39232,37 @@ impl InterpreterCore {
             BuiltinFunctionKind::StaticHostcall => self.call_static_hostcall(module, builtin, args),
             BuiltinFunctionKind::ErrorPrototypeToString => {
                 self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::ErrorCaptureStackTrace => {
+                // V8 Error.captureStackTrace(target[, constructorOpt]): give
+                // `target` a non-enumerable `stack` whose first line is
+                // Error.prototype.toString of the target ("Error" for a
+                // plain object, "Name: message" otherwise) above the current
+                // frames. A non-object target is a TypeError, as in V8.
+                let target = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let Value::Object(object_id) = target else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object target for Error.captureStackTrace".to_string(),
+                        got: target.type_name().to_string(),
+                    });
+                };
+                let header = match self.error_prototype_to_string(module, Value::Object(object_id))? {
+                    Value::Str(header) => header.to_string(),
+                    other => self.value_to_string(&other),
+                };
+                let frames = self.format_stack_trace();
+                let stack = if frames.is_empty() {
+                    header
+                } else {
+                    format!("{header}\n{frames}")
+                };
+                self.set_object_property(object_id, "stack".to_string(), Value::str(stack))?;
+                self.set_own_property_attributes(
+                    object_id,
+                    &RuntimePropertyKey::String(JsString::from("stack")),
+                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                )?;
+                Ok(Value::Undefined)
             }
             BuiltinFunctionKind::DateNow => {
                 self.dispatch_builtin_hostcall("builtin:DateNow", args, Some(module))
@@ -91476,6 +91512,12 @@ impl InterpreterCore {
             "asUintN" if name == "BigInt" => Value::BuiltinFunction(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::BigIntAsUintN,
             )),
+            // V8 statics that Node code relies on: Error.captureStackTrace
+            // and Error.stackTraceLimit (10, as in V8).
+            "captureStackTrace" if name == "Error" => Value::BuiltinFunction(
+                BuiltinFunction::new_kind(BuiltinFunctionKind::ErrorCaptureStackTrace),
+            ),
+            "stackTraceLimit" if name == "Error" => Value::Int(10),
             "asIntN" if name == "BigInt" => {
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsIntN))
             }

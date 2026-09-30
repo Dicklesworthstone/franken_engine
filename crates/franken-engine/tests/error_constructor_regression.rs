@@ -271,3 +271,26 @@ const d = Object.getOwnPropertyDescriptor(e2, 'cause');
         "1 false true true true inner why 2 3 false true {} 0"
     );
 }
+
+/// V8's Error.captureStackTrace, which npm error classes call unguarded
+/// (`Error.captureStackTrace(this, MyError)`): it was undefined, so those
+/// constructors threw "expected function, got undefined". The first stack
+/// line is Error.prototype.toString of the target; the property is not
+/// enumerable; a non-object target is a TypeError. Node v22.2.0's value.
+#[test]
+fn error_capture_stack_trace() {
+    assert_eq!(
+        eval_value(
+            r#"class MyError extends Error { constructor(m) { super(m); this.name = 'MyError'; Error.captureStackTrace(this, MyError); } }
+const e = new MyError('x');
+const o = {}; Error.captureStackTrace(o);
+const p = { message: 'hi', name: 'Custom' }; Error.captureStackTrace(p);
+function F(msg) { this.message = msg; Error.captureStackTrace(this, F); }
+F.prototype = Object.create(Error.prototype); F.prototype.name = 'F'; F.prototype.constructor = F;
+const f = new F('m');
+let threw; try { Error.captureStackTrace(1); threw = 'no'; } catch (err) { threw = err.constructor.name; }
+[e.stack.split('\n')[0], e instanceof MyError, o.stack.split('\n')[0], Object.keys(o).length, p.stack.split('\n')[0], f.stack.split('\n')[0], f instanceof Error, threw, typeof Error.captureStackTrace, Error.captureStackTrace.length, Error.stackTraceLimit].join(' | ')"#
+        ),
+        "MyError: x | true | Error | 0 | Custom: hi | F: m | true | TypeError | function | 2 | 10"
+    );
+}

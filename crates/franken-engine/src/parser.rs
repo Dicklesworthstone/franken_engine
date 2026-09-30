@@ -2793,9 +2793,41 @@ fn text_after_last_top_level_terminator(statement: &str) -> &str {
 }
 
 /// Whether `statement` is a `do` statement whose `while (...)` has not
-/// appeared yet (its body is complete or still to come).
+/// appeared yet (its body is complete or still to come), also as the
+/// unbraced body of other headers: `if (c) do x++; while (x < 3);` is one
+/// if statement, as js-yaml's bundle writes it across three lines.
 fn do_statement_awaits_while(statement: &str) -> bool {
-    starts_with_keyword(statement, "do") && find_top_level_keyword(statement, " while").is_none()
+    let body = unbraced_body_of_header_chain(statement);
+    starts_with_keyword(body, "do") && find_top_level_keyword(body, " while").is_none()
+}
+
+/// `statement` without its leading chain of statement headers (`if (...)`,
+/// `for (...)`, `while (...)`, `with (...)`, `else`, labels): the statement
+/// that is their innermost unbraced body, or `statement` itself.
+fn unbraced_body_of_header_chain(statement: &str) -> &str {
+    let mut rest = strip_leading_labels(statement.trim_start()).trim_start();
+    loop {
+        if let Some(after) = rest
+            .strip_prefix("else")
+            .filter(|after| after.starts_with(char::is_whitespace))
+        {
+            rest = strip_leading_labels(after.trim_start()).trim_start();
+            continue;
+        }
+        if !["if", "for", "while", "with"]
+            .iter()
+            .any(|keyword| starts_with_keyword(rest, keyword))
+        {
+            return rest;
+        }
+        let Some((_, after)) = rest
+            .find('(')
+            .and_then(|open| extract_balanced(&rest[open..], '(', ')'))
+        else {
+            return rest;
+        };
+        rest = strip_leading_labels(after.trim_start()).trim_start();
+    }
 }
 
 /// Whether `statement` ends in a header whose body may be a single unbraced
@@ -2806,7 +2838,10 @@ fn do_statement_awaits_while(statement: &str) -> bool {
 /// not a header.
 fn statement_header_takes_unbraced_body(statement: &str) -> bool {
     let tail = text_after_last_top_level_terminator(statement).trim();
-    header_chain_takes_unbraced_body(tail, starts_with_keyword(statement, "do"))
+    // Only a `while` tail can be a do statement's condition.
+    let in_do_statement = tail.contains("while")
+        && starts_with_keyword(unbraced_body_of_header_chain(statement), "do");
+    header_chain_takes_unbraced_body(tail, in_do_statement)
 }
 
 /// Whether an `else` on the next line continues `clause`: an `if` statement,

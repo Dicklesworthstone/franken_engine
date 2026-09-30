@@ -88,3 +88,28 @@ fn number_to_precision_and_exponential() {
         "true",
     );
 }
+
+/// `Number.prototype.toLocaleString` (ECMA-402 subset, number_locale.rs):
+/// grouping and three fraction digits by default (en-US), currency and
+/// percent styles, a German locale, fraction-digit options, a locale list;
+/// min > max fraction digits is a RangeError and a currency style without a
+/// currency a TypeError, as in Node. It was undefined, so `n.toLocaleString()`
+/// threw "expected function, got undefined".
+#[test]
+fn number_to_locale_string() {
+    check(
+        "[(1234567.891).toLocaleString(), \
+         (1234.5).toLocaleString('en-US', { style: 'currency', currency: 'USD' }), \
+         (0.256).toLocaleString('en-US', { style: 'percent' }), (1234.5).toLocaleString('de-DE'), \
+         (1.5).toLocaleString(undefined, { minimumFractionDigits: 2 }), \
+         (1e6).toLocaleString('en-US', { maximumFractionDigits: 0 }), (-0.5).toLocaleString(['en-GB']), \
+         typeof (1).toLocaleString, (1).toLocaleString.name, (1).toLocaleString.length].join(' | ');",
+        "1,234,567.891 | $1,234.50 | 26% | 1.234,5 | 1.50 | 1,000,000 | -0.5 | function | toLocaleString | 0",
+    );
+    check(
+        "function attempt(f) { try { f(); return 'ok'; } catch (e) { return e.constructor.name; } } \
+         [attempt(() => (1).toLocaleString('en', { minimumFractionDigits: 5, maximumFractionDigits: 2 })), \
+         attempt(() => (1).toLocaleString('en', { style: 'currency' }))].join();",
+        "RangeError,TypeError",
+    );
+}

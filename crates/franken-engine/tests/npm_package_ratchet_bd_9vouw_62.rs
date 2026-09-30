@@ -7,10 +7,11 @@
 //! fixed usage script; the expected line was produced by Node v22.2.0 on the
 //! identical program text.
 //!
-//! Ratchet contract: a package listed as `Passes` must match Node exactly (a
-//! regression fails the test); a package listed as `KnownFailure` must still
-//! fail with its recorded failure class, so a fix that makes it pass fails the
-//! test until the entry is promoted to `Passes`. Nothing is silently skipped.
+//! Ratchet contract: every listed package must match Node exactly (a
+//! regression fails the test). Nothing is silently skipped. All three pass
+//! today; a vendored package that does not yet run gets an expected failure
+//! class, as dayjs had until it ran (bd-9vouw.17), so that fixing it fails
+//! the test until the entry is promoted.
 //! No-claim: three single-file packages; multi-file packages need the module
 //! loader and are franken_node's corpus.
 
@@ -19,19 +20,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-enum Expect {
-    /// Must print exactly this line (Node v22.2.0 output).
-    Passes(&'static str),
-    /// Must still fail, with stderr containing this failure class.
-    KnownFailure(&'static str),
-}
-
 struct Package {
     name: &'static str,
     file: &'static str,
     usage: &'static str,
+    /// The line Node v22.2.0 prints, which the engine must print exactly.
     node_output: &'static str,
-    expect: Expect,
 }
 
 const PACKAGES: &[Package] = &[
@@ -40,26 +34,21 @@ const PACKAGES: &[Package] = &[
         file: "ms-2.1.3/index.js",
         usage: "console.log(m('2 days'), m('1h'), m(60000), m(2 * 60000, { long: true }), m('-3.5s'));",
         node_output: "172800000 3600000 1m 2 minutes -3500",
-        expect: Expect::Passes("172800000 3600000 1m 2 minutes -3500"),
     },
     Package {
         name: "minimist",
         file: "minimist-1.2.8/index.js",
         usage: "const a = m(['-x', '3', '-y4', '-n5', '-abc', '--beep=boop', 'foo', 'bar', '--no-z']); console.log(JSON.stringify(a));",
         node_output: r#"{"_":["foo","bar"],"x":3,"y":4,"n":5,"a":true,"b":true,"c":true,"beep":"boop","z":false}"#,
-        expect: Expect::Passes(
-            r#"{"_":["foo","bar"],"x":3,"y":4,"n":5,"a":true,"b":true,"c":true,"beep":"boop","z":false}"#,
-        ),
     },
     Package {
         name: "dayjs",
         file: "dayjs-1.11.13/dayjs.min.js",
         usage: "const d = m('2020-01-31T12:00:00Z'); console.log(d.valueOf(), d.add(1, 'day').toISOString(), d.isValid(), m('invalid').isValid());",
+        // Parses since 6a1955fc0 (`=` in a `?:` branch); runs since its UMD
+        // header's `globalThis` fallback reaches the sanitized global object
+        // (bd-9vouw.17, f0c8e3237).
         node_output: "1580472000000 2020-02-01T12:00:00.000Z true false",
-        // Parses since 6a1955fc0 (`=` in a `?:` branch); its UMD header's
-        // `globalThis` fallback is refused at lowering as ambient authority
-        // (effect runtime.global).
-        expect: Expect::KnownFailure("globalThis"),
     },
 ];
 
@@ -136,25 +125,13 @@ fn real_npm_packages_ratchet_against_node() {
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        match (&package.expect, printed) {
-            (Expect::Passes(line), Some(printed)) if printed == *line => {}
-            (Expect::Passes(line), other) => problems.push(format!(
-                "{}: REGRESSION, expected Node output {line:?}, got {other:?} (stderr: {})",
+        if printed.as_deref() != Some(package.node_output) {
+            problems.push(format!(
+                "{}: REGRESSION, expected Node output {:?}, got {printed:?} (stderr: {})",
                 package.name,
+                package.node_output,
                 stderr.lines().last().unwrap_or("")
-            )),
-            (Expect::KnownFailure(class), None) if stderr.contains(class) => {}
-            (Expect::KnownFailure(_), Some(printed)) if printed == package.node_output => {
-                problems.push(format!(
-                    "{}: now matches Node; promote it to Expect::Passes",
-                    package.name
-                ));
-            }
-            (Expect::KnownFailure(class), other) => problems.push(format!(
-                "{}: failure class changed (expected {class:?}); output {other:?}, stderr {}",
-                package.name,
-                stderr.lines().last().unwrap_or("")
-            )),
+            ));
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));

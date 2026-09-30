@@ -248,3 +248,21 @@ fn global_object_exposes_no_host_authority() {
         "undefined,undefined",
     );
 }
+
+/// A program's own binding named `global` (or `globalThis`) shadows the
+/// global object at top level and in blocks, as Node's module scope does.
+/// Seeding the object as a realm dynamic global broke this: the program's
+/// top-level `global` read as undefined.
+#[test]
+fn program_bindings_named_global_shadow_the_global_object() {
+    check("var global = 5; [global, typeof globalThis].join();", "5,object");
+    check(
+        "const global = Symbol.for('shared'); [global === Symbol.for('shared'), typeof global].join();",
+        "true,symbol",
+    );
+    check(
+        "var r; { const global = 'x'; r = global; } r + ':' + typeof global;",
+        "x:object",
+    );
+    check("function f() { const global = 7; return global; } f();", "7");
+}

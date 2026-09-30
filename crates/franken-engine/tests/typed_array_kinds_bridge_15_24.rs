@@ -231,3 +231,21 @@ fn typed_arrays_inherit_from_their_constructor_prototype() {
          true,[object Int8Array],2,true",
     );
 }
+
+/// A typed array constructed from an iterable reads it with the iteration
+/// protocol (ES2020 22.2.4.4 step 6): a Set, a Map's keys, a generator, a
+/// user iterable. Array-likes, arrays and typed arrays keep their indexed
+/// read. A Set gave an empty typed array and a generator or iterator was
+/// taken for a length (RangeError).
+#[test]
+fn typed_arrays_from_iterables() {
+    check(
+        "function* g() { yield 5; yield 6; } \
+         var it = { [Symbol.iterator]() { var i = 0; return { next() { \
+         return i < 2 ? { value: 10 + i++, done: false } : { done: true }; } }; } }; \
+         [new Uint8Array(new Set([1, 2, 3])).join(), new Float64Array(new Map([[1.5, 2]]).keys()).join(), \
+         new Int16Array(g()).join(), new Uint8Array(it).join(), new Uint8Array({ length: 2, 0: 7 }).join(), \
+         new Uint8Array([1, 2]).join(), new Int8Array(new Int8Array([3, 4])).join()].join(' | ');",
+        "1,2,3 | 1.5 | 5,6 | 10,11 | 7,0 | 1,2 | 3,4",
+    );
+}

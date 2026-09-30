@@ -80473,7 +80473,7 @@ impl InterpreterCore {
                 let kind = TypedArrayKind::from_builtin_capability(cap).expect(
                     "typed-array constructor branch must use a known typed-array capability",
                 );
-                let view_id = self.construct_typed_array(kind, args)?;
+                let view_id = self.construct_typed_array(module, kind, args)?;
                 Ok(Value::Object(view_id))
             }
             "builtin:DataView" => {
@@ -90916,8 +90916,53 @@ impl InterpreterCore {
         Ok(view)
     }
 
+    /// ES2020 22.2.4.4 TypedArray(object) step 6: a source with an
+    /// @@iterator is read through the iteration protocol (IterableToList):
+    /// a generator or iterator, a Map or Set, an object with its own
+    /// @@iterator. Arrays with the builtin iterator and typed arrays yield
+    /// the same values as their indexed read, and an array-like has no
+    /// iterator, so those return `None` for the indexed path. (A Set gave an
+    /// empty typed array and a generator was taken for a length.)
+    fn typed_array_iterable_source(
+        &mut self,
+        module: Option<&Ir3Module>,
+        source: &Value,
+    ) -> Result<Option<Vec<Value>>, InterpreterError> {
+        let iterate = match source {
+            Value::Iterator(_) | Value::Generator(_) => true,
+            Value::Object(id) => {
+                let (is_array, is_view) = self
+                    .heap
+                    .get(id.0 as usize)
+                    .map_or((false, false), |object| {
+                        (object.is_array, object.typed_array.is_some())
+                    });
+                if is_view {
+                    false
+                } else if is_array {
+                    self.array_from_has_explicit_iterator(*id)?
+                } else {
+                    let map = self.collection_storage_id(*id, "Map", "__entries");
+                    let set = self.collection_storage_id(*id, "Set", "__values");
+                    map.is_some() || set.is_some() || self.array_from_has_explicit_iterator(*id)?
+                }
+            }
+            _ => false,
+        };
+        if !iterate {
+            return Ok(None);
+        }
+        let iterator = self.init_for_of_iterator(module, source.clone())?;
+        let mut values = Vec::new();
+        while let Some(value) = self.advance_for_of_iterator(module, iterator.clone())? {
+            values.push(value);
+        }
+        Ok(Some(values))
+    }
+
     fn construct_typed_array(
         &mut self,
+        module: Option<&Ir3Module>,
         kind: TypedArrayKind,
         args: RegRange,
     ) -> Result<ObjectId, InterpreterError> {
@@ -90947,7 +90992,13 @@ impl InterpreterCore {
                     length,
                 );
             }
+        }
 
+        if let Some(values) = self.typed_array_iterable_source(module, &first_arg)? {
+            return self.alloc_typed_array_from_values(kind, &values);
+        }
+
+        if let Value::Object(object_id) = first_arg {
             self.typed_array_content_type_check(kind, &first_arg)?;
             let values = self.read_array_like_values(object_id);
             return self.alloc_typed_array_from_values(kind, &values);

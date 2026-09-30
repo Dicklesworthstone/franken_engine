@@ -245,3 +245,45 @@ fn nested_for_of_destructuring_default_initializes_fresh_let_cell() {
         "7"
     );
 }
+
+/// A class declared in a function body is a lexical binding: its capture cell
+/// starts uninitialized and the declaration must initialize it. It was written
+/// with a plain store, a TDZ error, so every CommonJS wrapper whose functions
+/// use a class declared beside them failed (path-to-regexp's TokenData and
+/// PathError). Expected values are Node v22.2.0's.
+#[test]
+fn function_local_class_declaration_initializes_its_capture_cell() {
+    assert_eq!(
+        eval_value(concat!(
+            "var r = (function() { function parse() { return new TokenData(1); } ",
+            "class TokenData { constructor(t) { this.t = t; } } return parse; })(); r().t;"
+        )),
+        "1"
+    );
+    assert_eq!(
+        eval_value(concat!(
+            "(function(exports) { class PathError extends TypeError { constructor(m) { ",
+            "super(m); this.p = 1; } } exports.PathError = PathError; ",
+            "function fail() { throw new PathError('bad'); } try { fail(); } catch (e) { ",
+            "return [e instanceof PathError, e instanceof TypeError, e.message, e.p].join(); ",
+            "} })({});"
+        )),
+        "true,true,bad,1"
+    );
+    assert_eq!(
+        eval_value(concat!(
+            "function f() { { class K { v() { return 'k'; } } const g = () => new K().v(); ",
+            "return g(); } } f();"
+        )),
+        "k"
+    );
+    // The binding is still in its TDZ until the declaration runs.
+    assert_eq!(
+        eval_value(concat!(
+            "function early() { function use() { return typeof K2; } let before; ",
+            "try { before = use(); } catch (e) { before = e.constructor.name; } ",
+            "class K2 {} return before + ',' + use(); } early();"
+        )),
+        "ReferenceError,function"
+    );
+}

@@ -6037,8 +6037,9 @@ fn parse_arrow_body(
         let body = if body_src.starts_with('{') {
             if let Some((block_src, after_block)) = extract_balanced(body_src, '{', '}') {
                 // An arrow function is a whole AssignmentExpression: nothing
-                // follows its block body (`() => {} = 1`, `() => {}.x`).
-                if !after_block.trim().is_empty() {
+                // follows its block body (`() => {} = 1`, `() => {}.x`) but
+                // the `;` ending its statement, which some callers keep.
+                if !matches!(after_block.trim(), "" | ";") {
                     return Err(unsupported_expression_syntax_error(
                         "unexpected token after an arrow function body",
                         span,

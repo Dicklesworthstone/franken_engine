@@ -21,7 +21,7 @@
 //!   operators and `Array.prototype.join` still do not.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -239,7 +239,113 @@ const TO_PRIMITIVE_CASES: &[Case] = &[
     ),
 ];
 
-fn run(dir: &PathBuf, id: &str, source: &str) -> Result<Vec<String>, String> {
+/// bd-9vouw.37: arithmetic, relational, bitwise and unary operators convert an
+/// object operand with ToPrimitive(hint "number"), left operand first.
+const NUMERIC_TO_PRIMITIVE_CASES: &[Case] = &[
+    (
+        "date_arithmetic_and_comparison",
+        "const a=new Date(1000), b=new Date(3500); console.log(b-a, b>a, a<b);",
+        &["2500 true true"],
+    ),
+    (
+        "value_of_arithmetic",
+        "const o={valueOf(){return 5}}; console.log(o-1, o*2, o/2, o%3, o**2);",
+        &["4 10 2.5 2 25"],
+    ),
+    (
+        "unary_plus_and_minus",
+        "const o={valueOf(){return 2}}; console.log(+o, -o);",
+        &["2 -2"],
+    ),
+    (
+        "arrays_convert_through_their_string_form",
+        "console.log([5]*2, [3]-[1], +[], +[7]);",
+        &["10 2 0 7"],
+    ),
+    (
+        "relational_value_of",
+        "const o={valueOf(){return 3}}; console.log(o>2, o<2, o>=3, o<=3, 2<o);",
+        &["true false true true true"],
+    ),
+    (
+        "relational_to_string_compares_strings",
+        "const p={toString(){return 'b'}}; console.log(p>'a', 'c'>p);",
+        &["true true"],
+    ),
+    (
+        "symbol_to_primitive_number_hint",
+        "const q={[Symbol.toPrimitive](h){return h==='number'?10:'s'}}; console.log(q*2, `${q}`, q+'');",
+        &["20 s s"],
+    ),
+    (
+        "left_operand_converts_first",
+        "const log=[]; const l={valueOf(){log.push('l');return 1}}, r={valueOf(){log.push('r');return 2}}; console.log(l-r, log.join(','));",
+        &["-1 l,r"],
+    ),
+    (
+        "conversion_throw_is_catchable",
+        "const t={valueOf(){throw new Error('boom')}}; try { t*2 } catch(e) { console.log('caught', e.message) }",
+        &["caught boom"],
+    ),
+    (
+        "plain_objects_are_nan",
+        "console.log(({})-1, ({})*1);",
+        &["NaN NaN"],
+    ),
+    (
+        "function_operands",
+        "const f=function(){}; f.valueOf=()=>5; console.log(f - 1, (function(){}) * 1, f > 4);",
+        &["4 NaN true"],
+    ),
+    (
+        "string_operands_use_to_number",
+        "console.log('abc' - 1, '0x1F' - 0, ' 12 ' - 2, 'inf' * 1, 'abc' < 1, '0x10' > 15, \
+         '1e3' / 10, '' * 3);",
+        &["NaN 31 10 NaN false true 100 0"],
+    ),
+    (
+        "bitwise_and_shift",
+        "const o={valueOf(){return 6}}; console.log(o|1, o&3, o^1, o<<1, o>>1);",
+        &["7 2 7 12 3"],
+    ),
+    (
+        "loose_equality_converts_the_object_side",
+        "const o={valueOf(){return 5}}; const p={toString(){return 'x'}}; console.log(o==5, 5==o, o!=5, o=='5', p=='x', 'x'==p);",
+        &["true true false true true true"],
+    ),
+    (
+        "loose_equality_arrays_and_dates",
+        "const d=new Date(0); console.log([1]==1, [1,2]=='1,2', []==0, []=='', d==d.toString(), d==0, ({})==({}), null=={valueOf(){return null}});",
+        &["true true true true true false false false"],
+    ),
+    (
+        "join_uses_element_to_string",
+        "class P{constructor(n){this.n=n} toString(){return 'P'+this.n}} console.log([new P(1), new P(2)].join('-'), String([new P(3)]));",
+        &["P1-P2 P3"],
+    ),
+    (
+        "join_prefers_to_string_over_value_of",
+        "const o={valueOf(){return 9}, toString(){return 't'}}; console.log([o].join(), [o]+'');",
+        &["t t"],
+    ),
+    (
+        "arrays_of_objects_in_templates_and_concatenation",
+        "class P{constructor(n){this.n=n} toString(){return 'P'+this.n}} console.log(`${[new P(4)]}`, [new P(5), [new P(6)]]+'');",
+        &["P4 P5,P6"],
+    ),
+    (
+        "join_conversion_throw_is_catchable",
+        "const t={toString(){throw new Error('nope')}}; try { [t].join() } catch(e) { console.log('caught', e.message) }",
+        &["caught nope"],
+    ),
+    (
+        "compound_assignment",
+        "let x={valueOf(){return 4}}; x-=1; console.log(x); let y={valueOf(){return 4}}; y*=3; console.log(y);",
+        &["3", "12"],
+    ),
+];
+
+fn run(dir: &Path, id: &str, source: &str) -> Result<Vec<String>, String> {
     let input = dir.join(format!("{id}.js"));
     let report = dir.join(format!("{id}.run.json"));
     fs::write(&input, source).expect("write case");
@@ -343,4 +449,9 @@ fn promise_finally_passes_settlement_through_bd_9vouw_39() {
 #[test]
 fn addition_and_templates_run_guest_conversions_bd_9vouw_37() {
     assert_matches_node("to_primitive", TO_PRIMITIVE_CASES);
+}
+
+#[test]
+fn numeric_operators_run_guest_conversions_bd_9vouw_37() {
+    assert_matches_node("numeric_to_primitive", NUMERIC_TO_PRIMITIVE_CASES);
 }

@@ -5268,6 +5268,7 @@ fn parse_arrow_body(
     with_await_context(is_async, context, |context| {
         let body = if body_src.starts_with('{') {
             if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
+                reject_use_strict_with_non_simple_params(block_src, &params, span, context)?;
                 let stmts = parse_function_body_statements(
                     block_src,
                     ParseGoal::Script,
@@ -9594,6 +9595,30 @@ fn strip_initial_hashbang(source: &str) -> &str {
         .map_or("", |(_, end)| &source[*end..])
 }
 
+/// ES2020 14.1.2, 14.2.1, 14.3.1: a function whose own body has a
+/// "use strict" directive must have simple parameters (no default, pattern or
+/// rest parameter).
+fn reject_use_strict_with_non_simple_params(
+    body_src: &str,
+    params: &[FunctionParam],
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if params
+        .iter()
+        .any(|param| !matches!(param.pattern, BindingPattern::Identifier(_)))
+        && has_use_strict_directive(body_src)
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "\"use strict\" is not allowed in a function with non-simple parameters",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 fn has_use_strict_directive(source: &str) -> bool {
     let mut source = strip_initial_hashbang(source);
     loop {
@@ -10742,6 +10767,7 @@ fn parse_function_expression_with_super(
     let parsed = with_await_context(is_async, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
+            reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
             let body = parse_body_statements(body_src, goal, span, context)?;
             Ok((params, body))
         })
@@ -11022,6 +11048,7 @@ fn parse_class_body(
         let parsed = with_await_context(is_async, context, |context| {
             with_function_strict_mode(body_src, true, context, |context| {
                 let params = parse_arrow_params(params_src, span, context)?;
+                reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
                 let body = parse_body_statements(body_src, goal, span, context)?;
                 Ok((params, body))
             })
@@ -11188,6 +11215,7 @@ fn parse_function_declaration(
     let (params, body_stmts) = with_await_context(is_async, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, &span, context)?;
+            reject_use_strict_with_non_simple_params(body_src, &params, &span, context)?;
             let body = parse_body_statements(body_src, goal, &span, context)?;
             Ok((params, body))
         })

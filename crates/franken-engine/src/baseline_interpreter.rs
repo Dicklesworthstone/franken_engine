@@ -75,6 +75,7 @@ use zeroize::Zeroizing;
 mod array_from;
 mod async_generator;
 mod bigint_ops;
+mod builtin_function_lengths;
 mod collector;
 mod inspect;
 mod json_parse;
@@ -4971,6 +4972,235 @@ impl BuiltinFunction {
             BuiltinFunctionKind::BigIntAsIntN => "asIntN",
         }
     }
+
+    /// bd-9vouw.17: the object that owns this built-in as a property, as
+    /// keyed in `builtin_function_lengths` (`"Array.prototype"`, `"Math"`,
+    /// `"globalThis"`, ...). `None` for engine-internal closures and Node
+    /// module methods, whose `length` the engine does not model.
+    fn spec_owner(&self) -> Option<&'static str> {
+        use BuiltinFunctionKind as K;
+        Some(match self.kind {
+            K::ArrayAt
+            | K::ArrayConcat
+            | K::ArrayCopyWithin
+            | K::ArrayEntries
+            | K::ArrayEvery
+            | K::ArrayFill
+            | K::ArrayFilter
+            | K::ArrayFind
+            | K::ArrayFindIndex
+            | K::ArrayFindLast
+            | K::ArrayFindLastIndex
+            | K::ArrayFlat
+            | K::ArrayFlatMap
+            | K::ArrayForEach
+            | K::ArrayIncludes
+            | K::ArrayIndexOf
+            | K::ArrayJoin
+            | K::ArrayKeys
+            | K::ArrayLastIndexOf
+            | K::ArrayMap
+            | K::ArrayPop
+            | K::ArrayPush
+            | K::ArrayReduce
+            | K::ArrayReduceRight
+            | K::ArrayReverse
+            | K::ArrayShift
+            | K::ArraySliceMethod
+            | K::ArraySome
+            | K::ArraySort
+            | K::ArraySplice
+            | K::ArrayToReversed
+            | K::ArrayToSorted
+            | K::ArrayToSpliced
+            | K::ArrayToString
+            | K::ArrayUnshift
+            | K::ArrayValues
+            | K::ArrayWith => "Array.prototype",
+            K::ArrayIsArray => "Array",
+            K::StringAt
+            | K::StringCharAt
+            | K::StringCharCodeAt
+            | K::StringCodePointAt
+            | K::StringEndsWith
+            | K::StringIncludes
+            | K::StringIndexOf
+            | K::StringIsWellFormed
+            | K::StringLastIndexOf
+            | K::StringLocaleCompare
+            | K::StringMatch
+            | K::StringNormalize
+            | K::StringPadEnd
+            | K::StringPadStart
+            | K::StringPrototypeConcat
+            | K::StringRepeat
+            | K::StringReplace
+            | K::StringReplaceAll
+            | K::StringSearch
+            | K::StringSlice
+            | K::StringSplit
+            | K::StringStartsWith
+            | K::StringSubstr
+            | K::StringSubstring
+            | K::StringToLowerCase
+            | K::StringToString
+            | K::StringToUpperCase
+            | K::StringToWellFormed
+            | K::StringTrim
+            | K::StringTrimEnd
+            | K::StringTrimStart => "String.prototype",
+            K::MathAbs
+            | K::MathAcos
+            | K::MathAcosh
+            | K::MathAsin
+            | K::MathAsinh
+            | K::MathAtan
+            | K::MathAtan2
+            | K::MathAtanh
+            | K::MathCbrt
+            | K::MathCeil
+            | K::MathClz32
+            | K::MathCos
+            | K::MathExp
+            | K::MathFloor
+            | K::MathFround
+            | K::MathHypot
+            | K::MathImul
+            | K::MathLog
+            | K::MathLog10
+            | K::MathLog2
+            | K::MathMax
+            | K::MathMin
+            | K::MathPow
+            | K::MathRandom
+            | K::MathRound
+            | K::MathSign
+            | K::MathSin
+            | K::MathSqrt
+            | K::MathTan
+            | K::MathTrunc => "Math",
+            K::MapClear
+            | K::MapDelete
+            | K::MapEntries
+            | K::MapForEach
+            | K::MapGet
+            | K::MapHas
+            | K::MapKeys
+            | K::MapSet
+            | K::MapValues => "Map.prototype",
+            K::SetAdd
+            | K::SetClear
+            | K::SetDelete
+            | K::SetEntries
+            | K::SetForEach
+            | K::SetHas
+            | K::SetValues => "Set.prototype",
+            K::WeakMapMethod => "WeakMap.prototype",
+            K::WeakSetMethod => "WeakSet.prototype",
+            K::NumberToExponential
+            | K::NumberToFixed
+            | K::NumberToPrecision
+            | K::NumberToString
+            | K::NumberValueOf => "Number.prototype",
+            K::PromiseAll
+            | K::PromiseAllSettled
+            | K::PromiseAny
+            | K::PromiseRace
+            | K::PromiseReject
+            | K::PromiseResolve => "Promise",
+            K::PromiseThen | K::PromiseCatch | K::PromiseFinally => "Promise.prototype",
+            K::TypedArrayCopyWithin
+            | K::TypedArrayEntries
+            | K::TypedArrayFill
+            | K::TypedArrayKeys
+            | K::TypedArraySet
+            | K::TypedArraySlice
+            | K::TypedArraySubarray
+            | K::TypedArrayValues => "TypedArray.prototype",
+            K::DataViewGetInt32
+            | K::DataViewGetUint32
+            | K::DataViewGetUint8
+            | K::DataViewSetInt32
+            | K::DataViewSetUint32
+            | K::DataViewSetUint8 => "DataView.prototype",
+            K::ObjectHasOwnProperty
+            | K::ObjectPrototypeIsPrototypeOf
+            | K::ObjectPrototypePropertyIsEnumerable
+            | K::ObjectPrototypeToString
+            | K::ObjectPrototypeValueOf => "Object.prototype",
+            K::FunctionPrototypeApply
+            | K::FunctionPrototypeBind
+            | K::FunctionPrototypeCall
+            | K::FunctionPrototypeToString => "Function.prototype",
+            K::RegExpPrototypeExec | K::RegExpTest => "RegExp.prototype",
+            K::DateNow | K::DateParse | K::DateUtc => "Date",
+            K::DateGetTime | K::DatePrototypeMethod => "Date.prototype",
+            K::SymbolPrototypeToString => "Symbol.prototype",
+            K::BigIntAsIntN | K::BigIntAsUintN => "BigInt",
+            K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
+            K::ErrorPrototypeToString => "Error.prototype",
+            K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
+            K::SetTimeout
+            | K::SetInterval
+            | K::SetImmediate
+            | K::ClearTimeout
+            | K::ClearInterval
+            | K::ClearImmediate
+            | K::QueueMicrotask
+            | K::StandardConstructor
+            | K::FunctionConstructor
+            | K::DateConstructor
+            | K::PromiseConstructor => "globalThis",
+            K::StaticHostcall => static_hostcall_owner_and_name(&self.module_specifier)?.0,
+            _ => return None,
+        })
+    }
+
+    /// bd-9vouw.17: the built-in's own `length` (ES2020 17: the number of
+    /// required parameters in its specification). Iterator steps and the
+    /// spec's anonymous Promise.prototype.finally closures have fixed
+    /// lengths; kinds the engine does not model return `None`.
+    fn spec_length(&self) -> Option<i64> {
+        use BuiltinFunctionKind as K;
+        let fixed = match self.kind {
+            K::GeneratorNext
+            | K::GeneratorReturn
+            | K::GeneratorThrow
+            | K::AsyncGeneratorNext
+            | K::AsyncGeneratorReturn
+            | K::AsyncGeneratorThrow
+            | K::PromiseThenFinally
+            | K::PromiseCatchFinally => Some(1),
+            K::IteratorNext
+            | K::IteratorSelf
+            | K::AsyncGeneratorIteratorSelf
+            | K::GeneratorIteratorSelf
+            | K::StringIterator
+            | K::PromiseFinallyValueThunk
+            | K::PromiseFinallyThrower
+            | K::ProxyRevoke => Some(0),
+            _ => None,
+        };
+        if fixed.is_some() {
+            return fixed;
+        }
+        let owner = self.spec_owner()?;
+        let key = match self.kind {
+            K::StandardConstructor => canonical_builtin_prototype_name(&self.module_specifier)?,
+            _ => self.display_name(),
+        };
+        builtin_function_lengths::builtin_function_length(owner, key).map(i64::from)
+    }
+
+    /// bd-9vouw.17: the built-in's own `name`: its property key, with
+    /// symbol-keyed methods named `[Symbol.iterator]` (ES2020 9.2.13).
+    fn spec_name(&self) -> &'static str {
+        match self.display_name() {
+            "@@iterator" => "[Symbol.iterator]",
+            "@@asyncIterator" => "[Symbol.asyncIterator]",
+            name => name,
+        }
+    }
 }
 
 /// bd-9vouw.17: standard constructors bound as first-class global values.
@@ -5196,16 +5426,30 @@ mod date_math {
 }
 
 fn static_hostcall_name(tag: &str) -> Option<&'static str> {
-    slot0_static_member_name(tag)
+    static_hostcall_owner_and_name(tag).map(|(_, name)| name)
+}
+
+/// Owner (`"Object"`, `"globalThis"`, `"Reflect"`, ...) and member name of a
+/// first-class static builtin tag.
+fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static str)> {
+    slot0_static_owner_and_member(tag)
         .or_else(|| {
-            GLOBAL_FUNCTION_VALUES.iter().copied().find(|name| {
-                crate::lowering_pipeline::global_function_capability(name) == Some(tag)
-            })
+            GLOBAL_FUNCTION_VALUES
+                .iter()
+                .copied()
+                .find(|name| {
+                    crate::lowering_pipeline::global_function_capability(name) == Some(tag)
+                })
+                .map(|name| ("globalThis", name))
         })
         .or_else(|| {
-            REFLECT_MEMBERS.iter().copied().find(|member| {
-                crate::lowering_pipeline::reflect_member_capability(member) == Some(tag)
-            })
+            REFLECT_MEMBERS
+                .iter()
+                .copied()
+                .find(|member| {
+                    crate::lowering_pipeline::reflect_member_capability(member) == Some(tag)
+                })
+                .map(|member| ("Reflect", member))
         })
 }
 
@@ -5277,13 +5521,19 @@ const SLOT0_STATIC_MEMBERS: [&str; 25] = [
     "revocable",
 ];
 
-/// Member name for a slot-0 static hostcall tag, for `Function.prototype.name`
-/// style display. Only tags the shared lowering table can produce resolve.
-fn slot0_static_member_name(tag: &str) -> Option<&'static str> {
-    SLOT0_STATIC_GLOBALS.iter().find_map(|global| {
-        SLOT0_STATIC_MEMBERS.iter().copied().find(|member| {
-            crate::lowering_pipeline::slot0_static_member_capability(global, member) == Some(tag)
-        })
+/// Owner global and member name for a slot-0 static hostcall tag, for
+/// `Function.prototype.name` style display and `length` lookup. Only tags the
+/// shared lowering table can produce resolve.
+fn slot0_static_owner_and_member(tag: &str) -> Option<(&'static str, &'static str)> {
+    SLOT0_STATIC_GLOBALS.iter().copied().find_map(|global| {
+        SLOT0_STATIC_MEMBERS
+            .iter()
+            .copied()
+            .find(|member| {
+                crate::lowering_pipeline::slot0_static_member_capability(global, member)
+                    == Some(tag)
+            })
+            .map(|member| (global, member))
     })
 }
 
@@ -6484,6 +6734,15 @@ const REGEXP_CACHE_MAX_PROGRAM_BYTES: usize = 1024 * 1024;
 /// Lazy-DFA transition cache limit for a cached RegExp. It bounds only how
 /// much of the DFA is kept; matching falls back to other engines past it.
 const REGEXP_CACHE_MAX_DFA_BYTES: usize = 512 * 1024;
+
+/// Not writable, not enumerable, configurable: a function's own `length` and
+/// `name` (ES2020 9.2.4 SetFunctionLength, 9.2.11 SetFunctionName, 17 for
+/// built-ins; bd-9vouw.17).
+const FUNCTION_NAME_LENGTH_ATTRIBUTES: PropertyAttributes = PropertyAttributes {
+    writable: false,
+    enumerable: false,
+    configurable: true,
+};
 
 /// Prototypes that carry `name` and `message` (ES2020 19.5.3, 19.5.6.3).
 const ERROR_PROTOTYPE_NAMES: [&str; 7] = [
@@ -39586,13 +39845,24 @@ impl InterpreterCore {
                 if let Value::Object(object_id) = &receiver {
                     self.join_pending_hostcall_stream_label(*object_id)?;
                 }
-                // A function's other own properties live on its backing object.
-                let own = self.object_own_property_contains(&receiver, &property)
-                    || self
-                        .function_own_property_object(module, &receiver)?
-                        .is_some_and(|backing| {
-                            self.object_own_property_contains(&Value::Object(backing), &property)
-                        });
+                // A function's own properties live on its backing object; once
+                // that exists it decides, so a deleted `name` is gone
+                // (bd-9vouw.17).
+                let key = self.executable_property_key_from_value(&property);
+                let own = match self.function_own_property_exists(module, &receiver, &key)? {
+                    Some(own) => own,
+                    None => {
+                        self.object_own_property_contains(&receiver, &property)
+                            || self
+                                .function_own_property_object(module, &receiver)?
+                                .is_some_and(|backing| {
+                                    self.object_own_property_contains(
+                                        &Value::Object(backing),
+                                        &property,
+                                    )
+                                })
+                    }
+                };
                 Ok(Value::Bool(own))
             }
             BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => {
@@ -46479,36 +46749,57 @@ impl InterpreterCore {
                     // backing object (`F.x`, class statics) wins over the
                     // synthesized function members below. `prototype` keeps
                     // its dedicated path.
+                    let mut inherited_function_standard = None;
                     let function_backing = match &obj_val {
                         Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)
                         | Value::AsyncFunction(_)
                         | Value::AsyncGeneratorFunction(_)
+                        | Value::BuiltinFunction(_)
                             if property_key.as_str() != Some("prototype") =>
                         {
-                            self.function_own_property_object(module, &obj_val)?
-                                .filter(|backing| {
-                                    // Own `name`/`length` are the function's
-                                    // (never inherited from a parent class);
-                                    // other keys may be statics inherited
-                                    // from the parent constructor (bd-9vouw.24).
-                                    if matches!(property_key.as_str(), Some("name" | "length")) {
-                                        self.heap.get(backing.0 as usize).is_some_and(|object| {
-                                            object.contains_own_runtime_property(&property_key)
-                                        })
+                            match self.function_own_property_object(module, &obj_val)? {
+                                // Own `name`/`length` are the function's (never
+                                // inherited from a parent class). Once the
+                                // backing object exists a deleted one reads
+                                // Function.prototype's (`0`, `""`). Other keys
+                                // may be statics inherited from the parent
+                                // constructor (bd-9vouw.24).
+                                Some(backing)
+                                    if matches!(property_key.as_str(), Some("name" | "length")) =>
+                                {
+                                    if self.heap.get(backing.0 as usize).is_some_and(|object| {
+                                        object.contains_own_runtime_property(&property_key)
+                                    }) {
+                                        Some(backing)
                                     } else {
-                                        self.chain_contains_runtime_property(
-                                            *backing,
-                                            &property_key,
-                                        )
+                                        inherited_function_standard =
+                                            Some(if property_key.as_str() == Some("length") {
+                                                Value::Int(0)
+                                            } else {
+                                                Value::str("")
+                                            });
+                                        None
                                     }
-                                })
+                                }
+                                Some(backing)
+                                    if self.chain_contains_runtime_property(
+                                        backing,
+                                        &property_key,
+                                    ) =>
+                                {
+                                    Some(backing)
+                                }
+                                _ => None,
+                            }
                         }
                         _ => None,
                     };
 
-                    let prop = if let Some(backing) = function_backing {
+                    let prop = if let Some(value) = inherited_function_standard {
+                        value
+                    } else if let Some(backing) = function_backing {
                         self.run_pre_runtime_property_access_hook(module, backing, &property_key)?;
                         self.proxy_aware_get_runtime_property(
                             Some(module),
@@ -46646,10 +46937,20 @@ impl InterpreterCore {
                                         None => Value::Undefined,
                                     }
                                 } else {
-                                    property_key
-                                        .as_str()
-                                        .and_then(Self::function_prototype_property)
-                                        .unwrap_or(Value::Undefined)
+                                    match property_key.as_str() {
+                                        // bd-9vouw.17: a built-in's own `name`
+                                        // and `length` (ES2020 17).
+                                        Some(key @ ("name" | "length")) => self
+                                            .function_standard_own_value(
+                                                module,
+                                                &Value::BuiltinFunction(builtin),
+                                                key,
+                                            )?
+                                            .unwrap_or(Value::Undefined),
+                                        key => key
+                                            .and_then(Self::function_prototype_property)
+                                            .unwrap_or(Value::Undefined),
+                                    }
                                 }
                             }
                             // Own `name` and `length` come from the function
@@ -46946,15 +47247,27 @@ impl InterpreterCore {
                                 module, &function, set_val, label,
                             )?;
                         }
+                        // bd-9vouw.17: a built-in's own `name` and `length`
+                        // are non-writable too.
+                        Value::BuiltinFunction(ref builtin)
+                            if Self::builtin_function_property_object(builtin).is_none()
+                                && matches!(property_key.as_str(), Some("name" | "length")) => {}
                         Value::BuiltinFunction(builtin) => {
-                            let Some(property_object) =
-                                Self::builtin_function_property_object(&builtin)
-                            else {
-                                return Err(InterpreterError::TypeError {
-                                    expected: "object with writable properties".to_string(),
-                                    got: builtin.display_name().to_string(),
-                                });
-                            };
+                            let property_object =
+                                match Self::builtin_function_property_object(&builtin) {
+                                    Some(property_object) => property_object,
+                                    // Other built-ins keep assigned properties
+                                    // (`fn.displayName = ...`) on a backing object.
+                                    None => self
+                                        .ensure_function_own_property_object(
+                                            module,
+                                            &Value::BuiltinFunction(builtin.clone()),
+                                        )?
+                                        .ok_or_else(|| InterpreterError::TypeError {
+                                            expected: "object with writable properties".to_string(),
+                                            got: builtin.display_name().to_string(),
+                                        })?,
+                                };
                             self.set_backing_object_property(
                                 module,
                                 property_object,
@@ -47153,15 +47466,11 @@ impl InterpreterCore {
                             }
                             self.write_reg(dst, Value::Bool(deleted))?;
                         }
-                        Value::BuiltinFunction(builtin) => {
-                            let Some(property_object) =
-                                Self::builtin_function_property_object(&builtin)
-                            else {
-                                return Err(InterpreterError::TypeError {
-                                    expected: "object with configurable properties".to_string(),
-                                    got: builtin.display_name().to_string(),
-                                });
-                            };
+                        Value::BuiltinFunction(builtin)
+                            if Self::builtin_function_property_object(&builtin).is_some() =>
+                        {
+                            let property_object = Self::builtin_function_property_object(&builtin)
+                                .expect("guarded above");
                             self.run_pre_runtime_property_access_hook(
                                 module,
                                 property_object,
@@ -47173,6 +47482,39 @@ impl InterpreterCore {
                                 &property_key,
                                 0,
                             )?;
+                            self.write_reg(dst, Value::Bool(deleted))?;
+                        }
+                        // bd-9vouw.17: a function's own properties (including
+                        // its configurable `name` and `length`) live on its
+                        // backing object. `prototype` is not configurable.
+                        ref function @ (Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_)
+                        | Value::BuiltinFunction(_)) => {
+                            let deleted = if property_key.as_str() == Some("prototype") {
+                                false
+                            } else if let Some(backing) =
+                                self.ensure_function_own_property_object(module, function)?
+                            {
+                                self.run_pre_runtime_property_access_hook(
+                                    module,
+                                    backing,
+                                    &property_key,
+                                )?;
+                                self.proxy_aware_delete_runtime_property(
+                                    Some(module),
+                                    backing,
+                                    &property_key,
+                                    0,
+                                )?
+                            } else {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "object with configurable properties".to_string(),
+                                    got: function.type_name().to_string(),
+                                });
+                            };
                             self.write_reg(dst, Value::Bool(deleted))?;
                         }
                         _ => {
@@ -53613,7 +53955,10 @@ impl InterpreterCore {
             match receiver {
                 Value::Function(_) => return matches!(key, "name" | "length" | "prototype"),
                 Value::Closure(closure_id) => {
-                    return if self.closure_method_metadata.contains_key(closure_id) {
+                    // Concise methods and arrow functions have no `prototype`.
+                    return if self.closure_method_metadata.contains_key(closure_id)
+                        || self.arrow_lexical_this.contains_key(closure_id)
+                    {
                         matches!(key, "name" | "length")
                     } else {
                         matches!(key, "name" | "length" | "prototype")
@@ -75119,6 +75464,27 @@ impl InterpreterCore {
                         let array_id = self.alloc_array_from_values(&key_values)?;
                         Ok(Value::Object(array_id))
                     }
+                    // bd-9vouw.17: a function's enumerable own properties are
+                    // on its backing object (`length`/`name` are not enumerable).
+                    ref function if function.is_callable() => {
+                        let key_values = match self.own_property_holder(module, function, false)? {
+                            Some(backing) => self
+                                .heap
+                                .get(backing.0 as usize)
+                                .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
+                                .properties
+                                .exact_keys()
+                                .into_iter()
+                                .filter(|key| {
+                                    self.ordinary_own_string_key_is_enumerable(backing, key)
+                                })
+                                .map(Value::Str)
+                                .collect::<Vec<_>>(),
+                            None => Vec::new(),
+                        };
+                        let array_id = self.alloc_array_from_values(&key_values)?;
+                        Ok(Value::Object(array_id))
+                    }
                     _ => {
                         // Non-object argument - return empty array per JavaScript behavior
                         let array_id = self.alloc_array_from_values(&[])?;
@@ -76602,6 +76968,12 @@ impl InterpreterCore {
                 if let Value::Object(obj_id) = &this_val {
                     self.join_pending_hostcall_stream_label(*obj_id)?;
                 }
+                if let Some(module) = module {
+                    let key = self.executable_property_key_from_value(&prop_val);
+                    if let Some(own) = self.function_own_property_exists(module, &this_val, &key)? {
+                        return Ok(Value::Bool(own));
+                    }
+                }
                 Ok(Value::Bool(
                     self.object_own_property_contains(&this_val, &prop_val),
                 ))
@@ -77256,15 +77628,34 @@ impl InterpreterCore {
                 // Object.defineProperty(O, P, Attributes), ES2020 19.1.2.4:
                 // TypeError unless O and Attributes are objects.
                 let obj_val = self.arg_or_undefined(args, 0)?;
-                let Value::Object(obj_id) = obj_val else {
+                let prop_val = self.arg_or_undefined(args, 1)?;
+                let prop_name = self.executable_property_key_from_value(&prop_val);
+                let descriptor_val = self.arg_or_undefined(args, 2)?;
+                // bd-9vouw.17: a function target defines on its backing object
+                // (static members in transpiled classes). `prototype` keeps
+                // its dedicated storage: a new value replaces it, attribute-only
+                // changes (Babel's `{ writable: false }`) are accepted as is.
+                if !matches!(obj_val, Value::Object(_))
+                    && obj_val.is_callable()
+                    && prop_name.as_str() == Some("prototype")
+                    && let Some(module) = module
+                {
+                    let descriptor =
+                        self.read_property_descriptor(Some(module), &descriptor_val)?;
+                    if let Some(value) = descriptor.value
+                        && matches!(obj_val, Value::Function(_) | Value::Closure(_))
+                    {
+                        let label = self.join_arg_range_with_object_mutation_label(args)?;
+                        self.set_constructor_prototype_override(module, &obj_val, value, label)?;
+                    }
+                    return Ok(obj_val);
+                }
+                let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Err(InterpreterError::TypeError {
                         expected: "object target for Object.defineProperty".to_string(),
                         got: obj_val.type_name().to_string(),
                     });
                 };
-                let prop_val = self.arg_or_undefined(args, 1)?;
-                let prop_name = self.executable_property_key_from_value(&prop_val);
-                let descriptor_val = self.arg_or_undefined(args, 2)?;
                 let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
                 if !self.define_own_property_from_descriptor(obj_id, prop_name, descriptor)? {
                     return Err(InterpreterError::TypeError {
@@ -77280,7 +77671,7 @@ impl InterpreterCore {
             "builtin:ObjectDefineProperties" => {
                 // Object.defineProperties(O, Properties), ES2020 19.1.2.3.
                 let obj_val = self.arg_or_undefined(args, 0)?;
-                let Value::Object(obj_id) = obj_val else {
+                let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Err(InterpreterError::TypeError {
                         expected: "object target for Object.defineProperties".to_string(),
                         got: obj_val.type_name().to_string(),
@@ -77889,6 +78280,39 @@ impl InterpreterCore {
                             .collect::<Vec<_>>();
                         self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&property_name_values)?;
+                        Ok(Value::Object(array_id))
+                    }
+                    // bd-9vouw.17: a function's own property names are its
+                    // backing object's (`length` and `name` first), plus the
+                    // dedicated `prototype` after them when it has one.
+                    ref function if function.is_callable() => {
+                        let mut names = match self.own_property_holder(module, function, true)? {
+                            Some(backing) => self
+                                .heap
+                                .get(backing.0 as usize)
+                                .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
+                                .properties
+                                .exact_keys()
+                                .into_iter()
+                                .filter(|key| {
+                                    self.writable_own_runtime_property_visible(backing, key)
+                                })
+                                .map(Value::Str)
+                                .collect::<Vec<_>>(),
+                            None => Vec::new(),
+                        };
+                        let prototype = Value::str("prototype");
+                        if self.object_own_property_contains(function, &prototype)
+                            && !names.contains(&prototype)
+                        {
+                            let (length, name) = (Value::str("length"), Value::str("name"));
+                            let position = names
+                                .iter()
+                                .position(|key| *key != length && *key != name)
+                                .unwrap_or(names.len());
+                            names.insert(position, prototype);
+                        }
+                        let array_id = self.alloc_array_from_values(&names)?;
                         Ok(Value::Object(array_id))
                     }
                     _ => {
@@ -78553,13 +78977,20 @@ impl InterpreterCore {
                 }
 
                 let obj_val = self.read_reg(args.start)?;
-                let obj_id = match obj_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects don't have property descriptors
-                };
-
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_name = self.executable_property_key_from_value(&prop_val);
+                // bd-9vouw.17: a function's own properties (its `length` and
+                // `name` included) are on its backing object. `prototype`
+                // keeps its dedicated path and is not described here.
+                if !matches!(obj_val, Value::Object(_))
+                    && obj_val.is_callable()
+                    && prop_name.as_str() == Some("prototype")
+                {
+                    return Ok(Value::Undefined);
+                }
+                let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
+                    return Ok(Value::Undefined); // Primitives have no own property descriptors here
+                };
                 self.join_pending_hostcall_stream_label(obj_id)?;
                 self.own_property_descriptor_value(obj_id, &prop_name)
             }
@@ -78567,7 +78998,7 @@ impl InterpreterCore {
             "builtin:ObjectGetOwnPropertyDescriptors" => {
                 // Object.getOwnPropertyDescriptors(O), ES2020 19.1.2.9.
                 let obj_val = self.arg_or_undefined(args, 0)?;
-                let Value::Object(obj_id) = obj_val else {
+                let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Err(InterpreterError::TypeError {
                         expected: "object for Object.getOwnPropertyDescriptors".to_string(),
                         got: obj_val.type_name().to_string(),
@@ -88087,6 +88518,23 @@ impl InterpreterCore {
                     *id,
                 )
             }
+            // A built-in value carries no storage of its own; its backing
+            // object is keyed by the built-in's identity (kind, specifier,
+            // bound state). Built-ins that already own a property object
+            // (`Date`, `Promise`, once wrappers) keep using it.
+            Value::BuiltinFunction(builtin)
+                if Self::builtin_function_property_object(builtin).is_none() =>
+            {
+                let identity =
+                    serde_json::to_vec(builtin).map_err(|error| InterpreterError::TypeError {
+                        expected: "serializable built-in function identity".to_string(),
+                        got: error.to_string(),
+                    })?;
+                let mut digest = Sha256::new();
+                digest.update(b"FrankenEngine.BuiltinFunctionIdentity.v1");
+                digest.update(&identity);
+                (5u8, ContentHash::from_bytes(digest.finalize().into()), 0)
+            }
             _ => return Ok(None),
         };
         Ok(Some((
@@ -88096,7 +88544,8 @@ impl InterpreterCore {
     }
 
     /// Owner id of the backing objects of one function kind (0 = IR3
-    /// function, 1 = closure, 2 = generator, 3 = async, 4 = async generator).
+    /// function, 1 = closure, 2 = generator, 3 = async, 4 = async generator,
+    /// 5 = built-in, whose base owner is its identity digest).
     pub(super) fn function_own_property_owner(kind: u8, base_owner: &ContentHash) -> ContentHash {
         let mut digest = Sha256::new();
         digest.update(b"FrankenEngine.FunctionOwnPropertyObject.v1");
@@ -88159,7 +88608,148 @@ impl InterpreterCore {
         }
         let backing = self.alloc_object_with_prototype(None)?;
         self.mutate_function_prototypes(|entries| entries.insert(key, backing));
+        // bd-9vouw.17: from here on the backing object is the authority on the
+        // function's own properties, so it starts with the standard `length`
+        // and `name` (in that order, as OrdinaryFunctionCreate creates them).
+        // Deleting or redefining them then behaves as on any object.
+        for key in ["length", "name"] {
+            if let Some(value) = self.function_standard_own_value(module, function, key)? {
+                let key = RuntimePropertyKey::String(JsString::from(key));
+                self.set_object_runtime_property(backing, key.clone(), value)?;
+                self.set_own_property_attributes(backing, &key, FUNCTION_NAME_LENGTH_ATTRIBUTES)?;
+            }
+        }
         Ok(Some(backing))
+    }
+
+    /// bd-9vouw.17: the own `name` or `length` a function has before its
+    /// backing object exists; `None` for other keys and for a built-in whose
+    /// `length` the engine does not model.
+    fn function_standard_own_value(
+        &mut self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if !matches!(key, "name" | "length") {
+            return Ok(None);
+        }
+        Ok(match function {
+            Value::Function(index) => Self::function_name_or_length(module, *index, key),
+            Value::Closure(closure_id) => {
+                Some(self.closure_property_value(module, *closure_id, key)?)
+            }
+            Value::GeneratorFunction(closure_id)
+            | Value::AsyncFunction(closure_id)
+            | Value::AsyncGeneratorFunction(closure_id) => {
+                if let (Some(metadata), "name") =
+                    (self.closure_method_metadata.get(closure_id), key)
+                {
+                    Some(Value::Str(metadata.name.clone()))
+                } else {
+                    let owner_module = self.foreign_closure_module(function, module)?;
+                    let function_index = self.closure_function_index(*closure_id)?;
+                    Self::function_name_or_length(
+                        owner_module.as_deref().unwrap_or(module),
+                        function_index,
+                        key,
+                    )
+                }
+            }
+            Value::BuiltinFunction(builtin) => match builtin.kind {
+                BuiltinFunctionKind::BoundFunction => {
+                    self.bound_function_property(module, builtin, key)?
+                }
+                BuiltinFunctionKind::StandardConstructor => {
+                    Some(self.standard_constructor_property(builtin, key)?)
+                }
+                _ if key == "name" => Some(Value::str(builtin.spec_name())),
+                _ => builtin.spec_length().map(Value::Int),
+            },
+            _ => None,
+        })
+    }
+
+    /// bd-9vouw.17: the object that holds `value`'s own properties for the
+    /// Object.* reflection built-ins: an object itself, a built-in's property
+    /// object, or a function's backing object (created and seeded on demand
+    /// when `create` is set). `None` for primitives, and for functions when
+    /// no module is available or `create` is unset and nothing exists yet.
+    fn own_property_holder(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+        create: bool,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        if let Value::Object(id) = value {
+            return Ok(Some(*id));
+        }
+        if let Value::BuiltinFunction(builtin) = value
+            && let Some(object) = Self::builtin_function_property_object(builtin)
+        {
+            return Ok(Some(object));
+        }
+        if !value.is_callable() {
+            return Ok(None);
+        }
+        let Some(module) = module else {
+            return Ok(None);
+        };
+        if create {
+            self.ensure_function_own_property_object(module, value)
+        } else {
+            self.function_own_property_object(module, value)
+        }
+    }
+
+    /// bd-9vouw.17: whether a function value has the own property `key`, or
+    /// `None` if `function` is not a function this model covers. Once the
+    /// backing object exists it decides (a deleted `name` is gone); before
+    /// that the standard `name` and `length` are own. `prototype` keeps its
+    /// dedicated rules in `object_own_property_contains`.
+    fn function_own_property_exists(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<bool>, InterpreterError> {
+        let is_builtin_without_property_object = matches!(
+            function,
+            Value::BuiltinFunction(builtin)
+                if Self::builtin_function_property_object(builtin).is_none()
+        );
+        if !matches!(
+            function,
+            Value::Function(_)
+                | Value::Closure(_)
+                | Value::GeneratorFunction(_)
+                | Value::AsyncFunction(_)
+                | Value::AsyncGeneratorFunction(_)
+        ) && !is_builtin_without_property_object
+        {
+            return Ok(None);
+        }
+        if key.as_str() == Some("prototype") {
+            return Ok(None);
+        }
+        if let Some(backing) = self.function_own_property_object(module, function)? {
+            return Ok(Some(
+                self.heap
+                    .get(backing.0 as usize)
+                    .is_some_and(|object| object.contains_own_runtime_property(key)),
+            ));
+        }
+        Ok(Some(match (key.as_str(), function) {
+            (Some("name"), _) => true,
+            (Some("length"), Value::BuiltinFunction(builtin)) => {
+                matches!(
+                    builtin.kind,
+                    BuiltinFunctionKind::BoundFunction | BuiltinFunctionKind::StandardConstructor
+                ) || builtin.spec_length().is_some()
+            }
+            (Some("length"), _) => true,
+            _ => false,
+        }))
     }
 
     fn standard_constructor_name(

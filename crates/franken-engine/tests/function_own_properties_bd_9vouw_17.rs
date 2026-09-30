@@ -268,6 +268,21 @@ fn builtin_functions_have_length_and_name() {
     );
 }
 
+/// `Date` and `Promise` keep their statics on a property object of their own;
+/// that object had no `length` or `name`, so `Date.name` was undefined.
+#[test]
+fn materialized_constructors_have_length_and_name() {
+    router_check(
+        "const d = Object.getOwnPropertyDescriptor(Date, 'name'); \
+         const p = Object.getOwnPropertyDescriptor(Promise, 'length'); \
+         [Date.name, Date.length, Promise.name, Promise.length, d.writable, d.enumerable, \
+         d.configurable, p.value, p.writable, Object.keys(Date).length, \
+         Object.keys(Promise).length, new Promise(() => {}).constructor.name, \
+         Promise.resolve(1).constructor === Promise].join(' ');",
+        "Date 7 Promise 1 false false true 1 false 0 0 Promise true",
+    );
+}
+
 #[test]
 fn builtin_functions_hold_and_delete_own_properties() {
     router_check(

@@ -34348,6 +34348,8 @@ impl InterpreterCore {
     /// live on its bound property object, like `Date`.
     fn alloc_promise_global(&mut self) -> Result<Value, InterpreterError> {
         let properties = self.alloc_object_with_properties(&[
+            ("length", Value::Int(1)),
+            ("name", Value::str("Promise")),
             (
                 "resolve",
                 Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
@@ -34374,6 +34376,7 @@ impl InterpreterCore {
             ),
         ])?;
         self.mark_builtin_members_non_enumerable(properties)?;
+        self.mark_materialized_constructor_name_and_length(properties)?;
         Ok(Value::BuiltinFunction(
             BuiltinFunction::promise_constructor(properties),
         ))
@@ -34574,8 +34577,28 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Gives a materialized constructor's property object the standard own
+    /// `length` and `name` (ES2020 17: non-writable, non-enumerable,
+    /// configurable). `Date.name` and `Promise.length` were undefined, so
+    /// `Object.getPrototypeOf(d).constructor.name` was not "Date".
+    fn mark_materialized_constructor_name_and_length(
+        &mut self,
+        properties: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        for key in ["length", "name"] {
+            self.set_own_property_attributes(
+                properties,
+                &RuntimePropertyKey::String(JsString::from(key)),
+                FUNCTION_NAME_LENGTH_ATTRIBUTES,
+            )?;
+        }
+        Ok(())
+    }
+
     fn alloc_date_global(&mut self) -> Result<Value, InterpreterError> {
         let properties = self.alloc_object_with_properties(&[
+            ("length", Value::Int(7)),
+            ("name", Value::str("Date")),
             (
                 "now",
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::DateNow)),
@@ -34590,6 +34613,7 @@ impl InterpreterCore {
             ),
         ])?;
         self.mark_builtin_members_non_enumerable(properties)?;
+        self.mark_materialized_constructor_name_and_length(properties)?;
         Ok(Value::BuiltinFunction(BuiltinFunction::date_constructor(
             properties,
         )))

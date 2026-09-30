@@ -41,7 +41,8 @@ fn a_local_binding_shadows_the_global() {
 /// Decode (ES2020 18.2.6.1.2): `decodeURI` keeps the escapes of reserved
 /// characters as written, a malformed escape or ill-formed UTF-8
 /// (truncated, overlong, a surrogate, a 5-byte lead) is a catchable
-/// `URIError: URI malformed`, and a missing argument is `undefined`. Before
+/// `URIError: URI malformed`, a missing argument is `undefined`, and the
+/// argument's string form is ToString's (an array joins, 1e21). Before
 /// this, `decodeURI` decoded `%2F` too, every malformed input came back
 /// unchanged (so `try { decodeURIComponent(s) } catch` never caught), and
 /// a call with no argument read a neighboring register.
@@ -50,9 +51,10 @@ fn decode_keeps_reserved_escapes_and_rejects_malformed_input() {
     assert_eq!(
         eval_to_string(
             "[decodeURI('%2F%3B%41%23%3f'), decodeURIComponent('%2F%3B%41%23%3f'), \
-             decodeURI('%C3%A9%20'), encodeURIComponent(), decodeURI()].join('|');"
+             decodeURI('%C3%A9%20'), encodeURIComponent(), decodeURI(), \
+             encodeURIComponent([1, 2]), encodeURI(1e21)].join('|');"
         ),
-        "%2F%3BA%23%3f|/;A#?|é |undefined|undefined"
+        "%2F%3BA%23%3f|/;A#?|é |undefined|undefined|1%2C2|1e+21"
     );
     assert_eq!(
         eval_to_string(

@@ -84939,7 +84939,7 @@ impl InterpreterCore {
                 // encodeURIComponent(value): slot-0 convention, shared by direct
                 // calls and the first-class value.
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let input_str = value_to_string_for_uri(&value);
+                let input_str = self.value_to_string(&value);
                 let encoded = percent_encode_utf8(&input_str, should_encode_uri_component);
 
                 Ok(Value::str(encoded))
@@ -84950,7 +84950,7 @@ impl InterpreterCore {
                 // calls and the first-class value. A malformed escape is a
                 // URIError (ES2020 18.2.6.1.2), which callers catch.
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let encoded_str = value_to_string_for_uri(&value);
+                let encoded_str = self.value_to_string(&value);
                 match percent_decode_utf8(&encoded_str, "") {
                     Some(decoded) => Ok(Value::str(decoded)),
                     None => Err(self.throw_uri_malformed(None)),
@@ -84961,7 +84961,7 @@ impl InterpreterCore {
                 // encodeURI(value): slot-0 convention, shared by direct
                 // calls and the first-class value.
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let input_str = value_to_string_for_uri(&value);
+                let input_str = self.value_to_string(&value);
                 let encoded = percent_encode_utf8(&input_str, should_encode_uri);
 
                 Ok(Value::str(encoded))
@@ -84972,7 +84972,7 @@ impl InterpreterCore {
                 // calls and the first-class value. A malformed escape is a
                 // URIError (ES2020 18.2.6.1.2), which callers catch.
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let encoded_str = value_to_string_for_uri(&value);
+                let encoded_str = self.value_to_string(&value);
                 match percent_decode_utf8(&encoded_str, ";/?:@&=+$,#") {
                     Some(decoded) => Ok(Value::str(decoded)),
                     None => Err(self.throw_uri_malformed(None)),
@@ -96645,20 +96645,6 @@ fn unescape_code_units(units: &[u16]) -> Vec<u16> {
 // ---------------------------------------------------------------------------
 // Shared UTF-8 Percent Codec
 // ---------------------------------------------------------------------------
-
-/// Convert a JavaScript value to string for URI encoding.
-fn value_to_string_for_uri(value: &Value) -> String {
-    match value {
-        Value::Str(s) => s.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Undefined => "undefined".to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Object(_) => "[object Object]".to_string(),
-        _ => "[object Object]".to_string(),
-    }
-}
 
 /// Check if a character should be encoded in a URI context.
 /// Based on RFC 3986 unreserved characters: ALPHA / DIGIT / "-" / "." / "_" / "~"

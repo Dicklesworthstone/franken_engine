@@ -2116,7 +2116,7 @@ struct ParseExecutionContext<'a> {
 /// The private names one class body declares and the `#x` references met
 /// while parsing it. A reference the body does not declare must be declared
 /// by an enclosing class body.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct PrivateNameScope {
     declared: BTreeMap<String, PrivateNameDeclaration>,
     referenced: BTreeSet<String>,
@@ -2124,7 +2124,7 @@ struct PrivateNameScope {
 
 /// What a private name was declared as, for the duplicate-declaration early
 /// error: only a getter and a setter of the same placement may share a name.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrivateNameDeclaration {
     Field { is_static: bool },
     Method { is_static: bool },

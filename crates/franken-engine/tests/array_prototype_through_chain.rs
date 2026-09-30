@@ -102,6 +102,15 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"var n = { valueOf() { return 1; } }; console.log([1, 2, 3].slice(n).join(), [1, 2, 3].indexOf(2, n), [1, 2, 3].at(n), new Array(3).fill(0, n).join(), [3, 2, 1].includes(3, n), [1, 2].join({ toString() { return '+'; } }), [1, 2, 3].splice(n, n).join(), [1, 2].with(n, 9).join(), [{ a: 1 }].indexOf({ a: 1 }));"#,
         "2,3 1 2 ,0,0 false 1+2 2 1,9 -1",
     ),
+    // A hole-skipping method over a huge sparse array-like visits the
+    // present indices only (the generic path probed every one of 2^32 and
+    // ran out of budget). Node v22.2.0 prints the same values; for the first
+    // (not-found) case it takes tens of seconds, probing each index.
+    (
+        "huge_sparse_array_likes",
+        r#"console.log(Array.prototype.indexOf.call({ length: 4294967296 }, 1), Array.prototype.indexOf.call({ length: 2 ** 32, 7: 'x' }, 'x'), Array.prototype.some.call({ length: 2 ** 32, 3: 1 }, (v) => v === 1), Array.prototype.lastIndexOf.call({ length: 2 ** 17, 5: 'a', 9: 'a' }, 'a'), Array.prototype.reduce.call({ length: 2 ** 20, 1: 'p', 100: 'q' }, (acc, v, i) => acc + v + i, ''));"#,
+        "-1 7 true 9 p1q100",
+    ),
     (
         "arguments_and_plain_array_likes",
         r#"function f() { return Array.prototype.slice.call(arguments, 1).concat(Array.prototype.map.call(arguments, (x) => x * 10)); } var o2 = { length: 2 }; Array.prototype.push.call(o2, 'a'); var s = { length: 2, 0: 'b', 1: 'a' }; Array.prototype.sort.call(s); var sorted = s[0] + s[1]; Array.prototype.reverse.call(s); console.log(f(1, 2, 3).join(), JSON.stringify(o2), sorted, s[0] + s[1], Array.prototype.reduceRight.call({ length: 3, 0: 'a', 1: 'b', 2: 'c' }, (acc, v) => acc + v));"#,

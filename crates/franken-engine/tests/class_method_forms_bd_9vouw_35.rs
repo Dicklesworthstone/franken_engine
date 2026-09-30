@@ -110,6 +110,14 @@ fn modifiers_without_whitespace_before_the_name() {
          typeof C.ag().next, C.s1(), c.static, c.async, Object.keys(c).join()].join(' ');",
         "1 true true function s 4 5 static,async",
     );
+    // The same forms in an object literal were "invalid object shorthand
+    // property".
+    check(
+        "const k = 'z'; const o = {async*g(){yield 1}, async[k](){return 2}, \
+         get['b'](){return 3}, set['c'](v){this._c=v}, get\"q\"(){return 'q'}}; o.c = 7; \
+         [typeof o.g().next, o.z() instanceof Promise, o.b, o._c, o.q].join(' ');",
+        "function true 3 7 q",
+    );
 }
 
 /// `get` / `set` directly followed by `(` name an ordinary method (Map-like

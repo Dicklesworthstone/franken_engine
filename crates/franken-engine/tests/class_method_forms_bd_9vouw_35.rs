@@ -95,3 +95,28 @@ fn modifier_names_stay_ordinary_method_names() {
         "ag",
     );
 }
+
+/// `get` / `set` directly followed by `(` name an ordinary method (Map-like
+/// classes such as lru-cache). They used to become accessors with an empty
+/// name, so `new Cache().get(k)` threw "expected function, got undefined".
+#[test]
+fn methods_named_get_and_set_are_methods() {
+    check(
+        "class Cache { constructor() { this.m = new Map(); } get(k) { return this.m.get(k); } \
+         set(k, v) { this.m.set(k, v); return this; } static get() { return 'S'; } \
+         static set(v) { return v * 2; } } \
+         const c = new Cache().set('a', 1).set('b', 2); \
+         [c.get('a'), c.get('b'), Cache.get(), Cache.set(21), \
+         Object.getOwnPropertyNames(Cache.prototype).join(), \
+         typeof Object.getOwnPropertyDescriptor(Cache.prototype, 'get').value].join(' ');",
+        "1 2 S 42 constructor,get,set function",
+    );
+    // Accessors keep working, including across a line break and for names
+    // that merely start with `get` / `set`.
+    check(
+        "class D { get\nx() { return 'gx'; } set$(v) { return 'd' + v; } \
+         get $() { return 'dollar'; } set y(v) { this._y = v; } } \
+         const d = new D(); d.y = 5; [d.x, d.set$(1), d.$, d._y].join(' ');",
+        "gx d1 dollar 5",
+    );
+}

@@ -3907,6 +3907,18 @@ fn starts_with_keyword(text: &str, kw: &str) -> bool {
             .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
 }
 
+/// The rest of a class element after a `get` / `set` accessor modifier, or
+/// `None` when `keyword` is not a modifier there: `get() {}` and `set$(v) {}`
+/// are ordinary methods named `get` and `set$` (Map-like classes).
+fn class_accessor_prefix<'a>(element: &'a str, keyword: &str) -> Option<&'a str> {
+    let after = element.strip_prefix(keyword)?;
+    if after.starts_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '$' | '\\')) {
+        return None;
+    }
+    let after = after.trim_start();
+    (!after.starts_with('(')).then_some(after)
+}
+
 fn starts_with_export_block_statement(text: &str) -> bool {
     let Some(rest) = text.strip_prefix("export") else {
         return false;
@@ -12431,12 +12443,12 @@ fn parse_class_body_members(
         let rest = if is_async || is_generator {
             kind = MethodKind::Method;
             rest
-        } else if starts_with_keyword(rest, "get") {
+        } else if let Some(after) = class_accessor_prefix(rest, "get") {
             kind = MethodKind::Get;
-            rest.strip_prefix("get").unwrap_or(rest).trim_start()
-        } else if starts_with_keyword(rest, "set") {
+            after
+        } else if let Some(after) = class_accessor_prefix(rest, "set") {
             kind = MethodKind::Set;
-            rest.strip_prefix("set").unwrap_or(rest).trim_start()
+            after
         } else {
             kind = MethodKind::Method;
             rest

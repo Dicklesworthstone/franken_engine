@@ -57301,11 +57301,23 @@ impl InterpreterCore {
             // properties; concise methods expose only `name`.
             return false;
         }
-        if let Value::Object(object_id) = receiver
-            && let RuntimePropertyKey::String(key) =
-                self.executable_property_key_from_value(property)
-        {
-            return self.ordinary_own_string_key_is_enumerable(*object_id, &key);
+        if let Value::Object(object_id) = receiver {
+            match self.executable_property_key_from_value(property) {
+                RuntimePropertyKey::String(key) => {
+                    return self.ordinary_own_string_key_is_enumerable(*object_id, &key);
+                }
+                // A Symbol-keyed property's [[Enumerable]] decides too: it was
+                // reported enumerable whenever it existed, so
+                // `Set.prototype.propertyIsEnumerable(Symbol.toStringTag)`
+                // was true (Test262 verifyProperty on @@toStringTag).
+                key @ RuntimePropertyKey::Symbol(_) => {
+                    return self.object_own_property_contains(receiver, property)
+                        && self
+                            .heap
+                            .get(object_id.0 as usize)
+                            .is_some_and(|object| object.own_property_attributes(&key).enumerable);
+                }
+            }
         }
         self.object_own_property_contains(receiver, property)
     }

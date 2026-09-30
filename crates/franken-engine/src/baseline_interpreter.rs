@@ -38141,6 +38141,28 @@ impl InterpreterCore {
         if let Some(Value::Object(object_id)) = receiver {
             receiver = Some(self.this_primitive_receiver(builtin, object_id));
         }
+        // ES2020 21.1.3: a String.prototype method (but toString/valueOf,
+        // which require a String) starts with ToString(this), so another
+        // object `this` is ToPrimitive'd with the string hint and its
+        // toString runs; `String.prototype.toUpperCase.call({ toString() {
+        // return 'ab' } })` read "[object Object]".
+        if let Some(object) = receiver.as_ref().filter(|value| value.is_object_like())
+            && builtin.spec_owner() == Some("String.prototype")
+            && !matches!(
+                builtin.kind,
+                BuiltinFunctionKind::StringToString | BuiltinFunctionKind::StringValueOf
+            )
+        {
+            self.gc_nested_request = None;
+            let primitive = self.coerce_runtime_primitive(Some(module), object.clone(), true)?;
+            if matches!(primitive, Value::Symbol(_)) {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("string-convertible this for {}", builtin.display_name()),
+                    got: "symbol".to_string(),
+                });
+            }
+            receiver = Some(primitive);
+        }
         // Array.prototype methods on a Proxy, an array-like that is not an
         // Array or a primitive `this` run over [[Get]]/[[Set]]/[[HasProperty]]
         // /[[Delete]] (getters and traps see every step), and so does a concat
@@ -38206,6 +38228,20 @@ impl InterpreterCore {
                 let mut text = self.value_to_string(&receiver);
                 for index in 0..args.count {
                     let argument = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    // An object argument's toString runs (ToString).
+                    let argument = if argument.is_object_like() {
+                        self.gc_nested_request = None;
+                        self.coerce_runtime_primitive(Some(module), argument, true)?
+                    } else {
+                        argument
+                    };
+                    if matches!(argument, Value::Symbol(_)) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "string-convertible String.prototype.concat argument"
+                                .to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     text.push_str(&self.value_to_string(&argument));
                     self.check_string_limit(text.len())?;
                 }

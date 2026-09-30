@@ -65590,12 +65590,24 @@ impl InterpreterCore {
         if self.heap.get(array_id.0 as usize).is_none() {
             return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
         }
+        // ToLength(Get(O, "length")) (ES2020 7.1.20) of a primitive length:
+        // a string is StringToNumber (`"2.3E2"`, `"0x0002"`), a boolean 0 or
+        // 1, and the number is truncated into [0, 2^53 - 1]. A string length
+        // counted as 0, so `Array.prototype.map.call({ length: '2' }, f)`
+        // saw no elements.
         Ok(match self.chain_data_property(array_id, "length") {
             Some(Value::Int(length)) if *length > 0 => {
                 usize::try_from(*length).unwrap_or(usize::MAX)
             }
-            Some(Value::Float(length)) if length.inner() > 0.0 => length.inner() as usize,
-            _ => 0,
+            Some(length) => {
+                let number = Self::coerce_to_float(length).unwrap_or(0.0);
+                if number > 0.0 {
+                    number.trunc().min(9_007_199_254_740_991.0) as usize
+                } else {
+                    0
+                }
+            }
+            None => 0,
         })
     }
 

@@ -58,6 +58,13 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const o = Object.create(Array.prototype); o.length = 2; o[0] = 'a'; o[1] = 'b'; console.log([typeof Array.prototype[Symbol.iterator], Array.prototype[Symbol.iterator] === Array.prototype.values, [][Symbol.iterator] === Array.prototype.values, typeof o[Symbol.iterator], [...o].join('+'), Array.from(o).length].join(' '));"#,
         "function true true function a+b 2",
     ),
+    // ToLength of a primitive `length`: a string is StringToNumber and a
+    // boolean 0 or 1; a string length read as 0.
+    (
+        "string_and_boolean_lengths",
+        r#"var o1 = { 229: 229, 230: 230, length: '2.3E2' }, o2 = { 0: 12, 1: 11, 2: 9, length: '2.5' }, o3 = { 0: 11, 1: 9, 2: 12, length: '0x0002' }, o4 = { 0: 'a', 1: 'b', length: true }, o5 = { 0: 'a', length: -3 }, o6 = { 0: 'a', 1: 'b', length: ' 2 ' }, o7 = { 0: 'a', length: 'abc' }; console.log([Array.prototype.lastIndexOf.call(o1, 229), Array.prototype.lastIndexOf.call(o1, 230), Array.prototype.every.call(o2, (v) => v > 10), Array.prototype.map.call(o3, (v) => v < 10).length, Array.prototype.join.call(o4), JSON.stringify(Array.prototype.join.call(o5)), Array.prototype.slice.call(o6).join(''), Array.from(o6).length, Array.prototype.indexOf.call(o7, 'a')].join(' '));"#,
+        r#"229 -1 true 2 a "" ab 2 -1"#,
+    ),
     (
         "hole_reads_object_prototype_index",
         r#"const a = [1, , 3]; Object.prototype[1] = 'P'; console.log(a.join('-'), a.indexOf('P')); delete Object.prototype[1];"#,

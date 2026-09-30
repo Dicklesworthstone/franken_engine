@@ -2858,7 +2858,10 @@ fn header_chain_takes_unbraced_body(tail: &str, in_do_statement: bool) -> bool {
         .strip_prefix("else")
         .filter(|rest| rest.starts_with(char::is_whitespace))
         .map_or(tail, str::trim_start);
-    if header.is_empty() || header.contains('{') {
+    // A braced body shows after the header's parentheses (the recursion
+    // below rejects it); a `{` inside them is an object literal or a
+    // destructuring pattern: `if (visit(item, {\n  depth\n}))\n  return;`.
+    if header.is_empty() {
         return false;
     }
     if starts_with_keyword(header, "while") && in_do_statement {

@@ -40,7 +40,6 @@ enum Expect {
 // focused bugs filed from this corpus's first real run on 2026-09-23).
 const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
 const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
-const TYPED_ARRAYS: &str = "bd-performance-conformance-bridge-tu32j.16.7";
 const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 
 /// Case id -> expectation. Every corpus case must appear exactly once.
@@ -55,7 +54,8 @@ const REGEXP_GRAMMAR: &str = "bd-performance-conformance-bridge-tu32j.17.1";
 /// with Date methods, RegExp replace and the URI globals (861c1a92c /
 /// 247a2a99c, bd-9vouw.51-.53), 13 with BigInt arithmetic (bd-9vouw.54), 27
 /// once array literal elisions became holes, 32 with `Symbol.hasInstance`,
-/// and 30 once `for await` ran the async iteration protocol.
+/// 30 once `for await` ran the async iteration protocol, and 12 with the
+/// DataView Float64/Int16/BigInt64 accessors (2026-09-28).
 const LEDGER: &[(&str, Expect)] = &[
     ("01_closure", Expect::Pass),
     ("02_class_super", Expect::Pass),
@@ -71,7 +71,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("09_regexp_replace", Expect::Pass),
     ("10_proxy_reflect", Expect::Pass),
     ("11_symbol_iter", Expect::Pass),
-    ("12_typed_arrays", Expect::KnownFailure(TYPED_ARRAYS)),
+    ("12_typed_arrays", Expect::Pass),
     ("13_bigint", Expect::Pass),
     ("14_labels_switch", Expect::Pass),
     ("15_try_finally", Expect::Pass),

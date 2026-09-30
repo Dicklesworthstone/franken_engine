@@ -2898,8 +2898,25 @@ fn text_after_last_top_level_terminator(statement: &str) -> &str {
 /// unbraced body of other headers: `if (c) do x++; while (x < 3);` is one
 /// if statement, as js-yaml's bundle writes it across three lines.
 fn do_statement_awaits_while(statement: &str) -> bool {
-    let body = unbraced_body_of_header_chain(statement);
-    starts_with_keyword(body, "do") && find_top_level_keyword(body, " while").is_none()
+    let awaits = |text: &str| {
+        let body = unbraced_body_of_header_chain(text);
+        starts_with_keyword(body, "do") && find_top_level_keyword(body, " while").is_none()
+    };
+    // `if (a) x(); else if (b)\n  do\n    y();\n  while (c);` (pako's
+    // deflate): the do statement is the last else clause's body.
+    awaits(statement) || text_after_last_top_level_else(statement).is_some_and(awaits)
+}
+
+/// The clause after the last top-level `else` of `statement` (`if (a) x();
+/// else if (b) do y();` gives `if (b) do y();`), or `None`.
+fn text_after_last_top_level_else(statement: &str) -> Option<&str> {
+    let mut rest = statement;
+    let mut last = None;
+    while let Some(at) = find_top_level_keyword(rest, " else ") {
+        rest = &rest[at + " else ".len()..];
+        last = Some(rest);
+    }
+    last.map(str::trim_start)
 }
 
 /// `statement` without its leading chain of statement headers (`if (...)`,

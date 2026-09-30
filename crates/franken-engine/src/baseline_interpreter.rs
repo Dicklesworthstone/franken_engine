@@ -5374,9 +5374,23 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 15] = [
-    "Array", "String", "Number", "Boolean", "BigInt", "Symbol", "Map", "Set", "Function", "Date",
-    "RegExp", "Promise", "WeakMap", "WeakSet", "DataView",
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 16] = [
+    "Array",
+    "String",
+    "Number",
+    "Boolean",
+    "BigInt",
+    "Symbol",
+    "Map",
+    "Set",
+    "Function",
+    "Date",
+    "RegExp",
+    "Promise",
+    "WeakMap",
+    "WeakSet",
+    "DataView",
+    "ArrayBuffer",
 ];
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
@@ -88851,6 +88865,11 @@ impl InterpreterCore {
             ),
         })?;
 
+        // Every ArrayBuffer (constructed, a view's `.buffer`, a slice) inherits
+        // from %ArrayBuffer.prototype%: `instanceof ArrayBuffer`, `constructor`
+        // and the prototype's methods. Materialized before the buffer's id is
+        // taken, since the first call allocates the prototype object.
+        let prototype = self.ensure_builtin_prototype("ArrayBuffer")?;
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
             return Err(
@@ -88867,6 +88886,7 @@ impl InterpreterCore {
             );
 
         let mut object = HeapObject::new();
+        object.prototype = Some(prototype);
         object
             .properties
             .insert("__type".to_string(), Value::str("ArrayBuffer"));
@@ -92172,7 +92192,8 @@ impl InterpreterCore {
             "Promise" => defined(Self::promise_property_value(key)),
             // DataView: the accessors instances already expose, served from
             // the canonical prototype too.
-            "Map" | "Set" | "Date" | "RegExp" | "WeakMap" | "WeakSet" | "DataView" => {
+            "Map" | "Set" | "Date" | "RegExp" | "WeakMap" | "WeakSet" | "DataView"
+            | "ArrayBuffer" => {
                 Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)
             }
             _ => None,

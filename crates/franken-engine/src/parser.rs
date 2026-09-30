@@ -5789,7 +5789,7 @@ fn parse_new_expression(
         } else {
             parse_comma_separated_exprs(args_inner, span, context, recursion_depth + 1)?
         };
-        if contains_optional_chain(&callee) {
+        if new_callee_is_optional_chain(callee_src, &callee) {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "optional chaining cannot be used in constructor position",
@@ -5804,7 +5804,7 @@ fn parse_new_expression(
     }
     // `new Foo` without arguments.
     let callee = parse_expression(rest, span, context, recursion_depth + 1)?;
-    if contains_optional_chain(&callee) {
+    if new_callee_is_optional_chain(rest, &callee) {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "optional chaining cannot be used in constructor position",
@@ -7464,6 +7464,16 @@ fn parenthesized_chain_boundary(source: &str, parsed: Expression) -> Expression 
     } else {
         parsed
     }
+}
+
+/// Whether a `new` callee is an optional chain, which ES2020 12.3.9.1 makes a
+/// SyntaxError (`new a?.b()`). A parenthesized callee is an ordinary operand
+/// whatever it holds (zod: `new (params?.Err ?? Err)(issues)`), and a chain
+/// inside a binary or conditional operand is not the callee's own chain.
+fn new_callee_is_optional_chain(callee_src: &str, callee: &Expression) -> bool {
+    let parenthesized = callee_src.starts_with('(')
+        && extract_balanced(callee_src, '(', ')').is_some_and(|(_, rest)| rest.trim().is_empty());
+    !parenthesized && expression_is_optional_chain(callee)
 }
 
 /// Whether `expression` is a member/call chain containing an optional link.

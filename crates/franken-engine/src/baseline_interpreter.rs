@@ -58877,32 +58877,21 @@ impl InterpreterCore {
                 Ok(Value::Promise(handle.0))
             }
             "promise:resolve" => {
-                // If arg0 is a Promise, resolve it with arg1.
-                // Otherwise create a pre-resolved promise with arg0 as the value.
+                // ES2020 25.6.4.5 Promise.resolve(x) (PromiseResolve with
+                // %Promise%): a promise is returned as it is, any other value
+                // settles a new promise. Extra arguments are ignored. This
+                // never settles an existing promise: only that promise's own
+                // resolving functions may, so `Promise.resolve(p, v)` cannot
+                // settle someone else's pending `p`, and `Promise.resolve(p)`
+                // no longer tries to fulfill `p` with undefined (a TypeError
+                // once `p` had settled, e.g. `Promise.resolve(asyncFn())`).
                 let arg0 = if args.count > 0 {
                     self.read_reg(args.start)?
                 } else {
                     Value::Undefined
                 };
                 match arg0 {
-                    Value::Promise(h) => {
-                        // Resolve the existing promise with the given value.
-                        let val = if args.count > 1 {
-                            let reg = args.start.checked_add(1).ok_or(
-                                InterpreterError::RegisterOutOfBounds {
-                                    register: args.start,
-                                    max: self.config.max_registers,
-                                },
-                            )?;
-                            self.read_reg(reg)?
-                        } else {
-                            Value::Undefined
-                        };
-                        let js_val = self.promise_value(&val)?;
-                        let handle = crate::promise_model::PromiseHandle(h);
-                        self.fulfill_promise(handle, js_val, label.clone())?;
-                        Ok(Value::Promise(h))
-                    }
+                    Value::Promise(h) => Ok(Value::Promise(h)),
                     _ => {
                         // Promise.resolve(value): a pending promise resolved
                         // with `value`. Thenable assimilation (ES 25.6.4.5.1)
@@ -58918,36 +58907,17 @@ impl InterpreterCore {
                 }
             }
             "promise:reject" => {
+                // ES2020 25.6.4.4 Promise.reject(r): always a new promise
+                // rejected with `r`, even when `r` is itself a promise; extra
+                // arguments are ignored (see promise:resolve).
                 let arg0 = if args.count > 0 {
                     self.read_reg(args.start)?
                 } else {
                     Value::Undefined
                 };
-                match arg0 {
-                    Value::Promise(h) => {
-                        let reason = if args.count > 1 {
-                            let reg = args.start.checked_add(1).ok_or(
-                                InterpreterError::RegisterOutOfBounds {
-                                    register: args.start,
-                                    max: self.config.max_registers,
-                                },
-                            )?;
-                            self.read_reg(reg)?
-                        } else {
-                            Value::Undefined
-                        };
-                        let js_reason = self.promise_value(&reason)?;
-                        let handle = crate::promise_model::PromiseHandle(h);
-                        self.reject_promise(handle, js_reason, label.clone())?;
-                        Ok(Value::Promise(h))
-                    }
-                    _ => {
-                        // Promise.reject(reason) — create a pre-rejected promise.
-                        let js_reason = self.promise_value(&arg0)?;
-                        let handle = self.create_rejected_promise(js_reason, label.clone())?;
-                        Ok(Value::Promise(handle.0))
-                    }
-                }
+                let js_reason = self.promise_value(&arg0)?;
+                let handle = self.create_rejected_promise(js_reason, label.clone())?;
+                Ok(Value::Promise(handle.0))
             }
             "promise:then" => {
                 // arg0 = promise handle, arg1 = onFulfilled (optional),

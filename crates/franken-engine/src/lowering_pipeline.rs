@@ -27300,7 +27300,22 @@ fn object_receiver_static_call_capability(
         false => well_formed_static_name(property)?,
         true => well_formed_string_literal(property)?,
     };
-    match property_name {
+    object_receiver_static_member_capability(property_name)
+}
+
+/// The `Object.*` statics whose handlers use the receiver-placeholder
+/// convention (see `object_receiver_static_call_capability`).
+pub(crate) const OBJECT_RECEIVER_STATIC_MEMBERS: [&str; 5] = [
+    "is",
+    "isExtensible",
+    "preventExtensions",
+    "seal",
+    "isSealed",
+];
+
+/// The hostcall of the receiver-placeholder `Object.*` static `member`.
+pub(crate) fn object_receiver_static_member_capability(member: &str) -> Option<&'static str> {
+    match member {
         "is" => Some("builtin:ObjectIs"),
         "isExtensible" => Some("builtin:ObjectIsExtensible"),
         "preventExtensions" => Some("builtin:ObjectPreventExtensions"),

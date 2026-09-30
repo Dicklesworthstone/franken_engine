@@ -251,3 +251,23 @@ fn error_name_and_message_are_inherited_and_not_enumerable() {
         "TypeError|true|0|false"
     );
 }
+
+/// ES2022 InstallErrorCause: `new Error(message, { cause })` (also the call
+/// form, the other error constructors and a subclass's `super(m, options)`)
+/// installs an own non-enumerable `cause`, including an inherited one; an
+/// options object without `cause` installs none. Expected string is Node
+/// v22.2.0's output.
+#[test]
+fn error_options_cause_is_installed() {
+    assert_eq!(
+        eval_value(
+            r#"const e2 = new Error('a', { cause: 1 });
+const inner = new Error('inner'); const e5 = new Error('outer', { cause: inner });
+class E extends Error { constructor(m, o) { super(m, o); } }
+const e7 = new E('m', { cause: 3 });
+const d = Object.getOwnPropertyDescriptor(e2, 'cause');
+[e2.cause, d.enumerable, d.writable, d.configurable, e5.cause === inner, e5.cause.message, new TypeError('x', { cause: 'why' }).cause, Error('a', { cause: 2 }).cause, e7.cause, 'cause' in new Error('a', {}), 'cause' in new Error('a', Object.create({ cause: 'inh' })), JSON.stringify(e2), Object.keys(e2).length].join(' ')"#
+        ),
+        "1 false true true true inner why 2 3 false true {} 0"
+    );
+}

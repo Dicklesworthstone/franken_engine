@@ -102,6 +102,15 @@ fn static_builtins_are_callable_values() {
     check("const J = JSON; J.stringify({ a: 1 });", "{\"a\":1}");
     check("const p = parseInt; p('42px');", "42");
     check("parseInt === parseInt;", "true");
+    // js-yaml's bundle calls these through a value; the runtime's list of
+    // first-class Object statics lacked them ("expected known static
+    // builtin").
+    check(
+        "const d = Object.getOwnPropertyDescriptors; const dp = Object.defineProperties; \
+         const o = dp({}, d({ a: 1, get b() { return 2; } })); \
+         [o.a, o.b, typeof d, d.length, dp.length, d.name].join();",
+        "1,2,function,1,2,getOwnPropertyDescriptors",
+    );
 }
 
 #[test]

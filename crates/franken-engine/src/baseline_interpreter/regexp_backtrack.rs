@@ -26,6 +26,9 @@ const STEP_BUDGET_BASE: u64 = 10_000_000;
 const STEP_BUDGET_PER_CHAR: u64 = 1_000;
 /// Instructions a compiled pattern may hold (counted repetition expands).
 const MAX_PROGRAM_LEN: usize = 1 << 16;
+/// A repetition count above this runs as a counted loop instead of being
+/// unrolled: `(...){0,999}` over a group unrolled past MAX_PROGRAM_LEN.
+const MAX_UNROLLED_REPEAT: u32 = 16;
 const HIGH_SURROGATES: (u32, u32) = (0xD800, 0xDBFF);
 const LOW_SURROGATES: (u32, u32) = (0xDC00, 0xDFFF);
 const SUPPLEMENTARY: (u32, u32) = (0x1_0000, 0x10_FFFF);
@@ -1251,6 +1254,27 @@ enum Inst {
     Mark(usize),
     /// Fail when the iteration begun at the marked position was empty.
     CheckProgress(usize),
+    /// Set a counted loop's iteration counter to 0 (undoable).
+    CounterReset(usize),
+    /// The head of a counted loop: below `min` iterations the body is
+    /// mandatory; from `min` up to `max` it is a greedy or lazy choice
+    /// between `body` and `exit`; at `max` the loop exits.
+    CountedLoop {
+        counter: usize,
+        min: usize,
+        max: Option<usize>,
+        greedy: bool,
+        body: usize,
+        exit: usize,
+    },
+    /// The end of a counted loop's iteration: once `min` iterations are
+    /// done, an iteration that matched the empty string fails (ES2020
+    /// 21.2.2.5.1 RepeatMatcher); otherwise count it (undoable).
+    CounterStep {
+        counter: usize,
+        mark: usize,
+        min: usize,
+    },
     BackRef {
         group: usize,
         backward: bool,
@@ -1379,6 +1403,42 @@ impl Compiler {
         Ok(())
     }
 
+    /// `body{min,max}` as one copy of the body in a loop over a counter
+    /// register, for counts too large to unroll. The counter and the
+    /// iteration mark are registers, so backtracking undoes them.
+    fn counted_repeat(
+        &mut self,
+        body: &Node,
+        min: u32,
+        max: Option<u32>,
+        greedy: bool,
+        clear: Option<Inst>,
+        backward: bool,
+    ) -> Result<(), String> {
+        let (counter, mark) = (self.registers, self.registers + 1);
+        self.registers += 2;
+        let min = min as usize;
+        self.push(Inst::CounterReset(counter));
+        let head = self.push(Inst::Match);
+        let body_start = self.push(Inst::Mark(mark));
+        if let Some(Inst::Clear { from, to }) = clear {
+            self.push(Inst::Clear { from, to });
+        }
+        self.emit(body, backward)?;
+        self.push(Inst::CounterStep { counter, mark, min });
+        self.push(Inst::Jump(head));
+        let exit = self.program.len();
+        self.program[head] = Inst::CountedLoop {
+            counter,
+            min,
+            max: max.map(|max| max as usize),
+            greedy,
+            body: body_start,
+            exit,
+        };
+        Ok(())
+    }
+
     fn repeat(
         &mut self,
         body: &Node,
@@ -1392,6 +1452,9 @@ impl Compiler {
             from: first_group * 2,
             to: end_group * 2,
         });
+        if min > MAX_UNROLLED_REPEAT || max.is_some_and(|max| max > MAX_UNROLLED_REPEAT) {
+            return self.counted_repeat(body, min, max, greedy, clear, backward);
+        }
         let iteration = |compiler: &mut Self| -> Result<(), String> {
             if let Some(Inst::Clear { from, to }) = clear {
                 compiler.push(Inst::Clear { from, to });
@@ -1565,6 +1628,54 @@ impl Run<'_> {
                 }
                 Inst::CheckProgress(register) => {
                     (self.registers[*register] != position).then_some(position)
+                }
+                Inst::CounterReset(counter) => {
+                    stack.push(Frame::Register {
+                        register: *counter,
+                        old: self.registers[*counter],
+                    });
+                    self.registers[*counter] = 0;
+                    Some(position)
+                }
+                Inst::CountedLoop {
+                    counter,
+                    min,
+                    max,
+                    greedy,
+                    body,
+                    exit,
+                } => {
+                    let count = self.registers[*counter];
+                    if count < *min {
+                        pc = *body;
+                    } else if max.is_some_and(|max| count >= max) {
+                        pc = *exit;
+                    } else {
+                        let (first, second) = if *greedy {
+                            (*body, *exit)
+                        } else {
+                            (*exit, *body)
+                        };
+                        stack.push(Frame::Alternative {
+                            pc: second,
+                            position,
+                        });
+                        pc = first;
+                    }
+                    continue;
+                }
+                Inst::CounterStep { counter, mark, min } => {
+                    let count = self.registers[*counter];
+                    if count >= *min && self.registers[*mark] == position {
+                        None
+                    } else {
+                        stack.push(Frame::Register {
+                            register: *counter,
+                            old: count,
+                        });
+                        self.registers[*counter] = count + 1;
+                        Some(position)
+                    }
                 }
                 Inst::BackRef { group, backward } => {
                     self.backreference(*group, position, *backward)
@@ -1803,6 +1914,69 @@ mod tests {
     }
 
     // Expected values are Node v22.2.0's exec results.
+
+    /// Counted repetition above MAX_UNROLLED_REPEAT runs as a loop over a
+    /// counter register instead of being unrolled; the semantics match the
+    /// unrolled form. marked's `reflinkSearch` (`{0,999}?` over a group,
+    /// with lookaheads, so only this engine runs it) was "Regular
+    /// expression too large". `(?=)` keeps the patterns on this engine.
+    #[test]
+    fn large_counted_repetition_runs_as_a_loop() {
+        let many = |s: &str, n: usize| s.repeat(n);
+        assert_eq!(
+            exec(r"(?:ab){20}(?=)", "", &many("ab", 21)),
+            Some((0, groups(&[Some(&many("ab", 20))])))
+        );
+        assert_eq!(
+            exec(r"(?:a|b(?!c)){0,30}d", "", "ababbd"),
+            Some((0, groups(&[Some("ababbd")])))
+        );
+        assert_eq!(
+            exec(r"(?:a|b(?!c)){0,30}d", "", "abbcd"),
+            Some((4, groups(&[Some("d")])))
+        );
+        assert_eq!(
+            exec(r"a{0,30}?b(?=)", "", "aaab"),
+            Some((0, groups(&[Some("aaab")])))
+        );
+        // The last iteration's captures, the others cleared.
+        let alternating = format!("{}{}", many("a", 10), many("b", 8));
+        assert_eq!(
+            exec(r"(?:(a)|(b)){17,20}(?=)", "", &alternating),
+            Some((0, groups(&[Some(&alternating), None, Some("b")])))
+        );
+        // Mandatory iterations may be empty.
+        assert_eq!(
+            exec(r"(?:a*){17,40}b(?=)", "", "aaab"),
+            Some((0, groups(&[Some("aaab")])))
+        );
+        assert_eq!(
+            exec(r"(a){20,}(?=)", "", &many("a", 25)),
+            Some((0, groups(&[Some(&many("a", 25)), Some("a")])))
+        );
+        assert_eq!(
+            exec(r"a{17}(?=)", "", &many("a", 20)),
+            Some((0, groups(&[Some(&many("a", 17))])))
+        );
+        assert_eq!(exec(r"a{20}(?=)", "", &many("a", 10)), None);
+        // Backward, inside a lookbehind.
+        assert_eq!(
+            exec(r"(?<=a{17,20})b", "", &format!("{}b", many("a", 18))),
+            Some((18, groups(&[Some("b")])))
+        );
+        assert_eq!(
+            exec(r"(?<=(a){17,20})b", "", &format!("{}b", many("a", 25))),
+            Some((25, groups(&[Some("b"), Some("a")])))
+        );
+        let reflink = r#"!?\[((?:[^\[\]\\`]*(?:\[(?:\[(?:\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|[^\[\]\\])*\]|\\[\s\S]|`+(?!`)[^`]*?`+(?!`)|``+(?=\]))){0,999}?[^\[\]\\`]*?)\]\[((?!\s*\])(?:\\[\s\S]|[^\[\]\\]){1,999})\]|!?\[((?!\s*\])(?:\\[\s\S]|[^\[\]\\]){1,999})\](?:\[\])?(?!\()"#;
+        assert_eq!(
+            exec(reflink, "", "see ![alt][ref] and [x][] and [y] end"),
+            Some((
+                4,
+                groups(&[Some("![alt][ref]"), Some("alt"), Some("ref"), None])
+            ))
+        );
+    }
 
     #[test]
     fn look_behind_matches_right_to_left() {

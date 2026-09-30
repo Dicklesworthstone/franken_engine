@@ -26,6 +26,20 @@ fn check(source: &str, node: &str) {
     );
 }
 
+/// A method named by a numeric literal (`{ 1(a) {} }`, mobx's error-message
+/// table) failed to parse ("invalid object shorthand property"): only
+/// identifier and quoted names were methods. The key is ToPropertyKey of
+/// the number (`0x10` names "16").
+#[test]
+fn numeric_literal_method_names() {
+    check(
+        "var o = { 1(a) { return a + 1; }, 0x10() { return 'hex'; }, 1.5() { return 'f'; }, \
+         get 2() { return 'g'; } }; \
+         [o[1](1), o[16](), o['1.5'](), o[2], o[1].name, o[16].name, Object.keys(o).join()].join(' ');",
+        "2 hex f g 1 16 1,2,16,1.5",
+    );
+}
+
 #[test]
 fn generator_methods() {
     check(

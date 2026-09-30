@@ -82,6 +82,7 @@ mod collation;
 mod collector;
 mod date_locale;
 mod inspect;
+mod intl;
 mod json_parse;
 mod json_stringify;
 mod number_locale;
@@ -3434,6 +3435,16 @@ pub enum BuiltinFunctionKind {
     /// `Number.prototype.toLocaleString` (ECMA-402 subset, see
     /// number_locale.rs). Append only.
     NumberToLocaleString,
+    /// `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator` and
+    /// `Intl.PluralRules` (ECMA-402, intl.rs); the service name travels in
+    /// `module_specifier`. Append only.
+    IntlConstructor,
+    /// A service object's `format`, `compare`, `select` or
+    /// `resolvedOptions`, bound to it (`bound_object`); `module_specifier`
+    /// holds `<service>.<method>`. Append only.
+    IntlMethod,
+    /// `Intl.getCanonicalLocales` (ECMA-402 8.3.1). Append only.
+    IntlGetCanonicalLocales,
 }
 
 impl BuiltinFunctionKind {
@@ -3452,6 +3463,7 @@ impl BuiltinFunctionKind {
                 | Self::EventEmitterConstructor
                 | Self::PromiseConstructor
                 | Self::StandardConstructor
+                | Self::IntlConstructor
         )
     }
 }
@@ -5126,6 +5138,25 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberToPrecision => "toPrecision",
             BuiltinFunctionKind::NumberToExponential => "toExponential",
             BuiltinFunctionKind::NumberToLocaleString => "toLocaleString",
+            BuiltinFunctionKind::IntlConstructor => {
+                ["NumberFormat", "DateTimeFormat", "Collator", "PluralRules"]
+                    .iter()
+                    .copied()
+                    .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                    .unwrap_or("IntlConstructor")
+            }
+            BuiltinFunctionKind::IntlMethod => ["format", "compare", "select", "resolvedOptions"]
+                .iter()
+                .copied()
+                .find(|name| {
+                    self.module_specifier
+                        .0
+                        .as_deref()
+                        .and_then(|specifier| specifier.split_once('.'))
+                        .is_some_and(|(_, method)| method == *name)
+                })
+                .unwrap_or("intlMethod"),
+            BuiltinFunctionKind::IntlGetCanonicalLocales => "getCanonicalLocales",
             BuiltinFunctionKind::RegExpPrototypeExec => "exec",
             BuiltinFunctionKind::DateUtc => "UTC",
             BuiltinFunctionKind::DateParse => "parse",
@@ -5388,6 +5419,19 @@ impl BuiltinFunction {
             K::FinalizationRegistryMethod => "FinalizationRegistry.prototype",
             K::RegExpSymbolMethod => "RegExp.prototype",
             K::TypedArrayStaticMethod => "TypedArray",
+            K::IntlConstructor | K::IntlGetCanonicalLocales => "Intl",
+            K::IntlMethod => match self
+                .module_specifier
+                .0
+                .as_deref()
+                .and_then(|specifier| specifier.split_once('.'))
+                .map(|(service, _)| service)
+            {
+                Some("NumberFormat") => "Intl.NumberFormat.prototype",
+                Some("DateTimeFormat") => "Intl.DateTimeFormat.prototype",
+                Some("Collator") => "Intl.Collator.prototype",
+                _ => "Intl.PluralRules.prototype",
+            },
             K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
             K::SetTimeout
             | K::SetInterval
@@ -35453,6 +35497,10 @@ impl InterpreterCore {
                 members.push((*name, value));
             }
         }
+        // ECMA-402's namespace is a property of the global object only; free
+        // `Intl` resolves through it.
+        let intl = self.alloc_intl_object()?;
+        members.push(("Intl", Value::Object(intl)));
         let global = self.alloc_object_with_properties(&members)?;
         for (name, _) in &members {
             self.set_own_property_attributes(
@@ -40024,6 +40072,19 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::WeakRefDeref => {
                 self.weak_ref_deref(&receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::IntlConstructor => {
+                let service = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.construct_intl_service(module, &service, args)
+            }
+            BuiltinFunctionKind::IntlMethod => self.intl_method(module, builtin, args),
+            BuiltinFunctionKind::IntlGetCanonicalLocales => {
+                self.intl_get_canonical_locales(args)
             }
             BuiltinFunctionKind::FinalizationRegistryMethod => {
                 let method = builtin

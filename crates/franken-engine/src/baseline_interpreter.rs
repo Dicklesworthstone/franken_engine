@@ -78038,6 +78038,26 @@ impl InterpreterCore {
         self.throw_uri_malformed(Some("ERR_INVALID_URI"))
     }
 
+    /// Throw a guest `SyntaxError` with `message` (a runtime-detected syntax
+    /// error such as an invalid `new RegExp` pattern).
+    fn throw_syntax_error(&mut self, message: String) -> InterpreterError {
+        let thrown = (|| {
+            let prototype = self.ensure_builtin_prototype("SyntaxError")?;
+            let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+            self.initialize_error_like_object(error_id, "SyntaxError", message)?;
+            Ok::<Value, InterpreterError>(Value::Object(error_id))
+        })();
+        let thrown = match thrown {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: self.uncaught_exception_description(&thrown),
+        }
+    }
+
     /// Throw a guest `URIError: URI malformed` (ES2020 18.2.6.1.2 Decode),
     /// with Node's `code` property when `code` is given.
     fn throw_uri_malformed(&mut self, code: Option<&str>) -> InterpreterError {
@@ -82666,6 +82686,19 @@ impl InterpreterCore {
                     (_, Value::Undefined) => String::new(),
                     (_, other) => self.value_to_string(other),
                 };
+                // ES2020 21.2.3.2.2 RegExpInitialize: invalid flags or a
+                // pattern that does not parse are a SyntaxError here, not
+                // at the first match (the literal's early-error rule). A
+                // pattern in the compiled cache already ran, so a literal
+                // evaluated in a loop is checked once.
+                let compiled = self
+                    .regexp_cache
+                    .borrow()
+                    .iter()
+                    .any(|(cached, cached_flags, _)| *cached == pattern && *cached_flags == flags);
+                if !compiled && let Some(message) = regexp_literal_early_error(&pattern, &flags) {
+                    return Err(self.throw_syntax_error(message));
+                }
 
                 Ok(Value::Object(self.alloc_regexp_object(pattern, flags)?))
             }

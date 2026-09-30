@@ -80570,13 +80570,28 @@ impl InterpreterCore {
                 } else {
                     self.read_reg(args.start)?
                 };
-                let target_obj_id = match target_val {
-                    Value::Object(obj_id) => obj_id,
+                let target_obj_id = match &target_val {
+                    Value::Object(obj_id) => *obj_id,
                     Value::Undefined | Value::Null => {
                         return Err(InterpreterError::TypeError {
                             expected: "object-coercible target for Object.assign".to_string(),
                             got: target_val.type_name().to_string(),
                         });
+                    }
+                    // A function's own properties live on its backing object,
+                    // where `f.x = 1` stores them: `Object.assign(fn, {...})`
+                    // (chroma's statics) copied nothing.
+                    function if function.is_callable() => {
+                        let backing = match module {
+                            Some(module) => {
+                                self.ensure_function_own_property_object(module, function)?
+                            }
+                            None => None,
+                        };
+                        let Some(backing) = backing else {
+                            return Ok(target_val);
+                        };
+                        backing
                     }
                     _ => {
                         // If target is not an object, return it as-is
@@ -80587,7 +80602,17 @@ impl InterpreterCore {
                 // Copy properties from each source object to target
                 for i in 1..args.count {
                     let source_val = self.read_reg(args.start + i)?;
-                    if let Value::Object(source_obj_id) = source_val {
+                    let source_obj_id = match &source_val {
+                        Value::Object(source_obj_id) => Some(*source_obj_id),
+                        // A function source's own enumerable properties.
+                        function if function.is_callable() => match module {
+                            Some(module) => self.function_own_property_object(module, function)?,
+                            None => None,
+                        },
+                        // Skip non-object sources (null, undefined, primitives)
+                        _ => None,
+                    };
+                    if let Some(source_obj_id) = source_obj_id {
                         self.join_pending_hostcall_stream_label(source_obj_id)?;
                         self.copy_own_runtime_properties(
                             module,
@@ -80596,13 +80621,12 @@ impl InterpreterCore {
                             true,
                         )?;
                     }
-                    // Skip non-object sources (null, undefined, primitives)
                 }
                 let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
                 self.join_object_mutation_label(target_obj_id, &mutation_label)?;
 
-                // Return the target object
-                Ok(Value::Object(target_obj_id))
+                // Return the target (the function itself for a function).
+                Ok(target_val)
             }
             "builtin:ObjectFreeze" => {
                 // Object.freeze implementation - makes an object immutable

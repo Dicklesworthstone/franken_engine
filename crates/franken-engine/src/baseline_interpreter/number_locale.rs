@@ -86,12 +86,31 @@ fn currency_layout(code: &str) -> Option<(&'static str, u32)> {
     }
 }
 
-/// Format `value` as `Number.prototype.toLocaleString(locale, options)`.
-pub(super) fn format_number_locale(
-    value: f64,
+/// The fraction digits `options` resolve to for `locale` (ECMA-402
+/// SetNumberFormatDigitOptions), after checking that the engine formats the
+/// locale, style and currency.
+pub(super) fn resolved_fraction_digits(
     locale: Option<&str>,
     options: &NumberLocaleOptions,
-) -> Result<String, NumberLocaleError> {
+) -> Result<(u32, u32), NumberLocaleError> {
+    let layout = layout_and_digits(locale, options)?;
+    Ok((layout.minimum, layout.maximum))
+}
+
+/// The locale's symbols, the style's prefix and suffix, and the resolved
+/// fraction digits.
+struct NumberLayout {
+    symbols: LocaleSymbols,
+    prefix: &'static str,
+    suffix: &'static str,
+    minimum: u32,
+    maximum: u32,
+}
+
+fn layout_and_digits(
+    locale: Option<&str>,
+    options: &NumberLocaleOptions,
+) -> Result<NumberLayout, NumberLocaleError> {
     let symbols = locale_symbols(locale)?;
     let (prefix, suffix, default_min, default_max) = match &options.style {
         NumberLocaleStyle::Decimal => ("", "", 0, 3),
@@ -139,7 +158,28 @@ pub(super) fn format_number_locale(
         (None, Some(max)) => (default_min.min(max), max),
         (None, None) => (default_min, default_max),
     };
+    Ok(NumberLayout {
+        symbols,
+        prefix,
+        suffix,
+        minimum,
+        maximum,
+    })
+}
 
+/// Format `value` as `Number.prototype.toLocaleString(locale, options)`.
+pub(super) fn format_number_locale(
+    value: f64,
+    locale: Option<&str>,
+    options: &NumberLocaleOptions,
+) -> Result<String, NumberLocaleError> {
+    let NumberLayout {
+        symbols,
+        prefix,
+        suffix,
+        minimum,
+        maximum,
+    } = layout_and_digits(locale, options)?;
     let negative = value.is_sign_negative() && !value.is_nan();
     let body = if value.is_nan() {
         "NaN".to_string()

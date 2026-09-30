@@ -3110,6 +3110,17 @@ where
     let budget_depth = usize::try_from(options.budget.max_recursion_depth).unwrap_or(usize::MAX);
     let stack_bytes = PARSE_STACK_BASE_BYTES
         .saturating_add(budget_depth.saturating_mul(PARSE_STACK_BYTES_PER_RECURSION_LEVEL));
+    run_with_provisioned_stack("franken-engine-parse", stack_bytes, run)
+}
+
+/// Run `run` on a scoped thread with a `stack_bytes` native stack, falling
+/// back to the caller stack if the thread cannot be spawned (bd-rucba). Shared
+/// by the parser and the IR0 lowering, which both recurse over the syntax tree.
+pub(crate) fn run_with_provisioned_stack<T, F>(thread_name: &str, stack_bytes: usize, run: F) -> T
+where
+    T: Send,
+    F: FnOnce() -> T + Send,
+{
     // The slot lets the closure survive a failed spawn (Builder::spawn_scoped
     // consumes its argument even on error); the mutex is uncontended — only one
     // of the two arms ever takes it.
@@ -3117,13 +3128,13 @@ where
     let take_and_run = || {
         (run_slot
             .lock()
-            .expect("parse closure slot is never poisoned")
+            .expect("provisioned-stack closure slot is never poisoned")
             .take()
-            .expect("parse closure is consumed exactly once"))()
+            .expect("provisioned-stack closure is consumed exactly once"))()
     };
     std::thread::scope(|scope| {
         match std::thread::Builder::new()
-            .name("franken-engine-parse".to_string())
+            .name(thread_name.to_string())
             .stack_size(stack_bytes)
             .spawn_scoped(scope, take_and_run)
         {

@@ -4541,6 +4541,15 @@ fn lower_statement_to_ir1_with_flow(
                     binding_kind,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+                // `var x;` evaluates to nothing (ES2020 13.3.2.4): the hoisted
+                // binding already holds undefined, and a redeclaration keeps
+                // the value (`n = 4; var n;`, a parameter redeclared with
+                // `var`). Storing undefined reset it, so d3-array's quantile
+                // (`if (!(n = values.length)) ...; var n, i = (n - 1) * p`)
+                // computed NaN. `let x;` still initializes.
+                if vd.kind == VariableDeclarationKind::Var && d.initializer.is_none() {
+                    continue;
+                }
 
                 // bd-1xl17.c: a confirmed *destructured* fs/promises require —
                 // `const { readFile } = require('fs/promises')` or

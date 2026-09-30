@@ -13,7 +13,8 @@
 //! the real lowering pipeline for the register high-water assertion.
 
 use frankenengine_engine::HybridRouter;
-use frankenengine_engine::baseline_interpreter::QuickJsLane;
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, QuickJsLane};
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser_api_stability::parse_script;
@@ -43,7 +44,16 @@ fn fixed_lane_value(source: &str) -> String {
     let module = lower_ir0_to_ir3(&ir0, &context)
         .expect("source should lower")
         .ir3;
-    match QuickJsLane::new().execute(&module, "rr-trace") {
+    // The programs call builtins (`Object.keys`, for-of over arrays), which
+    // QuickJsLane::new()'s VM/heap-only grant refuses; the frame is what is
+    // under test, so grant the builtins too.
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities.extend([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+    ]);
+    match QuickJsLane::with_config(config).execute(&module, "rr-trace") {
         Ok(result) => result.value.to_string(),
         Err(err) => format!("ERROR: {err}"),
     }
@@ -627,5 +637,80 @@ fn nested_batch_literals_release_their_element_registers() {
              var n = 0; for (var k in table.expected) n++; return table.expected.j[10] + ':' + n; }})();"
         )),
         "100:11"
+    );
+}
+
+fn loop_filler(target: &str) -> String {
+    (0..60)
+        .map(|i| format!("{target}.push([{i}].concat([0]).length);\n"))
+        .collect()
+}
+
+#[test]
+fn for_in_and_for_of_bodies_reuse_registers() {
+    // A for-in/for-of loop keeps its iterator on the lowering value stack for
+    // the whole body, so no statement in the body ever emptied the stack and
+    // none of them released its temporaries: 60 statements in one loop body
+    // failed with "register 256 out of bounds". Plain for/while bodies were
+    // fine. Expected strings are Node v22.2.0's.
+    let fill = loop_filler("out");
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "var out = []; for (const x of [1, 2]) {{\n{fill}}}\nout.length;"
+        )),
+        "120"
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var out = []; for (const x of [1, 2]) {{\n{fill}}}\n\
+             return out.length; }})();"
+        )),
+        "120"
+    );
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var out = []; for (const k in {{a: 1, b: 2}}) {{\n{fill}}}\n\
+             return out.length; }})();"
+        )),
+        "120"
+    );
+    let scratch = loop_filler("[]");
+    // Loop-carried locals and a destructured loop variable keep their values.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var acc = 0; var last = ''; \
+             for (const [k, v] of [['a', 1], ['b', 2], ['c', 3]]) {{\n{scratch}\
+             acc = acc + v; last = k + last; }}\nreturn acc + ':' + last; }})();"
+        )),
+        "6:cba"
+    );
+    // Nested loops with break, continue and a labeled continue.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var log = []; outer: for (const a of [1, 2, 3]) {{ \
+             for (const b of ['x', 'y', 'z']) {{\n{scratch}\
+             if (b === 'y' && a === 2) continue outer; if (a === 3) break outer; \
+             log.push(a + b); }} log.push('|'); }}\nreturn log.join(','); }})();"
+        )),
+        "1x,1y,1z,|,2x"
+    );
+    // A return inside the body still closes the iterator.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ var closed = false; var it = {{ [Symbol.iterator]() {{ var n = 0; \
+             return {{ next() {{ n++; return {{ value: n, done: n > 5 }}; }}, \
+             return() {{ closed = true; return {{}}; }} }}; }} }};\n\
+             var found = (function () {{ for (const v of it) {{\n{scratch}\
+             if (v === 3) return v * 10; }} return -1; }})(); return found + ':' + closed; }})();"
+        )),
+        "30:true"
+    );
+    // A generator suspended inside a long loop body resumes with its state.
+    assert_eq!(
+        fixed_lane_value(&format!(
+            "(function () {{ function* g(xs) {{ for (const x of xs) {{\n{scratch}\
+             yield x * 2; }} }} return [...g([1, 2, 3])].join(','); }})();"
+        )),
+        "2,4,6"
     );
 }

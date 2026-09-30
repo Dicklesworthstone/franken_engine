@@ -10500,16 +10500,20 @@ fn parse_for_statement(
     // must be nesting-aware so a `;` inside an arrow/block body or a string in
     // a header clause (e.g. `for (let f = () => { a; return b; }; i < n; i++)`)
     // does not mis-split the three parts.
-    let (init_src, cond_src, update_src) = match split_for_header(header_src) {
-        Some((init, cond, update)) => (init.trim(), cond.trim(), update.trim()),
-        None => {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "for statement header must have three semicolon-separated parts",
-                context.source_label.to_string(),
-                Some(span),
-            ));
-        }
+    let parts = split_for_header(header_src)
+        .map(|(init, cond, update)| (init.trim(), cond.trim(), update.trim()))
+        // A fourth part (`for (a; b; c; d)`) is an early SyntaxError. It used
+        // to stay in the update clause, which became an expression that threw
+        // only when the loop ran (Test262 S12.6.3_A7.1_T1). Re-splitting the
+        // update with a `;` appended finds a top-level `;` inside it.
+        .filter(|(_, _, update)| split_for_header(&format!("{update};")).is_none());
+    let Some((init_src, cond_src, update_src)) = parts else {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "for statement header must have three semicolon-separated parts",
+            context.source_label.to_string(),
+            Some(span),
+        ));
     };
 
     let init = if init_src.is_empty() {

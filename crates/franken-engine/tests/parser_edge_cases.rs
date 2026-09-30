@@ -1099,3 +1099,24 @@ fn public_class_fields_parse_as_field_members() {
         parser().parse(source, ParseGoal::Script).expect_err(source);
     }
 }
+
+#[test]
+fn for_header_with_a_fourth_part_is_a_parse_error() {
+    // Test262 S12.6.3_A7.1_T1: `for(a; b; c; d)` is an early SyntaxError. The
+    // fourth part used to stay in the update clause, which became an
+    // expression that threw only when the loop ran.
+    for source in [
+        "for(var index=0; index<10; index++; index--);",
+        "for (;;;) {}",
+    ] {
+        let err = parser().parse(source, ParseGoal::Script).unwrap_err();
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+    }
+    // A `;` nested in the update clause is not a fourth part.
+    parser()
+        .parse(
+            "for (var i = 0; i < 1; (() => { i++; })()) {}",
+            ParseGoal::Script,
+        )
+        .expect("nested `;` in the update clause");
+}

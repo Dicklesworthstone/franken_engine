@@ -52959,6 +52959,25 @@ impl InterpreterCore {
         // primitive enumerates its wrapper (a string its indices).
         let object_id = match value {
             Value::Object(object_id) => object_id,
+            // Step 7.a: an undefined or null object enumerates nothing (the
+            // body never runs) and is not ToObject'd, which would throw:
+            // `for (k in opts)` with `opts` omitted, preact's `h(type, null)`.
+            Value::Undefined | Value::Null => {
+                let empty = self.alloc_object_with_prototype(None)?;
+                let trace_index =
+                    self.start_iteration_trace(IterationKind::ForIn, || "nullish".to_string());
+                let handle =
+                    self.alloc_iterator(RuntimeIteratorState::ForIn(RuntimeForInState {
+                        object_id: empty,
+                        keys: Vec::new(),
+                        next_index: 0,
+                        deleted_keys: BTreeSet::new(),
+                        done: false,
+                        closed: false,
+                        trace_index,
+                    }))?;
+                return Ok(Value::Iterator(handle));
+            }
             primitive @ (Value::Str(_)
             | Value::Int(_)
             | Value::Float(_)

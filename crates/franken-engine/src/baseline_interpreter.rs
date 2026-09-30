@@ -77,6 +77,7 @@ mod array_from;
 mod async_generator;
 mod bigint_ops;
 mod builtin_function_lengths;
+mod collation;
 mod collector;
 mod date_locale;
 mod inspect;
@@ -53850,12 +53851,59 @@ impl InterpreterCore {
             Some(value) => self.value_to_string(&value),
             None => "undefined".to_string(),
         };
-        let comparison = match this_str.as_utf8_projection().cmp(that_string.as_str()) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
+        let options = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
+        let options = self.collation_options(&options)?;
+        let ordering =
+            collation::locale_compare(&this_str.as_utf8_projection(), &that_string, &options);
+        Ok(Value::Int(ordering as i64))
+    }
+
+    /// The `sensitivity`, `numeric` and `ignorePunctuation` options of
+    /// localeCompare (ECMA-402 Intl.Collator); an unknown sensitivity is a
+    /// RangeError, as in Node. The locale argument does not change the
+    /// order (collation.rs uses the root order).
+    fn collation_options(
+        &mut self,
+        options: &Value,
+    ) -> Result<collation::CollationOptions, InterpreterError> {
+        let mut parsed = collation::CollationOptions::default();
+        let Value::Object(options_id) = options else {
+            return Ok(parsed);
         };
-        Ok(Value::Int(comparison))
+        let options_id = *options_id;
+        let mut read = |key: &str| {
+            self.proxy_aware_get_property(None, options_id, key, Value::Object(options_id), 0)
+        };
+        let sensitivity = read("sensitivity")?;
+        let numeric = read("numeric")?;
+        let ignore_punctuation = read("ignorePunctuation")?;
+        parsed.sensitivity = match &sensitivity {
+            Value::Undefined => collation::Sensitivity::Variant,
+            Value::Str(text) => match text.as_str() {
+                Some("base") => collation::Sensitivity::Base,
+                Some("accent") => collation::Sensitivity::Accent,
+                Some("case") => collation::Sensitivity::Case,
+                Some("variant") => collation::Sensitivity::Variant,
+                _ => {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "Value {text} out of range for Intl.Collator options property sensitivity"
+                        ),
+                    });
+                }
+            },
+            other => {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "Value {} out of range for Intl.Collator options property sensitivity",
+                        other.type_name()
+                    ),
+                });
+            }
+        };
+        parsed.numeric = numeric.is_truthy();
+        parsed.ignore_punctuation = ignore_punctuation.is_truthy();
+        Ok(parsed)
     }
 
     fn string_normalize_impl(
@@ -82856,15 +82904,15 @@ impl InterpreterCore {
                     "undefined".to_string()
                 };
 
-                // Simplified locale-aware comparison (using standard string comparison for now)
-                let result = this_string.cmp(&that_string);
-                let comparison_result = match result {
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
+                // The same collation as String.prototype.localeCompare.
+                let options = if args.count >= 4 {
+                    self.read_reg(args.start + 3)?
+                } else {
+                    Value::Undefined
                 };
-
-                Ok(Value::Int(comparison_result))
+                let options = self.collation_options(&options)?;
+                let ordering = collation::locale_compare(&this_string, &that_string, &options);
+                Ok(Value::Int(ordering as i64))
             }
 
             "builtin:DatePrototypeGetTime" => {

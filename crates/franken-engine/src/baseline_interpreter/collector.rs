@@ -1436,6 +1436,7 @@ impl InterpreterCore {
             last_post_run_epoch: _,
             scope_chain,
             realm_dynamic_globals,
+            realm_global_object,
             generated_function_realm_globals,
             generated_function_realm_generation: _,
             runtime_name_references,
@@ -1643,6 +1644,9 @@ impl InterpreterCore {
             realm_dynamic_globals
                 .values()
                 .for_each(|binding| m.binding(binding));
+            if let Some(global) = realm_global_object {
+                m.object(*global);
+            }
         }
         if let Some((_, value, _)) = pending_arguments_object {
             m.value(value);

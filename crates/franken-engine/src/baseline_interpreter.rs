@@ -38086,7 +38086,10 @@ impl InterpreterCore {
                 let len = self.array_like_length(arr_id)?;
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let from = match self.builtin_arg(args, 1)? {
-                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    Some(value) => {
+                        Self::require_number_coercible_index(&value, "Array.prototype.indexOf")?;
+                        Self::clamp_relative_index(Self::value_as_integer(&value), len)
+                    }
                     None => 0,
                 };
                 let mut found = -1i64;
@@ -38117,7 +38120,10 @@ impl InterpreterCore {
                 let len = self.array_like_length(arr_id)?;
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let from = match self.builtin_arg(args, 1)? {
-                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    Some(value) => {
+                        Self::require_number_coercible_index(&value, "Array.prototype.includes")?;
+                        Self::clamp_relative_index(Self::value_as_integer(&value), len)
+                    }
                     None => 0,
                 };
                 let mut present = false;
@@ -64893,6 +64899,19 @@ impl InterpreterCore {
         }
     }
 
+    /// ToIntegerOrInfinity's ToNumber step (ES2020 7.1.5, 7.1.4) for a
+    /// `fromIndex` argument: a Symbol or BigInt throws a TypeError. They were
+    /// read as 0, so `[1].indexOf(7, Symbol())` searched instead of throwing.
+    fn require_number_coercible_index(value: &Value, method: &str) -> Result<(), InterpreterError> {
+        if matches!(value, Value::Symbol(_) | Value::BigInt(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: format!("a fromIndex convertible to a Number for {method}"),
+                got: value.type_name().to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Clamp a possibly-negative relative array index into `[0, len]`, per the
     /// `Array.prototype` convention where a negative index counts from the end.
     fn clamp_relative_index(raw: i64, len: usize) -> usize {
@@ -79965,7 +79984,12 @@ impl InterpreterCore {
 
                 // Get fromIndex if provided, otherwise start from the end
                 let from_index = if args.count >= 3 {
-                    match self.read_reg(args.start + 2)? {
+                    let from_value = self.read_reg(args.start + 2)?;
+                    Self::require_number_coercible_index(
+                        &from_value,
+                        "Array.prototype.lastIndexOf",
+                    )?;
+                    match from_value {
                         Value::Int(idx) => idx,
                         Value::Float(idx) => idx.inner() as i64,
                         _ => length as i64 - 1,

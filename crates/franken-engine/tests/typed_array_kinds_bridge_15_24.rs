@@ -107,3 +107,26 @@ r.join(' ');"#,
          -1,-0,0,2.5,NaN 0.75,1 1,4,3,2,5 true",
     );
 }
+
+#[test]
+fn a_symbol_or_bigint_from_index_throws_a_type_error() {
+    // ToIntegerOrInfinity(fromIndex) throws for a Symbol or BigInt. Arrays
+    // read it as 0; typed arrays reach the same generic search methods, and
+    // Test262 TypedArray/prototype/indexOf/return-abrupt-tointeger-fromindex-symbol
+    // expects the throw.
+    let probe = |call: &str| {
+        format!(
+            "(() => {{ try {{ {call}; return 'no throw'; }} catch (e) {{ return e.name; }} }})()"
+        )
+    };
+    for call in [
+        "[1, 2].indexOf(7, Symbol('1'))",
+        "[1, 2].includes(7, Symbol('1'))",
+        "[1, 2].lastIndexOf(7, Symbol('1'))",
+        "[1, 2].indexOf(7, 1n)",
+        "new Float64Array(1).indexOf(7, Symbol('1'))",
+    ] {
+        check(&probe(call), "TypeError");
+    }
+    check("[1, 2, 1].indexOf(1, 1)", "2");
+}

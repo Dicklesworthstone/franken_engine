@@ -5700,8 +5700,10 @@ const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
 const ARRAY_BUFFER_SLOT_KEYS: [&str; 2] = ["__type", "byteLength"];
 const DATA_VIEW_SLOT_KEYS: [&str; 4] = ["__type", "buffer", "byteLength", "byteOffset"];
 
-const SLOT0_STATIC_GLOBALS: [&str; 6] = ["Object", "JSON", "Array", "String", "Symbol", "Proxy"];
-const SLOT0_STATIC_MEMBERS: [&str; 25] = [
+const SLOT0_STATIC_GLOBALS: [&str; 7] = [
+    "Object", "JSON", "Array", "String", "Symbol", "Proxy", "Map",
+];
+const SLOT0_STATIC_MEMBERS: [&str; 26] = [
     "keys",
     "values",
     "entries",
@@ -5716,6 +5718,7 @@ const SLOT0_STATIC_MEMBERS: [&str; 25] = [
     "getOwnPropertySymbols",
     "getOwnPropertyDescriptor",
     "fromEntries",
+    "groupBy",
     "parse",
     "stringify",
     "isArray",
@@ -56155,6 +56158,101 @@ impl InterpreterCore {
         Ok(Value::Object(map_id))
     }
 
+    /// A new empty Map: the object and its entry storage.
+    fn alloc_empty_map(&mut self) -> Result<(ObjectId, ObjectId), InterpreterError> {
+        let prototype = self.ensure_builtin_prototype("Map")?;
+        let map_id = self.alloc_object_with_prototype(Some(prototype))?;
+        let entries_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(map_id, "__type".to_string(), Value::str("Map"))?;
+        self.set_object_property(map_id, "__entries".to_string(), Value::Object(entries_id))?;
+        self.set_object_property(map_id, "size".to_string(), Value::Int(0))?;
+        self.hide_internal_slots(map_id, &["__type", "__entries", "size"])?;
+        Ok((map_id, entries_id))
+    }
+
+    /// ES2024 Object.groupBy / Map.groupBy (GroupBy, 7.3.35): the values of
+    /// `items` (iterated like Array.from's source; undefined and null throw)
+    /// grouped by `callbackfn(value, index)`, in first-seen order of the
+    /// keys. Object.groupBy keys by ToPropertyKey into a null-prototype
+    /// object of arrays; Map.groupBy keys by SameValueZero into a Map of
+    /// arrays. Every item is read before the first callback runs.
+    fn group_by_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+        into_map: bool,
+    ) -> Result<Value, InterpreterError> {
+        let items = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let callback = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        if matches!(items, Value::Undefined | Value::Null) {
+            return Err(InterpreterError::TypeError {
+                expected: "object-coercible items for groupBy".to_string(),
+                got: items.type_name().to_string(),
+            });
+        }
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable groupBy callback".to_string(),
+                got: callback.type_name().to_string(),
+            });
+        }
+        let list = self.iterable_to_array(
+            module,
+            RegRange {
+                start: args.start,
+                count: args.count.min(1),
+            },
+        )?;
+        let Value::Object(list_id) = list else {
+            return Err(InterpreterError::InternalError {
+                details: "groupBy item list is not an array".to_string(),
+            });
+        };
+        let values = self.array_like_values(list_id)?;
+        let mut groups: Vec<(String, Value, Vec<Value>)> = Vec::new();
+        for (index, value) in values.into_iter().enumerate() {
+            let (key, _) = self.invoke_inline_method_call_with_argument_label(
+                module,
+                callback.clone(),
+                Value::Undefined,
+                vec![
+                    value.clone(),
+                    Value::Int(i64::try_from(index).unwrap_or(i64::MAX)),
+                ],
+                None,
+            )?;
+            let key = if into_map {
+                Self::collection_canonical_member(key)
+            } else {
+                self.coerce_runtime_property_key(module, key)?
+            };
+            let identity = Self::collection_key_repr(&key);
+            match groups
+                .iter_mut()
+                .find(|(existing, ..)| *existing == identity)
+            {
+                Some((_, _, members)) => members.push(value),
+                None => groups.push((identity, key, vec![value])),
+            }
+        }
+        if into_map {
+            let (map_id, _) = self.alloc_empty_map()?;
+            for (_, key, members) in groups {
+                let array = self.alloc_array_from_values(&members)?;
+                self.map_collection_set(map_id, key, Value::Object(array))?;
+            }
+            return Ok(Value::Object(map_id));
+        }
+        let object = self.alloc_object_with_prototype(None)?;
+        self.store_prototype_link(object, None);
+        for (_, key, members) in groups {
+            let array = self.alloc_array_from_values(&members)?;
+            let key = self.executable_property_key_from_value(&key);
+            self.set_object_runtime_property(object, key, Value::Object(array))?;
+        }
+        Ok(Value::Object(object))
+    }
+
     fn set_collection_add(
         &mut self,
         set_id: ObjectId,
@@ -78129,6 +78227,9 @@ impl InterpreterCore {
                 };
                 self.object_from_entries_value(module, source)
             }
+            "builtin:ObjectGroupBy" | "builtin:MapGroupBy" => {
+                self.group_by_builtin(module, args, cap == "builtin:MapGroupBy")
+            }
             "builtin:ObjectAssign" => {
                 // Object.assign implementation - copies properties from source objects to target
                 // ES2020 19.1.2.1: ToObject(target) throws for undefined and
@@ -80295,19 +80396,7 @@ impl InterpreterCore {
             "builtin:ConstructSuperSpread" => self.construct_super_spread_builtin(module, args),
             "builtin:Map" => {
                 // Map([iterable]) constructor implementation
-                let prototype = self.ensure_builtin_prototype("Map")?;
-                let map_id = self.alloc_object_with_prototype(Some(prototype))?;
-                let entries_id = self.alloc_object_with_prototype(None)?;
-
-                // Mark as Map type
-                self.set_object_property(map_id, "__type".to_string(), Value::str("Map"))?;
-                self.set_object_property(
-                    map_id,
-                    "__entries".to_string(),
-                    Value::Object(entries_id),
-                )?;
-                self.set_object_property(map_id, "size".to_string(), Value::Int(0))?;
-                self.hide_internal_slots(map_id, &["__type", "__entries", "size"])?;
+                let (map_id, entries_id) = self.alloc_empty_map()?;
 
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;

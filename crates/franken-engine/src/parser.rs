@@ -2515,9 +2515,10 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
 /// Scanners call [`Self::active`] first; while it holds, every byte goes to
 /// [`Self::advance`]. Otherwise they call [`Self::open`] on a quote or
 /// backtick. Backward scanners use [`quoted_byte_mask`], which is computed
-/// forward with the same machine. Comments and regular-expression literals
-/// inside a substitution are not interpreted; they are opaque template
-/// content to every scanner, exactly like the rest of the substitution.
+/// forward with the same machine. Inside a substitution, a `/` where an
+/// operand may begin opens a regular-expression literal, whose quotes and
+/// braces are pattern text: js-yaml writes `` `'${v.replace(/'/g, "''")}'` ``.
+/// Comments inside a substitution are not interpreted.
 #[derive(Debug, Default)]
 struct QuoteState {
     stack: Vec<QuoteContext>,
@@ -2531,18 +2532,31 @@ enum QuoteContext {
     String(u8),
     /// Inside the literal text of a template.
     Template,
-    /// Inside a `${ ... }` substitution, with its open-brace depth.
-    Substitution(u32),
+    /// Inside a `${ ... }` substitution: its open-brace depth and its last
+    /// significant byte (0 at its start), which tells a regex `/` from a
+    /// division.
+    Substitution { depth: u32, last: u8 },
     /// Inside a regular-expression literal, with the bytes left in it.
     Regex(usize),
+    /// Inside a regular-expression literal that began in a substitution,
+    /// whose end is found byte by byte; `in_class` inside `[...]`.
+    RegexStream { in_class: bool },
 }
 
 impl QuoteState {
     /// A scanner positioned just after a template's `${`.
     fn in_substitution() -> Self {
         Self {
-            stack: vec![QuoteContext::Substitution(0)],
+            stack: vec![QuoteContext::Substitution { depth: 0, last: 0 }],
             ..Self::default()
+        }
+    }
+
+    /// Record `byte` as the last significant byte of the innermost
+    /// substitution (the top of the stack).
+    fn set_substitution_last(&mut self, byte: u8) {
+        if let Some(QuoteContext::Substitution { last, .. }) = self.stack.last_mut() {
+            *last = byte;
         }
     }
 
@@ -2589,6 +2603,19 @@ impl QuoteState {
         };
         match context {
             QuoteContext::Regex(left) => self.consume_regex_bytes(left, 1),
+            QuoteContext::RegexStream { in_class } => {
+                if self.escaped {
+                    self.escaped = false;
+                } else if b == b'\\' {
+                    self.escaped = true;
+                } else if b == b'[' || b == b']' {
+                    *self.stack.last_mut().expect("regex context") = QuoteContext::RegexStream {
+                        in_class: b == b'[',
+                    };
+                } else if b == b'/' && !in_class {
+                    self.stack.pop();
+                }
+            }
             QuoteContext::String(quote) => {
                 if self.escaped {
                     self.escaped = false;
@@ -2607,36 +2634,56 @@ impl QuoteState {
                 } else if b == b'`' {
                     self.stack.pop();
                 } else if b == b'{' && after_dollar {
-                    self.stack.push(QuoteContext::Substitution(0));
+                    self.stack
+                        .push(QuoteContext::Substitution { depth: 0, last: 0 });
                 } else {
                     self.after_dollar = b == b'$';
                 }
             }
-            QuoteContext::Substitution(depth) => match b {
+            QuoteContext::Substitution { depth, last } => match b {
                 b'\'' | b'"' | b'`' => {
+                    // After the literal closes, an operand has ended.
+                    self.set_substitution_last(b'"');
                     self.open(b);
+                }
+                b'/' if substitution_slash_starts_regex(last) => {
+                    self.set_substitution_last(b'"');
+                    self.escaped = false;
+                    self.stack
+                        .push(QuoteContext::RegexStream { in_class: false });
                 }
                 b'{' => {
                     *self.stack.last_mut().expect("substitution context") =
-                        QuoteContext::Substitution(depth + 1);
+                        QuoteContext::Substitution {
+                            depth: depth + 1,
+                            last: b'{',
+                        };
                 }
                 b'}' if depth == 0 => {
                     self.stack.pop();
                 }
                 b'}' => {
                     *self.stack.last_mut().expect("substitution context") =
-                        QuoteContext::Substitution(depth - 1);
+                        QuoteContext::Substitution {
+                            depth: depth - 1,
+                            last: b'}',
+                        };
                 }
-                _ => {}
+                b' ' | b'\t' | b'\n' | b'\r' => {}
+                _ => self.set_substitution_last(b),
             },
         }
     }
 
     /// A physical line terminator consumed an escape (a backslash line
-    /// continuation) or ended the line; the escape does not carry over.
+    /// continuation) or ended the line; the escape does not carry over, and
+    /// a regular-expression literal never spans a line.
     fn line_break(&mut self) {
         self.escaped = false;
         self.after_dollar = false;
+        if matches!(self.stack.last(), Some(QuoteContext::RegexStream { .. })) {
+            self.stack.pop();
+        }
     }
 
     fn advance_char(&mut self, ch: char) {
@@ -2656,6 +2703,37 @@ impl QuoteState {
             *self.stack.last_mut().expect("regex context") = QuoteContext::Regex(left - consumed);
         }
     }
+}
+
+/// Whether a `/` inside a template substitution opens a regex literal, given
+/// the substitution's last significant byte: at its start or after an
+/// opening bracket or an operator, as [`merge_logical_lines_slash_starts_regex`]
+/// decides at top level. An identifier counts as an operand here, so the
+/// rare `typeof /x/` inside a substitution reads as a division.
+fn substitution_slash_starts_regex(last: u8) -> bool {
+    matches!(
+        last,
+        0 | b'('
+            | b'{'
+            | b'['
+            | b','
+            | b';'
+            | b':'
+            | b'='
+            | b'!'
+            | b'?'
+            | b'&'
+            | b'|'
+            | b'^'
+            | b'~'
+            | b'*'
+            | b'%'
+            | b'+'
+            | b'-'
+            | b'<'
+            | b'>'
+            | b'/'
+    )
 }
 
 /// For each byte of `s`, whether it belongs to a string, template or regex
@@ -20029,6 +20107,30 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let literal_end = src.find(" + 1").expect("tail");
         assert!(mask[..literal_end].iter().all(|quoted| *quoted));
         assert!(mask[literal_end..].iter().all(|quoted| !*quoted));
+    }
+
+    #[test]
+    fn quoted_byte_mask_reads_regex_literals_in_substitutions() {
+        // js-yaml: the `'` inside `/'/g` is pattern text, not a string.
+        let src = "`'${v.replace(/'/g, \"''\")}'` + 1";
+        let mask = quoted_byte_mask(src);
+        let literal_end = src.find(" + 1").expect("tail");
+        assert!(mask[..literal_end].iter().all(|quoted| *quoted));
+        assert!(mask[literal_end..].iter().all(|quoted| !*quoted));
+
+        // After an operand a `/` divides, so `/ 2}` closes the substitution.
+        let src = "`${a / 2}` + `${b}`";
+        let mask = quoted_byte_mask(src);
+        let first_end = src.find(" + ").expect("operator");
+        assert!(mask[..first_end].iter().all(|quoted| *quoted));
+        assert!(!mask[first_end + 1]);
+
+        // A class may hold `/`, `` ` `` and `}`.
+        let src = "`${s.split(/[/`}]/)}`;x";
+        let mask = quoted_byte_mask(src);
+        let literal_end = src.find(";x").expect("tail");
+        assert!(mask[..literal_end].iter().all(|quoted| *quoted));
+        assert!(!mask[literal_end]);
     }
 
     #[test]

@@ -33,6 +33,28 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"function Stack() {} Stack.prototype = []; Stack.prototype.push = function (v) { return 'custom ' + v; }; const s = new Stack(); console.log(s.push(1), typeof s.pop);"#,
         "custom 1 function",
     ),
+    // The generic methods read `length` and the elements through the chain
+    // ([[Get]]), not the receiver's own properties only.
+    (
+        "generic_methods_read_inherited_elements",
+        r#"const o = Object.create(['x', 'y']); console.log(Array.prototype.join.call(o, '-'), Array.prototype.slice.call(o).length, [].concat(Array.prototype.map.call(o, (v) => v + v)).join());"#,
+        "x-y 2 xx,yy",
+    ),
+    (
+        "push_on_an_inherited_length_writes_own_properties",
+        r#"function foo() {} foo.prototype = [1, 2, 3, 4]; const f = new foo(); f.push(5); console.log(f.length, Object.keys(f).join(), f.reduce((a, b) => a + b), f.lastIndexOf(2), f.includes(4));"#,
+        "5 4,length 15 1 true",
+    ),
+    (
+        "array_like_prototype",
+        r#"const o = Object.create({ length: 2, 0: 'a', 1: 'b' }); console.log(Array.prototype.join.call(o), Array.from(o).join('|'));"#,
+        "a,b a|b",
+    ),
+    (
+        "hole_reads_object_prototype_index",
+        r#"const a = [1, , 3]; Object.prototype[1] = 'P'; console.log(a.join('-'), a.indexOf('P')); delete Object.prototype[1];"#,
+        "1-P-3 1",
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

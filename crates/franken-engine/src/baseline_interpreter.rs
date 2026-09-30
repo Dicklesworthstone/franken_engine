@@ -55483,8 +55483,22 @@ impl InterpreterCore {
             if root.is_array {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
             }
-            if root.typed_array.is_some() {
+            // %TypedArray%.prototype[@@iterator] is
+            // %TypedArray%.prototype.values (ES2020 22.2.3.32), so a typed
+            // array, Int8Array.prototype and %TypedArray%.prototype give one
+            // function.
+            if root.typed_array.is_some()
+                || self.chain_reaches_canonical_prototype(object_id, "TypedArray")
+            {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::typed_array_values()));
+            }
+            // %Array.prototype%[@@iterator] is %Array.prototype.values%
+            // (ES2020 22.1.3.31): read from Array.prototype itself or from an
+            // object inheriting from it (`Object.create(Array.prototype)`).
+            if self.chain_reaches_canonical_prototype(object_id, "Array")
+                || self.chain_inherits_array_prototype(object_id)
+            {
+                return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
             }
         }
         // RegExp.prototype's symbol-keyed methods (ES2020 21.2.5.6-11), once
@@ -93641,16 +93655,20 @@ impl InterpreterCore {
     /// Whether `object_id` is a RegExp or inherits from %RegExp.prototype%,
     /// so the RegExp.prototype methods reach it.
     fn chain_has_regexp_prototype(&self, object_id: ObjectId) -> bool {
-        if self.regexp_source_flags_from_object(object_id).is_some() {
-            return true;
-        }
-        let Some(&regexp_prototype) = self.builtin_prototypes.get("RegExp") else {
+        self.regexp_source_flags_from_object(object_id).is_some()
+            || self.chain_reaches_canonical_prototype(object_id, "RegExp")
+    }
+
+    /// Whether `object_id` is, or inherits from, the canonical prototype of
+    /// the builtin `name` (which exists only once something has used it).
+    fn chain_reaches_canonical_prototype(&self, object_id: ObjectId, name: &str) -> bool {
+        let Some(&prototype) = self.builtin_prototypes.get(name) else {
             return false;
         };
         let mut current = Some(object_id);
         let mut depth = 0u32;
         while let Some(id) = current {
-            if id == regexp_prototype {
+            if id == prototype {
                 return true;
             }
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {

@@ -50,6 +50,14 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const o = Object.create({ length: 2, 0: 'a', 1: 'b' }); console.log(Array.prototype.join.call(o), Array.from(o).join('|'));"#,
         "a,b a|b",
     ),
+    // %Array.prototype%[@@iterator] is %Array.prototype.values%, read from
+    // Array.prototype itself and from objects inheriting from it; it was
+    // undefined there, so `[...Object.create(Array.prototype)]` threw.
+    (
+        "array_prototype_iterator",
+        r#"const o = Object.create(Array.prototype); o.length = 2; o[0] = 'a'; o[1] = 'b'; console.log([typeof Array.prototype[Symbol.iterator], Array.prototype[Symbol.iterator] === Array.prototype.values, [][Symbol.iterator] === Array.prototype.values, typeof o[Symbol.iterator], [...o].join('+'), Array.from(o).length].join(' '));"#,
+        "function true true function a+b 2",
+    ),
     (
         "hole_reads_object_prototype_index",
         r#"const a = [1, , 3]; Object.prototype[1] = 'P'; console.log(a.join('-'), a.indexOf('P')); delete Object.prototype[1];"#,

@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -147,7 +147,7 @@ fn corpus() -> Vec<(String, String, String)> {
         .collect()
 }
 
-fn run_case(dir: &PathBuf, id: &str, source: &str) -> Observed {
+fn run_case(dir: &Path, id: &str, source: &str) -> Observed {
     let input = dir.join(format!("{id}.js"));
     let report = dir.join(format!("{id}.run.json"));
     fs::write(&input, source).expect("write case");

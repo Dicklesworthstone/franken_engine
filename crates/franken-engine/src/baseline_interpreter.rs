@@ -49039,9 +49039,17 @@ impl InterpreterCore {
                         _ => None,
                     };
                     // A function whose own properties lack the key continues
-                    // its [[Get]] on its intrinsic prototype (after the match).
-                    let function_base = if function_backing.is_none() {
+                    // its [[Get]] on its intrinsic prototype, a generator
+                    // object or an iterator on Object.prototype (after the
+                    // match).
+                    let inherited_base = if function_backing.is_none() {
                         Self::function_intrinsic_prototype_name(&obj_val)
+                            .or(match obj_val {
+                                Value::Generator(_)
+                                | Value::AsyncGeneratorObject(_)
+                                | Value::Iterator(_) => Some("Object"),
+                                _ => None,
+                            })
                             .map(|prototype| (prototype, obj_val.clone()))
                     } else {
                         None
@@ -49390,11 +49398,15 @@ impl InterpreterCore {
                     // Function (`g.constructor` GeneratorFunction), and
                     // `valueOf`, `__proto__` and members a program adds
                     // (`Function.prototype.method = ...`) reach every
-                    // function. They read undefined.
-                    let prop = match function_base {
-                        Some((prototype, function)) if matches!(prop, Value::Undefined) => {
-                            if property_key.as_str() == Some("__proto__") {
-                                self.function_value_prototype(Some(module), &function)?
+                    // function. They read undefined. Generator objects and
+                    // iterators reach Object.prototype after their own
+                    // methods (`it.toString`, `it.hasOwnProperty`).
+                    let prop = match inherited_base {
+                        Some((prototype, base))
+                            if matches!(prop, Value::Undefined) && primitive_owner.is_none() =>
+                        {
+                            if property_key.as_str() == Some("__proto__") && base.is_callable() {
+                                self.function_value_prototype(Some(module), &base)?
                             } else {
                                 // The kind prototypes exist once read, so
                                 // Function.prototype's members are behind them.
@@ -49405,7 +49417,7 @@ impl InterpreterCore {
                                     module,
                                     prototype,
                                     &property_key,
-                                    function,
+                                    base,
                                 )?;
                                 primitive_owner = owner;
                                 value
@@ -59147,12 +59159,23 @@ impl InterpreterCore {
     fn register_needs_observable_to_primitive(&self, register: u32) -> bool {
         // Borrowed peek: this runs ahead of every compact arithmetic op.
         // Functions convert through Function.prototype.toString or their own
-        // `toString`/`valueOf`, which only the reentrant path can run.
+        // `toString`/`valueOf`, and promises, generator objects and iterators
+        // through theirs (own, else inherited), which only the reentrant path
+        // can run.
         register < self.config.max_registers
             && self
                 .registers
                 .get(self.register_base + register as usize)
-                .is_some_and(|value| matches!(value, Value::Object(_)) || value.is_callable())
+                .is_some_and(|value| {
+                    matches!(
+                        value,
+                        Value::Object(_)
+                            | Value::Promise(_)
+                            | Value::Generator(_)
+                            | Value::AsyncGeneratorObject(_)
+                            | Value::Iterator(_)
+                    ) || value.is_callable()
+                })
     }
 
     /// bd-9vouw.37: operand registers of the numeric operators whose object
@@ -59268,8 +59291,17 @@ impl InterpreterCore {
         register: u32,
     ) -> Result<Value, InterpreterError> {
         let value = self.read_reg(register)?;
-        if value.is_callable() {
-            // A function's own valueOf/toString, else Function.prototype.toString.
+        if value.is_callable()
+            || matches!(
+                value,
+                Value::Promise(_)
+                    | Value::Generator(_)
+                    | Value::AsyncGeneratorObject(_)
+                    | Value::Iterator(_)
+            )
+        {
+            // A function's own valueOf/toString, else Function.prototype.toString;
+            // a promise's, generator object's or iterator's own or inherited.
             return self.coerce_runtime_primitive_with_hint(Some(module), value, "number");
         }
         let Value::Object(object_id) = value else {
@@ -59306,7 +59338,18 @@ impl InterpreterCore {
         prefer_string: bool,
     ) -> Result<Value, InterpreterError> {
         let value = self.read_reg(register)?;
-        if value.is_callable() {
+        // Functions, and promises, generator objects and iterators (no
+        // property storage of their own), convert through their methods:
+        // `gen + ''` is "[object Generator]", not "[object Object]".
+        if value.is_callable()
+            || matches!(
+                value,
+                Value::Promise(_)
+                    | Value::Generator(_)
+                    | Value::AsyncGeneratorObject(_)
+                    | Value::Iterator(_)
+            )
+        {
             let hint = if prefer_string { "string" } else { "default" };
             return self.coerce_runtime_primitive_with_hint(Some(module), value, hint);
         }
@@ -59617,15 +59660,116 @@ impl InterpreterCore {
                     expected: "primitive conversion result".to_string(),
                     got: "object from both conversion methods".to_string(),
                 })?
+            } else if let Some(module) = module {
+                self.exotic_to_primitive(module, value, hint)?
             } else {
-                return Err(InterpreterError::TypeError {
-                    expected: "property-key carrier with native conversion methods".to_string(),
-                    got: value.type_name().to_string(),
-                });
+                // No program to run a conversion method in: the builtinTag
+                // Object.prototype.toString would answer.
+                Value::str(Self::value_to_object_to_string_tag(&value))
             }
         } else {
             value
         })
+    }
+
+    /// ES2020 7.1.1 ToPrimitive of a promise, generator, async generator or
+    /// iterator value (no property storage of its own): @@toPrimitive, else
+    /// OrdinaryToPrimitive over `toString`/`valueOf`, each read like [[Get]]
+    /// (own properties, then Promise.prototype or Object.prototype), so
+    /// `String(promise)` is "[object Promise]" through
+    /// Object.prototype.toString. These values threw a TypeError.
+    fn exotic_to_primitive(
+        &mut self,
+        module: &Ir3Module,
+        value: Value,
+        hint: &'static str,
+    ) -> Result<Value, InterpreterError> {
+        let to_primitive = RuntimePropertyKey::Symbol(WellKnownSymbol::ToPrimitive.id());
+        let exotic = self.exotic_conversion_method(module, &value, &to_primitive)?;
+        if exotic.is_callable() {
+            let result =
+                self.call_conversion_method(module, exotic, &value, vec![Value::str(hint)])?;
+            if result.is_object_like() {
+                return Err(InterpreterError::TypeError {
+                    expected: "primitive from Symbol.toPrimitive".to_string(),
+                    got: result.type_name().to_string(),
+                });
+            }
+            return Ok(result);
+        }
+        let names = if hint == "string" {
+            ["toString", "valueOf"]
+        } else {
+            ["valueOf", "toString"]
+        };
+        for name in names {
+            let method = self.exotic_conversion_method(
+                module,
+                &value,
+                &RuntimePropertyKey::String(JsString::from(name)),
+            )?;
+            if !method.is_callable() {
+                continue;
+            }
+            let result = self.call_conversion_method(module, method, &value, Vec::new())?;
+            if !result.is_object_like() {
+                return Ok(result);
+            }
+        }
+        Err(InterpreterError::TypeError {
+            expected: "primitive conversion result".to_string(),
+            got: "object from both conversion methods".to_string(),
+        })
+    }
+
+    /// Call a conversion method with `value` as `this`, joining its result
+    /// label into the pending hostcall result label.
+    fn call_conversion_method(
+        &mut self,
+        module: &Ir3Module,
+        method: Value,
+        value: &Value,
+        arguments: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let (result, label) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            method,
+            value.clone(),
+            arguments,
+            None,
+        )?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()?;
+        Ok(result)
+    }
+
+    /// [[Get]] of a conversion method on a promise, generator, async
+    /// generator or iterator value: its own properties, then Promise.prototype
+    /// (for a promise) or Object.prototype.
+    fn exotic_conversion_method(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        if Self::has_exotic_backing_object(value)
+            && let Some((own, _)) = self.exotic_own_property_get(module, value, key)?
+        {
+            return Ok(own);
+        }
+        let prototype = if matches!(value, Value::Promise(_)) {
+            "Promise"
+        } else {
+            "Object"
+        };
+        Ok(self
+            .primitive_prototype_get(module, prototype, key, value.clone())?
+            .0)
     }
 
     fn require_object_coercible(value: Value) -> Result<Value, InterpreterError> {

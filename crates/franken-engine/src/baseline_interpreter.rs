@@ -48094,13 +48094,16 @@ impl InterpreterCore {
                                 &callee_val,
                                 binding_temporary_bytes,
                             )?;
-                            let (call_this, call_this_label) = if let Some(binding) = lexical_this {
-                                binding
-                            } else if captured_env.is_some() {
-                                self.clone_inherited_this_binding(binding_temporary_bytes)?
-                            } else {
-                                (Value::Undefined, Label::Public)
-                            };
+                            // A plain call's `this` is undefined (ES2020 9.2.1.2
+                            // OrdinaryCallBindThis; sloppy functions' global object
+                            // is not modeled). Only an arrow has a lexical `this`,
+                            // recorded at its creation; every other closure used to
+                            // inherit the caller frame's, so `g()` inside a method
+                            // saw the method's receiver and the
+                            // `if (!(this instanceof F)) return new F()` factory
+                            // ran its body on that receiver instead.
+                            let (call_this, call_this_label) =
+                                lexical_this.unwrap_or((Value::Undefined, Label::Public));
                             let call_this_temporary_bytes = Self::estimate_value_bytes(&call_this)
                                 .saturating_add(Self::estimate_label_bytes(&call_this_label));
 
@@ -48334,20 +48337,10 @@ impl InterpreterCore {
                                 &callee_val,
                                 binding_temporary_bytes,
                             )?;
-                            let is_concise_method = matches!(
-                                &callee_val,
-                                Value::Closure(closure_id)
-                                    if self.closure_method_metadata.contains_key(closure_id)
-                            );
-                            let (call_this, call_this_label) = if let Some(binding) = lexical_this {
-                                binding
-                            } else if is_concise_method {
-                                (Value::Undefined, Label::Public)
-                            } else if has_captured_env {
-                                self.clone_inherited_this_binding(binding_temporary_bytes)?
-                            } else {
-                                (Value::Undefined, Label::Public)
-                            };
+                            // A plain call's `this` is undefined; only an arrow's
+                            // creation-time `this` is lexical (see the Call arm).
+                            let (call_this, call_this_label) =
+                                lexical_this.unwrap_or((Value::Undefined, Label::Public));
                             let call_this_temporary_bytes = Self::estimate_value_bytes(&call_this)
                                 .saturating_add(Self::estimate_label_bytes(&call_this_label));
                             let scope_depth = self.scope_chain.depth();
@@ -94378,21 +94371,6 @@ impl InterpreterCore {
             metadata.this_value.clone(),
             metadata.this_label.clone(),
         )))
-    }
-
-    fn clone_inherited_this_binding(
-        &self,
-        already_owned_temporary_bytes: u64,
-    ) -> Result<(Value, Label), InterpreterError> {
-        let Some(frame) = self.call_stack.last() else {
-            return Ok((Value::Undefined, Label::Public));
-        };
-        self.check_temporary_memory_budget(
-            already_owned_temporary_bytes
-                .saturating_add(Self::estimate_value_bytes(&frame.this_value))
-                .saturating_add(Self::estimate_label_bytes(&frame.this_label)),
-        )?;
-        Ok((frame.this_value.clone(), frame.this_label.clone()))
     }
 
     fn clone_receiver_this_binding(

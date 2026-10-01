@@ -3472,6 +3472,10 @@ pub enum BuiltinFunctionKind {
     IntlGetCanonicalLocales,
     /// `Object.prototype.toLocaleString` (ES2020 19.1.3.5). Append only.
     ObjectPrototypeToLocaleString,
+    /// `Array.prototype.toLocaleString` (ES2020 22.1.3.27); with the
+    /// %TypedArray%.prototype specifier, the typed array one (22.2.3.28).
+    /// Append only.
+    ArrayToLocaleString,
 }
 
 impl BuiltinFunctionKind {
@@ -4664,6 +4668,7 @@ impl BuiltinFunction {
         }
     }
 
+    #[cfg(test)]
     fn typed_array_unsupported_method() -> Self {
         Self {
             kind: BuiltinFunctionKind::TypedArrayUnsupportedMethod,
@@ -4987,6 +4992,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayAt => "at",
             BuiltinFunctionKind::ArrayFlat => "flat",
             BuiltinFunctionKind::ArrayJoin => "join",
+            BuiltinFunctionKind::ArrayToLocaleString => "toLocaleString",
             BuiltinFunctionKind::ArrayToString => "toString",
             BuiltinFunctionKind::ArrayForEach => "forEach",
             BuiltinFunctionKind::ArrayMap => "map",
@@ -5294,6 +5300,7 @@ impl BuiltinFunction {
             | K::ArrayIncludes
             | K::ArrayIndexOf
             | K::ArrayJoin
+            | K::ArrayToLocaleString
             | K::ArrayKeys
             | K::ArrayLastIndexOf
             | K::ArrayMap
@@ -39592,6 +39599,9 @@ impl InterpreterCore {
                 )?;
                 Ok(Value::Object(result))
             }
+            BuiltinFunctionKind::ArrayToLocaleString => {
+                self.array_to_locale_string(module, receiver.unwrap_or(Value::Undefined))
+            }
             BuiltinFunctionKind::ArrayJoin => {
                 // ES2020 23.1.3.13(join): concatenate elements with `separator`
                 // (default ","); `undefined`/`null` elements render as "".
@@ -57085,6 +57095,9 @@ impl InterpreterCore {
     fn array_prototype_method(key: &str) -> Option<BuiltinFunction> {
         match key {
             "push" => Some(BuiltinFunction::array_push()),
+            "toLocaleString" => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ArrayToLocaleString,
+            )),
             "pop" => Some(BuiltinFunction::array_pop()),
             "shift" => Some(BuiltinFunction::array_shift()),
             "unshift" => Some(BuiltinFunction::array_unshift()),
@@ -57637,13 +57650,14 @@ impl InterpreterCore {
             "toString" => Self::array_prototype_method(key),
             "join" | "indexOf" | "lastIndexOf" | "includes" | "at" | "forEach" | "reduce"
             | "reduceRight" | "find" | "findIndex" | "findLast" | "findLastIndex" | "some"
-            | "every" => Self::array_prototype_method(key).map(|builtin| BuiltinFunction {
-                module_specifier: BuiltinModuleSpecifier::from_nonempty(
-                    TYPED_ARRAY_PROTOTYPE_SPECIFIER,
-                ),
-                ..builtin
-            }),
-            "toLocaleString" => Some(BuiltinFunction::typed_array_unsupported_method()),
+            | "every" | "toLocaleString" => {
+                Self::array_prototype_method(key).map(|builtin| BuiltinFunction {
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(
+                        TYPED_ARRAY_PROTOTYPE_SPECIFIER,
+                    ),
+                    ..builtin
+                })
+            }
             _ => None,
         }
     }

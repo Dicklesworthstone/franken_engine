@@ -5508,6 +5508,16 @@ impl BuiltinFunction {
     /// bd-9vouw.17: the built-in's own `name`: its property key, with
     /// symbol-keyed methods named `[Symbol.iterator]` (ES2020 9.2.13).
     fn spec_name(&self) -> &'static str {
+        // A promise's resolving functions (CreateResolvingFunctions, the
+        // executor's `resolve`/`reject`) are anonymous built-ins (ES2020
+        // 25.6.1.3): only the static Promise.resolve/reject are named.
+        if matches!(
+            self.kind,
+            BuiltinFunctionKind::PromiseResolve | BuiltinFunctionKind::PromiseReject
+        ) && self.bound_object.is_some()
+        {
+            return "";
+        }
         match self.display_name() {
             "@@iterator" => "[Symbol.iterator]",
             "@@asyncIterator" => "[Symbol.asyncIterator]",

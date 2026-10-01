@@ -302,6 +302,19 @@ fn program_bindings_named_global_shadow_the_global_object() {
         "var r; { let setTimeout = 'x'; r = setTimeout; } r + ':' + typeof setTimeout;",
         "x:function",
     );
+    // A bare reference is recorded as a `let` binding no declaration stores
+    // to; it stays the runtime global, while a declared `let` shadows it
+    // (bd-9vouw.130 routes by that difference; its reproducer is
+    // querystring_os_builtin_bd_qmy52's `process.platform` under the trusted
+    // process-shape grant).
+    check(
+        "[typeof performance, typeof performance.now, typeof console.log].join();",
+        "object,function,function",
+    );
+    check(
+        "let performance = 'own'; [performance, typeof console].join();",
+        "own,object",
+    );
 }
 
 /// A free name no binding resolves is a property of the global object, own

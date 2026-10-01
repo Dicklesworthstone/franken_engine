@@ -7657,20 +7657,36 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     // parameter or an import is its own, not the runtime global: routing it
     // made a top-level block's `{ const performance = 'x'; }` overwrite the
     // injected global (`typeof performance` was then "string" after the
-    // block). Only a `var` or implicit binding of the name is routed.
+    // block). Only a `var` or implicit binding of the name is routed. An
+    // implicit binding (a bare `process`) is recorded as a `let` too, but
+    // no declaration stores to it (`let x = v`, even in a block, lowers to a
+    // StoreBinding; an assignment to a bare name is an AssignOp). Treating
+    // it as declared read `process` from an unset register (bd-9vouw.130).
+    let declared_binding_ids: BTreeSet<BindingId> = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::InitializeBinding { binding_id } | Ir1Op::StoreBinding { binding_id } => {
+                Some(*binding_id)
+            }
+            _ => None,
+        })
+        .collect();
     for &global_name in PREDECLARED_RUNTIME_GLOBALS {
-        if let Some(binding_id) = name_to_binding_id.get(global_name)
-            && !matches!(
-                binding_kind_by_id.get(binding_id),
-                Some(
-                    BindingKind::Let
-                        | BindingKind::Const
-                        | BindingKind::FunctionDecl
-                        | BindingKind::Parameter
-                        | BindingKind::Import
-                )
-            )
-        {
+        let Some(binding_id) = name_to_binding_id.get(global_name) else {
+            continue;
+        };
+        let declared = match binding_kind_by_id.get(binding_id) {
+            Some(
+                BindingKind::Const
+                | BindingKind::FunctionDecl
+                | BindingKind::Parameter
+                | BindingKind::Import,
+            ) => true,
+            Some(BindingKind::Let) => declared_binding_ids.contains(binding_id),
+            Some(BindingKind::Var) | None => false,
+        };
+        if !declared {
             scoped_runtime_binding_ids.insert(*binding_id);
         }
     }

@@ -5891,6 +5891,16 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
                 })
                 .map(|member| ("Reflect", member))
         })
+        .or_else(|| {
+            crate::lowering_pipeline::OBJECT_RECEIVER_STATIC_MEMBERS
+                .iter()
+                .copied()
+                .find(|member| {
+                    crate::lowering_pipeline::object_receiver_static_member_capability(member)
+                        == Some(tag)
+                })
+                .map(|member| ("Object", member))
+        })
 }
 
 /// `Reflect` members installed on the first-class `Reflect` object; each is
@@ -5930,6 +5940,13 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
             REFLECT_MEMBERS
                 .iter()
                 .filter_map(|member| crate::lowering_pipeline::reflect_member_capability(member)),
+        )
+        .chain(
+            crate::lowering_pipeline::OBJECT_RECEIVER_STATIC_MEMBERS
+                .iter()
+                .filter_map(|member| {
+                    crate::lowering_pipeline::object_receiver_static_member_capability(member)
+                }),
         )
         .find(|candidate| *candidate == tag)
 }
@@ -95466,6 +95483,15 @@ impl InterpreterCore {
                     crate::lowering_pipeline::slot0_static_member_capability(name, key)
                 {
                     Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag))
+                } else if name == "Object"
+                    && let Some(tag) =
+                        crate::lowering_pipeline::object_receiver_static_member_capability(key)
+                {
+                    // `const eq = Object.is` (mobx's default comparer):
+                    // these read as values too; a value call passes its
+                    // arguments without the receiver placeholder their
+                    // call-site convention adds (call_static_hostcall).
+                    Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag))
                 } else if name == "Number" {
                     Self::number_constructor_constant(key).unwrap_or(Value::Undefined)
                 } else {
@@ -95669,7 +95695,55 @@ impl InterpreterCore {
         let tag = tag.to_string();
         let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
         check_hostcall_capability_gate(self, &tag, instruction_index)?;
+        if let Some(value) = self.object_receiver_static_value_call(module, &tag, args)? {
+            return Ok(value);
+        }
         self.dispatch_builtin_hostcall(&tag, args, Some(module))
+    }
+
+    /// A value call of `Object.is`, `isExtensible`, `preventExtensions`,
+    /// `seal` or `isSealed` (`const eq = Object.is; eq(a, b)`). Their hostcall
+    /// handlers read past a receiver slot the call-site convention adds, and
+    /// a value call's arguments have none, so these run here over the
+    /// arguments as passed. `None` for any other tag.
+    fn object_receiver_static_value_call(
+        &mut self,
+        module: &Ir3Module,
+        tag: &str,
+        args: RegRange,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let arg = |core: &Self, index: u32| -> Result<Value, InterpreterError> {
+            Ok(core.builtin_arg(args, index)?.unwrap_or(Value::Undefined))
+        };
+        Ok(Some(match tag {
+            "builtin:ObjectIs" => Value::Bool(Self::same_value(&arg(self, 0)?, &arg(self, 1)?)),
+            "builtin:ObjectIsExtensible" => self.object_integrity_builtin(
+                Some(module),
+                args,
+                ObjectIntegrityOperation::IsExtensible,
+                false,
+            )?,
+            "builtin:ObjectPreventExtensions" => self.object_integrity_builtin(
+                Some(module),
+                args,
+                ObjectIntegrityOperation::PreventExtensions,
+                false,
+            )?,
+            "builtin:ObjectSeal" => {
+                let object = arg(self, 0)?;
+                if let Value::Object(object_id) = object {
+                    self.seal_object(object_id)?;
+                }
+                object
+            }
+            "builtin:ObjectIsSealed" => match arg(self, 0)? {
+                Value::Object(object_id) => {
+                    Value::Bool(self.object_has_integrity_level(object_id, false)?)
+                }
+                _ => Value::Bool(true),
+            },
+            _ => return Ok(None),
+        }))
     }
 
     /// Whether `object_id`'s prototype chain passes through a canonical

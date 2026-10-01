@@ -132,3 +132,24 @@ fn exotic_values_convert_through_their_methods() {
          P:string|P:default string string"
     );
 }
+
+/// Object.prototype.toLocaleString (ES2020 19.1.3.5) is Invoke(this,
+/// "toString"); it did not exist, so `obj.toLocaleString` was undefined on
+/// every object and function.
+#[test]
+fn object_prototype_to_locale_string_invokes_to_string() {
+    let source = "let e; try { Object.prototype.toLocaleString.call(null); } catch (x) { e = x.constructor.name; }\n\
+                  [({ toString() { return 'x'; } }).toLocaleString(), Object.prototype.toLocaleString.call(5), \
+                  Object.prototype.toLocaleString.call('s'), typeof Object.prototype.toLocaleString, \
+                  Object.prototype.toLocaleString.length, Object.prototype.toLocaleString.name, \
+                  ({}).toLocaleString(), (function f() {}).toLocaleString === Object.prototype.toLocaleString, \
+                  e].join(' ');";
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "x 5 s function 0 toLocaleString [object Object] true TypeError"
+    );
+}

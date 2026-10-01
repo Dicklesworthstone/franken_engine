@@ -100731,7 +100731,7 @@ mod active_builtin_regressions {
         }
     }
 
-    fn call_builtin_for_test(
+    pub(super) fn call_builtin_for_test(
         core: &mut InterpreterCore,
         builtin: BuiltinFunction,
         receiver: ObjectId,
@@ -124195,6 +124195,8 @@ mod async_runtime_tests_current {
     /// was Public).
     #[test]
     fn array_aggregate_reads_join_stored_element_labels() {
+        use super::active_builtin_regressions::call_builtin_for_test;
+
         let module = test_module_with_functions(
             vec![
                 Ir3Instruction::ArrayPush {

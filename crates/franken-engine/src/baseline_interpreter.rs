@@ -56450,6 +56450,21 @@ impl InterpreterCore {
             {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
             }
+            // Map.prototype[@@iterator] is Map.prototype.entries, Set's is
+            // Set.prototype.values (ES2020 23.1.3.12, 23.2.3.11) and
+            // String.prototype[@@iterator] the string iterator (21.1.3.29),
+            // read from the prototypes themselves too: only instances and
+            // primitives had them, so `typeof Map.prototype[Symbol.iterator]`
+            // was "undefined".
+            for (prototype, kind) in [
+                ("Map", BuiltinFunctionKind::MapEntries),
+                ("Set", BuiltinFunctionKind::SetValues),
+                ("String", BuiltinFunctionKind::StringIterator),
+            ] {
+                if self.chain_reaches_canonical_prototype(object_id, prototype) {
+                    return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)));
+                }
+            }
         }
         // RegExp.prototype's symbol-keyed methods (ES2020 21.2.5.6-11), once
         // own and inherited properties have had their chance to shadow them.
@@ -58535,6 +58550,23 @@ impl InterpreterCore {
                 }
                 current = self.observable_prototype_link(object, id);
                 depth += 1;
+            }
+            // The virtual @@iterator of the canonical Array, %TypedArray%,
+            // Map, Set and String prototypes (served by [[Get]]'s fallback)
+            // is found by HasProperty too: `Symbol.iterator in Map.prototype`.
+            if matches!(
+                key,
+                RuntimePropertyKey::Symbol(symbol) if *symbol == WellKnownSymbol::Iterator.id()
+            ) {
+                let root_is_array = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.is_array || object.typed_array.is_some());
+                return Ok(root_is_array
+                    || self.chain_inherits_array_prototype(object_id)
+                    || ["Array", "TypedArray", "Map", "Set", "String"]
+                        .iter()
+                        .any(|name| self.chain_reaches_canonical_prototype(object_id, name)));
             }
             return Ok(key
                 .as_str()

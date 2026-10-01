@@ -1395,6 +1395,8 @@ impl InterpreterCore {
             collection_for_each_cursors,
             iteration_traces: _,
             function_prototypes,
+            // Digests of module headers: no references (bd-9vouw.124).
+            prototype_owner_ids: _,
             builtin_function_backings: _,
             virtual_property_deletions: _,
             builtin_prototypes,

@@ -760,18 +760,21 @@ impl InterpreterCore {
     ) -> Result<Option<(ContentHash, u32)>, InterpreterError> {
         let foreign = self.foreign_closure_module(function, module)?;
         let owner = foreign.as_deref().unwrap_or(module);
-        let (owner, index) = match function {
-            Value::Function(index) => (Self::function_prototype_owner_id(owner), *index),
-            Value::Closure(index) => (Self::closure_prototype_owner_id(owner), *index),
-            _ => return Ok(None),
-        };
+        let ids = self.prototype_owner_ids(owner);
+        Ok(match function {
+            Value::Function(index) => Some((ids.constructor_override[0], *index)),
+            Value::Closure(index) => Some((ids.constructor_override[1], *index)),
+            _ => None,
+        })
+    }
+
+    /// The owner of the constructor-prototype override cells of a module's
+    /// IR3 functions (`base` is their prototype owner) or closures.
+    pub(super) fn constructor_override_owner(base: &ContentHash) -> ContentHash {
         let mut digest = Sha256::new();
         digest.update(b"FrankenEngine.ConstructorPrototypeProperty.v1");
-        digest.update(owner.as_bytes());
-        Ok(Some((
-            ContentHash::from_bytes(digest.finalize().into()),
-            index,
-        )))
+        digest.update(base.as_bytes());
+        ContentHash::from_bytes(digest.finalize().into())
     }
 
     pub(super) fn constructor_prototype_override(

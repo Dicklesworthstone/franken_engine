@@ -149,7 +149,7 @@ use crate::intrinsics_codegen::{GeneratedGlue, generate_glue};
 use crate::intrinsics_table::{IfcPropagation, ImplBinding, ThisCoercion};
 use crate::ir_contract::{
     AccessorKind, CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
-    IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
+    IrHeader, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
 use crate::iterator_protocol::{
     CloseReason, IterationCompletion, IterationEvent, IterationKind, IterationOperation,
@@ -6325,6 +6325,34 @@ impl fmt::Display for Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ObjectId(pub u32);
 
+/// The visited set of one prototype-chain walk, with no heap allocation for
+/// its first [`CHAIN_GUARD_INLINE`] links (bd-9vouw.124): every [[Get]] that
+/// missed an own property, and every label read, built a `BTreeSet` node.
+#[derive(Debug, Default)]
+struct ChainGuard {
+    inline: [Option<ObjectId>; CHAIN_GUARD_INLINE],
+    overflow: BTreeSet<ObjectId>,
+}
+
+const CHAIN_GUARD_INLINE: usize = 8;
+
+impl ChainGuard {
+    /// Records `id`; false when the walk already visited it (a cycle).
+    fn insert(&mut self, id: ObjectId) -> bool {
+        for slot in &mut self.inline {
+            match slot {
+                Some(seen) if *seen == id => return false,
+                Some(_) => {}
+                None => {
+                    *slot = Some(id);
+                    return true;
+                }
+            }
+        }
+        self.overflow.insert(id)
+    }
+}
+
 /// Owned ArrayBuffer byte storage. Views store the ArrayBuffer ObjectId and
 /// read/write through this backing so mutations stay shared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -8362,6 +8390,25 @@ struct RuntimeTypedArrayIterator {
     view: TypedArrayView,
     kind: RuntimeTypedArrayIteratorKind,
 }
+
+/// The prototype and own-property owner ids of one module's functions,
+/// digested once per module header (bd-9vouw.124): `new F()` and every
+/// function property read took one to three SHA-256 digests.
+#[derive(Debug, Clone, Copy)]
+struct PrototypeOwnerIds {
+    function: ContentHash,
+    closure: ContentHash,
+    /// [`InterpreterCore::function_own_property_owner`] of kinds 0-4: the
+    /// IR3 function over `function`, the closure kinds over `closure`.
+    own_property: [ContentHash; 5],
+    /// [`InterpreterCore::constructor_override_owner`] of `function` and of
+    /// `closure`.
+    constructor_override: [ContentHash; 2],
+}
+
+/// Module headers [`InterpreterCore::prototype_owner_ids`] remembers; the
+/// oldest goes first.
+const PROTOTYPE_OWNER_MEMO_ENTRIES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeArrayIterator {
@@ -13556,6 +13603,8 @@ pub struct InterpreterCore {
     /// immutable owner-module identity plus the module-local function index.
     /// SEED-SURFACE.
     function_prototypes: SeedTrackedField<BTreeMap<(ContentHash, u32), ObjectId>>,
+    /// Owner ids already digested, by module header (bd-9vouw.124).
+    prototype_owner_ids: std::cell::RefCell<Vec<(IrHeader, PrototypeOwnerIds)>>,
     /// Set once a built-in function may have a backing object in
     /// `function_prototypes`; never cleared. Until then a property read on a
     /// built-in skips the identity digest (a JSON encoding and two SHA-256
@@ -14792,6 +14841,7 @@ impl InterpreterCore {
             collection_for_each_cursors: Vec::new(),
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
+            prototype_owner_ids: std::cell::RefCell::new(Vec::new()),
             builtin_function_backings: false,
             virtual_property_deletions: false,
             builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
@@ -33094,7 +33144,7 @@ impl InterpreterCore {
         let mut label: Option<&Label> = None;
         let mut current = Some(object_id);
         let mut depth = 0u32;
-        let mut visited = BTreeSet::new();
+        let mut visited = ChainGuard::default();
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
                 break;
@@ -56702,7 +56752,7 @@ impl InterpreterCore {
             object_id,
         );
         let mut depth = 0u32;
-        let mut visited = BTreeSet::new();
+        let mut visited = ChainGuard::default();
         visited.insert(object_id);
 
         while let Some(id) = current {
@@ -56956,7 +57006,7 @@ impl InterpreterCore {
 
         let mut current = Some(object_id);
         let mut depth = initial_depth;
-        let mut visited = BTreeSet::new();
+        let mut visited = ChainGuard::default();
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
@@ -58571,7 +58621,7 @@ impl InterpreterCore {
         self.validate_executable_property_key(key)?;
         let mut current = Some(object_id);
         let mut depth = 0u32;
-        let mut visited = BTreeSet::new();
+        let mut visited = ChainGuard::default();
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
@@ -58653,7 +58703,7 @@ impl InterpreterCore {
         }
         let mut current = Some(object_id);
         let mut depth = 0u32;
-        let mut visited = BTreeSet::new();
+        let mut visited = ChainGuard::default();
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
@@ -93995,7 +94045,7 @@ impl InterpreterCore {
     fn runtime_property_label(&self, object_id: ObjectId, key: &RuntimePropertyKey) -> Label {
         let mut current = Some(object_id);
         let mut depth = 0u32;
-        let mut visited = BTreeSet::new();
+        let mut visited = ChainGuard::default();
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
                 break;
@@ -94563,12 +94613,46 @@ impl InterpreterCore {
         ContentHash::from_bytes(digest.finalize().into())
     }
 
+    /// [`Self::function_prototype_owner_id`], [`Self::closure_prototype_owner_id`]
+    /// and the own-property owners of `module`'s functions, digested once per
+    /// module header (the digests read nothing else).
+    fn prototype_owner_ids(&self, module: &Ir3Module) -> PrototypeOwnerIds {
+        if let Some((_, ids)) = self
+            .prototype_owner_ids
+            .borrow()
+            .iter()
+            .find(|(header, _)| *header == module.header)
+        {
+            return *ids;
+        }
+        let function = Self::function_prototype_owner_id(module);
+        let closure = Self::closure_prototype_owner_id(module);
+        let own_property = [0u8, 1, 2, 3, 4].map(|kind| {
+            Self::function_own_property_owner(kind, if kind == 0 { &function } else { &closure })
+        });
+        let ids = PrototypeOwnerIds {
+            function,
+            closure,
+            own_property,
+            constructor_override: [
+                Self::constructor_override_owner(&function),
+                Self::constructor_override_owner(&closure),
+            ],
+        };
+        let mut memo = self.prototype_owner_ids.borrow_mut();
+        if memo.len() >= PROTOTYPE_OWNER_MEMO_ENTRIES {
+            memo.remove(0);
+        }
+        memo.push((module.header.clone(), ids));
+        ids
+    }
+
     fn ensure_function_prototype(
         &mut self,
         module: &Ir3Module,
         func_idx: u32,
     ) -> Result<ObjectId, InterpreterError> {
-        let key = (Self::function_prototype_owner_id(module), func_idx);
+        let key = (self.prototype_owner_ids(module).function, func_idx);
         if let Some(existing) = self.function_prototypes.get(&key) {
             Ok(*existing)
         } else {
@@ -94625,7 +94709,7 @@ impl InterpreterCore {
                 expected: "valid closure".to_string(),
                 got: format!("closure#{closure_id} not found"),
             })?;
-        let key = (Self::closure_prototype_owner_id(module), closure_id);
+        let key = (self.prototype_owner_ids(module).closure, closure_id);
         if let Some(existing) = self.function_prototypes.get(&key) {
             Ok(*existing)
         } else {
@@ -96428,11 +96512,11 @@ impl InterpreterCore {
             let prototype = match &current {
                 Value::Closure(id) => self
                     .function_prototypes
-                    .get(&(Self::closure_prototype_owner_id(module), *id))
+                    .get(&(self.prototype_owner_ids(module).closure, *id))
                     .copied(),
                 Value::Function(index) => self
                     .function_prototypes
-                    .get(&(Self::function_prototype_owner_id(module), *index))
+                    .get(&(self.prototype_owner_ids(module).function, *index))
                     .copied(),
                 _ => None,
             };
@@ -96560,23 +96644,25 @@ impl InterpreterCore {
         function: &Value,
     ) -> Result<Option<(ContentHash, u32)>, InterpreterError> {
         let (kind, base_owner, id) = match function {
-            Value::Function(index) => (0u8, Self::function_prototype_owner_id(module), *index),
+            Value::Function(index) => {
+                return Ok(Some((
+                    self.prototype_owner_ids(module).own_property[0],
+                    *index,
+                )));
+            }
             Value::Closure(id)
             | Value::GeneratorFunction(id)
             | Value::AsyncFunction(id)
             | Value::AsyncGeneratorFunction(id) => {
                 let kind = match function {
-                    Value::Closure(_) => 1u8,
+                    Value::Closure(_) => 1usize,
                     Value::GeneratorFunction(_) => 2,
                     Value::AsyncFunction(_) => 3,
                     _ => 4,
                 };
                 let owner_module = self.foreign_closure_module(function, module)?;
-                (
-                    kind,
-                    Self::closure_prototype_owner_id(owner_module.as_deref().unwrap_or(module)),
-                    *id,
-                )
+                let ids = self.prototype_owner_ids(owner_module.as_deref().unwrap_or(module));
+                return Ok(Some((ids.own_property[kind], *id)));
             }
             // A built-in value carries no storage of its own; its backing
             // object is keyed by the built-in's identity (kind, specifier,
@@ -96645,15 +96731,9 @@ impl InterpreterCore {
             .function_prototypes
             .iter()
             .find(|(_, object)| **object == backing)?;
-        let function_base = Self::function_prototype_owner_id(module);
-        let closure_base = Self::closure_prototype_owner_id(module);
+        let ids = self.prototype_owner_ids(module);
         (0u8..=4).find_map(|kind| {
-            let base = if kind == 0 {
-                &function_base
-            } else {
-                &closure_base
-            };
-            (Self::function_own_property_owner(kind, base) == *owner).then_some(match kind {
+            (ids.own_property[usize::from(kind)] == *owner).then_some(match kind {
                 0 => Value::Function(*id),
                 1 => Value::Closure(*id),
                 2 => Value::GeneratorFunction(*id),

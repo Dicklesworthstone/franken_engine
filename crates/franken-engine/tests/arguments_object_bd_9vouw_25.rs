@@ -43,6 +43,38 @@ fn arguments_holds_every_actual_argument() {
     check("function f() { return typeof arguments; } f();", "object");
 }
 
+/// A generator's body runs at its first `next()`, after the call that only
+/// created the generator; no call setup staged its arguments object, so
+/// the body saw an empty one (Test262 arguments-object/
+/// gen-meth-args-trailing-comma-multiple and relatives).
+#[test]
+fn generator_bodies_see_their_invocation_arguments() {
+    check(
+        "var o = { *g() { yield arguments.length; yield arguments[1]; } }; \
+         var it = o.g(1, 'x',); [it.next().value, it.next().value].join();",
+        "2,x",
+    );
+    check(
+        "class C { *m() { yield arguments.length; } static *s() { yield arguments.length; } } \
+         [new C().m(1, 2, 3).next().value, C.s(1).next().value].join();",
+        "3,1",
+    );
+    check(
+        "function* g2(a) { return arguments.length + ':' + a; } g2(1, 2).next().value;",
+        "2:1",
+    );
+    check(
+        "function* g3() { yield 1; yield arguments[0]; } var it3 = g3('late'); it3.next(); \
+         it3.next().value;",
+        "late",
+    );
+    check(
+        "function* g4(a, ...r) { yield arguments.length + ':' + r.length; } \
+         g4(1, 2, 3).next().value;",
+        "3:2",
+    );
+}
+
 #[test]
 fn length_is_not_enumerable() {
     check(

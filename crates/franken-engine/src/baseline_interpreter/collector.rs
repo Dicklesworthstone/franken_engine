@@ -1392,6 +1392,7 @@ impl InterpreterCore {
             iteration_traces: _,
             function_prototypes,
             builtin_function_backings: _,
+            virtual_property_deletions: _,
             builtin_prototypes,
             seed_epoch: _,
             // Seeds hold their own heap copies; restoring one replaces the

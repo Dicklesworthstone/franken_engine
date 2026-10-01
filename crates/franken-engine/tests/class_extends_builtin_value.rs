@@ -137,3 +137,22 @@ fn reflect_construct_of_builtins_with_new_target() {
         "object true 5 true true",
     );
 }
+
+/// A class inherits its builtin parent's statics, through class parents and
+/// an aliased parent too. Not claimed: the static ignores `this`, so
+/// `L.from([1])` is an Array rather than an L.
+#[test]
+fn inherited_builtin_statics() {
+    check(
+        "class L extends Array {}
+         class M extends L {}
+         class E extends Error {}
+         class O extends Object {}
+         const Mp = Map; class G extends Mp {}
+         class N extends Number {}
+         [typeof L.from, Array.isArray(L.from([1, 2])), L.from([1, 2]).length, typeof M.of,
+          M.of(7)[0], L.isArray([]), typeof E.captureStackTrace, O.keys({a: 1}).join(),
+          typeof G.groupBy, N.MAX_SAFE_INTEGER, typeof L.foo].join(' ');",
+        "function true 2 function 7 true function a function 9007199254740991 undefined",
+    );
+}

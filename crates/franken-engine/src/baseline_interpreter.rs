@@ -93705,7 +93705,10 @@ impl InterpreterCore {
                 self.ensure_function_prototype(module, func_idx)?,
             ))
         } else {
-            Ok(Self::function_name_or_length(module, func_idx, key).unwrap_or(Value::Undefined))
+            match Self::function_name_or_length(module, func_idx, key) {
+                Some(value) => Ok(value),
+                None => self.builtin_parent_static(module, Value::Function(func_idx), key),
+            }
         }
     }
 
@@ -93767,9 +93770,71 @@ impl InterpreterCore {
             ))
         } else {
             let func_idx = self.closure_function_index(closure_id)?;
-            Ok(Self::function_name_or_length(owner_module, func_idx, key)
-                .unwrap_or(Value::Undefined))
+            match Self::function_name_or_length(owner_module, func_idx, key) {
+                Some(value) => Ok(value),
+                None => self.builtin_parent_static(owner_module, Value::Closure(closure_id), key),
+            }
         }
+    }
+
+    /// A static a class inherits from a builtin parent (`class L extends
+    /// Array {}; L.from`). The class's own statics and those of class parents
+    /// live on backing objects that are searched before this; a builtin
+    /// parent's statics are served by its constructor, so the parent chain is
+    /// walked to it. Only classes with a derived-constructor record are
+    /// walked: the lookup never allocates a prototype for a plain function.
+    fn builtin_parent_static(
+        &mut self,
+        module: &Ir3Module,
+        constructor: Value,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        let mut current = constructor;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let prototype = match &current {
+                Value::Closure(id) => self
+                    .function_prototypes
+                    .get(&(Self::closure_prototype_owner_id(module), *id))
+                    .copied(),
+                Value::Function(index) => self
+                    .function_prototypes
+                    .get(&(Self::function_prototype_owner_id(module), *index))
+                    .copied(),
+                _ => None,
+            };
+            let Some(parent) = prototype
+                .and_then(|prototype| self.heap.get(prototype.0 as usize))
+                .filter(|object| object.is_derived_constructor)
+                .and_then(|object| object.derived_constructor_parent.clone())
+            else {
+                return Ok(Value::Undefined);
+            };
+            let builtin = match &parent {
+                Value::Str(name) => {
+                    let name = name.to_string();
+                    match STANDARD_CONSTRUCTOR_GLOBALS
+                        .iter()
+                        .copied()
+                        .find(|candidate| *candidate == name)
+                    {
+                        Some(name) => BuiltinFunction::standard_constructor(name),
+                        None => return Ok(Value::Undefined),
+                    }
+                }
+                Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::StandardConstructor =>
+                {
+                    builtin.clone()
+                }
+                Value::Closure(_) | Value::Function(_) => {
+                    current = parent;
+                    continue;
+                }
+                _ => return Ok(Value::Undefined),
+            };
+            return self.standard_constructor_property(&builtin, key);
+        }
+        Ok(Value::Undefined)
     }
 
     fn function_prototype_property(key: &str) -> Option<Value> {

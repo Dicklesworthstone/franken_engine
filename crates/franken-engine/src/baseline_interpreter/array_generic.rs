@@ -98,9 +98,10 @@ impl InterpreterCore {
                         (object.is_array, object.typed_array.is_some())
                     });
                 if is_array || self.builtin_prototypes.get("Array") == Some(&object_id) {
-                    let spread = kind == K::ArrayConcat
-                        && self.concat_spreads_generically(object_id, args)?;
-                    return Ok(spread.then_some(object_id));
+                    let generic = (kind == K::ArrayConcat
+                        && self.concat_spreads_generically(object_id, args)?)
+                        || self.converts_object_argument(kind, args)?;
+                    return Ok(generic.then_some(object_id));
                 }
                 Ok((!is_typed_array && !iterator).then_some(object_id))
             }
@@ -114,6 +115,37 @@ impl InterpreterCore {
             ) if !iterator => Ok(Some(self.alloc_primitive_wrapper(primitive.clone())?)),
             _ => Ok(None),
         }
+    }
+
+    /// Whether an Array receiver's method must run generically because an
+    /// argument it ToNumbers (an index, a length, a count) or ToStrings
+    /// (join's separator) is an object: the element-storage paths convert
+    /// primitives only, so `[1, 2, 3].slice({ valueOf() { return 1 } })`
+    /// ignored the start. Arguments that are values (indexOf's search
+    /// element, fill's value, splice's items) do not count.
+    fn converts_object_argument(
+        &self,
+        kind: BuiltinFunctionKind,
+        args: RegRange,
+    ) -> Result<bool, InterpreterError> {
+        use BuiltinFunctionKind as K;
+        let positions: &[u32] = match kind {
+            K::ArraySliceMethod | K::ArraySplice => &[0, 1],
+            K::ArrayAt | K::ArrayWith | K::ArrayJoin => &[0],
+            K::ArrayFill => &[1, 2],
+            K::ArrayIndexOf | K::ArrayLastIndexOf | K::ArrayIncludes => &[1],
+            _ => return Ok(false),
+        };
+        for &position in positions {
+            if position < args.count
+                && self
+                    .builtin_arg(args, position)?
+                    .is_some_and(|value| value.is_object_like())
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Whether concat on the Array `receiver` must spread generically: an

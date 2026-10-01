@@ -57639,6 +57639,17 @@ impl InterpreterCore {
                     return matches!(key, "name" | "length" | "prototype");
                 }
                 Value::AsyncFunction(_) => return matches!(key, "name" | "length"),
+                // bd-9vouw.17: every standard constructor but Proxy has an own
+                // `prototype` (ES2020 26.2.2), as do Date and Promise.
+                Value::BuiltinFunction(builtin) if key == "prototype" => {
+                    if Self::materialized_global_prototype_name(builtin).is_some() {
+                        return true;
+                    }
+                    if builtin.kind == BuiltinFunctionKind::StandardConstructor {
+                        return Self::standard_constructor_name(builtin)
+                            .is_ok_and(|name| name != "Proxy");
+                    }
+                }
                 _ => {}
             }
         }
@@ -69382,13 +69393,25 @@ impl InterpreterCore {
             return Ok(self.object_own_property_contains(receiver, property));
         };
         let key = self.executable_property_key_from_value(property);
+        if let Value::BuiltinFunction(builtin) = receiver
+            && builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && let Some(name) = key.as_str()
+            && self
+                .function_own_property_object(module, receiver)?
+                .is_none()
+            && self
+                .standard_constructor_own_static(builtin, name)?
+                .is_some()
+        {
+            return Ok(true);
+        }
         if let Some(own) = self.function_own_property_exists(module, receiver, &key)? {
             return Ok(own);
         }
         if self.object_own_property_contains(receiver, property) {
             return Ok(true);
         }
-        let backing = self.function_own_property_object(module, receiver)?;
+        let backing = self.own_property_holder(Some(module), receiver, false)?;
         Ok(backing.is_some_and(|backing| {
             self.object_own_property_contains(&Value::Object(backing), property)
         }))
@@ -73442,10 +73465,14 @@ impl InterpreterCore {
                         self.canonical_prototype_own_virtual_value(object_id, name)
                     }),
                 }?;
-                Some((
-                    BaselineSymbolProperty::Data(virtual_value),
-                    NON_ENUMERABLE_DATA_ATTRIBUTES,
-                ))
+                let attributes = if matches!(key.as_str(), Some("length" | "name"))
+                    && self.builtin_prototypes.get("Function") == Some(&object_id)
+                {
+                    FUNCTION_NAME_LENGTH_ATTRIBUTES
+                } else {
+                    NON_ENUMERABLE_DATA_ATTRIBUTES
+                };
+                Some((BaselineSymbolProperty::Data(virtual_value), attributes))
             });
         let Some((property, attributes)) = source else {
             return Ok(Value::Undefined);
@@ -83028,17 +83055,8 @@ impl InterpreterCore {
 
                 let this_val = self.read_reg(args.start)?;
                 let prop_val = self.read_reg(args.start + 1)?;
-                if let Value::Object(obj_id) = &this_val {
-                    self.join_pending_hostcall_stream_label(*obj_id)?;
-                }
-                if let Some(module) = module {
-                    let key = self.executable_property_key_from_value(&prop_val);
-                    if let Some(own) = self.function_own_property_exists(module, &this_val, &key)? {
-                        return Ok(Value::Bool(own));
-                    }
-                }
                 Ok(Value::Bool(
-                    self.object_own_property_contains(&this_val, &prop_val),
+                    self.value_has_own_property(module, &this_val, &prop_val)?,
                 ))
             }
             "builtin:ArrayPrototypeSort" => {
@@ -94536,14 +94554,29 @@ impl InterpreterCore {
         if !self.object_own_property_contains(function, &Value::str("prototype")) {
             return Ok(Value::Undefined);
         }
-        let value = match function {
-            Value::Function(index) => self.function_property_value(module, *index, "prototype")?,
-            Value::Closure(id) => self.closure_property_value(module, *id, "prototype")?,
+        let (value, writable) = match function {
+            Value::Function(index) => (
+                self.function_property_value(module, *index, "prototype")?,
+                true,
+            ),
+            Value::Closure(id) => (self.closure_property_value(module, *id, "prototype")?, true),
+            // bd-9vouw.17: a built-in constructor's `prototype` is not
+            // writable (ES2020 19.1.2.19, 20.1.2.15, ...).
+            Value::BuiltinFunction(builtin) => {
+                let value = match Self::materialized_global_prototype_name(builtin) {
+                    Some(name) => Value::Object(self.ensure_builtin_prototype(name)?),
+                    None if builtin.kind == BuiltinFunctionKind::StandardConstructor => {
+                        self.standard_constructor_property(builtin, "prototype")?
+                    }
+                    None => return Ok(Value::Undefined),
+                };
+                (value, false)
+            }
             _ => return Ok(Value::Undefined),
         };
         let descriptor = self.alloc_object_with_properties(&[
             ("value", value),
-            ("writable", Value::Bool(true)),
+            ("writable", Value::Bool(writable)),
             ("enumerable", Value::Bool(false)),
             ("configurable", Value::Bool(false)),
         ])?;
@@ -95985,6 +96018,23 @@ impl InterpreterCore {
                 self.set_own_property_attributes(backing, &key, FUNCTION_NAME_LENGTH_ATTRIBUTES)?;
             }
         }
+        // A standard constructor's backing object also starts with its
+        // `prototype` and static members, so the reflection built-ins see
+        // what a read sees.
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::StandardConstructor
+        {
+            let name = Self::standard_constructor_name(builtin)?;
+            for key in Self::standard_constructor_candidate_keys(name) {
+                if let Some((value, attributes)) =
+                    self.standard_constructor_own_static(builtin, key)?
+                {
+                    let key = RuntimePropertyKey::String(JsString::from(key));
+                    self.set_object_runtime_property(backing, key.clone(), value)?;
+                    self.set_own_property_attributes(backing, &key, attributes)?;
+                }
+            }
+        }
         Ok(Some(backing))
     }
 
@@ -96191,6 +96241,81 @@ impl InterpreterCore {
                 expected: "standard constructor".to_string(),
                 got: builtin.module_specifier.to_string(),
             })
+    }
+
+    /// bd-9vouw.17: the own property `key` of a first-class standard
+    /// constructor other than `length` and `name`, with its attributes.
+    /// `prototype` and the value properties (`Number.MAX_SAFE_INTEGER`,
+    /// `Symbol.iterator`, `Uint8Array.BYTES_PER_ELEMENT`) are read-only, the
+    /// static methods writable and configurable, all non-enumerable (ES2020
+    /// clause 17); V8's `Error.stackTraceLimit` is a plain data property.
+    /// `None` for a key the constructor only inherits (Function.prototype's
+    /// members, %TypedArray%'s `from` and `of` on a concrete typed array
+    /// constructor) and for one it does not have.
+    fn standard_constructor_own_static(
+        &mut self,
+        builtin: &BuiltinFunction,
+        key: &str,
+    ) -> Result<Option<(Value, PropertyAttributes)>, InterpreterError> {
+        if matches!(key, "length" | "name") || Self::function_prototype_property(key).is_some() {
+            return Ok(None);
+        }
+        let name = Self::standard_constructor_name(builtin)?;
+        if matches!(key, "from" | "of") && TypedArrayKind::from_type_name(name).is_some() {
+            return Ok(None);
+        }
+        let value = self.standard_constructor_property(builtin, key)?;
+        if matches!(value, Value::Undefined) {
+            return Ok(None);
+        }
+        let attributes = if key == "stackTraceLimit" {
+            PropertyAttributes {
+                writable: true,
+                enumerable: true,
+                configurable: true,
+            }
+        } else if key == "prototype" || !value.is_callable() {
+            READ_ONLY_VALUE_ATTRIBUTES
+        } else {
+            NON_ENUMERABLE_DATA_ATTRIBUTES
+        };
+        Ok(Some((value, attributes)))
+    }
+
+    /// bd-9vouw.17: the keys a standard constructor's own properties can
+    /// have besides `length` and `name`: `prototype`, the static methods Node
+    /// has (BUILTIN_FUNCTION_LENGTHS), the Number constants, the well-known
+    /// symbols, `BYTES_PER_ELEMENT` and `stackTraceLimit`.
+    /// `standard_constructor_own_static` decides which ones it has.
+    fn standard_constructor_candidate_keys(name: &str) -> Vec<&'static str> {
+        let mut keys = vec!["prototype"];
+        keys.extend(
+            builtin_function_lengths::BUILTIN_FUNCTION_LENGTHS
+                .iter()
+                .filter(|(owner, _, _)| *owner == name)
+                .map(|(_, key, _)| *key),
+        );
+        match name {
+            "Number" => keys.extend([
+                "EPSILON",
+                "MAX_SAFE_INTEGER",
+                "MAX_VALUE",
+                "MIN_SAFE_INTEGER",
+                "MIN_VALUE",
+                "NaN",
+                "NEGATIVE_INFINITY",
+                "POSITIVE_INFINITY",
+            ]),
+            "Symbol" => keys.extend(
+                crate::object_model::WellKnownSymbol::ALL
+                    .into_iter()
+                    .filter_map(|symbol| symbol.name().strip_prefix("@@")),
+            ),
+            "Error" => keys.push("stackTraceLimit"),
+            _ if TypedArrayKind::from_type_name(name).is_some() => keys.push("BYTES_PER_ELEMENT"),
+            _ => {}
+        }
+        keys
     }
 
     /// bd-9vouw.17: members of a first-class standard constructor value.
@@ -96638,6 +96763,10 @@ impl InterpreterCore {
             "BigInt" => defined(Self::bigint_property_value(key)),
             "Symbol" => (key == "toString")
                 .then(|| Value::BuiltinFunction(BuiltinFunction::symbol_to_string())),
+            // %Function.prototype% is itself a function with length 0 and
+            // the empty name (ES2020 19.2.3), bd-9vouw.17.
+            "Function" if key == "length" => Some(Value::Int(0)),
+            "Function" if key == "name" => Some(Value::str("")),
             "Function" => Self::function_prototype_property(key),
             "Promise" => defined(Self::promise_property_value(key)),
             // DataView: the accessors instances already expose, served from

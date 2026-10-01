@@ -49188,6 +49188,22 @@ impl InterpreterCore {
                                         .unwrap_or(Value::Undefined),
                                 }
                             }
+                            ref exotic @ (Value::Generator(_) | Value::AsyncGeneratorObject(_))
+                                if self.exotic_has_own_property(
+                                    module,
+                                    exotic,
+                                    &property_key,
+                                )? =>
+                            {
+                                match self.exotic_own_property_get(module, exotic, &property_key)? {
+                                    // IFC: the backing object owns the stored label.
+                                    Some((own, backing)) => {
+                                        primitive_owner = Some(backing);
+                                        own
+                                    }
+                                    None => Value::Undefined,
+                                }
+                            }
                             Value::Generator(_) => match property_key {
                                 RuntimePropertyKey::String(ref key) => match key.as_str() {
                                     Some("next") => {
@@ -49249,7 +49265,15 @@ impl InterpreterCore {
                             // Object.prototype), as for a primitive base.
                             // @@toStringTag is "Promise" (ES2020 25.6.5.5).
                             Value::Promise(promise) => {
-                                if matches!(
+                                if let Some((own, backing)) = self.exotic_own_property_get(
+                                    module,
+                                    &Value::Promise(promise),
+                                    &property_key,
+                                )? {
+                                    // IFC: the backing object owns the stored label.
+                                    primitive_owner = Some(backing);
+                                    own
+                                } else if matches!(
                                     &property_key,
                                     RuntimePropertyKey::Symbol(symbol)
                                         if *symbol == WellKnownSymbol::ToStringTag.id()
@@ -49544,6 +49568,26 @@ impl InterpreterCore {
                             let property_object = self
                                 .ensure_function_own_property_object(module, function)?
                                 .expect("user function values always have a backing-object key");
+                            let mutation_label = self
+                                .get_register_label(obj)?
+                                .join(self.get_register_label(key)?)
+                                .join(self.get_register_label(val)?);
+                            self.join_object_mutation_label(property_object, &mutation_label)?;
+                            self.set_backing_object_property(
+                                module,
+                                property_object,
+                                &property_key,
+                                val,
+                                set_val,
+                            )?;
+                        }
+                        // A promise, generator or async generator object keeps
+                        // assigned properties (`p.cancel = fn`) on its backing
+                        // object; the assignment threw "expected object".
+                        ref exotic if Self::has_exotic_backing_object(exotic) => {
+                            let property_object = self
+                                .ensure_function_own_property_object(module, exotic)?
+                                .expect("promise and generator values have a backing-object key");
                             let mutation_label = self
                                 .get_register_label(obj)?
                                 .join(self.get_register_label(key)?)
@@ -52762,6 +52806,9 @@ impl InterpreterCore {
             | Value::AsyncGeneratorObject(_)
             | Value::Iterator(_)
             | Value::AsyncFunctionObject(_)) => {
+                if self.exotic_has_own_property(module, object_like, &key)? {
+                    return Ok(Value::Bool(true));
+                }
                 let supplied = match object_like {
                     Value::Promise(_) => key.as_str().is_some_and(|name| {
                         !matches!(Self::promise_property_value(name), Value::Undefined)
@@ -80597,8 +80644,11 @@ impl InterpreterCore {
                         Ok(Value::Object(array_id))
                     }
                     // bd-9vouw.17: a function's enumerable own properties are
-                    // on its backing object (`length`/`name` are not enumerable).
-                    ref function if function.is_callable() => {
+                    // on its backing object (`length`/`name` are not enumerable),
+                    // as are a promise's or generator object's.
+                    ref function
+                        if function.is_callable() || Self::has_exotic_backing_object(function) =>
+                    {
                         let key_values = match self.own_property_holder(module, function, false)? {
                             Some(backing) => self
                                 .heap
@@ -80837,7 +80887,11 @@ impl InterpreterCore {
                     // A function's own properties live on its backing object,
                     // where `f.x = 1` stores them: `Object.assign(fn, {...})`
                     // (chroma's statics) copied nothing.
-                    function if function.is_callable() => {
+                    // Promises and generator objects keep theirs on a
+                    // backing object too (`Object.assign(promise, { a: 1 })`).
+                    function
+                        if function.is_callable() || Self::has_exotic_backing_object(function) =>
+                    {
                         let backing = match module {
                             Some(module) => {
                                 self.ensure_function_own_property_object(module, function)?
@@ -94959,6 +95013,26 @@ impl InterpreterCore {
                 digest.update(&identity);
                 (5u8, ContentHash::from_bytes(digest.finalize().into()), 0)
             }
+            // A promise, generator or async generator object has no heap
+            // storage of its own either: its own properties (`p.cancel =
+            // fn`, `Object.assign(promise, ...)`) live on a backing object
+            // too. Their ids are the runtime's, not a module's, so the owner
+            // is a constant (computed once: every `p.then` read asks).
+            Value::Promise(id) | Value::Generator(id) | Value::AsyncGeneratorObject(id) => {
+                static OWNERS: OnceLock<[ContentHash; 3]> = OnceLock::new();
+                let owners = OWNERS.get_or_init(|| {
+                    let mut digest = Sha256::new();
+                    digest.update(b"FrankenEngine.ExoticObjectOwnProperties.v1");
+                    let base = ContentHash::from_bytes(digest.finalize().into());
+                    [6u8, 7, 8].map(|kind| Self::function_own_property_owner(kind, &base))
+                });
+                let slot = match function {
+                    Value::Promise(_) => 0,
+                    Value::Generator(_) => 1,
+                    _ => 2,
+                };
+                return Ok(Some((owners[slot], *id)));
+            }
             _ => return Ok(None),
         };
         Ok(Some((
@@ -95113,6 +95187,51 @@ impl InterpreterCore {
         })
     }
 
+    /// Whether `value` is a promise, generator or async generator object,
+    /// whose own properties live on a backing object (see
+    /// `function_own_property_key`).
+    fn has_exotic_backing_object(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Promise(_) | Value::Generator(_) | Value::AsyncGeneratorObject(_)
+        )
+    }
+
+    /// Whether a promise, generator or async generator object has the own
+    /// property `key` (on its backing object). Runs no guest code.
+    fn exotic_has_own_property(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        Ok(self
+            .function_own_property_object(module, value)?
+            .and_then(|backing| self.heap.get(backing.0 as usize))
+            .is_some_and(|object| object.contains_own_runtime_property(key)))
+    }
+
+    /// The own property `key` of a promise, generator or async generator
+    /// object, read from its backing object with `value` as the receiver
+    /// (an accessor sees it as `this`), with that backing object (the owner
+    /// whose stored label the read joins), or `None` when it has none.
+    fn exotic_own_property_get(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<(Value, ObjectId)>, InterpreterError> {
+        if !self.exotic_has_own_property(module, value, key)? {
+            return Ok(None);
+        }
+        let backing = self
+            .function_own_property_object(module, value)?
+            .expect("checked by exotic_has_own_property");
+        let own =
+            self.proxy_aware_get_runtime_property(Some(module), backing, key, value.clone(), 0)?;
+        Ok(Some((own, backing)))
+    }
+
     /// bd-9vouw.17: the object that holds `value`'s own properties for the
     /// Object.* reflection built-ins: an object itself, a built-in's property
     /// object, or a function's backing object (created and seeded on demand
@@ -95132,7 +95251,7 @@ impl InterpreterCore {
         {
             return Ok(Some(object));
         }
-        if !value.is_callable() {
+        if !value.is_callable() && !Self::has_exotic_backing_object(value) {
             return Ok(None);
         }
         let Some(module) = module else {
@@ -123170,6 +123289,58 @@ mod async_runtime_tests_current {
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Secret,
             "a Secret value written to a Public object property must read back Secret (bd-ojvo1)"
+        );
+    }
+
+    /// A promise's own properties live on a backing object; a Secret value
+    /// stored there must read back Secret too (the read joins the backing
+    /// object's stored label, as bd-ojvo1 does for an object).
+    #[test]
+    fn promise_own_property_read_keeps_the_stored_label() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("cancel".into());
+
+        let mut core = test_interpreter();
+        let promise = core
+            .create_promise()
+            .expect("test promise allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Promise(promise.0);
+            r[2] = Value::Int(42);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Public)
+            .expect("promise label should be settable");
+        core.set_register_label(2, crate::ifc_artifacts::Label::Secret)
+            .expect("written value label should be settable");
+
+        core.execute(&module)
+            .expect("set then get off a promise should execute");
+
+        assert_eq!(core.read_reg(3).expect("dst register"), Value::Int(42));
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "a Secret value written to a promise's own property must read back Secret"
         );
     }
 

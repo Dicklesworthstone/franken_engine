@@ -89,6 +89,7 @@ mod primitive_conversion;
 mod reflect_invocation;
 mod regexp_backtrack;
 mod regexp_syntax;
+mod text_codec;
 #[cfg(test)]
 use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
@@ -928,6 +929,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "WeakSet" => Some("WeakSet"),
         "WeakRef" => Some("WeakRef"),
         "FinalizationRegistry" => Some("FinalizationRegistry"),
+        "TextEncoder" => Some("TextEncoder"),
+        "TextDecoder" => Some("TextDecoder"),
         _ => None,
     }
 }
@@ -3377,6 +3380,9 @@ pub enum BuiltinFunctionKind {
     /// `WeakSet.prototype.add/has/delete`; the method name travels in
     /// `module_specifier`. Append only.
     WeakSetMethod,
+    /// TextEncoder.prototype.encode/encodeInto, TextDecoder.prototype.decode
+    /// (bd-3l74k); the method name is in `module_specifier`.
+    TextCodecMethod,
     /// `next` / `return` of the async iterator that
     /// `require('timers/promises').setInterval` returns (bd-suwvw). Append
     /// only.
@@ -5122,6 +5128,11 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or("weakSetMethod"),
+            BuiltinFunctionKind::TextCodecMethod => ["encode", "encodeInto", "decode"]
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("textCodecMethod"),
             BuiltinFunctionKind::WeakMapMethod => ["get", "set", "has", "delete"]
                 .iter()
                 .copied()
@@ -5306,6 +5317,13 @@ impl BuiltinFunction {
             | K::SetValues => "Set.prototype",
             K::WeakMapMethod => "WeakMap.prototype",
             K::WeakSetMethod => "WeakSet.prototype",
+            K::TextCodecMethod => {
+                if self.module_specifier.0.as_deref() == Some("decode") {
+                    "TextDecoder.prototype"
+                } else {
+                    "TextEncoder.prototype"
+                }
+            }
             K::NumberToExponential
             | K::NumberToFixed
             | K::NumberToLocaleString
@@ -5435,7 +5453,7 @@ const TYPED_ARRAY_INTRINSIC: &str = "TypedArray";
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 36] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 38] = [
     "Object",
     "Array",
     "Number",
@@ -5483,6 +5501,9 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 36] = [
     // lowering; the binding makes `Symbol` a value (`var S = Symbol`,
     // `root.Symbol`-style aliases). Not constructible.
     "Symbol",
+    // WHATWG Encoding (bd-3l74k): pure builtins, no authority.
+    "TextEncoder",
+    "TextDecoder",
 ];
 
 /// bd-9vouw.17: realm globals besides the standard constructors and global
@@ -5543,7 +5564,7 @@ const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 19] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 21] = [
     "Array",
     "String",
     "Number",
@@ -5563,6 +5584,8 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 19] = [
     "WeakRef",
     "FinalizationRegistry",
     "TypedArray",
+    "TextEncoder",
+    "TextDecoder",
 ];
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
@@ -37907,6 +37930,15 @@ impl InterpreterCore {
                     .to_string();
                 self.weakset_method(&method, receiver.unwrap_or(Value::Undefined), args)
             }
+            BuiltinFunctionKind::TextCodecMethod => {
+                let method = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.text_codec_method(&method, receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::TimersPromisesIntervalNext
             | BuiltinFunctionKind::TimersPromisesIntervalReturn => self
                 .timers_promises_interval_step(
@@ -56435,6 +56467,13 @@ impl InterpreterCore {
             }
             ("WeakSet", method @ ("add" | "has" | "delete")) => Some(BuiltinFunction {
                 kind: BuiltinFunctionKind::WeakSetMethod,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                iterator_handle: None,
+                bound_object: None,
+            }),
+            ("TextEncoder", method @ ("encode" | "encodeInto"))
+            | ("TextDecoder", method @ "decode") => Some(BuiltinFunction {
+                kind: BuiltinFunctionKind::TextCodecMethod,
                 module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
                 iterator_handle: None,
                 bound_object: None,
@@ -94303,6 +94342,8 @@ impl InterpreterCore {
             "WeakMap" | "WeakSet" => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }
+            "TextEncoder" => self.construct_text_encoder(),
+            "TextDecoder" => self.construct_text_decoder(Some(module), args),
             "ArrayBuffer" | "DataView" => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }

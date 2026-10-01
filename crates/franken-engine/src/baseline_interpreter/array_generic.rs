@@ -1239,6 +1239,9 @@ impl InterpreterCore {
             }
             let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
             if matches!(element, Value::Undefined | Value::Null) {
+                // No guest call runs for it, so the step is metered here
+                // (bd-9vouw.112).
+                self.charge_native_hole_read()?;
                 continue;
             }
             let method = self.get_v(module, &element, &to_locale_string)?;

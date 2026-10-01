@@ -245,7 +245,9 @@ fn package_mapping_target<'a, 'b>(
     entries: &'a [(String, PackageExports)],
     subpath: &'b str,
 ) -> Option<(&'a PackageExports, Option<&'b str>)> {
-    let exact = entries.iter().find(|(key, _)| key == subpath && !key.contains('*'));
+    let exact = entries
+        .iter()
+        .find(|(key, _)| key == subpath && !key.contains('*'));
     if let Some((_, target)) = exact {
         return Some((target, None));
     }
@@ -258,13 +260,16 @@ fn package_mapping_target<'a, 'b>(
         if suffix.contains('*')
             || !subpath.starts_with(prefix)
             || subpath == prefix
-            || !(suffix.is_empty()
-                || (subpath.ends_with(suffix) && subpath.len() >= key.len()))
+            || !(suffix.is_empty() || (subpath.ends_with(suffix) && subpath.len() >= key.len()))
         {
             continue;
         }
         if best.is_none_or(|(best_key, ..)| pattern_key_precedes(key, best_key)) {
-            best = Some((key, target, &subpath[prefix.len()..subpath.len() - suffix.len()]));
+            best = Some((
+                key,
+                target,
+                &subpath[prefix.len()..subpath.len() - suffix.len()],
+            ));
         }
     }
     best.map(|(_, target, capture)| (target, Some(capture)))
@@ -371,8 +376,12 @@ fn package_relative_target(package_dir: &Path, relative: &str) -> Result<PathBuf
     let mut cursor = 0;
     while cursor < bytes.len() {
         if bytes[cursor] == b'%' {
-            let high = bytes.get(cursor + 1).and_then(|byte| (*byte as char).to_digit(16));
-            let low = bytes.get(cursor + 2).and_then(|byte| (*byte as char).to_digit(16));
+            let high = bytes
+                .get(cursor + 1)
+                .and_then(|byte| (*byte as char).to_digit(16));
+            let low = bytes
+                .get(cursor + 2)
+                .and_then(|byte| (*byte as char).to_digit(16));
             let (Some(high), Some(low)) = (high, low) else {
                 return Err(invalid());
             };
@@ -388,9 +397,11 @@ fn package_relative_target(package_dir: &Path, relative: &str) -> Result<PathBuf
         }
     }
     let decoded = String::from_utf8(decoded).map_err(|_| invalid())?;
-    if decoded.contains('\\') || decoded.as_bytes().contains(&0)
+    if decoded.contains('\\')
+        || decoded.as_bytes().contains(&0)
         || decoded.split('/').any(|segment| {
-            segment.is_empty() || matches!(segment, "." | "..")
+            segment.is_empty()
+                || matches!(segment, "." | "..")
                 || segment.eq_ignore_ascii_case("node_modules")
         })
     {
@@ -480,12 +491,13 @@ impl InterpreterCore {
             return match target {
                 ExportsTargetResolution::Found(path) if path.is_file() => Ok(path),
                 ExportsTargetResolution::Package(target) => {
-                    self.resolve_named_require_from(&target, &scope, &root).map_err(|error| {
-                        // Keep the source-level alias in the outward diagnostic.
-                        failed(ModuleResolutionFailureReason::Other(format!(
-                            "package import `{specifier}` targeting `{target}`: {error}"
-                        )))
-                    })
+                    self.resolve_named_require_from(&target, &scope, &root)
+                        .map_err(|error| {
+                            // Keep the source-level alias in the outward diagnostic.
+                            failed(ModuleResolutionFailureReason::Other(format!(
+                                "package import `{specifier}` targeting `{target}`: {error}"
+                            )))
+                        })
                 }
                 _ => Err(failed(ModuleResolutionFailureReason::ModuleNotFound)),
             };
@@ -521,12 +533,13 @@ impl InterpreterCore {
             && manifest.name.as_ref().and_then(serde_json::Value::as_str) == Some(name)
             && let Some(exports) = manifest.exports.as_ref()
         {
-            let target = resolve_package_exports(&scope, &format!(".{subpath}"), exports)
-                .map_err(|reason| {
+            let target = resolve_package_exports(&scope, &format!(".{subpath}"), exports).map_err(
+                |reason| {
                     failed(ModuleResolutionFailureReason::Other(format!(
                         "package `{name}` {reason}"
                     )))
-                })?;
+                },
+            )?;
             return if target.is_file() {
                 Ok(target)
             } else {
@@ -583,7 +596,9 @@ impl InterpreterCore {
     ) -> Result<Option<(PathBuf, PackageManifest)>, InterpreterError> {
         for directory in start.ancestors() {
             if !directory.starts_with(root)
-                || directory.file_name().is_some_and(|name| name == "node_modules")
+                || directory
+                    .file_name()
+                    .is_some_and(|name| name == "node_modules")
             {
                 break;
             }
@@ -771,7 +786,10 @@ mod tests {
             ("#x/special/a", "/pkg/special/a.cjs"),
             ("#x/a", "/pkg/general/a.cjs"),
         ] {
-            assert_eq!(import_target(map, request), Ok(ExportsTargetResolution::Found(target.into())));
+            assert_eq!(
+                import_target(map, request),
+                Ok(ExportsTargetResolution::Found(target.into()))
+            );
         }
         assert!(import_target(map, "#x/private/secret").is_err());
         assert!(import_target(map, "#missing").is_err());
@@ -780,14 +798,23 @@ mod tests {
     #[test]
     fn imports_conditions_and_array_alternatives_share_exports_semantics() {
         assert_eq!(
-            import_target(r##"{"#x":{"default":"./first.cjs","require":"./second.cjs"}}"##, "#x"),
+            import_target(
+                r##"{"#x":{"default":"./first.cjs","require":"./second.cjs"}}"##,
+                "#x"
+            ),
             Ok(ExportsTargetResolution::Found("/pkg/first.cjs".into()))
         );
         assert_eq!(
-            import_target(r##"{"#x":[null,"../invalid",{"browser":"./wrong.cjs"},{"node":{"require":"./right.cjs"}}]}"##, "#x"),
+            import_target(
+                r##"{"#x":[null,"../invalid",{"browser":"./wrong.cjs"},{"node":{"require":"./right.cjs"}}]}"##,
+                "#x"
+            ),
             Ok(ExportsTargetResolution::Found("/pkg/right.cjs".into()))
         );
-        assert_eq!(resolve(r#"[null,"./right.cjs"]"#, "."), Ok("/pkg/right.cjs".into()));
+        assert_eq!(
+            resolve(r#"[null,"./right.cjs"]"#, "."),
+            Ok("/pkg/right.cjs".into())
+        );
         assert!(import_target(r##"{"#x":[]}"##, "#x").is_err());
         assert!(import_target(r##"{"#x":{"browser":"./wrong.cjs"}}"##, "#x").is_err());
     }
@@ -796,13 +823,17 @@ mod tests {
     fn only_imports_can_select_external_package_targets() {
         assert_eq!(
             import_target(r##"{"#dep/*":"@scope/dependency/*"}"##, "#dep/feature"),
-            Ok(ExportsTargetResolution::Package("@scope/dependency/feature".to_string()))
+            Ok(ExportsTargetResolution::Package(
+                "@scope/dependency/feature".to_string()
+            ))
         );
         // Target selection does not examine the filesystem or try fallbacks
         // after selecting a syntactically valid but possibly absent package.
         assert_eq!(
             import_target(r##"{"#dep":["missing-package","./fallback.cjs"]}"##, "#dep"),
-            Ok(ExportsTargetResolution::Package("missing-package".to_string()))
+            Ok(ExportsTargetResolution::Package(
+                "missing-package".to_string()
+            ))
         );
         assert!(resolve(r#""@scope/dependency/feature""#, ".").is_err());
         assert!(import_target(r##"{"#x":"node:path"}"##, "#x").is_err());
@@ -816,18 +847,35 @@ mod tests {
             ("lib/%252e.cjs", "/pkg/lib/%2e.cjs"),
             ("lib/a%23b.cjs", "/pkg/lib/a#b.cjs"),
         ] {
-            assert_eq!(package_relative_target(Path::new("/pkg"), url_path), Ok(file.into()));
+            assert_eq!(
+                package_relative_target(Path::new("/pkg"), url_path),
+                Ok(file.into())
+            );
         }
     }
 
     #[test]
     fn package_url_targets_refuse_encoded_traversal_separators_and_invalid_utf8() {
         for target in [
-            "../escape.cjs", "%2e%2e/escape.cjs", ".%2e/escape.cjs", "%2e./escape.cjs",
-            "node_modules/x.cjs", "%6eode_modules/x.cjs", "x%2fy.cjs", "x%5cy.cjs",
-            "x\\y.cjs", "%ff.cjs", "%00.cjs", "%zz.cjs", "%", "",
+            "../escape.cjs",
+            "%2e%2e/escape.cjs",
+            ".%2e/escape.cjs",
+            "%2e./escape.cjs",
+            "node_modules/x.cjs",
+            "%6eode_modules/x.cjs",
+            "x%2fy.cjs",
+            "x%5cy.cjs",
+            "x\\y.cjs",
+            "%ff.cjs",
+            "%00.cjs",
+            "%zz.cjs",
+            "%",
+            "",
         ] {
-            assert!(package_relative_target(Path::new("/pkg"), target).is_err(), "{target}");
+            assert!(
+                package_relative_target(Path::new("/pkg"), target).is_err(),
+                "{target}"
+            );
         }
         assert!(import_target(r##"{"#x":"../escape.cjs"}"##, "#x").is_err());
         assert!(import_target(r##"{"#x":"file:///tmp/escape.cjs"}"##, "#x").is_err());

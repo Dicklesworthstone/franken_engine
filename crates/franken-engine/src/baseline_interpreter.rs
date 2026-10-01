@@ -48945,7 +48945,7 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
-                    let key_val = self.to_property_key_primitive(module, key_val)?;
+                    let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let object_id = match &obj_val {
                         Value::Object(object_id) => Some(*object_id),
@@ -49526,7 +49526,7 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
-                    let key_val = self.to_property_key_primitive(module, key_val)?;
+                    let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let has_hook_target = matches!(&obj_val, Value::Object(_))
                         || matches!(
@@ -49881,7 +49881,7 @@ impl InterpreterCore {
                             got: "a class private name".to_string(),
                         });
                     }
-                    let key_val = self.to_property_key_primitive(module, key_val)?;
+                    let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let has_hook_target = matches!(&obj_val, Value::Object(_))
                         || matches!(
@@ -52917,9 +52917,17 @@ impl InterpreterCore {
         rhs: u32,
     ) -> Result<Value, InterpreterError> {
         let key_value = self.read_reg(lhs)?;
+        let target = self.read_reg(rhs)?;
+        // ES2020 12.10.3: a non-object right operand throws before
+        // ToPropertyKey(left) runs its toString.
+        if key_value.is_object_like() && !target.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object right operand of `in`".to_string(),
+                got: target.type_name().to_string(),
+            });
+        }
         let key_value = self.to_property_key_primitive(module, key_value)?;
         let key = self.executable_property_key_from_value(&key_value);
-        let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
                 self.heap
@@ -63399,6 +63407,25 @@ impl InterpreterCore {
     /// ToPrimitive'd with the string hint (its toString runs), so `o[k]`
     /// with `k = { toString() { return 'key' } }` reads "key"; it read
     /// "[object#13]" (the object's heap id). A primitive is returned as is.
+    /// ToPropertyKey of a computed member's key after RequireObjectCoercible
+    /// of its base (ES2020 12.3.2.1 EvaluatePropertyAccessWithExpressionKey
+    /// steps 2-4): `null[key]` throws its TypeError before an object key's
+    /// toString runs.
+    fn member_key_primitive(
+        &mut self,
+        module: &Ir3Module,
+        base: &Value,
+        key: Value,
+    ) -> Result<Value, InterpreterError> {
+        if key.is_object_like() && matches!(base, Value::Undefined | Value::Null) {
+            return Err(InterpreterError::TypeError {
+                expected: "object-coercible base of a computed member".to_string(),
+                got: base.type_name().to_string(),
+            });
+        }
+        self.to_property_key_primitive(module, key)
+    }
+
     fn to_property_key_primitive(
         &mut self,
         module: &Ir3Module,

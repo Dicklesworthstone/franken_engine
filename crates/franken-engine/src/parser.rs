@@ -2422,18 +2422,19 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             // A comment inside a template substitution is code, not template
             // text (`${/* @__PURE__ */ f()}`, as bundlers emit). Neither
             // `/*` nor `//` can start a regular expression.
-            if ch == '/' && quotes.in_substitution_code() {
-                if let Some(&next @ ('*' | '/')) = chars.peek() {
-                    chars.next();
-                    push_blanked(&mut out, '/');
-                    push_blanked(&mut out, next);
-                    if next == '*' {
-                        in_block_comment = true;
-                    } else {
-                        in_line_comment = true;
-                    }
-                    continue;
+            if ch == '/'
+                && quotes.in_substitution_code()
+                && let Some(&next @ ('*' | '/')) = chars.peek()
+            {
+                chars.next();
+                push_blanked(&mut out, '/');
+                push_blanked(&mut out, next);
+                if next == '*' {
+                    in_block_comment = true;
+                } else {
+                    in_line_comment = true;
                 }
+                continue;
             }
             out.push(ch);
             quotes.advance_char(ch);

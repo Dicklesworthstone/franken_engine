@@ -1025,12 +1025,23 @@ impl InterpreterCore {
         }
     }
 
+    /// [[Get]](O, P). IFC: the stored label of the property read joins the
+    /// pending result label, as GetProperty's does (bd-ojvo1).
     fn generic_get(
         &mut self,
         m: Option<&Ir3Module>,
         o: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<Value, InterpreterError> {
+        let stored = self.runtime_property_label(o, key);
+        if stored != Label::Public {
+            let joined = self
+                .pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public)
+                .join(&stored);
+            self.replace_pending_hostcall_result_label(Some(joined))?;
+        }
         self.proxy_aware_get_runtime_property(m, o, key, Value::Object(o), 0)
     }
 

@@ -972,7 +972,8 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
 
 /// The early SyntaxError of a regular expression literal (ES2020 12.2.8.1),
 /// or `None` when it may be valid: duplicate or unknown flags, `u` with `v`,
-/// or a pattern that both the backtracking parser and the `regex` crate
+/// a Unicode property escape with a name JavaScript does not define, or a
+/// pattern that both the backtracking parser and the `regex` crate
 /// reject. A pattern either one accepts is left to the runtime, which runs
 /// it there, so no program that runs today is refused at parse time.
 pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<String> {
@@ -985,6 +986,13 @@ pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<S
     }) && !(flags.contains('u') && flags.contains('v'));
     if !flags_valid {
         return Some(format!("Invalid regular expression flags '{flags}'"));
+    }
+    // Property names are exact in JavaScript; the `regex` crate would accept
+    // loose spellings (`\p{greek}`), so they are checked here.
+    if let Some(message) = regexp_syntax::unicode_property_escape_error(pattern, flags) {
+        return Some(format!(
+            "Invalid regular expression: /{pattern}/{flags}: {message}"
+        ));
     }
     let message = BacktrackRegExp::syntax_error(pattern, flags)?;
     let automaton_accepts = InterpreterCore::regexp_builder(pattern, flags)

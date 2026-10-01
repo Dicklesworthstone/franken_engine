@@ -367,23 +367,19 @@ fn empty_double_quoted_string() {
 }
 
 #[test]
-fn mismatched_quotes_are_not_string_literals() {
-    // 'hello" doesn't match quote pairs — treated as Raw expression
-    let tree = parser()
+fn mismatched_quotes_are_a_syntax_error() {
+    // 'hello" is an unterminated string literal (Node: SyntaxError: Invalid
+    // or unexpected token); it used to be accepted as a Raw expression.
+    let error = parser()
         .parse("'hello\"", ParseGoal::Script)
-        .expect("mismatched quotes parse as raw");
-    match &tree.body[0] {
-        Statement::Expression(expr) => {
-            assert!(matches!(&expr.expression, Expression::Raw(_)));
-        }
-        _ => panic!("expected expression"),
-    }
+        .expect_err("an unterminated string literal must not parse");
+    assert!(error.message.contains("unterminated"), "{}", error.message);
 }
 
 #[test]
 fn await_expression_wraps_inner_expression() {
     let tree = parser()
-        .parse("await fetch", ParseGoal::Script)
+        .parse("await fetch", ParseGoal::Module)
         .expect("await expression");
     match &tree.body[0] {
         Statement::Expression(expr) => match &expr.expression {
@@ -399,7 +395,7 @@ fn await_expression_wraps_inner_expression() {
 #[test]
 fn await_string_literal() {
     let tree = parser()
-        .parse("await 'result'", ParseGoal::Script)
+        .parse("await 'result'", ParseGoal::Module)
         .expect("await string");
     match &tree.body[0] {
         Statement::Expression(expr) => match &expr.expression {

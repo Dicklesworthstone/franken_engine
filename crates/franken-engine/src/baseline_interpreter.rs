@@ -81282,7 +81282,11 @@ impl InterpreterCore {
                     // A function's own properties live on its backing object,
                     // where `f.x = 1` stores them: `Object.assign(fn, {...})`
                     // (chroma's statics) copied nothing.
-                    function if function.is_callable() => {
+                    // Promises and generator objects keep theirs on a
+                    // backing object too (`Object.assign(promise, { a: 1 })`).
+                    function
+                        if function.is_callable() || Self::has_exotic_backing_object(function) =>
+                    {
                         let backing = match module {
                             Some(module) => {
                                 self.ensure_function_own_property_object(module, function)?

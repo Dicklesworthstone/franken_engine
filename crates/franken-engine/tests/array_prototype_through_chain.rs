@@ -116,6 +116,14 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"function f() { return Array.prototype.slice.call(arguments, 1).concat(Array.prototype.map.call(arguments, (x) => x * 10)); } var o2 = { length: 2 }; Array.prototype.push.call(o2, 'a'); var s = { length: 2, 0: 'b', 1: 'a' }; Array.prototype.sort.call(s); var sorted = s[0] + s[1]; Array.prototype.reverse.call(s); console.log(f(1, 2, 3).join(), JSON.stringify(o2), sorted, s[0] + s[1], Array.prototype.reduceRight.call({ length: 3, 0: 'a', 1: 'b', 2: 'c' }, (acc, v) => acc + v));"#,
         r#"2,3,10,20,30 {"2":"a","length":3} ab ba cba"#,
     ),
+    // Array.prototype.toLocaleString (ES2020 22.1.3.27) and the typed array
+    // one (22.2.3.28): each element's toLocaleString, "," between. The first
+    // did not exist; the second was an "unsupported TypedArray method".
+    (
+        "to_locale_string",
+        r#"let e; try { Uint8Array.prototype.toLocaleString.call([1]); } catch (x) { e = x.constructor.name; } console.log([[1234, 'a', null, undefined, 5.5].toLocaleString(), [{ toLocaleString() { return 'X'; } }, [1, 2]].toLocaleString(), Array.prototype.toLocaleString.call('ab'), new Uint8Array([1, 200]).toLocaleString(), typeof Array.prototype.toLocaleString, [].toLocaleString() === '', Array.prototype.toLocaleString.call({ length: 2, 0: 3 }), [1234567.891].toLocaleString(), e].join(' | '));"#,
+        "1,234,a,,,5.5 | X,1,2 | a,b | 1,200 | function | true | 3, | 1,234,567.891 | TypeError",
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

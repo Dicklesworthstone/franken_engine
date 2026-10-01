@@ -119,19 +119,20 @@ fn locale_strings() {
     );
 }
 
-/// Component options (`{ month: 'long' }`), another time zone or an
-/// unknown locale are a TypeError naming what is not formatted: the
-/// engine's typed refusal, where Node would print a string.
+/// Another time zone or an unknown locale are a TypeError naming what is
+/// not formatted: the engine's typed refusal, where Node would print a
+/// string. Component options (`{ month: 'long' }`) format as an
+/// Intl.DateTimeFormat does (Node's value); they were refused before Intl.
 #[test]
 fn locale_strings_refuse_what_they_do_not_format() {
     assert_eq!(
         eval_to_string(
             "var d = new Date(0); function attempt(f) { try { f(); return 'ok'; } \
              catch (e) { return e.constructor.name; } } \
-             [attempt(() => d.toLocaleDateString('en-US', { month: 'long' })), \
+             [d.toLocaleDateString('en-US', { month: 'long' }), \
              attempt(() => d.toLocaleString('en-US', { timeZone: 'America/New_York' })), \
              attempt(() => d.toLocaleString('es-ES'))].join();"
         ),
-        "TypeError,TypeError,TypeError"
+        "January,TypeError,TypeError"
     );
 }

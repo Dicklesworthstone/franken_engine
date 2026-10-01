@@ -38326,7 +38326,45 @@ impl InterpreterCore {
                     .as_deref()
                     .unwrap_or_default()
                     .to_string();
-                self.date_prototype_method(&method, receiver.unwrap_or(Value::Undefined), args)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                // toLocale*String with options is a DateTimeFormat (intl.rs).
+                let caller = match method.as_str() {
+                    "toLocaleDateString" => Some(intl::DateOptionsFor::DateString),
+                    "toLocaleTimeString" => Some(intl::DateOptionsFor::TimeString),
+                    "toLocaleString" => Some(intl::DateOptionsFor::String),
+                    _ => None,
+                };
+                let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let time = match &receiver {
+                    Value::Object(id) => match self
+                        .heap
+                        .get(id.0 as usize)
+                        .filter(|object| {
+                            matches!(
+                                object.properties.get("__type"),
+                                Some(Value::Str(tag)) if tag.as_ref() == "Date"
+                            )
+                        })
+                        .and_then(|object| object.properties.get("__timestamp"))
+                    {
+                        Some(Value::Int(value)) => Some(*value as f64),
+                        Some(Value::Float(value)) => Some(value.inner()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let (Some(caller), Some(time)) = (caller, time)
+                    && !matches!(options, Value::Undefined)
+                {
+                    if !time.is_finite() {
+                        return Ok(Value::str("Invalid Date"));
+                    }
+                    let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                    return self.date_to_locale_with_options(
+                        module, caller, time, &locales, &options,
+                    );
+                }
+                self.date_prototype_method(&method, receiver, args)
             }
             BuiltinFunctionKind::NumberToPrecision | BuiltinFunctionKind::NumberToExponential => {
                 let exponential = builtin.kind == BuiltinFunctionKind::NumberToExponential;

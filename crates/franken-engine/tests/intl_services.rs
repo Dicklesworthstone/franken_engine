@@ -1,6 +1,9 @@
 //! ECMA-402 `Intl`: NumberFormat, DateTimeFormat, Collator, PluralRules and
 //! getCanonicalLocales over the engine's locale formatters.
 //!
+//! Date.prototype.toLocale*String with options are DateTimeFormats over
+//! ToDateTimeOptions (they refused every option but a UTC timeZone).
+//!
 //! `Intl` was not defined, so `new Intl.NumberFormat(...)`,
 //! `Intl.DateTimeFormat().resolvedOptions().timeZone` and luxon threw a
 //! ReferenceError. Expected output is Node v22.2.0's (TZ=UTC) for the same
@@ -84,6 +87,14 @@ S / J
         "option_errors",
         r#"const out = []; for (const f of [() => new Intl.NumberFormat('en', { style: 'bogus' }), () => Intl.getCanonicalLocales('not a locale'), () => new Intl.DateTimeFormat('en', { dateStyle: 'medium', year: 'numeric' }), () => new Intl.NumberFormat('en', { style: 'currency' }), () => new Intl.DateTimeFormat('en', { month: 'bogus' })]) { try { f(); out.push('none'); } catch (e) { out.push(e.constructor.name); } } console.log(out.join());"#,
         r#"RangeError,RangeError,TypeError,TypeError,RangeError"#,
+    ),
+    (
+        "date_to_locale_with_options",
+        r#"const d = new Date(Date.UTC(2026, 8, 30, 15, 4, 5)); console.log([d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }), d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), d.toLocaleDateString(undefined, { timeZone: 'UTC' }), d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), d.toLocaleTimeString('en-US', { hour12: false }), d.toLocaleString('en-US', { timeZone: 'UTC' }), d.toLocaleString('de-DE', { timeZone: 'UTC' }), d.toLocaleDateString('en-GB', { timeZone: 'UTC' }), d.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }), d.toLocaleDateString('en-US', { dateStyle: 'long' }), d.toLocaleTimeString('en-US', { timeStyle: 'short' }), d.toLocaleDateString('en-US', { hour: 'numeric' }), d.toLocaleTimeString('en-US', { weekday: 'short' }), d.toLocaleString('en-US', { month: 'long' })].join(' | ')); for (const f of [() => d.toLocaleDateString('en-US', { timeStyle: 'short' }), () => d.toLocaleTimeString('en-US', { dateStyle: 'short' })]) { try { f(); console.log('none'); } catch (e) { console.log(e.constructor.name); } } console.log(new Date(NaN).toLocaleDateString('en-US', { month: 'long' }));"#,
+        r#"Wednesday, September 30, 2026 | Sep 30 | 9/30/2026 | 03:04 PM | 15:04:05 | 9/30/2026, 3:04:05 PM | 30.9.2026, 15:04:05 | 30/09/2026 | Sep 30, 2026, 3:04 PM | September 30, 2026 | 3:04 PM | 9/30/2026, 3 PM | Wed 3:04:05 PM | September
+TypeError
+TypeError
+Invalid Date"#,
     ),
 ];
 

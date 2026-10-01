@@ -3478,6 +3478,14 @@ pub enum BuiltinFunctionKind {
     /// %TypedArray%.prototype specifier, the typed array one (22.2.3.28).
     /// Append only.
     ArrayToLocaleString,
+    /// Math.sinh, cosh, tanh, expm1 and log1p (ES2020 20.2.2.31, .13, .34,
+    /// .15, .21): absent, so `Math.tanh(1)` was a TypeError (calling
+    /// undefined). Append only.
+    MathSinh,
+    MathCosh,
+    MathTanh,
+    MathExpm1,
+    MathLog1p,
 }
 
 impl BuiltinFunctionKind {
@@ -5160,6 +5168,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::MathClz32 => "clz32",
             BuiltinFunctionKind::MathFround => "fround",
             BuiltinFunctionKind::MathAcosh => "acosh",
+            BuiltinFunctionKind::MathSinh => "sinh",
+            BuiltinFunctionKind::MathCosh => "cosh",
+            BuiltinFunctionKind::MathTanh => "tanh",
+            BuiltinFunctionKind::MathExpm1 => "expm1",
+            BuiltinFunctionKind::MathLog1p => "log1p",
             BuiltinFunctionKind::MathAsinh => "asinh",
             BuiltinFunctionKind::MathAtanh => "atanh",
             BuiltinFunctionKind::EmitterRawListeners => "rawListeners",
@@ -5360,6 +5373,11 @@ impl BuiltinFunction {
             K::MathAbs
             | K::MathAcos
             | K::MathAcosh
+            | K::MathSinh
+            | K::MathCosh
+            | K::MathTanh
+            | K::MathExpm1
+            | K::MathLog1p
             | K::MathAsin
             | K::MathAsinh
             | K::MathAtan
@@ -35380,6 +35398,26 @@ impl InterpreterCore {
                 "atanh",
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathAtanh)),
             ),
+            (
+                "sinh",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathSinh)),
+            ),
+            (
+                "cosh",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathCosh)),
+            ),
+            (
+                "tanh",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathTanh)),
+            ),
+            (
+                "expm1",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathExpm1)),
+            ),
+            (
+                "log1p",
+                Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::MathLog1p)),
+            ),
         ] {
             self.set_object_property(math, name.to_string(), value)?;
         }
@@ -37592,7 +37630,12 @@ impl InterpreterCore {
             | BuiltinFunctionKind::MathFround
             | BuiltinFunctionKind::MathAcosh
             | BuiltinFunctionKind::MathAsinh
-            | BuiltinFunctionKind::MathAtanh => Some(RuntimeCapability::Builtin),
+            | BuiltinFunctionKind::MathAtanh
+            | BuiltinFunctionKind::MathSinh
+            | BuiltinFunctionKind::MathCosh
+            | BuiltinFunctionKind::MathTanh
+            | BuiltinFunctionKind::MathExpm1
+            | BuiltinFunctionKind::MathLog1p => Some(RuntimeCapability::Builtin),
             _ => None,
         }
     }
@@ -40874,6 +40917,28 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::MathAtanh => {
                 self.dispatch_builtin_hostcall("builtin:MathAtanh", args, Some(module))
+            }
+            BuiltinFunctionKind::MathSinh
+            | BuiltinFunctionKind::MathCosh
+            | BuiltinFunctionKind::MathTanh
+            | BuiltinFunctionKind::MathExpm1
+            | BuiltinFunctionKind::MathLog1p => {
+                // ToNumber of the argument (ToPrimitive first), then the
+                // correctly rounded libm function, as the other Math ones.
+                let x = if args.count == 0 {
+                    f64::NAN
+                } else {
+                    let number = self.math_argument_value(args.start, Some(module))?;
+                    Self::coerce_to_float(&number).unwrap_or(f64::NAN)
+                };
+                let result = match builtin.kind {
+                    BuiltinFunctionKind::MathSinh => x.sinh(),
+                    BuiltinFunctionKind::MathCosh => x.cosh(),
+                    BuiltinFunctionKind::MathTanh => x.tanh(),
+                    BuiltinFunctionKind::MathExpm1 => x.exp_m1(),
+                    _ => x.ln_1p(),
+                };
+                Ok(Value::Float(Float64::new(result)))
             }
             BuiltinFunctionKind::DateGetTime => {
                 // `Date.prototype.getTime()` — read the receiver Date object's

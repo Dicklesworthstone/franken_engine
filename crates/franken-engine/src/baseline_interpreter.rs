@@ -68197,7 +68197,25 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         };
+        // ToString(string) (21.2.5.6-11 step 3): an object argument's
+        // toString runs (it read "[object Object]"), a Symbol throws. Guest
+        // code may run: no collection while native locals hold the receiver.
         let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let input = if input.is_object_like() {
+            self.gc_nested_request = None;
+            self.coerce_runtime_primitive(Some(module), input, true)?
+        } else {
+            input
+        };
+        if matches!(input, Value::Symbol(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "string argument for RegExp.prototype.{}",
+                    builtin.spec_name()
+                ),
+                got: "symbol".to_string(),
+            });
+        }
         let input = self.value_to_string(&input);
         match method {
             "@@match" => self.string_match_value(&input, &receiver),

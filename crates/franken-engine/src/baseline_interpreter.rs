@@ -90,6 +90,7 @@ mod number_locale;
 mod object_integrity;
 mod package_resolution;
 mod primitive_conversion;
+mod prototype_getters;
 mod reflect_invocation;
 mod regexp_backtrack;
 mod regexp_syntax;
@@ -3339,6 +3340,10 @@ pub enum BuiltinFunctionKind {
     /// object). The `builtin:*` hostcall tag travels in `module_specifier` and
     /// is re-validated against the shared slot-0 table on every call.
     StaticHostcall,
+    /// bd-9vouw.129: the getter of a built-in prototype accessor
+    /// (`Map.prototype.size`, ...); `module_specifier` names it
+    /// (`"Map.size"`, see `prototype_getters.rs`).
+    PrototypeGetter,
     /// `Error.prototype.toString`, reached through the error prototypes'
     /// chain (bd-9vouw.17). Append only.
     ErrorPrototypeToString,
@@ -5210,6 +5215,12 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StaticHostcall => {
                 static_hostcall_name(&self.module_specifier).unwrap_or("anonymous")
             }
+            BuiltinFunctionKind::PrototypeGetter => self
+                .module_specifier
+                .0
+                .as_deref()
+                .and_then(prototype_getters::prototype_getter_entry)
+                .map_or("get", |(_, _, name)| name),
             BuiltinFunctionKind::ErrorPrototypeToString => "toString",
             BuiltinFunctionKind::ErrorCaptureStackTrace => "captureStackTrace",
             BuiltinFunctionKind::ArrayBufferSlice => "slice",
@@ -5483,7 +5494,8 @@ impl BuiltinFunction {
             | K::StringIterator
             | K::PromiseFinallyValueThunk
             | K::PromiseFinallyThrower
-            | K::ProxyRevoke => Some(0),
+            | K::ProxyRevoke
+            | K::PrototypeGetter => Some(0),
             _ => None,
         };
         if fixed.is_some() {
@@ -40353,6 +40365,9 @@ impl InterpreterCore {
                 self.call_standard_constructor(module, builtin, args)
             }
             BuiltinFunctionKind::StaticHostcall => self.call_static_hostcall(module, builtin, args),
+            BuiltinFunctionKind::PrototypeGetter => {
+                self.call_prototype_getter(module, builtin, receiver.unwrap_or(Value::Undefined))
+            }
             BuiltinFunctionKind::ErrorPrototypeToString => {
                 self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
             }
@@ -84800,6 +84815,9 @@ impl InterpreterCore {
                     return Ok(Value::Undefined); // Primitives have no own property descriptors here
                 };
                 self.join_pending_hostcall_stream_label(obj_id)?;
+                if let Some(descriptor) = self.prototype_getter_descriptor(obj_id, &prop_name)? {
+                    return Ok(descriptor);
+                }
                 self.own_property_descriptor_value(obj_id, &prop_name)
             }
 

@@ -103,7 +103,7 @@ impl InterpreterCore {
             // %AsyncGeneratorPrototype%, %ArrayIteratorPrototype%), which
             // core-js and regenerator-runtime read at load
             // (`getProto(getProto([].keys()))`), and it is extensible.
-            if let Some(name) = Self::exotic_intrinsic_prototype_name(&target) {
+            if let Some(name) = self.exotic_intrinsic_prototype_name(&target) {
                 match operation {
                     ObjectIntegrityOperation::GetPrototype => {
                         return Ok(Value::Object(self.ensure_builtin_prototype(name)?));

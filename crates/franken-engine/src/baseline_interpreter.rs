@@ -945,6 +945,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "AsyncGeneratorFunction" => Some("AsyncGeneratorFunction"),
         ITERATOR_PROTOTYPE => Some(ITERATOR_PROTOTYPE),
         ARRAY_ITERATOR_PROTOTYPE => Some(ARRAY_ITERATOR_PROTOTYPE),
+        MAP_ITERATOR_PROTOTYPE => Some(MAP_ITERATOR_PROTOTYPE),
+        SET_ITERATOR_PROTOTYPE => Some(SET_ITERATOR_PROTOTYPE),
         GENERATOR_PROTOTYPE => Some(GENERATOR_PROTOTYPE),
         ASYNC_GENERATOR_PROTOTYPE => Some(ASYNC_GENERATOR_PROTOTYPE),
         _ => None,
@@ -5570,6 +5572,10 @@ const TYPED_ARRAY_PROTOTYPE_SPECIFIER: &str = "%TypedArray%.prototype";
 /// identifiers, so no `builtin:proto:` tag can reach them.
 const ITERATOR_PROTOTYPE: &str = "%IteratorPrototype%";
 const ARRAY_ITERATOR_PROTOTYPE: &str = "%ArrayIteratorPrototype%";
+/// %MapIteratorPrototype% and %SetIteratorPrototype% (ES2020 23.1.5.2,
+/// 23.2.5.2; bd-9vouw.121): the prototypes of the live Map and Set iterators.
+const MAP_ITERATOR_PROTOTYPE: &str = "%MapIteratorPrototype%";
+const SET_ITERATOR_PROTOTYPE: &str = "%SetIteratorPrototype%";
 const GENERATOR_PROTOTYPE: &str = "%GeneratorPrototype%";
 const ASYNC_GENERATOR_PROTOTYPE: &str = "%AsyncGeneratorPrototype%";
 /// %GeneratorFunction%, %AsyncFunction% and %AsyncGeneratorFunction% (ES2020
@@ -49466,7 +49472,8 @@ impl InterpreterCore {
                     // intrinsic prototype (after the match).
                     let inherited_base = if function_backing.is_none() {
                         Self::function_intrinsic_prototype_name(&obj_val)
-                            .or(Self::exotic_intrinsic_prototype_name(&obj_val)
+                            .or(self
+                                .exotic_intrinsic_prototype_name(&obj_val)
                                 .filter(|name| *name != "Promise"))
                             .map(|prototype| (prototype, obj_val.clone()))
                     } else {
@@ -53378,9 +53385,9 @@ impl InterpreterCore {
                 if supplied {
                     return Ok(Value::Bool(true));
                 }
-                if let Some(&intrinsic_prototype) =
-                    Self::exotic_intrinsic_prototype_name(object_like)
-                        .and_then(|name| self.builtin_prototypes.get(name))
+                if let Some(&intrinsic_prototype) = self
+                    .exotic_intrinsic_prototype_name(object_like)
+                    .and_then(|name| self.builtin_prototypes.get(name))
                 {
                     return Ok(Value::Bool(self.proxy_aware_has_runtime_property(
                         Some(module),
@@ -58095,6 +58102,14 @@ impl InterpreterCore {
     }
 
     fn object_prototype_to_string_value(&self, receiver: &Value) -> Value {
+        if let Value::Iterator(handle) = receiver {
+            let tag = match self.iterator_intrinsic_prototype_name(*handle) {
+                MAP_ITERATOR_PROTOTYPE => "Map Iterator",
+                SET_ITERATOR_PROTOTYPE => "Set Iterator",
+                _ => "Array Iterator",
+            };
+            return Value::str(format!("[object {tag}]"));
+        }
         let Value::Object(object_id) = receiver else {
             return Value::str(Self::value_to_object_to_string_tag(receiver));
         };
@@ -60522,7 +60537,9 @@ impl InterpreterCore {
         }
         // Unallocated intrinsic prototypes hold no program-added members, so
         // reading through Object.prototype then is the same answer.
-        let prototype = Self::exotic_intrinsic_prototype_name(value).unwrap_or("Object");
+        let prototype = self
+            .exotic_intrinsic_prototype_name(value)
+            .unwrap_or("Object");
         Ok(self
             .primitive_prototype_get(module, prototype, key, value.clone())?
             .0)
@@ -95951,9 +95968,10 @@ impl InterpreterCore {
             ITERATOR_PROTOTYPE | ASYNC_GENERATOR_PROTOTYPE => {
                 Some(self.ensure_builtin_prototype("Object")?)
             }
-            ARRAY_ITERATOR_PROTOTYPE | GENERATOR_PROTOTYPE => {
-                Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?)
-            }
+            ARRAY_ITERATOR_PROTOTYPE
+            | MAP_ITERATOR_PROTOTYPE
+            | SET_ITERATOR_PROTOTYPE
+            | GENERATOR_PROTOTYPE => Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?),
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
             // ES2020 22.2.6: the concrete typed array prototypes inherit the
@@ -96076,6 +96094,16 @@ impl InterpreterCore {
             }
             ARRAY_ITERATOR_PROTOTYPE => (
                 "Array Iterator",
+                vec![method("next", BuiltinFunctionKind::IteratorNext)],
+                None,
+            ),
+            MAP_ITERATOR_PROTOTYPE => (
+                "Map Iterator",
+                vec![method("next", BuiltinFunctionKind::IteratorNext)],
+                None,
+            ),
+            SET_ITERATOR_PROTOTYPE => (
+                "Set Iterator",
                 vec![method("next", BuiltinFunctionKind::IteratorNext)],
                 None,
             ),
@@ -96614,13 +96642,30 @@ impl InterpreterCore {
     /// iterator value (no property storage of its own) reports and inherits
     /// from. Map, Set and String iterators are array iterators over a
     /// snapshot here, so every iterator reports %ArrayIteratorPrototype%.
-    pub(super) fn exotic_intrinsic_prototype_name(value: &Value) -> Option<&'static str> {
+    pub(super) fn exotic_intrinsic_prototype_name(&self, value: &Value) -> Option<&'static str> {
         match value {
             Value::Promise(_) => Some("Promise"),
             Value::Generator(_) => Some(GENERATOR_PROTOTYPE),
             Value::AsyncGeneratorObject(_) => Some(ASYNC_GENERATOR_PROTOTYPE),
-            Value::Iterator(_) => Some(ARRAY_ITERATOR_PROTOTYPE),
+            Value::Iterator(handle) => Some(self.iterator_intrinsic_prototype_name(*handle)),
             _ => None,
+        }
+    }
+
+    /// %MapIteratorPrototype% or %SetIteratorPrototype% for a Map or Set
+    /// iterator (bd-9vouw.121; they were array iterators over a copy before
+    /// bd-9vouw.131), %ArrayIteratorPrototype% for the others.
+    fn iterator_intrinsic_prototype_name(&self, handle: u32) -> &'static str {
+        match self.iterators.get(handle as usize) {
+            Some(RuntimeIteratorState::ForOf(RuntimeForOfState {
+                collection: Some(iterator),
+                ..
+            })) if iterator.is_map => MAP_ITERATOR_PROTOTYPE,
+            Some(RuntimeIteratorState::ForOf(RuntimeForOfState {
+                collection: Some(_),
+                ..
+            })) => SET_ITERATOR_PROTOTYPE,
+            _ => ARRAY_ITERATOR_PROTOTYPE,
         }
     }
 

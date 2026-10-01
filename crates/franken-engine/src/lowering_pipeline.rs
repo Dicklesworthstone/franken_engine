@@ -13240,7 +13240,7 @@ fn try_lower_optional_chain_to_ir1(
     let keeps_existing_lowering = matches!(prefix, Expression::Super)
         || chain.iter().any(|link| {
             matches!(link, OptionalChainLink::Call { arguments, .. }
-                if arguments.iter().any(|argument| matches!(argument, Expression::SpreadElement(_))))
+                if stages_argument_array(arguments))
         });
     if keeps_existing_lowering {
         return Ok(false);
@@ -15159,10 +15159,7 @@ fn lower_expression_to_ir1_inner(
                 // the argument list as an array (ArrayLiteral expands spreads)
                 // and construct the parent through
                 // `builtin:ConstructSuperSpread`, which also binds `this`.
-                if arguments
-                    .iter()
-                    .any(|argument| matches!(argument, Expression::SpreadElement(_)))
-                {
+                if stages_argument_array(arguments) {
                     let argument_list =
                         Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
                     lower_expression_to_ir1(
@@ -15284,9 +15281,7 @@ fn lower_expression_to_ir1_inner(
             // unpacks an array into a call). Free callees use `undefined` as
             // thisArg; the generic member-callee path below evaluates and
             // preserves its receiver exactly once.
-            let has_spread_argument = arguments
-                .iter()
-                .any(|arg| matches!(arg, Expression::SpreadElement(_)));
+            let has_spread_argument = stages_argument_array(arguments);
             let callee_is_member = matches!(
                 callee.as_ref(),
                 Expression::Member { .. } | Expression::OptionalMember { .. }
@@ -18242,10 +18237,7 @@ fn lower_expression_to_ir1_inner(
             // `new Error(...xs)` etc. keep their existing (non-expanding) behavior:
             // those globals have no Function/Closure binding and would not satisfy
             // ReflectConstruct's target check anyway.
-            if arguments
-                .iter()
-                .any(|arg| matches!(arg, Expression::SpreadElement(_)))
-            {
+            if stages_argument_array(arguments) {
                 // ReflectConstruct reads [target, argumentsList].
                 lower_expression_to_ir1(
                     callee,
@@ -18907,6 +18899,23 @@ fn function_reads_arguments(
             } => function_reads_arguments(runtime_global_loads, body_ops),
             _ => false,
         })
+}
+
+/// Positional arguments a call lowers into registers. A longer list (a
+/// minified UMD export sequence, generated code) is built as an array and
+/// passed like a spread, whose arguments past the 256-register frame are
+/// staged out of band (bd-9vouw.50): `f(a0, ..., a299)` failed with
+/// "register 256 out of bounds".
+const POSITIONAL_ARGUMENT_LIMIT: usize = 128;
+
+/// Whether a call's argument list goes through the argument-array path: it
+/// has a spread element, or more than [`POSITIONAL_ARGUMENT_LIMIT`]
+/// arguments.
+fn stages_argument_array(arguments: &[Expression]) -> bool {
+    arguments.len() > POSITIONAL_ARGUMENT_LIMIT
+        || arguments
+            .iter()
+            .any(|argument| matches!(argument, Expression::SpreadElement(_)))
 }
 
 /// Internal intrinsic that clears `enumerable` on a class's own members.

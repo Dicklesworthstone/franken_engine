@@ -344,6 +344,15 @@ impl InterpreterCore {
         for offset in 0..args.count {
             values.push(self.builtin_arg(args, offset)?.unwrap_or(Value::Undefined));
         }
+        self.format_values(module, &values)
+    }
+
+    /// `util.format(...values)`.
+    fn format_values(
+        &mut self,
+        module: Option<&Ir3Module>,
+        values: &[Value],
+    ) -> Result<String, InterpreterError> {
         let mut out = String::new();
         let mut next = 0;
         let mut join = "";
@@ -446,6 +455,149 @@ impl InterpreterCore {
     ) -> Result<String, InterpreterError> {
         let mut state = InspectState::new(module, depth);
         self.inspect_value(&mut state, value, 0)
+    }
+
+    /// `util.inspect(value, { depth })` for `require('util')`
+    /// (bd-9vouw.109). args = (value, depth); `Infinity` has no limit.
+    pub(super) fn util_inspect_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let depth = match self.builtin_arg(args, 1)? {
+            Some(Value::Int(depth)) => depth,
+            Some(Value::Float(depth)) if depth.inner() == f64::INFINITY => i64::MAX,
+            Some(Value::Float(depth)) if depth.inner().is_finite() => depth.inner() as i64,
+            _ => INSPECT_DEPTH,
+        };
+        self.util_format_labelled(args, std::slice::from_ref(&value), |core| {
+            core.inspect_with_depth(module, &value, depth)
+        })
+    }
+
+    /// `util.format(...values)` for `require('util')`: args = (values array).
+    pub(super) fn util_format_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let values = match self.builtin_arg(args, 0)? {
+            Some(Value::Object(array)) => self.array_like_values(array)?,
+            _ => Vec::new(),
+        };
+        self.util_format_labelled(args, &values, |core| core.format_values(module, &values))
+    }
+
+    /// Runs a formatter whose text shows `values`. The text carries the
+    /// labels of everything console output of `values` could show: the
+    /// arguments' labels and the console sink's reachable walk, joined into
+    /// the HostCall's result label as JSON.stringify does.
+    fn util_format_labelled(
+        &mut self,
+        args: RegRange,
+        values: &[Value],
+        format: impl FnOnce(&mut Self) -> Result<String, InterpreterError>,
+    ) -> Result<Value, InterpreterError> {
+        let context = self.join_arg_range_label(args)?;
+        let context_bytes = Self::estimate_label_bytes(&context);
+        let previous_bytes = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0);
+        self.json_reserve_temporary(previous_bytes)?;
+        if let Err(error) = self.apply_memory_component_delta(previous_bytes, context_bytes) {
+            self.json_release_temporary(previous_bytes);
+            return Err(error);
+        }
+        let previous = self.active_inline_callback_context_label.replace(context);
+        let mut outcome = (|| {
+            for value in values {
+                self.console_observe_reachable_value(value)?;
+            }
+            let text = format(self)?;
+            self.check_string_limit(text.len())?;
+            Ok(text)
+        })();
+        let context = self
+            .active_inline_callback_context_label
+            .take()
+            .expect("the formatter restores the operation context");
+        if outcome.is_ok() {
+            let joined = self.clone_dominant_label_with_temporary_budget(
+                &context,
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
+                0,
+            );
+            if let Err(error) =
+                joined.and_then(|label| self.replace_pending_hostcall_result_label(Some(label)))
+            {
+                outcome = Err(error);
+            }
+        }
+        self.active_inline_callback_context_label = previous;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&context))
+            .saturating_add(previous_bytes);
+        self.json_release_temporary(previous_bytes);
+        outcome.map(Value::str)
+    }
+
+    /// The internal type `util.types` tests: the engine's tag of a native
+    /// object (Map, Date, Uint8Array, ...), `Proxy`, `DataView`, `Error` for
+    /// an object on Error.prototype's chain, `Boxed<Type>` for a primitive
+    /// wrapper, the kind of a function, promise or generator value, and
+    /// otherwise `Array`, `Object` or `primitive`.
+    pub(super) fn util_type_tag(&mut self, value: &Value) -> Result<String, InterpreterError> {
+        let id = match value {
+            Value::Object(id) => *id,
+            Value::Promise(_) | Value::AsyncFunctionObject(_) => return Ok("Promise".into()),
+            Value::Generator(_) => return Ok("Generator".into()),
+            Value::AsyncGeneratorObject(_) => return Ok("AsyncGenerator".into()),
+            Value::GeneratorFunction(_) => return Ok("GeneratorFunction".into()),
+            Value::AsyncFunction(_) => return Ok("AsyncFunction".into()),
+            Value::AsyncGeneratorFunction(_) => return Ok("AsyncGeneratorFunction".into()),
+            Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => {
+                return Ok("Function".into());
+            }
+            _ => return Ok("primitive".into()),
+        };
+        if self.proxy_record(id)?.is_some() {
+            return Ok(PROXY_TYPE_TAG.into());
+        }
+        let object = self
+            .heap
+            .get(id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+        let boxed = match &object.primitive_value {
+            Some(Value::Int(_) | Value::Float(_)) => Some("BoxedNumber"),
+            Some(Value::Str(_)) => Some("BoxedString"),
+            Some(Value::Bool(_)) => Some("BoxedBoolean"),
+            Some(Value::BigInt(_)) => Some("BoxedBigInt"),
+            Some(Value::Symbol(_)) => Some("BoxedSymbol"),
+            _ => None,
+        };
+        if let Some(boxed) = boxed {
+            return Ok(boxed.into());
+        }
+        if object.data_view.is_some() {
+            return Ok("DataView".into());
+        }
+        let is_array = object.is_array;
+        if let Some(kind) = self.inspect_internal_type(id) {
+            return Ok(kind);
+        }
+        Ok(if self.inspect_is_error(id) {
+            "Error".into()
+        } else if is_array {
+            "Array".into()
+        } else {
+            "Object".into()
+        })
     }
 
     fn console_format_percent_s(

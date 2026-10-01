@@ -80228,6 +80228,13 @@ impl InterpreterCore {
             }
             // A call whose callee no `with` object supplied has no receiver.
             "builtin:WithReceiver" => Ok(Value::Undefined),
+            // `require('util')` (lowering_pipeline/util_module.rs).
+            "builtin:UtilInspect" => self.util_inspect_builtin(module, args),
+            "builtin:UtilFormat" => self.util_format_builtin(module, args),
+            "builtin:UtilTypeTag" => {
+                let value = self.arg_or_undefined(args, 0)?;
+                Ok(Value::str(self.util_type_tag(&value)?))
+            }
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are
                 // non-enumerable. args = (constructor, constructor.prototype).
@@ -83510,6 +83517,14 @@ impl InterpreterCore {
                 self.reflect_property_builtin(module, args, ReflectPropertyOperation::Has)
             }
             "builtin:ReflectOwnKeys" => {
+                // A function is an object: its names, then its symbols.
+                let value = self.arg_or_undefined(args, 0)?;
+                if !matches!(value, Value::Object(_)) && value.is_callable() {
+                    let mut keys = self.function_own_property_names(module, &value)?;
+                    keys.extend(self.function_own_property_symbols(module, &value)?);
+                    let array_id = self.alloc_array_from_values(&keys)?;
+                    return Ok(Value::Object(array_id));
+                }
                 let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
                 let keys = self.proxy_aware_own_property_keys(module, target, 0)?;
                 self.join_pending_hostcall_stream_label(target)?;
@@ -84067,34 +84082,8 @@ impl InterpreterCore {
                         let array_id = self.alloc_array_from_values(&property_name_values)?;
                         Ok(Value::Object(array_id))
                     }
-                    // bd-9vouw.17: a function's own property names are its
-                    // backing object's (`length` and `name` first), plus the
-                    // dedicated `prototype` after them when it has one.
                     ref function if function.is_callable() => {
-                        let mut names = match self.own_property_holder(module, function, true)? {
-                            Some(backing) => self
-                                .heap
-                                .get(backing.0 as usize)
-                                .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
-                                .properties
-                                .exact_keys()
-                                .into_iter()
-                                .filter(|key| self.own_runtime_property_visible(backing, key))
-                                .map(Value::Str)
-                                .collect::<Vec<_>>(),
-                            None => Vec::new(),
-                        };
-                        let prototype = Value::str("prototype");
-                        if self.object_own_property_contains(function, &prototype)
-                            && !names.contains(&prototype)
-                        {
-                            let (length, name) = (Value::str("length"), Value::str("name"));
-                            let position = names
-                                .iter()
-                                .position(|key| *key != length && *key != name)
-                                .unwrap_or(names.len());
-                            names.insert(position, prototype);
-                        }
+                        let names = self.function_own_property_names(module, function)?;
                         let array_id = self.alloc_array_from_values(&names)?;
                         Ok(Value::Object(array_id))
                     }
@@ -84116,6 +84105,9 @@ impl InterpreterCore {
                         .into_iter()
                         .filter(|key| matches!(key, Value::Symbol(_)))
                         .collect::<Vec<_>>(),
+                    ref function if function.is_callable() => {
+                        self.function_own_property_symbols(module, function)?
+                    }
                     _ => Vec::new(),
                 };
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
@@ -84764,12 +84756,12 @@ impl InterpreterCore {
                 let prop_name = self.executable_property_key_from_value(&prop_val);
                 // bd-9vouw.17: a function's own properties (its `length` and
                 // `name` included) are on its backing object. `prototype`
-                // keeps its dedicated path and is not described here.
+                // keeps its dedicated path.
                 if !matches!(obj_val, Value::Object(_))
                     && obj_val.is_callable()
                     && prop_name.as_str() == Some("prototype")
                 {
-                    return Ok(Value::Undefined);
+                    return self.function_prototype_descriptor(module, &obj_val);
                 }
                 let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Ok(Value::Undefined); // Primitives have no own property descriptors here
@@ -94190,6 +94182,89 @@ impl InterpreterCore {
     /// Replace an object's engine-private class field list, charging the
     /// slot's footprint.
     /// The primitive a wrapper object holds, if `object_id` is one.
+    /// bd-9vouw.17: a function's own property names are its backing
+    /// object's (`length` and `name` first), plus the dedicated `prototype`
+    /// after them when it has one. The backing object's label goes to the
+    /// pending HostCall result.
+    fn function_own_property_names(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let mut names = match self.own_property_holder(module, function, true)? {
+            Some(backing) => {
+                self.join_pending_hostcall_stream_label(backing)?;
+                self.heap
+                    .get(backing.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
+                    .properties
+                    .exact_keys()
+                    .into_iter()
+                    .filter(|key| self.own_runtime_property_visible(backing, key))
+                    .map(Value::Str)
+                    .collect::<Vec<_>>()
+            }
+            None => Vec::new(),
+        };
+        let prototype = Value::str("prototype");
+        if self.object_own_property_contains(function, &prototype) && !names.contains(&prototype) {
+            let (length, name) = (Value::str("length"), Value::str("name"));
+            let position = names
+                .iter()
+                .position(|key| *key != length && *key != name)
+                .unwrap_or(names.len());
+            names.insert(position, prototype);
+        }
+        Ok(names)
+    }
+
+    /// `fn.prototype` described (bd-9vouw.109): the value a read gives,
+    /// writable, neither enumerable nor configurable (ES2020 9.2.10
+    /// MakeConstructor). Undefined when the function has no `prototype`.
+    /// No-claim: a class's `prototype` is described as writable, though it
+    /// is not (14.6.13 step 16).
+    fn function_prototype_descriptor(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let Some(module) = module else {
+            return Ok(Value::Undefined);
+        };
+        if !self.object_own_property_contains(function, &Value::str("prototype")) {
+            return Ok(Value::Undefined);
+        }
+        let value = match function {
+            Value::Function(index) => self.function_property_value(module, *index, "prototype")?,
+            Value::Closure(id) => self.closure_property_value(module, *id, "prototype")?,
+            _ => return Ok(Value::Undefined),
+        };
+        let descriptor = self.alloc_object_with_properties(&[
+            ("value", value),
+            ("writable", Value::Bool(true)),
+            ("enumerable", Value::Bool(false)),
+            ("configurable", Value::Bool(false)),
+        ])?;
+        Ok(Value::Object(descriptor))
+    }
+
+    /// The Symbol keys of a function's own properties (bd-9vouw.109), in
+    /// creation order.
+    fn function_own_property_symbols(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let Some(backing) = self.own_property_holder(module, function, true)? else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .proxy_aware_own_property_keys(module, backing, 0)?
+            .into_iter()
+            .filter(|key| matches!(key, Value::Symbol(_)))
+            .collect())
+    }
+
     fn primitive_wrapper_value(&self, object_id: ObjectId) -> Option<&Value> {
         self.heap
             .get(object_id.0 as usize)

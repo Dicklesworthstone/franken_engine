@@ -185,3 +185,38 @@ fn a_spread_argument_can_contain_operators() {
         "3,9,2,4,2",
     );
 }
+
+/// Iterator, generator and async generator values report their intrinsic
+/// prototypes (ES2020 22.1.5.2, 25.1.2, 25.4.1; ES2018 25.5.1):
+/// %ArrayIteratorPrototype% (`next`, "Array Iterator") inherits from
+/// %IteratorPrototype%, whose own @@iterator returns its receiver;
+/// %GeneratorPrototype% and %AsyncGeneratorPrototype% are their function
+/// kinds' `prototype` and have them as `constructor`. Object.getPrototypeOf
+/// of an iterator threw ("object with property storage"), so core-js and
+/// regenerator-runtime, which run `getProto(getProto([].keys()))` at load,
+/// failed (xregexp's bundle did).
+///
+/// No-claim: Map, Set and String iterators also report
+/// %ArrayIteratorPrototype% (they are array iterators over a snapshot here),
+/// and a generator object reports %GeneratorPrototype% rather than its
+/// function's `prototype`.
+#[test]
+fn iteration_intrinsic_prototypes() {
+    check(
+        "const getProto = Object.getPrototypeOf; const o = {}; \
+         const AIP = getProto([].keys()); const IP = getProto(AIP); \
+         function* g() { yield 1; } async function* ag() {} \
+         const GP = getProto(g).prototype; const AGP = getProto(ag).prototype; \
+         const NativeIteratorPrototype = getProto(getProto([][Symbol.iterator]())); \
+         [IP === NativeIteratorPrototype, getProto(IP) === Object.prototype, \
+         Object.prototype.hasOwnProperty.call(IP, Symbol.iterator), IP[Symbol.iterator].call(o) === o, \
+         typeof AIP.next, AIP[Symbol.toStringTag], Object.prototype.toString.call([].values()), \
+         AIP.next.call([7].values()).value, Object.isExtensible([].keys()), \
+         getProto(new Map().keys()) !== Object.prototype, getProto(GP) === IP, GP[Symbol.toStringTag], \
+         GP.constructor === getProto(g), typeof GP.next, GP.next.call(g()).value, \
+         GP.hasOwnProperty('return'), AGP[Symbol.toStringTag], AGP.constructor === getProto(ag), \
+         typeof AGP[Symbol.asyncIterator], [].keys()[Symbol.toStringTag], String([].entries())].join(' ')",
+        "true true true true function Array Iterator [object Array Iterator] 7 true true true Generator \
+         true function 1 true AsyncGenerator true function Array Iterator [object Array Iterator]",
+    );
+}

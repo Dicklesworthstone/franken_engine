@@ -72,3 +72,16 @@ fn members_added_to_promise_prototype_are_inherited() {
         "1 true",
     );
 }
+
+/// The executor's resolve and reject functions are anonymous built-ins
+/// (ES2020 25.6.1.3, `name` ""); they were named "resolve" and "reject"
+/// like the static Promise.resolve/reject.
+#[test]
+fn resolving_functions_are_anonymous() {
+    check(
+        "let r, j; new Promise((a, b) => { r = a; j = b; }); \
+         [JSON.stringify(r.name), r.length, JSON.stringify(j.name), j.length, Promise.resolve.name, \
+         Promise.reject.name, typeof r, r.hasOwnProperty('name')].join(' ')",
+        r#""" 1 "" 1 resolve reject function true"#,
+    );
+}

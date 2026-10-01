@@ -5503,6 +5503,10 @@ impl BuiltinFunction {
 /// %TypedArray% (ES2020 22.2.1): the abstract superclass of the typed array
 /// constructors, a standard constructor that is not a global binding.
 const TYPED_ARRAY_INTRINSIC: &str = "TypedArray";
+/// Module specifier of the %TypedArray%.prototype methods that share an
+/// Array.prototype algorithm (`some`, `indexOf`, ...): they are distinct
+/// functions whose receiver must be a typed array.
+const TYPED_ARRAY_PROTOTYPE_SPECIFIER: &str = "%TypedArray%.prototype";
 
 /// bd-9vouw.17: standard constructors bound as first-class global values.
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
@@ -38154,6 +38158,30 @@ impl InterpreterCore {
         if let Some(Value::Object(object_id)) = receiver {
             receiver = Some(self.this_primitive_receiver(builtin, object_id));
         }
+        // ES2020 22.2.3 ValidateTypedArray(this): `%TypedArray%.prototype.some`
+        // (and its siblings sharing an Array.prototype algorithm) on anything
+        // but a typed array is a TypeError; it ran as the Array method.
+        if &*builtin.module_specifier == TYPED_ARRAY_PROTOTYPE_SPECIFIER
+            && !matches!(
+                receiver,
+                Some(Value::Object(object_id))
+                    if self
+                        .heap
+                        .get(object_id.0 as usize)
+                        .is_some_and(|object| object.typed_array.is_some())
+            )
+        {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "typed array receiver for %TypedArray%.prototype.{}",
+                    builtin.spec_name()
+                ),
+                got: receiver
+                    .as_ref()
+                    .map_or("undefined", Value::type_name)
+                    .to_string(),
+            });
+        }
         // ES2020 21.1.3: a String.prototype method (but toString/valueOf,
         // which require a String) starts with ToString(this), so another
         // object `this` is ToPrimitive'd with the string hint and its
@@ -57169,10 +57197,18 @@ impl InterpreterCore {
             // ES2020 22.2.3: these behave as their Array.prototype namesakes
             // over the typed array's elements (%TypedArray%.prototype.toString
             // is Array.prototype.toString itself). Every one of them used to
-            // throw "unsupported TypedArray method".
-            "join" | "toString" | "indexOf" | "lastIndexOf" | "includes" | "at" | "forEach"
-            | "reduce" | "reduceRight" | "find" | "findIndex" | "findLast" | "findLastIndex"
-            | "some" | "every" => Self::array_prototype_method(key),
+            // throw "unsupported TypedArray method". They are distinct
+            // functions that first ValidateTypedArray(this): the specifier
+            // marks them for that check in dispatch.
+            "toString" => Self::array_prototype_method(key),
+            "join" | "indexOf" | "lastIndexOf" | "includes" | "at" | "forEach" | "reduce"
+            | "reduceRight" | "find" | "findIndex" | "findLast" | "findLastIndex" | "some"
+            | "every" => Self::array_prototype_method(key).map(|builtin| BuiltinFunction {
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(
+                    TYPED_ARRAY_PROTOTYPE_SPECIFIER,
+                ),
+                ..builtin
+            }),
             "toLocaleString" => Some(BuiltinFunction::typed_array_unsupported_method()),
             _ => None,
         }

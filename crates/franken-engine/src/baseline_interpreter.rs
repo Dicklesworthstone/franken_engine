@@ -95448,7 +95448,7 @@ impl InterpreterCore {
                     Value::Generator(_) => 1,
                     _ => 2,
                 };
-                return Ok(Some((owners[slot].clone(), *id)));
+                return Ok(Some((owners[slot], *id)));
             }
             _ => return Ok(None),
         };

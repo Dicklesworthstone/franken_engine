@@ -2344,7 +2344,7 @@ fn merge_logical_lines_requires_continuation(
 
 /// Whether `line` starts with an operator that can only continue an
 /// expression, never begin a statement: `|| b`, `&& b`, `?? b`, `? a : b`,
-/// `: b`, `, b`, `* b`, `% b`, `| b`, `& b`, `^ b`, `= b`, `!= b`. ECMAScript
+/// `: b`, `, b`, `* b`, `% b`, `| b`, `& b`, `^ b`, `= b`, `!= b`, `/= b`. ECMAScript
 /// inserts no semicolon before such a token, so the line continues the
 /// previous one (the leading-operator layout formatters emit for long
 /// conditions and ternaries). `+`/`-` also continue (`a\n- b` is `a - b`)
@@ -2360,6 +2360,10 @@ fn line_starts_with_continuation_operator(line: &str) -> Option<LeadingOperator>
             Some(LeadingOperator::BinaryOnly)
         }
         b'!' if second == Some(b'=') => Some(LeadingOperator::BinaryOnly),
+        // After a token that ends an expression, `/=` is the division
+        // assignment punctuator, never a regex (ES2020 11.8.5 goal
+        // InputElementDiv): `z\n/= 3` is `z /= 3` (bd-9vouw.127).
+        b'/' if second == Some(b'=') => Some(LeadingOperator::BinaryOnly),
         b'+' | b'-' if second != Some(first) => Some(LeadingOperator::UnaryOrBinary),
         _ => None,
     }
@@ -19882,6 +19886,29 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// bd-9vouw.127: a line that starts with `/=` continues the previous
+    /// one as division assignment, as in Node (`var z = 9\nz\n/= 3` leaves
+    /// z = 3). After an operator, `/=` still opens a regex.
+    #[test]
+    fn a_line_starting_with_division_assignment_continues_the_previous_line() {
+        let tree = parse_script("var z = 9\nz\n/= 3\nvar w = 8\nw\n/=2");
+        assert_eq!(tree.body.len(), 4);
+        for statement in [&tree.body[1], &tree.body[3]] {
+            let Statement::Expression(statement) = statement else {
+                panic!("expected an expression statement");
+            };
+            assert!(matches!(
+                statement.expression,
+                Expression::Assignment {
+                    operator: AssignmentOperator::DivideAssign,
+                    ..
+                }
+            ));
+        }
+        let tree = parse_script("var s = x.replace(\n/=/g, '-')");
+        assert_eq!(tree.body.len(), 1);
     }
 
     #[test]

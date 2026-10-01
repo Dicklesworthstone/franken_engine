@@ -685,6 +685,7 @@ impl InterpreterCore {
                         next_index: 0,
                         array: None,
                         typed_array: None,
+                        collection: None,
                         iterator_receiver: None,
                         next_method: None,
                         timers_interval: None,

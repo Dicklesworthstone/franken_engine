@@ -1428,6 +1428,11 @@ impl InterpreterCore {
             pending_exception,
             pending_exception_label: _,
             pending_hostcall_result_label: _,
+            // bd-9vouw.113: the last RegExp match is a copied string, spans
+            // and a label; no heap references.
+            legacy_regexp_match: _,
+            legacy_regexp_generation: _,
+            legacy_regexp_read_label: _,
             pending_return,
             suspended_abrupt_completions,
             finally_frames,

@@ -1392,3 +1392,41 @@ fn ed25519_sign_rejects_non_null_algorithm_and_foreign_keys_bd_53l89() {
         "a non-handle key argument must raise the handle type error, got {foreign_key:?}"
     );
 }
+
+/// bd-9vouw.113: a legacy RegExp static holds a copy of the last matched
+/// string, so it carries that match's label. A secret matched by `test`
+/// cannot reach the console through `RegExp.$1`: the static check sees a
+/// read of a global, and the console builtin's live check refuses it. The
+/// same program on a public string prints.
+#[test]
+fn legacy_regexp_statics_carry_the_matched_string_label_bd_9vouw_113() {
+    let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
+    let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+    orchestrator.set_host_io(provider.clone(), Some(recorder));
+    let error = orchestrator
+        .execute(&crypto_package(
+            "const crypto = require('crypto'); const secret = crypto.randomUUID(); \
+             /([0-9a-f]+)-/.test(secret); console.log(RegExp.$1.length);",
+            true,
+        ))
+        .expect_err("a secret must not reach the console through RegExp.$1");
+    let primary_error = error.primary_error();
+    assert!(
+        matches!(
+            primary_error,
+            OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                if capability.ends_with(":confidentiality")
+        ),
+        "{primary_error:?}"
+    );
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+    assert!(orchestrator.last_failed_console_output().is_empty());
+
+    let result = execute_crypto(
+        "/([0-9a-f]+)-/.test('abc-def'); console.log(RegExp.$1, RegExp.lastMatch);",
+        Arc::new(ScriptedRandomHostIo::never()),
+        Arc::new(InMemoryHostIoTranscript::recording()),
+    );
+    assert_eq!(orchestrated_console(&result), "abc abc-");
+}

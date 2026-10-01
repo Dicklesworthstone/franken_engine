@@ -85,6 +85,7 @@ mod inspect;
 mod intl;
 mod json_parse;
 mod json_stringify;
+mod legacy_regexp;
 mod number_locale;
 mod object_integrity;
 mod package_resolution;
@@ -99,6 +100,7 @@ use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
 use collector::GcPin;
 pub use collector::GcStats;
+use legacy_regexp::{LegacyRegExpMatch, is_legacy_regexp_static};
 use object_integrity::ObjectIntegrityOperation;
 use primitive_conversion::PrimitiveConversion;
 use reflect_invocation::ReflectPropertyOperation;
@@ -13495,6 +13497,14 @@ pub struct InterpreterCore {
     /// `HostCall` consumes this exactly once and joins it with the ordinary
     /// argument label before writing the destination register.
     pending_hostcall_result_label: Option<Label>,
+    /// bd-9vouw.113: the realm's last successful RegExp match, which the
+    /// legacy statics (`RegExp.$1`, `lastMatch`, ...) read.
+    legacy_regexp_match: Option<LegacyRegExpMatch>,
+    /// Bumped on every recorded match, so a builtin call can tell whether it
+    /// recorded one.
+    legacy_regexp_generation: u64,
+    /// The label of the legacy statics read by the current GetProperty.
+    legacy_regexp_read_label: Option<Label>,
     /// A pending return value and IFC label before `EnterFinally` captures it
     /// or the return completes.
     pending_return: Option<LabeledReturn>,
@@ -14608,6 +14618,9 @@ impl InterpreterCore {
             pending_exception: None,
             pending_exception_label: Label::Public,
             pending_hostcall_result_label: None,
+            legacy_regexp_match: None,
+            legacy_regexp_generation: 0,
+            legacy_regexp_read_label: None,
             pending_return: None,
             suspended_abrupt_completions: Vec::new(),
             finally_frames: Vec::new(),
@@ -38068,6 +38081,9 @@ impl InterpreterCore {
         receiver: Option<Value>,
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
+        let legacy_regexp_generation = self.legacy_regexp_generation;
+        let receiver_given = receiver.is_some();
+        let receiver_had_register = receiver_register.is_some();
         // bd-9vouw.77: count this dispatch so a builtin reached from inside
         // another builtin's Rust frame never arms a nested loop.
         self.gc_enter_builtin();
@@ -38114,6 +38130,19 @@ impl InterpreterCore {
             ),
         };
         self.gc_exit_builtin();
+        // bd-9vouw.113: a match this call recorded carries its operands'
+        // label. A receiver passed without its register leaves the match
+        // unlabelled, which reads as TopSecret.
+        if result.is_ok()
+            && self.legacy_regexp_generation != legacy_regexp_generation
+            && (receiver_had_register || !receiver_given)
+        {
+            let mut label = self.join_arg_range_label(args)?;
+            if let Some(register) = receiver_register {
+                label = label.join(self.get_register_label(register)?);
+            }
+            self.label_legacy_regexp_match(legacy_regexp_generation, &label);
+        }
         result
     }
 
@@ -46996,8 +47025,17 @@ impl InterpreterCore {
                         // follow-up in the bd-8enww.4.7 / bd-8enww.4.8 family.
                         // (Non-throw hostcall errors are a no-op through the
                         // router and propagate unchanged.)
+                        let legacy_regexp_generation = self.legacy_regexp_generation;
                         match self.dispatch_builtin_hostcall(&capability.0, args, Some(module)) {
-                            Ok(value) => value,
+                            Ok(value) => {
+                                // bd-9vouw.113: a match this call recorded
+                                // carries its operands' label.
+                                self.label_legacy_regexp_match(
+                                    legacy_regexp_generation,
+                                    &args_label,
+                                );
+                                value
+                            }
                             Err(err) => {
                                 match self.route_isolated_explicit_throw(module, err)? {
                                     None => {
@@ -48953,6 +48991,7 @@ impl InterpreterCore {
                         self.preflight_legacy_property_key_for_hook(&property_key)?;
                     }
 
+                    self.legacy_regexp_read_label = None;
                     let mut result_label = self.binary_operation_label(obj, key)?;
                     if property_key.as_str() == Some("prototype")
                         && let Some((_, label)) =
@@ -49484,6 +49523,11 @@ impl InterpreterCore {
                     let pending_cyclic_import = object_id.and_then(|namespace_object| {
                         self.cyclic_module_import_target(namespace_object, &property_key, &prop)
                     });
+                    // bd-9vouw.113: a legacy RegExp static carries its match's label.
+                    if let Some(legacy_label) = self.legacy_regexp_read_label.take() {
+                        result_label = self
+                            .join_owned_label_with_temporary_budget(result_label, &legacy_label)?;
+                    }
                     let prior_dst_label = self.get_register_label(dst)?;
                     result_label =
                         self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
@@ -54776,7 +54820,7 @@ impl InterpreterCore {
     /// with each match's capture groups spliced in. An empty match never
     /// splits at either end of the input or directly after a previous match.
     fn regexp_split_pieces(
-        &self,
+        &mut self,
         input: &str,
         source: &str,
         flags: &str,
@@ -54790,7 +54834,11 @@ impl InterpreterCore {
             return Ok(pieces);
         }
         let mut last = 0usize;
-        for spans in regex.all_captures(input)? {
+        let matches = regex.all_captures(input)?;
+        if let Some(spans) = matches.last() {
+            self.record_legacy_regexp_match(input, spans);
+        }
+        for spans in matches {
             let Some((start, end)) = spans[0] else {
                 continue;
             };
@@ -55419,7 +55467,14 @@ impl InterpreterCore {
         }
         let regex = self.compile_regexp_pattern(&source, &flags)?;
         let input = Self::value_to_primitive_string(input);
-        Ok(Value::Bool(regex.is_match(&input)?))
+        // bd-9vouw.113: a successful test records the legacy statics, so it
+        // needs the capture spans, not only a yes/no.
+        let found = regex.captures_at(&input, 0, false)?;
+        let matched = found.as_ref().is_some_and(|spans| spans[0].is_some());
+        if let Some(spans) = &found {
+            self.record_legacy_regexp_match(&input, spans);
+        }
+        Ok(Value::Bool(matched))
     }
 
     fn string_match_value(
@@ -55441,7 +55496,11 @@ impl InterpreterCore {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
             let result_id = self.alloc_array_with_prototype(None)?;
             let mut count = 0usize;
-            for spans in regex.all_captures(input)? {
+            let matches = regex.all_captures(input)?;
+            if let Some(spans) = matches.last() {
+                self.record_legacy_regexp_match(input, spans);
+            }
+            for spans in matches {
                 let Some((from, to)) = spans[0] else {
                     continue;
                 };
@@ -55574,18 +55633,23 @@ impl InterpreterCore {
     /// ES2020 21.1.3.18 String.prototype.search: the index of the first
     /// match in UTF-16 code units. Any value other than a RegExp is
     /// `new RegExp(value)`.
-    fn string_search_value(&self, input: &str, pattern: &Value) -> Result<Value, InterpreterError> {
+    fn string_search_value(
+        &mut self,
+        input: &str,
+        pattern: &Value,
+    ) -> Result<Value, InterpreterError> {
         let (source, flags) = self
             .regexp_source_flags_from_value(pattern)
             .unwrap_or_else(|| (self.regexp_create_source(pattern), String::new()));
         let regex = self.compile_regexp_pattern(&source, &flags)?;
+        let found = regex.captures_at(input, 0, false)?;
+        if let Some(spans) = &found {
+            self.record_legacy_regexp_match(input, spans);
+        }
         Ok(Value::Int(
-            regex
-                .captures_at(input, 0, false)?
-                .and_then(|spans| spans[0])
-                .map_or(-1, |(from, _)| {
-                    i64::try_from(input[..from].encode_utf16().count()).unwrap_or(i64::MAX)
-                }),
+            found.and_then(|spans| spans[0]).map_or(-1, |(from, _)| {
+                i64::try_from(input[..from].encode_utf16().count()).unwrap_or(i64::MAX)
+            }),
         ))
     }
 
@@ -55630,6 +55694,9 @@ impl InterpreterCore {
             } else {
                 regex.captures_at(input, 0, false)?.into_iter().collect()
             };
+            if let Some(spans) = found.last() {
+                self.record_legacy_regexp_match(input, spans);
+            }
             for spans in found {
                 let Some((start, end)) = spans[0] else {
                     continue;
@@ -68645,6 +68712,7 @@ impl InterpreterCore {
         let Some((whole_start, whole_end)) = spans[0] else {
             return Ok(None);
         };
+        self.record_legacy_regexp_match(input, &spans);
         let group_value = |span: Option<(usize, usize)>| {
             span.map_or(Value::Undefined, |(from, to)| Value::str(&input[from..to]))
         };
@@ -95775,6 +95843,10 @@ impl InterpreterCore {
                 BuiltinFunction::new_kind(BuiltinFunctionKind::ErrorCaptureStackTrace),
             ),
             "stackTraceLimit" if name == "Error" => Value::Int(10),
+            // bd-9vouw.113: RegExp.$1, lastMatch, ... from the last match.
+            key if name == "RegExp" && is_legacy_regexp_static(key) => {
+                self.legacy_regexp_static_value(key)?
+            }
             "asIntN" if name == "BigInt" => {
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsIntN))
             }

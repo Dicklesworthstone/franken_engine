@@ -2414,6 +2414,23 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             continue;
         }
         if quotes.active() {
+            // A comment inside a template substitution is code, not template
+            // text (`${/* @__PURE__ */ f()}`, as bundlers emit). Neither
+            // `/*` nor `//` can start a regular expression.
+            if ch == '/'
+                && quotes.in_substitution_code()
+                && let Some(&next @ ('*' | '/')) = chars.peek()
+            {
+                chars.next();
+                push_blanked(&mut out, '/');
+                push_blanked(&mut out, next);
+                if next == '*' {
+                    in_block_comment = true;
+                } else {
+                    in_line_comment = true;
+                }
+                continue;
+            }
             out.push(ch);
             quotes.advance_char(ch);
             continue;
@@ -2569,6 +2586,12 @@ impl QuoteState {
     /// substitution.
     fn active(&self) -> bool {
         !self.stack.is_empty()
+    }
+
+    /// Whether the scanner is in a template substitution's code (not in a
+    /// string, template text or regex nested in it).
+    fn in_substitution_code(&self) -> bool {
+        matches!(self.stack.last(), Some(QuoteContext::Substitution { .. }))
     }
 
     /// Enter a string or template if `b` opens one. Returns whether it did.
@@ -19258,6 +19281,17 @@ mod tests {
         let stripped = strip_comments_to_whitespace(src);
         assert!(stripped.contains("`a//b`"));
         assert!(!stripped.contains("// c"));
+    }
+
+    #[test]
+    fn strip_comments_blanks_comments_inside_template_substitutions() {
+        let src = "var u = `a${/* c */ f() // d\n}b // text ${`n${/*e*/ 1}`}`; // f\n";
+        let stripped = strip_comments_to_whitespace(src);
+        assert_eq!(stripped.len(), src.len());
+        assert!(!stripped.contains("/* c */") && !stripped.contains("// d"));
+        assert!(!stripped.contains("/*e*/") && !stripped.contains("// f"));
+        assert!(stripped.contains("f() "), "{stripped}");
+        assert!(stripped.contains("}b // text ${`n${"), "{stripped}");
     }
 
     #[test]

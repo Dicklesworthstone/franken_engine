@@ -81,3 +81,14 @@ fn tagged_templates_see_cooked_and_raw_strings() {
         r#"["xy",4]"#,
     );
 }
+
+/// Comments inside a substitution are code comments (bundlers emit
+/// `${/* @__PURE__ */ f()}`, as redux's ActionTypes do); they failed to
+/// parse ("empty expression statement"). Template text keeps `//`.
+#[test]
+fn comments_inside_substitutions_are_comments() {
+    check(
+        "const f = () => 'x'; [`a${/* c */ f()}b`, `a${f() /* trailing */}b`, `a${ // line\n f()}b`, `a${/* } */ f()}b`, `${/* a */ `in${/* b */ f()}`}`, `p // not a comment ${1}`].join('|');",
+        "axb|axb|axb|axb|inx|p // not a comment 1",
+    );
+}

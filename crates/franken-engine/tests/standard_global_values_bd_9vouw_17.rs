@@ -111,6 +111,17 @@ fn static_builtins_are_callable_values() {
          [o.a, o.b, typeof d, d.length, dp.length, d.name].join();",
         "1,2,function,1,2,getOwnPropertyDescriptors",
     );
+    // The Number statics were callable only directly: read as values they
+    // were undefined (`[x].filter(Number.isNaN)` threw, and zod, which calls
+    // them through values, was refused). Number.parseInt/parseFloat are the
+    // global functions themselves.
+    check(
+        "[typeof Number.isNaN, [1, NaN, 'x'].filter(Number.isNaN).length, \
+          Number.parseInt === parseInt, Number.parseFloat === parseFloat, \
+          Number.isInteger.name, Number.isInteger.length, ((f) => f(2.5))(Number.isFinite), \
+          (({ isSafeInteger }) => isSafeInteger(2 ** 53))(Number), Number['isNaN'](NaN)].join();",
+        "function,1,true,true,isInteger,1,true,false,true",
+    );
 }
 
 #[test]

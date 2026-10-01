@@ -134,3 +134,18 @@ fn string_methods_defer_to_a_pattern_objects_symbol_method() {
         "TypeError",
     );
 }
+
+/// A regex literal leading a member chain followed by a top-level binary
+/// operator: the operator binds looser than the chain. The parser took the
+/// whole text as one postfix chain, so a trailing `[...]`
+/// (`(/at .../i.exec(err.stack) || [])[1]`, Prism's currentScript lookup)
+/// made `/ab/.source ||` a computed member's object.
+#[test]
+fn regex_member_chain_before_a_binary_operator() {
+    check(
+        "[(/ab/.exec('ab') || [])[0], (/ab/.source || []), /a/.source + [1], \
+         (/x/.exec('y') || ['none'])[0], /a/.flags + /b/g.flags, \
+         (/at [^(]*\\((.*)\\)$/i.exec('at f (x.js)') || [])[1]].join(' ')",
+        "ab ab a1 none g x.js",
+    );
+}

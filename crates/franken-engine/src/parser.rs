@@ -5301,6 +5301,13 @@ fn parse_expression(
         if tail.is_empty() {
             return regexp_literal_expression(pattern, flags, span, context);
         }
+        // A top-level binary operator after the chain binds looser than it
+        // (`/ab/.source || []`, `/a/.source + [1]`); the binary scanner skips
+        // regex literals. Taken as one postfix chain, the trailing `[...]`
+        // made `/ab/.source ||` a computed member's object.
+        if let Some(result) = try_parse_binary(expression, span, context, recursion_depth) {
+            return result;
+        }
         if (tail.starts_with('.') || tail.starts_with('[') || tail.starts_with('('))
             && let Some(result) = try_parse_postfix(expression, span, context, recursion_depth)
         {

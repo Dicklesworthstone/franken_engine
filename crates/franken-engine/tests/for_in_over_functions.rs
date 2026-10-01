@@ -28,6 +28,15 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"function isEnumerable(obj, name) { var s = false; for (var x in obj) { if (x === name) { s = true; break; } } return s && Object.prototype.hasOwnProperty.call(obj, name) && Object.prototype.propertyIsEnumerable.call(obj, name); } function f(a, b) {} f.extra = 1; console.log(isEnumerable(f, 'name'), isEnumerable(f, 'length'), isEnumerable(Math.max, 'name'), isEnumerable(f, 'extra'));"#,
         "false false false true",
     ),
+    // ES2020 13.7.5.12 step 7.a: for-in over undefined or null runs no
+    // iteration; it threw "expected object, got null", which stopped
+    // preact's `h(type, null)` (`for (f in t)` over null props) and every
+    // `for (k in opts)` with `opts` omitted.
+    (
+        "for_in_over_undefined_and_null",
+        r#"var n = 0; for (var k in null) n++; for (var k2 in undefined) n++; function g(o) { var ks = []; for (const k in o) ks.push(k); return ks.length; } var t = null, f, c = 0; for (f in t) c++; var c2 = 0; for (let k3 in void 0) { c2++; } console.log(n, g(null), g(undefined), g({ a: 1 }), c, f, c2);"#,
+        "0 0 0 1 0 undefined 0",
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

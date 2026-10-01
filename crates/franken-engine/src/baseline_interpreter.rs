@@ -59129,12 +59129,23 @@ impl InterpreterCore {
     fn register_needs_observable_to_primitive(&self, register: u32) -> bool {
         // Borrowed peek: this runs ahead of every compact arithmetic op.
         // Functions convert through Function.prototype.toString or their own
-        // `toString`/`valueOf`, which only the reentrant path can run.
+        // `toString`/`valueOf`, and promises, generator objects and iterators
+        // through theirs (own, else inherited), which only the reentrant path
+        // can run.
         register < self.config.max_registers
             && self
                 .registers
                 .get(self.register_base + register as usize)
-                .is_some_and(|value| matches!(value, Value::Object(_)) || value.is_callable())
+                .is_some_and(|value| {
+                    matches!(
+                        value,
+                        Value::Object(_)
+                            | Value::Promise(_)
+                            | Value::Generator(_)
+                            | Value::AsyncGeneratorObject(_)
+                            | Value::Iterator(_)
+                    ) || value.is_callable()
+                })
     }
 
     /// bd-9vouw.37: operand registers of the numeric operators whose object
@@ -59250,8 +59261,17 @@ impl InterpreterCore {
         register: u32,
     ) -> Result<Value, InterpreterError> {
         let value = self.read_reg(register)?;
-        if value.is_callable() {
-            // A function's own valueOf/toString, else Function.prototype.toString.
+        if value.is_callable()
+            || matches!(
+                value,
+                Value::Promise(_)
+                    | Value::Generator(_)
+                    | Value::AsyncGeneratorObject(_)
+                    | Value::Iterator(_)
+            )
+        {
+            // A function's own valueOf/toString, else Function.prototype.toString;
+            // a promise's, generator object's or iterator's own or inherited.
             return self.coerce_runtime_primitive_with_hint(Some(module), value, "number");
         }
         let Value::Object(object_id) = value else {

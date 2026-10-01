@@ -195,6 +195,37 @@ fn empty_statement_bodies() {
     }
 }
 
+/// An Allman `{` on the line after a header whose parentheses hold braces of
+/// their own: a callback body (papaparse 5.4.1's JsonToCsv unpackConfig,
+/// `if (... && !Papa.BAD_DELIMITERS.filter(function (value) { ... }).length)`)
+/// or a default parameter's object. A brace inside the parentheses was taken
+/// for the header's own body, so the next line's `{` was not joined ("empty
+/// expression statement"). Expected values are Node v22.2.0's.
+#[test]
+fn allman_brace_after_a_header_holding_braces() {
+    for (source, node) in [
+        (
+            "var a = [1, 2], d = 'x', r = 0;\nif (typeof d === 'string'\n    && !a.filter(function (v) { return d.indexOf(v) !== -1; }).length)\n{\n  r = 3;\n}\nr;",
+            "3",
+        ),
+        ("function f(o = { k: 1 })\n{\n  return o.k;\n}\nf();", "1"),
+        (
+            "var n = 0;\nwhile ([1, 2].some(function (v) { return v > n; }))\n{\n  n++;\n}\nn;",
+            "2",
+        ),
+        (
+            "var s = '';\nfor (var k in { a: 1, b: 2 })\n{\n  s += k;\n}\ns;",
+            "ab",
+        ),
+    ] {
+        assert_eq!(
+            eval_to_string(source),
+            node,
+            "`{source}` must match Node v22.2.0"
+        );
+    }
+}
+
 /// ES2020 13.1.1: `yield` is not a label inside a generator or in strict
 /// code, nor `await` inside an async function, however it is spelled. Before
 /// `L: ;` parsed, an empty-bodied `yield: ;` was refused for that reason

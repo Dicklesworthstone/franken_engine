@@ -2893,6 +2893,34 @@ fn text_after_last_top_level_terminator(statement: &str) -> &str {
     &statement[start..]
 }
 
+/// Whether `text` opens a `{` outside parentheses, brackets and quotes. A
+/// brace inside a header's parentheses (a callback body, a default
+/// parameter's object) does not make the header's own body begin
+/// (papaparse: `if (list.filter(function (v) { ... }).length)` then `{`).
+fn has_top_level_open_brace(text: &str) -> bool {
+    let mut depth = 0i64;
+    let mut quotes = QuoteState::default();
+    for (index, ch) in text.char_indices() {
+        if quotes.active() {
+            quotes.advance_char(ch);
+            continue;
+        }
+        if ch == '/' && quotes.open_regex_at(text, index) {
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => {
+                quotes.open_char(ch);
+            }
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            '{' if depth <= 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Whether `statement` is a `do` statement whose `while (...)` has not
 /// appeared yet (its body is complete or still to come), also as the
 /// unbraced body of other headers: `if (c) do x++; while (x < 3);` is one
@@ -3019,7 +3047,7 @@ fn statement_header_awaits_body(statement: &str) -> bool {
         .strip_prefix("else")
         .filter(|rest| rest.starts_with(char::is_whitespace))
         .map_or(tail, str::trim_start);
-    if tail.is_empty() || tail.contains('{') || tail.ends_with(';') {
+    if tail.is_empty() || has_top_level_open_brace(tail) || tail.ends_with(';') {
         return false;
     }
     if ["else", "do", "try", "finally"].contains(&tail) || starts_with_keyword(tail, "class") {

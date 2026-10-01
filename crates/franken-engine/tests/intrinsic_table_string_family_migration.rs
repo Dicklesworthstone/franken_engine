@@ -318,7 +318,9 @@ fn e2e_search_family_keeps_nan_positions_at_zero() {
     assert_eq!(ev("'abc'.startsWith('a', 0 / 0)"), "true");
     assert_eq!(ev("'abc'.endsWith('a', 0 / 0)"), "false");
     assert_eq!(ev("'abcabc'.indexOf('a', 0 / 0)"), "0");
-    assert_eq!(ev("'ababa'.lastIndexOf('a', 0 / 0)"), "0");
+    // lastIndexOf is the exception: a NaN position is +Infinity, so the
+    // search starts at the end (ES2020 21.1.3.9 step 6; Node v22.2.0 gives 4).
+    assert_eq!(ev("'ababa'.lastIndexOf('a', 0 / 0)"), "4");
 }
 
 #[test]

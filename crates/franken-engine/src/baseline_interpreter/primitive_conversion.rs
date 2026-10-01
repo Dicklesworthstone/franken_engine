@@ -33,11 +33,7 @@ impl InterpreterCore {
         let Some(value) = self.builtin_arg(args, index)? else {
             return Ok(None);
         };
-        let primitive = if value.is_object_like() {
-            self.coerce_runtime_primitive_with_hint(Some(module), value, "number")?
-        } else {
-            value
-        };
+        let primitive = self.object_to_number_primitive(Some(module), value)?;
         if matches!(primitive, Value::Symbol(_) | Value::BigInt(_)) {
             return Err(InterpreterError::TypeError {
                 expected: "value convertible to a number".to_string(),
@@ -59,15 +55,72 @@ impl InterpreterCore {
         let Some(value) = self.builtin_arg(args, index)? else {
             return Ok(None);
         };
-        let primitive = if value.is_object_like() {
-            self.coerce_runtime_primitive_with_hint(Some(module), value, "string")?
-        } else {
-            value
-        };
+        let primitive = self.object_to_string_primitive(Some(module), value)?;
         if matches!(primitive, Value::Symbol(_)) {
             return Err(Self::symbol_to_string_error());
         }
         Ok(Some(primitive))
+    }
+
+    /// The text of a builtin argument that is only read as a string
+    /// (Date.parse, the URI functions): ToString, with a missing argument
+    /// read as undefined ("undefined"), an object converted as in
+    /// `object_to_string_primitive`, and a Symbol a TypeError.
+    pub(super) fn builtin_arg_text(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+        index: u32,
+    ) -> Result<String, InterpreterError> {
+        let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+        let primitive = self.object_to_string_primitive(module, value)?;
+        if matches!(primitive, Value::Symbol(_)) {
+            return Err(Self::symbol_to_string_error());
+        }
+        Ok(self.value_to_string(&primitive))
+    }
+
+    /// ToNumber's ToPrimitive step (hint "number") for an object, observable
+    /// through @@toPrimitive, valueOf and toString. An object that converts
+    /// to undefined comes back as NaN, which is ToNumber(undefined), so the
+    /// caller does not mistake it for an absent argument. Anything that is
+    /// not an object, and any value when there is no module for the guest
+    /// call, comes back unchanged.
+    pub(super) fn object_to_number_primitive(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if !value.is_object_like() || module.is_none() {
+            return Ok(value);
+        }
+        Ok(
+            match self.coerce_runtime_primitive_with_hint(module, value, "number")? {
+                Value::Undefined => Value::Float(Float64::new(f64::NAN)),
+                primitive => primitive,
+            },
+        )
+    }
+
+    /// ToString's ToPrimitive step (hint "string") for an object, observable
+    /// through @@toPrimitive, toString and valueOf. An object that converts
+    /// to undefined comes back as "undefined", which is ToString(undefined),
+    /// not an absent argument. Anything that is not an object, and any value
+    /// when there is no module for the guest call, comes back unchanged.
+    pub(super) fn object_to_string_primitive(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if !value.is_object_like() || module.is_none() {
+            return Ok(value);
+        }
+        Ok(
+            match self.coerce_runtime_primitive_with_hint(module, value, "string")? {
+                Value::Undefined => Value::str("undefined"),
+                primitive => primitive,
+            },
+        )
     }
 
     pub(super) fn primitive_conversion_builtin(

@@ -38459,8 +38459,7 @@ impl InterpreterCore {
                 Ok(js_number_to_value(time))
             }
             BuiltinFunctionKind::DateParse => {
-                let text = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let text = self.value_to_string(&text);
+                let text = self.builtin_arg_text(Some(module), args, 0)?;
                 Ok(js_number_to_value(Self::parse_date_string(&text)))
             }
             BuiltinFunctionKind::RegExpPrototypeExec => {
@@ -38686,17 +38685,17 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringCharAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_char_at_impl(&value, args)
+                self.string_char_at_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringCharCodeAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_char_code_at_impl(&value, args)
+                self.string_char_code_at_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_at_impl(&value, args)
+                self.string_at_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringIsWellFormed => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -38769,7 +38768,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringNormalize => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_normalize_impl(&value, args)
+                self.string_normalize_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringIncludes => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -38797,7 +38796,7 @@ impl InterpreterCore {
                     return Ok(result);
                 }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_split_impl(&value, args)
+                self.string_split_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringIndexOf => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -38848,7 +38847,7 @@ impl InterpreterCore {
                     return Ok(result);
                 }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_match_impl(&value, args)
+                self.string_match_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringMatchAll => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -38861,7 +38860,7 @@ impl InterpreterCore {
                     return Ok(result);
                 }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let pattern = self.string_pattern_arg(module, args)?;
                 self.string_match_all_value(&value, &pattern)
             }
             BuiltinFunctionKind::StringSearch => {
@@ -38875,7 +38874,7 @@ impl InterpreterCore {
                     return Ok(result);
                 }
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_search_impl(&value, args)
+                self.string_search_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringRepeat => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -40436,7 +40435,7 @@ impl InterpreterCore {
                 self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::ArrayBufferSlice => {
-                self.array_buffer_slice(receiver.unwrap_or(Value::Undefined), args)
+                self.array_buffer_slice(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::WeakRefDeref => {
                 self.weak_ref_deref(&receiver.unwrap_or(Value::Undefined))
@@ -41542,31 +41541,37 @@ impl InterpreterCore {
                 self.dispatch_builtin_hostcall("builtin:PerformanceNow", args, Some(module))
             }
             BuiltinFunctionKind::DataViewGetUint8 => self.data_view_get_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 DataViewIntegerKind::Uint8,
             ),
             BuiltinFunctionKind::DataViewSetUint8 => self.data_view_set_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 DataViewIntegerKind::Uint8,
             ),
             BuiltinFunctionKind::DataViewGetInt32 => self.data_view_get_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 DataViewIntegerKind::Int32,
             ),
             BuiltinFunctionKind::DataViewSetInt32 => self.data_view_set_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 DataViewIntegerKind::Int32,
             ),
             BuiltinFunctionKind::DataViewGetUint32 => self.data_view_get_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 DataViewIntegerKind::Uint32,
             ),
             BuiltinFunctionKind::DataViewSetUint32 => self.data_view_set_integer(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 args,
                 DataViewIntegerKind::Uint32,
@@ -41590,25 +41595,25 @@ impl InterpreterCore {
                 };
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 if setter {
-                    self.data_view_set_integer(receiver, args, kind)
+                    self.data_view_set_integer(module, receiver, args, kind)
                 } else {
-                    self.data_view_get_integer(receiver, args, kind)
+                    self.data_view_get_integer(module, receiver, args, kind)
                 }
             }
             BuiltinFunctionKind::TypedArraySet => {
-                self.typed_array_set(receiver.unwrap_or(Value::Undefined), args)
+                self.typed_array_set(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::TypedArraySubarray => {
-                self.typed_array_subarray(receiver.unwrap_or(Value::Undefined), args)
+                self.typed_array_subarray(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::TypedArraySlice => {
-                self.typed_array_slice(receiver.unwrap_or(Value::Undefined), args)
+                self.typed_array_slice(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::TypedArrayFill => {
-                self.typed_array_fill(receiver.unwrap_or(Value::Undefined), args)
+                self.typed_array_fill(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::TypedArrayCopyWithin => {
-                self.typed_array_copy_within(receiver.unwrap_or(Value::Undefined), args)
+                self.typed_array_copy_within(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::TypedArrayEntries => self
                 .typed_array_iterator_for_receiver(receiver.unwrap_or(Value::Undefined), "entries"),
@@ -41627,7 +41632,7 @@ impl InterpreterCore {
                 self.buffer_to_string(receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::BufferSharedSlice => {
-                self.buffer_shared_slice(receiver.unwrap_or(Value::Undefined), args)
+                self.buffer_shared_slice(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::BufferIndexOf => {
                 self.buffer_index_of(receiver.unwrap_or(Value::Undefined), args)
@@ -54509,11 +54514,9 @@ impl InterpreterCore {
     ) -> Option<fn(&mut Self, &Ir3Module, &JsString, RegRange) -> Result<Value, InterpreterError>>
     {
         Some(match impl_fn {
-            "string_char_at_impl" => |core, _, value, args| core.string_char_at_impl(value, args),
-            "string_char_code_at_impl" => {
-                |core, _, value, args| core.string_char_code_at_impl(value, args)
-            }
-            "string_at_impl" => |core, _, value, args| core.string_at_impl(value, args),
+            "string_char_at_impl" => Self::string_char_at_impl,
+            "string_char_code_at_impl" => Self::string_char_code_at_impl,
+            "string_at_impl" => Self::string_at_impl,
             "string_to_upper_case_impl" => {
                 |core, _, value, args| core.string_to_upper_case_impl(value, args)
             }
@@ -54532,10 +54535,8 @@ impl InterpreterCore {
             "string_locale_compare_impl" => {
                 |core, _, value, args| core.string_locale_compare_impl(value, args)
             }
-            "string_normalize_impl" => {
-                |core, _, value, args| core.string_normalize_impl(value, args)
-            }
-            "string_split_impl" => |core, _, value, args| core.string_split_impl(value, args),
+            "string_normalize_impl" => Self::string_normalize_impl,
+            "string_split_impl" => Self::string_split_impl,
             "string_includes_impl" => Self::string_includes_impl,
             "string_starts_with_impl" => Self::string_starts_with_impl,
             "string_ends_with_impl" => Self::string_ends_with_impl,
@@ -54544,8 +54545,8 @@ impl InterpreterCore {
             "string_slice_impl" => Self::string_slice_impl,
             "string_substring_impl" => Self::string_substring_impl,
             "string_replace_impl" => |core, _, value, args| core.string_replace_impl(value, args),
-            "string_match_impl" => |core, _, value, args| core.string_match_impl(value, args),
-            "string_search_impl" => |core, _, value, args| core.string_search_impl(value, args),
+            "string_match_impl" => Self::string_match_impl,
+            "string_search_impl" => Self::string_search_impl,
             "string_repeat_impl" => Self::string_repeat_impl,
             "string_pad_start_impl" => Self::string_pad_start_impl,
             "string_pad_end_impl" => Self::string_pad_end_impl,
@@ -54694,28 +54695,31 @@ impl InterpreterCore {
 
     fn string_char_at_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let index = self.builtin_arg(args, 0)?;
+        let index = self.builtin_number_arg(module, args, 0)?;
         Self::string_prototype_char_at_value(Value::Str(this_str.clone()), index)
     }
 
     fn string_char_code_at_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let index = self.builtin_arg(args, 0)?;
+        let index = self.builtin_number_arg(module, args, 0)?;
         Self::string_prototype_char_code_at_value(Value::Str(this_str.clone()), index)
     }
 
     fn string_at_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let index = self.builtin_arg(args, 0)?;
+        let index = self.builtin_number_arg(module, args, 0)?;
         Self::string_prototype_at_value(Value::Str(this_str.clone()), index)
     }
 
@@ -54789,8 +54793,7 @@ impl InterpreterCore {
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let replacement = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let (search, replacement) = self.string_replace_args(module, args)?;
         if self
             .regexp_source_flags_from_value(&search)
             .is_some_and(|(_, flags)| !flags.contains('g'))
@@ -54901,10 +54904,11 @@ impl InterpreterCore {
 
     fn string_normalize_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let form = match self.builtin_arg(args, 0)? {
+        let form = match self.builtin_string_arg(module, args, 0)? {
             Some(Value::Undefined) | None => "NFC".to_string(),
             Some(value) => self.value_to_string(&value),
         };
@@ -54972,6 +54976,7 @@ impl InterpreterCore {
 
     fn string_split_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -54984,12 +54989,22 @@ impl InterpreterCore {
         // per-scalar over the lossy projection). A RegExp separator splits
         // on its matches with capture groups spliced in, and `limit` caps
         // the element count (bd-9vouw.40).
-        let limit = Self::split_limit(self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined));
+        let limit = Self::split_limit(
+            self.builtin_number_arg(module, args, 1)?
+                .unwrap_or(Value::Undefined),
+        );
         let separator_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let regexp = self.regexp_source_flags_from_value(&separator_value);
+        let separator_value = if regexp.is_none() && !matches!(separator_value, Value::Undefined) {
+            self.builtin_string_arg(module, args, 0)?
+                .unwrap_or(Value::Undefined)
+        } else {
+            separator_value
+        };
         if limit == 0 {
             return Ok(Value::Object(self.alloc_array_from_values(&[])?));
         }
-        if let Some((source, flags)) = self.regexp_source_flags_from_value(&separator_value) {
+        if let Some((source, flags)) = regexp {
             let mut pieces = self.regexp_split_pieces(this_str.as_ref(), &source, &flags)?;
             pieces.truncate(limit);
             return Ok(Value::Object(self.alloc_array_from_values(&pieces)?));
@@ -55272,14 +55287,43 @@ impl InterpreterCore {
         self.string_replace_with_module(Some(module), this_str, args)
     }
 
+    /// The search and replacement arguments of replace and replaceAll. With
+    /// a module (the guest call path) an object search value that is not a
+    /// RegExp is ToString'd, then a replacement that is not callable;
+    /// without one (the module-less intrinsic binding) they pass through.
+    fn string_replace_args(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<(Value, Value), InterpreterError> {
+        let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let replacement = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let Some(module) = module else {
+            return Ok((search, replacement));
+        };
+        let search =
+            if search.is_object_like() && self.regexp_source_flags_from_value(&search).is_none() {
+                self.builtin_string_arg(module, args, 0)?
+                    .unwrap_or(Value::Undefined)
+            } else {
+                search
+            };
+        let replacement = if replacement.is_object_like() && !replacement.is_callable() {
+            self.builtin_string_arg(module, args, 1)?
+                .unwrap_or(Value::Undefined)
+        } else {
+            replacement
+        };
+        Ok((search, replacement))
+    }
+
     fn string_replace_with_module(
         &mut self,
         module: Option<&Ir3Module>,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let replacement = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let (search, replacement) = self.string_replace_args(module, args)?;
         let label = self.join_arg_range_label(args)?;
         self.string_replace_js(
             module,
@@ -55291,21 +55335,42 @@ impl InterpreterCore {
         )
     }
 
-    fn string_match_impl(
+    /// The pattern argument of match, matchAll and search: a RegExp stays
+    /// as it is; any other value except undefined is ToString'd (observably
+    /// for an object), as RegExpCreate would. A Symbol is a TypeError.
+    fn string_pattern_arg(
         &mut self,
-        this_str: &JsString,
+        module: &Ir3Module,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if matches!(pattern, Value::Undefined)
+            || self.regexp_source_flags_from_value(&pattern).is_some()
+        {
+            return Ok(pattern);
+        }
+        Ok(self
+            .builtin_string_arg(module, args, 0)?
+            .unwrap_or(Value::Undefined))
+    }
+
+    fn string_match_impl(
+        &mut self,
+        module: &Ir3Module,
+        this_str: &JsString,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let pattern = self.string_pattern_arg(module, args)?;
         self.string_match_value(this_str, &pattern)
     }
 
     fn string_search_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let pattern = self.string_pattern_arg(module, args)?;
         self.string_search_value(this_str, &pattern)
     }
 
@@ -63757,7 +63822,8 @@ impl InterpreterCore {
     }
 
     fn array_buffer_byte_length_from_args(
-        &self,
+        &mut self,
+        module: Option<&Ir3Module>,
         args: RegRange,
     ) -> Result<usize, InterpreterError> {
         let raw_length = if args.count == 0 {
@@ -63769,6 +63835,7 @@ impl InterpreterCore {
         if matches!(raw_length, Value::Undefined) {
             return Ok(0);
         }
+        let raw_length = self.object_to_number_primitive(module, raw_length)?;
 
         let Some(length) = Self::coerce_to_number(&raw_length) else {
             return Err(InterpreterError::RangeError {
@@ -63847,7 +63914,8 @@ impl InterpreterCore {
     }
 
     fn typed_array_optional_index_arg(
-        &self,
+        &mut self,
+        module: Option<&Ir3Module>,
         kind: TypedArrayKind,
         args: RegRange,
         offset: u32,
@@ -63860,6 +63928,7 @@ impl InterpreterCore {
         if matches!(value, Value::Undefined) {
             return Ok(None);
         }
+        let value = self.object_to_number_primitive(module, value)?;
         self.typed_array_index_from_value(kind, field, &value)
             .map(Some)
     }
@@ -63886,14 +63955,15 @@ impl InterpreterCore {
     }
 
     fn typed_array_buffer_view_shape(
-        &self,
+        &mut self,
+        module: Option<&Ir3Module>,
         kind: TypedArrayKind,
         buffer_id: ObjectId,
         args: RegRange,
     ) -> Result<(usize, usize, usize), InterpreterError> {
         let buffer_len = self.array_buffer_byte_length(buffer_id)?;
         let byte_offset = self
-            .typed_array_optional_index_arg(kind, args, 1, "byteOffset")?
+            .typed_array_optional_index_arg(module, kind, args, 1, "byteOffset")?
             .unwrap_or(0);
         let element_size = kind.element_size();
 
@@ -63915,7 +63985,7 @@ impl InterpreterCore {
         }
 
         let remaining = buffer_len - byte_offset;
-        let length = match self.typed_array_optional_index_arg(kind, args, 2, "length")? {
+        let length = match self.typed_array_optional_index_arg(module, kind, args, 2, "length")? {
             Some(length) => length,
             None => {
                 if remaining % element_size != 0 {
@@ -64426,7 +64496,8 @@ impl InterpreterCore {
     }
 
     fn typed_array_offset_arg(
-        &self,
+        &mut self,
+        module: &Ir3Module,
         kind: TypedArrayKind,
         args: RegRange,
         offset: u32,
@@ -64438,17 +64509,19 @@ impl InterpreterCore {
         if matches!(value, Value::Undefined) {
             return Ok(0);
         }
+        let value = self.object_to_number_primitive(Some(module), value)?;
         self.typed_array_index_from_value(kind, field, &value)
     }
 
     fn typed_array_relative_index_arg(
-        &self,
+        &mut self,
+        module: &Ir3Module,
         args: RegRange,
         offset: u32,
         len: usize,
         default: usize,
     ) -> Result<usize, InterpreterError> {
-        match self.builtin_arg(args, offset)? {
+        match self.builtin_number_arg(module, args, offset)? {
             Some(Value::Undefined) | None => Ok(default),
             Some(value) => Ok(Self::clamp_relative_index(
                 Self::value_as_integer(&value),
@@ -64458,28 +64531,30 @@ impl InterpreterCore {
     }
 
     fn typed_array_method_range(
-        &self,
+        &mut self,
+        module: &Ir3Module,
         args: RegRange,
         start_offset: u32,
         end_offset: u32,
         len: usize,
     ) -> Result<(usize, usize), InterpreterError> {
-        let start = self.typed_array_relative_index_arg(args, start_offset, len, 0)?;
-        let end = self.typed_array_relative_index_arg(args, end_offset, len, len)?;
+        let start = self.typed_array_relative_index_arg(module, args, start_offset, len, 0)?;
+        let end = self.typed_array_relative_index_arg(module, args, end_offset, len, len)?;
         Ok((start, end))
     }
 
     fn typed_array_set(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (_, target_view) = self.typed_array_receiver_view(receiver, "set")?;
+        let offset = self.typed_array_offset_arg(module, target_view.kind, args, 1, "offset")?;
         let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         self.typed_array_content_type_check(target_view.kind, &source)?;
         let values = self.typed_array_source_values(source)?;
         let values = self.typed_array_prepare_values(target_view.kind, values)?;
-        let offset = self.typed_array_offset_arg(target_view.kind, args, 1, "offset")?;
         let end = offset
             .checked_add(values.len())
             .ok_or_else(|| InterpreterError::RangeError {
@@ -64516,11 +64591,12 @@ impl InterpreterCore {
 
     fn typed_array_subarray(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (_, view) = self.typed_array_receiver_view(receiver, "subarray")?;
-        let (start, end) = self.typed_array_method_range(args, 0, 1, view.length)?;
+        let (start, end) = self.typed_array_method_range(module, args, 0, 1, view.length)?;
         let length = end.saturating_sub(start);
         let element_size = view.kind.element_size();
         let relative_byte_offset =
@@ -64562,11 +64638,12 @@ impl InterpreterCore {
 
     fn typed_array_slice(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (_, view) = self.typed_array_receiver_view(receiver, "slice")?;
-        let (start, end) = self.typed_array_method_range(args, 0, 1, view.length)?;
+        let (start, end) = self.typed_array_method_range(module, args, 0, 1, view.length)?;
         let values = self.typed_array_values_in_range(&view, start, end.max(start))?;
         let result = self.alloc_typed_array_from_values(view.kind, &values)?;
         Ok(Value::Object(result))
@@ -64579,6 +64656,7 @@ impl InterpreterCore {
     /// source bytes' IFC label.
     fn array_buffer_slice(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -64600,7 +64678,7 @@ impl InterpreterCore {
             }
         };
         let length = self.with_array_buffer_bytes(source, <[u8]>::len)?;
-        let (first, last) = self.typed_array_method_range(args, 0, 1, length)?;
+        let (first, last) = self.typed_array_method_range(module, args, 0, 1, length)?;
         let copied =
             self.with_array_buffer_bytes(source, |bytes| bytes[first..last.max(first)].to_vec())?;
         let label = self
@@ -64617,14 +64695,23 @@ impl InterpreterCore {
 
     fn typed_array_fill(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (target_id, view) = self.typed_array_receiver_view(receiver, "fill")?;
-        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        // ES2020 22.2.3.8 step 4: ToBigInt or ToNumber of the value, before
+        // start and end convert.
+        let value = if view.kind.is_bigint() {
+            let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            self.object_to_number_primitive(Some(module), value)?
+        } else {
+            self.builtin_number_arg(module, args, 0)?
+                .unwrap_or(Value::Undefined)
+        };
         let value = self.typed_array_prepare_value(view.kind, value)?;
-        let start = self.typed_array_relative_index_arg(args, 1, view.length, 0)?;
-        let end = self.typed_array_relative_index_arg(args, 2, view.length, view.length)?;
+        let start = self.typed_array_relative_index_arg(module, args, 1, view.length, 0)?;
+        let end = self.typed_array_relative_index_arg(module, args, 2, view.length, view.length)?;
         if start < end {
             self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
                 for index in start..end {
@@ -64749,13 +64836,14 @@ impl InterpreterCore {
 
     fn typed_array_copy_within(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (target_id, view) = self.typed_array_receiver_view(receiver, "copyWithin")?;
-        let to = self.typed_array_relative_index_arg(args, 0, view.length, 0)?;
-        let from = self.typed_array_relative_index_arg(args, 1, view.length, 0)?;
-        let end = self.typed_array_relative_index_arg(args, 2, view.length, view.length)?;
+        let to = self.typed_array_relative_index_arg(module, args, 0, view.length, 0)?;
+        let from = self.typed_array_relative_index_arg(module, args, 1, view.length, 0)?;
+        let end = self.typed_array_relative_index_arg(module, args, 2, view.length, view.length)?;
         let count = end.saturating_sub(from).min(view.length.saturating_sub(to));
         if count > 0 {
             let values = self.typed_array_values_in_range(&view, from, from + count)?;
@@ -65604,8 +65692,12 @@ impl InterpreterCore {
                     .get(object_id.0 as usize)
                     .is_some_and(|object| object.array_buffer.is_some()) =>
             {
-                let (byte_offset, byte_length, _) =
-                    self.typed_array_buffer_view_shape(TypedArrayKind::Uint8, object_id, args)?;
+                let (byte_offset, byte_length, _) = self.typed_array_buffer_view_shape(
+                    None,
+                    TypedArrayKind::Uint8,
+                    object_id,
+                    args,
+                )?;
                 Ok(Value::Object(self.alloc_buffer_view_object(
                     object_id,
                     byte_offset,
@@ -65913,11 +66005,12 @@ impl InterpreterCore {
 
     fn buffer_shared_slice(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let (_, view) = self.buffer_receiver_view(receiver, "slice")?;
-        let (start, end) = self.typed_array_method_range(args, 0, 1, view.length)?;
+        let (start, end) = self.typed_array_method_range(module, args, 0, 1, view.length)?;
         let length = end.saturating_sub(start);
         let byte_offset =
             view.byte_offset
@@ -66532,7 +66625,8 @@ impl InterpreterCore {
     }
 
     fn data_view_optional_index_arg(
-        &self,
+        &mut self,
+        module: Option<&Ir3Module>,
         args: RegRange,
         offset: u32,
         field: &str,
@@ -66544,17 +66638,19 @@ impl InterpreterCore {
         if matches!(value, Value::Undefined) {
             return Ok(None);
         }
+        let value = self.object_to_number_primitive(module, value)?;
         self.data_view_index_from_value(field, &value).map(Some)
     }
 
     fn data_view_buffer_view_shape(
-        &self,
+        &mut self,
+        module: Option<&Ir3Module>,
         buffer_id: ObjectId,
         args: RegRange,
     ) -> Result<(usize, usize), InterpreterError> {
         let buffer_len = self.array_buffer_byte_length(buffer_id)?;
         let byte_offset = self
-            .data_view_optional_index_arg(args, 1, "byteOffset")?
+            .data_view_optional_index_arg(module, args, 1, "byteOffset")?
             .unwrap_or(0);
         if byte_offset > buffer_len {
             return Err(InterpreterError::RangeError {
@@ -66566,7 +66662,7 @@ impl InterpreterCore {
 
         let remaining = buffer_len - byte_offset;
         let byte_length = self
-            .data_view_optional_index_arg(args, 2, "byteLength")?
+            .data_view_optional_index_arg(module, args, 2, "byteLength")?
             .unwrap_or(remaining);
         let end =
             byte_offset
@@ -66588,11 +66684,13 @@ impl InterpreterCore {
     }
 
     fn data_view_byte_offset_arg(
-        &self,
+        &mut self,
+        module: &Ir3Module,
         args: RegRange,
         method_name: &str,
     ) -> Result<usize, InterpreterError> {
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Int(0));
+        let value = self.object_to_number_primitive(Some(module), value)?;
         self.data_view_index_from_value(
             &format!("byteOffset for DataView.prototype.{method_name}"),
             &value,
@@ -66674,14 +66772,15 @@ impl InterpreterCore {
     }
 
     fn data_view_get_integer(
-        &self,
+        &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
         kind: DataViewIntegerKind,
     ) -> Result<Value, InterpreterError> {
         let method_name = kind.method_name(false);
         let view = self.data_view_receiver_view(receiver, method_name)?;
-        let byte_offset = self.data_view_byte_offset_arg(args, method_name)?;
+        let byte_offset = self.data_view_byte_offset_arg(module, args, method_name)?;
         let little_endian = if kind.byte_width() == 1 {
             false
         } else {
@@ -66750,14 +66849,23 @@ impl InterpreterCore {
 
     fn data_view_set_integer(
         &mut self,
+        module: &Ir3Module,
         receiver: Value,
         args: RegRange,
         kind: DataViewIntegerKind,
     ) -> Result<Value, InterpreterError> {
         let method_name = kind.method_name(true);
         let view = self.data_view_receiver_view(receiver, method_name)?;
-        let byte_offset = self.data_view_byte_offset_arg(args, method_name)?;
-        let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let byte_offset = self.data_view_byte_offset_arg(module, args, method_name)?;
+        let value = match kind {
+            DataViewIntegerKind::BigInt64 | DataViewIntegerKind::BigUint64 => {
+                let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                self.object_to_number_primitive(Some(module), value)?
+            }
+            _ => self
+                .builtin_number_arg(module, args, 1)?
+                .unwrap_or(Value::Undefined),
+        };
         let little_endian = if kind.byte_width() == 1 {
             false
         } else {
@@ -82460,7 +82568,7 @@ impl InterpreterCore {
                 Ok(Value::Object(date_id))
             }
             "builtin:ArrayBuffer" => {
-                let byte_length = self.array_buffer_byte_length_from_args(args)?;
+                let byte_length = self.array_buffer_byte_length_from_args(module, args)?;
                 let buffer_id = self.alloc_array_buffer_object(byte_length)?;
                 Ok(Value::Object(buffer_id))
             }
@@ -82482,7 +82590,7 @@ impl InterpreterCore {
                 Ok(Value::Object(view_id))
             }
             "builtin:DataView" => {
-                let view_id = self.construct_data_view(args)?;
+                let view_id = self.construct_data_view(module, args)?;
                 Ok(Value::Object(view_id))
             }
             "builtin:BufferFrom" => self.buffer_from(args),
@@ -86977,10 +87085,11 @@ impl InterpreterCore {
                 } else {
                     Value::Undefined
                 };
-                let index = if args.count >= 2 {
-                    Some(self.read_reg(args.start + 1)?)
-                } else {
-                    None
+                // Slot 0 is the receiver; the position converts observably
+                // when the guest call has a module.
+                let index = match module {
+                    Some(module) => self.builtin_number_arg(module, args, 1)?,
+                    None => self.builtin_arg(args, 1)?,
                 };
                 Self::string_prototype_char_at_value(receiver, index)
             }
@@ -87273,8 +87382,7 @@ impl InterpreterCore {
             "builtin:EncodeURIComponent" => {
                 // encodeURIComponent(value): slot-0 convention, shared by direct
                 // calls and the first-class value.
-                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let input_str = self.value_to_string(&value);
+                let input_str = self.builtin_arg_text(module, args, 0)?;
                 let encoded = percent_encode_utf8(&input_str, should_encode_uri_component);
 
                 Ok(Value::str(encoded))
@@ -87284,8 +87392,7 @@ impl InterpreterCore {
                 // decodeURIComponent(value): slot-0 convention, shared by direct
                 // calls and the first-class value. A malformed escape is a
                 // URIError (ES2020 18.2.6.1.2), which callers catch.
-                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let encoded_str = self.value_to_string(&value);
+                let encoded_str = self.builtin_arg_text(module, args, 0)?;
                 match percent_decode_utf8(&encoded_str, "") {
                     Some(decoded) => Ok(Value::str(decoded)),
                     None => Err(self.throw_uri_malformed(None)),
@@ -87295,8 +87402,7 @@ impl InterpreterCore {
             "builtin:EncodeURI" => {
                 // encodeURI(value): slot-0 convention, shared by direct
                 // calls and the first-class value.
-                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let input_str = self.value_to_string(&value);
+                let input_str = self.builtin_arg_text(module, args, 0)?;
                 let encoded = percent_encode_utf8(&input_str, should_encode_uri);
 
                 Ok(Value::str(encoded))
@@ -87306,8 +87412,7 @@ impl InterpreterCore {
                 // decodeURI(value): slot-0 convention, shared by direct
                 // calls and the first-class value. A malformed escape is a
                 // URIError (ES2020 18.2.6.1.2), which callers catch.
-                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let encoded_str = self.value_to_string(&value);
+                let encoded_str = self.builtin_arg_text(module, args, 0)?;
                 match percent_decode_utf8(&encoded_str, ";/?:@&=+$,#") {
                     Some(decoded) => Ok(Value::str(decoded)),
                     None => Err(self.throw_uri_malformed(None)),
@@ -92992,7 +93097,7 @@ impl InterpreterCore {
                 .is_some_and(|object| object.array_buffer.is_some())
             {
                 let (byte_offset, byte_length, length) =
-                    self.typed_array_buffer_view_shape(kind, object_id, args)?;
+                    self.typed_array_buffer_view_shape(module, kind, object_id, args)?;
                 return self.alloc_typed_array_view_object(
                     kind,
                     object_id,
@@ -93092,7 +93197,11 @@ impl InterpreterCore {
         Ok(id)
     }
 
-    fn construct_data_view(&mut self, args: RegRange) -> Result<ObjectId, InterpreterError> {
+    fn construct_data_view(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<ObjectId, InterpreterError> {
         let first_arg = if args.count == 0 {
             Value::Undefined
         } else {
@@ -93122,7 +93231,8 @@ impl InterpreterCore {
             });
         }
 
-        let (byte_offset, byte_length) = self.data_view_buffer_view_shape(buffer_id, args)?;
+        let (byte_offset, byte_length) =
+            self.data_view_buffer_view_shape(module, buffer_id, args)?;
         self.alloc_data_view_object(buffer_id, byte_offset, byte_length)
     }
 

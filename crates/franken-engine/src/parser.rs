@@ -3013,10 +3013,8 @@ fn header_chain_takes_unbraced_body(tail: &str, in_do_statement: bool) -> bool {
 /// after an earlier clause's `}`. A header already followed by a body (so
 /// `if (x) f()` before a block) does not qualify.
 fn statement_header_awaits_body(statement: &str) -> bool {
-    let tail = statement
-        .rfind('}')
-        .map_or(statement, |index| &statement[index + 1..])
-        .trim();
+    // The last clause: `if (a) x(); else if (b)` awaits the `else if` body.
+    let tail = text_after_last_top_level_terminator(statement).trim();
     let tail = tail
         .strip_prefix("else")
         .filter(|rest| rest.starts_with(char::is_whitespace))
@@ -3907,8 +3905,12 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                     continue;
                 }
                 // `while (x);` / `for (...);`: after a header this `;` is the
-                // empty statement body, so it stays in the segment.
-                let end = if statement_header_takes_unbraced_body(clause.trim_end()) {
+                // empty statement body, so it stays in the segment. So it does
+                // after a bare label (`L: ;`).
+                let only_labels =
+                    clause.trim().is_empty() && !line[segment_start..index].trim().is_empty();
+                let end = if only_labels || statement_header_takes_unbraced_body(clause.trim_end())
+                {
                     index.saturating_add(ch.len_utf8())
                 } else {
                     index
@@ -4145,6 +4147,21 @@ fn parse_statement_inner(
     if let Some(colon_idx) = find_top_level_colon(statement) {
         let label = statement[..colon_idx].trim();
         if is_identifier(label) && !is_unconditional_reserved_keyword(label) {
+            // ES2020 13.1.1: `yield` is not a label inside a generator or in
+            // strict code, nor `await` inside an async function or a module,
+            // however it is spelled (`yield`).
+            let name = decode_identifier_escapes(label);
+            let name = name.as_deref().unwrap_or(label);
+            if (name == "yield" && (context.yield_context || context.strict_mode))
+                || (name == "await" && (context.await_context || goal == ParseGoal::Module))
+            {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("`{name}` cannot be a label here"),
+                    context.source_label.to_string(),
+                    Some(span),
+                ));
+            }
             let body_src = statement[colon_idx + 1..].trim();
             if body_src.is_empty() {
                 return Err(ParseError::new(

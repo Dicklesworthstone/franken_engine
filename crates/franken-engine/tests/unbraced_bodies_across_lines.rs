@@ -93,6 +93,16 @@ fn bodies_and_clauses_on_following_lines() {
         ("var e = 0; do e++; while (e < 3); e;", "3"),
         ("var f = 0; do ; while (f++ < 2); f;", "3"),
         ("var n = 0;\nif (!n)\n  // set it\n  n = 7;\nn;", "7"),
+        // An Allman `else if` block after an unbraced consequent (papaparse
+        // 5.4.1's mainThreadReceivedMessage).
+        (
+            "var e = {b: 1}, r = 0;\nif (e.a)\n\tr = 1;\nelse if (e.b)\n{\n\tr = 2;\n}\nr;",
+            "2",
+        ),
+        (
+            "var e = {}, r = 0;\nif (e.a) r = 1;\nelse if (e.b)\n{\n\tr = 2;\n}\nelse\n{\n\tr = 3;\n}\nr;",
+            "3",
+        ),
     ] {
         assert_eq!(
             eval_to_string(source),
@@ -174,6 +184,44 @@ fn empty_statement_bodies() {
         ("var a = [1, 2, 0, 4], j; for (j = 0; a[j]; j++); j;", "2"),
         ("var z = 0; if (z) ; else z = 9; z;", "9"),
         ("var w = 3; while (w-- > 0) ; w;", "-1"),
+        // After a bare label the `;` is the label's body.
+        ("var v = 1; L: ; v;", "1"),
+    ] {
+        assert_eq!(
+            eval_to_string(source),
+            node,
+            "`{source}` must match Node v22.2.0"
+        );
+    }
+}
+
+/// ES2020 13.1.1: `yield` is not a label inside a generator or in strict
+/// code, nor `await` inside an async function, however it is spelled. Before
+/// `L: ;` parsed, an empty-bodied `yield: ;` was refused for that reason
+/// instead (Test262 async-gen-method yield-as-label-identifier*.js). Each
+/// program is a SyntaxError in Node v22.2.0.
+#[test]
+fn yield_and_await_are_not_labels_where_they_are_reserved() {
+    for source in [
+        "function* g() { yield: ; }",
+        "function* g() { yield: x; }",
+        "var C = class { static async *gen() { yi\\u0065ld: ; } };",
+        "'use strict'; yield: ;",
+        "async function f() { await: ; }",
+    ] {
+        let result = eval_to_string(source);
+        assert!(
+            result.contains("cannot be a label here"),
+            "`{source}`: {result}"
+        );
+    }
+    // Elsewhere both are ordinary labels.
+    for (source, node) in [
+        ("var n = 0; yield: { n = 1; break yield; } n;", "1"),
+        (
+            "function f() { await: for (;;) break await; return 2; } f();",
+            "2",
+        ),
     ] {
         assert_eq!(
             eval_to_string(source),

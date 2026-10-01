@@ -7417,6 +7417,13 @@ pub struct HeapObject {
     /// enumeration, Proxy trap, prototype walk or integrity level
     /// (`Object.freeze`) reaches them.
     private_elements: BTreeMap<SymbolId, PrivateElement>,
+    /// Keys of the virtual own properties a canonical builtin prototype
+    /// supplies without storing them (its methods, `constructor`,
+    /// @@iterator) that `delete` removed (bd-9vouw.93). They are
+    /// configurable, so `delete Array.prototype.fill` must make them absent;
+    /// the virtual lookups skip a key listed here. Empty on every other
+    /// object.
+    deleted_virtual_keys: BTreeSet<RuntimePropertyKey>,
 }
 
 /// One ES2022 PrivateElement (6.2.10).
@@ -7594,6 +7601,17 @@ struct PropertyAttributesWire {
     configurable: bool,
 }
 
+/// One key of [`HeapObject::deleted_virtual_keys`]: a String key or a
+/// nonzero Symbol id, exactly one.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PropertyKeyWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<JsString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    symbol_id: Option<u32>,
+}
+
 struct HeapSymbolPropertyRef<'a> {
     symbol_id: SymbolId,
     property: &'a BaselineSymbolProperty<Value>,
@@ -7649,6 +7667,7 @@ impl Serialize for HeapObject {
                 + usize::from(self.class_fields.is_some())
                 + usize::from(self.primitive_value.is_some())
                 + usize::from(!self.private_elements.is_empty())
+                + usize::from(!self.deleted_virtual_keys.is_empty())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -7725,6 +7744,23 @@ impl Serialize for HeapObject {
         if !symbol_properties.is_empty() {
             object.serialize_field("symbol_properties", &symbol_properties)?;
         }
+        if !self.deleted_virtual_keys.is_empty() {
+            let keys = self
+                .deleted_virtual_keys
+                .iter()
+                .map(|key| match key {
+                    RuntimePropertyKey::String(key) => PropertyKeyWire {
+                        key: Some(key.clone()),
+                        symbol_id: None,
+                    },
+                    RuntimePropertyKey::Symbol(symbol) => PropertyKeyWire {
+                        key: None,
+                        symbol_id: Some(symbol.0),
+                    },
+                })
+                .collect::<Vec<_>>();
+            object.serialize_field("deleted_virtual_keys", &keys)?;
+        }
         object.end()
     }
 }
@@ -7770,6 +7806,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             property_attributes: Vec<PropertyAttributesWire>,
             #[serde(default)]
             symbol_properties: Vec<HeapSymbolPropertyWire>,
+            #[serde(default)]
+            deleted_virtual_keys: Vec<PropertyKeyWire>,
         }
 
         #[derive(Deserialize)]
@@ -7829,6 +7867,23 @@ impl<'de> Deserialize<'de> for HeapObject {
                 ));
             }
         }
+        let mut deleted_virtual_keys = BTreeSet::new();
+        for record in wire.deleted_virtual_keys {
+            let key = match (record.key, record.symbol_id) {
+                (Some(key), None) => RuntimePropertyKey::String(key),
+                (None, Some(symbol_id)) if symbol_id != 0 => {
+                    RuntimePropertyKey::Symbol(SymbolId(symbol_id))
+                }
+                _ => {
+                    return Err(D::Error::custom(
+                        "a deleted virtual key needs exactly one String key or nonzero Symbol id",
+                    ));
+                }
+            };
+            if !deleted_virtual_keys.insert(key) {
+                return Err(D::Error::custom("deleted virtual keys must be unique"));
+            }
+        }
         let mut private_elements = BTreeMap::new();
         for record in wire.private_elements {
             let well_formed = record.symbol_id != 0
@@ -7871,6 +7926,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             class_fields: wire.class_fields,
             primitive_value: wire.primitive_value,
             private_elements,
+            deleted_virtual_keys,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -7938,6 +7994,10 @@ impl<'de> Deserialize<'de> for HeapObject {
 pub(crate) fn heap_object_contains_symbols(object: &HeapObject) -> bool {
     !object.properties.baseline_symbol_key_order().is_empty()
         || !object.private_elements.is_empty()
+        || object
+            .deleted_virtual_keys
+            .iter()
+            .any(|key| matches!(key, RuntimePropertyKey::Symbol(_)))
         || object
             .derived_constructor_parent
             .as_ref()
@@ -13462,6 +13522,11 @@ pub struct InterpreterCore {
     /// built-in skips the identity digest (a JSON encoding and two SHA-256
     /// hashes) that locates one (bd-9vouw.17).
     builtin_function_backings: bool,
+    /// Set once `delete` removed a virtual own property of a canonical
+    /// prototype ([`HeapObject::deleted_virtual_keys`]); never cleared.
+    /// Until then the virtual lookups skip the tombstone check
+    /// (bd-9vouw.93).
+    virtual_property_deletions: bool,
     /// Lazily allocated prototype objects for modeled builtin constructors. SEED-SURFACE.
     builtin_prototypes: SeedTrackedField<BTreeMap<String, ObjectId>>,
     /// Current seed epoch for lazy materialization.
@@ -14687,6 +14752,7 @@ impl InterpreterCore {
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
             builtin_function_backings: false,
+            virtual_property_deletions: false,
             builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
             seed_epoch: 0,
             pending_lazy_seeds: Vec::new(),
@@ -32837,8 +32903,10 @@ impl InterpreterCore {
             self.registers.value = registers;
             self.heap.value = heap;
             self.function_prototypes.value = function_prototypes;
-            // A restored map may hold built-in backing objects.
+            // A restored map may hold built-in backing objects, and a
+            // restored heap deleted virtual properties.
             self.builtin_function_backings = true;
+            self.virtual_property_deletions = true;
             self.builtin_prototypes.value = builtin_prototypes;
             self.symbol_state.value = symbol_state;
             let committed_seed_surface_bytes = next_seed_surface_bytes
@@ -56692,6 +56760,7 @@ impl InterpreterCore {
             .is_some_and(|object| object.is_array);
         if (root_is_array || self.chain_inherits_array_prototype(object_id))
             && Self::array_prototype_method(key).is_some()
+            && !self.canonical_virtual_name_deleted("Array", key)
         {
             return true;
         }
@@ -56703,6 +56772,7 @@ impl InterpreterCore {
         }
         self.chain_reaches_object_prototype(object_id)
             && (key == "constructor" || Self::object_prototype_method(key).is_some())
+            && !self.canonical_virtual_name_deleted("Object", key)
     }
 
     /// Walk the prototype chain to find a property value.
@@ -56823,23 +56893,29 @@ impl InterpreterCore {
                 .heap
                 .get(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-            if root.is_array {
+            let (root_is_array, root_is_typed_array) = (root.is_array, root.typed_array.is_some());
+            // A deleted %Array.prototype%[@@iterator] (bd-9vouw.93) leaves
+            // arrays without one, like every prototype's virtual method below.
+            let array_deleted = self.canonical_virtual_property_deleted("Array", key);
+            if root_is_array && !array_deleted {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
             }
             // %TypedArray%.prototype[@@iterator] is
             // %TypedArray%.prototype.values (ES2020 22.2.3.32), so a typed
             // array, Int8Array.prototype and %TypedArray%.prototype give one
             // function.
-            if root.typed_array.is_some()
-                || self.chain_reaches_canonical_prototype(object_id, "TypedArray")
+            if (root_is_typed_array
+                || self.chain_reaches_canonical_prototype(object_id, "TypedArray"))
+                && !self.canonical_virtual_property_deleted("TypedArray", key)
             {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::typed_array_values()));
             }
             // %Array.prototype%[@@iterator] is %Array.prototype.values%
             // (ES2020 22.1.3.31): read from Array.prototype itself or from an
             // object inheriting from it (`Object.create(Array.prototype)`).
-            if self.chain_reaches_canonical_prototype(object_id, "Array")
-                || self.chain_inherits_array_prototype(object_id)
+            if (self.chain_reaches_canonical_prototype(object_id, "Array")
+                || self.chain_inherits_array_prototype(object_id))
+                && !array_deleted
             {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
             }
@@ -56854,13 +56930,16 @@ impl InterpreterCore {
                 ("Set", BuiltinFunctionKind::SetValues),
                 ("String", BuiltinFunctionKind::StringIterator),
             ] {
-                if self.chain_reaches_canonical_prototype(object_id, prototype) {
+                if self.chain_reaches_canonical_prototype(object_id, prototype)
+                    && !self.canonical_virtual_property_deleted(prototype, key)
+                {
                     return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)));
                 }
             }
             // URLSearchParams.prototype[@@iterator] is its entries (bd-9vouw.126).
-            if self.url_search_params.contains_key(&object_id)
-                || self.chain_reaches_canonical_prototype(object_id, "URLSearchParams")
+            if (self.url_search_params.contains_key(&object_id)
+                || self.chain_reaches_canonical_prototype(object_id, "URLSearchParams"))
+                && !self.canonical_virtual_property_deleted("URLSearchParams", key)
             {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(
                     BuiltinFunctionKind::UrlSearchParamsEntries,
@@ -56872,6 +56951,7 @@ impl InterpreterCore {
         if let RuntimePropertyKey::Symbol(symbol) = key
             && let Some(method) = regexp_symbol_method_key(*symbol)
             && self.chain_has_regexp_prototype(object_id)
+            && !self.canonical_virtual_property_deleted("RegExp", key)
         {
             return Ok(Value::BuiltinFunction(
                 BuiltinFunction::regexp_symbol_method(method),
@@ -56893,6 +56973,7 @@ impl InterpreterCore {
         // properties, including an explicitly stored undefined, have won.
         if receiver.is_callable()
             && let Some(value) = Self::function_prototype_property(key_text)
+            && !self.canonical_virtual_property_deleted("Function", key)
         {
             return Ok(value);
         }
@@ -56910,7 +56991,10 @@ impl InterpreterCore {
         }
         // `Error.prototype.toString` for error objects (own/inherited data
         // properties walked above still win, e.g. a user `toString`).
-        if key_text == "toString" && self.chain_has_error_prototype(object_id) {
+        if key_text == "toString"
+            && self.chain_has_error_prototype(object_id)
+            && !self.canonical_virtual_property_deleted("Error", key)
+        {
             return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::ErrorPrototypeToString,
             )));
@@ -56928,6 +57012,7 @@ impl InterpreterCore {
             .unwrap_or(false);
         if let Some(builtin) = Self::array_prototype_method(key_text)
             && (root_is_array || self.chain_inherits_array_prototype(object_id))
+            && !self.canonical_virtual_property_deleted("Array", key)
         {
             return Ok(Value::BuiltinFunction(builtin));
         }
@@ -56984,6 +57069,7 @@ impl InterpreterCore {
         if let Some(tag) = root_type_tag.as_deref()
             && (tag != "URLSearchParams" || self.url_search_params.contains_key(&object_id))
             && let Some(builtin) = Self::collection_prototype_method(tag, key_text)
+            && !self.canonical_virtual_property_deleted(tag, key)
         {
             return Ok(Value::BuiltinFunction(builtin));
         }
@@ -56994,6 +57080,7 @@ impl InterpreterCore {
         // function), matching the `in` check's rule.
         if self.chain_reaches_object_prototype(object_id)
             && let Some(builtin) = Self::object_prototype_method(key_text)
+            && !self.canonical_virtual_property_deleted("Object", key)
         {
             return Ok(Value::BuiltinFunction(builtin));
         }
@@ -57745,14 +57832,9 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .map(|object| object.contains_own_runtime_property(&property_key))
             .unwrap_or(false)
-            || property_key.as_str().is_some_and(|key| {
-                self.canonical_prototype_own_virtual_value(*object_id, key)
-                    .is_some()
-            })
-            || matches!(
-                property_key,
-                RuntimePropertyKey::Symbol(symbol) if symbol == WellKnownSymbol::Iterator.id()
-            ) && self.builtin_prototypes.get("Array") == Some(object_id)
+            || self
+                .canonical_prototype_virtual_property(*object_id, &property_key)
+                .is_some()
     }
 
     fn object_own_property_is_enumerable(&self, receiver: &Value, property: &Value) -> bool {
@@ -57770,12 +57852,13 @@ impl InterpreterCore {
                 // reported enumerable whenever it existed, so
                 // `Set.prototype.propertyIsEnumerable(Symbol.toStringTag)`
                 // was true (Test262 verifyProperty on @@toStringTag).
+                // A virtual one (%Array.prototype%[@@iterator]) is not
+                // enumerable: only a stored property can be.
                 key @ RuntimePropertyKey::Symbol(_) => {
-                    return self.object_own_property_contains(receiver, property)
-                        && self
-                            .heap
-                            .get(object_id.0 as usize)
-                            .is_some_and(|object| object.own_property_attributes(&key).enumerable);
+                    return self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                        object.contains_own_runtime_property(&key)
+                            && object.own_property_attributes(&key).enumerable
+                    });
                 }
             }
         }
@@ -57854,33 +57937,50 @@ impl InterpreterCore {
         if object.is_array {
             return "Array";
         }
+        // These tags are no builtinTag but the @@toStringTag data property of
+        // the kind's prototype (ES2020 23.1.3.13, 24.1.4.4, ...), which
+        // [`Self::data_to_string_tag`] has already looked for along the
+        // object's chain. Once that prototype exists and the object's link is
+        // explicit, finding none there means it was deleted or bypassed
+        // (`delete WeakSet.prototype[Symbol.toStringTag]`, a null prototype):
+        // "Object", not the kind (bd-9vouw.93). Before that nothing can have
+        // changed it.
+        let prototype_tag = |tag: &'static str| -> &'static str {
+            if (object.prototype.is_some() || object.is_null_prototype)
+                && self.builtin_prototypes.contains_key(tag)
+            {
+                "Object"
+            } else {
+                tag
+            }
+        };
         match &object.primitive_value {
             Some(Value::Bool(_)) => return "Boolean",
             Some(Value::Int(_) | Value::Float(_)) => return "Number",
             Some(Value::Str(_)) => return "String",
-            Some(Value::BigInt(_)) => return "BigInt",
-            Some(Value::Symbol(_)) => return "Symbol",
+            Some(Value::BigInt(_)) => return prototype_tag("BigInt"),
+            Some(Value::Symbol(_)) => return prototype_tag("Symbol"),
             _ => {}
         }
         if let Some(view) = &object.typed_array {
             return view.kind.type_name();
         }
         if object.data_view.is_some() {
-            return "DataView";
+            return prototype_tag("DataView");
         }
         if object.array_buffer.is_some() {
-            return "ArrayBuffer";
+            return prototype_tag("ArrayBuffer");
         }
         if let Some(Value::Str(type_tag)) = object.properties.get("__type") {
             match type_tag.as_ref() {
                 "Date" => return "Date",
                 "RegExp" => return "RegExp",
-                "Map" => return "Map",
-                "Set" => return "Set",
-                "WeakMap" => return "WeakMap",
-                "WeakSet" => return "WeakSet",
-                "WeakRef" => return "WeakRef",
-                "FinalizationRegistry" => return "FinalizationRegistry",
+                "Map" => return prototype_tag("Map"),
+                "Set" => return prototype_tag("Set"),
+                "WeakMap" => return prototype_tag("WeakMap"),
+                "WeakSet" => return prototype_tag("WeakSet"),
+                "WeakRef" => return prototype_tag("WeakRef"),
+                "FinalizationRegistry" => return prototype_tag("FinalizationRegistry"),
                 _ => {}
             }
         }
@@ -59024,6 +59124,13 @@ impl InterpreterCore {
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
             self.validate_executable_property_key(key)?;
+            // bd-9vouw.93: a canonical prototype's virtual own property (a
+            // method, `constructor`, @@iterator) is configurable, so deleting
+            // it, or a stored property shadowing it, leaves it absent:
+            // `delete Array.prototype.fill` returned true and left `fill`.
+            let virtual_property = self
+                .canonical_prototype_virtual_property(object_id, key)
+                .is_some();
             let object = self
                 .heap
                 .get(object_id.0 as usize)
@@ -59040,6 +59147,12 @@ impl InterpreterCore {
             // An absent own property succeeds even on a frozen object or when
             // an inherited property with the same name remains observable.
             if !object.contains_own_runtime_property(key) {
+                if virtual_property {
+                    if object.is_frozen || !self.virtual_property_is_configurable(object_id, key) {
+                        return Ok(false);
+                    }
+                    self.delete_virtual_own_property(object_id, key)?;
+                }
                 return Ok(true);
             }
             // ES2020 9.1.10.1 OrdinaryDelete: a non-configurable own property
@@ -59052,6 +59165,9 @@ impl InterpreterCore {
                 self.reflect_admit_mutation_label(object_id)?;
             }
             let removed = self.remove_object_runtime_property(object_id, key)?;
+            if removed && virtual_property {
+                self.delete_virtual_own_property(object_id, key)?;
+            }
             if removed && let Some(key) = key.string() {
                 self.mark_deleted_for_in_iterators(object_id, key);
             }
@@ -59123,7 +59239,10 @@ impl InterpreterCore {
             })
             .map(|name| Value::str(*name))
             .collect();
-        keys.push(Value::Symbol(WellKnownSymbol::Iterator.id()));
+        let iterator = WellKnownSymbol::Iterator.id();
+        if !self.virtual_own_property_deleted(object_id, &RuntimePropertyKey::Symbol(iterator)) {
+            keys.push(Value::Symbol(iterator));
+        }
         keys
     }
 
@@ -73526,22 +73645,17 @@ impl InterpreterCore {
             })
             .flatten()
             .or_else(|| {
-                let virtual_value = match key {
-                    // bd-9vouw.122: %Array.prototype%[@@iterator] is values.
-                    RuntimePropertyKey::Symbol(symbol)
-                        if *symbol == WellKnownSymbol::Iterator.id()
-                            && self.builtin_prototypes.get("Array") == Some(&object_id) =>
-                    {
-                        Some(Value::BuiltinFunction(BuiltinFunction::array_values()))
+                let virtual_value = self.canonical_prototype_virtual_property(object_id, key)?;
+                let attributes = if self.virtual_property_is_configurable(object_id, key) {
+                    NON_ENUMERABLE_DATA_ATTRIBUTES
+                } else {
+                    PropertyAttributes {
+                        writable: true,
+                        enumerable: false,
+                        configurable: false,
                     }
-                    _ => key.as_str().and_then(|name| {
-                        self.canonical_prototype_own_virtual_value(object_id, name)
-                    }),
-                }?;
-                Some((
-                    BaselineSymbolProperty::Data(virtual_value),
-                    NON_ENUMERABLE_DATA_ATTRIBUTES,
-                ))
+                };
+                Some((BaselineSymbolProperty::Data(virtual_value), attributes))
             });
         let Some((property, attributes)) = source else {
             return Ok(Value::Undefined);
@@ -90001,6 +90115,12 @@ impl InterpreterCore {
                     .map(Self::estimate_label_bytes)
                     .unwrap_or(0),
             )
+            .saturating_add(Self::saturating_sum(
+                object
+                    .deleted_virtual_keys
+                    .iter()
+                    .map(Self::estimate_property_attributes_entry_bytes),
+            ))
     }
 
     fn estimate_execution_seed_snapshot_bytes(&self) -> u64 {
@@ -91313,6 +91433,12 @@ impl InterpreterCore {
                     .map(Self::estimate_label_bytes)
                     .unwrap_or(0),
             )
+            .saturating_add(Self::saturating_sum(
+                object
+                    .deleted_virtual_keys
+                    .iter()
+                    .map(Self::estimate_property_attributes_entry_bytes),
+            ))
     }
 
     /// Footprint of one [[PrivateElements]] entry.
@@ -96957,8 +97083,15 @@ impl InterpreterCore {
                 .iter()
                 .find(|(_, prototype)| **prototype == id)
                 .map(|(name, _)| name.as_str());
+            // A method `delete` removed from this prototype (bd-9vouw.93)
+            // is looked up further along the chain.
             if let Some(name) = name
                 && VIRTUAL_METHOD_PROTOTYPES.contains(&name)
+                && !(self.virtual_property_deletions
+                    && self.virtual_own_property_deleted(
+                        id,
+                        &RuntimePropertyKey::String(JsString::from(key)),
+                    ))
             {
                 return Self::canonical_prototype_method(name, key);
             }
@@ -96985,6 +97118,14 @@ impl InterpreterCore {
             .iter()
             .find(|(_, prototype)| **prototype == object_id)
             .map(|(name, _)| name.as_str())?;
+        if self.virtual_property_deletions
+            && self.virtual_own_property_deleted(
+                object_id,
+                &RuntimePropertyKey::String(JsString::from(key)),
+            )
+        {
+            return None;
+        }
         if key == "constructor" && matches!(name, "Promise" | "Date") {
             return self.materialized_intrinsic_constructor(name);
         }
@@ -97028,14 +97169,130 @@ impl InterpreterCore {
         }
     }
 
+    /// bd-9vouw.93: whether `delete` removed `key`, a virtual own property of
+    /// the canonical prototype `object_id`.
+    fn virtual_own_property_deleted(&self, object_id: ObjectId, key: &RuntimePropertyKey) -> bool {
+        self.virtual_property_deletions
+            && self
+                .heap
+                .get(object_id.0 as usize)
+                .is_some_and(|object| object.deleted_virtual_keys.contains(key))
+    }
+
+    /// [`Self::virtual_own_property_deleted`] on the canonical prototype
+    /// named `name`, when that prototype exists (an unallocated one cannot
+    /// have lost anything).
+    fn canonical_virtual_property_deleted(&self, name: &str, key: &RuntimePropertyKey) -> bool {
+        self.virtual_property_deletions
+            && self
+                .builtin_prototypes
+                .get(name)
+                .is_some_and(|object_id| self.virtual_own_property_deleted(*object_id, key))
+    }
+
+    /// [`Self::canonical_virtual_property_deleted`] for a String key.
+    fn canonical_virtual_name_deleted(&self, name: &str, key: &str) -> bool {
+        self.virtual_property_deletions
+            && self.canonical_virtual_property_deleted(
+                name,
+                &RuntimePropertyKey::String(JsString::from(key)),
+            )
+    }
+
+    /// The virtual own property `key` of the canonical prototype `object_id`
+    /// unless `delete` removed it: a String-keyed method, `constructor` or
+    /// `length` ([`Self::canonical_prototype_own_virtual_value`]), or one of
+    /// the Symbol-keyed methods the prototype supplies (@@iterator of Array,
+    /// %TypedArray%, Map, Set, String and URLSearchParams; RegExp's
+    /// @@match/@@replace/@@search/@@split/@@matchAll). Its attributes are
+    /// { writable: true, enumerable: false, configurable: true }, except
+    /// %Array.prototype%.length (non-configurable).
+    fn canonical_prototype_virtual_property(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<Value> {
+        let symbol = match key {
+            RuntimePropertyKey::String(name) => {
+                return self.canonical_prototype_own_virtual_value(object_id, name.as_str()?);
+            }
+            RuntimePropertyKey::Symbol(symbol) => *symbol,
+        };
+        let name = self
+            .builtin_prototypes
+            .iter()
+            .find(|(_, prototype)| **prototype == object_id)
+            .map(|(name, _)| name.as_str())?;
+        if self.virtual_own_property_deleted(object_id, key) {
+            return None;
+        }
+        if symbol == WellKnownSymbol::Iterator.id() {
+            let builtin = match name {
+                "Array" => BuiltinFunction::array_values(),
+                "TypedArray" => BuiltinFunction::typed_array_values(),
+                "Map" => BuiltinFunction::new_kind(BuiltinFunctionKind::MapEntries),
+                "Set" => BuiltinFunction::new_kind(BuiltinFunctionKind::SetValues),
+                "String" => BuiltinFunction::new_kind(BuiltinFunctionKind::StringIterator),
+                "URLSearchParams" => {
+                    BuiltinFunction::new_kind(BuiltinFunctionKind::UrlSearchParamsEntries)
+                }
+                _ => return None,
+            };
+            return Some(Value::BuiltinFunction(builtin));
+        }
+        (name == "RegExp")
+            .then(|| regexp_symbol_method_key(symbol))
+            .flatten()
+            .map(|method| Value::BuiltinFunction(BuiltinFunction::regexp_symbol_method(method)))
+    }
+
+    /// Whether the virtual own property `key` of the canonical prototype
+    /// `object_id` is configurable: all are but %Array.prototype%.length
+    /// (ES2020 22.1.3, an Array's `length`).
+    fn virtual_property_is_configurable(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> bool {
+        !(key.as_str() == Some("length")
+            && self.builtin_prototypes.get("Array") == Some(&object_id))
+    }
+
+    /// `delete` of the virtual own property `key` of a canonical prototype
+    /// (bd-9vouw.93): recorded so the virtual lookups skip it.
+    fn delete_virtual_own_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        let index = object_id.0 as usize;
+        if self
+            .heap
+            .get(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .deleted_virtual_keys
+            .contains(key)
+        {
+            return Ok(());
+        }
+        self.apply_memory_component_delta(0, Self::estimate_property_attributes_entry_bytes(key))?;
+        self.mutate_heap(|heap| heap[index].deleted_virtual_keys.insert(key.clone()));
+        self.virtual_property_deletions = true;
+        Ok(())
+    }
+
     /// bd-9vouw.17: virtual, non-enumerable `constructor` of the canonical
     /// builtin prototypes (and of arrays, which carry no prototype object).
     fn standard_constructor_for_chain(&self, object_id: ObjectId) -> Option<Value> {
         let constructor = |name: &'static str| {
             Value::BuiltinFunction(BuiltinFunction::standard_constructor(name))
         };
-        if self.heap.get(object_id.0 as usize)?.is_array
-            || self.chain_inherits_array_prototype(object_id)
+        // A `constructor` deleted from a canonical prototype (bd-9vouw.93)
+        // is skipped: the walk goes on to the next prototype.
+        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
+        if (self.heap.get(object_id.0 as usize)?.is_array
+            || self.chain_inherits_array_prototype(object_id))
+            && !self.canonical_virtual_property_deleted("Array", &constructor_key)
         {
             return Some(constructor("Array"));
         }
@@ -97049,7 +97306,8 @@ impl InterpreterCore {
                 .builtin_prototypes
                 .iter()
                 .find(|(_, prototype)| **prototype == id)
-                .map(|(name, _)| name.as_str());
+                .map(|(name, _)| name.as_str())
+                .filter(|_| !self.virtual_own_property_deleted(id, &constructor_key));
             // %Promise.prototype%.constructor is %Promise% and
             // %Date.prototype%.constructor is %Date%, materialized
             // constructors rather than standard constructor builtins.
@@ -97078,8 +97336,9 @@ impl InterpreterCore {
         }
         // Every other ordinary chain ends at %Object.prototype%, whose
         // `constructor` is `Object` (bd-9vouw.34).
-        self.chain_reaches_object_prototype(object_id)
-            .then(|| constructor("Object"))
+        (self.chain_reaches_object_prototype(object_id)
+            && !self.canonical_virtual_property_deleted("Object", &constructor_key))
+        .then(|| constructor("Object"))
     }
 
     /// Write `set_val` to `property_key` on an ordinary-property backing

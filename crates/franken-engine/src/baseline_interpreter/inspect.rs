@@ -947,7 +947,7 @@ impl InterpreterCore {
     /// Guest data can carry a `__type` field too (a common JSON
     /// discriminator), so only the engine's own tags count, and Map, Set and
     /// Date must also have their storage slot.
-    fn inspect_internal_type(&self, id: ObjectId) -> Option<String> {
+    pub(super) fn inspect_internal_type(&self, id: ObjectId) -> Option<String> {
         let object = self.heap.get(id.0 as usize)?;
         let Some(Value::Str(kind)) = object.properties.get("__type") else {
             return None;

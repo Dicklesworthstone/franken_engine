@@ -27019,7 +27019,7 @@ fn global_function_call_capability(
 pub(crate) const STATIC_VALUE_CAPABILITY_PREFIX: &str = "builtin:static-value:";
 
 /// Bare global functions that read as first-class values.
-pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 12] = [
+pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 13] = [
     "parseInt",
     "parseFloat",
     "isNaN",
@@ -27032,6 +27032,7 @@ pub(crate) const GLOBAL_FUNCTION_VALUE_NAMES: [&str; 12] = [
     "decodeURIComponent",
     "encodeURI",
     "decodeURI",
+    "structuredClone",
 ];
 
 fn static_member_value_capability(
@@ -27110,6 +27111,8 @@ pub(crate) fn global_function_capability(name: &str) -> Option<&'static str> {
         "decodeURIComponent" => Some("builtin:DecodeURIComponent"),
         "encodeURI" => Some("builtin:EncodeURI"),
         "decodeURI" => Some("builtin:DecodeURI"),
+        // bd-9vouw.96: HTML structuredClone (a Node global).
+        "structuredClone" => Some("builtin:StructuredClone"),
         _ => None,
     }
 }

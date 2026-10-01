@@ -1,0 +1,601 @@
+//! HTML `structuredClone(value)` (bd-9vouw.96).
+//!
+//! StructuredSerialize and StructuredDeserialize done as one walk: a memory
+//! map from source objects to their clones keeps shared references shared
+//! and cycles closed. Supported, as in Node:
+//! - primitives, including -0, NaN and BigInt;
+//! - plain objects and arrays: own enumerable string-keyed properties, read
+//!   with [[Get]] (getters run), become data properties; the prototype is
+//!   not kept, so a class instance clones to a plain object, and holes stay
+//!   holes;
+//! - Boolean/Number/String/BigInt wrapper objects;
+//! - Date, RegExp (`lastIndex` restarts at 0), Map, Set;
+//! - ArrayBuffer (bytes copied), typed arrays and DataView over a cloned
+//!   buffer (a Node Buffer clones to a plain Uint8Array);
+//! - Error objects: the standard constructor named by `name` (else Error),
+//!   an own `message`, `stack` and `cause`.
+//!
+//! Functions, symbols, Promises, WeakMap/WeakSet, generators, iterators,
+//! proxies and other engine objects throw a DataCloneError (`code` 25, with
+//! Node's message). The engine has no DOMException, so that is an Error named
+//! DataCloneError, like btoa's InvalidCharacterError. The `transfer` option
+//! is ignored.
+//!
+//! The walk keeps its own task stack instead of recursing natively, so
+//! nesting depth is bounded by the instruction and memory budgets, not by the
+//! Rust stack. Each object's properties are read in the HTML algorithm's
+//! depth-first order: a property's value is cloned completely before the next
+//! property is read, so getters run in Node's order.
+
+use super::*;
+
+/// Node's DOMException code for DataCloneError.
+const DATA_CLONE_ERR_CODE: i64 = 25;
+
+/// Error constructors a cloned error keeps (HTML serializable errors).
+const SERIALIZABLE_ERROR_NAMES: [&str; 7] = [
+    "Error",
+    "EvalError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+];
+
+struct CloneState {
+    /// Source object -> its clone, so identity and cycles survive.
+    memory: BTreeMap<ObjectId, ObjectId>,
+    /// Join of every object and property label read, carried to the result.
+    label: Label,
+    /// Bytes of key snapshots charged to the memory budget, released at the
+    /// end of the walk.
+    charged: u64,
+}
+
+/// One step of the walk. `Clone` pushes exactly one value onto the results
+/// stack; the steps after it pop what they need.
+enum CloneTask {
+    Clone(Value),
+    /// Copy own enumerable string-keyed properties of `source`, from `next`.
+    Properties {
+        source: ObjectId,
+        target: ObjectId,
+        keys: Vec<Value>,
+        next: usize,
+        is_array: bool,
+    },
+    /// Pop a cloned value and define it on `target`.
+    Define {
+        target: ObjectId,
+        key: RuntimePropertyKey,
+        label: Label,
+    },
+    MapEntries {
+        target: ObjectId,
+        entries: Vec<(Value, Value)>,
+        next: usize,
+    },
+    /// Pop a cloned value, then its cloned key, into the Map.
+    MapSet {
+        target: ObjectId,
+    },
+    SetValues {
+        target: ObjectId,
+        values: Vec<Value>,
+        next: usize,
+    },
+    SetAdd {
+        target: ObjectId,
+    },
+    /// Pop the cloned buffer and make the clone of view `source` over it.
+    View {
+        source: ObjectId,
+    },
+    /// Pop a cloned `cause` and define it on the error clone.
+    Cause {
+        target: ObjectId,
+    },
+}
+
+impl InterpreterCore {
+    pub(super) fn structured_clone_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if args.count == 0 {
+            return Err(self.throw_buffer_node_error(
+                "TypeError",
+                "ERR_MISSING_ARGS",
+                "The value argument must be specified".to_string(),
+            ));
+        }
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let mut state = CloneState {
+            memory: BTreeMap::new(),
+            label: Label::Public,
+            charged: 0,
+        };
+        let outcome = self.structured_clone_walk(module, value, &mut state);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(state.charged);
+        let clone = outcome?;
+        // The clone holds everything reachable from the argument: its label
+        // is the join of what the walk read, on top of the argument's own.
+        let label = state.label.join(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        );
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(clone)
+    }
+
+    fn structured_clone_walk(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        state: &mut CloneState,
+    ) -> Result<Value, InterpreterError> {
+        let mut tasks = vec![CloneTask::Clone(value)];
+        let mut results: Vec<Value> = Vec::new();
+        while let Some(task) = tasks.pop() {
+            match task {
+                CloneTask::Clone(value) => {
+                    let clone = self.structured_clone_step(module, value, state, &mut tasks)?;
+                    if let Some(clone) = clone {
+                        results.push(clone);
+                    }
+                }
+                CloneTask::Properties {
+                    source,
+                    target,
+                    keys,
+                    next,
+                    is_array,
+                } => {
+                    let Some(key_value) = keys.get(next).cloned() else {
+                        if is_array
+                            && let Some(length) = self
+                                .heap
+                                .get(source.0 as usize)
+                                .and_then(|object| object.properties.get("length").cloned())
+                        {
+                            // Trailing holes: only the present indices were
+                            // written.
+                            self.set_object_property(target, "length".to_string(), length)?;
+                        }
+                        continue;
+                    };
+                    tasks.push(CloneTask::Properties {
+                        source,
+                        target,
+                        keys,
+                        next: next + 1,
+                        is_array,
+                    });
+                    self.charge_property_copy_work()?;
+                    let key = self.executable_property_key_from_value(&key_value);
+                    if matches!(key, RuntimePropertyKey::Symbol(_))
+                        || !self.copy_own_key_is_enumerable(module, source, &key, 0)?
+                    {
+                        continue;
+                    }
+                    let label = self.runtime_property_label(source, &key);
+                    let value = self.proxy_aware_get_runtime_property(
+                        module,
+                        source,
+                        &key,
+                        Value::Object(source),
+                        0,
+                    )?;
+                    state.label = state.label.join(&label);
+                    tasks.push(CloneTask::Define { target, key, label });
+                    tasks.push(CloneTask::Clone(value));
+                }
+                CloneTask::Define { target, key, label } => {
+                    let value = Self::structured_clone_pop(&mut results)?;
+                    self.copy_data_property_write(module, target, key, value, false, label)?;
+                }
+                CloneTask::MapEntries {
+                    target,
+                    entries,
+                    next,
+                } => {
+                    let Some((key, value)) = entries.get(next).cloned() else {
+                        continue;
+                    };
+                    tasks.push(CloneTask::MapEntries {
+                        target,
+                        entries,
+                        next: next + 1,
+                    });
+                    tasks.push(CloneTask::MapSet { target });
+                    tasks.push(CloneTask::Clone(value));
+                    tasks.push(CloneTask::Clone(key));
+                }
+                CloneTask::MapSet { target } => {
+                    let value = Self::structured_clone_pop(&mut results)?;
+                    let key = Self::structured_clone_pop(&mut results)?;
+                    self.map_collection_set(target, key, value)?;
+                }
+                CloneTask::SetValues {
+                    target,
+                    values,
+                    next,
+                } => {
+                    let Some(value) = values.get(next).cloned() else {
+                        continue;
+                    };
+                    tasks.push(CloneTask::SetValues {
+                        target,
+                        values,
+                        next: next + 1,
+                    });
+                    tasks.push(CloneTask::SetAdd { target });
+                    tasks.push(CloneTask::Clone(value));
+                }
+                CloneTask::SetAdd { target } => {
+                    let value = Self::structured_clone_pop(&mut results)?;
+                    self.set_collection_add(target, value)?;
+                }
+                CloneTask::View { source } => {
+                    let Value::Object(buffer) = Self::structured_clone_pop(&mut results)? else {
+                        return Err(InterpreterError::InternalError {
+                            details: "cloned view buffer is not an object".to_string(),
+                        });
+                    };
+                    let object = self
+                        .heap
+                        .get(source.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: source.0 })?;
+                    let clone = match (object.typed_array.clone(), object.data_view.clone()) {
+                        (Some(view), _) => self.alloc_typed_array_view_object(
+                            view.kind,
+                            buffer,
+                            view.byte_offset,
+                            view.byte_length,
+                            view.length,
+                        )?,
+                        (None, Some(view)) => {
+                            self.alloc_data_view_object(buffer, view.byte_offset, view.byte_length)?
+                        }
+                        (None, None) => {
+                            return Err(InterpreterError::InternalError {
+                                details: "cloned view source is not a view".to_string(),
+                            });
+                        }
+                    };
+                    state.memory.insert(source, clone);
+                    results.push(Value::Object(clone));
+                }
+                CloneTask::Cause { target } => {
+                    let cause = Self::structured_clone_pop(&mut results)?;
+                    self.set_object_property(target, "cause".to_string(), cause)?;
+                    self.set_own_property_attributes(
+                        target,
+                        &RuntimePropertyKey::String(JsString::from("cause")),
+                        NON_ENUMERABLE_DATA_ATTRIBUTES,
+                    )?;
+                }
+            }
+        }
+        match (results.pop(), results.is_empty()) {
+            (Some(clone), true) => Ok(clone),
+            _ => Err(InterpreterError::InternalError {
+                details: "structuredClone walk left an unbalanced result stack".to_string(),
+            }),
+        }
+    }
+
+    fn structured_clone_pop(results: &mut Vec<Value>) -> Result<Value, InterpreterError> {
+        results
+            .pop()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "structuredClone walk popped an empty result stack".to_string(),
+            })
+    }
+
+    /// Clone one value: a primitive or a remembered object directly, a leaf
+    /// object (Date, RegExp, wrapper, ArrayBuffer) at once, a container as an
+    /// empty shell whose contents `tasks` fills next. Returns `None` only for
+    /// a view, whose `View` task pushes the clone once its buffer is cloned.
+    fn structured_clone_step(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        state: &mut CloneState,
+        tasks: &mut Vec<CloneTask>,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let id = match &value {
+            Value::Undefined
+            | Value::Null
+            | Value::Bool(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Str(_)
+            | Value::BigInt(_) => return Ok(Some(value)),
+            // Only a property's stored accessor pair has this shape; reads
+            // through [[Get]] never return it.
+            Value::Accessor { .. } => return Ok(Some(Value::Undefined)),
+            Value::Object(id) => *id,
+            Value::Symbol(symbol) => {
+                let text = self.symbol_display_string(*symbol);
+                return Err(self.throw_data_clone_error(&text, &state.label));
+            }
+            Value::Promise(_) | Value::AsyncFunctionObject(_) => {
+                return Err(self.throw_data_clone_error("#<Promise>", &state.label));
+            }
+            Value::Generator(_) => {
+                return Err(self.throw_data_clone_error("[object Generator]", &state.label));
+            }
+            Value::AsyncGeneratorObject(_) => {
+                return Err(self.throw_data_clone_error("[object AsyncGenerator]", &state.label));
+            }
+            Value::Iterator(_) => {
+                return Err(self.throw_data_clone_error("[object Array Iterator]", &state.label));
+            }
+            Value::Function(_)
+            | Value::Closure(_)
+            | Value::GeneratorFunction(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::BuiltinFunction(_) => {
+                let text = self.function_native_source_text(module, &value);
+                return Err(self.throw_data_clone_error(&text, &state.label));
+            }
+        };
+        if let Some(clone) = state.memory.get(&id) {
+            return Ok(Some(Value::Object(*clone)));
+        }
+        self.charge_property_copy_work()?;
+        if self.proxy_record(id)?.is_some() {
+            return Err(self.throw_data_clone_error("#<Object>", &state.label));
+        }
+        state.label = state.label.join(&self.structured_clone_object_label(id));
+        let object = self
+            .heap
+            .get(id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+        let is_array = object.is_array;
+        let view_buffer = object
+            .typed_array
+            .as_ref()
+            .map(|view| view.buffer)
+            .or_else(|| object.data_view.as_ref().map(|view| view.buffer));
+        let array_buffer = object.array_buffer.is_some();
+        let primitive = object.primitive_value.clone();
+
+        if let Some(primitive) = primitive {
+            if matches!(primitive, Value::Symbol(_)) {
+                return Err(self.throw_data_clone_error("[object Symbol]", &state.label));
+            }
+            let clone = self.alloc_primitive_wrapper(primitive)?;
+            state.memory.insert(id, clone);
+            return Ok(Some(Value::Object(clone)));
+        }
+        if let Some(buffer) = view_buffer {
+            tasks.push(CloneTask::View { source: id });
+            tasks.push(CloneTask::Clone(Value::Object(buffer)));
+            return Ok(None);
+        }
+        if array_buffer {
+            let bytes = self.with_array_buffer_bytes(id, <[u8]>::to_vec)?;
+            let label = self.binary_storage_label(id);
+            let clone = self.alloc_array_buffer_object(bytes.len())?;
+            self.with_array_buffer_bytes_mut(clone, |target| target.copy_from_slice(&bytes))?;
+            self.join_binary_storage_label(clone, &label)?;
+            state.memory.insert(id, clone);
+            return Ok(Some(Value::Object(clone)));
+        }
+        match self.inspect_internal_type(id).as_deref() {
+            Some("Date") => {
+                let time = self
+                    .heap
+                    .get(id.0 as usize)
+                    .and_then(|object| object.properties.get("__timestamp").cloned())
+                    .unwrap_or(Value::Float(Float64::new(f64::NAN)));
+                let prototype = self.ensure_builtin_prototype("Date")?;
+                let clone = self.alloc_object_with_prototype(Some(prototype))?;
+                self.set_object_property(clone, "__type".to_string(), Value::str("Date"))?;
+                self.set_object_property(clone, "__timestamp".to_string(), time)?;
+                self.hide_internal_slots(clone, &["__type", "__timestamp"])?;
+                state.memory.insert(id, clone);
+                return Ok(Some(Value::Object(clone)));
+            }
+            Some("RegExp") => {
+                let text = |core: &Self, key: &str| match core
+                    .heap
+                    .get(id.0 as usize)
+                    .and_then(|object| object.properties.get(key))
+                {
+                    Some(Value::Str(text)) => text.to_string(),
+                    _ => String::new(),
+                };
+                let (source, flags) = (text(self, "source"), text(self, "flags"));
+                let clone = self.alloc_regexp_object(source, flags)?;
+                state.memory.insert(id, clone);
+                return Ok(Some(Value::Object(clone)));
+            }
+            Some("Map") => {
+                let (clone, _) = self.alloc_empty_map()?;
+                state.memory.insert(id, clone);
+                let entries =
+                    self.structured_clone_collection_entries(id, "Map", "__entries", state);
+                tasks.push(CloneTask::MapEntries {
+                    target: clone,
+                    entries,
+                    next: 0,
+                });
+                return Ok(Some(Value::Object(clone)));
+            }
+            Some("Set") => {
+                let clone = self.alloc_empty_set()?;
+                state.memory.insert(id, clone);
+                let values = self
+                    .structured_clone_collection_entries(id, "Set", "__values", state)
+                    .into_iter()
+                    .map(|(_, value)| value)
+                    .collect();
+                tasks.push(CloneTask::SetValues {
+                    target: clone,
+                    values,
+                    next: 0,
+                });
+                return Ok(Some(Value::Object(clone)));
+            }
+            Some(other) => {
+                let name = if other == PROXY_TYPE_TAG {
+                    "Object"
+                } else {
+                    other
+                };
+                return Err(self.throw_data_clone_error(&format!("#<{name}>"), &state.label));
+            }
+            None => {}
+        }
+        if self.inspect_is_error(id) {
+            return self.structured_clone_error(id, state, tasks).map(Some);
+        }
+
+        let clone = if is_array {
+            self.alloc_array_with_prototype(None)?
+        } else {
+            self.alloc_object_with_prototype(None)?
+        };
+        state.memory.insert(id, clone);
+        let keys = self.proxy_aware_own_property_keys(module, id, 0)?;
+        let key_bytes = Self::estimate_value_vec_bytes(&keys);
+        self.apply_memory_component_delta(0, key_bytes)?;
+        state.charged = state.charged.saturating_add(key_bytes);
+        tasks.push(CloneTask::Properties {
+            source: id,
+            target: clone,
+            keys,
+            next: 0,
+            is_array,
+        });
+        Ok(Some(Value::Object(clone)))
+    }
+
+    /// What an object's own storage carries: its mutation label and, for
+    /// binary data, its bytes' label.
+    fn structured_clone_object_label(&self, id: ObjectId) -> Label {
+        self.object_mutation_labels
+            .get(&id)
+            .cloned()
+            .unwrap_or(Label::Public)
+            .join(&self.binary_storage_label(id))
+    }
+
+    /// A Map's or Set's entries in insertion order, keys decoded from their
+    /// storage representation. The storage object's label joins the walk's.
+    fn structured_clone_collection_entries(
+        &self,
+        id: ObjectId,
+        type_tag: &str,
+        storage_prop: &str,
+        state: &mut CloneState,
+    ) -> Vec<(Value, Value)> {
+        let Some(storage_id) = self.collection_storage_id(id, type_tag, storage_prop) else {
+            return Vec::new();
+        };
+        state.label = state
+            .label
+            .join(&self.structured_clone_object_label(storage_id));
+        self.heap
+            .get(storage_id.0 as usize)
+            .map(|storage| {
+                storage
+                    .properties
+                    .iter()
+                    .map(|(repr, value)| (Self::collection_key_from_repr(repr), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// V8's error serialization: the prototype of the standard constructor
+    /// that `name` names (else Error), then an own `message`, `stack` and
+    /// `cause`. Other own properties are not kept.
+    fn structured_clone_error(
+        &mut self,
+        id: ObjectId,
+        state: &mut CloneState,
+        tasks: &mut Vec<CloneTask>,
+    ) -> Result<Value, InterpreterError> {
+        let name = match self.chain_data_property(id, "name") {
+            Some(Value::Str(name)) => SERIALIZABLE_ERROR_NAMES
+                .into_iter()
+                .find(|candidate| name.as_ref() == *candidate)
+                .unwrap_or("Error"),
+            _ => "Error",
+        };
+        let own = |core: &Self, key: &str| {
+            core.heap
+                .get(id.0 as usize)
+                .and_then(|object| object.properties.get(key).cloned())
+                .filter(|value| !matches!(value, Value::Accessor { .. }))
+        };
+        let message = own(self, "message").map(|message| self.value_to_string(&message));
+        let stack = own(self, "stack");
+        let cause = own(self, "cause");
+        let prototype = self.ensure_builtin_prototype(name)?;
+        let clone = self.alloc_object_with_prototype(Some(prototype))?;
+        state.memory.insert(id, clone);
+        self.initialize_error_object(clone, message)?;
+        if let Some(stack @ Value::Str(_)) = stack {
+            self.set_object_property(clone, "stack".to_string(), stack)?;
+        }
+        if let Some(cause) = cause {
+            tasks.push(CloneTask::Cause { target: clone });
+            tasks.push(CloneTask::Clone(cause));
+        }
+        Ok(Value::Object(clone))
+    }
+
+    /// A new empty Set: the object and its value storage, as `new Set()`
+    /// makes them.
+    fn alloc_empty_set(&mut self) -> Result<ObjectId, InterpreterError> {
+        let prototype = self.ensure_builtin_prototype("Set")?;
+        let set_id = self.alloc_object_with_prototype(Some(prototype))?;
+        let values_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(set_id, "__type".to_string(), Value::str("Set"))?;
+        self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
+        self.set_object_property(set_id, "size".to_string(), Value::Int(0))?;
+        self.hide_internal_slots(set_id, &["__type", "__values", "size"])?;
+        Ok(set_id)
+    }
+
+    /// Node throws a DOMException named DataCloneError (legacy code 25). The
+    /// engine has no DOMException, so the thrown value is an Error with that
+    /// `name`, Node's message and `code` 25. The message can quote the
+    /// value (a function's source, a symbol's description), so the exception
+    /// carries the walk's label.
+    fn throw_data_clone_error(&mut self, what: &str, label: &Label) -> InterpreterError {
+        let thrown = (|| -> Result<Value, InterpreterError> {
+            let prototype = self.ensure_builtin_prototype("Error")?;
+            let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+            self.initialize_error_like_object(
+                error_id,
+                "DataCloneError",
+                format!("{what} could not be cloned."),
+            )?;
+            self.set_object_property(
+                error_id,
+                "code".to_string(),
+                Value::Int(DATA_CLONE_ERR_CODE),
+            )?;
+            Ok(Value::Object(error_id))
+        })();
+        let thrown = match thrown {
+            Ok(value) => value,
+            Err(err) => return err,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = label.clone();
+        InterpreterError::UncaughtException {
+            value: self.uncaught_exception_description(&thrown),
+        }
+    }
+}

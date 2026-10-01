@@ -4556,6 +4556,15 @@ fn lower_statement_to_ir1_with_flow(
                     binding_kind,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+                // `var x;` evaluates to nothing (ES2020 13.3.2.4): the hoisted
+                // binding already holds undefined, and a redeclaration keeps
+                // the value (`n = 4; var n;`, a parameter redeclared with
+                // `var`). Storing undefined reset it, so d3-array's quantile
+                // (`if (!(n = values.length)) ...; var n, i = (n - 1) * p`)
+                // computed NaN. `let x;` still initializes.
+                if vd.kind == VariableDeclarationKind::Var && d.initializer.is_none() {
+                    continue;
+                }
 
                 // bd-1xl17.c: a confirmed *destructured* fs/promises require —
                 // `const { readFile } = require('fs/promises')` or
@@ -41617,8 +41626,12 @@ mod tests {
         assert!(has_await);
     }
 
+    /// `var counter;` declares (hoists) the binding but stores nothing: the
+    /// hoisted binding already holds undefined and a redeclaration keeps the
+    /// value (ES2020 13.3.2.4). This test asserted the old lowering, which
+    /// stored undefined and so reset `n = 4; var n;`.
     #[test]
-    fn lower_var_declaration_without_initializer_loads_undefined() {
+    fn lower_var_declaration_without_initializer_keeps_the_binding() {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::VariableDeclaration(VariableDeclaration {
@@ -41641,17 +41654,10 @@ mod tests {
             .find(|binding| binding.name == "counter")
             .expect("counter binding must exist");
         assert_eq!(counter_binding.kind, BindingKind::Var);
-        assert!(matches!(
-            result.module.ops.as_slice(),
-            [
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::Undefined
-                },
-                Ir1Op::StoreBinding { binding_id },
-                Ir1Op::Discard,
-                Ir1Op::Return
-            ] if *binding_id == counter_binding.binding_id
-        ));
+        assert!(!result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::StoreBinding { binding_id } if *binding_id == counter_binding.binding_id
+        )));
     }
 
     #[test]

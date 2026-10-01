@@ -89,6 +89,26 @@ fn arrow_function_body_declarations_are_hoisted() {
     );
 }
 
+/// `var x;` without an initializer is a no-op (ES2020 13.3.2.4): the hoisted
+/// binding keeps whatever it holds, including a parameter of the same name.
+/// It stored undefined, so d3-array's quantile computed NaN. A `let` without
+/// an initializer still starts undefined in each loop iteration.
+#[test]
+fn var_redeclaration_without_initializer_keeps_the_value() {
+    check(
+        "function f1() { n = 5; var n; return n; } \
+         function f2() { if (!(n = 4)) return; var n, i = n - 1; return [n, i].join(); } \
+         var g = 7; var g; \
+         function f3(a) { var a; return a; } \
+         function f4() { for (var k = 0; k < 2; k++) {} var k; return k; } \
+         const f5 = () => { m = 2; var m; return m; }; \
+         function f6() { const out = []; for (let i = 0; i < 2; i++) { var v; if (i === 0) v = 1; out.push(v); } return out.join(); } \
+         function f7() { const out = []; for (let i = 0; i < 2; i++) { let w; if (i === 0) w = 1; out.push(w); } return out.join(); } \
+         [f1(), f2(), g, f3(3), f4(), f5(), f6(), f7(), typeof undeclaredLater].join(' | '); var undeclaredLater;",
+        "5 | 4,3 | 7 | 3 | 2 | 2 | 1,1 | 1, | undefined",
+    );
+}
+
 #[test]
 fn hoisting_keeps_the_script_completion_value() {
     check("1; function f() {}", "1");

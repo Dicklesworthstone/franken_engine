@@ -31191,7 +31191,7 @@ fn infer_sink_clearance(
     }
 }
 
-fn sink_clearance_from_capability(capability: &str) -> Label {
+pub(crate) fn sink_clearance_from_capability(capability: &str) -> Label {
     // Canonicalizing a property name is internal computation, not disclosure
     // to a sink whose name happens to contain "key". Guest conversion hooks
     // keep their own hostcall gates; operand, callback and exception labels

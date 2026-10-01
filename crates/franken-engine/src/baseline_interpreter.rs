@@ -12278,6 +12278,10 @@ struct HttpClientRequestState {
     ended: bool,
     response_callback: Option<u32>,
     lifecycle_label: Label,
+    /// bd-9vouw.8: the label of what goes on the wire (URL, options,
+    /// headers, body chunks), without the request object's own floor. The
+    /// external egress checks this one.
+    egress_label: Label,
 }
 
 #[derive(Debug, Clone)]
@@ -16190,6 +16194,23 @@ impl InterpreterCore {
     /// is installed, preserving the fail-closed baseline. The capability gate has
     /// already authorized the call before this point; the provider re-checks the
     /// single required capability and performs the real I/O.
+    /// bd-9vouw.8: a host I/O HostCall's operands, and everything reachable
+    /// from them, must fit the clearance the static flow check gives its sink
+    /// (Public for `net:*`, Internal for `fs:*`). Checked before dispatch on
+    /// every path guest code reaches it by, so a flow the static inference
+    /// missed stops before any effect.
+    fn check_host_io_confidentiality(
+        &mut self,
+        capability: &str,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        self.check_sink_confidentiality(
+            args,
+            capability,
+            &crate::lowering_pipeline::sink_clearance_from_capability(capability),
+        )
+    }
+
     fn dispatch_host_io_hostcall(
         &mut self,
         capability: &str,
@@ -17131,6 +17152,7 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_http_headers_bytes(&state.headers))
             .saturating_add(state.body.len() as u64)
             .saturating_add(Self::estimate_label_bytes(&state.lifecycle_label))
+            .saturating_add(Self::estimate_label_bytes(&state.egress_label))
     }
 
     fn estimate_http_incoming_message_state_bytes(state: &HttpIncomingMessageState) -> u64 {
@@ -20354,6 +20376,7 @@ impl InterpreterCore {
             body: Vec::new(),
             ended: false,
             response_callback: resolved.response_callback,
+            egress_label: lifecycle_label.clone(),
             lifecycle_label,
         };
         let retained = Self::estimate_http_client_request_state_bytes(&state);
@@ -20565,6 +20588,49 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// The label of a client-request method's arguments (and the bytes of a
+    /// Buffer or typed-array argument), without the receiver.
+    fn join_http_client_request_egress_from_args(
+        &mut self,
+        request: ObjectId,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let mut label = self.writable_invocation_label(args)?;
+        for offset in 0..args.count {
+            if let Some(Value::Object(object_id)) = self.builtin_arg(args, offset)? {
+                label = label.join(&self.binary_storage_label(object_id));
+            }
+        }
+        self.join_http_client_request_egress_label(request, &label)
+    }
+
+    /// bd-9vouw.8: join what a write, setHeader or end puts on the wire into
+    /// the request's egress label.
+    fn join_http_client_request_egress_label(
+        &mut self,
+        request: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let state = self
+            .http_client_requests
+            .get(&request)
+            .ok_or(InterpreterError::ObjectNotFound { id: request.0 })?;
+        let previous_label = state.egress_label.clone();
+        let next_label = previous_label.join(label);
+        if next_label == previous_label {
+            return Ok(());
+        }
+        self.apply_memory_component_delta(
+            Self::estimate_label_bytes(&previous_label),
+            Self::estimate_label_bytes(&next_label),
+        )?;
+        self.http_client_requests
+            .get_mut(&request)
+            .expect("HTTP request existed before egress-label commit")
+            .egress_label = next_label;
+        Ok(())
+    }
+
     fn join_http_client_request_lifecycle_label(
         &mut self,
         request: ObjectId,
@@ -20692,6 +20758,9 @@ impl InterpreterCore {
         } else {
             self.http_server_response_receiver(receiver)?
         };
+        if client_request {
+            self.join_http_client_request_egress_from_args(object_id, args)?;
+        }
         let name_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let name_len =
@@ -20919,7 +20988,7 @@ impl InterpreterCore {
                     self.schedule_http_task(PendingHttpTask::ClientError {
                         request,
                         code: "ECONNREFUSED".to_string(),
-                        label: lifecycle_label,
+                        label: lifecycle_label.clone(),
                     })?;
                     self.mark_http_client_request_ended(request)?;
                 }
@@ -20936,6 +21005,20 @@ impl InterpreterCore {
         // provider effect and its single deferred delivery task are never
         // replayed through this request object.
         check_hostcall_capability_gate(self, "net:request", self.ip as u32)?;
+        // bd-9vouw.8: the request leaves the engine here, so its label (URL,
+        // headers, options and every body chunk) must be Public, as for a
+        // `net:request` HostCall. `builtin:HttpGet` and `builtin:HttpRequest`
+        // keep the Internal static clearance of the loopback facade, so
+        // without this check file or response data reached the network.
+        let egress_label = self
+            .http_client_requests
+            .get(&request)
+            .map_or(Label::TopSecret, |state| state.egress_label.clone());
+        if !egress_label.can_flow_to(&Label::Public) {
+            return Err(InterpreterError::CapabilityDenied {
+                capability: "net:request:confidentiality".to_string(),
+            });
+        }
         let (work_bytes, header_count) = {
             let state = self
                 .http_client_requests
@@ -21239,6 +21322,7 @@ impl InterpreterCore {
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         let request = self.http_client_request_receiver(receiver)?;
+        self.join_http_client_request_egress_from_args(request, args)?;
         let label = self.writable_invocation_label_with_receiver(args, receiver_register)?;
         if let Some(value) = self.builtin_arg(args, 0)? {
             self.http_append_client_body(request, &value, label)?;
@@ -21255,6 +21339,7 @@ impl InterpreterCore {
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
         let request = self.http_client_request_receiver(receiver)?;
+        self.join_http_client_request_egress_from_args(request, args)?;
         let label = self.writable_invocation_label_with_receiver(args, receiver_register)?;
         let first = self.builtin_arg(args, 0)?;
         let second = self.builtin_arg(args, 1)?;
@@ -46482,6 +46567,7 @@ impl InterpreterCore {
                         // via the sandboxed provider's network mechanism. The gate
                         // above (`check_hostcall_capability_gate`) has already
                         // authorized it against the granted NetworkEgress capability.
+                        self.check_host_io_confidentiality(&capability.0, args)?;
                         self.dispatch_host_io_hostcall(&capability.0, args)?
                     }
                     HostcallDispatchBinding::Internal
@@ -65863,14 +65949,28 @@ impl InterpreterCore {
             expected: "array callback index within i64".to_string(),
             got: element_index.to_string(),
         })?;
+        // bd-9vouw.110: the element's stored label (and the array's own) is
+        // the callback's context label, so a sink inside the callback sees it.
+        // Passed bare, `[secret].forEach(s => { const w = console.warn; w(s) })`
+        // printed the secret: the aliased sink escapes the static check, and
+        // the argument register arrived Public.
+        let element_key = RuntimePropertyKey::String(JsString::from(element_index.to_string()));
+        let element_label = self.runtime_property_label(array_id, &element_key).join(
+            self.object_mutation_labels
+                .get(&array_id)
+                .unwrap_or(&Label::Public),
+        );
+        let argument_label = (element_label != Label::Public).then_some(element_label);
         let held = self.gc_nested_request.take().unwrap_or_default();
         self.with_gc_nested_request(held, |core| {
-            core.invoke_inline_method_call(
+            core.invoke_inline_method_call_with_argument_label(
                 module,
                 callback.clone(),
                 this_arg,
                 vec![element, Value::Int(index), Value::Object(array_id)],
+                argument_label,
             )
+            .map(|(value, _label)| value)
         })
     }
 
@@ -77501,9 +77601,9 @@ impl InterpreterCore {
             Some(HostcallDispatchBinding::ClientRequest) => {
                 self.dispatch_client_request_create(delegated_args)
             }
-            Some(HostcallDispatchBinding::HostIo) => {
-                self.dispatch_host_io_hostcall(cap, delegated_args)
-            }
+            Some(HostcallDispatchBinding::HostIo) => self
+                .check_host_io_confidentiality(cap, delegated_args)
+                .and_then(|()| self.dispatch_host_io_hostcall(cap, delegated_args)),
             Some(
                 HostcallDispatchBinding::Internal | HostcallDispatchBinding::DeterministicNoop,
             ) => Ok(Value::Undefined),
@@ -104771,11 +104871,35 @@ mod async_runtime_tests_current {
             "a public request joins with the canonical provider's Internal state"
         );
 
-        let (_, label) = caught_label(sandbox.clone(), None, Label::Secret);
-        assert_eq!(
-            label,
-            Label::Secret,
-            "the direct path label must survive the provider error and catch edge"
+        // bd-9vouw.8: an fs operand above the sink's Internal clearance is
+        // refused before dispatch, so a Secret path never reaches the
+        // provider (it used to, and its error carried the Secret label to
+        // the catch binding).
+        let refused_read = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("fs:read".to_string()),
+                    args: RegRange { start: 8, count: 1 },
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        let mut core = test_interpreter();
+        core.config
+            .granted_capabilities
+            .insert(RuntimeCapability::FsRead);
+        core.set_host_io(sandbox.clone(), None);
+        core.write_reg_with_label(8, Value::str("missing"), Label::Secret)
+            .expect("path register");
+        assert!(
+            matches!(
+                core.execute(&refused_read),
+                Err(InterpreterError::CapabilityDenied { ref capability })
+                    if capability == "fs:read:confidentiality"
+            ),
+            "a Secret path must be refused before the provider"
         );
 
         let module = test_module_with_functions(
@@ -104803,13 +104927,17 @@ mod async_runtime_tests_current {
             .expect("write path register");
         core.write_reg_with_label(9, Value::str("payload"), Label::Secret)
             .expect("write content register");
-        core.execute(&module)
-            .expect("provider write error should reach the catch handler");
-        assert_eq!(
-            core.get_register_label(1)
-                .expect("caught write error label"),
-            &Label::Secret,
-            "the direct write-content label must survive the provider error and catch edge"
+        assert!(
+            matches!(
+                core.execute(&module),
+                Err(InterpreterError::CapabilityDenied { ref capability })
+                    if capability == "fs:write:confidentiality"
+            ),
+            "Secret write content must be refused before the provider"
+        );
+        assert!(
+            !scratch.path().join("missing-parent").exists(),
+            "nothing was written"
         );
 
         let (_, label) = caught_label(Arc::new(UnknownFsErrorProvider), None, Label::Public);

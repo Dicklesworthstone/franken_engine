@@ -169,6 +169,19 @@ impl InterpreterCore {
         args: RegRange,
         capability: &str,
     ) -> Result<(), InterpreterError> {
+        self.check_sink_confidentiality(args, capability, &Label::Internal)
+    }
+
+    /// bd-9vouw.8: the same live check for any sink, against the clearance
+    /// the static flow check assigns it. Host I/O and process spawn run it
+    /// before any effect, so a flow the static analysis missed still stops
+    /// at the boundary.
+    pub(super) fn check_sink_confidentiality(
+        &mut self,
+        args: RegRange,
+        capability: &str,
+        clearance: &Label,
+    ) -> Result<(), InterpreterError> {
         let context = self.join_arg_range_label(args)?;
         let saved_bytes = self
             .active_inline_callback_context_label
@@ -190,7 +203,7 @@ impl InterpreterCore {
                 self.console_observe_reachable_value(&value)?;
             }
             let label = self.json_parse_context_label()?;
-            if !label.can_flow_to(&Label::Internal) {
+            if !label.can_flow_to(clearance) {
                 return Err(InterpreterError::CapabilityDenied {
                     capability: format!("{capability}:confidentiality"),
                 });

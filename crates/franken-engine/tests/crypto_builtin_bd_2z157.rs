@@ -926,6 +926,82 @@ fn entropy_egress_requires_declassification_before_host_effect_bd_z1peg() {
     );
 }
 
+/// bd-9vouw.110: the static flow check recognizes `console.log(...)` by its
+/// syntax. It still follows a secret into some aliased shapes (a template
+/// argument to `o.sink.error`); the others lower, the entropy read runs, and
+/// the console builtin's live label check refuses the Secret argument before
+/// anything is printed. The same aliases print a public value.
+#[test]
+fn aliased_console_sinks_refuse_secret_arguments_bd_9vouw_110() {
+    // (alias, refused by the static flow check)
+    const ALIASES: [(&str, bool); 4] = [
+        ("const c = console; c.log('len', secret.length);", false),
+        ("const log = console.log; log(secret);", false),
+        (
+            "const o = { sink: console }; o.sink.error(`id=${secret}`);",
+            true,
+        ),
+        (
+            "[secret].forEach(function (s) { const w = console.warn; w(s); });",
+            false,
+        ),
+    ];
+    for (alias, static_refusal) in ALIASES {
+        let source = format!(
+            "const crypto = require('crypto'); const secret = crypto.randomUUID(); {alias}"
+        );
+        let provider = Arc::new(ScriptedRandomHostIo::bytes([vec![0x11; 16]]));
+        let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_host_io(provider.clone(), Some(recorder));
+        let error = orchestrator
+            .execute(&crypto_package(&source, true))
+            .expect_err("a Secret must not reach an aliased console sink");
+        let primary_error = error.primary_error();
+        if static_refusal {
+            assert!(
+                matches!(
+                    primary_error,
+                    OrchestratorError::Lowering(lowering_error)
+                        if matches!(
+                            lowering_error.as_ref(),
+                            LoweringPipelineError::UnauthorizedFlow { .. }
+                        )
+                ),
+                "{alias}: {primary_error:?}"
+            );
+            assert_eq!(provider.calls.load(Ordering::Acquire), 0, "{alias}");
+        } else {
+            assert!(
+                matches!(
+                    primary_error,
+                    OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability })
+                        if capability.ends_with(":confidentiality")
+                ),
+                "{alias}: {primary_error:?}"
+            );
+            // Refused at run time: the entropy read happened, the output did not.
+            assert_eq!(provider.calls.load(Ordering::Acquire), 1, "{alias}");
+            assert!(
+                orchestrator.last_failed_console_output().is_empty(),
+                "{alias}: {:?}",
+                orchestrator.last_failed_console_output()
+            );
+        }
+    }
+    // Control: the same aliases print a public value.
+    let expected = ["len 6", "public", "id=public", "public"];
+    for ((alias, _), expected) in ALIASES.into_iter().zip(expected) {
+        let source = format!("const secret = 'public'; {alias}");
+        let result = execute_crypto(
+            &source,
+            Arc::new(ScriptedRandomHostIo::never()),
+            Arc::new(InMemoryHostIoTranscript::recording()),
+        );
+        assert_eq!(orchestrated_console(&result), expected, "{alias}");
+    }
+}
+
 #[test]
 fn random_int_rejection_sampling_discards_biased_tail_bd_opsnv() {
     let source = "const crypto = require('crypto'); crypto.randomInt(10);";

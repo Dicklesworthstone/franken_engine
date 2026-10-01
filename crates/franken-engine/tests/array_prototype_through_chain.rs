@@ -124,6 +124,17 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"let e; try { Uint8Array.prototype.toLocaleString.call([1]); } catch (x) { e = x.constructor.name; } console.log([[1234, 'a', null, undefined, 5.5].toLocaleString(), [{ toLocaleString() { return 'X'; } }, [1, 2]].toLocaleString(), Array.prototype.toLocaleString.call('ab'), new Uint8Array([1, 200]).toLocaleString(), typeof Array.prototype.toLocaleString, [].toLocaleString() === '', Array.prototype.toLocaleString.call({ length: 2, 0: 3 }), [1234567.891].toLocaleString(), e].join(' | '));"#,
         "1,234,a,,,5.5 | X,1,2 | a,b | 1,200 | function | true | 3, | 1,234,567.891 | TypeError",
     ),
+    // `class T extends Array {}`: `new T(1, 2, 3)` (a non-spread super call
+    // or the implicit constructor) gets its elements and `length` (it had
+    // neither), `new T(3)` an empty array of length 3. indexOf, lastIndexOf
+    // and includes find functions and other non-heap objects by identity
+    // (`[f].includes(f)` was false), which Redux Toolkit's
+    // `finalEnhancers.includes(middlewareEnhancer)` check relies on.
+    (
+        "array_subclass_construction_and_identity_search",
+        r#"class T extends Array {} const f = () => 1; const a = new T(1, 2, 3), b = new T(3), c = new T('a'), d = new T(); class U extends Array { constructor(x, y) { super(x, y); } } console.log([a.length, a[1], b.length, b[0] === undefined, c.length, c[0], d.length, a instanceof T, Array.isArray(a), new U(7, 8).length, [f].includes(f), [f].indexOf(f), [1, f].lastIndexOf(f), [Promise].indexOf(Promise), a.includes(2)].join(' '));"#,
+        "3 2 3 true 1 a 0 true true 2 true 0 1 0 true",
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

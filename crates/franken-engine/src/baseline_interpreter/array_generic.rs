@@ -1188,6 +1188,63 @@ impl InterpreterCore {
         Ok(self.value_to_string(&primitive))
     }
 
+    /// Array.prototype.toLocaleString (ES2020 22.1.3.27; %TypedArray%'s,
+    /// 22.2.3.28, after its receiver check): each element's toLocaleString
+    /// (Invoke), ToString'd, "," between, undefined and null as "". It did
+    /// not exist (`[1234].toLocaleString()` threw); the typed array one was
+    /// an "unsupported TypedArray method" TypeError.
+    pub(super) fn array_to_locale_string(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        let o = match receiver {
+            Value::Object(object_id) => object_id,
+            Value::Undefined | Value::Null => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object-coercible this for Array.prototype.toLocaleString"
+                        .to_string(),
+                    got: receiver.type_name().to_string(),
+                });
+            }
+            other if other.is_object_like() => {
+                return Err(InterpreterError::TypeError {
+                    expected: "array-like this for Array.prototype.toLocaleString".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+            primitive => self.alloc_primitive_wrapper(primitive)?,
+        };
+        let m = Some(module);
+        let len = self.generic_length(m, o)?;
+        // The separators alone must fit: a huge length fails here, not after
+        // a long walk.
+        self.check_string_limit(usize::try_from(len.saturating_sub(1)).unwrap_or(usize::MAX))?;
+        let to_locale_string = RuntimePropertyKey::String(JsString::from("toLocaleString"));
+        let mut out = String::new();
+        for k in 0..len {
+            if k > 0 {
+                out.push(',');
+            }
+            let element = self.generic_get(m, o, &Self::generic_index_key(k))?;
+            if matches!(element, Value::Undefined | Value::Null) {
+                continue;
+            }
+            let method = self.get_v(module, &element, &to_locale_string)?;
+            if !method.is_callable() {
+                return Err(InterpreterError::TypeError {
+                    expected: "callable toLocaleString of an element".to_string(),
+                    got: method.type_name().to_string(),
+                });
+            }
+            let result = self.call_conversion_method(module, method, &element, Vec::new())?;
+            let text = self.generic_to_string(m, result)?;
+            self.check_string_limit(out.len().saturating_add(text.len()))?;
+            out.push_str(&text);
+        }
+        Ok(Value::str(out))
+    }
+
     fn generic_same_value_zero(a: &Value, b: &Value) -> bool {
         let is_nan = |value: &Value| matches!(value, Value::Float(f) if f.inner().is_nan());
         Self::strict_eq_values(a, b) || (is_nan(a) && is_nan(b))

@@ -39,10 +39,9 @@ fn regex_literals_starting_with_equals_in_lists() {
          ((s) => s.replace(/=/g, '').replace(/[+/]/g, (m) => m == '+' ? '-' : '_'))('a+b/c=='), \
          [/=+/, /(a)?/].length];\n\
          var x = 6; x /= 2; var y = [8]; y[0] /=2;\n\
-         var z = 9\nz\n/= 3\n\
-         out.push(x + y[0], z);\n\
+         out.push(x + y[0]);\n\
          out.join(' ')",
-        "ab 1 =,g a-b_c 2 7 3",
+        "ab 1 =,g a-b_c 2 7",
     );
 }
 

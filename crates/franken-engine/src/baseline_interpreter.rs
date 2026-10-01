@@ -3451,6 +3451,8 @@ pub enum BuiltinFunctionKind {
     IntlMethod,
     /// `Intl.getCanonicalLocales` (ECMA-402 8.3.1). Append only.
     IntlGetCanonicalLocales,
+    /// `Object.prototype.toLocaleString` (ES2020 19.1.3.5). Append only.
+    ObjectPrototypeToLocaleString,
 }
 
 impl BuiltinFunctionKind {
@@ -5231,6 +5233,7 @@ impl BuiltinFunction {
             | BuiltinFunctionKind::PromiseFinallyValueThunk
             | BuiltinFunctionKind::PromiseFinallyThrower => "",
             BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
+            BuiltinFunctionKind::ObjectPrototypeToLocaleString => "toLocaleString",
             BuiltinFunctionKind::BigIntToString => "toString",
             BuiltinFunctionKind::BigIntValueOf => "valueOf",
             BuiltinFunctionKind::BigIntAsUintN => "asUintN",
@@ -5403,6 +5406,7 @@ impl BuiltinFunction {
             | K::DataViewMethod => "DataView.prototype",
             K::ObjectHasOwnProperty
             | K::ObjectPrototypeIsPrototypeOf
+            | K::ObjectPrototypeToLocaleString
             | K::ObjectPrototypePropertyIsEnumerable
             | K::ObjectPrototypeToString
             | K::ObjectPrototypeValueOf => "Object.prototype",
@@ -41715,6 +41719,24 @@ impl InterpreterCore {
                 };
                 Self::bigint_result(result)
             }
+            BuiltinFunctionKind::ObjectPrototypeToLocaleString => {
+                // ES2020 19.1.3.5: Invoke(this, "toString"); it was missing,
+                // so `obj.toLocaleString` was undefined.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let method = self.get_v(
+                    module,
+                    &receiver,
+                    &RuntimePropertyKey::String(JsString::from("toString")),
+                )?;
+                if !method.is_callable() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "callable toString for Object.prototype.toLocaleString"
+                            .to_string(),
+                        got: method.type_name().to_string(),
+                    });
+                }
+                self.call_conversion_method(module, method, &receiver, Vec::new())
+            }
             BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => {
                 // ES2020 19.1.3.3: a primitive V is never inherited from;
                 // otherwise walk V's chain for this (ToObject'd) receiver.
@@ -57368,6 +57390,9 @@ impl InterpreterCore {
             "isPrototypeOf" => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf,
             )),
+            "toLocaleString" => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ObjectPrototypeToLocaleString,
+            )),
             _ => None,
         }
     }
@@ -59746,6 +59771,66 @@ impl InterpreterCore {
         self.replace_pending_hostcall_result_label(Some(label))?;
         self.observe_scoped_callback_result()?;
         Ok(result)
+    }
+
+    /// ES2020 7.3.2 GetV(V, P): [[Get]] of `key` on any value, with `value`
+    /// as the receiver; a primitive reads its prototype's (ToObject is not
+    /// observable here). Undefined and null are a TypeError.
+    fn get_v(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        let prototype = match value {
+            Value::Object(object_id) => {
+                return self.proxy_aware_get_runtime_property(
+                    Some(module),
+                    *object_id,
+                    key,
+                    value.clone(),
+                    0,
+                );
+            }
+            Value::Promise(_)
+            | Value::Generator(_)
+            | Value::AsyncGeneratorObject(_)
+            | Value::Iterator(_) => return self.exotic_conversion_method(module, value, key),
+            Value::Undefined | Value::Null => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object-coercible value".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+            callable if callable.is_callable() => {
+                if let Some(backing) = self.function_own_property_object(module, callable)?
+                    && self.chain_contains_runtime_property(backing, key)
+                {
+                    return self.proxy_aware_get_runtime_property(
+                        Some(module),
+                        backing,
+                        key,
+                        value.clone(),
+                        0,
+                    );
+                }
+                let prototype =
+                    Self::function_intrinsic_prototype_name(callable).unwrap_or("Function");
+                if prototype != "Function" {
+                    self.ensure_builtin_prototype(prototype)?;
+                }
+                prototype
+            }
+            Value::Str(_) => "String",
+            Value::Bool(_) => "Boolean",
+            Value::BigInt(_) => "BigInt",
+            Value::Symbol(_) => "Symbol",
+            Value::Int(_) | Value::Float(_) => "Number",
+            _ => "Object",
+        };
+        Ok(self
+            .primitive_prototype_get(module, prototype, key, value.clone())?
+            .0)
     }
 
     /// [[Get]] of a conversion method on a promise, generator, async

@@ -355,7 +355,30 @@ impl InterpreterCore {
                     len as f64 - 1.0
                 };
                 let mut found = -1i64;
-                if forward {
+                if let Some(present) = self.generic_present_indices(o, len)? {
+                    // A huge sparse array-like: only its present indices.
+                    let first = from.max(0.0) as u64;
+                    let candidates: Vec<u64> = if forward {
+                        present.into_iter().filter(|&k| k >= first).collect()
+                    } else if from >= 0.0 {
+                        present
+                            .into_iter()
+                            .rev()
+                            .filter(|&k| k <= from as u64)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    for k in candidates {
+                        let key = Self::generic_index_key(k);
+                        if self.generic_has(m, o, &key)?
+                            && Self::strict_eq_values(&self.generic_get(m, o, &key)?, &search)
+                        {
+                            found = k as i64;
+                            break;
+                        }
+                    }
+                } else if forward {
                     let mut k = from.max(0.0) as u64;
                     while k < len {
                         let key = Self::generic_index_key(k);
@@ -528,8 +551,14 @@ impl InterpreterCore {
                     });
                 }
                 let backwards = kind == K::ArrayReduceRight;
-                let mut indices =
-                    (0..len).map(move |step| if backwards { len - 1 - step } else { step });
+                let mut indices: Box<dyn Iterator<Item = u64>> =
+                    match self.generic_present_indices(o, len)? {
+                        Some(present) if backwards => Box::new(present.into_iter().rev()),
+                        Some(present) => Box::new(present.into_iter()),
+                        None => Box::new(
+                            (0..len).map(move |step| if backwards { len - 1 - step } else { step }),
+                        ),
+                    };
                 let mut accumulator = if args.count > 1 {
                     Some(arg(self, 1)?)
                 } else {
@@ -753,8 +782,20 @@ impl InterpreterCore {
             K::ArrayFind | K::ArrayFindIndex | K::ArrayFindLast | K::ArrayFindLastIndex
         );
         let mut filtered = 0u64;
-        for step in 0..len {
-            let k = if backwards { len - 1 - step } else { step };
+        // A hole-skipping method over a huge sparse array-like visits only the
+        // indices present (generic_present_indices); each is re-checked below.
+        let present = if visits_holes {
+            None
+        } else {
+            self.generic_present_indices(o, len)?
+        };
+        let steps: Box<dyn Iterator<Item = u64>> = match present {
+            Some(indices) => Box::new(indices.into_iter()),
+            None => {
+                Box::new((0..len).map(move |step| if backwards { len - 1 - step } else { step }))
+            }
+        };
+        for k in steps {
             let key = Self::generic_index_key(k);
             if !visits_holes && !self.generic_has(m, o, &key)? {
                 continue;
@@ -884,6 +925,58 @@ impl InterpreterCore {
             expected: "bounded Proxy target chain".to_string(),
             got: format!("depth {MAX_PROTOTYPE_CHAIN_DEPTH}"),
         })
+    }
+
+    /// The indices below `len` at which HasProperty(o, k) holds, ascending,
+    /// when `len` is huge and they can be read without running guest code:
+    /// `o` and its prototype chain are ordinary objects (no Proxy, Array,
+    /// typed array or wrapper) and only `o` has integer keys, so the present
+    /// indices are its own integer keys (accessors included). Probing every
+    /// index of `{ length: 2 ** 32 }` ran out of budget where Node answers
+    /// at once. `None`: probe each index.
+    fn generic_present_indices(
+        &self,
+        o: ObjectId,
+        len: u64,
+    ) -> Result<Option<Vec<u64>>, InterpreterError> {
+        const SPARSE_SCAN_MIN_LENGTH: u64 = 1 << 16;
+        if len < SPARSE_SCAN_MIN_LENGTH {
+            return Ok(None);
+        }
+        let mut indices = Vec::new();
+        let mut current = Some(o);
+        for depth in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(id) = current else {
+                break;
+            };
+            if self.proxy_record(id)?.is_some() {
+                return Ok(None);
+            }
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                return Ok(None);
+            };
+            if object.is_array || object.typed_array.is_some() || object.primitive_value.is_some() {
+                return Ok(None);
+            }
+            for key in object.properties.keys() {
+                let Ok(index) = key.parse::<u64>() else {
+                    continue;
+                };
+                if index.to_string() != *key || index >= len {
+                    continue;
+                }
+                if depth > 0 {
+                    return Ok(None);
+                }
+                indices.push(index);
+            }
+            current = self.observable_prototype_link(object, id);
+        }
+        if current.is_some() {
+            return Ok(None);
+        }
+        indices.sort_unstable();
+        Ok(Some(indices))
     }
 
     /// A buffer for up to `len` elements, charged to the temporary budget

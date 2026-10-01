@@ -65,9 +65,11 @@ fn generate_case(seed: u64) -> GeneratedCase {
             source: format!("\"{txt}\""),
             goal: ParseGoal::Script,
         },
+        // `await` is an AwaitExpression only in module code or an async
+        // function (ES2020 15.1.1); in a script `await x` is a SyntaxError.
         3 => GeneratedCase {
             source: format!("await {ident_a}"),
-            goal: ParseGoal::Script,
+            goal: ParseGoal::Module,
         },
         4 => GeneratedCase {
             source: format!("{ident_a} + {ident_b} * {ident_c}"),
@@ -270,13 +272,14 @@ fn recursion_budget_failure_witness_is_seed_stable() {
         },
     };
 
+    // Module goal: `await` nests only where it is an AwaitExpression.
     for seed in 0_u64..64 {
         let source = format!("await await await v{seed}");
         let left = parser
-            .parse_with_options(source.as_str(), ParseGoal::Script, &options)
+            .parse_with_options(source.as_str(), ParseGoal::Module, &options)
             .expect_err("left parse should fail recursion budget");
         let right = parser
-            .parse_with_options(source.as_str(), ParseGoal::Script, &options)
+            .parse_with_options(source.as_str(), ParseGoal::Module, &options)
             .expect_err("right parse should fail recursion budget");
 
         assert_eq!(left.code, ParseErrorCode::BudgetExceeded);

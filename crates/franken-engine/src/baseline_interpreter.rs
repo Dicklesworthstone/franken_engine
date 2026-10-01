@@ -63045,6 +63045,14 @@ impl InterpreterCore {
         Ok((byte_offset, byte_length, length))
     }
 
+    /// ES2020 7.1.21 CanonicalNumericIndexString: "-0", or a string that
+    /// ToNumber and Number::toString return unchanged ("1.1", "Infinity",
+    /// "NaN"; not "01" or "1.0").
+    fn canonical_numeric_index_string(key: &str) -> bool {
+        let number = primitive_conversion::string_number(&JsString::from(key));
+        key == "-0" || ryu_js::Buffer::new().format(number) == key
+    }
+
     fn typed_array_integer_index_key(key: &str) -> Option<usize> {
         if key.is_empty() || !key.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
@@ -63355,6 +63363,18 @@ impl InterpreterCore {
         key: &str,
     ) -> Result<Option<Value>, InterpreterError> {
         let Some(index) = Self::typed_array_integer_index_key(key) else {
+            // Any other canonical numeric string ("1.1", "-0", "Infinity")
+            // names no element and is not looked up on the prototype
+            // (ES2020 9.4.5.2 and 9.4.5.4, integer-indexed [[HasProperty]]
+            // and [[Get]]); "01" is an ordinary key.
+            if Self::canonical_numeric_index_string(key)
+                && self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.typed_array.is_some())
+            {
+                return Ok(Some(Value::Undefined));
+            }
             return Ok(None);
         };
         let Some(view) = self

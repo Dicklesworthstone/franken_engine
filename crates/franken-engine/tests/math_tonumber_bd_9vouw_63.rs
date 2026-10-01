@@ -55,6 +55,14 @@ const CASES: &[(&str, &str, &str)] = &[
         "try { Math.floor(1n); console.log('no throw') } catch (e) { console.log(e.constructor.name) }",
         "TypeError",
     ),
+    // Math.sinh, cosh, tanh, expm1 and log1p were absent (calling them was a
+    // TypeError); toPrecision(12) keeps the comparison off the last ulp,
+    // which the specification leaves implementation-approximated.
+    (
+        "hyperbolic_and_near_zero",
+        "console.log([Math.sinh(1), Math.cosh(1), Math.tanh(1), Math.expm1(1e-10), Math.log1p(1e-10), Math.cosh('2')].map(x => x.toPrecision(12)).join(' '), 1 / Math.sinh(-0), Math.tanh(Infinity), Math.log1p(-1), Math.expm1(), Math.sinh.length, Math.log1p.name, Object.getOwnPropertyDescriptor(Math, 'tanh').enumerable, Math.tanh({ valueOf(){ return 0.5 } }).toPrecision(12));",
+        "1.17520119364 1.54308063482 0.761594155956 1.00000000005e-10 9.99999999950e-11 3.76219569108 -Infinity 1 -Infinity NaN 1 log1p false 0.462117157260",
+    ),
 ];
 
 fn scratch_dir() -> PathBuf {

@@ -70,6 +70,35 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const a = [1, , 3]; Object.prototype[1] = 'P'; console.log(a.join('-'), a.indexOf('P')); delete Object.prototype[1];"#,
         "1-P-3 1",
     ),
+    // On an object that is not an Array the methods run over [[Get]]: a
+    // `length` getter or an element getter was read as missing (length 0),
+    // and a getter shadowing an inherited length was skipped for it (Test262
+    // Array/prototype/some/15.4.4.17-2-8 and relatives).
+    (
+        "array_like_getters",
+        r#"var o = { 1: 'y' }; Object.defineProperty(o, '0', { get() { return 'x'; } }); Object.defineProperty(o, 'length', { get() { return 2; } }); var c = Object.create({ length: 3 }); Object.defineProperty(c, 'length', { get() { return 2; } }); c[0] = 9; c[1] = 11; c[2] = 12; console.log(Array.prototype.some.call(o, (v) => v === 'y'), Array.prototype.indexOf.call(o, 'y'), Array.prototype.join.call(o), Array.prototype.map.call(o, (v) => v + v).join(), Array.prototype.some.call(c, (v) => v > 11));"#,
+        "true 1 x,y xx,yy false",
+    ),
+    // A primitive `this` is ToObject'd: `map.call('abc', f)` and a boolean
+    // or number receiver were TypeErrors; a String wrapper's length bounds
+    // an inherited index; toString without a callable join is
+    // Object.prototype.toString.
+    (
+        "primitive_receivers",
+        r#"String.prototype[3] = '3'; console.log(Array.prototype.map.call('abc', (c) => c.toUpperCase()).join(''), Array.prototype.forEach.call(true, (x) => x), JSON.stringify(Array.prototype.join.call(5)), Array.prototype.toString.call(true), Array.prototype.toString.call({ join: 1 }), Array.prototype.lastIndexOf.call(new String('012'), '2'), Array.prototype.lastIndexOf.call(new String('012'), '3')); delete String.prototype[3];"#,
+        r#"ABC undefined "" [object Boolean] [object Object] 2 -1"#,
+    ),
+    // IsConcatSpreadable: a defined @@isConcatSpreadable decides over IsArray.
+    (
+        "is_concat_spreadable",
+        r#"var re = /abc/; re[Symbol.isConcatSpreadable] = true; re.length = 2; re[0] = 1; re[1] = 2; var a = [1, 2]; a[Symbol.isConcatSpreadable] = false; var al = { length: 1, 0: 'z', [Symbol.isConcatSpreadable]: true }; console.log(JSON.stringify([0].concat(re)), [].concat(a).length, JSON.stringify([9].concat(a)), JSON.stringify(Array.prototype.concat.call(al, al)));"#,
+        r#"[0,1,2] 1 [9,[1,2]] ["z","z"]"#,
+    ),
+    (
+        "arguments_and_plain_array_likes",
+        r#"function f() { return Array.prototype.slice.call(arguments, 1).concat(Array.prototype.map.call(arguments, (x) => x * 10)); } var o2 = { length: 2 }; Array.prototype.push.call(o2, 'a'); var s = { length: 2, 0: 'b', 1: 'a' }; Array.prototype.sort.call(s); var sorted = s[0] + s[1]; Array.prototype.reverse.call(s); console.log(f(1, 2, 3).join(), JSON.stringify(o2), sorted, s[0] + s[1], Array.prototype.reduceRight.call({ length: 3, 0: 'a', 1: 'b', 2: 'c' }, (acc, v) => acc + v));"#,
+        r#"2,3,10,20,30 {"2":"a","length":3} ab ba cba"#,
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
@@ -138,14 +167,20 @@ fn array_prototype_through_the_chain_matches_node() {
 /// An array-like's length is guest-chosen, up to 2^53 - 1. Methods that
 /// copy the elements sized a buffer by it unchecked, so
 /// `splice.call({ length: 2 ** 53 + 2 }, ...)` aborted the whole process
-/// (Test262 splice/length-and-deleteCount-exceeding-integer-limit). The
-/// buffer is now charged to the memory budget first: the run ends with a
-/// budget error instead. (Node, which does not copy, returns a two-element
-/// array; that is not claimed.) `push` past 2^53 - 1 is Node's TypeError.
+/// (Test262 splice/length-and-deleteCount-exceeding-integer-limit). Methods
+/// that copy every element charge the buffer to the memory budget first:
+/// the run ends with a budget error instead. splice on an array-like copies
+/// only what it removes and moves, and returns Node's two-element array.
+/// `push` past 2^53 - 1 is Node's TypeError.
 #[test]
 fn huge_array_like_lengths_are_budgeted_not_fatal() {
+    assert_eq!(
+        console_output(
+            "var arrayLike = { '9007199254740989': 'a', length: 2 ** 53 + 2 }; var r = Array.prototype.splice.call(arrayLike, 9007199254740989, 2 ** 53 + 4); console.log(r.length, r[0], r[1], 1 in r, arrayLike.length, 9007199254740989 in arrayLike);"
+        ),
+        Ok("2 a undefined false 9007199254740989 false".to_string())
+    );
     for source in [
-        "var arrayLike = { '9007199254740989': 'a', length: 2 ** 53 + 2 }; Array.prototype.splice.call(arrayLike, 9007199254740989, 2 ** 53 + 4);",
         "Array.prototype.sort.call({ length: 2 ** 53 - 1 });",
         "Array.prototype.toSorted.call({ length: 2 ** 40 });",
     ] {

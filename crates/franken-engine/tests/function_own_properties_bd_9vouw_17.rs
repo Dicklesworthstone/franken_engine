@@ -403,3 +403,20 @@ fn generator_and_async_functions_have_their_kind_prototypes() {
         "TypeError TypeError"
     );
 }
+
+/// The Function constructor ToStrings each parameter and the body, in
+/// order, before parsing (ES2020 19.2.1.1.1): an object argument's toString
+/// runs (an array joins). Object arguments read "[object Object]", so
+/// handlebars, which passes source-map SourceNodes, failed to compile its
+/// templates.
+#[test]
+fn function_constructor_to_strings_object_arguments() {
+    router_check(
+        "const log = []; const p = { toString() { log.push('p'); return 'x'; } }; \
+         const b = { toString() { log.push('b'); return 'return x * 3'; } }; let e; \
+         try { Function(Symbol('s')); } catch (x) { e = x.constructor.name; } \
+         [Function(p, b)(7), log.join(), new Function(new String('return 4'))(), \
+         new Function(['a', 'b'], 'return a + b')(1, 2), e].join(' ')",
+        "21 p,b 4 3 TypeError",
+    );
+}

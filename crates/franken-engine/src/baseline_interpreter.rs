@@ -36892,16 +36892,67 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<u64, InterpreterError> {
         let source_bytes = self.generated_function_source_upper_bound_bytes(args)?;
-        let argument_slots = u64::from(args.count).saturating_mul(
+        Ok(Self::generated_function_scratch_bytes_from_source(
+            source_bytes,
+            args.count,
+        ))
+    }
+
+    fn generated_function_scratch_bytes_from_source(source_bytes: u64, argument_count: u32) -> u64 {
+        let argument_slots = u64::from(argument_count).saturating_mul(
             (std::mem::size_of::<String>() as u64)
                 .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES),
         );
-        Ok(GENERATED_FUNCTION_COMPILATION_FIXED_SCRATCH_BYTES
+        GENERATED_FUNCTION_COMPILATION_FIXED_SCRATCH_BYTES
             .saturating_add(argument_slots)
             .saturating_add(
                 source_bytes
                     .saturating_mul(GENERATED_FUNCTION_COMPILATION_SCRATCH_BYTES_PER_SOURCE_BYTE),
-            ))
+            )
+    }
+
+    /// The Function constructor's arguments as strings when any is an object
+    /// or a Symbol (ES2020 19.2.1.1.1 steps 7-12): every argument ToString'd
+    /// in order, an object through ToPrimitive with the string hint (its
+    /// toString runs), a Symbol a TypeError. `None` when all are other
+    /// primitives, whose conversion is not observable. The strings are charged against the
+    /// temporary budget until the compilation scratch covers them.
+    fn generated_function_object_argument_texts(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<Option<Vec<String>>, InterpreterError> {
+        let mut observable = false;
+        for index in 0..args.count {
+            observable |= self
+                .builtin_arg(args, index)?
+                .is_some_and(|value| value.is_object_like() || matches!(value, Value::Symbol(_)));
+        }
+        if !observable {
+            return Ok(None);
+        }
+        let mut texts = Vec::with_capacity(args.count as usize);
+        let mut text_bytes = 0u64;
+        for index in 0..args.count {
+            let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+            let value = if value.is_object_like() {
+                self.gc_nested_request = None;
+                self.coerce_runtime_primitive(Some(module), value, true)?
+            } else {
+                value
+            };
+            if matches!(value, Value::Symbol(_)) {
+                return Err(InterpreterError::TypeError {
+                    expected: "string-convertible Function constructor argument".to_string(),
+                    got: "symbol".to_string(),
+                });
+            }
+            let text = self.value_to_string(&value);
+            text_bytes = text_bytes.saturating_add(u64::try_from(text.len()).unwrap_or(u64::MAX));
+            self.check_temporary_memory_budget(text_bytes)?;
+            texts.push(text);
+        }
+        Ok(Some(texts))
     }
 
     fn construct_generated_function(
@@ -36930,11 +36981,29 @@ impl InterpreterCore {
         self.ensure_generated_function_realm_globals()?;
         let (owner_program_id, owner_specifier, owner_program) =
             self.generated_function_owner(module)?;
+        // ES2020 19.2.1.1.1 CreateDynamicFunction steps 7-12: each parameter
+        // and the body are ToString'd, in order, before anything is parsed,
+        // so an object argument's toString runs (handlebars passes
+        // source-map SourceNodes); they read "[object Object]". Primitive
+        // arguments keep the non-observable conversion below.
+        let converted = self.generated_function_object_argument_texts(module, args)?;
         // Reserve the complete source/parse/lowering workspace before cloning
         // even the first argument string. The closure keeps every transient
         // owner scoped together so only the returned IR3/provenance survive to
         // the atomic scratch -> retained-artifact transition below.
-        let compilation_scratch_bytes = self.generated_function_compilation_scratch_bytes(args)?;
+        let compilation_scratch_bytes = match &converted {
+            Some(texts) => Self::generated_function_scratch_bytes_from_source(
+                texts
+                    .iter()
+                    .fold(0u64, |total, text| {
+                        total.saturating_add(u64::try_from(text.len()).unwrap_or(u64::MAX))
+                    })
+                    .saturating_add(u64::from(args.count))
+                    .saturating_add("function anonymous() {\n\n}".len() as u64),
+                args.count,
+            ),
+            None => self.generated_function_compilation_scratch_bytes(args)?,
+        };
         let record_construction_audit =
             self.generated_code_audit.len() < MAX_GENERATED_CODE_AUDIT_ENTRIES;
         self.apply_memory_component_delta(0, compilation_scratch_bytes)?;
@@ -36943,9 +37012,14 @@ impl InterpreterCore {
             parts
                 .try_reserve_exact(args.count as usize)
                 .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
-            for index in 0..args.count {
-                let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
-                parts.push(self.value_to_string(&value));
+            match &converted {
+                Some(texts) => parts.extend(texts.iter().cloned()),
+                None => {
+                    for index in 0..args.count {
+                        let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                        parts.push(self.value_to_string(&value));
+                    }
+                }
             }
 
             let body_source = parts.pop().unwrap_or_default();

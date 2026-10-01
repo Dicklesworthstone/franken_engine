@@ -35,6 +35,24 @@ fn object_assign() {
     assert_eq!(eval("Object.assign({x:1}, {x:9}).x;"), "9"); // later sources win
 }
 
+/// A function target's own properties live on its backing object, where
+/// `f.x = 1` stores them; `Object.assign(fn, {...})` copied nothing (chroma
+/// attaches its statics this way). A function source contributes its own
+/// enumerable properties. Node v22.2.0 values.
+#[test]
+fn object_assign_onto_and_from_functions() {
+    assert_eq!(
+        eval(
+            "var f = function () {}; Object.assign(f, { a: 1, b: function () { return 2; } }); \
+             var g = function () {}; Object.assign(g, { x: 1 }); Object.assign(g, { y: 2 }); \
+             var h = function () {}; h.k = 5; var o = Object.assign({}, h); \
+             var r = Object.assign(f, {}) === f; \
+             [f.a, typeof f.b, f.b(), g.x, g.y, o.k, r, Object.keys(g).join()].join(' ');"
+        ),
+        "1 function 2 1 2 5 true x,y"
+    );
+}
+
 #[test]
 fn object_is() {
     // Object.is uses the receiver-placeholder calling convention — these caught

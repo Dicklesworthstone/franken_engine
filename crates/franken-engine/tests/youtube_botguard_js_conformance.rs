@@ -775,14 +775,15 @@ fn typed_array_method_conformance_vectors() {
             "5",
             1,
         ),
-        ytbg_memory_error(
-            "ytbg-typedarray-unsupported-method-diagnostic",
+        // toLocaleString was this vector's example of an unsupported method
+        // (an "unsupported TypedArray method" fault); it is implemented now,
+        // and no %TypedArray% method is left on that path. Node v22.2.0: "1,2".
+        ytbg_memory_value(
+            "ytbg-typedarray-to-locale-string",
             "typedarray_methods",
-            "new Uint8Array(1).toLocaleString()",
-            "eval.runtime.fault",
-            Some("unsupported TypedArray method"),
-            1,
-            "unsupported_method_rejected",
+            "new Uint8Array([1, 2]).toLocaleString()",
+            "1,2",
+            2,
         ),
     ];
 

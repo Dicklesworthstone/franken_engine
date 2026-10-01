@@ -175,6 +175,61 @@ fn search_params_strip_one_leading_question_mark() {
     assert_eq!(eval_console(src), "1 true a=1");
 }
 
+/// A record's own enumerable string keys name the pairs, and an iterable
+/// (array, Map, generator, iterator) yields `[name, value]` iterables of
+/// exactly two items; names and values go through ToString. Only strings and
+/// URLSearchParams were accepted, so `new URLSearchParams({ q: 'x' })` threw.
+/// Expected values are Node v22.2.0's.
+#[test]
+fn search_params_accept_records_and_iterables_of_pairs() {
+    let src = r#"
+        const out = [];
+        out.push(String(new URLSearchParams({ x: '1 2', y: 3, z: null, u: undefined, b: true })));
+        out.push(String(new URLSearchParams([['a', '1'], ['b', 2], ['a', 'x y']])));
+        out.push(String(new URLSearchParams(new Map([['m', 'n'], ['k', 7]]))));
+        out.push(String(new URLSearchParams(Object.entries({ p: 'q', r: 's' }))));
+        function* gen() { yield ['g', 1]; yield new Set(['h', 2]); }
+        out.push(String(new URLSearchParams(gen())));
+        const proto = { inherited: 1 };
+        const rec = Object.create(proto);
+        rec.own = 'yes';
+        Object.defineProperty(rec, 'hidden', { value: 1, enumerable: false });
+        out.push(String(new URLSearchParams(rec)));
+        out.push(String(new URLSearchParams({ get g() { return 'getter'; }, o: { toString() { return 'obj'; } } })));
+        out.push(String(new URLSearchParams(new URLSearchParams('c=d&c=e'))));
+        const sp = new URLSearchParams({ a: '1' });
+        sp.append('b', '2');
+        out.push(sp.get('a') + sp.toString());
+        console.log(out.join(' | '));
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "x=1+2&y=3&z=null&u=undefined&b=true | a=1&b=2&a=x+y | m=n&k=7 | p=q&r=s | g=1&h=2 | own=yes | g=getter&o=obj | c=d&c=e | 1a=1&b=2"
+    );
+}
+
+/// A pair that is not an iterable of exactly two items is a TypeError, and
+/// the initializer's iterator is closed first.
+#[test]
+fn search_params_reject_malformed_pairs_and_close_the_iterator() {
+    let src = r#"
+        const out = [];
+        for (const bad of [[['a']], [['a', 'b', 'c']], ['ab'], [1]]) {
+            try { new URLSearchParams(bad); out.push('no throw'); } catch (e) { out.push(e.constructor.name); }
+        }
+        let closed = 0;
+        const it = { [Symbol.iterator]() { let i = 0; return {
+            next() { i++; return i > 3 ? { done: true } : { value: i === 2 ? 5 : ['k' + i, i], done: false }; },
+            return() { closed++; return {}; } }; } };
+        try { new URLSearchParams(it); } catch (e) { out.push(e.constructor.name + ' closed=' + closed); }
+        console.log(out.join(' | '));
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "TypeError | TypeError | TypeError | TypeError | TypeError closed=1"
+    );
+}
+
 #[test]
 fn special_url_backslashes_and_invalid_url_errors_match_node() {
     let src = r#"

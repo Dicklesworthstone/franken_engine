@@ -59223,6 +59223,16 @@ impl InterpreterCore {
             {
                 return Ok(success);
             }
+            // A String wrapper's own indices and `length` are non-writable
+            // (ES2020 9.4.3.1): OrdinarySet fails, so `Object.assign('a',
+            // [1])` throws and a sloppy `wrapper[0] = 'x'` does nothing. The
+            // write created an ordinary own property.
+            if key
+                .as_str()
+                .is_some_and(|key| self.string_wrapper_own_property(object_id, key).is_some())
+            {
+                return Ok(false);
+            }
             let mut owner = object_id;
             let mut owner_depth = depth;
             loop {
@@ -82405,10 +82415,31 @@ impl InterpreterCore {
                         };
                         backing
                     }
+                    // ToObject(target): a primitive target is boxed, the
+                    // sources copy onto the wrapper, which is the result
+                    // (`Object.assign('a', [1])` throws: the String
+                    // wrapper's index 0 is not writable). It returned the
+                    // primitive untouched.
+                    primitive @ (Value::Bool(_)
+                    | Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Str(_)
+                    | Value::BigInt(_)
+                    | Value::Symbol(_)) => self.alloc_primitive_wrapper(primitive.clone())?,
                     _ => {
-                        // If target is not an object, return it as-is
+                        // Any other exotic value without property storage
+                        // is returned as-is.
                         return Ok(target_val);
                     }
+                };
+                let target_val = match target_val {
+                    Value::Bool(_)
+                    | Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Str(_)
+                    | Value::BigInt(_)
+                    | Value::Symbol(_) => Value::Object(target_obj_id),
+                    other => other,
                 };
 
                 // Copy properties from each source object to target

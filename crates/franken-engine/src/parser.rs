@@ -7436,15 +7436,19 @@ fn try_parse_update(
         return None;
     }
 
-    // Prefix: `++x` / `--x`.
-    let prefix_op = if expr.starts_with("++") {
-        Some(AssignmentOperator::AddAssign)
+    // Prefix: `++x` / `--x`. The update subtracts a negative or positive
+    // unit (`x -= -1` / `x -= 1`): ES2020 12.4.4.1 applies ToNumeric to the
+    // old value, which `-` does and `+` does not, so `s = '5'; ++s` is 6, not
+    // "51" (and a Date or valueOf object takes its number hint). `x - -1` is
+    // exactly `x + 1` for every Number.
+    let prefix_unit = if expr.starts_with("++") {
+        Some(-1)
     } else if expr.starts_with("--") {
-        Some(AssignmentOperator::SubtractAssign)
+        Some(1)
     } else {
         None
     };
-    if let Some(op) = prefix_op {
+    if let Some(unit) = prefix_unit {
         let operand_src = expr[2..].trim();
         // Reject chained/ambiguous forms (`+++x`, `++ -x`); leave them to the
         // unary path or to a fail-closed parse.
@@ -7458,24 +7462,24 @@ fn try_parse_update(
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
         }
-        // `++x` ⇒ `x += 1` (compound assignment evaluates to the new value).
+        // `++x` ⇒ `x -= -1` (compound assignment evaluates to the new value).
         return Some(Ok(Expression::Assignment {
-            operator: op,
+            operator: AssignmentOperator::SubtractAssign,
             left: Box::new(target),
-            right: Box::new(Expression::NumericLiteral(1)),
+            right: Box::new(Expression::NumericLiteral(unit)),
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         }));
     }
 
     // Postfix: `x++` / `x--`.
     let postfix = if expr.ends_with("++") {
-        Some((AssignmentOperator::AddAssign, BinaryOperator::Subtract))
+        Some((-1, BinaryOperator::Subtract))
     } else if expr.ends_with("--") {
-        Some((AssignmentOperator::SubtractAssign, BinaryOperator::Add))
+        Some((1, BinaryOperator::Add))
     } else {
         None
     };
-    if let Some((assign_op, adjust_op)) = postfix {
+    if let Some((unit, adjust_op)) = postfix {
         let operand_src = expr[..expr.len() - 2].trim();
         if operand_src.is_empty() || operand_src.ends_with('+') || operand_src.ends_with('-') {
             return None;
@@ -7487,12 +7491,13 @@ fn try_parse_update(
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
         }
-        // `x++` ⇒ `(x += 1) - 1`: write the increment back, evaluate to the old
-        // value. `x--` mirrors with `(x -= 1) + 1`.
+        // `x++` ⇒ `(x -= -1) - 1`: write the increment back, evaluate to the
+        // old value, now a number (`s = '5'; s++` is 5). `x--` mirrors with
+        // `(x -= 1) + 1`.
         let write_back = Expression::Assignment {
-            operator: assign_op,
+            operator: AssignmentOperator::SubtractAssign,
             left: Box::new(target),
-            right: Box::new(Expression::NumericLiteral(1)),
+            right: Box::new(Expression::NumericLiteral(unit)),
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         };
         return Some(Ok(Expression::Binary {

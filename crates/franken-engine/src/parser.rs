@@ -11380,8 +11380,33 @@ fn find_top_level_else(s: &str) -> Option<usize> {
 /// collide with the operands: operands are evaluated as arguments in the
 /// enclosing scope, never inside the arrow body. Callers must pass
 /// `operands.len() >= 2` (a single operand needs no sequencing).
+/// Operands one sequence call takes. A longer comma sequence nests: the
+/// sequence of the operands so far is the first operand of the next call, so
+/// neither the call's argument list nor the arrow's parameter list grows with
+/// the sequence (a minified UMD export list `r.a=a,r.b=b,...` of 300
+/// assignments needed 300 registers: "register 256 out of bounds").
+const SEQUENCE_CHUNK: usize = 64;
+
 fn build_sequence_expression(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
     debug_assert!(operands.len() >= 2, "sequence needs >= 2 operands");
+    let mut operands = operands.into_iter();
+    let first: Vec<Expression> = operands.by_ref().take(SEQUENCE_CHUNK).collect();
+    let mut sequence = sequence_call(first, span);
+    loop {
+        let rest: Vec<Expression> = operands.by_ref().take(SEQUENCE_CHUNK - 1).collect();
+        if rest.is_empty() {
+            return sequence;
+        }
+        let mut next = Vec::with_capacity(rest.len() + 1);
+        next.push(sequence);
+        next.extend(rest);
+        sequence = sequence_call(next, span);
+    }
+}
+
+/// `((s0, ..., sn) => sn)(operands...)`: evaluates the operands left to
+/// right and yields the last.
+fn sequence_call(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
     let params: Vec<FunctionParam> = (0..operands.len())
         .map(|i| FunctionParam {
             pattern: BindingPattern::Identifier(format!("__seq_{i}")),

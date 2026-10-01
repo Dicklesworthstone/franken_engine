@@ -1,0 +1,99 @@
+//! bd-9vouw.122: %Array.prototype% lists its own keys.
+//!
+//! `Object.getOwnPropertyNames(Array.prototype)` was empty (Node v22: 40
+//! names), `Array.prototype.hasOwnProperty(Symbol.iterator)` was false and
+//! `Array.prototype.length` was undefined, although each method was already
+//! an own property to hasOwnProperty and getOwnPropertyDescriptor. PROGRAM
+//! checks the names in Node's order, `length` 0, the own @@iterator (key
+//! and descriptor), Reflect.ownKeys order, that Object.keys stays empty, and
+//! that a property a program adds comes last. NODE_OUTPUT is Node v22.2.0's
+//! output.
+//!
+//! `toLocaleString` is compared separately: the engine lists it exactly when
+//! Array.prototype has it as an own property, which it does not yet here
+//! (the read falls through to Object.prototype.toLocaleString).
+//! No-claim: @@unscopables is not listed, as Array.prototype has no
+//! @@unscopables object in this engine.
+
+#![forbid(unsafe_code)]
+
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+const PROGRAM: &str = r#"const names = Object.getOwnPropertyNames(Array.prototype);
+console.log(JSON.stringify(names.filter(function (name) { return name !== 'toLocaleString'; })));
+console.log(names.includes('toLocaleString') === Array.prototype.hasOwnProperty('toLocaleString'));
+console.log(Array.prototype.length, Array.prototype.hasOwnProperty('length'), Array.prototype.hasOwnProperty(Symbol.iterator), Object.getOwnPropertySymbols(Array.prototype).includes(Symbol.iterator));
+const keys = Reflect.ownKeys(Array.prototype);
+console.log(keys.indexOf('length'), keys.indexOf(Symbol.iterator) > keys.indexOf('toString'), typeof keys[keys.length - 1]);
+const d = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+console.log(d.value === Array.prototype.values, d.writable, d.enumerable, d.configurable);
+console.log(Object.keys(Array.prototype).length, Object.create(Array.prototype).length, [].length, [1, 2].length);
+Array.prototype.myExtra = 1;
+console.log(Object.getOwnPropertyNames(Array.prototype).slice(-1)[0]);
+delete Array.prototype.myExtra;
+console.log(Object.getOwnPropertyNames(Array.prototype).includes('myExtra'), Object.getOwnPropertyNames([]).join());"#;
+
+const NODE_OUTPUT: &str = r#"["length","constructor","at","concat","copyWithin","fill","find","findIndex","findLast","findLastIndex","lastIndexOf","pop","push","reverse","shift","unshift","slice","sort","splice","includes","indexOf","join","keys","entries","values","forEach","filter","flat","flatMap","map","every","some","reduce","reduceRight","toReversed","toSorted","toSpliced","with","toString"]
+true
+0 true true true
+0 true symbol
+true true false true
+0 0 0 2
+myExtra
+false length"#;
+
+fn console_output(source: &str) -> Result<String, String> {
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "array-prototype-own-keys.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .map_err(|error| format!("parse: {error:?}"))?;
+    let module = lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "array-prototype-own-keys.js"),
+        &LoweringContext::new("apk-trace", "apk-decision", "apk-policy"),
+    )
+    .map_err(|error| format!("lower: {error:?}"))?
+    .ir3;
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
+    ]
+    .into_iter()
+    .collect();
+    let mut core = InterpreterCore::new(config, "array-prototype-own-keys");
+    let result = core.execute(&module);
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes(),
+        "memory accounting drift"
+    );
+    let result = result.map_err(|error| format!("execute: {error:?}"))?;
+    Ok(result
+        .console_output
+        .iter()
+        .map(|entry| entry.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+#[test]
+fn array_prototype_own_keys_match_node() {
+    let output = console_output(PROGRAM).expect("the program runs");
+    for (index, (actual, expected)) in output.lines().zip(NODE_OUTPUT.lines()).enumerate() {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(output.lines().count(), NODE_OUTPUT.lines().count());
+}

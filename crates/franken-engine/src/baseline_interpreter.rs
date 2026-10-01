@@ -5645,6 +5645,50 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 
 /// The names Array.prototype[@@unscopables] blocks in a `with` body, as Node
 /// v22 lists them (ES2020 22.1.3.32 plus later additions).
+/// %Array.prototype%'s own string keys in Node v22's order (bd-9vouw.122).
+const ARRAY_PROTOTYPE_OWN_NAMES: [&str; 40] = [
+    "length",
+    "constructor",
+    "at",
+    "concat",
+    "copyWithin",
+    "fill",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "lastIndexOf",
+    "pop",
+    "push",
+    "reverse",
+    "shift",
+    "unshift",
+    "slice",
+    "sort",
+    "splice",
+    "includes",
+    "indexOf",
+    "join",
+    "keys",
+    "entries",
+    "values",
+    "forEach",
+    "filter",
+    "flat",
+    "flatMap",
+    "map",
+    "every",
+    "some",
+    "reduce",
+    "reduceRight",
+    "toReversed",
+    "toSorted",
+    "toSpliced",
+    "with",
+    "toLocaleString",
+    "toString",
+];
+
 const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
     "at",
     "copyWithin",
@@ -57590,6 +57634,10 @@ impl InterpreterCore {
                 self.canonical_prototype_own_virtual_value(*object_id, key)
                     .is_some()
             })
+            || matches!(
+                property_key,
+                RuntimePropertyKey::Symbol(symbol) if symbol == WellKnownSymbol::Iterator.id()
+            ) && self.builtin_prototypes.get("Array") == Some(object_id)
     }
 
     fn object_own_property_is_enumerable(&self, receiver: &Value, property: &Value) -> bool {
@@ -58916,6 +58964,8 @@ impl InterpreterCore {
             .into_iter()
             .map(|(key, _)| Value::Str(key))
             .collect();
+        let virtual_keys = self.canonical_prototype_virtual_own_keys(object_id);
+        keys.extend(virtual_keys.iter().cloned());
         let object = self
             .heap
             .get(object_id.0 as usize)
@@ -58932,9 +58982,34 @@ impl InterpreterCore {
                     }
                     RuntimePropertyKey::Symbol(symbol) => Some(Value::Symbol(symbol)),
                     RuntimePropertyKey::String(_) => None,
-                }),
+                })
+                .filter(|key| !virtual_keys.contains(key)),
         );
+        // String keys come before Symbol keys (ES2020 9.1.11.1).
+        keys.sort_by_key(|key| matches!(key, Value::Symbol(_)));
         Ok(keys)
+    }
+
+    /// bd-9vouw.122: the own keys %Array.prototype% supplies virtually, in
+    /// Node's order: `length`, `constructor`, the methods this engine serves,
+    /// and @@iterator. Empty for any other object. Without them
+    /// `Object.getOwnPropertyNames(Array.prototype)` was empty (Node: 40
+    /// names). No-claim: @@unscopables is not listed, as Array.prototype has
+    /// no @@unscopables object here.
+    fn canonical_prototype_virtual_own_keys(&self, object_id: ObjectId) -> Vec<Value> {
+        if self.builtin_prototypes.get("Array") != Some(&object_id) {
+            return Vec::new();
+        }
+        let mut keys: Vec<Value> = ARRAY_PROTOTYPE_OWN_NAMES
+            .iter()
+            .filter(|name| {
+                self.canonical_prototype_own_virtual_value(object_id, name)
+                    .is_some()
+            })
+            .map(|name| Value::str(*name))
+            .collect();
+        keys.push(Value::Symbol(WellKnownSymbol::Iterator.id()));
+        keys
     }
 
     fn proxy_aware_own_property_keys(
@@ -73319,9 +73394,18 @@ impl InterpreterCore {
             })
             .flatten()
             .or_else(|| {
-                let virtual_value = key
-                    .as_str()
-                    .and_then(|name| self.canonical_prototype_own_virtual_value(object_id, name))?;
+                let virtual_value = match key {
+                    // bd-9vouw.122: %Array.prototype%[@@iterator] is values.
+                    RuntimePropertyKey::Symbol(symbol)
+                        if *symbol == WellKnownSymbol::Iterator.id()
+                            && self.builtin_prototypes.get("Array") == Some(&object_id) =>
+                    {
+                        Some(Value::BuiltinFunction(BuiltinFunction::array_values()))
+                    }
+                    _ => key.as_str().and_then(|name| {
+                        self.canonical_prototype_own_virtual_value(object_id, name)
+                    }),
+                }?;
                 Some((
                     BaselineSymbolProperty::Data(virtual_value),
                     NON_ENUMERABLE_DATA_ATTRIBUTES,
@@ -84236,6 +84320,13 @@ impl InterpreterCore {
                             .into_iter()
                             .map(|(key, _)| Value::Str(key))
                             .collect::<Vec<_>>();
+                        // bd-9vouw.122: %Array.prototype%'s virtual names first.
+                        let virtual_names = self
+                            .canonical_prototype_virtual_own_keys(obj_id)
+                            .into_iter()
+                            .filter(|key| matches!(key, Value::Str(_)))
+                            .collect::<Vec<_>>();
+                        property_name_values.extend(virtual_names.iter().cloned());
                         property_name_values.extend(
                             self.heap
                                 .get(obj_id.0 as usize)
@@ -84244,7 +84335,8 @@ impl InterpreterCore {
                                 .exact_keys()
                                 .into_iter()
                                 .filter(|key| self.own_runtime_property_visible(obj_id, key))
-                                .map(Value::Str),
+                                .map(Value::Str)
+                                .filter(|key| !virtual_names.contains(key)),
                         );
                         self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&property_name_values)?;
@@ -96497,6 +96589,9 @@ impl InterpreterCore {
     fn canonical_prototype_method(name: &str, key: &str) -> Option<Value> {
         let defined = |value: Value| (!matches!(value, Value::Undefined)).then_some(value);
         match name {
+            // %Array.prototype% is itself an Array whose length is 0
+            // (ES2020 22.1.3), bd-9vouw.122.
+            "Array" if key == "length" => Some(Value::Int(0)),
             "Array" => Self::array_prototype_method(key).map(Value::BuiltinFunction),
             "String" => Self::string_prototype_method(key),
             "Number" => defined(Self::number_property_value(key)),

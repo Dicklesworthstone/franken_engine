@@ -5483,7 +5483,11 @@ fn parse_primary_expression(
         return Ok(Expression::UndefinedLiteral);
     }
     if expression == "this" {
-        return Ok(Expression::This);
+        return Ok(if context.strict_mode {
+            Expression::This
+        } else {
+            Expression::SloppyThis
+        });
     }
     if expression == "super" {
         return Err(unsupported_expression_syntax_error(
@@ -7632,6 +7636,7 @@ fn reject_non_assignable_update_target(
             | Expression::OptionalCall { .. }
             | Expression::OptionalMember { .. }
             | Expression::This
+            | Expression::SloppyThis
             | Expression::NewTarget
             | Expression::ImportMeta
             | Expression::StringLiteral(_)
@@ -8153,6 +8158,7 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::SloppyThis
         | Expression::NewTarget
         | Expression::ImportMeta
         | Expression::Super
@@ -13459,6 +13465,7 @@ fn field_initializer_forbidden(expression: &Expression) -> Option<&'static str> 
             | Expression::NullLiteral
             | Expression::UndefinedLiteral
             | Expression::This
+            | Expression::SloppyThis
             | Expression::NewTarget
             | Expression::ImportMeta
             | Expression::Raw(_)
@@ -19025,10 +19032,17 @@ mod tests {
         }
     }
 
+    /// `this` is sloppy in a script and strict in a module or after a
+    /// "use strict" directive (bd-9vouw.118).
     #[test]
     fn this_expression() {
         let tree = parse_script("this");
-        assert!(matches!(first_expr(&tree), Expression::This));
+        assert!(matches!(first_expr(&tree), Expression::SloppyThis));
+        let strict = parse_script("'use strict'; this");
+        assert!(matches!(
+            &strict.body[1],
+            Statement::Expression(statement) if matches!(statement.expression, Expression::This)
+        ));
     }
 
     #[test]

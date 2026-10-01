@@ -9776,6 +9776,22 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 dst: register,
             });
         }
+        // bd-9vouw.118: a non-strict, non-arrow function that reads `this`
+        // (itself or through an arrow) binds it once here, after the
+        // `arguments` marker that must stay first: an undefined or null this
+        // becomes the global object and a primitive its wrapper, in the
+        // frame, so every read and every arrow created later sees that
+        // object. The per-read conversions are then dropped below.
+        let sloppy_this_bound = !fn_is_arrow && function_reads_sloppy_this(body_ops);
+        if sloppy_this_bound {
+            let register = fn_reg;
+            fn_reg = fn_reg.saturating_add(1);
+            ir3.instructions.push(Ir3Instruction::HostCall {
+                capability: CapabilityTag(SLOPPY_THIS_CAPABILITY.to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: register,
+            });
+        }
 
         // When this function has free variables, put parameters on the
         // scope chain so LoadScoped can find them alongside captured
@@ -11479,6 +11495,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         reason: *reason,
                     });
                 }
+                // The prologue bound this function's sloppy `this`: the value
+                // LoadThis left is already converted (bd-9vouw.118).
+                Ir1Op::HostCall {
+                    capability,
+                    arg_count: 1,
+                } if sloppy_this_bound && capability == SLOPPY_THIS_CAPABILITY => {}
                 // HostCall in a function body — same lowering as module level
                 // (bd-bg9l1.27.10). A builtin recognized at lowering (e.g.
                 // `Symbol.iterator` or `new Error(...)`) can appear inside
@@ -17338,6 +17360,17 @@ fn lower_expression_to_ir1_inner(
         Expression::This => {
             ops.push(Ir1Op::LoadThis);
         }
+        // bd-9vouw.118: OrdinaryCallBindThis for non-strict code. A
+        // non-arrow function whose body reads `this` binds it once in its
+        // prologue instead ([`SLOPPY_THIS_CAPABILITY`] with no operand), and
+        // its IR3 lowering drops these per-read calls.
+        Expression::SloppyThis => {
+            ops.push(Ir1Op::LoadThis);
+            ops.push(Ir1Op::HostCall {
+                capability: SLOPPY_THIS_CAPABILITY.to_string(),
+                arg_count: 1,
+            });
+        }
         Expression::NewTarget => {
             ops.push(Ir1Op::LoadNewTarget);
         }
@@ -18835,9 +18868,28 @@ fn lower_expression_to_ir1_inner(
 /// Internal intrinsic yielding a function's unmapped `arguments` object
 /// (bd-9vouw.25). It is emitted only as the first instruction of a function.
 pub(crate) const ARGUMENTS_OBJECT_CAPABILITY: &str = "builtin:ArgumentsObject";
+/// Internal hostcall binding a non-strict `this` (bd-9vouw.118): with one
+/// argument, the converted value of a `this` read; with none, a function
+/// prologue that converts its frame's `this` in place.
+pub(crate) const SLOPPY_THIS_CAPABILITY: &str = "builtin:SloppyThis";
 
 /// Whether a function body reads `arguments`, directly or through nested
 /// arrow functions (which have no `arguments` of their own).
+/// Whether a function body reads a non-strict `this` (bd-9vouw.118): a
+/// [`SLOPPY_THIS_CAPABILITY`] conversion in it or in an arrow function it
+/// contains, whose `this` is this function's.
+fn function_reads_sloppy_this(body_ops: &[Ir1Op]) -> bool {
+    body_ops.iter().any(|op| match op {
+        Ir1Op::HostCall { capability, .. } => capability == SLOPPY_THIS_CAPABILITY,
+        Ir1Op::CreateFunction {
+            is_arrow: true,
+            body_ops,
+            ..
+        } => function_reads_sloppy_this(body_ops),
+        _ => false,
+    })
+}
+
 fn function_reads_arguments(
     runtime_global_loads: &[(String, BindingId)],
     body_ops: &[Ir1Op],

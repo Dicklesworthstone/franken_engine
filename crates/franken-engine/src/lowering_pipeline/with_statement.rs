@@ -354,6 +354,7 @@ pub(super) fn walk_expression<W: Walk + ?Sized>(
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::SloppyThis
         | Expression::NewTarget
         | Expression::ImportMeta
         | Expression::Raw(_)
@@ -649,6 +650,7 @@ impl Search {
             | Expression::NullLiteral
             | Expression::UndefinedLiteral
             | Expression::This
+            | Expression::SloppyThis
             | Expression::NewTarget
             | Expression::ImportMeta
             | Expression::Raw(_)

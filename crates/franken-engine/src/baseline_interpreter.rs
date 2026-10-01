@@ -943,6 +943,10 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "GeneratorFunction" => Some("GeneratorFunction"),
         "AsyncFunction" => Some("AsyncFunction"),
         "AsyncGeneratorFunction" => Some("AsyncGeneratorFunction"),
+        ITERATOR_PROTOTYPE => Some(ITERATOR_PROTOTYPE),
+        ARRAY_ITERATOR_PROTOTYPE => Some(ARRAY_ITERATOR_PROTOTYPE),
+        GENERATOR_PROTOTYPE => Some(GENERATOR_PROTOTYPE),
+        ASYNC_GENERATOR_PROTOTYPE => Some(ASYNC_GENERATOR_PROTOTYPE),
         _ => None,
     }
 }
@@ -5542,6 +5546,15 @@ const TYPED_ARRAY_INTRINSIC: &str = "TypedArray";
 /// Array.prototype algorithm (`some`, `indexOf`, ...): they are distinct
 /// functions whose receiver must be a typed array.
 const TYPED_ARRAY_PROTOTYPE_SPECIFIER: &str = "%TypedArray%.prototype";
+/// %IteratorPrototype% (ES2020 25.1.2), %ArrayIteratorPrototype% (22.1.5.2),
+/// %GeneratorPrototype% (25.4.1) and %AsyncGeneratorPrototype% (ES2018
+/// 25.5.1): prototypes no global names, the [[Prototype]] an iterator,
+/// generator or async generator value reports. Their names are not
+/// identifiers, so no `builtin:proto:` tag can reach them.
+const ITERATOR_PROTOTYPE: &str = "%IteratorPrototype%";
+const ARRAY_ITERATOR_PROTOTYPE: &str = "%ArrayIteratorPrototype%";
+const GENERATOR_PROTOTYPE: &str = "%GeneratorPrototype%";
+const ASYNC_GENERATOR_PROTOTYPE: &str = "%AsyncGeneratorPrototype%";
 /// %GeneratorFunction%, %AsyncFunction% and %AsyncGeneratorFunction% (ES2020
 /// 25.2, 25.7; ES2018 25.3): standard constructors that are not global
 /// bindings, reached as the `constructor` of their prototypes, which are the
@@ -38651,13 +38664,18 @@ impl InterpreterCore {
                 Ok(value)
             }
             BuiltinFunctionKind::IteratorNext => {
-                let iterator_handle =
-                    builtin
-                        .iterator_handle
-                        .ok_or_else(|| InterpreterError::TypeError {
-                            expected: "iterator-bound builtin".to_string(),
-                            got: "missing iterator handle".to_string(),
-                        })?;
+                // A bound `it.next`, or %ArrayIteratorPrototype%.next called
+                // on an iterator (`proto.next.call(it)`).
+                let iterator_handle = builtin
+                    .iterator_handle
+                    .or(match &receiver {
+                        Some(Value::Iterator(handle)) => Some(*handle),
+                        _ => None,
+                    })
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "array iterator receiver for next".to_string(),
+                        got: "missing iterator handle".to_string(),
+                    })?;
                 let next_value =
                     self.advance_for_of_iterator(Some(module), Value::Iterator(iterator_handle))?;
                 self.alloc_iterator_result_object(next_value)
@@ -41948,16 +41966,9 @@ impl InterpreterCore {
                 }
                 self.init_for_of_iterator(None, receiver)
             }
-            BuiltinFunctionKind::GeneratorIteratorSelf => {
-                let receiver = receiver.unwrap_or(Value::Undefined);
-                if !matches!(receiver, Value::Generator(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "generator iterator receiver".to_string(),
-                        got: receiver.type_name().to_string(),
-                    });
-                }
-                Ok(receiver)
-            }
+            // %IteratorPrototype%[@@iterator] (ES2020 25.1.2.1), which
+            // generators inherit: it returns its receiver, whatever it is.
+            BuiltinFunctionKind::GeneratorIteratorSelf => Ok(receiver.unwrap_or(Value::Undefined)),
             BuiltinFunctionKind::AsyncGeneratorIteratorSelf => {
                 Ok(receiver.unwrap_or(Value::Undefined))
             }
@@ -49194,18 +49205,13 @@ impl InterpreterCore {
                         }
                         _ => None,
                     };
-                    // A function whose own properties lack the key continues
-                    // its [[Get]] on its intrinsic prototype, a generator
-                    // object or an iterator on Object.prototype (after the
-                    // match).
+                    // A function, generator object or iterator whose own
+                    // properties lack the key continues its [[Get]] on its
+                    // intrinsic prototype (after the match).
                     let inherited_base = if function_backing.is_none() {
                         Self::function_intrinsic_prototype_name(&obj_val)
-                            .or(match obj_val {
-                                Value::Generator(_)
-                                | Value::AsyncGeneratorObject(_)
-                                | Value::Iterator(_) => Some("Object"),
-                                _ => None,
-                            })
+                            .or(Self::exotic_intrinsic_prototype_name(&obj_val)
+                                .filter(|name| *name != "Promise"))
                             .map(|prototype| (prototype, obj_val.clone()))
                     } else {
                         None
@@ -49555,8 +49561,9 @@ impl InterpreterCore {
                     // `valueOf`, `__proto__` and members a program adds
                     // (`Function.prototype.method = ...`) reach every
                     // function. They read undefined. Generator objects and
-                    // iterators reach Object.prototype after their own
-                    // methods (`it.toString`, `it.hasOwnProperty`).
+                    // iterators reach %GeneratorPrototype% /
+                    // %ArrayIteratorPrototype%, then Object.prototype, after
+                    // their own methods (`it.toString`, `it[Symbol.toStringTag]`).
                     let prop = match inherited_base {
                         Some((prototype, base))
                             if matches!(prop, Value::Undefined) && primitive_owner.is_none() =>
@@ -53107,12 +53114,13 @@ impl InterpreterCore {
                 if supplied {
                     return Ok(Value::Bool(true));
                 }
-                if matches!(object_like, Value::Promise(_))
-                    && let Some(&promise_prototype) = self.builtin_prototypes.get("Promise")
+                if let Some(&intrinsic_prototype) =
+                    Self::exotic_intrinsic_prototype_name(object_like)
+                        .and_then(|name| self.builtin_prototypes.get(name))
                 {
                     return Ok(Value::Bool(self.proxy_aware_has_runtime_property(
                         Some(module),
-                        promise_prototype,
+                        intrinsic_prototype,
                         &key,
                         0,
                     )?));
@@ -60060,11 +60068,9 @@ impl InterpreterCore {
         {
             return Ok(own);
         }
-        let prototype = if matches!(value, Value::Promise(_)) {
-            "Promise"
-        } else {
-            "Object"
-        };
+        // Unallocated intrinsic prototypes hold no program-added members, so
+        // reading through Object.prototype then is the same answer.
+        let prototype = Self::exotic_intrinsic_prototype_name(value).unwrap_or("Object");
         Ok(self
             .primitive_prototype_get(module, prototype, key, value.clone())?
             .0)
@@ -66876,7 +66882,7 @@ impl InterpreterCore {
             Value::Accessor { .. } => "[object Object]".to_string(),
             Value::Function(_) => "[object Function]".to_string(),
             Value::Closure(_) => "[object Function]".to_string(),
-            Value::Iterator(_) => "[object Iterator]".to_string(),
+            Value::Iterator(_) => "[object Array Iterator]".to_string(),
             Value::GeneratorFunction(_) => "[object GeneratorFunction]".to_string(),
             Value::Generator(_) => "[object Generator]".to_string(),
             Value::AsyncFunction(_) => "[object AsyncFunction]".to_string(),
@@ -66909,7 +66915,7 @@ impl InterpreterCore {
             Value::AsyncFunctionObject(_) => "[object AsyncFunction]".to_string(),
             Value::AsyncGeneratorFunction(_) => "[object AsyncGeneratorFunction]".to_string(),
             Value::AsyncGeneratorObject(_) => "[object AsyncGenerator]".to_string(),
-            Value::Iterator(_) => "[object Iterator]".to_string(),
+            Value::Iterator(_) => "[object Array Iterator]".to_string(),
             Value::Promise(_) => "[object Promise]".to_string(),
         }
     }
@@ -95219,6 +95225,16 @@ impl InterpreterCore {
             "GeneratorFunction" | "AsyncFunction" | "AsyncGeneratorFunction" => {
                 Some(self.ensure_builtin_prototype("Function")?)
             }
+            // ES2020 25.1.2, 22.1.5.2, 25.4.1: %IteratorPrototype% inherits
+            // from Object.prototype, the array iterator and generator
+            // prototypes from it. %AsyncGeneratorPrototype%'s
+            // %AsyncIteratorPrototype% is not modeled (Object.prototype).
+            ITERATOR_PROTOTYPE | ASYNC_GENERATOR_PROTOTYPE => {
+                Some(self.ensure_builtin_prototype("Object")?)
+            }
+            ARRAY_ITERATOR_PROTOTYPE | GENERATOR_PROTOTYPE => {
+                Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?)
+            }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
             // ES2020 22.2.6: the concrete typed array prototypes inherit the
@@ -95281,6 +95297,18 @@ impl InterpreterCore {
                 },
             )?;
         }
+        self.install_iteration_prototype_members(canonical, prototype)?;
+        // %GeneratorFunction.prototype%.prototype is %GeneratorPrototype%
+        // (ES2020 25.2.3.2), linked when that one is created.
+        match canonical {
+            "GeneratorFunction" => {
+                self.ensure_builtin_prototype(GENERATOR_PROTOTYPE)?;
+            }
+            "AsyncGeneratorFunction" => {
+                self.ensure_builtin_prototype(ASYNC_GENERATOR_PROTOTYPE)?;
+            }
+            _ => {}
+        }
         if ERROR_PROTOTYPE_NAMES.contains(&canonical) {
             // ES2020 19.5.3.2-3 / 19.5.6.3.2-3: `name` and `message` live on
             // the prototypes, so instances inherit them and a subclass's
@@ -95296,6 +95324,98 @@ impl InterpreterCore {
             }
         }
         Ok(prototype)
+    }
+
+    /// Own members of the iteration intrinsics (ES2020 25.1.2.1, 22.1.5.2,
+    /// 25.4.1; ES2018 25.5.1): %IteratorPrototype%[@@iterator] returns its
+    /// receiver; %ArrayIteratorPrototype% has `next`; the generator
+    /// prototypes have `next`/`return`/`throw` and a `constructor` that is
+    /// their function kind's prototype, whose `prototype` they are (each
+    /// non-writable, configurable). Methods are writable, configurable and
+    /// not enumerable; each has an @@toStringTag. A no-op for other names.
+    fn install_iteration_prototype_members(
+        &mut self,
+        canonical: &str,
+        prototype: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let method = |name: &str, kind| {
+            (
+                RuntimePropertyKey::String(JsString::from(name)),
+                Value::BuiltinFunction(BuiltinFunction::new_kind(kind)),
+            )
+        };
+        let (tag, members, function_kind) = match canonical {
+            ITERATOR_PROTOTYPE => {
+                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+                let value = Value::BuiltinFunction(BuiltinFunction::generator_iterator_self());
+                self.set_object_runtime_property(prototype, key.clone(), value)?;
+                return self.set_own_property_attributes(
+                    prototype,
+                    &key,
+                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                );
+            }
+            ARRAY_ITERATOR_PROTOTYPE => (
+                "Array Iterator",
+                vec![method("next", BuiltinFunctionKind::IteratorNext)],
+                None,
+            ),
+            GENERATOR_PROTOTYPE => (
+                "Generator",
+                vec![
+                    method("next", BuiltinFunctionKind::GeneratorNext),
+                    method("return", BuiltinFunctionKind::GeneratorReturn),
+                    method("throw", BuiltinFunctionKind::GeneratorThrow),
+                ],
+                Some("GeneratorFunction"),
+            ),
+            ASYNC_GENERATOR_PROTOTYPE => (
+                "AsyncGenerator",
+                vec![
+                    method("next", BuiltinFunctionKind::AsyncGeneratorNext),
+                    method("return", BuiltinFunctionKind::AsyncGeneratorReturn),
+                    method("throw", BuiltinFunctionKind::AsyncGeneratorThrow),
+                    (
+                        RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
+                        Value::BuiltinFunction(BuiltinFunction::new_kind(
+                            BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
+                        )),
+                    ),
+                ],
+                Some("AsyncGeneratorFunction"),
+            ),
+            _ => return Ok(()),
+        };
+        for (key, value) in members {
+            self.set_object_runtime_property(prototype, key.clone(), value)?;
+            self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+        }
+        let read_only = PropertyAttributes {
+            writable: false,
+            enumerable: false,
+            configurable: true,
+        };
+        let tag_key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+        self.set_object_runtime_property(prototype, tag_key.clone(), Value::str(tag))?;
+        self.set_own_property_attributes(prototype, &tag_key, read_only)?;
+        if let Some(function_kind) = function_kind {
+            let function_prototype = self.ensure_builtin_prototype(function_kind)?;
+            let constructor = RuntimePropertyKey::String(JsString::from("constructor"));
+            self.set_object_runtime_property(
+                prototype,
+                constructor.clone(),
+                Value::Object(function_prototype),
+            )?;
+            self.set_own_property_attributes(prototype, &constructor, read_only)?;
+            let link = RuntimePropertyKey::String(JsString::from("prototype"));
+            self.set_object_runtime_property(
+                function_prototype,
+                link.clone(),
+                Value::Object(prototype),
+            )?;
+            self.set_own_property_attributes(function_prototype, &link, read_only)?;
+        }
+        Ok(())
     }
 
     fn builtin_subclass_ancestor_name(
@@ -95736,6 +95856,20 @@ impl InterpreterCore {
             Value::GeneratorFunction(_) => Some("GeneratorFunction"),
             Value::AsyncFunction(_) => Some("AsyncFunction"),
             Value::AsyncGeneratorFunction(_) => Some("AsyncGeneratorFunction"),
+            _ => None,
+        }
+    }
+
+    /// The intrinsic prototype a promise, generator, async generator or
+    /// iterator value (no property storage of its own) reports and inherits
+    /// from. Map, Set and String iterators are array iterators over a
+    /// snapshot here, so every iterator reports %ArrayIteratorPrototype%.
+    pub(super) fn exotic_intrinsic_prototype_name(value: &Value) -> Option<&'static str> {
+        match value {
+            Value::Promise(_) => Some("Promise"),
+            Value::Generator(_) => Some(GENERATOR_PROTOTYPE),
+            Value::AsyncGeneratorObject(_) => Some(ASYNC_GENERATOR_PROTOTYPE),
+            Value::Iterator(_) => Some(ARRAY_ITERATOR_PROTOTYPE),
             _ => None,
         }
     }
@@ -149531,7 +149665,8 @@ mod tests {
             Value::BuiltinFunction(BuiltinFunction::require("console")),
             "[object Function]",
         );
-        run_to_string(&mut core, Value::Iterator(3), "[object Iterator]");
+        // An iterator's @@toStringTag is %ArrayIteratorPrototype%'s.
+        run_to_string(&mut core, Value::Iterator(3), "[object Array Iterator]");
         run_to_string(
             &mut core,
             Value::GeneratorFunction(4),

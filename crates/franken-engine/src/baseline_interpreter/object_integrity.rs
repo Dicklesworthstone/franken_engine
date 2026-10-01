@@ -97,12 +97,20 @@ impl InterpreterCore {
                     )),
                 };
             }
-            // A Promise value has no ordinary property storage; it inherits
-            // from the realm's %Promise.prototype% (bd-9vouw.34).
-            if matches!(target, Value::Promise(_))
-                && matches!(operation, ObjectIntegrityOperation::GetPrototype)
-            {
-                return Ok(Value::Object(self.ensure_builtin_prototype("Promise")?));
+            // A promise, generator, async generator or iterator value has no
+            // ordinary property storage; it inherits from its intrinsic
+            // prototype (%Promise.prototype%, bd-9vouw.34; %GeneratorPrototype%,
+            // %AsyncGeneratorPrototype%, %ArrayIteratorPrototype%), which
+            // core-js and regenerator-runtime read at load
+            // (`getProto(getProto([].keys()))`), and it is extensible.
+            if let Some(name) = Self::exotic_intrinsic_prototype_name(&target) {
+                match operation {
+                    ObjectIntegrityOperation::GetPrototype => {
+                        return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
+                    }
+                    ObjectIntegrityOperation::IsExtensible => return Ok(Value::Bool(true)),
+                    _ => {}
+                }
             }
             let target_id = match &target {
                 value if value.is_object_like() => Some(self.reflection_target_object(value)?),

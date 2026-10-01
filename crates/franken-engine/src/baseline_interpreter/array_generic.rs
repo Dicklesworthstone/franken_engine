@@ -98,9 +98,30 @@ impl InterpreterCore {
                         (object.is_array, object.typed_array.is_some())
                     });
                 if is_array || self.builtin_prototypes.get("Array") == Some(&object_id) {
+                    // A length-changing method on an Array whose `length`
+                    // is not writable (defineProperty, freeze) runs
+                    // generically: its Set(O, "length", len, true) fails with
+                    // a TypeError (ES2020 23.1.3.17 and relatives), where the
+                    // element-storage path changed the length anyway.
+                    let length_locked =
+                        matches!(
+                            kind,
+                            K::ArrayPush
+                                | K::ArrayPop
+                                | K::ArrayShift
+                                | K::ArrayUnshift
+                                | K::ArraySplice
+                        ) && self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                            !object
+                                .own_property_attributes(&RuntimePropertyKey::String(
+                                    JsString::from("length"),
+                                ))
+                                .writable
+                        });
                     let generic = (kind == K::ArrayConcat
                         && self.concat_spreads_generically(object_id, args)?)
-                        || self.converts_object_argument(kind, args)?;
+                        || self.converts_object_argument(kind, args)?
+                        || length_locked;
                     return Ok(generic.then_some(object_id));
                 }
                 Ok((!is_typed_array && !iterator).then_some(object_id))

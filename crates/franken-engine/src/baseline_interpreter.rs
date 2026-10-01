@@ -13385,6 +13385,15 @@ pub struct InterpreterCore {
     ip: usize,
     /// Instructions executed counter.
     instructions_executed: u64,
+    /// Holes visited by native element reads (`array_index_value`), which
+    /// count against the instruction budget with `instructions_executed`
+    /// (bd-9vouw.112). Builtins loop natively over an array-like's
+    /// guest-chosen length (`indexOf.call({ length: 2 ** 40 })`). Present
+    /// elements are bounded by the memory budget that holds them; holes are
+    /// bounded by nothing else. Kept apart from `instructions_executed` so
+    /// reported instruction counts do not change. A `Cell`, as the reads are
+    /// `&self`.
+    native_hole_reads: Cell<u64>,
     /// Source instructions handled by the compact Tier-I dispatch in the
     /// current execution.
     tier_i_instructions_executed: u64,
@@ -14591,6 +14600,7 @@ impl InterpreterCore {
             ),
             ip: 0,
             instructions_executed: 0,
+            native_hole_reads: Cell::new(0),
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
             witness_events: Vec::new(),
@@ -34288,6 +34298,7 @@ impl InterpreterCore {
         // A repeat run replays the previous run's budget and trace domain
         // from zero; both accumulate across `execute` calls otherwise.
         self.instructions_executed = 0;
+        self.native_hole_reads.set(0);
         self.tier_i_instructions_executed = 0;
         self.tier_i_specialized_instructions_executed = 0;
         self.nondeterminism_trace = NondeterminismTrace::new(&self.trace_id);
@@ -39722,10 +39733,12 @@ impl InterpreterCore {
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayCopyWithin => {
-                // ES2015 23.1.3.3: copy the subsequence `[start, end)` to
+                // ES2020 22.1.3.3: copy the subsequence `[start, end)` to
                 // `target`, in place; negative indices count from the end;
-                // returns the array. The source slice is snapshotted first so
-                // overlapping ranges copy correctly.
+                // returns the array. Overlapping ranges copy back to front, so
+                // each source is read before it is overwritten, and a hole
+                // deletes its target. The count is guest-chosen (bd-9vouw.112):
+                // nothing is buffered, and hole reads count against the budget.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(arr_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -39747,16 +39760,19 @@ impl InterpreterCore {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
                 let count = end.saturating_sub(start).min(len.saturating_sub(target));
-                let mut buf = Vec::with_capacity(count);
-                for i in 0..count {
-                    buf.push(
-                        self.array_index_value(arr_id, start + i)?
-                            .unwrap_or(Value::Undefined),
-                    );
+                let backward = start < target && target < start + count;
+                let was_dense = self.array_cache_is_dense(arr_id);
+                for step in 0..count {
+                    let offset = if backward { count - 1 - step } else { step };
+                    let to = (target + offset).to_string();
+                    match self.array_index_value(arr_id, start + offset)? {
+                        Some(value) => self.set_object_property(arr_id, to, value)?,
+                        None => {
+                            self.remove_object_property(arr_id, &to)?;
+                        }
+                    }
                 }
-                for (i, value) in buf.into_iter().enumerate() {
-                    self.set_object_property(arr_id, (target + i).to_string(), value)?;
-                }
+                self.refresh_dense_length_cache(arr_id, len, was_dense);
                 Ok(Value::Object(arr_id))
             }
             BuiltinFunctionKind::ArraySome => {
@@ -67196,7 +67212,24 @@ impl InterpreterCore {
         }
         // Inherited elements count, as for [[Get]]/HasProperty: an object
         // whose prototype is an array sees that array's elements.
-        Ok(self.chain_data_property(array_id, &key).cloned())
+        let value = self.chain_data_property(array_id, &key).cloned();
+        if value.is_none() {
+            self.charge_native_hole_read()?;
+        }
+        Ok(value)
+    }
+
+    /// One hole visited by a native element loop (bd-9vouw.112).
+    fn charge_native_hole_read(&self) -> Result<(), InterpreterError> {
+        let reads = self.native_hole_reads.get().saturating_add(1);
+        self.native_hole_reads.set(reads);
+        if self.instructions_executed.saturating_add(reads) > self.config.instruction_budget {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        Ok(())
     }
 
     fn set_object_from_entry_pair(

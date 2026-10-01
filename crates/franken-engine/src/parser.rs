@@ -3924,13 +3924,14 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
 }
 
 /// Returns true when `text` starts with the keyword `kw` followed by a
-/// non-alphanumeric, non-underscore character (or end of string).
+/// character that cannot continue an identifier (or end of string), so
+/// `forêt` and `let$` are names, not keywords.
 fn starts_with_keyword(text: &str, kw: &str) -> bool {
-    text.starts_with(kw)
-        && text
-            .as_bytes()
-            .get(kw.len())
-            .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
+    text.strip_prefix(kw).is_some_and(|rest| {
+        rest.chars()
+            .next()
+            .is_none_or(|ch| !is_identifier_continue(ch))
+    })
 }
 
 /// The rest of a class element after the modifier `keyword` (`static`,
@@ -6891,9 +6892,9 @@ fn ends_with_postfix_update(lhs: &str) -> bool {
     };
     operand
         .trim_end()
-        .as_bytes()
-        .last()
-        .is_some_and(|&c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'$' | b')' | b']'))
+        .chars()
+        .next_back()
+        .is_some_and(|c| is_identifier_continue(c) || matches!(c, ')' | ']'))
 }
 
 /// A sign in a decimal exponent belongs to its numeric token, not an
@@ -9765,12 +9766,39 @@ fn count_lexical_tokens_scalar_reference(input: &str) -> u64 {
     token_count
 }
 
+/// Unicode ID_Start and ID_Continue (ES2020 11.6: UnicodeIDStart,
+/// UnicodeIDContinue), for characters outside ASCII.
+fn unicode_identifier_sets() -> &'static (regex::Regex, regex::Regex) {
+    static SETS: std::sync::OnceLock<(regex::Regex, regex::Regex)> = std::sync::OnceLock::new();
+    SETS.get_or_init(|| {
+        let set = |property: &str| {
+            regex::Regex::new(&format!(r"^\p{{{property}}}$")).expect("Unicode identifier property")
+        };
+        (set("ID_Start"), set("ID_Continue"))
+    })
+}
+
 fn is_identifier_start(ch: char) -> bool {
-    ch.is_ascii_alphabetic() || ch == '_' || ch == '$'
+    if ch.is_ascii() {
+        return ch.is_ascii_alphabetic() || ch == '_' || ch == '$';
+    }
+    let mut buffer = [0u8; 4];
+    unicode_identifier_sets()
+        .0
+        .is_match(ch.encode_utf8(&mut buffer))
 }
 
 fn is_identifier_continue(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
+    if ch.is_ascii() {
+        return ch.is_ascii_alphanumeric() || ch == '_' || ch == '$';
+    }
+    // ZWNJ and ZWJ may continue an identifier (ES2020 11.6).
+    let mut buffer = [0u8; 4];
+    ch == '\u{200C}'
+        || ch == '\u{200D}'
+        || unicode_identifier_sets()
+            .1
+            .is_match(ch.encode_utf8(&mut buffer))
 }
 
 /// Decode the `\uXXXX` / `\u{X..}` `UnicodeEscapeSequence`s permitted in an
@@ -17068,6 +17096,25 @@ mod tests {
         assert!(is_identifier_start('$'));
         assert!(!is_identifier_start('0'));
         assert!(!is_identifier_start('-'));
+        // Non-ASCII letters (ID_Start), including Other_ID_Start (U+2118).
+        for ch in ['\u{3C0}', '\u{410}', '\u{E9}', '\u{4E2D}', '\u{2118}'] {
+            assert!(is_identifier_start(ch), "{ch:?}");
+        }
+        // Combining marks, digits, ZWJ and punctuation cannot start one.
+        for ch in ['\u{301}', '\u{660}', '\u{200D}', '\u{B7}', '\u{2014}'] {
+            assert!(!is_identifier_start(ch), "{ch:?}");
+        }
+    }
+
+    #[test]
+    fn is_identifier_continue_unicode_cases() {
+        for ch in ['\u{301}', '\u{660}', '\u{200C}', '\u{200D}', '\u{B7}'] {
+            assert!(is_identifier_continue(ch), "{ch:?}");
+        }
+        assert!(!is_identifier_continue('\u{2014}'));
+        assert!(is_identifier("\u{3C0}"));
+        assert!(is_identifier("caf\u{E9}\u{301}"));
+        assert!(!is_identifier("\u{301}x"));
     }
 
     #[test]

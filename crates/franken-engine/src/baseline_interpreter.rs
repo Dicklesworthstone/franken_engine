@@ -74,6 +74,7 @@ use url::{Url, form_urlencoded};
 use zeroize::Zeroizing;
 
 mod array_from;
+mod array_generic;
 mod async_generator;
 mod bigint_ops;
 mod builtin_function_lengths;
@@ -37955,15 +37956,14 @@ impl InterpreterCore {
 
     /// Single semantic implementation shared by the direct
     /// `builtin:ArrayIsArray` hostcall and its first-class callable twin.
-    fn array_is_array_value(&self, arg: Option<Value>) -> Value {
+    /// Array.isArray (ES2020 7.2.2 IsArray): a proxy answers for its target,
+    /// and Array.prototype is itself an array.
+    fn array_is_array_value(&self, arg: Option<Value>) -> Result<Value, InterpreterError> {
         let is_array = match arg {
-            Some(Value::Object(object_id)) => self
-                .heap
-                .get(object_id.0 as usize)
-                .is_some_and(|object| object.is_array),
+            Some(Value::Object(object_id)) => self.generic_is_array(object_id)?,
             _ => false,
         };
-        Value::Bool(is_array)
+        Ok(Value::Bool(is_array))
     }
 
     /// Keep the Writable lifecycle lane out of the monolithic builtin
@@ -38105,6 +38105,18 @@ impl InterpreterCore {
         // builtin called on a wrapper object works on its primitive.
         if let Some(Value::Object(object_id)) = receiver {
             receiver = Some(self.this_primitive_receiver(builtin, object_id));
+        }
+        // Array.prototype methods on a Proxy run over its traps, and so
+        // does a concat that spreads one.
+        if Self::has_generic_array_path(builtin.kind)
+            && let Some(Value::Object(object_id)) = receiver
+            && (self.active_proxy_record(object_id)?.is_some()
+                || (builtin.kind == BuiltinFunctionKind::ArrayConcat
+                    && self.any_proxy_argument(args)?))
+            && let Some(result) =
+                self.array_method_on_proxy(module, builtin.kind, object_id, args)?
+        {
+            return Ok(result);
         }
         match builtin.kind {
             BuiltinFunctionKind::AsyncGeneratorNext
@@ -38658,7 +38670,7 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ArrayIsArray => {
                 let arg = self.builtin_arg(args, 0)?;
-                Ok(self.array_is_array_value(arg))
+                self.array_is_array_value(arg)
             }
             BuiltinFunctionKind::StreamReadablePause => {
                 self.readable_pause(receiver.unwrap_or(Value::Undefined))
@@ -79819,7 +79831,7 @@ impl InterpreterCore {
             }
             "builtin:ArrayIsArray" => {
                 let arg = self.builtin_arg(args, 0)?;
-                Ok(self.array_is_array_value(arg))
+                self.array_is_array_value(arg)
             }
             "builtin:ArrayIsArrayFunction" => {
                 Ok(Value::BuiltinFunction(BuiltinFunction::array_is_array()))

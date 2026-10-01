@@ -102,3 +102,65 @@ fn proxy_constructor_value_matches_node() {
         mismatches.join("\n")
     );
 }
+
+/// Array.prototype methods on a Proxy of an array run over its traps
+/// (ES2020 23.1.3): they read and write the target through [[Get]]/[[Set]]/
+/// [[HasProperty]]/[[Delete]]. They used the receiver's own element storage,
+/// which a proxy lacks: `push` changed nothing, `map` gave [], `indexOf` -1
+/// and `Array.isArray(proxy)` false (immer drafts, reactive arrays).
+/// (name, program, Node v22.2.0 output)
+const ARRAY_CASES: &[(&str, &str, &str)] = &[
+    (
+        "push_through_traps",
+        r#"const target = [1, 2]; const log = []; const p = new Proxy(target, { get(t, k, r) { log.push('get:' + String(k)); return Reflect.get(t, k, r); }, set(t, k, v, r) { log.push('set:' + String(k)); return Reflect.set(t, k, v, r); } }); p.push(3); console.log(target.join() + ' ' + log.join());"#,
+        "1,2,3 get:push,get:length,set:2,set:length",
+    ),
+    (
+        "reading_methods",
+        r#"const q = new Proxy([3, 1, 2], {}); console.log([q.map((x) => x * 2).join(), q.indexOf(1), Array.isArray(q), q.slice(1).join(), q.includes(2), q.join('-'), q.filter((x) => x > 1).join(), q.reduce((a, b) => a + b, 0), q.find((x) => x < 3), q.findIndex((x) => x === 2), q.some((x) => x > 2), q.every((x) => x > 0), String(q), q.at(-1)].join('|'));"#,
+        "6,2,4|1|true|1,2|true|3-1-2|3,2|6|1|2|true|true|3,1,2|2",
+    ),
+    (
+        "sort_and_reverse_in_place",
+        r#"const r = new Proxy([5, 3, 4, 1], {}); r.sort(); r.reverse(); console.log(r.join() + ' ' + r.length);"#,
+        "5,4,3,1 4",
+    ),
+    (
+        "splice",
+        r#"const s = new Proxy([1, 2, 3, 4, 5], {}); const removed = s.splice(1, 2, 'a', 'b', 'c'); console.log(removed.join() + ' ' + s.join() + ' ' + s.length);"#,
+        "2,3 1,a,b,c,4,5 6",
+    ),
+    (
+        "unshift_pop_shift",
+        r#"const u = new Proxy([2], {}); u.unshift(0, 1); console.log(u.pop() + ' ' + u.shift() + ' ' + u.join() + ' ' + u.length);"#,
+        "2 0 1 1",
+    ),
+    (
+        "iteration_and_concat",
+        r#"console.log([...new Proxy(['x', 'y'], {})].join() + ' ' + Array.from(new Proxy([7, 8], {}).entries()).join(';') + ' ' + [].concat(new Proxy([1, 2], {}), 3).join());"#,
+        "x,y 0,7;1,8 1,2,3",
+    ),
+    (
+        "is_array_and_copying_methods",
+        r#"console.log(Array.isArray(Array.prototype) + ' ' + Array.isArray(new Proxy({}, {})) + ' ' + new Proxy([1, 2, 3], {}).toSorted((a, b) => b - a).join() + ' ' + new Proxy([1, 2], {}).with(0, 9).join() + ' ' + new Proxy([1, 2], {}).fill(0).join());"#,
+        "true false 3,2,1 9,2 0,0",
+    ),
+];
+
+#[test]
+fn array_methods_run_through_proxy_traps() {
+    let mut mismatches = Vec::new();
+    for (name, source, node) in ARRAY_CASES {
+        match console_output(source) {
+            Ok(output) if output == *node => {}
+            other => mismatches.push(format!("{name}: node {node:?}, got {other:?}")),
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "{} of {} programs differ from Node:\n{}",
+        mismatches.len(),
+        ARRAY_CASES.len(),
+        mismatches.join("\n")
+    );
+}

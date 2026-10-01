@@ -5,11 +5,12 @@
 // binding. Strict mode already rejects `with`, so this scenario also
 // drops `"use strict"` to demonstrate the legacy non-strict path.
 //
-// FrankenEngine's lowering must refuse `with` unconditionally — even
-// outside strict mode — because the construct breaks the static
-// information the capability contract relies on. The expected diagnostic
-// is `LoweringPipelineError::UnsupportedSyntax` (covering ES2020 strict
-// `with` rejection) or `LoweringPipelineError::SemanticViolation`.
+// FrankenEngine lowers non-strict `with` (bd-9vouw.101), so the defense is
+// the capability contract itself: the with object here is the raw
+// `process`, and lowering refuses a bare `process` read for every profile
+// (FE-CLAIM-006). Free names inside a with body stay visible to the
+// ambient-authority check, so the with scope grants nothing beyond member
+// access on an object the program already holds.
 
 const ambient = process;
 let exited = false;

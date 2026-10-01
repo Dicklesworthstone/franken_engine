@@ -22,8 +22,8 @@
     },
     "frankenengine": {
       "outcome": "fail_closed",
-      "observable": "capability-typed lowering refuses with unconditionally (strict ES2020 plus the with-scope-chain capability-evasion concern), producing LoweringPipelineError::UnsupportedSyntax",
-      "denial_reason": "with_statement_unconditionally_rejected"
+      "observable": "the with object must be obtained by a bare `process` read, which capability-typed lowering refuses for every profile (FE-CLAIM-006) before anything runs; with statements lower through a rewrite whose free references stay visible to the ambient-authority check, so the with scope adds no authority beyond member access on an object the program already holds (bd-9vouw.101)",
+      "denial_reason": "ambient_authority_rejection"
     }
   },
   "measurement": {

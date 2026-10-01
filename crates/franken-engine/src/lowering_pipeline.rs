@@ -76,6 +76,8 @@ use crate::parser_gap_inventory::{
 };
 use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
+mod with_statement;
+
 const COMPONENT: &str = "lowering_pipeline";
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const IFC_FLOW_PROOF_ERROR_CODE: &str = "FE-LOWER-IFC-0001";
@@ -888,6 +890,19 @@ fn lower_ir0_to_ir1_on_current_stack(
     }
 
     let ir0_hash = ir0.content_hash();
+    // `with` statements become blocks the rest of lowering handles; the IR1
+    // module stays bound to the source tree's hash.
+    let rewritten;
+    let ir0 = match with_statement::rewrite_with_statements(&ir0.tree)? {
+        Some(tree) => {
+            rewritten = Ir0Module {
+                header: ir0.header.clone(),
+                tree,
+            };
+            &rewritten
+        }
+        None => ir0,
+    };
 
     // Estimate ops capacity based on AST size, bounded by lowering budget
     let estimated_ops = ir0.tree.body.len().saturating_mul(8).min(MAX_PREALLOC_OPS); // ~8 ops per statement
@@ -5650,11 +5665,13 @@ fn lower_statement_to_ir1_with_flow(
             restore_source_lexical_markers(binding_lookup, &lexical_marker_snapshot);
         }
         Statement::With(with_stmt) => {
+            // `with_statement::rewrite_with_statements` removed every `with`
+            // before lowering; one here means that pass was bypassed.
             return Err(unsupported_frontier_expression_error(
                 "with_statement",
                 "FE-PARSER-GAP-WITH-0001",
                 "lower_ir0_to_ir1.with_statement_dynamic_scope",
-                "with statement lowering is not implemented; fail-closed parser-gap contract rejected dynamic-scope execution",
+                "with statement reached lowering without the with rewrite",
                 Some(with_stmt.span),
             ));
         }
@@ -15114,6 +15131,34 @@ fn lower_expression_to_ir1_inner(
                     )?;
                 }
                 ops.push(Ir1Op::ConstructSuper {
+                    arg_count: u32::try_from(arguments.len()).map_err(|_| {
+                        LoweringPipelineError::TooManyArguments {
+                            count: arguments.len(),
+                            max: u32::MAX as usize,
+                        }
+                    })?,
+                });
+                return Ok(());
+            }
+            // The `with` rewrite's intrinsics (`%WithBase(...)`, ...): a
+            // HostCall on the evaluated arguments.
+            if let Expression::Identifier(name) = callee.as_ref()
+                && let Some(capability) = with_statement::intrinsic_capability(name)
+            {
+                for argument in arguments {
+                    lower_expression_to_ir1(
+                        argument,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
                     arg_count: u32::try_from(arguments.len()).map_err(|_| {
                         LoweringPipelineError::TooManyArguments {
                             count: arguments.len(),

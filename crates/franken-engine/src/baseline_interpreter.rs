@@ -5519,6 +5519,27 @@ const GLOBAL_FUNCTION_VALUES: [&str; 12] = crate::lowering_pipeline::GLOBAL_FUNC
 /// (bd-9vouw.47). Not a builtin name, so no prototype lookup ever matches it.
 const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 
+/// The names Array.prototype[@@unscopables] blocks in a `with` body, as Node
+/// v22 lists them (ES2020 22.1.3.32 plus later additions).
+const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
+    "at",
+    "copyWithin",
+    "entries",
+    "fill",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "flat",
+    "flatMap",
+    "includes",
+    "keys",
+    "toReversed",
+    "toSorted",
+    "toSpliced",
+    "values",
+];
+
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
@@ -52253,6 +52274,65 @@ impl InterpreterCore {
         }
     }
 
+    /// HasBinding(name) of the object Environment Record of a `with`
+    /// statement (ES2020 8.1.1.2.1): [[HasProperty]], unless the object's
+    /// @@unscopables blocks the name.
+    fn with_has_binding(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object: &Value,
+        name: &Value,
+    ) -> Result<bool, InterpreterError> {
+        let key = self.executable_property_key_from_value(name);
+        let found = match object {
+            Value::Object(object_id) => {
+                if let Some(module) = module {
+                    self.run_pre_runtime_property_access_hook(module, *object_id, &key)?;
+                }
+                self.proxy_aware_has_runtime_property(module, *object_id, &key, 0)?
+            }
+            function if function.is_callable() => match module {
+                Some(module) => self.function_has_property(module, function, &key)?,
+                None => false,
+            },
+            _ => false,
+        };
+        let Value::Object(object_id) = object else {
+            return Ok(found);
+        };
+        if !found {
+            return Ok(false);
+        }
+        let unscopables_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Unscopables.id());
+        let unscopables = self.proxy_aware_get_runtime_property(
+            module,
+            *object_id,
+            &unscopables_key,
+            object.clone(),
+            0,
+        )?;
+        let Value::Object(unscopables_id) = unscopables else {
+            // Array.prototype[@@unscopables] (ES2020 22.1.3.32) has no heap
+            // object here; its names are applied to arrays directly, so
+            // `with (array) { keys }` finds the enclosing `keys`.
+            let is_array =
+                self.heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.is_array)
+                    || self.builtin_prototypes.get("Array").copied().is_some_and(
+                        |array_prototype| self.chain_contains_object(*object_id, array_prototype),
+                    );
+            let blocked = is_array
+                && key
+                    .as_str()
+                    .is_some_and(|name| ARRAY_UNSCOPABLE_NAMES.contains(&name));
+            return Ok(!blocked);
+        };
+        let blocked =
+            self.proxy_aware_get_runtime_property(module, unscopables_id, &key, unscopables, 0)?;
+        Ok(!blocked.is_truthy())
+    }
+
     /// [[HasProperty]] of a function value (ES2020 7.3.11), for `in`: its own
     /// properties (its backing object once that exists, else the standard
     /// name/length/prototype), a builtin constructor's statics, what its
@@ -78671,6 +78751,40 @@ impl InterpreterCore {
                 }
                 Ok(object)
             }
+            // The `with` statement rewrite (lowering_pipeline/with_statement.rs).
+            "builtin:WithObject" => match self.arg_or_undefined(args, 0)? {
+                // ES2020 13.11.7 step 2: ToObject of the expression.
+                Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                    expected: "object for a with statement".to_string(),
+                    got: "undefined or null".to_string(),
+                }),
+                primitive @ (Value::Bool(_)
+                | Value::Int(_)
+                | Value::Float(_)
+                | Value::Str(_)
+                | Value::BigInt(_)
+                | Value::Symbol(_)) => Ok(Value::Object(self.alloc_primitive_wrapper(primitive)?)),
+                object => Ok(object),
+            },
+            "builtin:WithHas" => {
+                // args = (object, name).
+                let object = self.arg_or_undefined(args, 0)?;
+                let name = self.arg_or_undefined(args, 1)?;
+                Ok(Value::Bool(self.with_has_binding(module, &object, &name)?))
+            }
+            "builtin:WithBase" => {
+                // args = (object, fallback, name): the object when it has a
+                // binding for the name, else the fallback.
+                let object = self.arg_or_undefined(args, 0)?;
+                let name = self.arg_or_undefined(args, 2)?;
+                if self.with_has_binding(module, &object, &name)? {
+                    Ok(object)
+                } else {
+                    self.arg_or_undefined(args, 1)
+                }
+            }
+            // A call whose callee no `with` object supplied has no receiver.
+            "builtin:WithReceiver" => Ok(Value::Undefined),
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are
                 // non-enumerable. args = (constructor, constructor.prototype).

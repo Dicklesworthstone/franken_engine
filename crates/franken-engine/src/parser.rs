@@ -11429,6 +11429,9 @@ fn parse_with_statement(
         )
     })?;
     let object = parse_expression(object_src.trim(), &span, context, 1)?;
+    // ES2020 13.11.1: the body is a Statement, so a declaration there (or a
+    // labelled function) is a SyntaxError even in sloppy code, as in a loop.
+    reject_declaration_in_statement_position(rest.trim(), StatementPosition::Loop, &span, context)?;
     let body = parse_statement(rest.trim(), ParseGoal::Script, span.clone(), context)?;
     Ok(Statement::With(WithStatement {
         object,

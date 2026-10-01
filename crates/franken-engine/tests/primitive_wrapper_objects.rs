@@ -126,6 +126,24 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const r = []; const b = new Boolean(); b.v = Number.prototype.valueOf; for (const f of [() => b.v(), () => Number.prototype.valueOf.call({}), () => Number.prototype.toString.call('x'), () => Number.prototype.valueOf.call(new Number(5)), () => Number.prototype.toString.call(new Number(255), 16)]) { try { r.push(String(f())); } catch (e) { r.push(e.constructor.name); } } console.log(r.join());"#,
         "TypeError,TypeError,TypeError,5,ff",
     ),
+    // A String.prototype method ToStrings an object `this` (its toString,
+    // else valueOf, runs) and concat ToStrings object arguments; both read
+    // "[object Object]".
+    (
+        "string_methods_on_object_this",
+        r#"var o = { toString() { return 'Ab-c'; } }; var S = String.prototype; console.log(S.toUpperCase.call(o), S.split.call(o, '-').join('|'), S.slice.call(o, 1), S.indexOf.call(o, 'c'), S.trim.call(o), S.padStart.call(o, 6, '*'), S.includes.call(o, 'b'), S.charAt.call(o, 0), S.at.call(o, -1));"#,
+        "AB-C Ab|c b-c 3 Ab-c **Ab-c true A c",
+    ),
+    (
+        "string_method_this_value_of",
+        r#"var o = { toString: undefined, valueOf() { return 'vv'; } }; console.log(String.prototype.toUpperCase.call(o), String(o), o + '');"#,
+        "VV vv vv",
+    ),
+    (
+        "string_concat_object_arguments",
+        r#"var n = 0; var o2 = { toString() { n++; return 'x'; } }; String.prototype.concat.call(o2, o2); console.log(n, 'a'.concat(o2, 1));"#,
+        "2 ax1",
+    ),
     // Number.prototype, String.prototype and Boolean.prototype are wrapper
     // objects of +0, "" and false: `Number.prototype.toString(10)` was
     // "expected Number receiver, got object" (Test262 Number/prototype/

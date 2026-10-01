@@ -58674,6 +58674,23 @@ impl InterpreterCore {
                 current = self.observable_prototype_link(object, id);
                 depth += 1;
             }
+            // The virtual @@iterator of the canonical Array, %TypedArray%,
+            // Map, Set and String prototypes (served by [[Get]]'s fallback)
+            // is found by HasProperty too: `Symbol.iterator in Map.prototype`.
+            if matches!(
+                key,
+                RuntimePropertyKey::Symbol(symbol) if *symbol == WellKnownSymbol::Iterator.id()
+            ) {
+                let root_is_array = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.is_array || object.typed_array.is_some());
+                return Ok(root_is_array
+                    || self.chain_inherits_array_prototype(object_id)
+                    || ["Array", "TypedArray", "Map", "Set", "String"]
+                        .iter()
+                        .any(|name| self.chain_reaches_canonical_prototype(object_id, name)));
+            }
             return Ok(key
                 .as_str()
                 .is_some_and(|key| self.chain_has_virtual_builtin_property(object_id, key)));

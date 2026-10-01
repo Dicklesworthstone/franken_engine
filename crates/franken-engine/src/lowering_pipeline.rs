@@ -76,6 +76,7 @@ use crate::parser_gap_inventory::{
 };
 use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
+mod util_module;
 mod with_statement;
 
 const COMPONENT: &str = "lowering_pipeline";
@@ -900,6 +901,18 @@ fn lower_ir0_to_ir1_on_current_stack(
                 tree,
             };
             &rewritten
+        }
+        None => ir0,
+    };
+    // A free `require('util')` builds the engine's util module.
+    let util_rewritten;
+    let ir0 = match util_module::rewrite_util_requires(&ir0.tree)? {
+        Some(tree) => {
+            util_rewritten = Ir0Module {
+                header: ir0.header.clone(),
+                tree,
+            };
+            &util_rewritten
         }
         None => ir0,
     };
@@ -4556,6 +4569,15 @@ fn lower_statement_to_ir1_with_flow(
                     binding_kind,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+                // `var x;` evaluates to nothing (ES2020 13.3.2.4): the hoisted
+                // binding already holds undefined, and a redeclaration keeps
+                // the value (`n = 4; var n;`, a parameter redeclared with
+                // `var`). Storing undefined reset it, so d3-array's quantile
+                // (`if (!(n = values.length)) ...; var n, i = (n - 1) * p`)
+                // computed NaN. `let x;` still initializes.
+                if vd.kind == VariableDeclarationKind::Var && d.initializer.is_none() {
+                    continue;
+                }
 
                 // bd-1xl17.c: a confirmed *destructured* fs/promises require —
                 // `const { readFile } = require('fs/promises')` or
@@ -7635,20 +7657,36 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     // parameter or an import is its own, not the runtime global: routing it
     // made a top-level block's `{ const performance = 'x'; }` overwrite the
     // injected global (`typeof performance` was then "string" after the
-    // block). Only a `var` or implicit binding of the name is routed.
+    // block). Only a `var` or implicit binding of the name is routed. An
+    // implicit binding (a bare `process`) is recorded as a `let` too, but
+    // no declaration stores to it (`let x = v`, even in a block, lowers to a
+    // StoreBinding; an assignment to a bare name is an AssignOp). Treating
+    // it as declared read `process` from an unset register (bd-9vouw.130).
+    let declared_binding_ids: BTreeSet<BindingId> = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::InitializeBinding { binding_id } | Ir1Op::StoreBinding { binding_id } => {
+                Some(*binding_id)
+            }
+            _ => None,
+        })
+        .collect();
     for &global_name in PREDECLARED_RUNTIME_GLOBALS {
-        if let Some(binding_id) = name_to_binding_id.get(global_name)
-            && !matches!(
-                binding_kind_by_id.get(binding_id),
-                Some(
-                    BindingKind::Let
-                        | BindingKind::Const
-                        | BindingKind::FunctionDecl
-                        | BindingKind::Parameter
-                        | BindingKind::Import
-                )
-            )
-        {
+        let Some(binding_id) = name_to_binding_id.get(global_name) else {
+            continue;
+        };
+        let declared = match binding_kind_by_id.get(binding_id) {
+            Some(
+                BindingKind::Const
+                | BindingKind::FunctionDecl
+                | BindingKind::Parameter
+                | BindingKind::Import,
+            ) => true,
+            Some(BindingKind::Let) => declared_binding_ids.contains(binding_id),
+            Some(BindingKind::Var) | None => false,
+        };
+        if !declared {
             scoped_runtime_binding_ids.insert(*binding_id);
         }
     }
@@ -13630,7 +13668,10 @@ fn try_lower_arrow_expression_to_ir1(
             &mut Vec::new(),
         )?,
         ArrowBody::Block(block) => {
-            for stmt in &block.body {
+            // Function declarations are hoisted (ES2020 14.1.22
+            // FunctionDeclarationInstantiation), as in function bodies: a
+            // helper declared after the arrow's `return` was undefined.
+            for stmt in hoisted_statement_order(&block.body) {
                 lower_statement_to_ir1(
                     stmt,
                     &mut body_ops,
@@ -15140,10 +15181,11 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
-            // The `with` rewrite's intrinsics (`%WithBase(...)`, ...): a
-            // HostCall on the evaluated arguments.
+            // The `with` and util rewrites' intrinsics (`%WithBase(...)`,
+            // `%UtilInspect(...)`, ...): a HostCall on the evaluated arguments.
             if let Expression::Identifier(name) = callee.as_ref()
                 && let Some(capability) = with_statement::intrinsic_capability(name)
+                    .or_else(|| util_module::intrinsic_capability(name))
             {
                 for argument in arguments {
                     lower_expression_to_ir1(
@@ -23988,16 +24030,19 @@ fn module_alias_has_predeclaration_hazard(
     // as `const bytes = Buffer.from(...); const hash = crypto.createHash(...)`.
     // Direct prefix uses and all rejected/escaped uses remain fail-closed below.
     let arbitrary_call_can_observe_hoisted_alias = !surface.is_authenticated_object();
+    // The util module (`util_module.rs`) is engine-owned code that names no
+    // program binding, so building it cannot observe the alias.
     let statement_prefix_has_hazard = body[..statement_index].iter().any(|statement| {
-        module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
-            || module_alias_statement_has_rejected_use(statement, alias, surface)
-            || (arbitrary_call_can_observe_hoisted_alias
-                && timers_scan_statement_deep(statement, &|expression| {
-                    module_alias_expression_is_predeclaration_call_hazard(
-                        expression,
-                        binding_lookup,
-                    )
-                }))
+        !util_module::is_module_declaration(statement)
+            && (module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
+                || module_alias_statement_has_rejected_use(statement, alias, surface)
+                || (arbitrary_call_can_observe_hoisted_alias
+                    && timers_scan_statement_deep(statement, &|expression| {
+                        module_alias_expression_is_predeclaration_call_hazard(
+                            expression,
+                            binding_lookup,
+                        )
+                    })))
     });
     let declarator_prefix_has_hazard = match &body[statement_index] {
         Statement::VariableDeclaration(declaration) => declaration.declarations[..declarator_index]
@@ -27245,6 +27290,17 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         // factory, not an ambient global binding. The lexical-shadowing check
         // above keeps a user-defined Proxy object's method entirely ordinary.
         ("Proxy", "revocable") => Some("builtin:ProxyRevocable"),
+        // Number statics read as values (`[x].filter(Number.isNaN)`, `const
+        // { isInteger } = Number`); direct calls keep
+        // number_static_builtin_call_capability, which is checked first.
+        // Number.parseInt and Number.parseFloat are the global functions
+        // (ES2020 20.1.2.12-13), so they share those tags and identities.
+        ("Number", "isInteger") => Some("builtin:NumberIsInteger"),
+        ("Number", "isSafeInteger") => Some("builtin:NumberIsSafeInteger"),
+        ("Number", "isFinite") => Some("builtin:NumberIsFinite"),
+        ("Number", "isNaN") => Some("builtin:NumberIsNaN"),
+        ("Number", "parseInt") => Some("builtin:parseInt"),
+        ("Number", "parseFloat") => Some("builtin:parseFloat"),
         _ => None,
     }
 }
@@ -27280,7 +27336,22 @@ fn object_receiver_static_call_capability(
         false => well_formed_static_name(property)?,
         true => well_formed_string_literal(property)?,
     };
-    match property_name {
+    object_receiver_static_member_capability(property_name)
+}
+
+/// The `Object.*` statics whose handlers use the receiver-placeholder
+/// convention (see `object_receiver_static_call_capability`).
+pub(crate) const OBJECT_RECEIVER_STATIC_MEMBERS: [&str; 5] = [
+    "is",
+    "isExtensible",
+    "preventExtensions",
+    "seal",
+    "isSealed",
+];
+
+/// The hostcall of the receiver-placeholder `Object.*` static `member`.
+pub(crate) fn object_receiver_static_member_capability(member: &str) -> Option<&'static str> {
+    match member {
         "is" => Some("builtin:ObjectIs"),
         "isExtensible" => Some("builtin:ObjectIsExtensible"),
         "preventExtensions" => Some("builtin:ObjectPreventExtensions"),
@@ -41603,8 +41674,12 @@ mod tests {
         assert!(has_await);
     }
 
+    /// `var counter;` declares (hoists) the binding but stores nothing: the
+    /// hoisted binding already holds undefined and a redeclaration keeps the
+    /// value (ES2020 13.3.2.4). This test asserted the old lowering, which
+    /// stored undefined and so reset `n = 4; var n;`.
     #[test]
-    fn lower_var_declaration_without_initializer_loads_undefined() {
+    fn lower_var_declaration_without_initializer_keeps_the_binding() {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::VariableDeclaration(VariableDeclaration {
@@ -41627,17 +41702,10 @@ mod tests {
             .find(|binding| binding.name == "counter")
             .expect("counter binding must exist");
         assert_eq!(counter_binding.kind, BindingKind::Var);
-        assert!(matches!(
-            result.module.ops.as_slice(),
-            [
-                Ir1Op::LoadLiteral {
-                    value: Ir1Literal::Undefined
-                },
-                Ir1Op::StoreBinding { binding_id },
-                Ir1Op::Discard,
-                Ir1Op::Return
-            ] if *binding_id == counter_binding.binding_id
-        ));
+        assert!(!result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::StoreBinding { binding_id } if *binding_id == counter_binding.binding_id
+        )));
     }
 
     #[test]

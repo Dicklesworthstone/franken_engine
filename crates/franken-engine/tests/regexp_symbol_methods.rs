@@ -25,6 +25,40 @@ fn check(source: &str, node: &str) {
     assert_eq!(value, node, "`{source}` must match Node v22.2.0");
 }
 
+/// A regex literal that starts with `=` in an argument or element list
+/// (`s.replace(/=/g, "")`, js-base64's _mkUriSafe; highlight.js's
+/// `[/const|var|let/, ..., /=\s*/, ...]`): the comma splitter read `/=` as
+/// division assignment, so the list was split inside the literal and the
+/// program failed. `/=` after an operand, and at the start of a line after
+/// one, is still division assignment.
+#[test]
+fn regex_literals_starting_with_equals_in_lists() {
+    check(
+        "var out = ['a=b='.replace(/=/g, ''), 'a=b'.split(/=/, 1).length, \
+         [/=/.source, /=a/g.flags].join(), \
+         ((s) => s.replace(/=/g, '').replace(/[+/]/g, (m) => m == '+' ? '-' : '_'))('a+b/c=='), \
+         [/=+/, /(a)?/].length];\n\
+         var x = 6; x /= 2; var y = [8]; y[0] /=2;\n\
+         out.push(x + y[0]);\n\
+         out.join(' ')",
+        "ab 1 =,g a-b_c 2 7",
+    );
+}
+
+/// The symbol methods ToString their argument, so an object's toString runs
+/// (it read "[object Object]"; Test262 RegExp/prototype/Symbol.split/
+/// coerce-string and relatives) and a Symbol is a TypeError.
+#[test]
+fn symbol_methods_to_string_their_argument() {
+    check(
+        "var o = { toString() { return 'a-b'; } }; var r; \
+         try { /x/[Symbol.split](Symbol()); r = 'none'; } catch (e) { r = e.constructor.name; } \
+         [/-/[Symbol.split](o).join('|'), /b/[Symbol.search](o), /a/[Symbol.replace](o, 'X'), \
+         /./g[Symbol.match](o).length, [..././g[Symbol.matchAll](o)].length, r].join(' ')",
+        "a|b 2 X-b 3 3 TypeError",
+    );
+}
+
 #[test]
 fn regexp_prototype_has_the_five_symbol_methods() {
     check(

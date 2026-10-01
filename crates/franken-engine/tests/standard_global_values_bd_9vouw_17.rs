@@ -111,6 +111,17 @@ fn static_builtins_are_callable_values() {
          [o.a, o.b, typeof d, d.length, dp.length, d.name].join();",
         "1,2,function,1,2,getOwnPropertyDescriptors",
     );
+    // The Number statics were callable only directly: read as values they
+    // were undefined (`[x].filter(Number.isNaN)` threw, and zod, which calls
+    // them through values, was refused). Number.parseInt/parseFloat are the
+    // global functions themselves.
+    check(
+        "[typeof Number.isNaN, [1, NaN, 'x'].filter(Number.isNaN).length, \
+          Number.parseInt === parseInt, Number.parseFloat === parseFloat, \
+          Number.isInteger.name, Number.isInteger.length, ((f) => f(2.5))(Number.isFinite), \
+          (({ isSafeInteger }) => isSafeInteger(2 ** 53))(Number), Number['isNaN'](NaN)].join();",
+        "function,1,true,true,isInteger,1,true,false,true",
+    );
 }
 
 #[test]
@@ -291,6 +302,112 @@ fn program_bindings_named_global_shadow_the_global_object() {
         "var r; { let setTimeout = 'x'; r = setTimeout; } r + ':' + typeof setTimeout;",
         "x:function",
     );
+    // A bare reference is recorded as a `let` binding no declaration stores
+    // to; it stays the runtime global, while a declared `let` shadows it
+    // (bd-9vouw.130 routes by that difference; its reproducer is
+    // querystring_os_builtin_bd_qmy52's `process.platform` under the trusted
+    // process-shape grant).
+    check(
+        "[typeof performance, typeof performance.now, typeof console.log].join();",
+        "object,function,function",
+    );
+    check(
+        "let performance = 'own'; [performance, typeof console].join();",
+        "own,object",
+    );
+}
+
+/// A free name no binding resolves is a property of the global object, own
+/// or inherited (ES2020 8.1.1.4): what a program stores on globalThis,
+/// accessors defined on it and the Object.prototype members (validator's
+/// `{ toString }` export). A sloppy global is such a property, so the two
+/// directions agree; strict code still throws for a name the global object
+/// lacks, and a local binding still shadows it. They were ReferenceErrors,
+/// and `x = 1` was invisible as globalThis.x.
+#[test]
+fn free_names_resolve_through_the_global_object() {
+    for (source, node) in [
+        (
+            "globalThis.foo = 1; [foo, typeof foo, typeof bar].join();",
+            "1,number,undefined",
+        ),
+        (
+            "Object.defineProperty(globalThis, 'lazy', { get() { return 'g'; }, configurable: true }); lazy;",
+            "g",
+        ),
+        (
+            "[typeof toString, toString === Object.prototype.toString, typeof hasOwnProperty, \
+              constructor === Object].join();",
+            "function,true,function,true",
+        ),
+        (
+            "var api = { toString }; api.toString === Object.prototype.toString;",
+            "true",
+        ),
+        (
+            "created = 8; [globalThis.created, delete created, typeof created].join();",
+            "8,true,undefined",
+        ),
+        ("[made] = [9]; globalThis.made;", "9"),
+        (
+            "globalThis.counter = 1; counter += 2; counter++; globalThis.counter;",
+            "4",
+        ),
+        (
+            "'use strict'; globalThis.strictTarget = 1; strictTarget = 5; globalThis.strictTarget;",
+            "5",
+        ),
+        (
+            "'use strict'; let r; try { undeclaredStrict = 1; r = 'no'; } catch (e) { r = e.name; } r;",
+            "ReferenceError",
+        ),
+        (
+            "(function (root) { root.umdLib = { v: 3 }; })(globalThis); umdLib.v;",
+            "3",
+        ),
+        (
+            "globalThis.shadowed = 'global'; function f() { var shadowed = 'local'; return shadowed; } \
+              f() + ':' + shadowed;",
+            "local:global",
+        ),
+        (
+            "let r; try { neverDefinedName; } catch (e) { r = e.name; } r;",
+            "ReferenceError",
+        ),
+    ] {
+        check(source, node);
+    }
+}
+
+/// Resolving through the global object opens no authority or flow: after a
+/// program stores functions under those names, `require` stays refused at
+/// lowering and `fetch` at its capability check, and a secret stored on
+/// globalThis cannot reach the console through the bare name.
+#[test]
+fn global_object_names_keep_the_ambient_and_flow_gates() {
+    for (source, refusal) in [
+        (
+            "globalThis.require = function () { return 1; }; require('fs');",
+            "ambient authority",
+        ),
+        (
+            "globalThis.fetch = function () { return 1; }; fetch('https://example.com');",
+            "capability denied",
+        ),
+        (
+            "const crypto = require('crypto'); const secret = crypto.randomUUID(); \
+              globalThis.leak = secret; console.log(leak);",
+            "unauthorized flow",
+        ),
+    ] {
+        let result = eval_to_string(source);
+        // The error's Debug form may spell the kind `AmbientAuthority...`.
+        let normalized = result.to_lowercase().replace([' ', '_'], "");
+        assert!(
+            result.starts_with("ERROR") && normalized.contains(&refusal.replace(' ', "")),
+            "`{source}` must be refused ({refusal}), got {result}"
+        );
+    }
 }
 
 /// ES2022 `Object.hasOwn(object, key)`: own properties only (not inherited),

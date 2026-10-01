@@ -126,6 +126,41 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"const r = []; const b = new Boolean(); b.v = Number.prototype.valueOf; for (const f of [() => b.v(), () => Number.prototype.valueOf.call({}), () => Number.prototype.toString.call('x'), () => Number.prototype.valueOf.call(new Number(5)), () => Number.prototype.toString.call(new Number(255), 16)]) { try { r.push(String(f())); } catch (e) { r.push(e.constructor.name); } } console.log(r.join());"#,
         "TypeError,TypeError,TypeError,5,ff",
     ),
+    // A computed member key that is an object goes through ToPropertyKey
+    // (its toString runs, preferred over valueOf); `o[k]` read the key
+    // "[object#13]", the object's heap id, for get, set, `in` and delete.
+    (
+        "object_property_keys",
+        r#"var k = { toString() { return 'key'; } }; var o = {}; o[k] = 1; var a = {}; a[{}] = 2; var d = new Date(0); var c = {}; c[d] = 'd'; var both = { toString() { return 'ts'; }, valueOf() { return 'vo'; } }; c[both] = 3; var has = k in o; delete o[k]; console.log(Object.keys(a).join(), has, 'key' in o, Object.keys(c).length, c[d], c.ts, c[both]);"#,
+        "[object Object] true false 2 d 3 3",
+    ),
+    // A String.prototype method ToStrings an object `this` (its toString,
+    // else valueOf, runs) and concat ToStrings object arguments; both read
+    // "[object Object]".
+    (
+        "string_methods_on_object_this",
+        r#"var o = { toString() { return 'Ab-c'; } }; var S = String.prototype; console.log(S.toUpperCase.call(o), S.split.call(o, '-').join('|'), S.slice.call(o, 1), S.indexOf.call(o, 'c'), S.trim.call(o), S.padStart.call(o, 6, '*'), S.includes.call(o, 'b'), S.charAt.call(o, 0), S.at.call(o, -1));"#,
+        "AB-C Ab|c b-c 3 Ab-c **Ab-c true A c",
+    ),
+    (
+        "string_method_this_value_of",
+        r#"var o = { toString: undefined, valueOf() { return 'vv'; } }; console.log(String.prototype.toUpperCase.call(o), String(o), o + '');"#,
+        "VV vv vv",
+    ),
+    (
+        "string_concat_object_arguments",
+        r#"var n = 0; var o2 = { toString() { n++; return 'x'; } }; String.prototype.concat.call(o2, o2); console.log(n, 'a'.concat(o2, 1));"#,
+        "2 ax1",
+    ),
+    // Number.prototype, String.prototype and Boolean.prototype are wrapper
+    // objects of +0, "" and false: `Number.prototype.toString(10)` was
+    // "expected Number receiver, got object" (Test262 Number/prototype/
+    // toString/S15.7.4.2_A1_T02 and relatives).
+    (
+        "builtin_prototypes_are_wrappers",
+        r#"console.log(Number.prototype.toString(10), Number.prototype.toString(36), Number.prototype.valueOf(), String.prototype.valueOf() === '', String.prototype.length, Boolean.prototype.valueOf(), Object.prototype.toString.call(Number.prototype), Object.prototype.toString.call(String.prototype), Object.prototype.toString.call(Boolean.prototype), Number.prototype + 1, JSON.stringify([Number.prototype, String.prototype, Boolean.prototype]), Number.prototype.toFixed(2), JSON.stringify(String.prototype.toUpperCase()));"#,
+        r#"0 0 0 true 0 false [object Number] [object String] [object Boolean] 1 [0,"",false] 0.00 """#,
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

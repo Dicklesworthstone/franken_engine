@@ -2278,7 +2278,12 @@ fn merge_logical_lines_slash_starts_regex(
     trailing_identifier: &str,
     next_char: Option<char>,
 ) -> bool {
-    if matches!(next_char, Some('=')) {
+    // With nothing before it (a physical line's start), `/=` continues the
+    // previous line as division assignment. After `(`, `,`, `=` or another
+    // operator no operand precedes it, so `/=` opens a regex: js-base64's
+    // `src.replace(/=/g, "")` was split at the `,` inside a "regex" that
+    // began at the closing `/`.
+    if matches!(next_char, Some('=')) && last_significant.is_none() {
         return false;
     }
 
@@ -2339,7 +2344,7 @@ fn merge_logical_lines_requires_continuation(
 
 /// Whether `line` starts with an operator that can only continue an
 /// expression, never begin a statement: `|| b`, `&& b`, `?? b`, `? a : b`,
-/// `: b`, `, b`, `* b`, `% b`, `| b`, `& b`, `^ b`, `= b`, `!= b`. ECMAScript
+/// `: b`, `, b`, `* b`, `% b`, `| b`, `& b`, `^ b`, `= b`, `!= b`, `/= b`. ECMAScript
 /// inserts no semicolon before such a token, so the line continues the
 /// previous one (the leading-operator layout formatters emit for long
 /// conditions and ternaries). `+`/`-` also continue (`a\n- b` is `a - b`)
@@ -2355,6 +2360,10 @@ fn line_starts_with_continuation_operator(line: &str) -> Option<LeadingOperator>
             Some(LeadingOperator::BinaryOnly)
         }
         b'!' if second == Some(b'=') => Some(LeadingOperator::BinaryOnly),
+        // After a token that ends an expression, `/=` is the division
+        // assignment punctuator, never a regex (ES2020 11.8.5 goal
+        // InputElementDiv): `z\n/= 3` is `z /= 3` (bd-9vouw.127).
+        b'/' if second == Some(b'=') => Some(LeadingOperator::BinaryOnly),
         b'+' | b'-' if second != Some(first) => Some(LeadingOperator::UnaryOrBinary),
         _ => None,
     }
@@ -2414,6 +2423,23 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             continue;
         }
         if quotes.active() {
+            // A comment inside a template substitution is code, not template
+            // text (`${/* @__PURE__ */ f()}`, as bundlers emit). Neither
+            // `/*` nor `//` can start a regular expression.
+            if ch == '/'
+                && quotes.in_substitution_code()
+                && let Some(&next @ ('*' | '/')) = chars.peek()
+            {
+                chars.next();
+                push_blanked(&mut out, '/');
+                push_blanked(&mut out, next);
+                if next == '*' {
+                    in_block_comment = true;
+                } else {
+                    in_line_comment = true;
+                }
+                continue;
+            }
             out.push(ch);
             quotes.advance_char(ch);
             continue;
@@ -2569,6 +2595,12 @@ impl QuoteState {
     /// substitution.
     fn active(&self) -> bool {
         !self.stack.is_empty()
+    }
+
+    /// Whether the scanner is in a template substitution's code (not in a
+    /// string, template text or regex nested in it).
+    fn in_substitution_code(&self) -> bool {
+        matches!(self.stack.last(), Some(QuoteContext::Substitution { .. }))
     }
 
     /// Enter a string or template if `b` opens one. Returns whether it did.
@@ -2926,8 +2958,25 @@ fn has_top_level_open_brace(text: &str) -> bool {
 /// unbraced body of other headers: `if (c) do x++; while (x < 3);` is one
 /// if statement, as js-yaml's bundle writes it across three lines.
 fn do_statement_awaits_while(statement: &str) -> bool {
-    let body = unbraced_body_of_header_chain(statement);
-    starts_with_keyword(body, "do") && find_top_level_keyword(body, " while").is_none()
+    let awaits = |text: &str| {
+        let body = unbraced_body_of_header_chain(text);
+        starts_with_keyword(body, "do") && do_condition_while_index(&body["do".len()..]).is_none()
+    };
+    // `if (a) x(); else if (b)\n  do\n    y();\n  while (c);` (pako's
+    // deflate): the do statement is the last else clause's body.
+    awaits(statement) || text_after_last_top_level_else(statement).is_some_and(awaits)
+}
+
+/// The clause after the last top-level `else` of `statement` (`if (a) x();
+/// else if (b) do y();` gives `if (b) do y();`), or `None`.
+fn text_after_last_top_level_else(statement: &str) -> Option<&str> {
+    let mut rest = statement;
+    let mut last = None;
+    while let Some(at) = find_top_level_keyword(rest, " else ") {
+        rest = &rest[at + " else ".len()..];
+        last = Some(rest);
+    }
+    last.map(str::trim_start)
 }
 
 /// `statement` without its leading chain of statement headers (`if (...)`,
@@ -2978,6 +3027,13 @@ fn statement_header_takes_unbraced_body(statement: &str) -> bool {
 /// else b();` pairs the `else` with that `if`).
 fn clause_takes_else(clause: &str) -> bool {
     let mut rest = clause.trim();
+    // `do\n  if (c) x();\n  else y();\nwhile (d);`: the if is the body.
+    if let Some(body) = rest
+        .strip_prefix("do")
+        .filter(|body| body.starts_with(char::is_whitespace))
+    {
+        rest = body.trim_start();
+    }
     loop {
         if starts_with_keyword(rest, "if") {
             return true;
@@ -3006,10 +3062,21 @@ fn header_chain_takes_unbraced_body(tail: &str, in_do_statement: bool) -> bool {
     if tail == "else" || tail == "do" {
         return true;
     }
-    let header = tail
-        .strip_prefix("else")
+    // A do statement's unbraced body can itself be a header chain (pako's
+    // inflate: `do\n  if (c)\n    x();\nwhile (d);`); a `while` right after
+    // `do` heads that body, it is not the do statement's condition.
+    let (header, in_do_statement) = match tail
+        .strip_prefix("do")
         .filter(|rest| rest.starts_with(char::is_whitespace))
-        .map_or(tail, str::trim_start);
+    {
+        Some(body) => (body.trim_start(), false),
+        None => (
+            tail.strip_prefix("else")
+                .filter(|rest| rest.starts_with(char::is_whitespace))
+                .map_or(tail, str::trim_start),
+            in_do_statement,
+        ),
+    };
     // A braced body shows after the header's parentheses (the recursion
     // below rejects it); a `{` inside them is an object literal or a
     // destructuring pattern: `if (visit(item, {\n  depth\n}))\n  return;`.
@@ -4720,6 +4787,16 @@ fn parse_binding_pattern_inner(
             ));
         }
         let name = canonicalize_identifier(trimmed);
+        // A reserved word spelled with a unicode escape is still reserved
+        // (ES2020 11.6.2): `var` with an escaped `case` is a SyntaxError.
+        if is_unconditional_reserved_keyword(&name) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("keyword `{name}` must not contain escaped characters"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         reject_strict_restricted_binding(&name, context.strict_mode, span, context)?;
         reject_context_reserved_binding(&name, span, context)?;
         return Ok(BindingPattern::Identifier(name));
@@ -5092,6 +5169,7 @@ fn parse_variable_declaration(
         let (name_raw, initializer_raw) = split_var_declarator_assignment(declarator);
         let name = name_raw.trim();
         let pattern = parse_binding_pattern(name, &span, context)?;
+        reject_let_lexical_binding(&pattern, kind, &span, context)?;
 
         let initializer = match initializer_raw {
             Some(initializer_source) => {
@@ -5358,6 +5436,16 @@ fn parse_primary_expression(
 
     if let Some(value) = parse_bigint_numeric_literal(expression) {
         return Ok(Expression::BigIntLiteral(value));
+    }
+    // A numeric literal with the BigInt suffix that is not a BigInt literal
+    // (`0e0n`, `1.5n`, `.5n`) is a SyntaxError (ES2020 11.8.3); it was
+    // evaluated as some other expression.
+    if is_malformed_bigint_literal(expression) {
+        return Err(unsupported_expression_syntax_error(
+            "invalid BigInt literal: no fraction or exponent is allowed",
+            span,
+            context,
+        ));
     }
 
     if let Some(value) = parse_i64_numeric_literal(expression) {
@@ -5780,7 +5868,14 @@ fn try_parse_arrow_function(
             false,
             context,
             |context| {
-                let params = parse_arrow_params(params_src, span, context)?;
+                // An async arrow's parameters reserve `await` (ES2020 14.8:
+                // `async (await) => {}`, `async (x = await) => {}`).
+                let saved_await_context = context.await_context;
+                context.await_context |= is_async;
+                let params = parse_arrow_params(params_src, span, context);
+                context.await_context = saved_await_context;
+                let params = params?;
+                reject_duplicate_params(&params, true, span, context)?;
                 parse_arrow_body(body_src, params, is_async, span, context, recursion_depth)
             },
         ))
@@ -5793,8 +5888,19 @@ fn try_parse_arrow_function(
             return None;
         }
         let body_src = rest[arrow_pos + 2..].trim();
+        // The parameter is a BindingIdentifier: reserved words (`yield` in
+        // strict code, `await` of an async arrow, escaped keywords) are
+        // SyntaxErrors, and an escaped name is canonical.
+        let saved_await_context = context.await_context;
+        context.await_context |= is_async;
+        let pattern = parse_binding_pattern(param_name, span, context);
+        context.await_context = saved_await_context;
+        let pattern = match pattern {
+            Ok(pattern) => pattern,
+            Err(error) => return Some(Err(error)),
+        };
         let params = vec![FunctionParam {
-            pattern: BindingPattern::Identifier(param_name.to_string()),
+            pattern,
             span: span.clone(),
         }];
         Some(parse_arrow_body(
@@ -5817,20 +5923,115 @@ fn parse_arrow_params(
     if params_src.trim().is_empty() {
         return Ok(Vec::new());
     }
+    // ES2020 14.1 FormalParameters: no elision (`(a,,b)`, `(,a)`), a rest
+    // parameter last, and no trailing comma after it (`(...a,)`).
+    fn malformed(
+        message: &str,
+        span: &SourceSpan,
+        context: &ParseExecutionContext<'_>,
+    ) -> ParseError {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            message.to_string(),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    }
     let segments = split_pattern_elements(params_src);
+    if segments.iter().any(|segment| segment.trim().is_empty()) {
+        return Err(malformed(
+            "empty parameter in a parameter list",
+            span,
+            context,
+        ));
+    }
     let mut params = Vec::with_capacity(segments.len());
     for segment in &segments {
-        let seg = segment.trim();
-        if seg.is_empty() {
-            continue;
+        if params
+            .last()
+            .is_some_and(|param: &FunctionParam| matches!(param.pattern, BindingPattern::Rest(_)))
+        {
+            return Err(malformed("a rest parameter must be last", span, context));
         }
-        let pattern = parse_binding_pattern(seg, span, context)?;
+        let pattern = parse_binding_pattern(segment.trim(), span, context)?;
         params.push(FunctionParam {
             pattern,
             span: span.clone(),
         });
     }
+    if params_src.trim_end().ends_with(',')
+        && params
+            .last()
+            .is_some_and(|param| matches!(param.pattern, BindingPattern::Rest(_)))
+    {
+        return Err(malformed(
+            "a rest parameter may not have a trailing comma",
+            span,
+            context,
+        ));
+    }
     Ok(params)
+}
+
+/// ES2020 14.1.2, 14.2.1, 14.3.1: parameter names are unique in strict
+/// code, in arrow functions and methods, and in any non-simple parameter
+/// list (`function f(x = 0, x) {}`); only a sloppy function with simple
+/// parameters may repeat one (`function f(a, a) {}`).
+fn reject_duplicate_params(
+    params: &[FunctionParam],
+    unique_required: bool,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let simple = params
+        .iter()
+        .all(|param| matches!(param.pattern, BindingPattern::Identifier(_)));
+    if !unique_required && !context.strict_mode && simple {
+        return Ok(());
+    }
+    let mut seen = BTreeSet::new();
+    for name in params
+        .iter()
+        .flat_map(|param| param.pattern.binding_names())
+    {
+        if !seen.insert(name) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("duplicate parameter name `{name}` is not allowed here"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// ES2020 14.3.1: a getter has no parameters, and a setter exactly one,
+/// which is not a rest parameter.
+fn reject_accessor_arity(
+    is_getter: bool,
+    params: &[FunctionParam],
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let valid = if is_getter {
+        params.is_empty()
+    } else {
+        params.len() == 1 && !matches!(params[0].pattern, BindingPattern::Rest(_))
+    };
+    if valid {
+        return Ok(());
+    }
+    Err(ParseError::new(
+        ParseErrorCode::UnsupportedSyntax,
+        if is_getter {
+            "a getter must not have parameters"
+        } else {
+            "a setter must have exactly one parameter"
+        },
+        context.source_label.to_string(),
+        Some(span.clone()),
+    ))
 }
 
 /// Parse the body of an arrow function — either `{ block }` or expression.
@@ -5844,7 +6045,17 @@ fn parse_arrow_body(
 ) -> ParseResult<Expression> {
     with_function_context(is_async, false, context, |context| {
         let body = if body_src.starts_with('{') {
-            if let Some((block_src, _)) = extract_balanced(body_src, '{', '}') {
+            if let Some((block_src, after_block)) = extract_balanced(body_src, '{', '}') {
+                // An arrow function is a whole AssignmentExpression: nothing
+                // follows its block body (`() => {} = 1`, `() => {}.x`) but
+                // the `;` ending its statement, which some callers keep.
+                if !matches!(after_block.trim(), "" | ";") {
+                    return Err(unsupported_expression_syntax_error(
+                        "unexpected token after an arrow function body",
+                        span,
+                        context,
+                    ));
+                }
                 reject_use_strict_with_non_simple_params(block_src, &params, span, context)?;
                 let stmts = parse_function_body_statements(
                     block_src,
@@ -6349,6 +6560,9 @@ fn try_parse_assignment(
                     context.source_label.to_string(),
                     Some(span.clone()),
                 )));
+            }
+            if let Err(error) = reject_strict_eval_arguments_target(&left, span, context) {
+                return Some(Err(error));
             }
             let right = match parse_expression(rhs, span, context, recursion_depth + 1) {
                 Ok(e) => e,
@@ -7255,15 +7469,19 @@ fn try_parse_update(
         return None;
     }
 
-    // Prefix: `++x` / `--x`.
-    let prefix_op = if expr.starts_with("++") {
-        Some(AssignmentOperator::AddAssign)
+    // Prefix: `++x` / `--x`. The update subtracts a negative or positive
+    // unit (`x -= -1` / `x -= 1`): ES2020 12.4.4.1 applies ToNumeric to the
+    // old value, which `-` does and `+` does not, so `s = '5'; ++s` is 6, not
+    // "51" (and a Date or valueOf object takes its number hint). `x - -1` is
+    // exactly `x + 1` for every Number.
+    let prefix_unit = if expr.starts_with("++") {
+        Some(-1)
     } else if expr.starts_with("--") {
-        Some(AssignmentOperator::SubtractAssign)
+        Some(1)
     } else {
         None
     };
-    if let Some(op) = prefix_op {
+    if let Some(unit) = prefix_unit {
         let operand_src = expr[2..].trim();
         // Reject chained/ambiguous forms (`+++x`, `++ -x`); leave them to the
         // unary path or to a fail-closed parse.
@@ -7274,24 +7492,27 @@ fn try_parse_update(
         if !is_simple_update_target(&target) {
             return reject_non_assignable_update_target(&target, span, context);
         }
-        // `++x` ⇒ `x += 1` (compound assignment evaluates to the new value).
+        if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
+            return Some(Err(error));
+        }
+        // `++x` ⇒ `x -= -1` (compound assignment evaluates to the new value).
         return Some(Ok(Expression::Assignment {
-            operator: op,
+            operator: AssignmentOperator::SubtractAssign,
             left: Box::new(target),
-            right: Box::new(Expression::NumericLiteral(1)),
+            right: Box::new(Expression::NumericLiteral(unit)),
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         }));
     }
 
     // Postfix: `x++` / `x--`.
     let postfix = if expr.ends_with("++") {
-        Some((AssignmentOperator::AddAssign, BinaryOperator::Subtract))
+        Some((-1, BinaryOperator::Subtract))
     } else if expr.ends_with("--") {
-        Some((AssignmentOperator::SubtractAssign, BinaryOperator::Add))
+        Some((1, BinaryOperator::Add))
     } else {
         None
     };
-    if let Some((assign_op, adjust_op)) = postfix {
+    if let Some((unit, adjust_op)) = postfix {
         let operand_src = expr[..expr.len() - 2].trim();
         if operand_src.is_empty() || operand_src.ends_with('+') || operand_src.ends_with('-') {
             return None;
@@ -7300,12 +7521,16 @@ fn try_parse_update(
         if !is_simple_update_target(&target) {
             return reject_non_assignable_update_target(&target, span, context);
         }
-        // `x++` ⇒ `(x += 1) - 1`: write the increment back, evaluate to the old
-        // value. `x--` mirrors with `(x -= 1) + 1`.
+        if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
+            return Some(Err(error));
+        }
+        // `x++` ⇒ `(x -= -1) - 1`: write the increment back, evaluate to the
+        // old value, now a number (`s = '5'; s++` is 5). `x--` mirrors with
+        // `(x -= 1) + 1`.
         let write_back = Expression::Assignment {
-            operator: assign_op,
+            operator: AssignmentOperator::SubtractAssign,
             left: Box::new(target),
-            right: Box::new(Expression::NumericLiteral(1)),
+            right: Box::new(Expression::NumericLiteral(unit)),
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         };
         return Some(Ok(Expression::Binary {
@@ -7332,6 +7557,63 @@ fn is_simple_update_target(expr: &Expression) -> bool {
 /// left to the paths that split them first: `a + b` in `a + b++` (binary),
 /// `-x` in `-x++` and `await x` in `await x++` (unary / await), and
 /// `undefined`, which is an assignable identifier in sloppy code.
+/// ES2020 12.1.1: a shorthand property `{ x }` is an IdentifierReference,
+/// so it is never a reserved word (`({ if })`), nor in strict code a
+/// strict-mode reserved word (`"use strict"; ({ implements })`), nor
+/// `yield`/`await` where those are reserved.
+fn reject_reserved_identifier_reference(
+    name: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    let reserved = is_unconditional_reserved_keyword(name)
+        || (context.await_context && name == "await")
+        || (context.yield_context && name == "yield")
+        || (context.strict_mode
+            && matches!(
+                name,
+                "implements"
+                    | "interface"
+                    | "let"
+                    | "package"
+                    | "private"
+                    | "protected"
+                    | "public"
+                    | "static"
+                    | "yield"
+            ));
+    if reserved {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("`{name}` is a reserved word here and cannot be referenced"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
+/// ES2020 12.15.1, 12.4.1: in strict code `eval` and `arguments` are not
+/// assignment or update targets (`arguments <<= 20`, `eval++`).
+fn reject_strict_eval_arguments_target(
+    target: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if context.strict_mode
+        && let Expression::Identifier(name) = target
+        && matches!(name.as_str(), "eval" | "arguments")
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            format!("`{name}` cannot be assigned in strict mode code"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 fn reject_non_assignable_update_target(
     target: &Expression,
     span: &SourceSpan,
@@ -8408,7 +8690,9 @@ fn parse_object_literal(
         } else {
             // Shorthand property: { x } means { x: x }
             let (key, value) = if is_identifier(p) {
-                let key = Expression::Identifier(canonicalize_identifier(p));
+                let name = canonicalize_identifier(p);
+                reject_reserved_identifier_reference(&name, span, context)?;
+                let key = Expression::Identifier(name);
                 (key.clone(), key)
             } else if assignment_pattern {
                 let value =
@@ -8483,6 +8767,7 @@ fn try_parse_object_accessor(
                         parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
                     let value =
                         parse_function_expression(after, span, context, recursion_depth + 1)?;
+                    reject_object_accessor_arity(kind, &value, span, context)?;
                     return Ok(Some((key, value, true, kind)));
                 }
             }
@@ -8499,10 +8784,26 @@ fn try_parse_object_accessor(
         let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
         let value =
             parse_function_expression(&rest[paren_idx..], span, context, recursion_depth + 1)?;
+        reject_object_accessor_arity(kind, &value, span, context)?;
         return Ok(Some((key, value, false, kind)));
     }
 
     Ok(None)
+}
+
+/// [`reject_accessor_arity`] for an object literal's accessor function, and
+/// its parameter names are unique, as for any method.
+fn reject_object_accessor_arity(
+    kind: ObjectPropertyKind,
+    value: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if let Expression::Function { params, .. } = value {
+        reject_accessor_arity(kind == ObjectPropertyKind::Get, params, span, context)?;
+        reject_duplicate_params(params, true, span, context)?;
+    }
+    Ok(())
 }
 
 /// Try to parse an object-literal method shorthand:
@@ -8540,27 +8841,33 @@ fn try_parse_object_method(
     let method_value = |params_and_body: &str,
                         context: &mut ParseExecutionContext<'_>|
      -> ParseResult<Expression> {
-        if !is_async && !is_generator {
-            return parse_object_method_function_expression(
+        let value = if !is_async && !is_generator {
+            parse_object_method_function_expression(
                 params_and_body,
                 span,
                 context,
                 recursion_depth + 1,
-            );
-        }
-        let source = if is_generator {
-            format!("*{params_and_body}")
+            )?
         } else {
-            params_and_body.to_string()
+            let source = if is_generator {
+                format!("*{params_and_body}")
+            } else {
+                params_and_body.to_string()
+            };
+            parse_function_expression_with_super(
+                &source,
+                span,
+                context,
+                recursion_depth + 1,
+                true,
+                is_async,
+            )?
         };
-        parse_function_expression_with_super(
-            &source,
-            span,
-            context,
-            recursion_depth + 1,
-            true,
-            is_async,
-        )
+        // A method's parameter names are unique (ES2020 14.3.1).
+        if let Expression::Function { params, .. } = &value {
+            reject_duplicate_params(params, true, span, context)?;
+        }
+        Ok(value)
     };
 
     // Computed method: `[expr](params){body}`.
@@ -8592,6 +8899,18 @@ fn try_parse_object_method(
             legacy_decimal_escape_mode(context),
             "object-method",
         )?
+    } else if name.starts_with(|ch: char| ch.is_ascii_digit() || ch == '.')
+        && let Ok(
+            numeric @ (Expression::NumericLiteral(_)
+            | Expression::FloatLiteral(_)
+            | Expression::BigIntLiteral(_)),
+        ) = parse_expression(name, span, context, recursion_depth + 1)
+    {
+        // A NumericLiteral name (`{ 1(a) {} }`, mobx's error table): the key
+        // is ToPropertyKey of the number ("0x10" names "16"), so it is
+        // evaluated like a computed key; the method name is the same string.
+        let value = method_value(&part[paren_idx..], context)?;
+        return Ok(Some((numeric, value, true)));
     } else {
         return Ok(None);
     };
@@ -8615,7 +8934,9 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     // with the same regex-vs-division rule the line merger uses.
     let mut in_regex = false;
     let mut regex_class = false;
-    let mut last_significant: Option<char> = None;
+    // Every list this splits (arguments, elements, declarators) starts in
+    // expression position, as after a `,`: a leading `/=/` is a regex.
+    let mut last_significant: Option<char> = Some(',');
     let mut trailing_identifier = String::new();
     let mut parts = Vec::with_capacity(4);
     let mut start = 0;
@@ -8811,6 +9132,32 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
         }
         Some(value_u64 as i64)
     }
+}
+
+/// Whether `input` is spelled as a numeric literal ending in the BigInt
+/// suffix `n`: digits (or `.digit`), letters, `.`, `_`, and a sign only
+/// after an exponent `e`. Callers try [`parse_bigint_numeric_literal`] first.
+fn is_malformed_bigint_literal(input: &str) -> bool {
+    let body = input.strip_prefix('-').unwrap_or(input);
+    let Some(digits) = body.strip_suffix('n') else {
+        return false;
+    };
+    let starts_numeric = digits.starts_with(|c: char| c.is_ascii_digit())
+        || (digits.starts_with('.') && digits[1..].starts_with(|c: char| c.is_ascii_digit()));
+    if !starts_numeric {
+        return false;
+    }
+    let mut previous = ' ';
+    for ch in digits.chars() {
+        let allowed = ch.is_ascii_alphanumeric()
+            || matches!(ch, '.' | '_')
+            || (matches!(ch, '+' | '-') && matches!(previous, 'e' | 'E'));
+        if !allowed {
+            return false;
+        }
+        previous = ch;
+    }
+    true
 }
 
 fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
@@ -10662,6 +11009,25 @@ fn reject_strict_restricted_binding(
     Ok(())
 }
 
+/// ES2020 13.3.1.1, 13.7.5.1: `let` is never a lexically bound name, in
+/// sloppy code too (`let let = 1`, `for (const let of xs)`).
+fn reject_let_lexical_binding(
+    pattern: &BindingPattern,
+    kind: VariableDeclarationKind,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<()> {
+    if kind != VariableDeclarationKind::Var && pattern.binding_names().contains(&"let") {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "`let` is disallowed as a lexically bound name",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+    Ok(())
+}
+
 /// ES2020 11.6.2.2, 12.1.1: strict code reserves `implements`, `interface`,
 /// `let`, `package`, `private`, `protected`, `public`, `static` and
 /// `yield`; async functions and modules reserve `await`. None of them can be
@@ -11294,6 +11660,24 @@ fn try_parse_for_in_of(
         Err(error) if split_for_header(header).is_none() => return Err(error),
         Err(_) => return Ok(None),
     };
+    if let Some(kind) = binding_kind {
+        reject_let_lexical_binding(&binding, kind, span, context)?;
+        // ES2020 13.7.5.1: a for-in/of declaration has no initializer, save
+        // Annex B.3.6's sloppy `for (var x = e in o)`.
+        if let BindingPattern::AssignmentPattern { left, .. } = &binding
+            && !(keyword == "in"
+                && kind == VariableDeclarationKind::Var
+                && !context.strict_mode
+                && matches!(**left, BindingPattern::Identifier(_)))
+        {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("for-{keyword} loop variable declaration may not have an initializer"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+    }
 
     let body_src = rest.trim();
     reject_declaration_in_statement_position(body_src, StatementPosition::Loop, span, context)?;
@@ -11513,6 +11897,37 @@ fn parse_with_statement(
     }))
 }
 
+/// Where the condition of a do statement with an unbraced body starts in
+/// the text after `do`: the last top-level `while (...)` that ends it (only
+/// a `;` may follow). The first `while` anywhere was taken, so a while loop
+/// as the body (`do while (a) a--; while (b);`) lost its body, and a
+/// `while` inside a string or an identifier (`awhile`) split the statement.
+fn do_condition_while_index(after_do: &str) -> Option<usize> {
+    let mut found = None;
+    let mut offset = 0;
+    while let Some(at) = find_top_level_keyword(&after_do[offset..], "while") {
+        let index = offset + at;
+        offset = index + "while".len();
+        let rest = &after_do[offset..];
+        if after_do[..index]
+            .chars()
+            .next_back()
+            .is_some_and(is_identifier_continue)
+            || rest.starts_with(is_identifier_continue)
+        {
+            continue;
+        }
+        let rest = rest.trim_start();
+        if rest.starts_with('(')
+            && let Some((_, tail)) = extract_balanced(rest, '(', ')')
+            && matches!(tail.trim(), "" | ";")
+        {
+            found = Some(index);
+        }
+    }
+    found
+}
+
 fn parse_do_while_statement(
     statement: &str,
     goal: ParseGoal,
@@ -11535,8 +11950,7 @@ fn parse_do_while_statement(
         })?;
         (format!("{{{inner}}}"), r.to_string())
     } else {
-        // Find "while" keyword at top level.
-        let while_idx = after_do.find("while").ok_or_else(|| {
+        let while_idx = do_condition_while_index(after_do).ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "do-while statement requires 'while' after body",
@@ -12078,6 +12492,7 @@ fn parse_function_expression_with_super(
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
+            reject_duplicate_params(&params, false, span, context)?;
             let body = parse_body_statements(body_src, goal, span, context)?;
             Ok((params, body))
         })
@@ -12134,6 +12549,27 @@ fn parse_class_parts(
             },
             &rest[end..],
         )
+    };
+
+    // The name is a BindingIdentifier in strict code (class code is strict,
+    // ES2020 10.2.1): `class let {}`, `class eval {}` and `class yield {}`
+    // in a generator are SyntaxErrors, and an escaped name is canonical.
+    let name = match name {
+        Some(name) => {
+            let pattern = with_function_strict_mode("", true, context, |context| {
+                parse_binding_pattern(&name, span, context)
+            })?;
+            let BindingPattern::Identifier(name) = pattern else {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    format!("invalid class name `{name}`"),
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            };
+            Some(name)
+        }
+        None => None,
     };
 
     let rest = rest.trim_start();
@@ -12721,6 +13157,10 @@ fn parse_class_body_members(
             with_function_strict_mode(body_src, true, context, |context| {
                 let params = parse_arrow_params(params_src, span, context)?;
                 reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
+                reject_duplicate_params(&params, true, span, context)?;
+                if matches!(kind, MethodKind::Get | MethodKind::Set) {
+                    reject_accessor_arity(kind == MethodKind::Get, &params, span, context)?;
+                }
                 let body = parse_body_statements(body_src, goal, span, context)?;
                 Ok((params, body))
             })
@@ -13359,6 +13799,7 @@ fn parse_function_declaration(
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, &span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, &span, context)?;
+            reject_duplicate_params(&params, false, &span, context)?;
             let body = parse_body_statements(body_src, goal, &span, context)?;
             Ok((params, body))
         })
@@ -19244,6 +19685,17 @@ mod tests {
     }
 
     #[test]
+    fn strip_comments_blanks_comments_inside_template_substitutions() {
+        let src = "var u = `a${/* c */ f() // d\n}b // text ${`n${/*e*/ 1}`}`; // f\n";
+        let stripped = strip_comments_to_whitespace(src);
+        assert_eq!(stripped.len(), src.len());
+        assert!(!stripped.contains("/* c */") && !stripped.contains("// d"));
+        assert!(!stripped.contains("/*e*/") && !stripped.contains("// f"));
+        assert!(stripped.contains("f() "), "{stripped}");
+        assert!(stripped.contains("}b // text ${`n${"), "{stripped}");
+    }
+
+    #[test]
     fn strip_comments_leaves_regex_literal_intact() {
         // The `/` inside the char class and body must not be read as a comment.
         let src = "var re = /a\\/b[/]c/; // note\n";
@@ -19436,6 +19888,29 @@ mod tests {
         ));
     }
 
+    /// bd-9vouw.127: a line that starts with `/=` continues the previous
+    /// one as division assignment, as in Node (`var z = 9\nz\n/= 3` leaves
+    /// z = 3). After an operator, `/=` still opens a regex.
+    #[test]
+    fn a_line_starting_with_division_assignment_continues_the_previous_line() {
+        let tree = parse_script("var z = 9\nz\n/= 3\nvar w = 8\nw\n/=2");
+        assert_eq!(tree.body.len(), 4);
+        for statement in [&tree.body[1], &tree.body[3]] {
+            let Statement::Expression(statement) = statement else {
+                panic!("expected an expression statement");
+            };
+            assert!(matches!(
+                statement.expression,
+                Expression::Assignment {
+                    operator: AssignmentOperator::DivideAssign,
+                    ..
+                }
+            ));
+        }
+        let tree = parse_script("var s = x.replace(\n/=/g, '-')");
+        assert_eq!(tree.body.len(), 1);
+    }
+
     #[test]
     fn parse_red_team_commonjs_destructuring_multiline_payload() {
         let tree = parse_script(
@@ -19554,6 +20029,14 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let parts = split_top_level_commas("f(a, b), c");
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], "f(a, b)");
+    }
+
+    #[test]
+    fn split_top_level_commas_reads_a_leading_equals_regex() {
+        // A list element starts in expression position: `/=` opens a regex
+        // there, whose `,` does not split.
+        assert_eq!(split_top_level_commas("/=/g, ''"), vec!["/=/g", " ''"]);
+        assert_eq!(split_top_level_commas("a, /=,/"), vec!["a", " /=,/"]);
     }
 
     // -----------------------------------------------------------------------

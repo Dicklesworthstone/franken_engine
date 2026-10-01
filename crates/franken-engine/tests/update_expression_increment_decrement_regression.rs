@@ -101,3 +101,27 @@ fn for_let_closures_capture_distinct_per_iteration_bindings() {
         "per-iteration env: expected 0+1+2=3; got {total}"
     );
 }
+
+/// ES2020 12.4.4.1 / 12.5.6.1: an update applies ToNumeric to the old value
+/// before adding the unit. The desugaring was `x += 1`, whose `+`
+/// concatenates a string (`s = '5'; s++` left "51" and returned 50) and
+/// converts a Date with its string hint; it is now `x -= -1`. Values are Node
+/// v22.2.0's.
+///
+/// No-claim: the postfix result is recomputed as `new - unit`, so `z++` on
+/// -0 answers +0 and `x++` at 2^53 answers 2^53 - 1 (Node: -0, 2^53), as
+/// before; a BigInt operand still throws (Node: `5n++` is 6n).
+#[test]
+fn updates_convert_the_old_value_to_a_number() {
+    assert_eq!(
+        eval_value(
+            "let s = '5'; const a = s++; let p = '5'; const b = ++p; let h = '0x10'; h++; \
+             let d = new Date(5); d++; let calls = 0; let v = { valueOf() { calls++; return 4; } }; \
+             const c = v--; const o = { n: '9' }; o.n--; const arr = ['1']; let i = 0; arr[i++]++; \
+             let big = 2 ** 53; const bigr = big--; \
+             [typeof a, a, typeof s, s, b, p, h, d, c, v, calls, o.n, typeof o.n, arr[0], i, \
+             bigr === 2 ** 53, big].join(' ');"
+        ),
+        "number 5 number 6 6 6 17 6 4 3 1 8 number 2 1 true 9007199254740991"
+    );
+}

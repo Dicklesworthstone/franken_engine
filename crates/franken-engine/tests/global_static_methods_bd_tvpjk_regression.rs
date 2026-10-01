@@ -35,6 +35,24 @@ fn object_assign() {
     assert_eq!(eval("Object.assign({x:1}, {x:9}).x;"), "9"); // later sources win
 }
 
+/// A function target's own properties live on its backing object, where
+/// `f.x = 1` stores them; `Object.assign(fn, {...})` copied nothing (chroma
+/// attaches its statics this way). A function source contributes its own
+/// enumerable properties. Node v22.2.0 values.
+#[test]
+fn object_assign_onto_and_from_functions() {
+    assert_eq!(
+        eval(
+            "var f = function () {}; Object.assign(f, { a: 1, b: function () { return 2; } }); \
+             var g = function () {}; Object.assign(g, { x: 1 }); Object.assign(g, { y: 2 }); \
+             var h = function () {}; h.k = 5; var o = Object.assign({}, h); \
+             var r = Object.assign(f, {}) === f; \
+             [f.a, typeof f.b, f.b(), g.x, g.y, o.k, r, Object.keys(g).join()].join(' ');"
+        ),
+        "1 function 2 1 2 5 true x,y"
+    );
+}
+
 #[test]
 fn object_is() {
     // Object.is uses the receiver-placeholder calling convention — these caught
@@ -42,6 +60,25 @@ fn object_is() {
     assert_eq!(eval("Object.is(1, 1);"), "true");
     assert_eq!(eval("Object.is(1, 2);"), "false");
     assert_eq!(eval("Object.is(\"x\", \"x\");"), "true");
+}
+
+/// The receiver-placeholder statics read as values too (`const eq =
+/// Object.is`, a parameter default): they were undefined, so mobx's
+/// `equals_ = comparer.default` (Object.is) made every observable `set`
+/// throw "expected function, got undefined". Node v22.2.0 values.
+#[test]
+fn receiver_placeholder_statics_are_values() {
+    assert_eq!(
+        eval(
+            "var eq = Object.is, ise = Object.isExtensible, pe = Object.preventExtensions, \
+             seal = Object.seal, iss = Object.isSealed; var o = {}; var s = seal({ a: 1 }); \
+             class B { constructor(e = Object.is) { this.e = e; } } \
+             [eq(NaN, NaN), eq(0, -0), eq(), ise(o), pe(o) === o, ise(o), iss(s), iss(1), \
+             typeof Object.is, Object.is.length, Object.is.name, \
+             [1, 2].some(Object.is.bind(null, 2)), new B().e(1, 1)].join(' ');"
+        ),
+        "true false true true true false true true function 2 is true true"
+    );
 }
 
 #[test]

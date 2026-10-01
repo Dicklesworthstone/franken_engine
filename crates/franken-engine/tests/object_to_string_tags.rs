@@ -37,6 +37,31 @@ fn builtin_objects_report_their_tags() {
     );
 }
 
+/// The prototypes own their @@toStringTag data property (writable false,
+/// enumerable false, configurable true); `Set.prototype[Symbol.toStringTag]`
+/// was undefined (Test262 built-ins/Set/prototype/Symbol.toStringTag and
+/// relatives), though Object.prototype.toString already named the tag.
+#[test]
+fn prototypes_carry_their_to_string_tag() {
+    let source = "var names = ['Map', 'Set', 'WeakMap', 'WeakSet', 'Promise', 'ArrayBuffer', \
+                  'DataView', 'Symbol', 'BigInt', 'WeakRef', 'FinalizationRegistry'];\n\
+                  var d = Object.getOwnPropertyDescriptor(Set.prototype, Symbol.toStringTag);\n\
+                  [names.map(n => globalThis[n].prototype[Symbol.toStringTag]).join(), \
+                  [d.value, d.writable, d.enumerable, d.configurable].join(), \
+                  Object.prototype.toString.call(Object.create(Set.prototype)), \
+                  Reflect.ownKeys(Map.prototype).includes(Symbol.toStringTag), \
+                  Object.keys(Map.prototype).length].join(' ');";
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "Map,Set,WeakMap,WeakSet,Promise,ArrayBuffer,DataView,Symbol,BigInt,WeakRef,\
+         FinalizationRegistry Set,false,false,true [object Set] true 0"
+    );
+}
+
 #[test]
 fn data_to_string_tags_replace_the_builtin_tag() {
     let source = r#"const t = (x) => Object.prototype.toString.call(x);
@@ -76,5 +101,55 @@ fn engine_string_conversion_uses_regexp_to_string_and_tags() {
         value,
         "/a+b/gi /a+b/gi /a+b/gi /x\\/y/m /(?:)/ /q/y /z/ [object Map] [object Set] [object WeakMap] \
          [object ArrayBuffer] [object DataView] [object Map] [object Object] function"
+    );
+}
+
+/// Promises, generator objects, async generator objects and iterators have
+/// no property storage of their own, and ToPrimitive threw a TypeError for
+/// them ("property-key carrier with native conversion methods"), so
+/// `String(promise)` failed; `gen + ''` and templates said "[object Object]",
+/// and a generator object had no Object.prototype members (`it.toString`
+/// was undefined). They now convert through @@toPrimitive / toString /
+/// valueOf read like any [[Get]] (own properties first). Iterators convert
+/// too; their tag ("[object Array Iterator]" in Node) is not asserted here.
+#[test]
+fn exotic_values_convert_through_their_methods() {
+    let source = "function* g() {} async function* ag() {}\n\
+                  const it = g(); const own = g(); own.toString = () => 'mine';\n\
+                  const p = Promise.resolve(1); p[Symbol.toPrimitive] = (hint) => 'P:' + hint;\n\
+                  [String(g()), `${g()}`, g() + '', String(Promise.resolve(1)), `${Promise.resolve(1)}`, \
+                  String(ag()), typeof it.toString, it.toString(), it.hasOwnProperty('next'), \
+                  String(own), `${p}|${p + ''}`, typeof String([1][Symbol.iterator]()), \
+                  typeof String(new Map().keys())].join(' ');";
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "[object Generator] [object Generator] [object Generator] [object Promise] \
+         [object Promise] [object AsyncGenerator] function [object Generator] false mine \
+         P:string|P:default string string"
+    );
+}
+
+/// Object.prototype.toLocaleString (ES2020 19.1.3.5) is Invoke(this,
+/// "toString"); it did not exist, so `obj.toLocaleString` was undefined on
+/// every object and function.
+#[test]
+fn object_prototype_to_locale_string_invokes_to_string() {
+    let source = "let e; try { Object.prototype.toLocaleString.call(null); } catch (x) { e = x.constructor.name; }\n\
+                  [({ toString() { return 'x'; } }).toLocaleString(), Object.prototype.toLocaleString.call(5), \
+                  Object.prototype.toLocaleString.call('s'), typeof Object.prototype.toLocaleString, \
+                  Object.prototype.toLocaleString.length, Object.prototype.toLocaleString.name, \
+                  ({}).toLocaleString(), (function f() {}).toLocaleString === Object.prototype.toLocaleString, \
+                  e].join(' ');";
+    let value = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .value;
+    assert_eq!(
+        value,
+        "x 5 s function 0 toLocaleString [object Object] true TypeError"
     );
 }

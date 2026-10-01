@@ -97,3 +97,17 @@ fn weakset_methods_and_weak_constructor_values() {
         "function,function,true,true,true,true",
     );
 }
+
+/// A replace callback receives the named groups object as its last
+/// argument (ES2020 21.2.5.8 step 14.l) when the pattern has named groups,
+/// and no extra argument otherwise. It never received it.
+#[test]
+fn replace_callbacks_receive_named_groups() {
+    check(
+        "['x-y 2020-01'.replace(/(?<a>x)-(?<b>y)/, (...args) => JSON.stringify(args.at(-1)) + typeof args.at(-1)), \
+         '2020-01'.replace(/(?<y>\\d+)-(?<m>\\d+)/, (m, y, mo, off, str, g) => g.m + '/' + g.y), \
+         'ab'.replace(/(?<x>a)|(?<z>q)/, (...args) => JSON.stringify(args.at(-1)) + ('z' in args.at(-1))), \
+         'ab'.replace(/(a)/, (...args) => args.length)].join(' ');",
+        r#"{"a":"x","b":"y"}object 2020-01 01/2020 {"x":"a"}trueb 4b"#,
+    );
+}

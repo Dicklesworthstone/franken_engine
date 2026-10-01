@@ -1396,6 +1396,7 @@ impl InterpreterCore {
             execution_seed_reservation_ledger: _,
             ip: _,
             instructions_executed: _,
+            native_hole_reads: _,
             // Instruction count at the last virtual-clock advance (bd-9vouw.59).
             virtual_clock_instruction_mark: _,
             tier_i_instructions_executed: _,
@@ -1428,6 +1429,11 @@ impl InterpreterCore {
             pending_exception,
             pending_exception_label: _,
             pending_hostcall_result_label: _,
+            // bd-9vouw.113: the last RegExp match is a copied string, spans
+            // and a label; no heap references.
+            legacy_regexp_match: _,
+            legacy_regexp_generation: _,
+            legacy_regexp_read_label: _,
             pending_return,
             suspended_abrupt_completions,
             finally_frames,
@@ -1436,6 +1442,7 @@ impl InterpreterCore {
             last_post_run_epoch: _,
             scope_chain,
             realm_dynamic_globals,
+            realm_global_object,
             generated_function_realm_globals,
             generated_function_realm_generation: _,
             runtime_name_references,
@@ -1643,6 +1650,9 @@ impl InterpreterCore {
             realm_dynamic_globals
                 .values()
                 .for_each(|binding| m.binding(binding));
+            if let Some(global) = realm_global_object {
+                m.object(*global);
+            }
         }
         if let Some((_, value, _)) = pending_arguments_object {
             m.value(value);

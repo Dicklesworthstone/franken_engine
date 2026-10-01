@@ -81,7 +81,7 @@ const SETTER_PARAMETER: &str = "__franken_with_value";
 /// lowering's sink recognition would not see.
 const MAX_DUAL_CALL_DEPTH: u32 = 6;
 
-type Outcome = Result<(), LoweringPipelineError>;
+pub(super) type Outcome = Result<(), LoweringPipelineError>;
 
 /// The HostCall tag of a rewrite intrinsic called by `name`, if it is one.
 pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
@@ -98,7 +98,11 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
 pub(super) fn rewrite_with_statements(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
-    if !tree.body.iter().any(statement_has_with) {
+    if !tree
+        .body
+        .iter()
+        .any(|statement| WITH_SEARCH.in_statement(statement))
+    {
         return Ok(None);
     }
     let mut tree = tree.clone();
@@ -166,21 +170,21 @@ fn declarator(name: &str, initializer: Option<Expression>, span: SourceSpan) -> 
 }
 
 /// A function's parts, as every function form shares them.
-struct FunctionParts<'a> {
+pub(super) struct FunctionParts<'a> {
     /// The name a named function expression binds in its own body.
-    own_name: Option<&'a str>,
-    params: &'a mut [FunctionParam],
-    body: FunctionBody<'a>,
+    pub(super) own_name: Option<&'a str>,
+    pub(super) params: &'a mut [FunctionParam],
+    pub(super) body: FunctionBody<'a>,
 }
 
-enum FunctionBody<'a> {
+pub(super) enum FunctionBody<'a> {
     Block(&'a mut BlockStatement),
     Expression(&'a mut Expression),
 }
 
 /// A mutable walk over statements and expressions. Each method's default
 /// visits the node's children.
-trait Walk {
+pub(super) trait Walk {
     fn statement(&mut self, statement: &mut Statement) -> Outcome {
         walk_statement(self, statement)
     }
@@ -227,7 +231,10 @@ trait Walk {
     }
 }
 
-fn walk_statement<W: Walk + ?Sized>(walker: &mut W, statement: &mut Statement) -> Outcome {
+pub(super) fn walk_statement<W: Walk + ?Sized>(
+    walker: &mut W,
+    statement: &mut Statement,
+) -> Outcome {
     match statement {
         Statement::Import(_) | Statement::Break(_) | Statement::Continue(_) => Ok(()),
         Statement::Export(export) => match &mut export.kind {
@@ -320,7 +327,10 @@ fn walk_statement<W: Walk + ?Sized>(walker: &mut W, statement: &mut Statement) -
     }
 }
 
-fn walk_switch_cases<W: Walk + ?Sized>(walker: &mut W, cases: &mut [SwitchCase]) -> Outcome {
+pub(super) fn walk_switch_cases<W: Walk + ?Sized>(
+    walker: &mut W,
+    cases: &mut [SwitchCase],
+) -> Outcome {
     for case in cases {
         if let Some(test) = &mut case.test {
             walker.expression(test)?;
@@ -330,7 +340,10 @@ fn walk_switch_cases<W: Walk + ?Sized>(walker: &mut W, cases: &mut [SwitchCase])
     Ok(())
 }
 
-fn walk_expression<W: Walk + ?Sized>(walker: &mut W, expression: &mut Expression) -> Outcome {
+pub(super) fn walk_expression<W: Walk + ?Sized>(
+    walker: &mut W,
+    expression: &mut Expression,
+) -> Outcome {
     match expression {
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
@@ -434,7 +447,10 @@ fn walk_expression<W: Walk + ?Sized>(walker: &mut W, expression: &mut Expression
     }
 }
 
-fn walk_function<W: Walk + ?Sized>(walker: &mut W, function: FunctionParts<'_>) -> Outcome {
+pub(super) fn walk_function<W: Walk + ?Sized>(
+    walker: &mut W,
+    function: FunctionParts<'_>,
+) -> Outcome {
     for param in function.params.iter_mut() {
         walker.pattern(&mut param.pattern)?;
     }
@@ -444,7 +460,7 @@ fn walk_function<W: Walk + ?Sized>(walker: &mut W, function: FunctionParts<'_>) 
     }
 }
 
-fn walk_class<W: Walk + ?Sized>(
+pub(super) fn walk_class<W: Walk + ?Sized>(
     walker: &mut W,
     super_class: Option<&mut Expression>,
     body: &mut [MethodDefinition],
@@ -465,7 +481,10 @@ fn walk_class<W: Walk + ?Sized>(
     Ok(())
 }
 
-fn walk_pattern<W: Walk + ?Sized>(walker: &mut W, pattern: &mut BindingPattern) -> Outcome {
+pub(super) fn walk_pattern<W: Walk + ?Sized>(
+    walker: &mut W,
+    pattern: &mut BindingPattern,
+) -> Outcome {
     match pattern {
         BindingPattern::Identifier(_) => Ok(()),
         BindingPattern::ObjectPattern(properties) => {
@@ -491,184 +510,234 @@ fn walk_pattern<W: Walk + ?Sized>(walker: &mut W, pattern: &mut BindingPattern) 
 
 /// Whether a `with` statement occurs anywhere in `statement`, including
 /// inside function and class bodies.
-fn statement_has_with(statement: &Statement) -> bool {
-    let any_statement = |statements: &[Statement]| statements.iter().any(statement_has_with);
-    match statement {
-        Statement::With(_) => true,
-        Statement::Import(_) | Statement::Break(_) | Statement::Continue(_) => false,
-        Statement::Export(export) => match &export.kind {
-            ExportKind::Default(expression) => expression_has_with(expression),
-            ExportKind::NamedClause(_) => false,
-        },
-        Statement::VariableDeclaration(declaration) => {
-            declaration.declarations.iter().any(|declarator| {
-                pattern_has_with(&declarator.pattern)
-                    || declarator
-                        .initializer
-                        .as_ref()
-                        .is_some_and(expression_has_with)
-            })
+/// A read-only search of a program for a statement or expression.
+pub(super) struct Search {
+    pub(super) statement: fn(&Statement) -> bool,
+    pub(super) expression: fn(&Expression) -> bool,
+}
+
+/// A `with` statement anywhere.
+const WITH_SEARCH: Search = Search {
+    statement: |statement| matches!(statement, Statement::With(_)),
+    expression: |_| false,
+};
+
+impl Search {
+    pub(super) fn in_statement(&self, statement: &Statement) -> bool {
+        if (self.statement)(statement) {
+            return true;
         }
-        Statement::Expression(statement) => expression_has_with(&statement.expression),
-        Statement::Block(block) => any_statement(&block.body),
-        Statement::If(statement) => {
-            expression_has_with(&statement.condition)
-                || statement_has_with(&statement.consequent)
-                || statement
-                    .alternate
-                    .as_deref()
-                    .is_some_and(statement_has_with)
-        }
-        Statement::For(statement) => {
-            statement.init.as_deref().is_some_and(statement_has_with)
-                || statement
-                    .condition
-                    .as_ref()
-                    .is_some_and(expression_has_with)
-                || statement.update.as_ref().is_some_and(expression_has_with)
-                || statement_has_with(&statement.body)
-        }
-        Statement::While(statement) => {
-            expression_has_with(&statement.condition) || statement_has_with(&statement.body)
-        }
-        Statement::DoWhile(statement) => {
-            statement_has_with(&statement.body) || expression_has_with(&statement.condition)
-        }
-        Statement::Return(statement) => {
-            statement.argument.as_ref().is_some_and(expression_has_with)
-        }
-        Statement::Throw(statement) => expression_has_with(&statement.argument),
-        Statement::TryCatch(statement) => {
-            any_statement(&statement.block.body)
-                || statement
-                    .handler
-                    .as_ref()
-                    .is_some_and(|handler| any_statement(&handler.body.body))
-                || statement
-                    .finalizer
-                    .as_ref()
-                    .is_some_and(|finalizer| any_statement(&finalizer.body))
-        }
-        Statement::Switch(statement) => {
-            expression_has_with(&statement.discriminant)
-                || statement.cases.iter().any(|case| {
-                    case.test.as_ref().is_some_and(expression_has_with)
-                        || any_statement(&case.consequent)
-                })
-        }
-        Statement::FunctionDeclaration(function) => {
-            function
-                .params
+        let any_statement = |statements: &[Statement]| {
+            statements
                 .iter()
-                .any(|param| pattern_has_with(&param.pattern))
-                || any_statement(&function.body.body)
-        }
-        Statement::ClassDeclaration(class) => {
-            class_has_with(class.super_class.as_deref(), &class.body)
-        }
-        Statement::ForIn(statement) => {
-            pattern_has_with(&statement.binding)
-                || expression_has_with(&statement.object)
-                || statement_has_with(&statement.body)
-        }
-        Statement::ForOf(statement) => {
-            pattern_has_with(&statement.binding)
-                || expression_has_with(&statement.iterable)
-                || statement_has_with(&statement.body)
-        }
-        Statement::Labeled(statement) => statement_has_with(&statement.body),
-    }
-}
-
-fn expression_has_with(expression: &Expression) -> bool {
-    let any = |expressions: &[Expression]| expressions.iter().any(expression_has_with);
-    match expression {
-        Expression::Identifier(_)
-        | Expression::StringLiteral(_)
-        | Expression::NumericLiteral(_)
-        | Expression::BigIntLiteral(_)
-        | Expression::FloatLiteral(_)
-        | Expression::BooleanLiteral(_)
-        | Expression::NullLiteral
-        | Expression::UndefinedLiteral
-        | Expression::This
-        | Expression::NewTarget
-        | Expression::ImportMeta
-        | Expression::Raw(_)
-        | Expression::RegExpLiteral { .. }
-        | Expression::Super => false,
-        Expression::Await(inner) | Expression::SpreadElement(inner) => expression_has_with(inner),
-        Expression::Yield { argument, .. } => argument.as_deref().is_some_and(expression_has_with),
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
-            expression_has_with(left) || expression_has_with(right)
-        }
-        Expression::Unary { argument, .. } => expression_has_with(argument),
-        Expression::Conditional {
-            test,
-            consequent,
-            alternate,
-        } => {
-            expression_has_with(test)
-                || expression_has_with(consequent)
-                || expression_has_with(alternate)
-        }
-        Expression::Call {
-            callee, arguments, ..
-        }
-        | Expression::OptionalCall {
-            callee, arguments, ..
-        }
-        | Expression::New { callee, arguments } => expression_has_with(callee) || any(arguments),
-        Expression::Member {
-            object, property, ..
-        }
-        | Expression::OptionalMember {
-            object, property, ..
-        } => expression_has_with(object) || expression_has_with(property),
-        Expression::ArrayLiteral(elements) => elements.iter().flatten().any(expression_has_with),
-        Expression::ObjectLiteral(properties) => properties.iter().any(|property| {
-            expression_has_with(&property.key) || expression_has_with(&property.value)
-        }),
-        Expression::ArrowFunction { params, body, .. } => {
-            params.iter().any(|param| pattern_has_with(&param.pattern))
-                || match body {
-                    ArrowBody::Expression(expression) => expression_has_with(expression),
-                    ArrowBody::Block(block) => block.body.iter().any(statement_has_with),
-                }
-        }
-        Expression::TemplateLiteral { expressions, .. } => any(expressions),
-        Expression::Function { params, body, .. } => {
-            params.iter().any(|param| pattern_has_with(&param.pattern))
-                || body.body.iter().any(statement_has_with)
-        }
-        Expression::ClassExpression {
-            super_class, body, ..
-        } => class_has_with(super_class.as_deref(), body),
-    }
-}
-
-fn class_has_with(super_class: Option<&Expression>, body: &[MethodDefinition]) -> bool {
-    super_class.is_some_and(expression_has_with)
-        || body.iter().any(|method| {
-            expression_has_with(&method.key)
-                || method
+                .any(|statement| self.in_statement(statement))
+        };
+        match statement {
+            Statement::With(statement) => {
+                self.in_expression(&statement.object) || self.in_statement(&statement.body)
+            }
+            Statement::Import(_) | Statement::Break(_) | Statement::Continue(_) => false,
+            Statement::Export(export) => match &export.kind {
+                ExportKind::Default(expression) => self.in_expression(expression),
+                ExportKind::NamedClause(_) => false,
+            },
+            Statement::VariableDeclaration(declaration) => {
+                declaration.declarations.iter().any(|declarator| {
+                    self.in_pattern(&declarator.pattern)
+                        || declarator
+                            .initializer
+                            .as_ref()
+                            .is_some_and(|node| self.in_expression(node))
+                })
+            }
+            Statement::Expression(statement) => self.in_expression(&statement.expression),
+            Statement::Block(block) => any_statement(&block.body),
+            Statement::If(statement) => {
+                self.in_expression(&statement.condition)
+                    || self.in_statement(&statement.consequent)
+                    || statement
+                        .alternate
+                        .as_deref()
+                        .is_some_and(|node| self.in_statement(node))
+            }
+            Statement::For(statement) => {
+                statement
+                    .init
+                    .as_deref()
+                    .is_some_and(|node| self.in_statement(node))
+                    || statement
+                        .condition
+                        .as_ref()
+                        .is_some_and(|node| self.in_expression(node))
+                    || statement
+                        .update
+                        .as_ref()
+                        .is_some_and(|node| self.in_expression(node))
+                    || self.in_statement(&statement.body)
+            }
+            Statement::While(statement) => {
+                self.in_expression(&statement.condition) || self.in_statement(&statement.body)
+            }
+            Statement::DoWhile(statement) => {
+                self.in_statement(&statement.body) || self.in_expression(&statement.condition)
+            }
+            Statement::Return(statement) => statement
+                .argument
+                .as_ref()
+                .is_some_and(|node| self.in_expression(node)),
+            Statement::Throw(statement) => self.in_expression(&statement.argument),
+            Statement::TryCatch(statement) => {
+                any_statement(&statement.block.body)
+                    || statement
+                        .handler
+                        .as_ref()
+                        .is_some_and(|handler| any_statement(&handler.body.body))
+                    || statement
+                        .finalizer
+                        .as_ref()
+                        .is_some_and(|finalizer| any_statement(&finalizer.body))
+            }
+            Statement::Switch(statement) => {
+                self.in_expression(&statement.discriminant)
+                    || statement.cases.iter().any(|case| {
+                        case.test
+                            .as_ref()
+                            .is_some_and(|node| self.in_expression(node))
+                            || any_statement(&case.consequent)
+                    })
+            }
+            Statement::FunctionDeclaration(function) => {
+                function
                     .params
                     .iter()
-                    .any(|param| pattern_has_with(&param.pattern))
-                || method.body.body.iter().any(statement_has_with)
-        })
-}
+                    .any(|param| self.in_pattern(&param.pattern))
+                    || any_statement(&function.body.body)
+            }
+            Statement::ClassDeclaration(class) => {
+                self.in_class(class.super_class.as_deref(), &class.body)
+            }
+            Statement::ForIn(statement) => {
+                self.in_pattern(&statement.binding)
+                    || self.in_expression(&statement.object)
+                    || self.in_statement(&statement.body)
+            }
+            Statement::ForOf(statement) => {
+                self.in_pattern(&statement.binding)
+                    || self.in_expression(&statement.iterable)
+                    || self.in_statement(&statement.body)
+            }
+            Statement::Labeled(statement) => self.in_statement(&statement.body),
+        }
+    }
 
-fn pattern_has_with(pattern: &BindingPattern) -> bool {
-    match pattern {
-        BindingPattern::Identifier(_) => false,
-        BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
-            expression_has_with(&property.key) || pattern_has_with(&property.value)
-        }),
-        BindingPattern::ArrayPattern(elements) => elements.iter().flatten().any(pattern_has_with),
-        BindingPattern::Rest(inner) => pattern_has_with(inner),
-        BindingPattern::AssignmentPattern { left, right } => {
-            pattern_has_with(left) || expression_has_with(right)
+    pub(super) fn in_expression(&self, expression: &Expression) -> bool {
+        if (self.expression)(expression) {
+            return true;
+        }
+        let any = |expressions: &[Expression]| {
+            expressions
+                .iter()
+                .any(|expression| self.in_expression(expression))
+        };
+        match expression {
+            Expression::Identifier(_)
+            | Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::FloatLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral
+            | Expression::UndefinedLiteral
+            | Expression::This
+            | Expression::NewTarget
+            | Expression::ImportMeta
+            | Expression::Raw(_)
+            | Expression::RegExpLiteral { .. }
+            | Expression::Super => false,
+            Expression::Await(inner) | Expression::SpreadElement(inner) => {
+                self.in_expression(inner)
+            }
+            Expression::Yield { argument, .. } => argument
+                .as_deref()
+                .is_some_and(|node| self.in_expression(node)),
+            Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+                self.in_expression(left) || self.in_expression(right)
+            }
+            Expression::Unary { argument, .. } => self.in_expression(argument),
+            Expression::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
+                self.in_expression(test)
+                    || self.in_expression(consequent)
+                    || self.in_expression(alternate)
+            }
+            Expression::Call {
+                callee, arguments, ..
+            }
+            | Expression::OptionalCall {
+                callee, arguments, ..
+            }
+            | Expression::New { callee, arguments } => self.in_expression(callee) || any(arguments),
+            Expression::Member {
+                object, property, ..
+            }
+            | Expression::OptionalMember {
+                object, property, ..
+            } => self.in_expression(object) || self.in_expression(property),
+            Expression::ArrayLiteral(elements) => elements
+                .iter()
+                .flatten()
+                .any(|node| self.in_expression(node)),
+            Expression::ObjectLiteral(properties) => properties.iter().any(|property| {
+                self.in_expression(&property.key) || self.in_expression(&property.value)
+            }),
+            Expression::ArrowFunction { params, body, .. } => {
+                params.iter().any(|param| self.in_pattern(&param.pattern))
+                    || match body {
+                        ArrowBody::Expression(expression) => self.in_expression(expression),
+                        ArrowBody::Block(block) => {
+                            block.body.iter().any(|node| self.in_statement(node))
+                        }
+                    }
+            }
+            Expression::TemplateLiteral { expressions, .. } => any(expressions),
+            Expression::Function { params, body, .. } => {
+                params.iter().any(|param| self.in_pattern(&param.pattern))
+                    || body.body.iter().any(|node| self.in_statement(node))
+            }
+            Expression::ClassExpression {
+                super_class, body, ..
+            } => self.in_class(super_class.as_deref(), body),
+        }
+    }
+
+    fn in_class(&self, super_class: Option<&Expression>, body: &[MethodDefinition]) -> bool {
+        super_class.is_some_and(|node| self.in_expression(node))
+            || body.iter().any(|method| {
+                self.in_expression(&method.key)
+                    || method
+                        .params
+                        .iter()
+                        .any(|param| self.in_pattern(&param.pattern))
+                    || method.body.body.iter().any(|node| self.in_statement(node))
+            })
+    }
+
+    fn in_pattern(&self, pattern: &BindingPattern) -> bool {
+        match pattern {
+            BindingPattern::Identifier(_) => false,
+            BindingPattern::ObjectPattern(properties) => properties.iter().any(|property| {
+                self.in_expression(&property.key) || self.in_pattern(&property.value)
+            }),
+            BindingPattern::ArrayPattern(elements) => {
+                elements.iter().flatten().any(|node| self.in_pattern(node))
+            }
+            BindingPattern::Rest(inner) => self.in_pattern(inner),
+            BindingPattern::AssignmentPattern { left, right } => {
+                self.in_pattern(left) || self.in_expression(right)
+            }
         }
     }
 }
@@ -816,7 +885,7 @@ fn scope_object(names: &BTreeSet<String>, span: SourceSpan) -> Expression {
 
 /// Names a statement list declares for its own block: `let`, `const`,
 /// classes and functions.
-fn lexical_names(statements: &[Statement], names: &mut BTreeSet<String>) {
+pub(super) fn lexical_names(statements: &[Statement], names: &mut BTreeSet<String>) {
     for statement in statements {
         match statement {
             Statement::VariableDeclaration(declaration)
@@ -841,7 +910,7 @@ fn lexical_names(statements: &[Statement], names: &mut BTreeSet<String>) {
 
 /// Names `var` and nested function declarations bind in a function body,
 /// without entering nested functions.
-fn var_names(statements: &[Statement], names: &mut BTreeSet<String>) {
+pub(super) fn var_names(statements: &[Statement], names: &mut BTreeSet<String>) {
     fn visit(statement: &Statement, names: &mut BTreeSet<String>) {
         match statement {
             Statement::VariableDeclaration(declaration)
@@ -1491,7 +1560,9 @@ mod tests {
     }
 
     fn contains_with(statements: &[Statement]) -> bool {
-        statements.iter().any(statement_has_with)
+        statements
+            .iter()
+            .any(|statement| WITH_SEARCH.in_statement(statement))
     }
 
     #[test]

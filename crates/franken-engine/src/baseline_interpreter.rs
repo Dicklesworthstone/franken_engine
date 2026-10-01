@@ -74,18 +74,23 @@ use url::{Url, form_urlencoded};
 use zeroize::Zeroizing;
 
 mod array_from;
+mod array_generic;
 mod async_generator;
 mod bigint_ops;
 mod builtin_function_lengths;
+mod collation;
 mod collector;
 mod date_locale;
 mod inspect;
+mod intl;
 mod json_parse;
 mod json_stringify;
+mod legacy_regexp;
 mod number_locale;
 mod object_integrity;
 mod package_resolution;
 mod primitive_conversion;
+mod prototype_getters;
 mod reflect_invocation;
 mod regexp_backtrack;
 mod regexp_syntax;
@@ -96,6 +101,7 @@ use async_generator::AsyncGeneratorPhase;
 use async_generator::{AsyncGeneratorObject, AsyncGeneratorRuntime};
 use collector::GcPin;
 pub use collector::GcStats;
+use legacy_regexp::{LegacyRegExpMatch, is_legacy_regexp_static};
 use object_integrity::ObjectIntegrityOperation;
 use primitive_conversion::PrimitiveConversion;
 use reflect_invocation::ReflectPropertyOperation;
@@ -932,6 +938,11 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "FinalizationRegistry" => Some("FinalizationRegistry"),
         "TextEncoder" => Some("TextEncoder"),
         "TextDecoder" => Some("TextDecoder"),
+        // %GeneratorFunction%, %AsyncFunction%, %AsyncGeneratorFunction%:
+        // not global bindings (FUNCTION_KIND_INTRINSICS).
+        "GeneratorFunction" => Some("GeneratorFunction"),
+        "AsyncFunction" => Some("AsyncFunction"),
+        "AsyncGeneratorFunction" => Some("AsyncGeneratorFunction"),
         _ => None,
     }
 }
@@ -971,7 +982,8 @@ fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
 
 /// The early SyntaxError of a regular expression literal (ES2020 12.2.8.1),
 /// or `None` when it may be valid: duplicate or unknown flags, `u` with `v`,
-/// or a pattern that both the backtracking parser and the `regex` crate
+/// a Unicode property escape with a name JavaScript does not define, or a
+/// pattern that both the backtracking parser and the `regex` crate
 /// reject. A pattern either one accepts is left to the runtime, which runs
 /// it there, so no program that runs today is refused at parse time.
 pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<String> {
@@ -984,6 +996,13 @@ pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<S
     }) && !(flags.contains('u') && flags.contains('v'));
     if !flags_valid {
         return Some(format!("Invalid regular expression flags '{flags}'"));
+    }
+    // Property names are exact in JavaScript; the `regex` crate would accept
+    // loose spellings (`\p{greek}`), so they are checked here.
+    if let Some(message) = regexp_syntax::unicode_property_escape_error(pattern, flags) {
+        return Some(format!(
+            "Invalid regular expression: /{pattern}/{flags}: {message}"
+        ));
     }
     let message = BacktrackRegExp::syntax_error(pattern, flags)?;
     let automaton_accepts = InterpreterCore::regexp_builder(pattern, flags)
@@ -3192,6 +3211,14 @@ pub enum BuiltinFunctionKind {
     UrlSearchParamsDelete,
     UrlSearchParamsSet,
     UrlSearchParamsToString,
+    /// bd-9vouw.126: URLSearchParams.prototype.keys/values/entries (and
+    /// @@iterator, which is entries): iterators over the pairs present at
+    /// the call.
+    UrlSearchParamsKeys,
+    UrlSearchParamsValues,
+    UrlSearchParamsEntries,
+    /// URLSearchParams.prototype.forEach(callback, thisArg).
+    UrlSearchParamsForEach,
     /// `cluster.setupPrimary` / legacy `setupMaster`: merge own enumerable
     /// option fields into the authenticated live settings object (bd-9p2v3).
     /// Cluster variants stay at the true enum tail because the discriminant
@@ -3321,6 +3348,10 @@ pub enum BuiltinFunctionKind {
     /// object). The `builtin:*` hostcall tag travels in `module_specifier` and
     /// is re-validated against the shared slot-0 table on every call.
     StaticHostcall,
+    /// bd-9vouw.129: the getter of a built-in prototype accessor
+    /// (`Map.prototype.size`, ...); `module_specifier` names it
+    /// (`"Map.size"`, see `prototype_getters.rs`).
+    PrototypeGetter,
     /// `Error.prototype.toString`, reached through the error prototypes'
     /// chain (bd-9vouw.17). Append only.
     ErrorPrototypeToString,
@@ -3425,6 +3456,18 @@ pub enum BuiltinFunctionKind {
     /// `Number.prototype.toLocaleString` (ECMA-402 subset, see
     /// number_locale.rs). Append only.
     NumberToLocaleString,
+    /// `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator` and
+    /// `Intl.PluralRules` (ECMA-402, intl.rs); the service name travels in
+    /// `module_specifier`. Append only.
+    IntlConstructor,
+    /// A service object's `format`, `compare`, `select` or
+    /// `resolvedOptions`, bound to it (`bound_object`); `module_specifier`
+    /// holds `<service>.<method>`. Append only.
+    IntlMethod,
+    /// `Intl.getCanonicalLocales` (ECMA-402 8.3.1). Append only.
+    IntlGetCanonicalLocales,
+    /// `Object.prototype.toLocaleString` (ES2020 19.1.3.5). Append only.
+    ObjectPrototypeToLocaleString,
 }
 
 impl BuiltinFunctionKind {
@@ -3443,6 +3486,7 @@ impl BuiltinFunctionKind {
                 | Self::EventEmitterConstructor
                 | Self::PromiseConstructor
                 | Self::StandardConstructor
+                | Self::IntlConstructor
         )
     }
 }
@@ -4891,6 +4935,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::UrlSearchParamsDelete => "delete",
             BuiltinFunctionKind::UrlSearchParamsSet => "set",
             BuiltinFunctionKind::UrlSearchParamsToString => "toString",
+            BuiltinFunctionKind::UrlSearchParamsKeys => "keys",
+            BuiltinFunctionKind::UrlSearchParamsValues => "values",
+            BuiltinFunctionKind::UrlSearchParamsEntries => "entries",
+            BuiltinFunctionKind::UrlSearchParamsForEach => "forEach",
             BuiltinFunctionKind::NetServerListen => "listen",
             BuiltinFunctionKind::NetServerAddress => "address",
             BuiltinFunctionKind::NetServerClose => "close",
@@ -5117,6 +5165,25 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberToPrecision => "toPrecision",
             BuiltinFunctionKind::NumberToExponential => "toExponential",
             BuiltinFunctionKind::NumberToLocaleString => "toLocaleString",
+            BuiltinFunctionKind::IntlConstructor => {
+                ["NumberFormat", "DateTimeFormat", "Collator", "PluralRules"]
+                    .iter()
+                    .copied()
+                    .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                    .unwrap_or("IntlConstructor")
+            }
+            BuiltinFunctionKind::IntlMethod => ["format", "compare", "select", "resolvedOptions"]
+                .iter()
+                .copied()
+                .find(|name| {
+                    self.module_specifier
+                        .0
+                        .as_deref()
+                        .and_then(|specifier| specifier.split_once('.'))
+                        .is_some_and(|(_, method)| method == *name)
+                })
+                .unwrap_or("intlMethod"),
+            BuiltinFunctionKind::IntlGetCanonicalLocales => "getCanonicalLocales",
             BuiltinFunctionKind::RegExpPrototypeExec => "exec",
             BuiltinFunctionKind::DateUtc => "UTC",
             BuiltinFunctionKind::DateParse => "parse",
@@ -5160,6 +5227,12 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StaticHostcall => {
                 static_hostcall_name(&self.module_specifier).unwrap_or("anonymous")
             }
+            BuiltinFunctionKind::PrototypeGetter => self
+                .module_specifier
+                .0
+                .as_deref()
+                .and_then(prototype_getters::prototype_getter_entry)
+                .map_or("get", |(_, _, name)| name),
             BuiltinFunctionKind::ErrorPrototypeToString => "toString",
             BuiltinFunctionKind::ErrorCaptureStackTrace => "captureStackTrace",
             BuiltinFunctionKind::ArrayBufferSlice => "slice",
@@ -5185,6 +5258,7 @@ impl BuiltinFunction {
             | BuiltinFunctionKind::PromiseFinallyValueThunk
             | BuiltinFunctionKind::PromiseFinallyThrower => "",
             BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
+            BuiltinFunctionKind::ObjectPrototypeToLocaleString => "toLocaleString",
             BuiltinFunctionKind::BigIntToString => "toString",
             BuiltinFunctionKind::BigIntValueOf => "valueOf",
             BuiltinFunctionKind::BigIntAsUintN => "asUintN",
@@ -5357,6 +5431,7 @@ impl BuiltinFunction {
             | K::DataViewMethod => "DataView.prototype",
             K::ObjectHasOwnProperty
             | K::ObjectPrototypeIsPrototypeOf
+            | K::ObjectPrototypeToLocaleString
             | K::ObjectPrototypePropertyIsEnumerable
             | K::ObjectPrototypeToString
             | K::ObjectPrototypeValueOf => "Object.prototype",
@@ -5379,6 +5454,19 @@ impl BuiltinFunction {
             K::FinalizationRegistryMethod => "FinalizationRegistry.prototype",
             K::RegExpSymbolMethod => "RegExp.prototype",
             K::TypedArrayStaticMethod => "TypedArray",
+            K::IntlConstructor | K::IntlGetCanonicalLocales => "Intl",
+            K::IntlMethod => match self
+                .module_specifier
+                .0
+                .as_deref()
+                .and_then(|specifier| specifier.split_once('.'))
+                .map(|(service, _)| service)
+            {
+                Some("NumberFormat") => "Intl.NumberFormat.prototype",
+                Some("DateTimeFormat") => "Intl.DateTimeFormat.prototype",
+                Some("Collator") => "Intl.Collator.prototype",
+                _ => "Intl.PluralRules.prototype",
+            },
             K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
             K::SetTimeout
             | K::SetInterval
@@ -5418,7 +5506,8 @@ impl BuiltinFunction {
             | K::StringIterator
             | K::PromiseFinallyValueThunk
             | K::PromiseFinallyThrower
-            | K::ProxyRevoke => Some(0),
+            | K::ProxyRevoke
+            | K::PrototypeGetter => Some(0),
             _ => None,
         };
         if fixed.is_some() {
@@ -5449,6 +5538,19 @@ impl BuiltinFunction {
 /// %TypedArray% (ES2020 22.2.1): the abstract superclass of the typed array
 /// constructors, a standard constructor that is not a global binding.
 const TYPED_ARRAY_INTRINSIC: &str = "TypedArray";
+/// Module specifier of the %TypedArray%.prototype methods that share an
+/// Array.prototype algorithm (`some`, `indexOf`, ...): they are distinct
+/// functions whose receiver must be a typed array.
+const TYPED_ARRAY_PROTOTYPE_SPECIFIER: &str = "%TypedArray%.prototype";
+/// %GeneratorFunction%, %AsyncFunction% and %AsyncGeneratorFunction% (ES2020
+/// 25.2, 25.7; ES2018 25.3): standard constructors that are not global
+/// bindings, reached as the `constructor` of their prototypes, which are the
+/// [[Prototype]] of generator, async and async generator functions.
+const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
+    "GeneratorFunction",
+    "AsyncFunction",
+    "AsyncGeneratorFunction",
+];
 
 /// bd-9vouw.17: standard constructors bound as first-class global values.
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
@@ -5543,6 +5645,50 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 
 /// The names Array.prototype[@@unscopables] blocks in a `with` body, as Node
 /// v22 lists them (ES2020 22.1.3.32 plus later additions).
+/// %Array.prototype%'s own string keys in Node v22's order (bd-9vouw.122).
+const ARRAY_PROTOTYPE_OWN_NAMES: [&str; 40] = [
+    "length",
+    "constructor",
+    "at",
+    "concat",
+    "copyWithin",
+    "fill",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "lastIndexOf",
+    "pop",
+    "push",
+    "reverse",
+    "shift",
+    "unshift",
+    "slice",
+    "sort",
+    "splice",
+    "includes",
+    "indexOf",
+    "join",
+    "keys",
+    "entries",
+    "values",
+    "forEach",
+    "filter",
+    "flat",
+    "flatMap",
+    "map",
+    "every",
+    "some",
+    "reduce",
+    "reduceRight",
+    "toReversed",
+    "toSorted",
+    "toSpliced",
+    "with",
+    "toLocaleString",
+    "toString",
+];
+
 const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
     "at",
     "copyWithin",
@@ -5833,6 +5979,16 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
                 })
                 .map(|member| ("Reflect", member))
         })
+        .or_else(|| {
+            crate::lowering_pipeline::OBJECT_RECEIVER_STATIC_MEMBERS
+                .iter()
+                .copied()
+                .find(|member| {
+                    crate::lowering_pipeline::object_receiver_static_member_capability(member)
+                        == Some(tag)
+                })
+                .map(|member| ("Object", member))
+        })
 }
 
 /// `Reflect` members installed on the first-class `Reflect` object; each is
@@ -5873,6 +6029,13 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
                 .iter()
                 .filter_map(|member| crate::lowering_pipeline::reflect_member_capability(member)),
         )
+        .chain(
+            crate::lowering_pipeline::OBJECT_RECEIVER_STATIC_MEMBERS
+                .iter()
+                .filter_map(|member| {
+                    crate::lowering_pipeline::object_receiver_static_member_capability(member)
+                }),
+        )
         .find(|candidate| *candidate == tag)
 }
 
@@ -5903,7 +6066,7 @@ const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
 const ARRAY_BUFFER_SLOT_KEYS: [&str; 2] = ["__type", "byteLength"];
 const DATA_VIEW_SLOT_KEYS: [&str; 4] = ["__type", "buffer", "byteLength", "byteOffset"];
 
-const SLOT0_STATIC_GLOBALS: [&str; 8] = [
+const SLOT0_STATIC_GLOBALS: [&str; 9] = [
     "Object",
     "JSON",
     "Array",
@@ -5912,8 +6075,9 @@ const SLOT0_STATIC_GLOBALS: [&str; 8] = [
     "Proxy",
     "Map",
     "ArrayBuffer",
+    "Number",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 30] = [
+const SLOT0_STATIC_MEMBERS: [&str; 36] = [
     "keys",
     "hasOwn",
     "values",
@@ -5944,6 +6108,12 @@ const SLOT0_STATIC_MEMBERS: [&str; 30] = [
     "for",
     "keyFor",
     "revocable",
+    "isInteger",
+    "isSafeInteger",
+    "isFinite",
+    "isNaN",
+    "parseInt",
+    "parseFloat",
 ];
 
 /// Owner global and member name for a slot-0 static hostcall tag, for
@@ -13283,6 +13453,15 @@ pub struct InterpreterCore {
     ip: usize,
     /// Instructions executed counter.
     instructions_executed: u64,
+    /// Holes visited by native element reads (`array_index_value`), which
+    /// count against the instruction budget with `instructions_executed`
+    /// (bd-9vouw.112). Builtins loop natively over an array-like's
+    /// guest-chosen length (`indexOf.call({ length: 2 ** 40 })`). Present
+    /// elements are bounded by the memory budget that holds them; holes are
+    /// bounded by nothing else. Kept apart from `instructions_executed` so
+    /// reported instruction counts do not change. A `Cell`, as the reads are
+    /// `&self`.
+    native_hole_reads: Cell<u64>,
     /// Source instructions handled by the compact Tier-I dispatch in the
     /// current execution.
     tier_i_instructions_executed: u64,
@@ -13395,6 +13574,14 @@ pub struct InterpreterCore {
     /// `HostCall` consumes this exactly once and joins it with the ordinary
     /// argument label before writing the destination register.
     pending_hostcall_result_label: Option<Label>,
+    /// bd-9vouw.113: the realm's last successful RegExp match, which the
+    /// legacy statics (`RegExp.$1`, `lastMatch`, ...) read.
+    legacy_regexp_match: Option<LegacyRegExpMatch>,
+    /// Bumped on every recorded match, so a builtin call can tell whether it
+    /// recorded one.
+    legacy_regexp_generation: u64,
+    /// The label of the legacy statics read by the current GetProperty.
+    legacy_regexp_read_label: Option<Label>,
     /// A pending return value and IFC label before `EnterFinally` captures it
     /// or the return completes.
     pending_return: Option<LabeledReturn>,
@@ -13425,6 +13612,11 @@ pub struct InterpreterCore {
     /// environment for the duration of one top-level realm. Realm rotation
     /// clears the map before seed-backed heap ObjectIds can be reused.
     realm_dynamic_globals: BTreeMap<String, ScopeBinding>,
+    /// The realm's global object (`globalThis`, bd-9vouw.17): seeded once per
+    /// realm and bound in every module's scope chain. A free identifier that
+    /// no binding resolves reads and writes its properties, own or inherited,
+    /// as a global environment's object record does. Cleared with the realm.
+    realm_global_object: Option<ObjectId>,
     /// Engine-owned sanitized outer environment for `Function`-constructor
     /// artifacts. Binding cells persist for one top-level realm, while every
     /// invocation receives fresh frame structure that shares only these
@@ -13881,7 +14073,9 @@ impl InterpreterCore {
                 .cloned()
                 .map(RuntimeNameReference::Resolved)
                 .unwrap_or(RuntimeNameReference::Unresolvable)
-        } else if self.realm_dynamic_globals.contains_key(name) {
+        } else if self.realm_dynamic_globals.contains_key(name)
+            || self.global_object_binding(None, name)?.is_some()
+        {
             // A global-object Reference retains the realm object and property
             // name, not the current property cell. If RHS code replaces that
             // property, PutValue must target the replacement.
@@ -13964,6 +14158,117 @@ impl InterpreterCore {
         }
     }
 
+    /// The realm global object and the key of its property `name`, when a
+    /// free identifier no binding resolves names one (ES2020 8.1.1.4.1
+    /// HasBinding of the global object record): an own property
+    /// (`globalThis.x = 1; x`), an accessor defined on it, or one it
+    /// inherits from Object.prototype (`toString`).
+    /// The global object free names resolve through, except while a
+    /// Function-constructor body runs: generated code resolves in its own
+    /// canonical realm (generated_function_realm_globals, bd-fw7zd.8.3), so
+    /// the owner's global writes (`Function = 3`, `console = 1`) must not
+    /// reach it through the main realm's global object.
+    fn name_resolving_global_object(&self) -> Option<ObjectId> {
+        if self.active_generated_function_artifact.is_some() {
+            None
+        } else {
+            self.realm_global_object
+        }
+    }
+
+    fn global_object_binding(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+    ) -> Result<Option<(ObjectId, RuntimePropertyKey)>, InterpreterError> {
+        let Some(global) = self.name_resolving_global_object() else {
+            return Ok(None);
+        };
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        if self.heap.get(global.0 as usize).is_none()
+            || !self.proxy_aware_has_runtime_property(module, global, &key, 0)?
+        {
+            return Ok(None);
+        }
+        Ok(Some((global, key)))
+    }
+
+    /// An own data property of the global object, read without running
+    /// guest code.
+    fn global_object_data_property(&self, name: &str) -> Option<Value> {
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        match self
+            .heap
+            .get(self.name_resolving_global_object()?.0 as usize)?
+            .own_runtime_property_descriptor(&key)?
+        {
+            BaselineSymbolProperty::Data(value) => Some(value),
+            BaselineSymbolProperty::Accessor { .. } => None,
+        }
+    }
+
+    /// GetBindingValue of a global-object binding: an ordinary [[Get]]
+    /// (getters run), with the label stored on the property it read.
+    fn load_global_object_name(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+    ) -> Result<Option<(Value, Label)>, InterpreterError> {
+        let Some((global, key)) = self.global_object_binding(module, name)? else {
+            return Ok(None);
+        };
+        if let Some(module) = module {
+            self.run_pre_runtime_property_access_hook(module, global, &key)?;
+        }
+        let value =
+            self.proxy_aware_get_runtime_property(module, global, &key, Value::Object(global), 0)?;
+        let label = self.runtime_property_label(global, &key);
+        Ok(Some((value, label)))
+    }
+
+    /// SetMutableBinding of a global-object binding, and the property a
+    /// sloppy write to an unresolvable name creates: an ordinary [[Set]] that
+    /// stores the written value's label on the property, as SetProperty does.
+    fn put_global_object_name(
+        &mut self,
+        module: Option<&Ir3Module>,
+        global: ObjectId,
+        name: &str,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let key = RuntimePropertyKey::String(JsString::from(name));
+        if let Some(module) = module {
+            self.run_pre_runtime_property_access_hook(module, global, &key)?;
+        }
+        self.join_object_mutation_label(global, label)?;
+        let previous_label = self.own_stored_runtime_property_label(global, &key);
+        self.set_own_runtime_property_label(global, &key, label)?;
+        let committed = match self.proxy_aware_set_runtime_property(
+            module,
+            global,
+            &key,
+            value,
+            Value::Object(global),
+            0,
+        ) {
+            Ok(committed) => committed,
+            Err(error) => {
+                self.set_own_runtime_property_label(global, &key, &previous_label)?;
+                return Err(error);
+            }
+        };
+        let owns_property = self
+            .heap
+            .get(global.0 as usize)
+            .is_some_and(|object| object.contains_own_runtime_property(&key));
+        if !committed || !owns_property {
+            // A non-writable property or an inherited setter keeps no own value.
+            self.set_own_runtime_property_label(global, &key, &previous_label)?;
+        }
+        Ok(())
+    }
+
     fn put_resolved_runtime_name_binding(
         &mut self,
         name: &str,
@@ -14005,8 +14310,10 @@ impl InterpreterCore {
 
     fn put_unresolvable_runtime_name(
         &mut self,
+        module: Option<&Ir3Module>,
         name: &str,
         value: Value,
+        label: &Label,
         strict: bool,
     ) -> Result<(), InterpreterError> {
         if strict {
@@ -14112,7 +14419,7 @@ impl InterpreterCore {
             return Ok(());
         }
 
-        self.put_realm_runtime_name(name, value)
+        self.put_realm_runtime_name_labeled(module, name, value, label)
     }
 
     /// Execute `delete name` for an identifier without a source lexical
@@ -14135,6 +14442,14 @@ impl InterpreterCore {
             self.realm_dynamic_globals.contains_key(name)
         };
         if !present {
+            // A global-object binding deletes the property ([[Delete]]: an
+            // inherited one is `true` without effect, a non-configurable one
+            // `false`).
+            if !in_generated_artifact
+                && let Some((global, key)) = self.global_object_binding(None, name)?
+            {
+                return self.proxy_aware_delete_runtime_property(None, global, &key, 0);
+            }
             // Genuinely missing name: `delete` of an unresolvable Reference is
             // `true` with no side effect.
             return Ok(true);
@@ -14166,12 +14481,28 @@ impl InterpreterCore {
     }
 
     fn put_realm_runtime_name(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
+        self.put_realm_runtime_name_labeled(None, name, value, &Label::Public)
+    }
+
+    fn put_realm_runtime_name_labeled(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
         // Write the realm global object directly. If RHS code created or
         // replaced this property after the Reference was captured, it is still
         // the property this PutValue updates; a newly appearing lexical binding
         // must not steal the write.
         if let Some(binding) = self.realm_dynamic_globals.get(name).cloned() {
             return self.put_resolved_runtime_name_binding(name, binding, value);
+        }
+        // Once the realm has its global object, a sloppy global is a property
+        // of it (`x = 1; globalThis.x`), readable through the fallback in
+        // LoadName.
+        if let Some(global) = self.name_resolving_global_object() {
+            return self.put_global_object_name(module, global, name, value, label);
         }
 
         let previous_scope_bytes = self.scope_chain_memory_bytes();
@@ -14206,10 +14537,29 @@ impl InterpreterCore {
         value: Value,
         strict: bool,
     ) -> Result<(), InterpreterError> {
+        self.put_runtime_name_labeled(None, name, value, &Label::Public, strict)
+    }
+
+    /// [`Self::put_runtime_name`] with the written value's label, which a
+    /// global-object property stores.
+    fn put_runtime_name_labeled(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+        value: Value,
+        label: &Label,
+        strict: bool,
+    ) -> Result<(), InterpreterError> {
         if let Some(binding) = self.resolve_runtime_name_binding(name) {
             self.put_resolved_runtime_name_binding(name, binding, value)
+        } else if self.active_generated_function_artifact.is_none()
+            && self.global_object_binding(module, name)?.is_some()
+        {
+            // A property of the global object is a binding, in strict code
+            // too (`globalThis.x = 1; x = 2`).
+            self.put_realm_runtime_name_labeled(module, name, value, label)
         } else {
-            self.put_unresolvable_runtime_name(name, value, strict)
+            self.put_unresolvable_runtime_name(module, name, value, label, strict)
         }
     }
 
@@ -14220,6 +14570,25 @@ impl InterpreterCore {
         &mut self,
         name: &str,
         value: Value,
+        strict: bool,
+        reference_token: u32,
+    ) -> Result<(), InterpreterError> {
+        self.put_runtime_name_with_status_labeled(
+            None,
+            name,
+            value,
+            &Label::Public,
+            strict,
+            reference_token,
+        )
+    }
+
+    fn put_runtime_name_with_status_labeled(
+        &mut self,
+        module: Option<&Ir3Module>,
+        name: &str,
+        value: Value,
+        label: &Label,
         strict: bool,
         reference_token: u32,
     ) -> Result<(), InterpreterError> {
@@ -14242,10 +14611,10 @@ impl InterpreterCore {
                                 .to_string(),
                     });
                 }
-                self.put_realm_runtime_name(name, value)
+                self.put_realm_runtime_name_labeled(module, name, value, label)
             }
             RuntimeNameReference::Unresolvable => {
-                self.put_unresolvable_runtime_name(name, value, strict)
+                self.put_unresolvable_runtime_name(module, name, value, label, strict)
             }
         }
     }
@@ -14299,6 +14668,7 @@ impl InterpreterCore {
             ),
             ip: 0,
             instructions_executed: 0,
+            native_hole_reads: Cell::new(0),
             tier_i_instructions_executed: 0,
             tier_i_specialized_instructions_executed: 0,
             witness_events: Vec::new(),
@@ -14326,6 +14696,9 @@ impl InterpreterCore {
             pending_exception: None,
             pending_exception_label: Label::Public,
             pending_hostcall_result_label: None,
+            legacy_regexp_match: None,
+            legacy_regexp_generation: 0,
+            legacy_regexp_read_label: None,
             pending_return: None,
             suspended_abrupt_completions: Vec::new(),
             finally_frames: Vec::new(),
@@ -14334,6 +14707,7 @@ impl InterpreterCore {
             last_post_run_epoch: None,
             scope_chain,
             realm_dynamic_globals: BTreeMap::new(),
+            realm_global_object: None,
             generated_function_realm_globals: None,
             generated_function_realm_generation: 0,
             runtime_name_references: Vec::new(),
@@ -33992,6 +34366,7 @@ impl InterpreterCore {
         // A repeat run replays the previous run's budget and trace domain
         // from zero; both accumulate across `execute` calls otherwise.
         self.instructions_executed = 0;
+        self.native_hole_reads.set(0);
         self.tier_i_instructions_executed = 0;
         self.tier_i_specialized_instructions_executed = 0;
         self.nondeterminism_trace = NondeterminismTrace::new(&self.trace_id);
@@ -35062,6 +35437,7 @@ impl InterpreterCore {
         // Heap-backed realm values are recreated after the authoritative seed
         // reset. Keeping their binding cells here would retain stale ObjectIds.
         self.realm_dynamic_globals.clear();
+        self.realm_global_object = None;
         self.generated_function_realm_generation = next_generation;
         self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(released_bytes);
         Ok(())
@@ -35151,6 +35527,12 @@ impl InterpreterCore {
             frame.replace_bindings(scope_checkpoint);
         }
         self.realm_dynamic_globals = realm_checkpoint;
+        if self
+            .realm_global_object
+            .is_some_and(|global| global.0 as usize >= heap_checkpoint)
+        {
+            self.realm_global_object = None;
+        }
         self.estimated_memory_bytes = memory_checkpoint;
     }
 
@@ -35305,24 +35687,33 @@ impl InterpreterCore {
     /// identity. It holds the standard intrinsics exactly as the bare
     /// names resolve (`globalThis.Object === Object`), non-enumerable as in
     /// Node, and never a host-authority binding: `process` stays reachable
-    /// only through the gated identifier. It is a snapshot: a sloppy global
-    /// created later is not a property of it, and a property written to it is
-    /// not a bare global.
+    /// only through the gated identifier. Its intrinsic members are a
+    /// snapshot of the bindings, which resolve first; a free name no binding
+    /// resolves reads and writes its properties (`realm_global_object`).
     fn seed_global_object(&mut self) -> Result<(), InterpreterError> {
         // One global object per realm: a repeated injection keeps its identity.
-        let seeded = self
+        let bound = self
             .scope_chain
             .frames
             .last()
             .and_then(|frame| frame.get("globalThis"))
             .map(|binding| {
-                binding
-                    .state()
-                    .map(|state| matches!(state.value, Value::Object(_)))
+                binding.state().map(|state| match state.value {
+                    Value::Object(global) => Some(global),
+                    _ => None,
+                })
             })
             .transpose()?
-            .unwrap_or(false);
-        if seeded {
+            .flatten();
+        if let Some(global) = bound {
+            self.realm_global_object.get_or_insert(global);
+            return Ok(());
+        }
+        // A module's fresh scope chain binds the realm's existing object.
+        if let Some(global) = self.realm_global_object {
+            for name in ["globalThis", "global"] {
+                self.inject_runtime_global_binding(name, Value::Object(global))?;
+            }
             return Ok(());
         }
         let mut members = Vec::new();
@@ -35336,6 +35727,10 @@ impl InterpreterCore {
                 members.push((*name, value));
             }
         }
+        // ECMA-402's namespace is a property of the global object only; free
+        // `Intl` resolves through it.
+        let intl = self.alloc_intl_object()?;
+        members.push(("Intl", Value::Object(intl)));
         let global = self.alloc_object_with_properties(&members)?;
         for (name, _) in &members {
             self.set_own_property_attributes(
@@ -35356,6 +35751,7 @@ impl InterpreterCore {
             // the way theirs do (PREDECLARED_RUNTIME_GLOBALS in lowering).
             self.inject_runtime_global_binding(name, Value::Object(global))?;
         }
+        self.realm_global_object = Some(global);
         Ok(())
     }
 
@@ -37739,15 +38135,14 @@ impl InterpreterCore {
 
     /// Single semantic implementation shared by the direct
     /// `builtin:ArrayIsArray` hostcall and its first-class callable twin.
-    fn array_is_array_value(&self, arg: Option<Value>) -> Value {
+    /// Array.isArray (ES2020 7.2.2 IsArray): a proxy answers for its target,
+    /// and Array.prototype is itself an array.
+    fn array_is_array_value(&self, arg: Option<Value>) -> Result<Value, InterpreterError> {
         let is_array = match arg {
-            Some(Value::Object(object_id)) => self
-                .heap
-                .get(object_id.0 as usize)
-                .is_some_and(|object| object.is_array),
+            Some(Value::Object(object_id)) => self.generic_is_array(object_id)?,
             _ => false,
         };
-        Value::Bool(is_array)
+        Ok(Value::Bool(is_array))
     }
 
     /// Keep the Writable lifecycle lane out of the monolithic builtin
@@ -37765,6 +38160,9 @@ impl InterpreterCore {
         receiver: Option<Value>,
         receiver_register: Option<u32>,
     ) -> Result<Value, InterpreterError> {
+        let legacy_regexp_generation = self.legacy_regexp_generation;
+        let receiver_given = receiver.is_some();
+        let receiver_had_register = receiver_register.is_some();
         // bd-9vouw.77: count this dispatch so a builtin reached from inside
         // another builtin's Rust frame never arms a nested loop.
         self.gc_enter_builtin();
@@ -37811,6 +38209,19 @@ impl InterpreterCore {
             ),
         };
         self.gc_exit_builtin();
+        // bd-9vouw.113: a match this call recorded carries its operands'
+        // label. A receiver passed without its register leaves the match
+        // unlabelled, which reads as TopSecret.
+        if result.is_ok()
+            && self.legacy_regexp_generation != legacy_regexp_generation
+            && (receiver_had_register || !receiver_given)
+        {
+            let mut label = self.join_arg_range_label(args)?;
+            if let Some(register) = receiver_register {
+                label = label.join(self.get_register_label(register)?);
+            }
+            self.label_legacy_regexp_match(legacy_regexp_generation, &label);
+        }
         result
     }
 
@@ -37890,6 +38301,64 @@ impl InterpreterCore {
         if let Some(Value::Object(object_id)) = receiver {
             receiver = Some(self.this_primitive_receiver(builtin, object_id));
         }
+        // ES2020 22.2.3 ValidateTypedArray(this): `%TypedArray%.prototype.some`
+        // (and its siblings sharing an Array.prototype algorithm) on anything
+        // but a typed array is a TypeError; it ran as the Array method.
+        if &*builtin.module_specifier == TYPED_ARRAY_PROTOTYPE_SPECIFIER
+            && !matches!(
+                receiver,
+                Some(Value::Object(object_id))
+                    if self
+                        .heap
+                        .get(object_id.0 as usize)
+                        .is_some_and(|object| object.typed_array.is_some())
+            )
+        {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "typed array receiver for %TypedArray%.prototype.{}",
+                    builtin.spec_name()
+                ),
+                got: receiver
+                    .as_ref()
+                    .map_or("undefined", Value::type_name)
+                    .to_string(),
+            });
+        }
+        // ES2020 21.1.3: a String.prototype method (but toString/valueOf,
+        // which require a String) starts with ToString(this), so another
+        // object `this` is ToPrimitive'd with the string hint and its
+        // toString runs; `String.prototype.toUpperCase.call({ toString() {
+        // return 'ab' } })` read "[object Object]".
+        if let Some(object) = receiver.as_ref().filter(|value| value.is_object_like())
+            && builtin.spec_owner() == Some("String.prototype")
+            && !matches!(
+                builtin.kind,
+                BuiltinFunctionKind::StringToString | BuiltinFunctionKind::StringValueOf
+            )
+        {
+            self.gc_nested_request = None;
+            let primitive = self.coerce_runtime_primitive(Some(module), object.clone(), true)?;
+            if matches!(primitive, Value::Symbol(_)) {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("string-convertible this for {}", builtin.display_name()),
+                    got: "symbol".to_string(),
+                });
+            }
+            receiver = Some(primitive);
+        }
+        // Array.prototype methods on a Proxy, an array-like that is not an
+        // Array or a primitive `this` run over [[Get]]/[[Set]]/[[HasProperty]]
+        // /[[Delete]] (getters and traps see every step), and so does a concat
+        // that spreads a Proxy or an @@isConcatSpreadable object.
+        if Self::has_generic_array_path(builtin.kind)
+            && let Some(object_id) =
+                self.generic_array_receiver(builtin.kind, receiver.as_ref(), args)?
+            && let Some(result) =
+                self.array_method_generic(module, builtin.kind, object_id, args)?
+        {
+            return Ok(result);
+        }
         match builtin.kind {
             BuiltinFunctionKind::AsyncGeneratorNext
             | BuiltinFunctionKind::AsyncGeneratorReturn
@@ -37915,6 +38384,14 @@ impl InterpreterCore {
                 args,
             ),
             BuiltinFunctionKind::BoundFunction => self.invoke_bound_function(module, builtin, args),
+            BuiltinFunctionKind::UrlSearchParamsKeys
+            | BuiltinFunctionKind::UrlSearchParamsValues
+            | BuiltinFunctionKind::UrlSearchParamsEntries => {
+                self.url_search_params_iterator(builtin.kind, receiver)
+            }
+            BuiltinFunctionKind::UrlSearchParamsForEach => {
+                self.url_search_params_for_each(module, receiver, args)
+            }
             BuiltinFunctionKind::MapForEach | BuiltinFunctionKind::SetForEach => self
                 .collection_for_each(
                     module,
@@ -37943,6 +38420,20 @@ impl InterpreterCore {
                 let mut text = self.value_to_string(&receiver);
                 for index in 0..args.count {
                     let argument = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    // An object argument's toString runs (ToString).
+                    let argument = if argument.is_object_like() {
+                        self.gc_nested_request = None;
+                        self.coerce_runtime_primitive(Some(module), argument, true)?
+                    } else {
+                        argument
+                    };
+                    if matches!(argument, Value::Symbol(_)) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "string-convertible String.prototype.concat argument"
+                                .to_string(),
+                            got: "symbol".to_string(),
+                        });
+                    }
                     text.push_str(&self.value_to_string(&argument));
                     self.check_string_limit(text.len())?;
                 }
@@ -38050,7 +38541,45 @@ impl InterpreterCore {
                     .as_deref()
                     .unwrap_or_default()
                     .to_string();
-                self.date_prototype_method(&method, receiver.unwrap_or(Value::Undefined), args)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                // toLocale*String with options is a DateTimeFormat (intl.rs).
+                let caller = match method.as_str() {
+                    "toLocaleDateString" => Some(intl::DateOptionsFor::DateString),
+                    "toLocaleTimeString" => Some(intl::DateOptionsFor::TimeString),
+                    "toLocaleString" => Some(intl::DateOptionsFor::String),
+                    _ => None,
+                };
+                let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let time = match &receiver {
+                    Value::Object(id) => match self
+                        .heap
+                        .get(id.0 as usize)
+                        .filter(|object| {
+                            matches!(
+                                object.properties.get("__type"),
+                                Some(Value::Str(tag)) if tag.as_ref() == "Date"
+                            )
+                        })
+                        .and_then(|object| object.properties.get("__timestamp"))
+                    {
+                        Some(Value::Int(value)) => Some(*value as f64),
+                        Some(Value::Float(value)) => Some(value.inner()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let (Some(caller), Some(time)) = (caller, time)
+                    && !matches!(options, Value::Undefined)
+                {
+                    if !time.is_finite() {
+                        return Ok(Value::str("Invalid Date"));
+                    }
+                    let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                    return self.date_to_locale_with_options(
+                        module, caller, time, &locales, &options,
+                    );
+                }
+                self.date_prototype_method(Some(module), &method, receiver, args)
             }
             BuiltinFunctionKind::NumberToPrecision | BuiltinFunctionKind::NumberToExponential => {
                 let exponential = builtin.kind == BuiltinFunctionKind::NumberToExponential;
@@ -38442,7 +38971,7 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ArrayIsArray => {
                 let arg = self.builtin_arg(args, 0)?;
-                Ok(self.array_is_array_value(arg))
+                self.array_is_array_value(arg)
             }
             BuiltinFunctionKind::StreamReadablePause => {
                 self.readable_pause(receiver.unwrap_or(Value::Undefined))
@@ -38623,6 +39152,14 @@ impl InterpreterCore {
                     });
                 };
                 let mut next_index = self.array_like_length(arr_id)?;
+                // ES2020 23.1.3.20 step 4: the new length must stay a safe
+                // integer.
+                if (next_index as u64).saturating_add(u64::from(args.count)) > (1 << 53) - 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "an array length of at most 2^53 - 1 after push".to_string(),
+                        got: format!("{next_index} + {}", args.count),
+                    });
+                }
                 for i in 0..args.count {
                     let reg =
                         args.start
@@ -39272,10 +39809,12 @@ impl InterpreterCore {
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayCopyWithin => {
-                // ES2015 23.1.3.3: copy the subsequence `[start, end)` to
+                // ES2020 22.1.3.3: copy the subsequence `[start, end)` to
                 // `target`, in place; negative indices count from the end;
-                // returns the array. The source slice is snapshotted first so
-                // overlapping ranges copy correctly.
+                // returns the array. Overlapping ranges copy back to front, so
+                // each source is read before it is overwritten, and a hole
+                // deletes its target. The count is guest-chosen (bd-9vouw.112):
+                // nothing is buffered, and hole reads count against the budget.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(arr_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -39297,16 +39836,19 @@ impl InterpreterCore {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
                 let count = end.saturating_sub(start).min(len.saturating_sub(target));
-                let mut buf = Vec::with_capacity(count);
-                for i in 0..count {
-                    buf.push(
-                        self.array_index_value(arr_id, start + i)?
-                            .unwrap_or(Value::Undefined),
-                    );
+                let backward = start < target && target < start + count;
+                let was_dense = self.array_cache_is_dense(arr_id);
+                for step in 0..count {
+                    let offset = if backward { count - 1 - step } else { step };
+                    let to = (target + offset).to_string();
+                    match self.array_index_value(arr_id, start + offset)? {
+                        Some(value) => self.set_object_property(arr_id, to, value)?,
+                        None => {
+                            self.remove_object_property(arr_id, &to)?;
+                        }
+                    }
                 }
-                for (i, value) in buf.into_iter().enumerate() {
-                    self.set_object_property(arr_id, (target + i).to_string(), value)?;
-                }
+                self.refresh_dense_length_cache(arr_id, len, was_dense);
                 Ok(Value::Object(arr_id))
             }
             BuiltinFunctionKind::ArraySome => {
@@ -39383,7 +39925,7 @@ impl InterpreterCore {
                     Some(callback) => Some(callback),
                 };
                 if len > 1 {
-                    let mut elements = Vec::with_capacity(len);
+                    let mut elements = self.element_buffer(len)?;
                     for index in 0..len {
                         elements.push(
                             self.array_index_value(arr_id, index)?
@@ -39578,7 +40120,7 @@ impl InterpreterCore {
                     items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
                     k += 1;
                 }
-                let mut elements: Vec<Value> = Vec::with_capacity(len);
+                let mut elements: Vec<Value> = self.element_buffer(len)?;
                 for i in 0..len {
                     elements.push(
                         self.array_index_value(arr_id, i)?
@@ -39654,7 +40196,7 @@ impl InterpreterCore {
                     Some(Value::Undefined) | None => None,
                     Some(callback) => Some(callback),
                 };
-                let mut elements = Vec::with_capacity(len);
+                let mut elements = self.element_buffer(len)?;
                 for index in 0..len {
                     elements.push(
                         self.array_index_value(arr_id, index)?
@@ -39774,7 +40316,7 @@ impl InterpreterCore {
                     items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
                     k += 1;
                 }
-                let mut elements: Vec<Value> = Vec::with_capacity(len);
+                let mut elements: Vec<Value> = self.element_buffer(len)?;
                 for i in 0..len {
                     elements.push(
                         self.array_index_value(arr_id, i)?
@@ -39887,6 +40429,9 @@ impl InterpreterCore {
                 self.call_standard_constructor(module, builtin, args)
             }
             BuiltinFunctionKind::StaticHostcall => self.call_static_hostcall(module, builtin, args),
+            BuiltinFunctionKind::PrototypeGetter => {
+                self.call_prototype_getter(module, builtin, receiver.unwrap_or(Value::Undefined))
+            }
             BuiltinFunctionKind::ErrorPrototypeToString => {
                 self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
             }
@@ -39895,6 +40440,19 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::WeakRefDeref => {
                 self.weak_ref_deref(&receiver.unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::IntlConstructor => {
+                let service = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.construct_intl_service(module, &service, args)
+            }
+            BuiltinFunctionKind::IntlMethod => self.intl_method(module, builtin, args),
+            BuiltinFunctionKind::IntlGetCanonicalLocales => {
+                self.intl_get_canonical_locales(args)
             }
             BuiltinFunctionKind::FinalizationRegistryMethod => {
                 let method = builtin
@@ -41284,6 +41842,24 @@ impl InterpreterCore {
                     bigint_ops::as_int_n(bits as u64, &digits)
                 };
                 Self::bigint_result(result)
+            }
+            BuiltinFunctionKind::ObjectPrototypeToLocaleString => {
+                // ES2020 19.1.3.5: Invoke(this, "toString"); it was missing,
+                // so `obj.toLocaleString` was undefined.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let method = self.get_v(
+                    module,
+                    &receiver,
+                    &RuntimePropertyKey::String(JsString::from("toString")),
+                )?;
+                if !method.is_callable() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "callable toString for Object.prototype.toLocaleString"
+                            .to_string(),
+                        got: method.type_name().to_string(),
+                    });
+                }
+                self.call_conversion_method(module, method, &receiver, Vec::new())
             }
             BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => {
                 // ES2020 19.1.3.3: a primitive V is never inherited from;
@@ -44616,6 +45192,24 @@ impl InterpreterCore {
             .generated_function_artifact
             .map(|handle| self.contained_codegen_grant_for_artifact(handle))
             .transpose()?;
+        // A generator body that reads `arguments` gets the object of its
+        // invocation's full argument list (bd-9vouw.25): the call only
+        // created the generator, so no call setup staged it, and the body
+        // saw an empty arguments object. Staged below, once this activation
+        // is complete, for the generator's single frame.
+        let arguments_object = if matches!(
+            module.instructions.get(func.entry as usize),
+            Some(Ir3Instruction::HostCall { capability, .. })
+                if capability.0 == crate::lowering_pipeline::ARGUMENTS_OBJECT_CAPABILITY
+        ) {
+            let label = invocation
+                .argument_labels
+                .iter()
+                .fold(Label::Public, |joined, label| joined.join(label));
+            Some((self.alloc_arguments_object(&invocation.arguments)?, label))
+        } else {
+            None
+        };
         let (arguments, argument_labels) = self.materialize_generator_arguments(
             &func,
             invocation.arguments,
@@ -44708,6 +45302,9 @@ impl InterpreterCore {
             contained_codegen_grant,
         };
         self.check_temporary_memory_budget(Self::estimate_generator_execution_bytes(&execution))?;
+        if let Some((object, label)) = arguments_object {
+            self.pending_arguments_object = Some((1, Value::Object(object), label));
+        }
         Ok(execution)
     }
 
@@ -46523,8 +47120,17 @@ impl InterpreterCore {
                         // follow-up in the bd-8enww.4.7 / bd-8enww.4.8 family.
                         // (Non-throw hostcall errors are a no-op through the
                         // router and propagate unchanged.)
+                        let legacy_regexp_generation = self.legacy_regexp_generation;
                         match self.dispatch_builtin_hostcall(&capability.0, args, Some(module)) {
-                            Ok(value) => value,
+                            Ok(value) => {
+                                // bd-9vouw.113: a match this call recorded
+                                // carries its operands' label.
+                                self.label_legacy_regexp_match(
+                                    legacy_regexp_generation,
+                                    &args_label,
+                                );
+                                value
+                            }
                             Err(err) => {
                                 match self.route_isolated_explicit_throw(module, err)? {
                                     None => {
@@ -48461,6 +49067,7 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
+                    let key_val = self.property_key_primitive(module, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let object_id = match &obj_val {
                         Value::Object(object_id) => Some(*object_id),
@@ -48479,6 +49086,7 @@ impl InterpreterCore {
                         self.preflight_legacy_property_key_for_hook(&property_key)?;
                     }
 
+                    self.legacy_regexp_read_label = None;
                     let mut result_label = self.binary_operation_label(obj, key)?;
                     if property_key.as_str() == Some("prototype")
                         && let Some((_, label)) =
@@ -48585,6 +49193,22 @@ impl InterpreterCore {
                             }
                         }
                         _ => None,
+                    };
+                    // A function whose own properties lack the key continues
+                    // its [[Get]] on its intrinsic prototype, a generator
+                    // object or an iterator on Object.prototype (after the
+                    // match).
+                    let inherited_base = if function_backing.is_none() {
+                        Self::function_intrinsic_prototype_name(&obj_val)
+                            .or(match obj_val {
+                                Value::Generator(_)
+                                | Value::AsyncGeneratorObject(_)
+                                | Value::Iterator(_) => Some("Object"),
+                                _ => None,
+                            })
+                            .map(|prototype| (prototype, obj_val.clone()))
+                    } else {
+                        None
                     };
 
                     // The prototype object a primitive base's property came
@@ -48795,6 +49419,22 @@ impl InterpreterCore {
                                         .unwrap_or(Value::Undefined),
                                 }
                             }
+                            ref exotic @ (Value::Generator(_) | Value::AsyncGeneratorObject(_))
+                                if self.exotic_has_own_property(
+                                    module,
+                                    exotic,
+                                    &property_key,
+                                )? =>
+                            {
+                                match self.exotic_own_property_get(module, exotic, &property_key)? {
+                                    // IFC: the backing object owns the stored label.
+                                    Some((own, backing)) => {
+                                        primitive_owner = Some(backing);
+                                        own
+                                    }
+                                    None => Value::Undefined,
+                                }
+                            }
                             Value::Generator(_) => match property_key {
                                 RuntimePropertyKey::String(ref key) => match key.as_str() {
                                     Some("next") => {
@@ -48856,7 +49496,15 @@ impl InterpreterCore {
                             // Object.prototype), as for a primitive base.
                             // @@toStringTag is "Promise" (ES2020 25.6.5.5).
                             Value::Promise(promise) => {
-                                if matches!(
+                                if let Some((own, backing)) = self.exotic_own_property_get(
+                                    module,
+                                    &Value::Promise(promise),
+                                    &property_key,
+                                )? {
+                                    // IFC: the backing object owns the stored label.
+                                    primitive_owner = Some(backing);
+                                    own
+                                } else if matches!(
                                     &property_key,
                                     RuntimePropertyKey::Symbol(symbol)
                                         if *symbol == WellKnownSymbol::ToStringTag.id()
@@ -48897,6 +49545,42 @@ impl InterpreterCore {
                             }
                         }
                     };
+                    // ES2020 19.2.3: a function's [[Prototype]] is
+                    // %Function.prototype% (a generator, async or async
+                    // generator function's is its kind's prototype, which
+                    // inherits from it), so a key that neither its own
+                    // properties nor its synthesized members supply is read
+                    // there, then on Object.prototype: `fn.constructor` is
+                    // Function (`g.constructor` GeneratorFunction), and
+                    // `valueOf`, `__proto__` and members a program adds
+                    // (`Function.prototype.method = ...`) reach every
+                    // function. They read undefined. Generator objects and
+                    // iterators reach Object.prototype after their own
+                    // methods (`it.toString`, `it.hasOwnProperty`).
+                    let prop = match inherited_base {
+                        Some((prototype, base))
+                            if matches!(prop, Value::Undefined) && primitive_owner.is_none() =>
+                        {
+                            if property_key.as_str() == Some("__proto__") && base.is_callable() {
+                                self.function_value_prototype(Some(module), &base)?
+                            } else {
+                                // The kind prototypes exist once read, so
+                                // Function.prototype's members are behind them.
+                                if prototype != "Function" {
+                                    self.ensure_builtin_prototype(prototype)?;
+                                }
+                                let (value, owner) = self.primitive_prototype_get(
+                                    module,
+                                    prototype,
+                                    &property_key,
+                                    base,
+                                )?;
+                                primitive_owner = owner;
+                                value
+                            }
+                        }
+                        _ => prop,
+                    };
                     if let Value::Closure(closure_id) = &prop
                         && let Some(method) = self.closure_method_metadata.get(closure_id)
                     {
@@ -48934,6 +49618,11 @@ impl InterpreterCore {
                     let pending_cyclic_import = object_id.and_then(|namespace_object| {
                         self.cyclic_module_import_target(namespace_object, &property_key, &prop)
                     });
+                    // bd-9vouw.113: a legacy RegExp static carries its match's label.
+                    if let Some(legacy_label) = self.legacy_regexp_read_label.take() {
+                        result_label = self
+                            .join_owned_label_with_temporary_budget(result_label, &legacy_label)?;
+                    }
                     let prior_dst_label = self.get_register_label(dst)?;
                     result_label =
                         self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
@@ -48969,6 +49658,7 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
+                    let key_val = self.property_key_primitive(module, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let has_hook_target = matches!(&obj_val, Value::Object(_))
                         || matches!(
@@ -49163,6 +49853,26 @@ impl InterpreterCore {
                                 set_val,
                             )?;
                         }
+                        // A promise, generator or async generator object keeps
+                        // assigned properties (`p.cancel = fn`) on its backing
+                        // object; the assignment threw "expected object".
+                        ref exotic if Self::has_exotic_backing_object(exotic) => {
+                            let property_object = self
+                                .ensure_function_own_property_object(module, exotic)?
+                                .expect("promise and generator values have a backing-object key");
+                            let mutation_label = self
+                                .get_register_label(obj)?
+                                .join(self.get_register_label(key)?)
+                                .join(self.get_register_label(val)?);
+                            self.join_object_mutation_label(property_object, &mutation_label)?;
+                            self.set_backing_object_property(
+                                module,
+                                property_object,
+                                &property_key,
+                                val,
+                                set_val,
+                            )?;
+                        }
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -49303,6 +50013,7 @@ impl InterpreterCore {
                             got: "a class private name".to_string(),
                         });
                     }
+                    let key_val = self.property_key_primitive(module, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let has_hook_target = matches!(&obj_val, Value::Object(_))
                         || matches!(
@@ -51070,8 +51781,29 @@ impl InterpreterCore {
                     allow_missing,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
-                    let val = self.load_runtime_name(name.as_ref(), allow_missing)?;
-                    self.write_reg(dst, val)?;
+                    match self.load_runtime_name(name.as_ref(), false) {
+                        Err(InterpreterError::UndefinedBinding { .. }) => {
+                            match self.load_global_object_name(Some(module), name.as_ref())? {
+                                Some((val, label)) => {
+                                    // As a property read: the stored label,
+                                    // never lowering what dst already holds.
+                                    let prior_dst_label = self.get_register_label(dst)?;
+                                    let label = self.join_owned_label_with_temporary_budget(
+                                        label,
+                                        prior_dst_label,
+                                    )?;
+                                    self.write_reg_with_label(dst, val, label)?;
+                                }
+                                None if allow_missing => self.write_reg(dst, Value::Undefined)?,
+                                None => {
+                                    return Err(InterpreterError::UndefinedBinding {
+                                        name: name.into_owned(),
+                                    });
+                                }
+                            }
+                        }
+                        loaded => self.write_reg(dst, loaded?)?,
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::ResolveNameStatus {
@@ -51150,7 +51882,14 @@ impl InterpreterCore {
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
-                    self.put_runtime_name(name.as_ref(), val, strict)?;
+                    let label = self.get_register_label(src)?.clone();
+                    self.put_runtime_name_labeled(
+                        Some(module),
+                        name.as_ref(),
+                        val,
+                        &label,
+                        strict,
+                    )?;
                     self.ip += 1;
                 }
                 Ir3Instruction::PutNameWithStatus {
@@ -51163,7 +51902,15 @@ impl InterpreterCore {
                     let val = self.read_reg(src)?;
                     let reference_token =
                         Self::runtime_name_reference_token(self.read_reg(status)?)?;
-                    self.put_runtime_name_with_status(name.as_ref(), val, strict, reference_token)?;
+                    let label = self.get_register_label(src)?.clone();
+                    self.put_runtime_name_with_status_labeled(
+                        Some(module),
+                        name.as_ref(),
+                        val,
+                        &label,
+                        strict,
+                        reference_token,
+                    )?;
                     self.ip += 1;
                 }
                 Ir3Instruction::InitBinding {
@@ -52301,7 +53048,9 @@ impl InterpreterCore {
         lhs: u32,
         rhs: u32,
     ) -> Result<Value, InterpreterError> {
-        let key = self.executable_property_key_from_value(&self.read_reg(lhs)?);
+        let key_value = self.read_reg(lhs)?;
+        let key_value = self.property_key_primitive(module, key_value)?;
+        let key = self.executable_property_key_from_value(&key_value);
         let target = self.read_reg(rhs)?;
         match target {
             Value::Object(object_id) => {
@@ -52329,6 +53078,9 @@ impl InterpreterCore {
             | Value::AsyncGeneratorObject(_)
             | Value::Iterator(_)
             | Value::AsyncFunctionObject(_)) => {
+                if self.exotic_has_own_property(module, object_like, &key)? {
+                    return Ok(Value::Bool(true));
+                }
                 let supplied = match object_like {
                     Value::Promise(_) => key.as_str().is_some_and(|name| {
                         !matches!(Self::promise_property_value(name), Value::Undefined)
@@ -52492,7 +53244,13 @@ impl InterpreterCore {
         {
             return Ok(true);
         }
-        if let Some(&function_prototype) = self.builtin_prototypes.get("Function") {
+        // A generator, async or async generator function's kind prototype
+        // inherits from Function.prototype.
+        let kind_prototype = Self::function_intrinsic_prototype_name(function)
+            .and_then(|name| self.builtin_prototypes.get(name))
+            .or_else(|| self.builtin_prototypes.get("Function"))
+            .copied();
+        if let Some(function_prototype) = kind_prototype {
             return self.proxy_aware_has_runtime_property(Some(module), function_prototype, key, 0);
         }
         self.object_prototype_has_property(module, key)
@@ -52667,6 +53425,25 @@ impl InterpreterCore {
         // primitive enumerates its wrapper (a string its indices).
         let object_id = match value {
             Value::Object(object_id) => object_id,
+            // Step 7.a: an undefined or null object enumerates nothing (the
+            // body never runs) and is not ToObject'd, which would throw:
+            // `for (k in opts)` with `opts` omitted, preact's `h(type, null)`.
+            Value::Undefined | Value::Null => {
+                let empty = self.alloc_object_with_prototype(None)?;
+                let trace_index =
+                    self.start_iteration_trace(IterationKind::ForIn, || "nullish".to_string());
+                let handle =
+                    self.alloc_iterator(RuntimeIteratorState::ForIn(RuntimeForInState {
+                        object_id: empty,
+                        keys: Vec::new(),
+                        next_index: 0,
+                        deleted_keys: BTreeSet::new(),
+                        done: false,
+                        closed: false,
+                        trace_index,
+                    }))?;
+                return Ok(Value::Iterator(handle));
+            }
             primitive @ (Value::Str(_)
             | Value::Int(_)
             | Value::Float(_)
@@ -54049,12 +54826,59 @@ impl InterpreterCore {
             Some(value) => self.value_to_string(&value),
             None => "undefined".to_string(),
         };
-        let comparison = match this_str.as_utf8_projection().cmp(that_string.as_str()) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
+        let options = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
+        let options = self.collation_options(&options)?;
+        let ordering =
+            collation::locale_compare(this_str.as_utf8_projection(), &that_string, &options);
+        Ok(Value::Int(ordering as i64))
+    }
+
+    /// The `sensitivity`, `numeric` and `ignorePunctuation` options of
+    /// localeCompare (ECMA-402 Intl.Collator); an unknown sensitivity is a
+    /// RangeError, as in Node. The locale argument does not change the
+    /// order (collation.rs uses the root order).
+    fn collation_options(
+        &mut self,
+        options: &Value,
+    ) -> Result<collation::CollationOptions, InterpreterError> {
+        let mut parsed = collation::CollationOptions::default();
+        let Value::Object(options_id) = options else {
+            return Ok(parsed);
         };
-        Ok(Value::Int(comparison))
+        let options_id = *options_id;
+        let mut read = |key: &str| {
+            self.proxy_aware_get_property(None, options_id, key, Value::Object(options_id), 0)
+        };
+        let sensitivity = read("sensitivity")?;
+        let numeric = read("numeric")?;
+        let ignore_punctuation = read("ignorePunctuation")?;
+        parsed.sensitivity = match &sensitivity {
+            Value::Undefined => collation::Sensitivity::Variant,
+            Value::Str(text) => match text.as_str() {
+                Some("base") => collation::Sensitivity::Base,
+                Some("accent") => collation::Sensitivity::Accent,
+                Some("case") => collation::Sensitivity::Case,
+                Some("variant") => collation::Sensitivity::Variant,
+                _ => {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "Value {text} out of range for Intl.Collator options property sensitivity"
+                        ),
+                    });
+                }
+            },
+            other => {
+                return Err(InterpreterError::RangeError {
+                    message: format!(
+                        "Value {} out of range for Intl.Collator options property sensitivity",
+                        other.type_name()
+                    ),
+                });
+            }
+        };
+        parsed.numeric = numeric.is_truthy();
+        parsed.ignore_punctuation = ignore_punctuation.is_truthy();
+        Ok(parsed)
     }
 
     fn string_normalize_impl(
@@ -54091,7 +54915,7 @@ impl InterpreterCore {
     /// with each match's capture groups spliced in. An empty match never
     /// splits at either end of the input or directly after a previous match.
     fn regexp_split_pieces(
-        &self,
+        &mut self,
         input: &str,
         source: &str,
         flags: &str,
@@ -54105,7 +54929,11 @@ impl InterpreterCore {
             return Ok(pieces);
         }
         let mut last = 0usize;
-        for spans in regex.all_captures(input)? {
+        let matches = regex.all_captures(input)?;
+        if let Some(spans) = matches.last() {
+            self.record_legacy_regexp_match(input, spans);
+        }
+        for spans in matches {
             let Some((start, end)) = spans[0] else {
                 continue;
             };
@@ -54734,7 +55562,14 @@ impl InterpreterCore {
         }
         let regex = self.compile_regexp_pattern(&source, &flags)?;
         let input = Self::value_to_primitive_string(input);
-        Ok(Value::Bool(regex.is_match(&input)?))
+        // bd-9vouw.113: a successful test records the legacy statics, so it
+        // needs the capture spans, not only a yes/no.
+        let found = regex.captures_at(&input, 0, false)?;
+        let matched = found.as_ref().is_some_and(|spans| spans[0].is_some());
+        if let Some(spans) = &found {
+            self.record_legacy_regexp_match(&input, spans);
+        }
+        Ok(Value::Bool(matched))
     }
 
     fn string_match_value(
@@ -54756,7 +55591,11 @@ impl InterpreterCore {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
             let result_id = self.alloc_array_with_prototype(None)?;
             let mut count = 0usize;
-            for spans in regex.all_captures(input)? {
+            let matches = regex.all_captures(input)?;
+            if let Some(spans) = matches.last() {
+                self.record_legacy_regexp_match(input, spans);
+            }
+            for spans in matches {
                 let Some((from, to)) = spans[0] else {
                     continue;
                 };
@@ -54889,18 +55728,23 @@ impl InterpreterCore {
     /// ES2020 21.1.3.18 String.prototype.search: the index of the first
     /// match in UTF-16 code units. Any value other than a RegExp is
     /// `new RegExp(value)`.
-    fn string_search_value(&self, input: &str, pattern: &Value) -> Result<Value, InterpreterError> {
+    fn string_search_value(
+        &mut self,
+        input: &str,
+        pattern: &Value,
+    ) -> Result<Value, InterpreterError> {
         let (source, flags) = self
             .regexp_source_flags_from_value(pattern)
             .unwrap_or_else(|| (self.regexp_create_source(pattern), String::new()));
         let regex = self.compile_regexp_pattern(&source, &flags)?;
+        let found = regex.captures_at(input, 0, false)?;
+        if let Some(spans) = &found {
+            self.record_legacy_regexp_match(input, spans);
+        }
         Ok(Value::Int(
-            regex
-                .captures_at(input, 0, false)?
-                .and_then(|spans| spans[0])
-                .map_or(-1, |(from, _)| {
-                    i64::try_from(input[..from].encode_utf16().count()).unwrap_or(i64::MAX)
-                }),
+            found.and_then(|spans| spans[0]).map_or(-1, |(from, _)| {
+                i64::try_from(input[..from].encode_utf16().count()).unwrap_or(i64::MAX)
+            }),
         ))
     }
 
@@ -54945,6 +55789,9 @@ impl InterpreterCore {
             } else {
                 regex.captures_at(input, 0, false)?.into_iter().collect()
             };
+            if let Some(spans) = found.last() {
+                self.record_legacy_regexp_match(input, spans);
+            }
             for spans in found {
                 let Some((start, end)) = spans[0] else {
                     continue;
@@ -54997,6 +55844,18 @@ impl InterpreterCore {
                 let offset = input[..start].encode_utf16().count();
                 arguments.push(Value::Int(i64::try_from(offset).unwrap_or(i64::MAX)));
                 arguments.push(Value::str(input));
+                // ES2020 21.2.5.8 step 14.l: with named groups the replacer
+                // also receives the groups object, as its last argument.
+                if group_names.iter().any(Option::is_some) {
+                    let named = self.alloc_object_with_prototype(None)?;
+                    for (name, group) in group_names.iter().zip(&groups) {
+                        if let Some(name) = name {
+                            let value = group.clone().map_or(Value::Undefined, Value::str);
+                            self.set_object_property(named, name.clone(), value)?;
+                        }
+                    }
+                    arguments.push(Value::Object(named));
+                }
                 self.preflight_inline_method_call_with_argument_label(
                     module,
                     replace,
@@ -55321,7 +56180,16 @@ impl InterpreterCore {
                     None,
                 ));
             }
-            if name == "constructor" && STANDARD_CONSTRUCTOR_GLOBALS.contains(&type_name) {
+            if name == "constructor" && type_name == "Function" {
+                return Ok((
+                    Value::BuiltinFunction(BuiltinFunction::function_constructor()),
+                    None,
+                ));
+            }
+            if name == "constructor"
+                && (STANDARD_CONSTRUCTOR_GLOBALS.contains(&type_name)
+                    || FUNCTION_KIND_INTRINSICS.contains(&type_name))
+            {
                 return Ok((
                     Value::BuiltinFunction(BuiltinFunction::standard_constructor(type_name)),
                     None,
@@ -55864,6 +56732,29 @@ impl InterpreterCore {
             {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
             }
+            // Map.prototype[@@iterator] is Map.prototype.entries, Set's is
+            // Set.prototype.values (ES2020 23.1.3.12, 23.2.3.11) and
+            // String.prototype[@@iterator] the string iterator (21.1.3.29),
+            // read from the prototypes themselves too: only instances and
+            // primitives had them, so `typeof Map.prototype[Symbol.iterator]`
+            // was "undefined".
+            for (prototype, kind) in [
+                ("Map", BuiltinFunctionKind::MapEntries),
+                ("Set", BuiltinFunctionKind::SetValues),
+                ("String", BuiltinFunctionKind::StringIterator),
+            ] {
+                if self.chain_reaches_canonical_prototype(object_id, prototype) {
+                    return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)));
+                }
+            }
+            // URLSearchParams.prototype[@@iterator] is its entries (bd-9vouw.126).
+            if self.url_search_params.contains_key(&object_id)
+                || self.chain_reaches_canonical_prototype(object_id, "URLSearchParams")
+            {
+                return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::UrlSearchParamsEntries,
+                )));
+            }
         }
         // RegExp.prototype's symbol-keyed methods (ES2020 21.2.5.6-11), once
         // own and inherited properties have had their chance to shadow them.
@@ -56306,6 +57197,18 @@ impl InterpreterCore {
             ("URLSearchParams", "toString") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::UrlSearchParamsToString,
             )),
+            ("URLSearchParams", "keys") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsKeys,
+            )),
+            ("URLSearchParams", "values") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsValues,
+            )),
+            ("URLSearchParams", "entries") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsEntries,
+            )),
+            ("URLSearchParams", "forEach") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsForEach,
+            )),
             ("FsStats", "isFile") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::FsStatsIsFile,
             )),
@@ -56611,10 +57514,18 @@ impl InterpreterCore {
             // ES2020 22.2.3: these behave as their Array.prototype namesakes
             // over the typed array's elements (%TypedArray%.prototype.toString
             // is Array.prototype.toString itself). Every one of them used to
-            // throw "unsupported TypedArray method".
-            "join" | "toString" | "indexOf" | "lastIndexOf" | "includes" | "at" | "forEach"
-            | "reduce" | "reduceRight" | "find" | "findIndex" | "findLast" | "findLastIndex"
-            | "some" | "every" => Self::array_prototype_method(key),
+            // throw "unsupported TypedArray method". They are distinct
+            // functions that first ValidateTypedArray(this): the specifier
+            // marks them for that check in dispatch.
+            "toString" => Self::array_prototype_method(key),
+            "join" | "indexOf" | "lastIndexOf" | "includes" | "at" | "forEach" | "reduce"
+            | "reduceRight" | "find" | "findIndex" | "findLast" | "findLastIndex" | "some"
+            | "every" => Self::array_prototype_method(key).map(|builtin| BuiltinFunction {
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(
+                    TYPED_ARRAY_PROTOTYPE_SPECIFIER,
+                ),
+                ..builtin
+            }),
             "toLocaleString" => Some(BuiltinFunction::typed_array_unsupported_method()),
             _ => None,
         }
@@ -56660,6 +57571,9 @@ impl InterpreterCore {
             "toString" => Some(BuiltinFunction::object_to_string()),
             "isPrototypeOf" => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf,
+            )),
+            "toLocaleString" => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ObjectPrototypeToLocaleString,
             )),
             _ => None,
         }
@@ -56720,6 +57634,10 @@ impl InterpreterCore {
                 self.canonical_prototype_own_virtual_value(*object_id, key)
                     .is_some()
             })
+            || matches!(
+                property_key,
+                RuntimePropertyKey::Symbol(symbol) if symbol == WellKnownSymbol::Iterator.id()
+            ) && self.builtin_prototypes.get("Array") == Some(object_id)
     }
 
     fn object_own_property_is_enumerable(&self, receiver: &Value, property: &Value) -> bool {
@@ -56728,11 +57646,23 @@ impl InterpreterCore {
             // properties; concise methods expose only `name`.
             return false;
         }
-        if let Value::Object(object_id) = receiver
-            && let RuntimePropertyKey::String(key) =
-                self.executable_property_key_from_value(property)
-        {
-            return self.ordinary_own_string_key_is_enumerable(*object_id, &key);
+        if let Value::Object(object_id) = receiver {
+            match self.executable_property_key_from_value(property) {
+                RuntimePropertyKey::String(key) => {
+                    return self.ordinary_own_string_key_is_enumerable(*object_id, &key);
+                }
+                // A Symbol-keyed property's [[Enumerable]] decides too: it was
+                // reported enumerable whenever it existed, so
+                // `Set.prototype.propertyIsEnumerable(Symbol.toStringTag)`
+                // was true (Test262 verifyProperty on @@toStringTag).
+                key @ RuntimePropertyKey::Symbol(_) => {
+                    return self.object_own_property_contains(receiver, property)
+                        && self
+                            .heap
+                            .get(object_id.0 as usize)
+                            .is_some_and(|object| object.own_property_attributes(&key).enumerable);
+                }
+            }
         }
         self.object_own_property_contains(receiver, property)
     }
@@ -57930,6 +58860,23 @@ impl InterpreterCore {
                 current = self.observable_prototype_link(object, id);
                 depth += 1;
             }
+            // The virtual @@iterator of the canonical Array, %TypedArray%,
+            // Map, Set and String prototypes (served by [[Get]]'s fallback)
+            // is found by HasProperty too: `Symbol.iterator in Map.prototype`.
+            if matches!(
+                key,
+                RuntimePropertyKey::Symbol(symbol) if *symbol == WellKnownSymbol::Iterator.id()
+            ) {
+                let root_is_array = self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.is_array || object.typed_array.is_some());
+                return Ok(root_is_array
+                    || self.chain_inherits_array_prototype(object_id)
+                    || ["Array", "TypedArray", "Map", "Set", "String"]
+                        .iter()
+                        .any(|name| self.chain_reaches_canonical_prototype(object_id, name)));
+            }
             return Ok(key
                 .as_str()
                 .is_some_and(|key| self.chain_has_virtual_builtin_property(object_id, key)));
@@ -58017,6 +58964,8 @@ impl InterpreterCore {
             .into_iter()
             .map(|(key, _)| Value::Str(key))
             .collect();
+        let virtual_keys = self.canonical_prototype_virtual_own_keys(object_id);
+        keys.extend(virtual_keys.iter().cloned());
         let object = self
             .heap
             .get(object_id.0 as usize)
@@ -58033,9 +58982,34 @@ impl InterpreterCore {
                     }
                     RuntimePropertyKey::Symbol(symbol) => Some(Value::Symbol(symbol)),
                     RuntimePropertyKey::String(_) => None,
-                }),
+                })
+                .filter(|key| !virtual_keys.contains(key)),
         );
+        // String keys come before Symbol keys (ES2020 9.1.11.1).
+        keys.sort_by_key(|key| matches!(key, Value::Symbol(_)));
         Ok(keys)
+    }
+
+    /// bd-9vouw.122: the own keys %Array.prototype% supplies virtually, in
+    /// Node's order: `length`, `constructor`, the methods this engine serves,
+    /// and @@iterator. Empty for any other object. Without them
+    /// `Object.getOwnPropertyNames(Array.prototype)` was empty (Node: 40
+    /// names). No-claim: @@unscopables is not listed, as Array.prototype has
+    /// no @@unscopables object here.
+    fn canonical_prototype_virtual_own_keys(&self, object_id: ObjectId) -> Vec<Value> {
+        if self.builtin_prototypes.get("Array") != Some(&object_id) {
+            return Vec::new();
+        }
+        let mut keys: Vec<Value> = ARRAY_PROTOTYPE_OWN_NAMES
+            .iter()
+            .filter(|name| {
+                self.canonical_prototype_own_virtual_value(object_id, name)
+                    .is_some()
+            })
+            .map(|name| Value::str(*name))
+            .collect();
+        keys.push(Value::Symbol(WellKnownSymbol::Iterator.id()));
+        keys
     }
 
     fn proxy_aware_own_property_keys(
@@ -58423,12 +59397,23 @@ impl InterpreterCore {
     fn register_needs_observable_to_primitive(&self, register: u32) -> bool {
         // Borrowed peek: this runs ahead of every compact arithmetic op.
         // Functions convert through Function.prototype.toString or their own
-        // `toString`/`valueOf`, which only the reentrant path can run.
+        // `toString`/`valueOf`, and promises, generator objects and iterators
+        // through theirs (own, else inherited), which only the reentrant path
+        // can run.
         register < self.config.max_registers
             && self
                 .registers
                 .get(self.register_base + register as usize)
-                .is_some_and(|value| matches!(value, Value::Object(_)) || value.is_callable())
+                .is_some_and(|value| {
+                    matches!(
+                        value,
+                        Value::Object(_)
+                            | Value::Promise(_)
+                            | Value::Generator(_)
+                            | Value::AsyncGeneratorObject(_)
+                            | Value::Iterator(_)
+                    ) || value.is_callable()
+                })
     }
 
     /// bd-9vouw.37: operand registers of the numeric operators whose object
@@ -58544,8 +59529,17 @@ impl InterpreterCore {
         register: u32,
     ) -> Result<Value, InterpreterError> {
         let value = self.read_reg(register)?;
-        if value.is_callable() {
-            // A function's own valueOf/toString, else Function.prototype.toString.
+        if value.is_callable()
+            || matches!(
+                value,
+                Value::Promise(_)
+                    | Value::Generator(_)
+                    | Value::AsyncGeneratorObject(_)
+                    | Value::Iterator(_)
+            )
+        {
+            // A function's own valueOf/toString, else Function.prototype.toString;
+            // a promise's, generator object's or iterator's own or inherited.
             return self.coerce_runtime_primitive_with_hint(Some(module), value, "number");
         }
         let Value::Object(object_id) = value else {
@@ -58582,7 +59576,18 @@ impl InterpreterCore {
         prefer_string: bool,
     ) -> Result<Value, InterpreterError> {
         let value = self.read_reg(register)?;
-        if value.is_callable() {
+        // Functions, and promises, generator objects and iterators (no
+        // property storage of their own), convert through their methods:
+        // `gen + ''` is "[object Generator]", not "[object Object]".
+        if value.is_callable()
+            || matches!(
+                value,
+                Value::Promise(_)
+                    | Value::Generator(_)
+                    | Value::AsyncGeneratorObject(_)
+                    | Value::Iterator(_)
+            )
+        {
             let hint = if prefer_string { "string" } else { "default" };
             return self.coerce_runtime_primitive_with_hint(Some(module), value, hint);
         }
@@ -58893,15 +59898,176 @@ impl InterpreterCore {
                     expected: "primitive conversion result".to_string(),
                     got: "object from both conversion methods".to_string(),
                 })?
+            } else if let Some(module) = module {
+                self.exotic_to_primitive(module, value, hint)?
             } else {
-                return Err(InterpreterError::TypeError {
-                    expected: "property-key carrier with native conversion methods".to_string(),
-                    got: value.type_name().to_string(),
-                });
+                // No program to run a conversion method in: the builtinTag
+                // Object.prototype.toString would answer.
+                Value::str(Self::value_to_object_to_string_tag(&value))
             }
         } else {
             value
         })
+    }
+
+    /// ES2020 7.1.1 ToPrimitive of a promise, generator, async generator or
+    /// iterator value (no property storage of its own): @@toPrimitive, else
+    /// OrdinaryToPrimitive over `toString`/`valueOf`, each read like [[Get]]
+    /// (own properties, then Promise.prototype or Object.prototype), so
+    /// `String(promise)` is "[object Promise]" through
+    /// Object.prototype.toString. These values threw a TypeError.
+    fn exotic_to_primitive(
+        &mut self,
+        module: &Ir3Module,
+        value: Value,
+        hint: &'static str,
+    ) -> Result<Value, InterpreterError> {
+        let to_primitive = RuntimePropertyKey::Symbol(WellKnownSymbol::ToPrimitive.id());
+        let exotic = self.exotic_conversion_method(module, &value, &to_primitive)?;
+        if exotic.is_callable() {
+            let result =
+                self.call_conversion_method(module, exotic, &value, vec![Value::str(hint)])?;
+            if result.is_object_like() {
+                return Err(InterpreterError::TypeError {
+                    expected: "primitive from Symbol.toPrimitive".to_string(),
+                    got: result.type_name().to_string(),
+                });
+            }
+            return Ok(result);
+        }
+        let names = if hint == "string" {
+            ["toString", "valueOf"]
+        } else {
+            ["valueOf", "toString"]
+        };
+        for name in names {
+            let method = self.exotic_conversion_method(
+                module,
+                &value,
+                &RuntimePropertyKey::String(JsString::from(name)),
+            )?;
+            if !method.is_callable() {
+                continue;
+            }
+            let result = self.call_conversion_method(module, method, &value, Vec::new())?;
+            if !result.is_object_like() {
+                return Ok(result);
+            }
+        }
+        Err(InterpreterError::TypeError {
+            expected: "primitive conversion result".to_string(),
+            got: "object from both conversion methods".to_string(),
+        })
+    }
+
+    /// Call a conversion method with `value` as `this`, joining its result
+    /// label into the pending hostcall result label.
+    fn call_conversion_method(
+        &mut self,
+        module: &Ir3Module,
+        method: Value,
+        value: &Value,
+        arguments: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let (result, label) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            method,
+            value.clone(),
+            arguments,
+            None,
+        )?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()?;
+        Ok(result)
+    }
+
+    /// ES2020 7.3.2 GetV(V, P): [[Get]] of `key` on any value, with `value`
+    /// as the receiver; a primitive reads its prototype's (ToObject is not
+    /// observable here). Undefined and null are a TypeError.
+    fn get_v(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        let prototype = match value {
+            Value::Object(object_id) => {
+                return self.proxy_aware_get_runtime_property(
+                    Some(module),
+                    *object_id,
+                    key,
+                    value.clone(),
+                    0,
+                );
+            }
+            Value::Promise(_)
+            | Value::Generator(_)
+            | Value::AsyncGeneratorObject(_)
+            | Value::Iterator(_) => return self.exotic_conversion_method(module, value, key),
+            Value::Undefined | Value::Null => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object-coercible value".to_string(),
+                    got: value.type_name().to_string(),
+                });
+            }
+            callable if callable.is_callable() => {
+                if let Some(backing) = self.function_own_property_object(module, callable)?
+                    && self.chain_contains_runtime_property(backing, key)
+                {
+                    return self.proxy_aware_get_runtime_property(
+                        Some(module),
+                        backing,
+                        key,
+                        value.clone(),
+                        0,
+                    );
+                }
+                let prototype =
+                    Self::function_intrinsic_prototype_name(callable).unwrap_or("Function");
+                if prototype != "Function" {
+                    self.ensure_builtin_prototype(prototype)?;
+                }
+                prototype
+            }
+            Value::Str(_) => "String",
+            Value::Bool(_) => "Boolean",
+            Value::BigInt(_) => "BigInt",
+            Value::Symbol(_) => "Symbol",
+            Value::Int(_) | Value::Float(_) => "Number",
+            _ => "Object",
+        };
+        Ok(self
+            .primitive_prototype_get(module, prototype, key, value.clone())?
+            .0)
+    }
+
+    /// [[Get]] of a conversion method on a promise, generator, async
+    /// generator or iterator value: its own properties, then Promise.prototype
+    /// (for a promise) or Object.prototype.
+    fn exotic_conversion_method(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        if Self::has_exotic_backing_object(value)
+            && let Some((own, _)) = self.exotic_own_property_get(module, value, key)?
+        {
+            return Ok(own);
+        }
+        let prototype = if matches!(value, Value::Promise(_)) {
+            "Promise"
+        } else {
+            "Object"
+        };
+        Ok(self
+            .primitive_prototype_get(module, prototype, key, value.clone())?
+            .0)
     }
 
     fn require_object_coercible(value: Value) -> Result<Value, InterpreterError> {
@@ -62432,6 +63598,23 @@ impl InterpreterCore {
 
     /// Convert a dynamic IR value to the private exact string-key carrier.
     /// This is the executable key path for dynamic and builtin consumers.
+    /// ToPropertyKey (ES2020 7.1.19) of a computed member key: an object is
+    /// ToPrimitive'd with the string hint (its toString runs), so `o[k]`
+    /// with `k = { toString() { return 'key' } }` reads "key"; it read
+    /// "[object#13]" (the object's heap id). A primitive is returned as is.
+    fn property_key_primitive(
+        &mut self,
+        module: &Ir3Module,
+        key: Value,
+    ) -> Result<Value, InterpreterError> {
+        if !key.is_object_like() {
+            return Ok(key);
+        }
+        // Guest code may run: no collection while native locals hold values.
+        self.gc_nested_request = None;
+        self.coerce_runtime_primitive(Some(module), key, true)
+    }
+
     fn executable_property_key_from_value(&self, value: &Value) -> RuntimePropertyKey {
         if let Value::Symbol(symbol) = value {
             return RuntimePropertyKey::Symbol(*symbol);
@@ -62720,6 +63903,14 @@ impl InterpreterCore {
         }
 
         Ok((byte_offset, byte_length, length))
+    }
+
+    /// ES2020 7.1.21 CanonicalNumericIndexString: "-0", or a string that
+    /// ToNumber and Number::toString return unchanged ("1.1", "Infinity",
+    /// "NaN"; not "01" or "1.0").
+    fn canonical_numeric_index_string(key: &str) -> bool {
+        let number = primitive_conversion::string_number(&JsString::from(key));
+        key == "-0" || ryu_js::Buffer::new().format(number) == key
     }
 
     fn typed_array_integer_index_key(key: &str) -> Option<usize> {
@@ -63032,6 +64223,18 @@ impl InterpreterCore {
         key: &str,
     ) -> Result<Option<Value>, InterpreterError> {
         let Some(index) = Self::typed_array_integer_index_key(key) else {
+            // Any other canonical numeric string ("1.1", "-0", "Infinity")
+            // names no element and is not looked up on the prototype
+            // (ES2020 9.4.5.2 and 9.4.5.4, integer-indexed [[HasProperty]]
+            // and [[Get]]); "01" is an ordinary key.
+            if Self::canonical_numeric_index_string(key)
+                && self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.typed_array.is_some())
+            {
+                return Ok(Some(Value::Undefined));
+            }
             return Ok(None);
         };
         let Some(view) = self
@@ -63155,7 +64358,7 @@ impl InterpreterCore {
             return self.typed_array_values_in_range(&view, 0, view.length);
         }
         let length = self.array_like_length(obj_id)?;
-        let mut values = Vec::with_capacity(length);
+        let mut values = self.element_buffer(length)?;
         for index in 0..length {
             values.push(
                 self.array_index_value(obj_id, index)?
@@ -66089,6 +67292,17 @@ impl InterpreterCore {
 
     /// `length` of an array-like receiver, read through its prototype chain
     /// like [[Get]] (`Object.create(['x', 'y'])` has no own `length`).
+    /// An empty buffer for `len` elements of an array-like, charged to the
+    /// temporary budget first: the length is guest-chosen (up to 2^53 - 1,
+    /// `{ length: 2 ** 53 - 1 }`), and an unchecked `with_capacity` of it
+    /// aborted the process ("memory allocation of ... bytes failed").
+    fn element_buffer(&self, len: usize) -> Result<Vec<Value>, InterpreterError> {
+        self.check_temporary_memory_budget(
+            (len as u64).saturating_mul(std::mem::size_of::<Value>() as u64),
+        )?;
+        Ok(Vec::with_capacity(len))
+    }
+
     fn array_like_length(&self, array_id: ObjectId) -> Result<usize, InterpreterError> {
         if self.heap.get(array_id.0 as usize).is_none() {
             return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
@@ -66128,7 +67342,24 @@ impl InterpreterCore {
         }
         // Inherited elements count, as for [[Get]]/HasProperty: an object
         // whose prototype is an array sees that array's elements.
-        Ok(self.chain_data_property(array_id, &key).cloned())
+        let value = self.chain_data_property(array_id, &key).cloned();
+        if value.is_none() {
+            self.charge_native_hole_read()?;
+        }
+        Ok(value)
+    }
+
+    /// One hole visited by a native element loop (bd-9vouw.112).
+    fn charge_native_hole_read(&self) -> Result<(), InterpreterError> {
+        let reads = self.native_hole_reads.get().saturating_add(1);
+        self.native_hole_reads.set(reads);
+        if self.instructions_executed.saturating_add(reads) > self.config.instruction_budget {
+            return Err(InterpreterError::BudgetExhausted {
+                executed: self.instructions_executed,
+                budget: self.config.instruction_budget,
+            });
+        }
+        Ok(())
     }
 
     fn set_object_from_entry_pair(
@@ -67015,6 +68246,86 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
+    /// URLSearchParams.prototype.keys/values/entries (bd-9vouw.126): an
+    /// iterator over the pairs present at the call, `[name, value]` arrays
+    /// for entries. The values carry the params' lifecycle label.
+    fn url_search_params_iterator(
+        &mut self,
+        kind: BuiltinFunctionKind,
+        receiver: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let method = match kind {
+            BuiltinFunctionKind::UrlSearchParamsKeys => "keys",
+            BuiltinFunctionKind::UrlSearchParamsValues => "values",
+            _ => "entries",
+        };
+        let object_id = self.url_search_params_receiver_id(receiver, method)?;
+        let state = &self.url_search_params[&object_id];
+        self.check_temporary_memory_budget(
+            Self::estimate_url_search_params_state_bytes(state).saturating_mul(2),
+        )?;
+        let (pairs, label) = (state.pairs.clone(), state.lifecycle_label.clone());
+        let mut projected = Vec::with_capacity(pairs.len());
+        for (name, value) in pairs {
+            projected.push(match kind {
+                BuiltinFunctionKind::UrlSearchParamsKeys => Value::str(name),
+                BuiltinFunctionKind::UrlSearchParamsValues => Value::str(value),
+                _ => Value::Object(
+                    self.alloc_array_from_values(&[Value::str(name), Value::str(value)])?,
+                ),
+            });
+        }
+        let array = self.alloc_array_from_values(&projected)?;
+        self.join_object_mutation_label(array, &label)?;
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+    }
+
+    /// URLSearchParams.prototype.forEach(callback, thisArg): calls
+    /// `callback(value, name, params)` for each pair, reading the list live
+    /// by index as Node does, so pairs a callback appends are visited.
+    fn url_search_params_for_each(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let params = receiver.clone().unwrap_or(Value::Undefined);
+        let object_id = self.url_search_params_receiver_id(receiver, "forEach")?;
+        let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable URLSearchParams.prototype.forEach callback".to_string(),
+                got: callback.type_name().to_string(),
+            });
+        }
+        let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let mut index = 0;
+        while let Some((name, value, params_label)) =
+            self.url_search_params.get(&object_id).and_then(|state| {
+                let (name, value) = state.pairs.get(index)?.clone();
+                Some((name, value, state.lifecycle_label.clone()))
+            })
+        {
+            let label = self.join_arg_range_label(args)?.join(&params_label);
+            self.preflight_inline_method_call_with_argument_label(
+                Some(module),
+                &callback,
+                3,
+                Some(&label),
+            )?;
+            self.invoke_inline_method_call_with_argument_label_preflighted(
+                Some(module),
+                callback.clone(),
+                this_arg.clone(),
+                vec![Value::str(value), Value::str(name), params.clone()],
+                Some(label),
+            )?;
+            index += 1;
+        }
+        Ok(Value::Undefined)
+    }
+
     /// `Map.prototype.keys/values/entries` and `Set.prototype.values/entries`:
     /// an iterator over the entries present at the call (not a live view).
     fn collection_iterator(
@@ -67170,6 +68481,7 @@ impl InterpreterCore {
 
     fn date_prototype_method(
         &mut self,
+        module: Option<&Ir3Module>,
         method: &str,
         receiver: Value,
         args: RegRange,
@@ -67305,9 +68617,34 @@ impl InterpreterCore {
                 )));
             }
             _ => {
-                let mut values = Vec::with_capacity(args.count as usize);
-                for index in 0..args.count {
+                // Each argument the setter takes is ToNumber'd, in order,
+                // after the time value is read and even when it is NaN
+                // (ES2020 20.4.4.20-28): an object's valueOf runs exactly
+                // once, a Symbol or BigInt throws. Arguments were read as
+                // primitives only, so `setHours(0, { valueOf })` saw NaN.
+                let arity = match method {
+                    "setHours" | "setUTCHours" => 4,
+                    "setMinutes" | "setUTCMinutes" | "setFullYear" | "setUTCFullYear" => 3,
+                    "setSeconds" | "setUTCSeconds" | "setMonth" | "setUTCMonth" => 2,
+                    _ => 1,
+                };
+                // Guest valueOf may run; no collection while native locals
+                // hold the receiver.
+                self.gc_nested_request = None;
+                let mut values = Vec::with_capacity(args.count.min(arity) as usize);
+                for index in 0..args.count.min(arity) {
                     let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    let value = if value.is_object_like() {
+                        self.coerce_runtime_primitive(module, value, false)?
+                    } else {
+                        value
+                    };
+                    if matches!(value, Value::Symbol(_) | Value::BigInt(_)) {
+                        return Err(InterpreterError::TypeError {
+                            expected: format!("number argument for Date.prototype.{method}"),
+                            got: value.type_name().to_string(),
+                        });
+                    }
                     values.push(Self::coerce_to_float(&value).unwrap_or(f64::NAN));
                 }
                 let arg =
@@ -67618,6 +68955,7 @@ impl InterpreterCore {
         let Some((whole_start, whole_end)) = spans[0] else {
             return Ok(None);
         };
+        self.record_legacy_regexp_match(input, &spans);
         let group_value = |span: Option<(usize, usize)>| {
             span.map_or(Value::Undefined, |(from, to)| Value::str(&input[from..to]))
         };
@@ -67670,7 +69008,25 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         };
+        // ToString(string) (21.2.5.6-11 step 3): an object argument's
+        // toString runs (it read "[object Object]"), a Symbol throws. Guest
+        // code may run: no collection while native locals hold the receiver.
         let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let input = if input.is_object_like() {
+            self.gc_nested_request = None;
+            self.coerce_runtime_primitive(Some(module), input, true)?
+        } else {
+            input
+        };
+        if matches!(input, Value::Symbol(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "string argument for RegExp.prototype.{}",
+                    builtin.spec_name()
+                ),
+                got: "symbol".to_string(),
+            });
+        }
         let input = self.value_to_string(&input);
         match method {
             "@@match" => self.string_match_value(&input, &receiver),
@@ -69636,7 +70992,22 @@ impl InterpreterCore {
                     allow_missing,
                 } => {
                     let name = Self::scoped_constant_name(module, name_pool_index);
-                    let value = self.load_runtime_name(name.as_ref(), allow_missing)?;
+                    let value = match self.load_runtime_name(name.as_ref(), false) {
+                        // This lane runs no guest code: a data property of the
+                        // global object only, as its GetProperty reads.
+                        Err(InterpreterError::UndefinedBinding { .. }) => {
+                            match self.global_object_data_property(name.as_ref()) {
+                                Some(value) => value,
+                                None if allow_missing => Value::Undefined,
+                                None => {
+                                    return Err(InterpreterError::UndefinedBinding {
+                                        name: name.into_owned(),
+                                    });
+                                }
+                            }
+                        }
+                        loaded => loaded?,
+                    };
                     Self::write_local_register(&mut local_registers, dst, value)?;
                     instruction_pointer += 1;
                 }
@@ -72023,9 +73394,18 @@ impl InterpreterCore {
             })
             .flatten()
             .or_else(|| {
-                let virtual_value = key
-                    .as_str()
-                    .and_then(|name| self.canonical_prototype_own_virtual_value(object_id, name))?;
+                let virtual_value = match key {
+                    // bd-9vouw.122: %Array.prototype%[@@iterator] is values.
+                    RuntimePropertyKey::Symbol(symbol)
+                        if *symbol == WellKnownSymbol::Iterator.id()
+                            && self.builtin_prototypes.get("Array") == Some(&object_id) =>
+                    {
+                        Some(Value::BuiltinFunction(BuiltinFunction::array_values()))
+                    }
+                    _ => key.as_str().and_then(|name| {
+                        self.canonical_prototype_own_virtual_value(object_id, name)
+                    }),
+                }?;
                 Some((
                     BaselineSymbolProperty::Data(virtual_value),
                     NON_ENUMERABLE_DATA_ATTRIBUTES,
@@ -72792,21 +74172,35 @@ impl InterpreterCore {
         outcome
     }
 
-    fn construct_url_search_params(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+    /// `new URLSearchParams(init)` (URL Standard 6.1): a string (less a
+    /// leading `?`) is form-urlencoded; an object with an @@iterator (an
+    /// array, a Map, a generator) yields the pairs, each an iterable of
+    /// exactly two items; any other object is a record whose own enumerable
+    /// string keys name the pairs. (Only strings and URLSearchParams were
+    /// accepted, so `new URLSearchParams({ q: 'x' })` threw.)
+    fn construct_url_search_params(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
         let initializer = self.builtin_arg(args, 0)?;
+        let mut lifecycle_label = None;
         let pairs = match initializer {
             None | Some(Value::Undefined) => Vec::new(),
-            Some(Value::Object(object_id)) => {
-                let state = self.url_search_params.get(&object_id).ok_or_else(|| {
-                    InterpreterError::TypeError {
-                        expected: "string or branded URLSearchParams initializer".to_string(),
-                        got: "object".to_string(),
-                    }
-                })?;
+            Some(Value::Object(object_id)) if self.url_search_params.contains_key(&object_id) => {
+                let state = &self.url_search_params[&object_id];
                 self.check_temporary_memory_budget(Self::estimate_url_search_params_state_bytes(
                     state,
                 ))?;
                 state.pairs.clone()
+            }
+            Some(value) if value.is_object_like() => {
+                // The initializer's reachable labels, and what its iterator
+                // or getters produce, flow into the pairs.
+                let mut label = self.join_arg_range_with_object_mutation_label(args)?;
+                let pairs = self.url_search_params_object_pairs(module, value, &mut label)?;
+                lifecycle_label = Some(label);
+                pairs
             }
             Some(value) => {
                 let input_bound = self.url_value_to_string_upper_bound(&value);
@@ -72820,9 +74214,150 @@ impl InterpreterCore {
                     .collect()
             }
         };
-        let lifecycle_label = self.join_arg_range_label(args)?;
-        let object_id = self.allocate_url_search_params_state(pairs, None, lifecycle_label)?;
+        let Some(lifecycle_label) = lifecycle_label else {
+            let lifecycle_label = self.join_arg_range_label(args)?;
+            let object_id = self.allocate_url_search_params_state(pairs, None, lifecycle_label)?;
+            return Ok(Value::Object(object_id));
+        };
+        let object_id =
+            self.allocate_url_search_params_state(pairs, None, lifecycle_label.clone())?;
+        self.finish_collection_seed(lifecycle_label)?;
         Ok(Value::Object(object_id))
+    }
+
+    fn url_search_params_object_pairs(
+        &mut self,
+        module: Option<&Ir3Module>,
+        init: Value,
+        label: &mut Label,
+    ) -> Result<Vec<(String, String)>, InterpreterError> {
+        let backing = self.iterator_carrier_backing_id(&init, "URLSearchParams initializer")?;
+        let iterable = match backing {
+            _ if matches!(init, Value::Iterator(_) | Value::Generator(_)) => true,
+            None => false,
+            Some(object) if self.array_from_has_explicit_iterator(object)? => self
+                .lookup_symbol_iterator_method(module, object, init.clone())?
+                .is_some(),
+            Some(object) => {
+                let map = self.collection_storage_id(object, "Map", "__entries");
+                let set = self.collection_storage_id(object, "Set", "__values");
+                map.is_some()
+                    || set.is_some()
+                    || self
+                        .heap
+                        .get(object.0 as usize)
+                        .is_some_and(|object| object.is_array)
+            }
+        };
+        self.observe_collection_seed_label(label);
+        let mut pairs = Vec::new();
+        let mut retained_bytes = 0u64;
+        if iterable {
+            let mut source = self.collection_seed_source(module, init)?;
+            while let Some(entry) = self.next_collection_seed(module, &mut source)? {
+                self.observe_collection_seed_label(label);
+                let pair = match self.url_search_params_sequence_pair(module, entry, label) {
+                    Ok(pair) => pair,
+                    Err(error) => return self.close_collection_seed(module, source, error),
+                };
+                retained_bytes = retained_bytes.saturating_add(
+                    Self::estimate_url_pair_storage_bytes(std::slice::from_ref(&pair)),
+                );
+                if let Err(error) = self.check_temporary_memory_budget(retained_bytes) {
+                    return self.close_collection_seed(module, source, error);
+                }
+                pairs.push(pair);
+            }
+            return Ok(pairs);
+        }
+        let Some(object) = backing else {
+            return Ok(pairs);
+        };
+        // A later key whose name converts to an earlier one's (lone
+        // surrogates become U+FFFD) replaces its value in place.
+        let mut positions: BTreeMap<String, usize> = BTreeMap::new();
+        for key in self.proxy_own_enumerable_string_keys(module, object)? {
+            let value = self.proxy_aware_get_runtime_property(
+                module,
+                object,
+                &RuntimePropertyKey::String(key.clone()),
+                init.clone(),
+                0,
+            )?;
+            self.observe_collection_seed_label(label);
+            let name = key.to_string();
+            let value = self.url_search_params_usv_string(module, value)?;
+            self.observe_collection_seed_label(label);
+            let pair = (name, value);
+            retained_bytes = retained_bytes.saturating_add(Self::estimate_url_pair_storage_bytes(
+                std::slice::from_ref(&pair),
+            ));
+            self.check_temporary_memory_budget(retained_bytes)?;
+            match positions.get(&pair.0) {
+                Some(&position) => pairs[position].1 = pair.1,
+                None => {
+                    positions.insert(pair.0.clone(), pairs.len());
+                    pairs.push(pair);
+                }
+            }
+        }
+        Ok(pairs)
+    }
+
+    /// One `[name, value]` of a URLSearchParams sequence initializer: an
+    /// iterable read to its end, which must have produced exactly two items.
+    fn url_search_params_sequence_pair(
+        &mut self,
+        module: Option<&Ir3Module>,
+        entry: Value,
+        label: &mut Label,
+    ) -> Result<(String, String), InterpreterError> {
+        if !entry.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "iterable [name, value] pair in the URLSearchParams initializer"
+                    .to_string(),
+                got: entry.type_name().to_string(),
+            });
+        }
+        let mut items = self.collection_seed_source(module, entry)?;
+        let (mut name, mut value) = (None, None);
+        let mut count = 0usize;
+        while let Some(item) = self.next_collection_seed(module, &mut items)? {
+            self.observe_collection_seed_label(label);
+            count = count.saturating_add(1);
+            if count <= 2 {
+                let text = self.url_search_params_usv_string(module, item)?;
+                self.observe_collection_seed_label(label);
+                *(if count == 1 { &mut name } else { &mut value }) = Some(text);
+            }
+        }
+        match (name, value) {
+            (Some(name), Some(value)) if count == 2 => Ok((name, value)),
+            _ => Err(InterpreterError::TypeError {
+                expected: "[name, value] pair of exactly two items".to_string(),
+                got: format!("{count} items"),
+            }),
+        }
+    }
+
+    /// ToString of a URLSearchParams name or value (objects through
+    /// ToPrimitive; a Symbol is a TypeError).
+    fn url_search_params_usv_string(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<String, InterpreterError> {
+        let primitive = if value.is_object_like() {
+            self.coerce_runtime_primitive(module, value, true)?
+        } else {
+            value
+        };
+        if matches!(primitive, Value::Symbol(_)) {
+            return Err(Self::symbol_to_string_error());
+        }
+        let text = self.value_to_string(&primitive);
+        self.check_temporary_memory_budget(Self::estimate_string_bytes(&text))?;
+        Ok(text)
     }
 
     fn url_search_params_receiver_id(
@@ -78258,6 +79793,26 @@ impl InterpreterCore {
         self.throw_uri_malformed(Some("ERR_INVALID_URI"))
     }
 
+    /// Throw a guest `SyntaxError` with `message` (a runtime-detected syntax
+    /// error such as an invalid `new RegExp` pattern).
+    fn throw_syntax_error(&mut self, message: String) -> InterpreterError {
+        let thrown = (|| {
+            let prototype = self.ensure_builtin_prototype("SyntaxError")?;
+            let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+            self.initialize_error_like_object(error_id, "SyntaxError", message)?;
+            Ok::<Value, InterpreterError>(Value::Object(error_id))
+        })();
+        let thrown = match thrown {
+            Ok(value) => value,
+            Err(error) => return error,
+        };
+        self.pending_exception = Some(thrown.clone());
+        self.pending_exception_label = Label::Public;
+        InterpreterError::UncaughtException {
+            value: self.uncaught_exception_description(&thrown),
+        }
+    }
+
     /// Throw a guest `URIError: URI malformed` (ES2020 18.2.6.1.2 Decode),
     /// with Node's `code` property when `code` is given.
     fn throw_uri_malformed(&mut self, code: Option<&str>) -> InterpreterError {
@@ -78925,6 +80480,13 @@ impl InterpreterCore {
             }
             // A call whose callee no `with` object supplied has no receiver.
             "builtin:WithReceiver" => Ok(Value::Undefined),
+            // `require('util')` (lowering_pipeline/util_module.rs).
+            "builtin:UtilInspect" => self.util_inspect_builtin(module, args),
+            "builtin:UtilFormat" => self.util_format_builtin(module, args),
+            "builtin:UtilTypeTag" => {
+                let value = self.arg_or_undefined(args, 0)?;
+                Ok(Value::str(self.util_type_tag(&value)?))
+            }
             "builtin:ClassMembersNonEnumerable" => {
                 // ES2020 14.6.13: class methods and accessors are
                 // non-enumerable. args = (constructor, constructor.prototype).
@@ -79032,7 +80594,7 @@ impl InterpreterCore {
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::String)
             }
             "builtin:Url" => self.construct_url(args),
-            "builtin:UrlSearchParams" => self.construct_url_search_params(args),
+            "builtin:UrlSearchParams" => self.construct_url_search_params(module, args),
             "builtin:UrlFileUrlToPath" => self.legacy_url_file_url_to_path(args),
             "builtin:UrlFormat" => self.legacy_url_format(args),
             "builtin:UrlParse" => self.legacy_url_parse(args),
@@ -79318,7 +80880,7 @@ impl InterpreterCore {
             }
             "builtin:ArrayIsArray" => {
                 let arg = self.builtin_arg(args, 0)?;
-                Ok(self.array_is_array_value(arg))
+                self.array_is_array_value(arg)
             }
             "builtin:ArrayIsArrayFunction" => {
                 Ok(Value::BuiltinFunction(BuiltinFunction::array_is_array()))
@@ -79804,8 +81366,11 @@ impl InterpreterCore {
                         Ok(Value::Object(array_id))
                     }
                     // bd-9vouw.17: a function's enumerable own properties are
-                    // on its backing object (`length`/`name` are not enumerable).
-                    ref function if function.is_callable() => {
+                    // on its backing object (`length`/`name` are not enumerable),
+                    // as are a promise's or generator object's.
+                    ref function
+                        if function.is_callable() || Self::has_exotic_backing_object(function) =>
+                    {
                         let key_values = match self.own_property_holder(module, function, false)? {
                             Some(backing) => self
                                 .heap
@@ -80033,13 +81598,32 @@ impl InterpreterCore {
                 } else {
                     self.read_reg(args.start)?
                 };
-                let target_obj_id = match target_val {
-                    Value::Object(obj_id) => obj_id,
+                let target_obj_id = match &target_val {
+                    Value::Object(obj_id) => *obj_id,
                     Value::Undefined | Value::Null => {
                         return Err(InterpreterError::TypeError {
                             expected: "object-coercible target for Object.assign".to_string(),
                             got: target_val.type_name().to_string(),
                         });
+                    }
+                    // A function's own properties live on its backing object,
+                    // where `f.x = 1` stores them: `Object.assign(fn, {...})`
+                    // (chroma's statics) copied nothing.
+                    // Promises and generator objects keep theirs on a
+                    // backing object too (`Object.assign(promise, { a: 1 })`).
+                    function
+                        if function.is_callable() || Self::has_exotic_backing_object(function) =>
+                    {
+                        let backing = match module {
+                            Some(module) => {
+                                self.ensure_function_own_property_object(module, function)?
+                            }
+                            None => None,
+                        };
+                        let Some(backing) = backing else {
+                            return Ok(target_val);
+                        };
+                        backing
                     }
                     _ => {
                         // If target is not an object, return it as-is
@@ -80050,7 +81634,17 @@ impl InterpreterCore {
                 // Copy properties from each source object to target
                 for i in 1..args.count {
                     let source_val = self.read_reg(args.start + i)?;
-                    if let Value::Object(source_obj_id) = source_val {
+                    let source_obj_id = match &source_val {
+                        Value::Object(source_obj_id) => Some(*source_obj_id),
+                        // A function source's own enumerable properties.
+                        function if function.is_callable() => match module {
+                            Some(module) => self.function_own_property_object(module, function)?,
+                            None => None,
+                        },
+                        // Skip non-object sources (null, undefined, primitives)
+                        _ => None,
+                    };
+                    if let Some(source_obj_id) = source_obj_id {
                         self.join_pending_hostcall_stream_label(source_obj_id)?;
                         self.copy_own_runtime_properties(
                             module,
@@ -80059,13 +81653,12 @@ impl InterpreterCore {
                             true,
                         )?;
                     }
-                    // Skip non-object sources (null, undefined, primitives)
                 }
                 let mutation_label = self.join_arg_range_with_object_mutation_label(args)?;
                 self.join_object_mutation_label(target_obj_id, &mutation_label)?;
 
-                // Return the target object
-                Ok(Value::Object(target_obj_id))
+                // Return the target (the function itself for a function).
+                Ok(target_val)
             }
             "builtin:ObjectFreeze" => {
                 // Object.freeze implementation - makes an object immutable
@@ -82176,6 +83769,14 @@ impl InterpreterCore {
                 self.reflect_property_builtin(module, args, ReflectPropertyOperation::Has)
             }
             "builtin:ReflectOwnKeys" => {
+                // A function is an object: its names, then its symbols.
+                let value = self.arg_or_undefined(args, 0)?;
+                if !matches!(value, Value::Object(_)) && value.is_callable() {
+                    let mut keys = self.function_own_property_names(module, &value)?;
+                    keys.extend(self.function_own_property_symbols(module, &value)?);
+                    let array_id = self.alloc_array_from_values(&keys)?;
+                    return Ok(Value::Object(array_id));
+                }
                 let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
                 let keys = self.proxy_aware_own_property_keys(module, target, 0)?;
                 self.join_pending_hostcall_stream_label(target)?;
@@ -82719,6 +84320,13 @@ impl InterpreterCore {
                             .into_iter()
                             .map(|(key, _)| Value::Str(key))
                             .collect::<Vec<_>>();
+                        // bd-9vouw.122: %Array.prototype%'s virtual names first.
+                        let virtual_names = self
+                            .canonical_prototype_virtual_own_keys(obj_id)
+                            .into_iter()
+                            .filter(|key| matches!(key, Value::Str(_)))
+                            .collect::<Vec<_>>();
+                        property_name_values.extend(virtual_names.iter().cloned());
                         property_name_values.extend(
                             self.heap
                                 .get(obj_id.0 as usize)
@@ -82727,40 +84335,15 @@ impl InterpreterCore {
                                 .exact_keys()
                                 .into_iter()
                                 .filter(|key| self.own_runtime_property_visible(obj_id, key))
-                                .map(Value::Str),
+                                .map(Value::Str)
+                                .filter(|key| !virtual_names.contains(key)),
                         );
                         self.join_pending_hostcall_stream_label(obj_id)?;
                         let array_id = self.alloc_array_from_values(&property_name_values)?;
                         Ok(Value::Object(array_id))
                     }
-                    // bd-9vouw.17: a function's own property names are its
-                    // backing object's (`length` and `name` first), plus the
-                    // dedicated `prototype` after them when it has one.
                     ref function if function.is_callable() => {
-                        let mut names = match self.own_property_holder(module, function, true)? {
-                            Some(backing) => self
-                                .heap
-                                .get(backing.0 as usize)
-                                .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
-                                .properties
-                                .exact_keys()
-                                .into_iter()
-                                .filter(|key| self.own_runtime_property_visible(backing, key))
-                                .map(Value::Str)
-                                .collect::<Vec<_>>(),
-                            None => Vec::new(),
-                        };
-                        let prototype = Value::str("prototype");
-                        if self.object_own_property_contains(function, &prototype)
-                            && !names.contains(&prototype)
-                        {
-                            let (length, name) = (Value::str("length"), Value::str("name"));
-                            let position = names
-                                .iter()
-                                .position(|key| *key != length && *key != name)
-                                .unwrap_or(names.len());
-                            names.insert(position, prototype);
-                        }
+                        let names = self.function_own_property_names(module, function)?;
                         let array_id = self.alloc_array_from_values(&names)?;
                         Ok(Value::Object(array_id))
                     }
@@ -82782,6 +84365,9 @@ impl InterpreterCore {
                         .into_iter()
                         .filter(|key| matches!(key, Value::Symbol(_)))
                         .collect::<Vec<_>>(),
+                    ref function if function.is_callable() => {
+                        self.function_own_property_symbols(module, function)?
+                    }
                     _ => Vec::new(),
                 };
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
@@ -82920,6 +84506,19 @@ impl InterpreterCore {
                     (_, Value::Undefined) => String::new(),
                     (_, other) => self.value_to_string(other),
                 };
+                // ES2020 21.2.3.2.2 RegExpInitialize: invalid flags or a
+                // pattern that does not parse are a SyntaxError here, not
+                // at the first match (the literal's early-error rule). A
+                // pattern in the compiled cache already ran, so a literal
+                // evaluated in a loop is checked once.
+                let compiled = self
+                    .regexp_cache
+                    .borrow()
+                    .iter()
+                    .any(|(cached, cached_flags, _)| *cached == pattern && *cached_flags == flags);
+                if !compiled && let Some(message) = regexp_literal_early_error(&pattern, &flags) {
+                    return Err(self.throw_syntax_error(message));
+                }
 
                 Ok(Value::Object(self.alloc_regexp_object(pattern, flags)?))
             }
@@ -83065,15 +84664,15 @@ impl InterpreterCore {
                     "undefined".to_string()
                 };
 
-                // Simplified locale-aware comparison (using standard string comparison for now)
-                let result = this_string.cmp(&that_string);
-                let comparison_result = match result {
-                    std::cmp::Ordering::Less => -1,
-                    std::cmp::Ordering::Equal => 0,
-                    std::cmp::Ordering::Greater => 1,
+                // The same collation as String.prototype.localeCompare.
+                let options = if args.count >= 4 {
+                    self.read_reg(args.start + 3)?
+                } else {
+                    Value::Undefined
                 };
-
-                Ok(Value::Int(comparison_result))
+                let options = self.collation_options(&options)?;
+                let ordering = collation::locale_compare(&this_string, &that_string, &options);
+                Ok(Value::Int(ordering as i64))
             }
 
             "builtin:DatePrototypeGetTime" => {
@@ -83417,17 +85016,20 @@ impl InterpreterCore {
                 let prop_name = self.executable_property_key_from_value(&prop_val);
                 // bd-9vouw.17: a function's own properties (its `length` and
                 // `name` included) are on its backing object. `prototype`
-                // keeps its dedicated path and is not described here.
+                // keeps its dedicated path.
                 if !matches!(obj_val, Value::Object(_))
                     && obj_val.is_callable()
                     && prop_name.as_str() == Some("prototype")
                 {
-                    return Ok(Value::Undefined);
+                    return self.function_prototype_descriptor(module, &obj_val);
                 }
                 let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Ok(Value::Undefined); // Primitives have no own property descriptors here
                 };
                 self.join_pending_hostcall_stream_label(obj_id)?;
+                if let Some(descriptor) = self.prototype_getter_descriptor(obj_id, &prop_name)? {
+                    return Ok(descriptor);
+                }
                 self.own_property_descriptor_value(obj_id, &prop_name)
             }
 
@@ -92843,6 +94445,89 @@ impl InterpreterCore {
     /// Replace an object's engine-private class field list, charging the
     /// slot's footprint.
     /// The primitive a wrapper object holds, if `object_id` is one.
+    /// bd-9vouw.17: a function's own property names are its backing
+    /// object's (`length` and `name` first), plus the dedicated `prototype`
+    /// after them when it has one. The backing object's label goes to the
+    /// pending HostCall result.
+    fn function_own_property_names(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let mut names = match self.own_property_holder(module, function, true)? {
+            Some(backing) => {
+                self.join_pending_hostcall_stream_label(backing)?;
+                self.heap
+                    .get(backing.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
+                    .properties
+                    .exact_keys()
+                    .into_iter()
+                    .filter(|key| self.own_runtime_property_visible(backing, key))
+                    .map(Value::Str)
+                    .collect::<Vec<_>>()
+            }
+            None => Vec::new(),
+        };
+        let prototype = Value::str("prototype");
+        if self.object_own_property_contains(function, &prototype) && !names.contains(&prototype) {
+            let (length, name) = (Value::str("length"), Value::str("name"));
+            let position = names
+                .iter()
+                .position(|key| *key != length && *key != name)
+                .unwrap_or(names.len());
+            names.insert(position, prototype);
+        }
+        Ok(names)
+    }
+
+    /// `fn.prototype` described (bd-9vouw.109): the value a read gives,
+    /// writable, neither enumerable nor configurable (ES2020 9.2.10
+    /// MakeConstructor). Undefined when the function has no `prototype`.
+    /// No-claim: a class's `prototype` is described as writable, though it
+    /// is not (14.6.13 step 16).
+    fn function_prototype_descriptor(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let Some(module) = module else {
+            return Ok(Value::Undefined);
+        };
+        if !self.object_own_property_contains(function, &Value::str("prototype")) {
+            return Ok(Value::Undefined);
+        }
+        let value = match function {
+            Value::Function(index) => self.function_property_value(module, *index, "prototype")?,
+            Value::Closure(id) => self.closure_property_value(module, *id, "prototype")?,
+            _ => return Ok(Value::Undefined),
+        };
+        let descriptor = self.alloc_object_with_properties(&[
+            ("value", value),
+            ("writable", Value::Bool(true)),
+            ("enumerable", Value::Bool(false)),
+            ("configurable", Value::Bool(false)),
+        ])?;
+        Ok(Value::Object(descriptor))
+    }
+
+    /// The Symbol keys of a function's own properties (bd-9vouw.109), in
+    /// creation order.
+    fn function_own_property_symbols(
+        &mut self,
+        module: Option<&Ir3Module>,
+        function: &Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let Some(backing) = self.own_property_holder(module, function, true)? else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .proxy_aware_own_property_keys(module, backing, 0)?
+            .into_iter()
+            .filter(|key| matches!(key, Value::Symbol(_)))
+            .collect())
+    }
+
     fn primitive_wrapper_value(&self, object_id: ObjectId) -> Option<&Value> {
         self.heap
             .get(object_id.0 as usize)
@@ -92867,6 +94552,17 @@ impl InterpreterCore {
         };
         let prototype = self.ensure_builtin_prototype(type_name)?;
         let object_id = self.alloc_object_with_prototype(Some(prototype))?;
+        self.set_primitive_wrapper_value(object_id, value)?;
+        Ok(object_id)
+    }
+
+    /// Give `object_id` the [[NumberData]] (StringData, BooleanData, ...)
+    /// `value`, charging its bytes.
+    fn set_primitive_wrapper_value(
+        &mut self,
+        object_id: ObjectId,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
         let index = object_id.0 as usize;
         let previous = self
             .heap
@@ -92878,7 +94574,7 @@ impl InterpreterCore {
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
-        Ok(object_id)
+        Ok(())
     }
 
     /// ES2020 thisNumberValue / thisStringValue / thisBooleanValue /
@@ -93518,6 +95214,11 @@ impl InterpreterCore {
             "BigInt" | "Number" | "String" | "Boolean" | "Symbol" | "Function" => {
                 Some(self.ensure_builtin_prototype("Object")?)
             }
+            // ES2020 25.2.3, 25.7.3; ES2018 25.3.3: their [[Prototype]] is
+            // %Function.prototype%.
+            "GeneratorFunction" | "AsyncFunction" | "AsyncGeneratorFunction" => {
+                Some(self.ensure_builtin_prototype("Function")?)
+            }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
             // ES2020 22.2.6: the concrete typed array prototypes inherit the
@@ -93533,6 +95234,53 @@ impl InterpreterCore {
         self.mutate_builtin_prototypes(|bp| {
             bp.insert(canonical.to_string(), prototype);
         });
+        // Number.prototype, String.prototype and Boolean.prototype are
+        // themselves wrapper objects of +0, "" and false (ES2020 20.1.3,
+        // 21.1.3, 19.3.3): `Number.prototype.toString(10)` is "0", not a
+        // TypeError for a non-Number receiver.
+        let wrapped = match canonical {
+            "Number" => Some(Value::Int(0)),
+            "String" => Some(Value::str("")),
+            "Boolean" => Some(Value::Bool(false)),
+            _ => None,
+        };
+        if let Some(value) = wrapped {
+            self.set_primitive_wrapper_value(prototype, value)?;
+        }
+        // These prototypes carry an own @@toStringTag data property naming
+        // the constructor (ES2020 23.1.3.13, 23.2.3.12, 24.1.4.4, 25.6.5.4,
+        // ...; writable false, enumerable false, configurable true):
+        // `Set.prototype[Symbol.toStringTag]` was undefined. It goes on while
+        // the property map is empty (see alloc_math_global).
+        if matches!(
+            canonical,
+            "Map"
+                | "Set"
+                | "WeakMap"
+                | "WeakSet"
+                | "Promise"
+                | "ArrayBuffer"
+                | "DataView"
+                | "Symbol"
+                | "BigInt"
+                | "WeakRef"
+                | "FinalizationRegistry"
+                | "GeneratorFunction"
+                | "AsyncFunction"
+                | "AsyncGeneratorFunction"
+        ) {
+            let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+            self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
+            self.set_own_property_attributes(
+                prototype,
+                &key,
+                PropertyAttributes {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                },
+            )?;
+        }
         if ERROR_PROTOTYPE_NAMES.contains(&canonical) {
             // ES2020 19.5.3.2-3 / 19.5.6.3.2-3: `name` and `message` live on
             // the prototypes, so instances inherit them and a subclass's
@@ -93978,6 +95726,20 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
+    /// The canonical prototype a function value's [[Prototype]] defaults to:
+    /// %GeneratorFunction.prototype%, %AsyncFunction.prototype% or
+    /// %AsyncGeneratorFunction.prototype% for those kinds, else
+    /// %Function.prototype%; `None` for a non-function.
+    pub(super) fn function_intrinsic_prototype_name(value: &Value) -> Option<&'static str> {
+        match value {
+            Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => Some("Function"),
+            Value::GeneratorFunction(_) => Some("GeneratorFunction"),
+            Value::AsyncFunction(_) => Some("AsyncFunction"),
+            Value::AsyncGeneratorFunction(_) => Some("AsyncGeneratorFunction"),
+            _ => None,
+        }
+    }
+
     fn function_prototype_property(key: &str) -> Option<Value> {
         let kind = match key {
             "call" => BuiltinFunctionKind::FunctionPrototypeCall,
@@ -94073,6 +95835,26 @@ impl InterpreterCore {
                 digest.update(b"FrankenEngine.BuiltinFunctionIdentity.v1");
                 digest.update(&identity);
                 (5u8, ContentHash::from_bytes(digest.finalize().into()), 0)
+            }
+            // A promise, generator or async generator object has no heap
+            // storage of its own either: its own properties (`p.cancel =
+            // fn`, `Object.assign(promise, ...)`) live on a backing object
+            // too. Their ids are the runtime's, not a module's, so the owner
+            // is a constant (computed once: every `p.then` read asks).
+            Value::Promise(id) | Value::Generator(id) | Value::AsyncGeneratorObject(id) => {
+                static OWNERS: OnceLock<[ContentHash; 3]> = OnceLock::new();
+                let owners = OWNERS.get_or_init(|| {
+                    let mut digest = Sha256::new();
+                    digest.update(b"FrankenEngine.ExoticObjectOwnProperties.v1");
+                    let base = ContentHash::from_bytes(digest.finalize().into());
+                    [6u8, 7, 8].map(|kind| Self::function_own_property_owner(kind, &base))
+                });
+                let slot = match function {
+                    Value::Promise(_) => 0,
+                    Value::Generator(_) => 1,
+                    _ => 2,
+                };
+                return Ok(Some((owners[slot], *id)));
             }
             _ => return Ok(None),
         };
@@ -94228,6 +96010,51 @@ impl InterpreterCore {
         })
     }
 
+    /// Whether `value` is a promise, generator or async generator object,
+    /// whose own properties live on a backing object (see
+    /// `function_own_property_key`).
+    fn has_exotic_backing_object(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::Promise(_) | Value::Generator(_) | Value::AsyncGeneratorObject(_)
+        )
+    }
+
+    /// Whether a promise, generator or async generator object has the own
+    /// property `key` (on its backing object). Runs no guest code.
+    fn exotic_has_own_property(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        Ok(self
+            .function_own_property_object(module, value)?
+            .and_then(|backing| self.heap.get(backing.0 as usize))
+            .is_some_and(|object| object.contains_own_runtime_property(key)))
+    }
+
+    /// The own property `key` of a promise, generator or async generator
+    /// object, read from its backing object with `value` as the receiver
+    /// (an accessor sees it as `this`), with that backing object (the owner
+    /// whose stored label the read joins), or `None` when it has none.
+    fn exotic_own_property_get(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<(Value, ObjectId)>, InterpreterError> {
+        if !self.exotic_has_own_property(module, value, key)? {
+            return Ok(None);
+        }
+        let backing = self
+            .function_own_property_object(module, value)?
+            .expect("checked by exotic_has_own_property");
+        let own =
+            self.proxy_aware_get_runtime_property(Some(module), backing, key, value.clone(), 0)?;
+        Ok(Some((own, backing)))
+    }
+
     /// bd-9vouw.17: the object that holds `value`'s own properties for the
     /// Object.* reflection built-ins: an object itself, a built-in's property
     /// object, or a function's backing object (created and seeded on demand
@@ -94247,7 +96074,7 @@ impl InterpreterCore {
         {
             return Ok(Some(object));
         }
-        if !value.is_callable() {
+        if !value.is_callable() && !Self::has_exotic_backing_object(value) {
             return Ok(None);
         }
         let Some(module) = module else {
@@ -94319,6 +96146,7 @@ impl InterpreterCore {
             .iter()
             .copied()
             .chain([TYPED_ARRAY_INTRINSIC])
+            .chain(FUNCTION_KIND_INTRINSICS)
             .find(|name| *name == &*builtin.module_specifier)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "standard constructor".to_string(),
@@ -94353,6 +96181,10 @@ impl InterpreterCore {
                 BuiltinFunction::new_kind(BuiltinFunctionKind::ErrorCaptureStackTrace),
             ),
             "stackTraceLimit" if name == "Error" => Value::Int(10),
+            // bd-9vouw.113: RegExp.$1, lastMatch, ... from the last match.
+            key if name == "RegExp" && is_legacy_regexp_static(key) => {
+                self.legacy_regexp_static_value(key)?
+            }
             "asIntN" if name == "BigInt" => {
                 Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::BigIntAsIntN))
             }
@@ -94381,6 +96213,15 @@ impl InterpreterCore {
                 } else if let Some(tag) =
                     crate::lowering_pipeline::slot0_static_member_capability(name, key)
                 {
+                    Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag))
+                } else if name == "Object"
+                    && let Some(tag) =
+                        crate::lowering_pipeline::object_receiver_static_member_capability(key)
+                {
+                    // `const eq = Object.is` (mobx's default comparer):
+                    // these read as values too; a value call passes its
+                    // arguments without the receiver placeholder their
+                    // call-site convention adds (call_static_hostcall).
                     Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag))
                 } else if name == "Number" {
                     Self::number_constructor_constant(key).unwrap_or(Value::Undefined)
@@ -94456,6 +96297,13 @@ impl InterpreterCore {
             TYPED_ARRAY_INTRINSIC => Err(InterpreterError::TypeError {
                 expected: "a concrete typed array constructor".to_string(),
                 got: "Abstract class TypedArray not directly constructable".to_string(),
+            }),
+            // Creating a generator or async function from source text is
+            // not supported (the Function constructor's contained-codegen
+            // path compiles ordinary functions only): a typed refusal.
+            name if FUNCTION_KIND_INTRINSICS.contains(&name) => Err(InterpreterError::TypeError {
+                expected: "the Function constructor".to_string(),
+                got: format!("{name} from source text is not supported"),
             }),
             "Array" => {
                 let values = self.call_arguments(args)?;
@@ -94585,7 +96433,55 @@ impl InterpreterCore {
         let tag = tag.to_string();
         let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
         check_hostcall_capability_gate(self, &tag, instruction_index)?;
+        if let Some(value) = self.object_receiver_static_value_call(module, &tag, args)? {
+            return Ok(value);
+        }
         self.dispatch_builtin_hostcall(&tag, args, Some(module))
+    }
+
+    /// A value call of `Object.is`, `isExtensible`, `preventExtensions`,
+    /// `seal` or `isSealed` (`const eq = Object.is; eq(a, b)`). Their hostcall
+    /// handlers read past a receiver slot the call-site convention adds, and
+    /// a value call's arguments have none, so these run here over the
+    /// arguments as passed. `None` for any other tag.
+    fn object_receiver_static_value_call(
+        &mut self,
+        module: &Ir3Module,
+        tag: &str,
+        args: RegRange,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let arg = |core: &Self, index: u32| -> Result<Value, InterpreterError> {
+            Ok(core.builtin_arg(args, index)?.unwrap_or(Value::Undefined))
+        };
+        Ok(Some(match tag {
+            "builtin:ObjectIs" => Value::Bool(Self::same_value(&arg(self, 0)?, &arg(self, 1)?)),
+            "builtin:ObjectIsExtensible" => self.object_integrity_builtin(
+                Some(module),
+                args,
+                ObjectIntegrityOperation::IsExtensible,
+                false,
+            )?,
+            "builtin:ObjectPreventExtensions" => self.object_integrity_builtin(
+                Some(module),
+                args,
+                ObjectIntegrityOperation::PreventExtensions,
+                false,
+            )?,
+            "builtin:ObjectSeal" => {
+                let object = arg(self, 0)?;
+                if let Value::Object(object_id) = object {
+                    self.seal_object(object_id)?;
+                }
+                object
+            }
+            "builtin:ObjectIsSealed" => match arg(self, 0)? {
+                Value::Object(object_id) => {
+                    Value::Bool(self.object_has_integrity_level(object_id, false)?)
+                }
+                _ => Value::Bool(true),
+            },
+            _ => return Ok(None),
+        }))
     }
 
     /// Whether `object_id`'s prototype chain passes through a canonical
@@ -94693,6 +96589,9 @@ impl InterpreterCore {
     fn canonical_prototype_method(name: &str, key: &str) -> Option<Value> {
         let defined = |value: Value| (!matches!(value, Value::Undefined)).then_some(value);
         match name {
+            // %Array.prototype% is itself an Array whose length is 0
+            // (ES2020 22.1.3), bd-9vouw.122.
+            "Array" if key == "length" => Some(Value::Int(0)),
             "Array" => Self::array_prototype_method(key).map(Value::BuiltinFunction),
             "String" => Self::string_prototype_method(key),
             "Number" => defined(Self::number_property_value(key)),
@@ -94775,6 +96674,12 @@ impl InterpreterCore {
         if key == "constructor" && matches!(name, "Promise" | "Date") {
             return self.materialized_intrinsic_constructor(name);
         }
+        // %Function.prototype%.constructor is %Function% (ES2020 19.2.3.1).
+        if key == "constructor" && name == "Function" {
+            return Some(Value::BuiltinFunction(
+                BuiltinFunction::function_constructor(),
+            ));
+        }
         if key == "constructor" && name == TYPED_ARRAY_INTRINSIC {
             return Some(Value::BuiltinFunction(
                 BuiltinFunction::standard_constructor(TYPED_ARRAY_INTRINSIC),
@@ -94784,6 +96689,7 @@ impl InterpreterCore {
             return STANDARD_CONSTRUCTOR_GLOBALS
                 .iter()
                 .copied()
+                .chain(FUNCTION_KIND_INTRINSICS)
                 .find(|candidate| *candidate == name)
                 .map(|name| Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)));
         }
@@ -94836,6 +96742,11 @@ impl InterpreterCore {
             if let Some(name @ ("Promise" | "Date")) = canonical {
                 return self.materialized_intrinsic_constructor(name);
             }
+            if canonical == Some("Function") {
+                return Some(Value::BuiltinFunction(
+                    BuiltinFunction::function_constructor(),
+                ));
+            }
             if canonical == Some(TYPED_ARRAY_INTRINSIC) {
                 return Some(constructor(TYPED_ARRAY_INTRINSIC));
             }
@@ -94843,6 +96754,7 @@ impl InterpreterCore {
                 STANDARD_CONSTRUCTOR_GLOBALS
                     .iter()
                     .copied()
+                    .chain(FUNCTION_KIND_INTRINSICS)
                     .find(|candidate| *candidate == name)
             }) {
                 return Some(constructor(name));
@@ -108649,7 +110561,8 @@ mod async_runtime_tests_current {
         pair_amplification_refused.config.max_total_memory_bytes =
             baseline_bytes.saturating_add(former_three_x_check);
         assert!(matches!(
-            pair_amplification_refused.construct_url_search_params(RegRange { start: 0, count: 1 }),
+            pair_amplification_refused
+                .construct_url_search_params(None, RegRange { start: 0, count: 1 }),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(pair_amplification_refused.heap.len(), baseline_heap_len);
@@ -122284,6 +124197,58 @@ mod async_runtime_tests_current {
                 .expect("dst register label should exist"),
             &crate::ifc_artifacts::Label::Secret,
             "a Secret value written to a Public object property must read back Secret (bd-ojvo1)"
+        );
+    }
+
+    /// A promise's own properties live on a backing object; a Secret value
+    /// stored there must read back Secret too (the read joins the backing
+    /// object's stored label, as bd-ojvo1 does for an object).
+    #[test]
+    fn promise_own_property_read_keeps_the_stored_label() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        module.constant_pool.push("cancel".into());
+
+        let mut core = test_interpreter();
+        let promise = core
+            .create_promise()
+            .expect("test promise allocation should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Promise(promise.0);
+            r[2] = Value::Int(42);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Public)
+            .expect("promise label should be settable");
+        core.set_register_label(2, crate::ifc_artifacts::Label::Secret)
+            .expect("written value label should be settable");
+
+        core.execute(&module)
+            .expect("set then get off a promise should execute");
+
+        assert_eq!(core.read_reg(3).expect("dst register"), Value::Int(42));
+        assert_eq!(
+            core.get_register_label(3)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "a Secret value written to a promise's own property must read back Secret"
         );
     }
 
@@ -140568,14 +142533,15 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "bd-0k19b-sloppy-global");
         let result = core.execute(&sloppy).expect("sloppy PutName execution");
         assert_eq!(result.value, Value::Int(7));
-        let binding = core
-            .realm_dynamic_globals
-            .get("bd_0k19b_sloppy_global")
-            .expect("sloppy PutName global binding");
-        assert_eq!(binding.kind, BindingKind::Var);
+        // A sloppy global is a property of the realm's global object.
+        assert!(
+            !core
+                .realm_dynamic_globals
+                .contains_key("bd_0k19b_sloppy_global")
+        );
         assert_eq!(
-            binding.value().expect("global binding value"),
-            Value::Int(7)
+            core.global_object_data_property("bd_0k19b_sloppy_global"),
+            Some(Value::Int(7))
         );
         assert_eq!(
             core.estimated_memory_bytes(),
@@ -140810,12 +142776,9 @@ mod tests {
                 if name == "bd_0k19b_frozen_missing"
         ));
         assert_eq!(
-            core.realm_dynamic_globals
-                .get("bd_0k19b_frozen_missing")
-                .expect("RHS-created realm global survives the strict PutValue error")
-                .value()
-                .expect("realm global value"),
-            Value::Int(1)
+            core.global_object_data_property("bd_0k19b_frozen_missing"),
+            Some(Value::Int(1)),
+            "RHS-created realm global survives the strict PutValue error"
         );
         assert_eq!(
             core.estimated_memory_bytes(),

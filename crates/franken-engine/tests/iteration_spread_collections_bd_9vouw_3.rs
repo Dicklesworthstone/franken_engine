@@ -24,6 +24,25 @@ fn check(source: &str, node: &str) {
     );
 }
 
+/// Map.prototype, Set.prototype and String.prototype hold their @@iterator
+/// (Map's is `entries`, Set's `values`); only instances and primitives had
+/// it, so `typeof Map.prototype[Symbol.iterator]` was "undefined" (Test262
+/// String/prototype/Symbol.iterator/name and relatives).
+#[test]
+fn collection_and_string_prototypes_have_their_iterator() {
+    check(
+        "[typeof String.prototype[Symbol.iterator], typeof Map.prototype[Symbol.iterator], \
+         typeof Set.prototype[Symbol.iterator], \
+         Map.prototype[Symbol.iterator] === Map.prototype.entries, \
+         Set.prototype[Symbol.iterator] === Set.prototype.values, \
+         Map.prototype[Symbol.iterator] === new Map()[Symbol.iterator], \
+         [...String.prototype[Symbol.iterator].call('ab')].join(), \
+         [...Map.prototype[Symbol.iterator].call(new Map([[1, 2]]))].join(), \
+         Symbol.iterator in Map.prototype].join(' ')",
+        "function function function true true true a,b 1,2 true",
+    );
+}
+
 #[test]
 fn generator_objects_spread_into_arrays() {
     check(
@@ -150,5 +169,19 @@ fn a_spread_operand_can_contain_operators() {
          JSON.stringify([[...a ?? [], 2], [...b || [], 2], [0, ...b ?? [], 2], \
          [...c ? [1, 2] : [], 3], [...b && [7, 8]], [...d = [5]], d]);",
         "[[2],[1,2],[0,1,2],[1,2,3],[7,8],[5],[5]]",
+    );
+}
+
+/// The same for a spread argument: `f(...c > 0 ? [a, b] : [b, a])` spreads
+/// the conditional's array. bun emits this shape without parentheses
+/// (date-fns' formatDistance), and it passed one argument, so date-fns
+/// printed "almost NaN years".
+#[test]
+fn a_spread_argument_can_contain_operators() {
+    check(
+        "var c = 5; var a; function n() { return arguments.length; } \
+         [n(...c > 0 ? [1, 2, 3] : []), Math.max(...c > 0 ? [7, 9] : [1]), n(...a ?? [1, 2]), \
+         n(0, ...a || [4, 5], 6), [].concat(...c ? [[1], [2]] : []).length].join();",
+        "3,9,2,4,2",
     );
 }

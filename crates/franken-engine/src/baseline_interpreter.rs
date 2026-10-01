@@ -80856,6 +80856,36 @@ impl InterpreterCore {
                 }
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::PropertyKey)
             }
+            "builtin:SloppyThis" => {
+                // bd-9vouw.118: ES2020 9.2.1.2 OrdinaryCallBindThis for
+                // non-strict code. With one argument, the converted value of
+                // a `this` read (arrow functions, top-level code); with none,
+                // a function prologue converting its frame's `this` in place,
+                // so every later read and arrow closure sees one object.
+                match args.count {
+                    1 => {
+                        let value = self.read_reg(args.start)?;
+                        self.sloppy_this_value(value)
+                    }
+                    0 => {
+                        let Some(frame) = self.call_stack.last() else {
+                            return Ok(Value::Undefined);
+                        };
+                        let current = frame.this_value.clone();
+                        let bound = self.sloppy_this_value(current.clone())?;
+                        if bound != current
+                            && let Some(frame) = self.call_stack.last_mut()
+                        {
+                            frame.this_value = bound.clone();
+                        }
+                        Ok(bound)
+                    }
+                    count => Err(InterpreterError::TypeError {
+                        expected: "zero or one sloppy-this hostcall argument".to_string(),
+                        got: format!("{count} arguments"),
+                    }),
+                }
+            }
             "builtin:ArgumentsObject" => {
                 // bd-9vouw.25: the object staged by call setup for this frame.
                 // A body entered without staging (a generator resumed by
@@ -94834,6 +94864,32 @@ impl InterpreterCore {
     /// (bd-9vouw.47) the active CommonJS module's `exports`, else one
     /// per-realm ordinary object. Node runs a script file as a CommonJS
     /// module, whose top-level `this` is `module.exports`.
+    /// ES2020 9.2.1.2 OrdinaryCallBindThis steps 5-6 for non-strict code
+    /// (bd-9vouw.118): undefined or null is the global object (as
+    /// `globalThis` resolves in the running code, so generated functions get
+    /// their realm's), a primitive its wrapper object (ToObject). With no
+    /// global object bound, the value is left alone.
+    fn sloppy_this_value(&mut self, value: Value) -> Result<Value, InterpreterError> {
+        match value {
+            Value::Undefined | Value::Null => {
+                let global = match self.resolve_runtime_name_binding("globalThis") {
+                    Some(binding) => Some(binding.state()?.value.clone()),
+                    None => None,
+                };
+                Ok(global
+                    .filter(|global| global.is_object_like())
+                    .unwrap_or(value))
+            }
+            Value::Bool(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Str(_)
+            | Value::BigInt(_)
+            | Value::Symbol(_) => Ok(Value::Object(self.alloc_primitive_wrapper(value)?)),
+            other => Ok(other),
+        }
+    }
+
     fn current_this_binding(&mut self) -> Result<(Value, Label), InterpreterError> {
         if let Some(frame) = self.call_stack.last() {
             return Ok((frame.this_value.clone(), frame.this_label.clone()));

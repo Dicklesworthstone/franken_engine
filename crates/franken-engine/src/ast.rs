@@ -1722,7 +1722,13 @@ pub enum Expression {
         #[serde(default)]
         span: Option<SourceSpan>,
     },
+    /// `this` in strict code, and every `this` of an AST serialized before
+    /// [`Expression::SloppyThis`] existed.
     This,
+    /// `this` in non-strict code (bd-9vouw.118): OrdinaryCallBindThis
+    /// (ES2020 9.2.1.2) gives a sloppy function called with an undefined or
+    /// null this the global object, and a primitive this its wrapper object.
+    SloppyThis,
     /// `new.target` meta-property.
     NewTarget,
     /// `import.meta` module meta-property.
@@ -1911,6 +1917,11 @@ impl Expression {
                 ("kind", CanonicalValue::str("this")),
                 ("value", CanonicalValue::Null),
             ]),
+            Self::SloppyThis => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("this")),
+                ("sloppy", CanonicalValue::Bool(true)),
+                ("value", CanonicalValue::Null),
+            ]),
             Self::NewTarget => {
                 CanonicalValue::map_from_entries([("kind", CanonicalValue::str("new_target"))])
             }
@@ -2062,7 +2073,7 @@ impl std::fmt::Display for Expression {
             Self::BooleanLiteral(value) => write!(f, "{value}"),
             Self::NullLiteral => write!(f, "null"),
             Self::UndefinedLiteral => write!(f, "undefined"),
-            Self::This => write!(f, "this"),
+            Self::This | Self::SloppyThis => write!(f, "this"),
             Self::NewTarget => write!(f, "new.target"),
             Self::ImportMeta => write!(f, "import.meta"),
             Self::Raw(value) => write!(f, "{value}"),

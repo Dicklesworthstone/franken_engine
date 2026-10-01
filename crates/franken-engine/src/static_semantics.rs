@@ -1577,6 +1577,7 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::SloppyThis
         | Expression::NewTarget
         | Expression::ImportMeta
         | Expression::Super
@@ -1787,6 +1788,7 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::SloppyThis
         | Expression::NewTarget
         | Expression::ImportMeta
         | Expression::Super

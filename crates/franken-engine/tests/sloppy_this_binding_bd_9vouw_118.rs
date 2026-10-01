@@ -2,9 +2,13 @@
 //! called with an undefined or null `this` gets the global object, and a
 //! primitive `this` its wrapper object; strict functions, class code and
 //! modules keep the value as passed. Sloppy functions saw `undefined`, so the
-//! global-object fallbacks of polyfills and older libraries
-//! (`Function('return this')()`, `(function () { return this })()`) found
-//! nothing. Expected strings are Node v22.2.0's output.
+//! global-object fallback `(function () { return this })()` of polyfills and
+//! older libraries found nothing. Expected strings are Node v22.2.0's output.
+//!
+//! No-claim: a function made by the Function constructor runs in the
+//! contained generated-code realm, which binds no global object (`globalThis`
+//! is not defined there), so `Function('return this')()` stays undefined
+//! (Node: globalThis); that is the contained-codegen policy (bd-9vouw.125).
 
 use frankenengine_engine::HybridRouter;
 
@@ -21,7 +25,6 @@ fn sloppy_functions_bind_the_global_object_and_box_primitives() {
                   r.push((function () { return this; })() === globalThis);\n\
                   r.push((function () { return typeof this; }).call(5), \
                   (function () { return this instanceof Number; }).call(5));\n\
-                  r.push(Function('return this')() === globalThis);\n\
                   r.push((function () { var a = () => this; return a(); })() === globalThis);\n\
                   r.push((function () { return this === this; }).call('s'));\n\
                   var o = { m: function () { return this; } }; var m = o.m;\n\
@@ -31,7 +34,7 @@ fn sloppy_functions_bind_the_global_object_and_box_primitives() {
                   r.join(' ');";
     assert_eq!(
         eval(source),
-        "true object true true true true true true true true"
+        "true object true true true true true true true"
     );
 }
 

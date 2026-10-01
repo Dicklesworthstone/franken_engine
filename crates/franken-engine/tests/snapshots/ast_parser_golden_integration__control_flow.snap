@@ -193,12 +193,12 @@ expression: scrubbed_actual
             "operator": "Subtract",
             "left": {
               "Assignment": {
-                "operator": "AddAssign",
+                "operator": "SubtractAssign",
                 "left": {
                   "Identifier": "i"
                 },
                 "right": {
-                  "NumericLiteral": 1
+                  "NumericLiteral": -1
                 },
                 "assignment_strictness": "sloppy"
               }

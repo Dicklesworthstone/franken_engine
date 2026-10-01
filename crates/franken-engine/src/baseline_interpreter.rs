@@ -3211,6 +3211,14 @@ pub enum BuiltinFunctionKind {
     UrlSearchParamsDelete,
     UrlSearchParamsSet,
     UrlSearchParamsToString,
+    /// bd-9vouw.126: URLSearchParams.prototype.keys/values/entries (and
+    /// @@iterator, which is entries): iterators over the pairs present at
+    /// the call.
+    UrlSearchParamsKeys,
+    UrlSearchParamsValues,
+    UrlSearchParamsEntries,
+    /// URLSearchParams.prototype.forEach(callback, thisArg).
+    UrlSearchParamsForEach,
     /// `cluster.setupPrimary` / legacy `setupMaster`: merge own enumerable
     /// option fields into the authenticated live settings object (bd-9p2v3).
     /// Cluster variants stay at the true enum tail because the discriminant
@@ -4927,6 +4935,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::UrlSearchParamsDelete => "delete",
             BuiltinFunctionKind::UrlSearchParamsSet => "set",
             BuiltinFunctionKind::UrlSearchParamsToString => "toString",
+            BuiltinFunctionKind::UrlSearchParamsKeys => "keys",
+            BuiltinFunctionKind::UrlSearchParamsValues => "values",
+            BuiltinFunctionKind::UrlSearchParamsEntries => "entries",
+            BuiltinFunctionKind::UrlSearchParamsForEach => "forEach",
             BuiltinFunctionKind::NetServerListen => "listen",
             BuiltinFunctionKind::NetServerAddress => "address",
             BuiltinFunctionKind::NetServerClose => "close",
@@ -38328,6 +38340,14 @@ impl InterpreterCore {
                 args,
             ),
             BuiltinFunctionKind::BoundFunction => self.invoke_bound_function(module, builtin, args),
+            BuiltinFunctionKind::UrlSearchParamsKeys
+            | BuiltinFunctionKind::UrlSearchParamsValues
+            | BuiltinFunctionKind::UrlSearchParamsEntries => {
+                self.url_search_params_iterator(builtin.kind, receiver)
+            }
+            BuiltinFunctionKind::UrlSearchParamsForEach => {
+                self.url_search_params_for_each(module, receiver, args)
+            }
             BuiltinFunctionKind::MapForEach | BuiltinFunctionKind::SetForEach => self
                 .collection_for_each(
                     module,
@@ -56683,6 +56703,14 @@ impl InterpreterCore {
                     return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(kind)));
                 }
             }
+            // URLSearchParams.prototype[@@iterator] is its entries (bd-9vouw.126).
+            if self.url_search_params.contains_key(&object_id)
+                || self.chain_reaches_canonical_prototype(object_id, "URLSearchParams")
+            {
+                return Ok(Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::UrlSearchParamsEntries,
+                )));
+            }
         }
         // RegExp.prototype's symbol-keyed methods (ES2020 21.2.5.6-11), once
         // own and inherited properties have had their chance to shadow them.
@@ -57124,6 +57152,18 @@ impl InterpreterCore {
             )),
             ("URLSearchParams", "toString") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::UrlSearchParamsToString,
+            )),
+            ("URLSearchParams", "keys") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsKeys,
+            )),
+            ("URLSearchParams", "values") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsValues,
+            )),
+            ("URLSearchParams", "entries") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsEntries,
+            )),
+            ("URLSearchParams", "forEach") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::UrlSearchParamsForEach,
             )),
             ("FsStats", "isFile") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::FsStatsIsFile,
@@ -68128,6 +68168,86 @@ impl InterpreterCore {
             )?;
         }
         self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(Value::Undefined)
+    }
+
+    /// URLSearchParams.prototype.keys/values/entries (bd-9vouw.126): an
+    /// iterator over the pairs present at the call, `[name, value]` arrays
+    /// for entries. The values carry the params' lifecycle label.
+    fn url_search_params_iterator(
+        &mut self,
+        kind: BuiltinFunctionKind,
+        receiver: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let method = match kind {
+            BuiltinFunctionKind::UrlSearchParamsKeys => "keys",
+            BuiltinFunctionKind::UrlSearchParamsValues => "values",
+            _ => "entries",
+        };
+        let object_id = self.url_search_params_receiver_id(receiver, method)?;
+        let state = &self.url_search_params[&object_id];
+        self.check_temporary_memory_budget(
+            Self::estimate_url_search_params_state_bytes(state).saturating_mul(2),
+        )?;
+        let (pairs, label) = (state.pairs.clone(), state.lifecycle_label.clone());
+        let mut projected = Vec::with_capacity(pairs.len());
+        for (name, value) in pairs {
+            projected.push(match kind {
+                BuiltinFunctionKind::UrlSearchParamsKeys => Value::str(name),
+                BuiltinFunctionKind::UrlSearchParamsValues => Value::str(value),
+                _ => Value::Object(
+                    self.alloc_array_from_values(&[Value::str(name), Value::str(value)])?,
+                ),
+            });
+        }
+        let array = self.alloc_array_from_values(&projected)?;
+        self.join_object_mutation_label(array, &label)?;
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+    }
+
+    /// URLSearchParams.prototype.forEach(callback, thisArg): calls
+    /// `callback(value, name, params)` for each pair, reading the list live
+    /// by index as Node does, so pairs a callback appends are visited.
+    fn url_search_params_for_each(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Option<Value>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let params = receiver.clone().unwrap_or(Value::Undefined);
+        let object_id = self.url_search_params_receiver_id(receiver, "forEach")?;
+        let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable URLSearchParams.prototype.forEach callback".to_string(),
+                got: callback.type_name().to_string(),
+            });
+        }
+        let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let mut index = 0;
+        while let Some((name, value, params_label)) =
+            self.url_search_params.get(&object_id).and_then(|state| {
+                let (name, value) = state.pairs.get(index)?.clone();
+                Some((name, value, state.lifecycle_label.clone()))
+            })
+        {
+            let label = self.join_arg_range_label(args)?.join(&params_label);
+            self.preflight_inline_method_call_with_argument_label(
+                Some(module),
+                &callback,
+                3,
+                Some(&label),
+            )?;
+            self.invoke_inline_method_call_with_argument_label_preflighted(
+                Some(module),
+                callback.clone(),
+                this_arg.clone(),
+                vec![Value::str(value), Value::str(name), params.clone()],
+                Some(label),
+            )?;
+            index += 1;
+        }
         Ok(Value::Undefined)
     }
 

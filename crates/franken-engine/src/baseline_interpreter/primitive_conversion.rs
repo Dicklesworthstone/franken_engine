@@ -19,6 +19,57 @@ pub(super) enum PrimitiveConversion {
 }
 
 impl InterpreterCore {
+    /// bd-9vouw.117: a builtin's numeric argument (a position, a count, a
+    /// radix, digits) after ToPrimitive with hint "number": an object's
+    /// @@toPrimitive, valueOf or toString runs, as ToNumber requires (ES2020
+    /// 7.1.4), and a Symbol or BigInt is a TypeError. A primitive comes back
+    /// unchanged, so the callers' own integer conversion is what it was.
+    pub(super) fn builtin_number_arg(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        index: u32,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(value) = self.builtin_arg(args, index)? else {
+            return Ok(None);
+        };
+        let primitive = if value.is_object_like() {
+            self.coerce_runtime_primitive_with_hint(Some(module), value, "number")?
+        } else {
+            value
+        };
+        if matches!(primitive, Value::Symbol(_) | Value::BigInt(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: "value convertible to a number".to_string(),
+                got: primitive.type_name().to_string(),
+            });
+        }
+        Ok(Some(primitive))
+    }
+
+    /// bd-9vouw.117: a builtin's string argument (a search string, a fill
+    /// string) after ToPrimitive with hint "string": an object's toString
+    /// runs, and a Symbol is a TypeError (ES2020 7.1.12 ToString).
+    pub(super) fn builtin_string_arg(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        index: u32,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(value) = self.builtin_arg(args, index)? else {
+            return Ok(None);
+        };
+        let primitive = if value.is_object_like() {
+            self.coerce_runtime_primitive_with_hint(Some(module), value, "string")?
+        } else {
+            value
+        };
+        if matches!(primitive, Value::Symbol(_)) {
+            return Err(Self::symbol_to_string_error());
+        }
+        Ok(Some(primitive))
+    }
+
     pub(super) fn primitive_conversion_builtin(
         &mut self,
         module: Option<&Ir3Module>,

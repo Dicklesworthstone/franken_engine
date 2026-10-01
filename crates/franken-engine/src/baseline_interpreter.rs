@@ -38584,7 +38584,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::NumberToPrecision | BuiltinFunctionKind::NumberToExponential => {
                 let exponential = builtin.kind == BuiltinFunctionKind::NumberToExponential;
                 let number = self.this_number_value(&receiver.unwrap_or(Value::Undefined))?;
-                let argument = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let argument = self.builtin_number_arg(module, args, 0)?.unwrap_or(Value::Undefined);
                 // toPrecision(undefined) is ToString(x); toExponential(undefined)
                 // uses as many digits as needed to represent x uniquely.
                 let digits = (!matches!(argument, Value::Undefined))
@@ -38759,7 +38759,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringCodePointAt => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_code_point_at_impl(&value, args)
+                self.string_code_point_at_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringLocaleCompare => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -38774,17 +38774,17 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringIncludes => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_includes_impl(&value, args)
+                self.string_includes_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringStartsWith => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_starts_with_impl(&value, args)
+                self.string_starts_with_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringEndsWith => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_ends_with_impl(&value, args)
+                self.string_ends_with_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringSplit => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -38802,27 +38802,27 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringIndexOf => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_index_of_impl(&value, args)
+                self.string_index_of_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringLastIndexOf => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_last_index_of_impl(&value, args)
+                self.string_last_index_of_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringSlice => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_slice_impl(&value, args)
+                self.string_slice_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringSubstring => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_substring_impl(&value, args)
+                self.string_substring_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringSubstr => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_substr_impl(&value, args)
+                self.string_substr_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringReplace => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -38880,17 +38880,17 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringRepeat => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_repeat_impl(&value, args)
+                self.string_repeat_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringPadStart => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_pad_start_impl(&value, args)
+                self.string_pad_start_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringPadEnd => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
-                self.string_pad_end_impl(&value, args)
+                self.string_pad_end_impl(module, &value, args)
             }
             BuiltinFunctionKind::NumberToFixed => {
                 // ES2020 20.1.3.3: fixed-point notation with `digits` fraction
@@ -38900,7 +38900,7 @@ impl InterpreterCore {
                 // `(1).toFixed(-1)` returned "1". (bd-i08nh, bd-cxmtb)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let num = self.this_number_value(&receiver)?;
-                let digits = match self.builtin_arg(args, 0)? {
+                let digits = match self.builtin_number_arg(module, args, 0)? {
                     Some(arg) => Self::value_as_integer(&arg),
                     None => 0,
                 };
@@ -38928,7 +38928,7 @@ impl InterpreterCore {
                 // (`Number.prototype.toString.call('x')`), not NaN.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let num = self.this_number_value(&receiver)?;
-                let radix = match self.builtin_arg(args, 0)? {
+                let radix = match self.builtin_number_arg(module, args, 0)? {
                     Some(Value::Undefined) | None => 10,
                     Some(arg) => Self::value_as_integer(&arg),
                 };
@@ -39339,7 +39339,7 @@ impl InterpreterCore {
                 };
                 let len = self.array_like_length(arr_id)?;
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let from = match self.builtin_arg(args, 1)? {
+                let from = match self.builtin_number_arg(module, args, 1)? {
                     Some(value) => {
                         Self::require_number_coercible_index(&value, "Array.prototype.indexOf")?;
                         Self::clamp_relative_index(Self::value_as_integer(&value), len)
@@ -39373,7 +39373,7 @@ impl InterpreterCore {
                 };
                 let len = self.array_like_length(arr_id)?;
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let from = match self.builtin_arg(args, 1)? {
+                let from = match self.builtin_number_arg(module, args, 1)? {
                     Some(value) => {
                         Self::require_number_coercible_index(&value, "Array.prototype.includes")?;
                         Self::clamp_relative_index(Self::value_as_integer(&value), len)
@@ -39432,11 +39432,11 @@ impl InterpreterCore {
                 };
                 let len = self.array_like_length(arr_id)?;
                 let fill_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let start = match self.builtin_arg(args, 1)? {
+                let start = match self.builtin_number_arg(module, args, 1)? {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => 0,
                 };
-                let end = match self.builtin_arg(args, 2)? {
+                let end = match self.builtin_number_arg(module, args, 2)? {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => len,
                 };
@@ -39461,7 +39461,7 @@ impl InterpreterCore {
                     });
                 };
                 let len = self.array_like_length(arr_id)? as i64;
-                let raw = match self.builtin_arg(args, 0)? {
+                let raw = match self.builtin_number_arg(module, args, 0)? {
                     Some(value) => Self::value_as_integer(&value),
                     None => 0,
                 };
@@ -39486,7 +39486,7 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let depth = match self.builtin_arg(args, 0)? {
+                let depth = match self.builtin_number_arg(module, args, 0)? {
                     None | Some(Value::Undefined) => 1,
                     Some(value) => Self::value_as_integer(&value).max(0),
                 };
@@ -39823,15 +39823,15 @@ impl InterpreterCore {
                     });
                 };
                 let len = self.array_like_length(arr_id)?;
-                let target = match self.builtin_arg(args, 0)? {
+                let target = match self.builtin_number_arg(module, args, 0)? {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => 0,
                 };
-                let start = match self.builtin_arg(args, 1)? {
+                let start = match self.builtin_number_arg(module, args, 1)? {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => 0,
                 };
-                let end = match self.builtin_arg(args, 2)? {
+                let end = match self.builtin_number_arg(module, args, 2)? {
                     None | Some(Value::Undefined) => len,
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
@@ -40017,11 +40017,11 @@ impl InterpreterCore {
                     });
                 };
                 let len = self.array_like_length(arr_id)?;
-                let start = match self.builtin_arg(args, 0)? {
+                let start = match self.builtin_number_arg(module, args, 0)? {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => 0,
                 };
-                let end = match self.builtin_arg(args, 1)? {
+                let end = match self.builtin_number_arg(module, args, 1)? {
                     None | Some(Value::Undefined) => len,
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
@@ -40059,7 +40059,7 @@ impl InterpreterCore {
                 };
                 let len = i64::try_from(self.array_like_length(arr_id)?).unwrap_or(i64::MAX);
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let start = match self.builtin_arg(args, 1)? {
+                let start = match self.builtin_number_arg(module, args, 1)? {
                     Some(value) => {
                         Self::require_number_coercible_index(
                             &value,
@@ -40099,11 +40099,11 @@ impl InterpreterCore {
                     });
                 };
                 let len = self.array_like_length(arr_id)?;
-                let start = match self.builtin_arg(args, 0)? {
+                let start = match self.builtin_number_arg(module, args, 0)? {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => 0,
                 };
-                let delete_count = match self.builtin_arg(args, 1)? {
+                let delete_count = match self.builtin_number_arg(module, args, 1)? {
                     None => len - start,
                     Some(value) => {
                         let raw = Self::value_as_integer(&value);
@@ -40251,7 +40251,7 @@ impl InterpreterCore {
                 };
                 let len = self.array_like_length(arr_id)?;
                 let relative =
-                    Self::value_as_integer(&self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined));
+                    Self::value_as_integer(&self.builtin_number_arg(module, args, 0)?.unwrap_or(Value::Undefined));
                 let actual = if relative < 0 {
                     relative + len as i64
                 } else {
@@ -40295,11 +40295,11 @@ impl InterpreterCore {
                     });
                 };
                 let len = self.array_like_length(arr_id)?;
-                let start = match self.builtin_arg(args, 0)? {
+                let start = match self.builtin_number_arg(module, args, 0)? {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => 0,
                 };
-                let delete_count = match self.builtin_arg(args, 1)? {
+                let delete_count = match self.builtin_number_arg(module, args, 1)? {
                     None => len - start,
                     Some(value) => {
                         let raw = Self::value_as_integer(&value);
@@ -41797,7 +41797,7 @@ impl InterpreterCore {
                         got: receiver.as_ref().map_or("undefined", Value::type_name).to_string(),
                     });
                 };
-                let radix = match self.builtin_arg(args, 0)? {
+                let radix = match self.builtin_number_arg(module, args, 0)? {
                     Some(Value::Undefined) | None => 10,
                     Some(arg) => Self::value_as_integer(&arg),
                 };
@@ -54506,21 +54506,36 @@ impl InterpreterCore {
     #[allow(clippy::type_complexity)]
     fn string_intrinsic_impl_binding(
         impl_fn: &str,
-    ) -> Option<fn(&mut Self, &JsString, RegRange) -> Result<Value, InterpreterError>> {
+    ) -> Option<fn(&mut Self, &Ir3Module, &JsString, RegRange) -> Result<Value, InterpreterError>>
+    {
         Some(match impl_fn {
-            "string_char_at_impl" => Self::string_char_at_impl,
-            "string_char_code_at_impl" => Self::string_char_code_at_impl,
-            "string_at_impl" => Self::string_at_impl,
-            "string_to_upper_case_impl" => Self::string_to_upper_case_impl,
-            "string_to_lower_case_impl" => Self::string_to_lower_case_impl,
-            "string_trim_impl" => Self::string_trim_impl,
-            "string_trim_start_impl" => Self::string_trim_start_impl,
-            "string_trim_end_impl" => Self::string_trim_end_impl,
-            "string_replace_all_impl" => Self::string_replace_all_impl,
+            "string_char_at_impl" => |core, _, value, args| core.string_char_at_impl(value, args),
+            "string_char_code_at_impl" => {
+                |core, _, value, args| core.string_char_code_at_impl(value, args)
+            }
+            "string_at_impl" => |core, _, value, args| core.string_at_impl(value, args),
+            "string_to_upper_case_impl" => {
+                |core, _, value, args| core.string_to_upper_case_impl(value, args)
+            }
+            "string_to_lower_case_impl" => {
+                |core, _, value, args| core.string_to_lower_case_impl(value, args)
+            }
+            "string_trim_impl" => |core, _, value, args| core.string_trim_impl(value, args),
+            "string_trim_start_impl" => {
+                |core, _, value, args| core.string_trim_start_impl(value, args)
+            }
+            "string_trim_end_impl" => |core, _, value, args| core.string_trim_end_impl(value, args),
+            "string_replace_all_impl" => {
+                |core, _, value, args| core.string_replace_all_impl(value, args)
+            }
             "string_code_point_at_impl" => Self::string_code_point_at_impl,
-            "string_locale_compare_impl" => Self::string_locale_compare_impl,
-            "string_normalize_impl" => Self::string_normalize_impl,
-            "string_split_impl" => Self::string_split_impl,
+            "string_locale_compare_impl" => {
+                |core, _, value, args| core.string_locale_compare_impl(value, args)
+            }
+            "string_normalize_impl" => {
+                |core, _, value, args| core.string_normalize_impl(value, args)
+            }
+            "string_split_impl" => |core, _, value, args| core.string_split_impl(value, args),
             "string_includes_impl" => Self::string_includes_impl,
             "string_starts_with_impl" => Self::string_starts_with_impl,
             "string_ends_with_impl" => Self::string_ends_with_impl,
@@ -54528,9 +54543,9 @@ impl InterpreterCore {
             "string_last_index_of_impl" => Self::string_last_index_of_impl,
             "string_slice_impl" => Self::string_slice_impl,
             "string_substring_impl" => Self::string_substring_impl,
-            "string_replace_impl" => Self::string_replace_impl,
-            "string_match_impl" => Self::string_match_impl,
-            "string_search_impl" => Self::string_search_impl,
+            "string_replace_impl" => |core, _, value, args| core.string_replace_impl(value, args),
+            "string_match_impl" => |core, _, value, args| core.string_match_impl(value, args),
+            "string_search_impl" => |core, _, value, args| core.string_search_impl(value, args),
             "string_repeat_impl" => Self::string_repeat_impl,
             "string_pad_start_impl" => Self::string_pad_start_impl,
             "string_pad_end_impl" => Self::string_pad_end_impl,
@@ -54550,6 +54565,7 @@ impl InterpreterCore {
     #[allow(dead_code)] // production caller lands at the family flip (E4 step 5)
     fn dispatch_string_intrinsic(
         &mut self,
+        module: &Ir3Module,
         method_key: &str,
         receiver: Value,
         args: RegRange,
@@ -54577,7 +54593,7 @@ impl InterpreterCore {
             // generated by this seam.
             _ => return None,
         };
-        Some(impl_fn(self, &coerced, args))
+        Some(impl_fn(self, module, &coerced, args))
     }
 
     /// Uniform per-row IFC result-label policy evaluator (E4.T4, `bd-fqlfw.4.4`).
@@ -54633,6 +54649,7 @@ impl InterpreterCore {
     #[allow(dead_code)] // production caller lands at the family flip (E4 step 5)
     fn dispatch_string_intrinsic_to_reg(
         &mut self,
+        module: &Ir3Module,
         method_key: &str,
         receiver_reg: u32,
         args: RegRange,
@@ -54651,7 +54668,7 @@ impl InterpreterCore {
             Ok(label) => label.clone(),
             Err(error) => return Some(Err(error)),
         };
-        let value = match self.dispatch_string_intrinsic(method_key, receiver, args)? {
+        let value = match self.dispatch_string_intrinsic(module, method_key, receiver, args)? {
             Ok(value) => value,
             Err(error) => return Some(Err(error)),
         };
@@ -54796,6 +54813,7 @@ impl InterpreterCore {
 
     fn string_code_point_at_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -54804,7 +54822,7 @@ impl InterpreterCore {
         // supplementary code point, an unpaired surrogate yields its own
         // unit value, and out-of-range / negative => `undefined`.
         // (bd-rdnhc; previously Unicode-scalar indexed.)
-        let index = match self.builtin_arg(args, 0)? {
+        let index = match self.builtin_number_arg(module, args, 0)? {
             Some(arg) => Self::value_as_integer(&arg),
             None => 0,
         };
@@ -55024,6 +55042,7 @@ impl InterpreterCore {
 
     fn string_includes_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -55032,9 +55051,9 @@ impl InterpreterCore {
         // the search runs over exact code units, so lone surrogates match
         // exactly and a position inside a surrogate pair is a legal offset
         // (bd-rdnhc; previously scalar-indexed over the projection).
-        let search = self.builtin_search_js_string(args, 0)?;
+        let search = self.builtin_search_js_string(module, args, 0)?;
         let unit_len = this_str.utf16_len();
-        let from = match self.builtin_arg(args, 1)? {
+        let from = match self.builtin_number_arg(module, args, 1)? {
             Some(arg) => Self::value_as_integer(&arg).clamp(0, unit_len as i64) as usize,
             None => 0,
         };
@@ -55045,15 +55064,16 @@ impl InterpreterCore {
 
     fn string_starts_with_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.20: prefix test at an optional position, over exact
         // UTF-16 code units (bd-9a8cz.1, bd-rdnhc).
-        let search = self.builtin_search_js_string(args, 0)?;
+        let search = self.builtin_search_js_string(module, args, 0)?;
         let units = this_str.code_units_vec();
         let needle = search.code_units_vec();
-        let from = match self.builtin_arg(args, 1)? {
+        let from = match self.builtin_number_arg(module, args, 1)? {
             Some(arg) => Self::value_as_integer(&arg).clamp(0, units.len() as i64) as usize,
             None => 0,
         };
@@ -55062,16 +55082,17 @@ impl InterpreterCore {
 
     fn string_ends_with_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.6: suffix test against the prefix of code-unit
         // length `endPosition` (default = full length) (bd-9a8cz.1,
         // bd-rdnhc).
-        let search = self.builtin_search_js_string(args, 0)?;
+        let search = self.builtin_search_js_string(module, args, 0)?;
         let units = this_str.code_units_vec();
         let needle = search.code_units_vec();
-        let end = match self.builtin_arg(args, 1)? {
+        let end = match self.builtin_number_arg(module, args, 1)? {
             Some(Value::Undefined) | None => units.len(),
             Some(arg) => Self::value_as_integer(&arg).clamp(0, units.len() as i64) as usize,
         };
@@ -55080,6 +55101,7 @@ impl InterpreterCore {
 
     fn string_index_of_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -55087,9 +55109,9 @@ impl InterpreterCore {
         // an optional start position, else -1 (bd-9a8cz.1, bd-rdnhc; the
         // returned index now composes with the code-unit-indexed
         // charAt/charCodeAt/at rather than scalar offsets).
-        let search = self.builtin_search_js_string(args, 0)?;
+        let search = self.builtin_search_js_string(module, args, 0)?;
         let unit_len = this_str.utf16_len();
-        let from = match self.builtin_arg(args, 1)? {
+        let from = match self.builtin_number_arg(module, args, 1)? {
             Some(arg) => Self::value_as_integer(&arg).clamp(0, unit_len as i64) as usize,
             None => 0,
         };
@@ -55102,16 +55124,19 @@ impl InterpreterCore {
 
     fn string_last_index_of_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.9: highest UTF-16 code-unit start index of `search`
         // at/before an optional position (default = end of string), else -1
         // (bd-9a8cz.1, bd-rdnhc).
-        let search = self.builtin_search_js_string(args, 0)?;
+        let search = self.builtin_search_js_string(module, args, 0)?;
         let unit_len = this_str.utf16_len();
-        let from = match self.builtin_arg(args, 1)? {
+        let from = match self.builtin_number_arg(module, args, 1)? {
             Some(Value::Undefined) | None => unit_len,
+            // A NaN position (`'x'.lastIndexOf('x', 'a')`) searches from the end.
+            Some(arg) if Self::coerce_to_float(&arg).is_none_or(f64::is_nan) => unit_len,
             Some(arg) => Self::value_as_integer(&arg).clamp(0, unit_len as i64) as usize,
         };
         Ok(Value::Int(
@@ -55123,6 +55148,7 @@ impl InterpreterCore {
 
     fn string_slice_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -55140,11 +55166,11 @@ impl InterpreterCore {
                 n.min(len)
             }
         };
-        let start = match self.builtin_arg(args, 0)? {
+        let start = match self.builtin_number_arg(module, args, 0)? {
             Some(Value::Undefined) | None => 0,
             Some(arg) => normalize(Self::value_as_integer(&arg)),
         };
-        let end = match self.builtin_arg(args, 1)? {
+        let end = match self.builtin_number_arg(module, args, 1)? {
             Some(Value::Undefined) | None => len,
             Some(arg) => normalize(Self::value_as_integer(&arg)),
         };
@@ -55158,6 +55184,7 @@ impl InterpreterCore {
 
     fn string_substring_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -55168,11 +55195,11 @@ impl InterpreterCore {
         let units = this_str.code_units_vec();
         let len = units.len() as i64;
         let clamp_idx = |n: i64| -> i64 { n.clamp(0, len) };
-        let start = match self.builtin_arg(args, 0)? {
+        let start = match self.builtin_number_arg(module, args, 0)? {
             Some(Value::Undefined) | None => 0,
             Some(arg) => clamp_idx(Self::value_as_integer(&arg)),
         };
-        let end = match self.builtin_arg(args, 1)? {
+        let end = match self.builtin_number_arg(module, args, 1)? {
             Some(Value::Undefined) | None => len,
             Some(arg) => clamp_idx(Self::value_as_integer(&arg)),
         };
@@ -55188,6 +55215,7 @@ impl InterpreterCore {
 
     fn string_substr_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -55201,11 +55229,11 @@ impl InterpreterCore {
         // over exact units (bd-fqlfw.2.11.2, bd-3kvat; previously scalar).
         let units = this_str.code_units_vec();
         let size = units.len() as i64;
-        let int_start = match self.builtin_arg(args, 0)? {
+        let int_start = match self.builtin_number_arg(module, args, 0)? {
             Some(Value::Undefined) | None => 0,
             Some(arg) => Self::value_as_integer(&arg),
         };
-        let int_length = match self.builtin_arg(args, 1)? {
+        let int_length = match self.builtin_number_arg(module, args, 1)? {
             Some(Value::Undefined) | None => size,
             Some(arg) => Self::value_as_integer(&arg),
         };
@@ -55283,6 +55311,7 @@ impl InterpreterCore {
 
     fn string_repeat_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
@@ -55293,7 +55322,7 @@ impl InterpreterCore {
         // length". (bd-9a8cz.1, bd-8tsdh) This path previously clamped a negative
         // count to 0 (returning "") and reported the size guard as a TypeError,
         // both of which diverged from the spec and from the stdlib path.
-        let count_int = match self.builtin_arg(args, 0)? {
+        let count_int = match self.builtin_number_arg(module, args, 0)? {
             Some(arg) => Self::value_as_integer(&arg),
             None => 0,
         };
@@ -55314,22 +55343,28 @@ impl InterpreterCore {
 
     fn string_pad_start_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.14: left-pad to `targetLength` (UTF-16 code-unit
         // count) with `padString` (default " "). (bd-9a8cz.1, bd-3kvat)
-        Ok(Value::Str(self.string_pad_value(this_str, args, true)?))
+        Ok(Value::Str(
+            self.string_pad_value(module, this_str, args, true)?,
+        ))
     }
 
     fn string_pad_end_impl(
         &mut self,
+        module: &Ir3Module,
         this_str: &JsString,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.13: right-pad to `targetLength` (UTF-16 code-unit
         // count) with `padString` (default " "). (bd-9a8cz.1, bd-3kvat)
-        Ok(Value::Str(self.string_pad_value(this_str, args, false)?))
+        Ok(Value::Str(
+            self.string_pad_value(module, this_str, args, false)?,
+        ))
     }
 
     fn string_property_value(receiver: &JsString, key: &str) -> Value {
@@ -66923,7 +66958,8 @@ impl InterpreterCore {
     /// `value` unchanged when it is already at least `target_length` long or
     /// the pad string is empty (per ES2020 21.1.3.13/21.1.3.14).
     fn string_pad_value(
-        &self,
+        &mut self,
+        module: &Ir3Module,
         value: &JsString,
         args: RegRange,
         pad_start: bool,
@@ -66934,11 +66970,11 @@ impl InterpreterCore {
         // previously scalar-counted over the projection).
         let units = value.code_units_vec();
         let cur_len = units.len();
-        let target = match self.builtin_arg(args, 0)? {
+        let target = match self.builtin_number_arg(module, args, 0)? {
             Some(arg) => Self::value_as_integer(&arg).max(0) as usize,
             None => 0,
         };
-        let pad = match self.builtin_arg(args, 1)? {
+        let pad = match self.builtin_string_arg(module, args, 1)? {
             Some(Value::Undefined) | None => JsString::from(" "),
             Some(Value::Str(s)) => s,
             Some(Value::Symbol(_)) => return Err(Self::symbol_to_string_error()),
@@ -87599,10 +87635,13 @@ impl InterpreterCore {
     /// `"undefined"` per ToString(undefined). (bd-rdnhc)
     fn builtin_search_js_string(
         &mut self,
+        module: &Ir3Module,
         args: RegRange,
         index: u32,
     ) -> Result<JsString, InterpreterError> {
-        Ok(match self.builtin_arg(args, index)? {
+        // bd-9vouw.117: an object argument converts through its own
+        // toString/valueOf (`'abc'.indexOf({ toString() { return 'b' } })`).
+        Ok(match self.builtin_string_arg(module, args, index)? {
             Some(Value::Str(s)) => s,
             // ES2020 7.1.12 ToString: a Symbol throws (`'a'.endsWith(Symbol())`).
             Some(Value::Symbol(_)) => return Err(Self::symbol_to_string_error()),
@@ -151951,7 +151990,7 @@ mod string_intrinsic_table_parity_tests {
         args: &[Value],
     ) -> Result<Value, InterpreterError> {
         let range = load_args(core, args);
-        core.dispatch_string_intrinsic(method_key, receiver.clone(), range)
+        core.dispatch_string_intrinsic(&halted_module(), method_key, receiver.clone(), range)
             .unwrap_or_else(|| {
                 panic!("String.prototype.{method_key} must be served by the generated path")
             })
@@ -152064,8 +152103,13 @@ mod string_intrinsic_table_parity_tests {
         let mut core = parity_test_core();
         let range = load_args(&mut core, &[]);
         assert!(
-            core.dispatch_string_intrinsic("noSuchMethod", Value::str("abc"), range)
-                .is_none(),
+            core.dispatch_string_intrinsic(
+                &halted_module(),
+                "noSuchMethod",
+                Value::str("abc"),
+                range
+            )
+            .is_none(),
             "unknown method names must fall back to the legacy seam"
         );
     }
@@ -152321,7 +152365,7 @@ mod string_intrinsic_table_parity_tests {
         });
         core.set_register_label(0, Label::Secret).unwrap();
         let args = RegRange { start: 1, count: 0 };
-        core.dispatch_string_intrinsic_to_reg("trim", 0, args, 2)
+        core.dispatch_string_intrinsic_to_reg(&halted_module(), "trim", 0, args, 2)
             .expect("trim is a generated row of the String family")
             .expect("trim dispatch succeeds");
         assert_eq!(core.read_reg(2).unwrap(), Value::str("classified"));
@@ -152343,7 +152387,7 @@ mod string_intrinsic_table_parity_tests {
         });
         core.set_register_label(1, Label::Confidential).unwrap();
         let args = RegRange { start: 1, count: 1 };
-        core.dispatch_string_intrinsic_to_reg("charAt", 0, args, 3)
+        core.dispatch_string_intrinsic_to_reg(&halted_module(), "charAt", 0, args, 3)
             .expect("charAt is a generated row of the String family")
             .expect("charAt dispatch succeeds");
         assert_eq!(core.read_reg(3).unwrap(), Value::str("c"));
@@ -152366,7 +152410,7 @@ mod string_intrinsic_table_parity_tests {
         core.set_register_label(0, Label::Secret).unwrap();
         core.set_register_label(1, Label::Internal).unwrap();
         let args = RegRange { start: 1, count: 1 };
-        core.dispatch_string_intrinsic_to_reg("indexOf", 0, args, 3)
+        core.dispatch_string_intrinsic_to_reg(&halted_module(), "indexOf", 0, args, 3)
             .expect("indexOf is a generated row of the String family")
             .expect("indexOf dispatch succeeds");
         assert_eq!(core.read_reg(3).unwrap(), Value::Int(11));
@@ -152389,7 +152433,7 @@ mod string_intrinsic_table_parity_tests {
         });
         core.set_register_label(2, Label::Secret).unwrap();
         let args = RegRange { start: 1, count: 0 };
-        core.dispatch_string_intrinsic_to_reg("trim", 0, args, 2)
+        core.dispatch_string_intrinsic_to_reg(&halted_module(), "trim", 0, args, 2)
             .expect("trim is a generated row of the String family")
             .expect("trim dispatch succeeds");
         assert_eq!(core.read_reg(2).unwrap(), Value::str("public"));
@@ -152412,7 +152456,7 @@ mod string_intrinsic_table_parity_tests {
         core.set_register_label(2, Label::Internal).unwrap();
         let args = RegRange { start: 1, count: 0 };
         let outcome = core
-            .dispatch_string_intrinsic_to_reg("trim", 0, args, 2)
+            .dispatch_string_intrinsic_to_reg(&halted_module(), "trim", 0, args, 2)
             .expect("trim is a generated row of the String family");
         assert!(outcome.is_err(), "null receiver must TypeError");
         assert_eq!(core.read_reg(2).unwrap(), Value::Int(7));
@@ -152430,7 +152474,7 @@ mod string_intrinsic_table_parity_tests {
         core.set_register_label(2, Label::Confidential).unwrap();
         let args = RegRange { start: 1, count: 0 };
         assert!(
-            core.dispatch_string_intrinsic_to_reg("noSuchMethod", 0, args, 2)
+            core.dispatch_string_intrinsic_to_reg(&halted_module(), "noSuchMethod", 0, args, 2)
                 .is_none(),
             "unknown method names must fall back to the legacy seam"
         );

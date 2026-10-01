@@ -592,6 +592,7 @@ impl GcMarker {
                     next_index: _,
                     array,
                     typed_array,
+                    collection,
                     iterator_receiver,
                     next_method,
                     timers_interval,
@@ -603,6 +604,10 @@ impl GcMarker {
                 values.iter().for_each(|value| self.value(value));
                 if let Some(array) = array {
                     self.object(array.object_id);
+                }
+                if let Some(collection) = collection {
+                    self.object(collection.collection);
+                    self.object(collection.storage);
                 }
                 if let Some(typed_array) = typed_array {
                     self.object(typed_array.view.buffer);

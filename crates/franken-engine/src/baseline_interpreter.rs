@@ -8242,6 +8242,8 @@ struct RuntimeForOfState {
     /// Typed-array iterators are lazy. Eagerly materializing one `Value` per
     /// byte amplified a bounded Buffer into an unmetered host allocation.
     typed_array: Option<RuntimeTypedArrayIterator>,
+    /// Map and Set iterators read the live entry list (bd-9vouw.131).
+    collection: Option<RuntimeCollectionIterator>,
     iterator_receiver: Option<Value>,
     next_method: Option<Value>,
     /// bd-suwvw: a `require('timers/promises').setInterval` iterable —
@@ -8260,6 +8262,7 @@ struct RuntimeForOfInit {
     values: Vec<Value>,
     array: Option<RuntimeArrayIterator>,
     typed_array: Option<RuntimeTypedArrayIterator>,
+    collection: Option<RuntimeCollectionIterator>,
     iterator_receiver: Option<Value>,
     next_method: Option<Value>,
     timers_interval: Option<(u64, Value)>,
@@ -8271,6 +8274,7 @@ impl RuntimeForOfInit {
             values,
             array: None,
             typed_array: None,
+            collection: None,
             iterator_receiver: None,
             next_method: None,
             timers_interval: None,
@@ -8289,12 +8293,22 @@ impl RuntimeForOfInit {
         }
     }
 
+    /// The live entries of a Map (`[key, value]` pairs) or Set (values),
+    /// as their @@iterator would step them (bd-9vouw.131).
+    fn from_collection(iterator: RuntimeCollectionIterator) -> Self {
+        Self {
+            collection: Some(iterator),
+            ..Self::from_values(Vec::new())
+        }
+    }
+
     #[cfg(test)]
     fn from_custom(iterator_object: ObjectId, next_method: Value) -> Self {
         Self {
             values: Vec::new(),
             array: None,
             typed_array: None,
+            collection: None,
             iterator_receiver: Some(Value::Object(iterator_object)),
             next_method: Some(next_method),
             timers_interval: None,
@@ -8306,6 +8320,7 @@ impl RuntimeForOfInit {
             values: Vec::new(),
             array: None,
             typed_array: None,
+            collection: None,
             iterator_receiver: Some(receiver),
             next_method: Some(next_method),
             timers_interval: None,
@@ -8327,6 +8342,7 @@ impl RuntimeForOfInit {
             values: Vec::new(),
             array: None,
             typed_array: None,
+            collection: None,
             iterator_receiver: None,
             next_method: None,
             timers_interval: Some((delay_ms, value)),
@@ -8351,6 +8367,20 @@ struct RuntimeTypedArrayIterator {
 struct RuntimeArrayIterator {
     object_id: ObjectId,
     // Arrays and typed arrays expose the same keys/values/entries projections.
+    kind: RuntimeTypedArrayIteratorKind,
+}
+
+/// A Map or Set iterator (ES2020 23.1.5, 23.2.5) over the live entry list of
+/// its collection's storage object (bd-9vouw.131): the state's `next_index`
+/// is a position in the storage's insertion order, which
+/// `collection_delete` and `collection_clear` move back for every live
+/// iterator registered in `collection_iterators`, so entries added while
+/// iterating are visited and deleted ones are not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeCollectionIterator {
+    collection: ObjectId,
+    storage: ObjectId,
+    is_map: bool,
     kind: RuntimeTypedArrayIteratorKind,
 }
 
@@ -13511,6 +13541,15 @@ pub struct InterpreterCore {
     temporarily_suspended_execution_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: ReclaimableTable<RuntimeIteratorState>,
+    /// The live Map/Set iterators (handles into `iterators`) of each
+    /// collection storage object, which `collection_delete` and
+    /// `collection_clear` move back (bd-9vouw.131). An exhausted iterator
+    /// leaves; a reclaimed or finished handle is pruned on the next visit.
+    collection_iterators: BTreeMap<ObjectId, BTreeSet<u32>>,
+    /// The (storage, next position) cursors of the Map/Set forEach calls in
+    /// progress, innermost last, moved back like `collection_iterators`
+    /// (bd-9vouw.131).
+    collection_for_each_cursors: Vec<(ObjectId, usize)>,
     /// Replay-visible iterator protocol traces keyed by runtime iterator state.
     iteration_traces: Vec<IterationTrace>,
     /// Lazily allocated prototype objects for constructor functions, keyed by
@@ -14749,6 +14788,8 @@ impl InterpreterCore {
             module_snapshot_in_flight_bytes: 0,
             temporarily_suspended_execution_bytes: 0,
             iterators: ReclaimableTable::new("iterator", Self::estimate_iterator_bytes),
+            collection_iterators: BTreeMap::new(),
+            collection_for_each_cursors: Vec::new(),
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
             builtin_function_backings: false,
@@ -53751,10 +53792,26 @@ impl InterpreterCore {
             return Ok(RuntimeForOfInit::from_timers_interval(delay_ms, value));
         }
 
-        if let Value::Object(object_id) = iterable
-            && let Some(values) = self.collection_iteration_values(*object_id)?
-        {
-            return Ok(RuntimeForOfInit::from_values(values));
+        // A Map's or Set's live entry list (bd-9vouw.131): entries added
+        // by the loop body are visited, deleted ones are not.
+        if let Value::Object(object_id) = iterable {
+            let collection =
+                if let Some(storage) = self.collection_storage_id(*object_id, "Map", "__entries") {
+                    Some((storage, true, RuntimeTypedArrayIteratorKind::Entries))
+                } else {
+                    self.collection_storage_id(*object_id, "Set", "__values")
+                        .map(|storage| (storage, false, RuntimeTypedArrayIteratorKind::Values))
+                };
+            if let Some((storage, is_map, kind)) = collection {
+                return Ok(RuntimeForOfInit::from_collection(
+                    RuntimeCollectionIterator {
+                        collection: *object_id,
+                        storage,
+                        is_map,
+                        kind,
+                    },
+                ));
+            }
         }
 
         if let Some(module) = module
@@ -54056,11 +54113,13 @@ impl InterpreterCore {
                 make_get_iterator_event(record_id, step_index, symbol_kind, iterable_ref)
             });
         }
+        let storage = init.collection.as_ref().map(|iterator| iterator.storage);
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: init.values,
             next_index: 0,
             array: init.array,
             typed_array: init.typed_array,
+            collection: init.collection,
             iterator_receiver: init.iterator_receiver,
             next_method: init.next_method,
             timers_interval: init.timers_interval,
@@ -54069,6 +54128,12 @@ impl InterpreterCore {
             return_called: false,
             trace_index,
         }))?;
+        if let Some(storage) = storage {
+            self.collection_iterators
+                .entry(storage)
+                .or_default()
+                .insert(handle);
+        }
         Ok(Value::Iterator(handle))
     }
 
@@ -54097,6 +54162,10 @@ impl InterpreterCore {
             },
             TypedArray {
                 iterator: RuntimeTypedArrayIterator,
+                index: usize,
+            },
+            Collection {
+                iterator: RuntimeCollectionIterator,
                 index: usize,
             },
             /// bd-suwvw: timers/promises interval tick — advance the virtual
@@ -54140,6 +54209,14 @@ impl InterpreterCore {
                     (
                         state.trace_index,
                         ForOfStep::Array {
+                            iterator,
+                            index: state.next_index,
+                        },
+                    )
+                } else if let Some(iterator) = state.collection.clone() {
+                    (
+                        state.trace_index,
+                        ForOfStep::Collection {
                             iterator,
                             index: state.next_index,
                         },
@@ -54243,6 +54320,54 @@ impl InterpreterCore {
                             element
                         }
                     }
+                };
+                self.record_iteration_next_result_impl(
+                    trace_index,
+                    Some(value.clone()),
+                    false,
+                    read_value,
+                );
+                return Ok(Some(value));
+            }
+            ForOfStep::Collection { iterator, index } => {
+                // The entry at `index` of the live insertion order; past its
+                // end the iterator is done for good, even if entries are
+                // added later (ES2020 23.1.5.2.1 step 12).
+                let Some((repr, stored)) = self.collection_entry_at(iterator.storage, index) else {
+                    if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                        state.done = true;
+                    }
+                    self.record_iteration_next_result_impl(trace_index, None, false, read_value);
+                    return Ok(None);
+                };
+                if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                    state.next_index = index.saturating_add(1);
+                }
+                if let Some(collection_label) = self
+                    .object_mutation_labels
+                    .get(&iterator.collection)
+                    .cloned()
+                {
+                    let label = self
+                        .pending_hostcall_result_label
+                        .as_ref()
+                        .unwrap_or(&Label::Public)
+                        .join(&collection_label);
+                    self.replace_pending_hostcall_result_label(Some(label))?;
+                }
+                let value = if iterator.is_map {
+                    let key = Self::collection_key_from_repr(&repr);
+                    match iterator.kind {
+                        RuntimeTypedArrayIteratorKind::Keys => key,
+                        RuntimeTypedArrayIteratorKind::Values => stored,
+                        RuntimeTypedArrayIteratorKind::Entries => {
+                            Value::Object(self.alloc_array_from_values(&[key, stored])?)
+                        }
+                    }
+                } else if iterator.kind == RuntimeTypedArrayIteratorKind::Entries {
+                    Value::Object(self.alloc_array_from_values(&[stored.clone(), stored])?)
+                } else {
+                    stored
                 };
                 self.record_iteration_next_result_impl(
                     trace_index,
@@ -58419,7 +58544,20 @@ impl InterpreterCore {
             return Ok(false);
         };
         let repr = Self::collection_key_repr(key);
+        // Live iterators past the removed entry move back (bd-9vouw.131).
+        let position = self
+            .collection_iterators
+            .contains_key(&storage_id)
+            .then(|| {
+                self.heap
+                    .get(storage_id.0 as usize)
+                    .and_then(|storage| storage.properties.insertion_key_position(&repr))
+            })
+            .flatten();
         let removed = self.remove_object_property(storage_id, &repr)?;
+        if removed && let Some(position) = position {
+            self.collection_entry_removed(storage_id, position);
+        }
         if removed {
             let obj_index = obj_id.0 as usize;
             self.mutate_heap(|heap| {
@@ -58446,6 +58584,7 @@ impl InterpreterCore {
         if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop) {
             let obj_index = obj_id.0 as usize;
             self.clear_object_properties(storage_id)?;
+            self.collection_storage_cleared(storage_id);
             self.mutate_heap(|heap| {
                 if let Some(obj) = heap.get_mut(obj_index)
                     && let Some(Value::Int(size)) = obj.properties.get_mut("size")
@@ -65052,6 +65191,7 @@ impl InterpreterCore {
             next_index: 0,
             array: None,
             typed_array: Some(RuntimeTypedArrayIterator { view, kind }),
+            collection: None,
             iterator_receiver: None,
             next_method: None,
             timers_interval: None,
@@ -68455,6 +68595,10 @@ impl InterpreterCore {
     /// over the entries present when iteration starts (entries added or
     /// deleted by the callback are not observed, unlike the spec's live
     /// iteration).
+    /// `Map.prototype.forEach` / `Set.prototype.forEach` (ES2020 23.1.3.5,
+    /// 23.2.3.6) over the live entry list (bd-9vouw.131): an entry added by
+    /// a callback is visited, a deleted one is not (it was a snapshot, so
+    /// additions were missed).
     fn collection_for_each(
         &mut self,
         module: &Ir3Module,
@@ -68467,8 +68611,16 @@ impl InterpreterCore {
         } else {
             ("Set", "__values")
         };
-        let collection_id = match &receiver {
-            Value::Object(id) if self.collection_storage_id(*id, tag, storage).is_some() => *id,
+        let (collection_id, storage_id) = match &receiver {
+            Value::Object(id) => match self.collection_storage_id(*id, tag, storage) {
+                Some(storage_id) => (*id, storage_id),
+                None => {
+                    return Err(InterpreterError::TypeError {
+                        expected: format!("{tag} receiver for forEach"),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+            },
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: format!("{tag} receiver for forEach"),
@@ -68484,51 +68636,44 @@ impl InterpreterCore {
             });
         }
         let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-        let items = self
-            .collection_iteration_values(collection_id)?
-            .unwrap_or_default();
         let mut label = self.join_arg_range_label(args)?;
         if let Some(collection_label) = self.object_mutation_labels.get(&collection_id) {
             label = label.join(collection_label);
         }
-        for item in items {
-            let (value, key) = if is_map {
-                let Value::Object(pair) = item else {
-                    continue;
-                };
-                let pair = self
-                    .heap
-                    .get(pair.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: pair.0 })?;
-                let field = |index: &str| {
-                    pair.properties
-                        .get(index)
-                        .cloned()
-                        .unwrap_or(Value::Undefined)
-                };
-                (field("1"), field("0"))
-            } else {
-                (item.clone(), item)
+        // The cursor is popped on every exit, a throwing callback included.
+        let depth = self.collection_for_each_cursors.len();
+        self.collection_for_each_cursors.push((storage_id, 0));
+        let walked = loop {
+            let index = self.collection_for_each_cursors[depth].1;
+            let Some((repr, stored)) = self.collection_entry_at(storage_id, index) else {
+                break Ok(());
             };
-            // An entry deleted by an earlier callback is not visited
-            // (ES2020 23.1.3.5 iterates the live entry list).
-            if !self.collection_has(collection_id, tag, storage, &key) {
-                continue;
-            }
-            self.preflight_inline_method_call_with_argument_label(
+            self.collection_for_each_cursors[depth].1 = index.saturating_add(1);
+            let (value, key) = if is_map {
+                (stored, Self::collection_key_from_repr(&repr))
+            } else {
+                (stored.clone(), stored)
+            };
+            if let Err(error) = self.preflight_inline_method_call_with_argument_label(
                 Some(module),
                 &callback,
                 3,
                 Some(&label),
-            )?;
-            self.invoke_inline_method_call_with_argument_label_preflighted(
+            ) {
+                break Err(error);
+            }
+            if let Err(error) = self.invoke_inline_method_call_with_argument_label_preflighted(
                 Some(module),
                 callback.clone(),
                 this_arg.clone(),
                 vec![value, key, receiver.clone()],
                 Some(label.clone()),
-            )?;
-        }
+            ) {
+                break Err(error);
+            }
+        };
+        self.collection_for_each_cursors.truncate(depth);
+        walked?;
         self.replace_pending_hostcall_result_label(Some(label))?;
         Ok(Value::Undefined)
     }
@@ -68613,8 +68758,14 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    /// `Map.prototype.keys/values/entries` and `Set.prototype.values/entries`:
-    /// an iterator over the entries present at the call (not a live view).
+    /// `Map.prototype.keys/values/entries` and `Set.prototype.values/entries`
+    /// (ES2020 23.1.3.8, 23.1.3.11, 23.1.3.4, 23.2.3.10, 23.2.3.5): an
+    /// iterator over the live entry list (bd-9vouw.131). It was an array
+    /// iterator over the entries present at the call, so entries added while
+    /// iterating (`for (x of set) set.add(...)` worklists) were never visited
+    /// and deleted ones still were. Each `next` reads the entry at its
+    /// position in the storage's insertion order; `collection_delete` and
+    /// `collection_clear` move registered iterators back.
     fn collection_iterator(
         &mut self,
         kind: BuiltinFunctionKind,
@@ -68631,8 +68782,16 @@ impl InterpreterCore {
         } else {
             ("Set", "__values")
         };
-        let collection_id = match &receiver {
-            Value::Object(id) if self.collection_storage_id(*id, tag, storage).is_some() => *id,
+        let (collection_id, storage_id) = match &receiver {
+            Value::Object(id) => match self.collection_storage_id(*id, tag, storage) {
+                Some(storage_id) => (*id, storage_id),
+                None => {
+                    return Err(InterpreterError::TypeError {
+                        expected: format!("{tag} receiver"),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+            },
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: format!("{tag} receiver"),
@@ -68640,39 +68799,136 @@ impl InterpreterCore {
                 });
             }
         };
-        let items = self
-            .collection_iteration_values(collection_id)?
-            .unwrap_or_default();
-        let mut projected = Vec::with_capacity(items.len());
-        for item in items {
-            let value = match kind {
-                BuiltinFunctionKind::MapKeys | BuiltinFunctionKind::MapValues => {
-                    let Value::Object(pair) = item else {
-                        continue;
-                    };
-                    let index = if kind == BuiltinFunctionKind::MapKeys {
-                        "0"
-                    } else {
-                        "1"
-                    };
-                    self.heap
-                        .get(pair.0 as usize)
-                        .and_then(|pair| pair.properties.get(index).cloned())
-                        .unwrap_or(Value::Undefined)
-                }
-                BuiltinFunctionKind::SetEntries => {
-                    Value::Object(self.alloc_array_from_values(&[item.clone(), item])?)
-                }
-                _ => item,
-            };
-            projected.push(value);
+        let projection = match kind {
+            BuiltinFunctionKind::MapKeys => RuntimeTypedArrayIteratorKind::Keys,
+            BuiltinFunctionKind::MapEntries | BuiltinFunctionKind::SetEntries => {
+                RuntimeTypedArrayIteratorKind::Entries
+            }
+            _ => RuntimeTypedArrayIteratorKind::Values,
+        };
+        let trace_index = self.start_iteration_trace(IterationKind::ForOf, || {
+            format!("collection_iterator:{tag}|{}", collection_id.0)
+        });
+        if self.iteration_traced(trace_index) {
+            let iterable_ref = self.iteration_ref_for_object(collection_id);
+            self.record_iteration_event(trace_index, |record_id, step_index| {
+                make_get_iterator_event(
+                    record_id,
+                    step_index,
+                    IteratorSymbolKind::Iterator,
+                    iterable_ref,
+                )
+            });
         }
-        let array = self.alloc_array_from_values(&projected)?;
+        let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+            values: Vec::new(),
+            next_index: 0,
+            array: None,
+            typed_array: None,
+            collection: Some(RuntimeCollectionIterator {
+                collection: collection_id,
+                storage: storage_id,
+                is_map,
+                kind: projection,
+            }),
+            iterator_receiver: None,
+            next_method: None,
+            timers_interval: None,
+            done: false,
+            closed: false,
+            return_called: false,
+            trace_index,
+        }))?;
+        self.collection_iterators
+            .entry(storage_id)
+            .or_default()
+            .insert(handle);
         if let Some(collection_label) = self.object_mutation_labels.get(&collection_id).cloned() {
-            self.join_object_mutation_label(array, &collection_label)?;
             self.replace_pending_hostcall_result_label(Some(collection_label))?;
         }
-        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+        Ok(Value::Iterator(handle))
+    }
+
+    /// The key representation and stored value of the entry at `position` in
+    /// the collection storage's insertion order (bd-9vouw.131).
+    fn collection_entry_at(&self, storage: ObjectId, position: usize) -> Option<(String, Value)> {
+        let storage = self.heap.get(storage.0 as usize)?;
+        let repr = storage.properties.insertion_key_at(position)?;
+        let stored = storage
+            .properties
+            .get(repr)
+            .cloned()
+            .unwrap_or(Value::Undefined);
+        Some((repr.clone(), stored))
+    }
+
+    /// The live Map/Set iterators of the collection storage `storage`, after
+    /// pruning handles that were reclaimed, finished, or are not its
+    /// iterators (bd-9vouw.131).
+    fn live_collection_iterators(&mut self, storage: ObjectId) -> Vec<u32> {
+        let Some(handles) = self.collection_iterators.get(&storage) else {
+            return Vec::new();
+        };
+        let live: BTreeSet<u32> = handles
+            .iter()
+            .copied()
+            .filter(|handle| {
+                matches!(
+                    self.iterators.get(*handle as usize),
+                    Some(RuntimeIteratorState::ForOf(state))
+                        if !state.done
+                            && !state.closed
+                            && state
+                                .collection
+                                .as_ref()
+                                .is_some_and(|iterator| iterator.storage == storage)
+                )
+            })
+            .collect();
+        if live.is_empty() {
+            self.collection_iterators.remove(&storage);
+            return Vec::new();
+        }
+        let handles = live.iter().copied().collect();
+        self.collection_iterators.insert(storage, live);
+        handles
+    }
+
+    /// The entry at `position` of the collection storage was removed: every
+    /// live iterator past it moves back one, so it neither skips the next
+    /// entry nor revisits one (bd-9vouw.131).
+    fn collection_entry_removed(&mut self, storage: ObjectId, position: usize) {
+        for (cursor_storage, next) in &mut self.collection_for_each_cursors {
+            if *cursor_storage == storage && *next > position {
+                *next -= 1;
+            }
+        }
+        for handle in self.live_collection_iterators(storage) {
+            if let Some(RuntimeIteratorState::ForOf(state)) =
+                self.iterators.get_mut(handle as usize)
+                && state.next_index > position
+            {
+                state.next_index -= 1;
+            }
+        }
+    }
+
+    /// The collection storage was emptied: its live iterators continue with
+    /// the entries added from now on (ES2020 23.1.3.1 keeps the list and
+    /// its iterators' positions; entries added later follow them).
+    fn collection_storage_cleared(&mut self, storage: ObjectId) {
+        for (cursor_storage, next) in &mut self.collection_for_each_cursors {
+            if *cursor_storage == storage {
+                *next = 0;
+            }
+        }
+        for handle in self.live_collection_iterators(storage) {
+            if let Some(RuntimeIteratorState::ForOf(state)) =
+                self.iterators.get_mut(handle as usize)
+            {
+                state.next_index = 0;
+            }
+        }
     }
 
     /// ES2020 20.1.3 thisNumberValue: a Number or a Number wrapper object.
@@ -70854,6 +71110,7 @@ impl InterpreterCore {
                 kind: projection,
             }),
             typed_array: None,
+            collection: None,
             iterator_receiver: None,
             next_method: None,
             timers_interval: None,
@@ -91525,6 +91782,12 @@ impl InterpreterCore {
                             .as_ref()
                             .map_or(0, |_| std::mem::size_of::<RuntimeArrayIterator>() as u64),
                     )
+                    // A collection iterator and its `collection_iterators`
+                    // registry entry.
+                    .saturating_add(state.collection.as_ref().map_or(0, |_| {
+                        (std::mem::size_of::<RuntimeCollectionIterator>() as u64)
+                            .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
+                    }))
                     .saturating_add(next_method)
                     .saturating_add(
                         state
@@ -102951,6 +103214,7 @@ mod active_builtin_regressions {
                 next_index: 0,
                 array: None,
                 typed_array: None,
+                collection: None,
                 iterator_receiver: Some(Value::Object(iterator_object)),
                 next_method: None,
                 timers_interval: None,
@@ -103249,6 +103513,7 @@ mod active_builtin_regressions {
                 next_index: 0,
                 array: None,
                 typed_array: None,
+                collection: None,
                 iterator_receiver: Some(Value::Object(iterator_object)),
                 next_method: None,
                 timers_interval: None,
@@ -112807,6 +113072,7 @@ mod async_runtime_tests_current {
             next_index: 0,
             array: None,
             typed_array: None,
+            collection: None,
             iterator_receiver: None,
             next_method: None,
             timers_interval: Some((
@@ -153376,6 +153642,7 @@ mod memory_accounting_tests {
                         next_index: 0,
                         array: None,
                         typed_array: None,
+                        collection: None,
                         iterator_receiver: None,
                         next_method: Some(next_method.to_runtime_value()),
                         timers_interval: None,

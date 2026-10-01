@@ -2278,7 +2278,12 @@ fn merge_logical_lines_slash_starts_regex(
     trailing_identifier: &str,
     next_char: Option<char>,
 ) -> bool {
-    if matches!(next_char, Some('=')) {
+    // With nothing before it (a physical line's start), `/=` continues the
+    // previous line as division assignment. After `(`, `,`, `=` or another
+    // operator no operand precedes it, so `/=` opens a regex: js-base64's
+    // `src.replace(/=/g, "")` was split at the `,` inside a "regex" that
+    // began at the closing `/`.
+    if matches!(next_char, Some('=')) && last_significant.is_none() {
         return false;
     }
 
@@ -8908,7 +8913,9 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     // with the same regex-vs-division rule the line merger uses.
     let mut in_regex = false;
     let mut regex_class = false;
-    let mut last_significant: Option<char> = None;
+    // Every list this splits (arguments, elements, declarators) starts in
+    // expression position, as after a `,`: a leading `/=/` is a regex.
+    let mut last_significant: Option<char> = Some(',');
     let mut trailing_identifier = String::new();
     let mut parts = Vec::with_capacity(4);
     let mut start = 0;
@@ -19978,6 +19985,14 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let parts = split_top_level_commas("f(a, b), c");
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], "f(a, b)");
+    }
+
+    #[test]
+    fn split_top_level_commas_reads_a_leading_equals_regex() {
+        // A list element starts in expression position: `/=` opens a regex
+        // there, whose `,` does not split.
+        assert_eq!(split_top_level_commas("/=/g, ''"), vec!["/=/g", " ''"]);
+        assert_eq!(split_top_level_commas("a, /=,/"), vec!["a", " /=,/"]);
     }
 
     // -----------------------------------------------------------------------

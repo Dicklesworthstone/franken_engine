@@ -14071,12 +14071,25 @@ impl InterpreterCore {
     /// HasBinding of the global object record): an own property
     /// (`globalThis.x = 1; x`), an accessor defined on it, or one it
     /// inherits from Object.prototype (`toString`).
+    /// The global object free names resolve through, except while a
+    /// Function-constructor body runs: generated code resolves in its own
+    /// canonical realm (generated_function_realm_globals, bd-fw7zd.8.3), so
+    /// the owner's global writes (`Function = 3`, `console = 1`) must not
+    /// reach it through the main realm's global object.
+    fn name_resolving_global_object(&self) -> Option<ObjectId> {
+        if self.active_generated_function_artifact.is_some() {
+            None
+        } else {
+            self.realm_global_object
+        }
+    }
+
     fn global_object_binding(
         &mut self,
         module: Option<&Ir3Module>,
         name: &str,
     ) -> Result<Option<(ObjectId, RuntimePropertyKey)>, InterpreterError> {
-        let Some(global) = self.realm_global_object else {
+        let Some(global) = self.name_resolving_global_object() else {
             return Ok(None);
         };
         let key = RuntimePropertyKey::String(JsString::from(name));
@@ -14094,7 +14107,7 @@ impl InterpreterCore {
         let key = RuntimePropertyKey::String(JsString::from(name));
         match self
             .heap
-            .get(self.realm_global_object?.0 as usize)?
+            .get(self.name_resolving_global_object()?.0 as usize)?
             .own_runtime_property_descriptor(&key)?
         {
             BaselineSymbolProperty::Data(value) => Some(value),
@@ -14396,7 +14409,7 @@ impl InterpreterCore {
         // Once the realm has its global object, a sloppy global is a property
         // of it (`x = 1; globalThis.x`), readable through the fallback in
         // LoadName.
-        if let Some(global) = self.realm_global_object {
+        if let Some(global) = self.name_resolving_global_object() {
             return self.put_global_object_name(module, global, name, value, label);
         }
 

@@ -1397,8 +1397,10 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         Expression::Unary {
             operator, argument, ..
         } => {
-            if *operator == crate::ast::UnaryOperator::Delete
-                && state.is_module
+            if matches!(
+                operator,
+                crate::ast::UnaryOperator::Delete | crate::ast::UnaryOperator::StrictDelete
+            ) && state.is_module
                 && matches!(argument.as_ref(), Expression::Identifier(_))
             {
                 state.push_error(

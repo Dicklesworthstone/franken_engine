@@ -124,6 +124,25 @@ fn exotic_integrity_of_exotic_values() {
     );
 }
 
+/// for-in visits their enumerable own properties, then their prototype's (it threw "expected object"; object-inspect's Promise path).
+#[test]
+fn exotic_for_in_enumeration() {
+    let source = "var kinds = { promise: function () { return Promise.resolve(1); },\n\
+           generator: function () { return (function* () { yield 1; })(); },\n\
+           asyncGenerator: function () { return (async function* () {})(); },\n\
+           arrayIterator: function () { return [1, 2].values(); },\n\
+           mapIterator: function () { return new Map([[1, 2]]).keys(); },\n\
+           stringIterator: function () { return 'ab'[Symbol.iterator](); } };\n\
+         function keys(v) { var ks = []; for (var k in v) ks.push(k); return ks.join('/'); }\n\
+         Promise.prototype.extra = 1;\n\
+         Object.keys(kinds).map(function (k) { var v = kinds[k](); v.tag = 1; Object.defineProperty(v, 'hidden', { value: 2 });\n\
+           return k + ':' + keys(v) + ':' + keys(kinds[k]()); }).join(' ');";
+    assert_eq!(
+        eval(source),
+        "promise:tag/extra:extra generator:tag: asyncGenerator:tag: arrayIterator:tag: mapIterator:tag: stringIterator:tag:"
+    );
+}
+
 /// Functions, classes and arrows: Object.freeze/seal/preventExtensions take effect (they were no-ops or threw).
 #[test]
 fn exotic_integrity_of_functions() {

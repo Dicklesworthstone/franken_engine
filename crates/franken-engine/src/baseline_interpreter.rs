@@ -45672,6 +45672,15 @@ impl InterpreterCore {
             register_labels[index] = label;
         }
 
+        // A generator method's body reads `super` through its [[HomeObject]]
+        // (LoadSuper takes the home object's prototype when the read runs).
+        let (super_label, super_home_object) = match invocation
+            .closure_index
+            .and_then(|closure_id| self.closure_method_metadata.get(&closure_id))
+        {
+            Some(metadata) => (metadata.definition_label.clone(), Some(metadata.home_object)),
+            None => (Label::Public, None),
+        };
         let execution = GeneratorExecutionSnapshot {
             registers,
             register_labels,
@@ -45688,8 +45697,8 @@ impl InterpreterCore {
                 new_target_value: Value::Undefined,
                 new_target_label: Label::Public,
                 super_value: Value::Undefined,
-                super_label: Label::Public,
-                super_home_object: None,
+                super_label,
+                super_home_object,
                 construct_this: None,
                 derived_constructor: false,
                 this_initialized: true,
@@ -74839,13 +74848,13 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(&key)?;
         let closure_id = match function {
-            Value::Closure(closure_id) | Value::AsyncFunction(closure_id) => closure_id,
             // Generator and async-generator methods (`*m(){}`, `async *m(){}`)
-            // install as ordinary data properties; they carry no
-            // [[HomeObject]] yet, so `super` inside them is unsupported.
-            Value::GeneratorFunction(_) | Value::AsyncGeneratorFunction(_) => {
-                return self.set_object_runtime_property(object_id, key, function);
-            }
+            // get a [[HomeObject]] too: `super.x` in their bodies reads the
+            // home object's prototype (bd-9vouw.143).
+            Value::Closure(closure_id)
+            | Value::AsyncFunction(closure_id)
+            | Value::GeneratorFunction(closure_id)
+            | Value::AsyncGeneratorFunction(closure_id) => closure_id,
             _ => {
                 return Err(InterpreterError::TypeError {
                     expected: "fresh closure for concise method definition".to_string(),

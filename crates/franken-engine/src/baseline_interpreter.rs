@@ -39761,14 +39761,18 @@ impl InterpreterCore {
                     None | Some(Value::Undefined) => 1,
                     Some(value) => Self::value_as_integer(&value).max(0),
                 };
-                let result = self.alloc_array_with_prototype(None)?;
+                let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 self.array_flatten_into(arr_id, depth, result, &mut out)?;
-                self.set_object_property(
-                    result,
-                    "length".to_string(),
-                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
-                )?;
+                // An array result keeps its length in step; another
+                // species object gets only the data properties.
+                if self.generic_is_array(result)? {
+                    self.set_object_property(
+                        result,
+                        "length".to_string(),
+                        Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                    )?;
+                }
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayToLocaleString => {
@@ -39883,7 +39887,7 @@ impl InterpreterCore {
                 // element (holes skipped).
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.map")?;
-                let result = self.alloc_array_with_prototype(None)?;
+                let result = self.array_species_result(module, arr_id, len)?;
                 for index in 0..len {
                     let Some(element) = self.array_index_value(arr_id, index)? else {
                         continue;
@@ -39901,11 +39905,15 @@ impl InterpreterCore {
                         })?;
                     self.set_object_property(result, index.to_string(), mapped)?;
                 }
-                self.set_object_property(
-                    result,
-                    "length".to_string(),
-                    Value::Int(i64::try_from(len).unwrap_or(i64::MAX)),
-                )?;
+                // An array result keeps its length in step; another
+                // species object gets only the data properties.
+                if self.generic_is_array(result)? {
+                    self.set_object_property(
+                        result,
+                        "length".to_string(),
+                        Value::Int(i64::try_from(len).unwrap_or(i64::MAX)),
+                    )?;
+                }
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayFilter => {
@@ -39913,7 +39921,7 @@ impl InterpreterCore {
                 // is truthy, with compacted indices.
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.filter")?;
-                let result = self.alloc_array_with_prototype(None)?;
+                let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 for index in 0..len {
                     let Some(element) = self.array_index_value(arr_id, index)? else {
@@ -39934,11 +39942,15 @@ impl InterpreterCore {
                         out += 1;
                     }
                 }
-                self.set_object_property(
-                    result,
-                    "length".to_string(),
-                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
-                )?;
+                // An array result keeps its length in step; another
+                // species object gets only the data properties.
+                if self.generic_is_array(result)? {
+                    self.set_object_property(
+                        result,
+                        "length".to_string(),
+                        Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                    )?;
+                }
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayFind => {
@@ -40039,7 +40051,7 @@ impl InterpreterCore {
                 // spread; a non-array result is appended as-is).
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.flatMap")?;
-                let result = self.alloc_array_with_prototype(None)?;
+                let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 for index in 0..len {
                     let Some(element) = self.array_index_value(arr_id, index)? else {
@@ -40075,11 +40087,15 @@ impl InterpreterCore {
                         out += 1;
                     }
                 }
-                self.set_object_property(
-                    result,
-                    "length".to_string(),
-                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
-                )?;
+                // An array result keeps its length in step; another
+                // species object gets only the data properties.
+                if self.generic_is_array(result)? {
+                    self.set_object_property(
+                        result,
+                        "length".to_string(),
+                        Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                    )?;
+                }
                 Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayCopyWithin => {
@@ -40240,7 +40256,7 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let result = self.alloc_array_with_prototype(None)?;
+                let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 let len = self.array_like_length(arr_id)?;
                 for i in 0..len {
@@ -40299,7 +40315,8 @@ impl InterpreterCore {
                     None | Some(Value::Undefined) => len,
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
-                let result = self.alloc_array_with_prototype(None)?;
+                let result =
+                    self.array_species_result(module, arr_id, end.saturating_sub(start))?;
                 let mut out = 0usize;
                 let mut index = start;
                 while index < end {
@@ -40391,6 +40408,7 @@ impl InterpreterCore {
                         }
                     }
                 };
+                let removed_arr = self.array_species_result(module, arr_id, delete_count)?;
                 let mut items = Vec::new();
                 let mut k = 2u32;
                 while k < args.count {
@@ -40422,7 +40440,6 @@ impl InterpreterCore {
                 )?;
                 self.refresh_dense_length_cache(arr_id, new_len, was_dense);
                 let removed_len = removed.len();
-                let removed_arr = self.alloc_array_with_prototype(None)?;
                 for (i, element) in removed.into_iter().enumerate() {
                     self.set_object_property(removed_arr, i.to_string(), element)?;
                 }
@@ -49591,6 +49608,11 @@ impl InterpreterCore {
                                         closure_id,
                                         key,
                                     )?
+                                } else if Self::is_species_key(&property_key) {
+                                    self.species_of_constructor(
+                                        module,
+                                        &Value::Closure(closure_id),
+                                    )?
                                 } else {
                                     Value::Undefined
                                 }
@@ -49598,6 +49620,8 @@ impl InterpreterCore {
                             Value::Function(idx) => {
                                 if let Some(key) = property_key.as_str() {
                                     self.function_property_value(module, idx, key)?
+                                } else if Self::is_species_key(&property_key) {
+                                    self.species_of_constructor(module, &Value::Function(idx))?
                                 } else {
                                     Value::Undefined
                                 }
@@ -49609,6 +49633,20 @@ impl InterpreterCore {
                                         self.bound_function_property(module, &builtin, key)?
                                 {
                                     value
+                                } else if Self::is_species_key(&property_key)
+                                    && Self::builtin_has_default_species(&builtin)
+                                    && !Self::builtin_function_property_object(&builtin)
+                                        .is_some_and(|object| {
+                                            self.chain_contains_runtime_property(
+                                                object,
+                                                &property_key,
+                                            )
+                                        })
+                                {
+                                    // bd-9vouw.94: `get [Symbol.species]() {
+                                    // return this }` (ES2020 22.1.2.5 and the
+                                    // like).
+                                    Value::BuiltinFunction(builtin)
                                 } else if property_key.as_str() == Some("prototype")
                                     && let Some(name) =
                                         Self::materialized_global_prototype_name(&builtin)
@@ -96673,50 +96711,210 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let mut current = constructor;
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
-            let prototype = match &current {
-                Value::Closure(id) => self
-                    .function_prototypes
-                    .get(&(self.prototype_owner_ids(module).closure, *id))
-                    .copied(),
-                Value::Function(index) => self
-                    .function_prototypes
-                    .get(&(self.prototype_owner_ids(module).function, *index))
-                    .copied(),
-                _ => None,
-            };
-            let Some(parent) = prototype
-                .and_then(|prototype| self.heap.get(prototype.0 as usize))
-                .filter(|object| object.is_derived_constructor)
-                .and_then(|object| object.derived_constructor_parent.clone())
-            else {
-                return Ok(Value::Undefined);
-            };
-            let builtin = match &parent {
-                Value::Str(name) => {
-                    let name = name.to_string();
-                    match STANDARD_CONSTRUCTOR_GLOBALS
-                        .iter()
-                        .copied()
-                        .find(|candidate| *candidate == name)
-                    {
-                        Some(name) => BuiltinFunction::standard_constructor(name),
+            match self.derived_constructor_parent(module, &current) {
+                Some(Value::BuiltinFunction(builtin))
+                    if builtin.kind == BuiltinFunctionKind::StandardConstructor =>
+                {
+                    return self.standard_constructor_property(&builtin, key);
+                }
+                Some(parent @ (Value::Closure(_) | Value::Function(_))) => current = parent,
+                _ => return Ok(Value::Undefined),
+            }
+        }
+        Ok(Value::Undefined)
+    }
+
+    /// The parent a derived class records (`class C extends P`): a class,
+    /// function or built-in constructor value. `None` for anything that is
+    /// not a derived class, and for a built-in parent recorded by a name
+    /// that is not a standard constructor global. Never allocates.
+    fn derived_constructor_parent(&self, module: &Ir3Module, constructor: &Value) -> Option<Value> {
+        let prototype = match constructor {
+            Value::Closure(id) => self
+                .function_prototypes
+                .get(&(self.prototype_owner_ids(module).closure, *id))
+                .copied(),
+            Value::Function(index) => self
+                .function_prototypes
+                .get(&(self.prototype_owner_ids(module).function, *index))
+                .copied(),
+            _ => None,
+        }?;
+        let parent = self
+            .heap
+            .get(prototype.0 as usize)
+            .filter(|object| object.is_derived_constructor)
+            .and_then(|object| object.derived_constructor_parent.clone())?;
+        match parent {
+            Value::Str(name) => {
+                let name = name.to_string();
+                STANDARD_CONSTRUCTOR_GLOBALS
+                    .iter()
+                    .copied()
+                    .find(|candidate| *candidate == name)
+                    .map(|name| Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)))
+            }
+            parent => Some(parent),
+        }
+    }
+
+    fn is_species_key(key: &RuntimePropertyKey) -> bool {
+        matches!(key, RuntimePropertyKey::Symbol(symbol) if *symbol == WellKnownSymbol::Species.id())
+    }
+
+    /// bd-9vouw.94: built-in constructors whose `get [Symbol.species]()`
+    /// returns `this` (ES2020 22.1.2.5, 22.2.2.4, 23.1.2.2, 23.2.2.2,
+    /// 24.1.3.3, 24.2.3.2, 25.6.4.6, 21.2.4.2). The concrete typed array
+    /// constructors inherit %TypedArray%'s.
+    fn builtin_has_default_species(builtin: &BuiltinFunction) -> bool {
+        if let Some(name) = Self::materialized_global_prototype_name(builtin) {
+            return name == "Promise";
+        }
+        builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && Self::standard_constructor_name(builtin).is_ok_and(|name| {
+                matches!(
+                    name,
+                    "Array"
+                        | "Map"
+                        | "Set"
+                        | "RegExp"
+                        | "ArrayBuffer"
+                        | "SharedArrayBuffer"
+                        | "Promise"
+                ) || name == TYPED_ARRAY_INTRINSIC
+                    || TypedArrayKind::from_type_name(name).is_some()
+            })
+    }
+
+    /// bd-9vouw.94: Get(C, @@species) (ES2020 7.3.20 step 5) for a
+    /// constructor value. An object (a proxy, a `{ [Symbol.species]: ... }`
+    /// record) answers through its own [[Get]]. A class or function answers
+    /// with an own or inherited static `[Symbol.species]` on its backing
+    /// object (a getter sees `constructor` as `this`), else with its parent
+    /// class's; a chain that reaches a built-in with the default getter gets
+    /// `constructor` itself, which is what `return this` gives. Anything
+    /// else has no @@species.
+    fn species_of_constructor(
+        &mut self,
+        module: &Ir3Module,
+        constructor: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Species.id());
+        if let Value::Object(object_id) = constructor {
+            return self.proxy_aware_get_runtime_property(
+                Some(module),
+                *object_id,
+                &key,
+                constructor.clone(),
+                0,
+            );
+        }
+        let mut current = constructor.clone();
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            if let Some(backing) = self.function_own_property_object(module, &current)?
+                && self.chain_contains_runtime_property(backing, &key)
+            {
+                return self.proxy_aware_get_runtime_property(
+                    Some(module),
+                    backing,
+                    &key,
+                    constructor.clone(),
+                    0,
+                );
+            }
+            match &current {
+                Value::BuiltinFunction(builtin) => {
+                    return Ok(if Self::builtin_has_default_species(builtin) {
+                        constructor.clone()
+                    } else {
+                        Value::Undefined
+                    });
+                }
+                Value::Closure(_) | Value::Function(_) => {
+                    match self.derived_constructor_parent(module, &current) {
+                        Some(parent) => current = parent,
                         None => return Ok(Value::Undefined),
                     }
                 }
-                Value::BuiltinFunction(builtin)
-                    if builtin.kind == BuiltinFunctionKind::StandardConstructor =>
-                {
-                    builtin.clone()
-                }
-                Value::Closure(_) | Value::Function(_) => {
-                    current = parent;
-                    continue;
-                }
                 _ => return Ok(Value::Undefined),
-            };
-            return self.standard_constructor_property(&builtin, key);
+            }
         }
         Ok(Value::Undefined)
+    }
+
+    /// bd-9vouw.94: ES2020 22.1.3 ArraySpeciesCreate(original, length): the
+    /// result object an Array method fills. A plain array (ArrayCreate) when
+    /// `original` is not an array, or its `constructor` is undefined or
+    /// %Array%, or that constructor's @@species is undefined, null or
+    /// %Array%. Otherwise the species is constructed with `length`. A
+    /// `constructor` that is not an object, a species that is not a
+    /// constructor, or a construct result that is not an object is a
+    /// TypeError.
+    fn array_species_result(
+        &mut self,
+        module: &Ir3Module,
+        original: ObjectId,
+        length: usize,
+    ) -> Result<ObjectId, InterpreterError> {
+        if !self.generic_is_array(original)? {
+            return self.alloc_array_with_prototype(None);
+        }
+        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
+        let constructor = self.proxy_aware_get_runtime_property(
+            Some(module),
+            original,
+            &constructor_key,
+            Value::Object(original),
+            0,
+        )?;
+        let is_intrinsic_array = |value: &Value| {
+            matches!(value, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::StandardConstructor
+                    && Self::standard_constructor_name(builtin).is_ok_and(|name| name == "Array"))
+        };
+        if matches!(constructor, Value::Undefined) || is_intrinsic_array(&constructor) {
+            return self.alloc_array_with_prototype(None);
+        }
+        if !constructor.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined constructor for ArraySpeciesCreate".to_string(),
+                got: constructor.type_name().to_string(),
+            });
+        }
+        let species = self.species_of_constructor(module, &constructor)?;
+        if matches!(species, Value::Undefined | Value::Null) || is_intrinsic_array(&species) {
+            return self.alloc_array_with_prototype(None);
+        }
+        if !self.is_constructible_value(&species) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructor @@species for ArraySpeciesCreate".to_string(),
+                got: species.type_name().to_string(),
+            });
+        }
+        let length = Value::Int(i64::try_from(length).unwrap_or(i64::MAX));
+        let (result, label) =
+            self.with_gc_nested_request(vec![Value::Object(original)], |core| {
+                core.invoke_inline_construct_with_labels(
+                    Some(module),
+                    species,
+                    vec![length],
+                    None,
+                    None,
+                )
+            })?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        match result {
+            Value::Object(object_id) => Ok(object_id),
+            other => Err(InterpreterError::TypeError {
+                expected: "object from the @@species constructor".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
     }
 
     /// The canonical prototype a function value's [[Prototype]] defaults to:

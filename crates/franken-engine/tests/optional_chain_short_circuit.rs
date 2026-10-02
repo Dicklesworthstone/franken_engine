@@ -92,3 +92,37 @@ fn parenthesized_optional_chain_can_be_constructed() {
         );
     }
 }
+
+/// ES2020 12.15.1 rejects an assignment target only when the target itself
+/// is an optional chain. The parser rejected any target with a `?.` anywhere
+/// inside it, so a computed key (`t[o?.p] = 1`, arktype's
+/// `t[l?.() ?? g()] = o`), a destructuring default or a for-of head with a
+/// chain in its key failed to parse. Expected values are Node v22.2.0's.
+#[test]
+fn optional_chains_inside_assignment_targets_are_ordinary_expressions() {
+    let source = "var t = {}, l = null, n = null, r, o = { p: \"k\", f() { return \"q\"; } };\n\
+                  t[l?.() ?? \"a\"] = 1;\n\
+                  t[o?.p] = 2; t[o?.p] += 3;\n\
+                  var u = { k: { m: 0 } }; u[o?.p].m = 4;\n\
+                  [t[n?.p ?? \"z\"]] = [5];\n\
+                  for (t[o.f?.()] of [6]) ;\n\
+                  [r = n?.p] = [];\n\
+                  ({ x: t[o?.p + \"2\"] } = { x: 7 });\n\
+                  [t.a, t.k, u.k.m, t.z, t.q, String(r), t.k2].join(\",\");";
+    assert_eq!(eval(source), "1,5,4,5,6,undefined,7");
+    for target in [
+        "a?.b = 1",
+        "a?.b.c = 1",
+        "a?.[0] = 1",
+        "a?.b += 1",
+        "[a?.b] = []",
+        "({ x: a?.b } = {})",
+        "[...a?.b] = []",
+        "[a?.b = 1] = []",
+    ] {
+        let error = HybridRouter::default()
+            .eval(&format!("var a = {{}}; {target};"))
+            .expect_err(target);
+        assert!(error.to_string().contains("target"), "{target}: {error}");
+    }
+}

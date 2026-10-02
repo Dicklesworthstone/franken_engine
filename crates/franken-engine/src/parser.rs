@@ -6638,7 +6638,7 @@ fn try_parse_assignment(
                     Ok(e) => e,
                     Err(e) => return Some(Err(e)),
                 };
-            if contains_optional_chain(&left) {
+            if assignment_target_has_optional_chain(&left) {
                 return Some(Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     "optional chaining cannot be used as an assignment target",
@@ -8194,66 +8194,24 @@ fn unsupported_expression_syntax_error(
     )
 }
 
-fn contains_optional_chain(expression: &Expression) -> bool {
-    match expression {
-        Expression::OptionalCall { .. } | Expression::OptionalMember { .. } => true,
-        Expression::Await(inner) => contains_optional_chain(inner),
-        Expression::Yield { argument, .. } => argument
-            .as_ref()
-            .is_some_and(|a| contains_optional_chain(a)),
-        Expression::SpreadElement(inner) => contains_optional_chain(inner),
-        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
-            contains_optional_chain(left) || contains_optional_chain(right)
-        }
-        Expression::Unary { argument, .. } => contains_optional_chain(argument),
-        Expression::Conditional {
-            test,
-            consequent,
-            alternate,
-        } => {
-            contains_optional_chain(test)
-                || contains_optional_chain(consequent)
-                || contains_optional_chain(alternate)
-        }
-        Expression::Call {
-            callee, arguments, ..
-        } => contains_optional_chain(callee) || arguments.iter().any(contains_optional_chain),
-        Expression::Member {
-            object, property, ..
-        } => contains_optional_chain(object) || contains_optional_chain(property),
-        Expression::ArrayLiteral(elements) => {
-            elements.iter().flatten().any(contains_optional_chain)
-        }
-        Expression::ObjectLiteral(properties) => properties.iter().any(|property| {
-            contains_optional_chain(&property.key) || contains_optional_chain(&property.value)
-        }),
-        Expression::ArrowFunction { body, .. } => match body {
-            ArrowBody::Expression(expr) => contains_optional_chain(expr),
-            ArrowBody::Block(_) => false,
-        },
-        Expression::New { callee, arguments } => {
-            contains_optional_chain(callee) || arguments.iter().any(contains_optional_chain)
-        }
-        Expression::TemplateLiteral { expressions, .. } => {
-            expressions.iter().any(contains_optional_chain)
-        }
-        Expression::Identifier(_)
-        | Expression::StringLiteral(_)
-        | Expression::NumericLiteral(_)
-        | Expression::BigIntLiteral(_)
-        | Expression::FloatLiteral(_)
-        | Expression::BooleanLiteral(_)
-        | Expression::NullLiteral
-        | Expression::UndefinedLiteral
-        | Expression::This
-        | Expression::SloppyThis
-        | Expression::NewTarget
-        | Expression::ImportMeta
-        | Expression::Super
-        | Expression::Function { .. }
-        | Expression::Raw(_)
-        | Expression::RegExpLiteral { .. }
-        | Expression::ClassExpression { .. } => false,
+/// Whether an assignment target is (or, for a destructuring pattern, has an
+/// element or property target that is) an optional chain, which ES2020
+/// 12.15.1 makes a SyntaxError (`a?.b = 1`, `a?.b.c = 1`, `[a?.b] = []`).
+/// Chains elsewhere in the target are ordinary expressions: a computed key
+/// (`t[o?.p] = 1`, arktype), a destructuring default (`[x = o?.p] = []`) or
+/// a parenthesized object (`(a?.b).c = 1`).
+fn assignment_target_has_optional_chain(target: &Expression) -> bool {
+    match target {
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .any(assignment_target_has_optional_chain),
+        Expression::ObjectLiteral(properties) => properties
+            .iter()
+            .any(|property| assignment_target_has_optional_chain(&property.value)),
+        Expression::SpreadElement(inner) => assignment_target_has_optional_chain(inner),
+        Expression::Assignment { left, .. } => assignment_target_has_optional_chain(left),
+        other => expression_is_optional_chain(other),
     }
 }
 

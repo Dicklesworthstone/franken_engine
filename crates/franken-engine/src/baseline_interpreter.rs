@@ -362,6 +362,9 @@ const PROXY_CALL_TARGET_SLOT: &str = "__proxy_call_target";
 /// `size` property, so %Map.prototype%.size / %Set.prototype%.size (and a
 /// subclass's `get size()`) answer `size` reads.
 const COLLECTION_SIZE_SLOT: &str = "__size";
+/// The TypeError Object.defineProperty raises for a definition the target
+/// rejects; Reflect.defineProperty answers false for exactly this one.
+const DEFINE_PROPERTY_REJECTED: &str = "definable property for Object.defineProperty";
 /// Built-in class parents the lowering records by name (`class X extends Map`,
 /// see `builtin_constructor_name` in the lowering); construction handles
 /// each through `initialize_builtin_subclass_instance`.
@@ -85517,9 +85520,13 @@ impl InterpreterCore {
                     });
                 };
                 let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
-                if !self.define_own_property_from_descriptor(obj_id, prop_name, descriptor)? {
+                // A Proxy defines through its defineProperty trap or its
+                // target (bd-9vouw.147).
+                if !self
+                    .proxy_aware_define_own_property(module, obj_id, prop_name, descriptor, 0)?
+                {
                     return Err(InterpreterError::TypeError {
-                        expected: "definable property for Object.defineProperty".to_string(),
+                        expected: DEFINE_PROPERTY_REJECTED.to_string(),
                         got: "non-configurable, non-writable or non-extensible target".to_string(),
                     });
                 }
@@ -86863,10 +86870,9 @@ impl InterpreterCore {
                     return Ok(Value::Undefined); // Primitives have no own property descriptors here
                 };
                 self.join_pending_hostcall_stream_label(obj_id)?;
-                if let Some(descriptor) = self.prototype_getter_descriptor(obj_id, &prop_name)? {
-                    return Ok(descriptor);
-                }
-                self.own_property_descriptor_value(obj_id, &prop_name)
+                // A Proxy answers through its getOwnPropertyDescriptor trap
+                // or its target (bd-9vouw.147).
+                self.proxy_aware_own_property_descriptor(module, obj_id, &prop_name, 0)
             }
 
             // ES2020 26.1.7 Reflect.getOwnPropertyDescriptor: the
@@ -86889,9 +86895,9 @@ impl InterpreterCore {
 
             // ES2020 26.1.3 Reflect.defineProperty: Object.defineProperty
             // that reports whether the definition succeeded instead of
-            // throwing. A non-object target or attributes value is still a
-            // TypeError. No-claim: a malformed but object-shaped descriptor
-            // (both `get` and `value`) answers false where the spec throws.
+            // throwing. A non-object target or attributes value, a malformed
+            // descriptor and a Proxy invariant violation are still TypeErrors;
+            // only the rejected definition itself answers false.
             "builtin:ReflectDefineProperty" => {
                 let target = self.arg_or_undefined(args, 0)?;
                 let attributes = self.arg_or_undefined(args, 2)?;
@@ -86908,7 +86914,11 @@ impl InterpreterCore {
                     module,
                 ) {
                     Ok(_) => Ok(Value::Bool(true)),
-                    Err(InterpreterError::TypeError { .. }) => Ok(Value::Bool(false)),
+                    Err(InterpreterError::TypeError { expected, .. })
+                        if expected == DEFINE_PROPERTY_REJECTED =>
+                    {
+                        Ok(Value::Bool(false))
+                    }
                     Err(error) => Err(error),
                 }
             }

@@ -81060,10 +81060,17 @@ impl InterpreterCore {
                         };
                         let current = frame.this_value.clone();
                         let bound = self.sloppy_this_value(current.clone())?;
-                        if bound != current
-                            && let Some(frame) = self.call_stack.last_mut()
-                        {
-                            frame.this_value = bound.clone();
+                        if bound != current {
+                            // The frame's `this` is part of the running
+                            // memory estimate: a boxed string replaces its
+                            // primitive's bytes.
+                            self.apply_memory_component_delta(
+                                Self::estimate_value_bytes(&current),
+                                Self::estimate_value_bytes(&bound),
+                            )?;
+                            if let Some(frame) = self.call_stack.last_mut() {
+                                frame.this_value = bound.clone();
+                            }
                         }
                         Ok(bound)
                     }

@@ -11402,6 +11402,8 @@ enum CompactTier1Opcode {
     Exp,
     UnaryNeg,
     UnaryPlus,
+    Inc,
+    Dec,
     LogicalNot,
     BitNot,
     Lt,
@@ -11580,6 +11582,8 @@ impl CompactTier1Program {
                 | Ir3Instruction::Exp { .. }
                 | Ir3Instruction::UnaryNeg { .. }
                 | Ir3Instruction::UnaryPlus { .. }
+                | Ir3Instruction::Inc { .. }
+                | Ir3Instruction::Dec { .. }
                 | Ir3Instruction::LogicalNot { .. }
                 | Ir3Instruction::BitNot { .. }
                 | Ir3Instruction::Lt { .. }
@@ -11716,6 +11720,8 @@ impl CompactTier1Program {
             | Ir3Instruction::CreateAsyncGenerator { dst, .. } => requirement(&[*dst], &[]),
             Ir3Instruction::UnaryNeg { dst, src }
             | Ir3Instruction::UnaryPlus { dst, src }
+            | Ir3Instruction::Inc { dst, src }
+            | Ir3Instruction::Dec { dst, src }
             | Ir3Instruction::LogicalNot { dst, src }
             | Ir3Instruction::BitNot { dst, src }
             | Ir3Instruction::TypeOf { dst, src }
@@ -11949,6 +11955,12 @@ impl CompactTier1Program {
             }
             Ir3Instruction::UnaryPlus { dst, src } => {
                 CompactTier1Instruction::with_unary(Op::UnaryPlus, *dst, *src)
+            }
+            Ir3Instruction::Inc { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::Inc, *dst, *src)
+            }
+            Ir3Instruction::Dec { dst, src } => {
+                CompactTier1Instruction::with_unary(Op::Dec, *dst, *src)
             }
             Ir3Instruction::LogicalNot { dst, src } => {
                 CompactTier1Instruction::with_unary(Op::LogicalNot, *dst, *src)
@@ -47704,6 +47716,8 @@ impl InterpreterCore {
                         (*dst, self.eval_unary_plus_operand(left)?)
                     }
                     Ir3Instruction::BitNot { dst, .. } => (*dst, self.eval_bit_not_operand(left)?),
+                    Ir3Instruction::Inc { dst, .. } => (*dst, Self::step_numeric(&left, 1)?),
+                    Ir3Instruction::Dec { dst, .. } => (*dst, Self::step_numeric(&left, -1)?),
                     _ => unreachable!("numeric_conversion_operands covers exactly these operators"),
                 };
                 self.write_reg_with_label(dst, result, label)?;
@@ -50602,6 +50616,18 @@ impl InterpreterCore {
                     self.write_reg_with_label(dst, result, result_label)?;
                     self.ip += 1;
                 }
+                Ir3Instruction::Inc { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
+                    let result = self.eval_step(src, 1)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Dec { dst, src } => {
+                    let result_label = self.unary_operation_label(src)?;
+                    let result = self.eval_step(src, -1)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
+                    self.ip += 1;
+                }
                 Ir3Instruction::LogicalNot { dst, src } => {
                     let result_label = self.unary_operation_label(src)?;
                     let val = self.read_reg(src)?;
@@ -52494,6 +52520,25 @@ impl InterpreterCore {
                 self.write_reg_with_label(dst, result, result_label)?;
                 self.ip += 1;
             }
+            // `++`/`--` (bd-9vouw.119): a public safe integer steps in place,
+            // as `x -= -1` did through the Sub fast path; anything else
+            // (a BigInt, a float, a string) steps through `eval_step`.
+            Op::Inc | Op::Dec => {
+                let delta: i64 = if instruction.opcode == Op::Inc { 1 } else { -1 };
+                let stepped = self
+                    .compact_public_int_operands(dst, lhs, lhs)
+                    .and_then(|(value, _)| value.checked_add(delta))
+                    .filter(|value| (MIN_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value));
+                if let Some(stepped) = stepped {
+                    self.write_reg_with_label(dst, Value::Int(stepped), Label::Public)?;
+                    self.record_tier_i_specialization();
+                } else {
+                    let result_label = self.unary_operation_label(lhs)?;
+                    let result = self.eval_step(lhs, delta)?;
+                    self.write_reg_with_label(dst, result, result_label)?;
+                }
+                self.ip += 1;
+            }
             Op::UnaryPlus => {
                 let result_label = self.unary_operation_label(lhs)?;
                 let result = self.eval_unary_plus(lhs)?;
@@ -52827,6 +52872,25 @@ impl InterpreterCore {
 
     fn eval_arith(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
         self.eval_arith_operands(self.read_reg(lhs)?, self.read_reg(rhs)?, op)
+    }
+
+    /// `Inc`/`Dec` (bd-9vouw.119): the register's value plus `delta` of its
+    /// own numeric type.
+    fn eval_step(&self, src: u32, delta: i64) -> Result<Value, InterpreterError> {
+        Self::step_numeric(&self.read_reg(src)?, delta)
+    }
+
+    /// ToNumeric(`value`) plus `delta` (1 or -1) of the same type: a BigInt
+    /// steps by `1n`, anything else by the Number 1, computed as `value -
+    /// -delta`, the subtraction the earlier `x -= -1` desugar ran. A Symbol,
+    /// or an object not yet converted to a primitive, is the subtraction's
+    /// TypeError.
+    fn step_numeric(value: &Value, delta: i64) -> Result<Value, InterpreterError> {
+        let unit = match value {
+            Value::BigInt(_) => Value::BigInt(Arc::from((-delta).to_string().as_str())),
+            _ => Value::Int(-delta),
+        };
+        Self::eval_arith_values(value, &unit, "sub")
     }
 
     fn eval_arith_operands(&self, a: Value, b: Value, op: &str) -> Result<Value, InterpreterError> {
@@ -60069,7 +60133,9 @@ impl InterpreterCore {
             | Ir3Instruction::Ushr { lhs, rhs, .. } => Some((*lhs, Some(*rhs))),
             Ir3Instruction::UnaryNeg { src, .. }
             | Ir3Instruction::UnaryPlus { src, .. }
-            | Ir3Instruction::BitNot { src, .. } => Some((*src, None)),
+            | Ir3Instruction::BitNot { src, .. }
+            | Ir3Instruction::Inc { src, .. }
+            | Ir3Instruction::Dec { src, .. } => Some((*src, None)),
             _ => None,
         }
     }
@@ -60140,7 +60206,7 @@ impl InterpreterCore {
             | Op::Shl
             | Op::Shr
             | Op::Ushr => needs(compact.lhs) || needs(compact.rhs),
-            Op::UnaryNeg | Op::UnaryPlus | Op::BitNot => needs(compact.lhs),
+            Op::UnaryNeg | Op::UnaryPlus | Op::BitNot | Op::Inc | Op::Dec => needs(compact.lhs),
             Op::Eq | Op::NotEq => self
                 .loose_equality_needs_to_primitive(u32::from(compact.lhs), u32::from(compact.rhs)),
             _ => false,
@@ -71644,6 +71710,8 @@ impl InterpreterCore {
                 | Ir3Instruction::Move { .. }
                 | Ir3Instruction::Add { .. }
                 | Ir3Instruction::Sub { .. }
+                | Ir3Instruction::Inc { .. }
+                | Ir3Instruction::Dec { .. }
                 | Ir3Instruction::Mul { .. }
                 | Ir3Instruction::Div { .. }
                 | Ir3Instruction::GetProperty { .. }
@@ -71893,6 +71961,17 @@ impl InterpreterCore {
                     let left = Self::read_local_register(&local_registers, lhs)?;
                     let right = Self::read_local_register(&local_registers, rhs)?;
                     let value = Self::eval_arith_values(&left, &right, "sub")?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Inc { dst, src } | Ir3Instruction::Dec { dst, src } => {
+                    let delta = if matches!(instruction_ref, Ir3Instruction::Inc { .. }) {
+                        1
+                    } else {
+                        -1
+                    };
+                    let value = Self::read_local_register(&local_registers, src)?;
+                    let value = Self::step_numeric(&value, delta)?;
                     Self::write_local_register(&mut local_registers, dst, value)?;
                     instruction_pointer += 1;
                 }

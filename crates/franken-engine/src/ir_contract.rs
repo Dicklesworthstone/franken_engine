@@ -1799,6 +1799,14 @@ pub enum Ir3Instruction {
     /// IR program cannot acquire module-continuation semantics merely because
     /// its call stack is empty.
     ModuleAwaitValue { promise_reg: Reg },
+
+    // ── Update expressions (bd-9vouw.119) ─────────────────────────────────
+    /// `++`: dst = ToNumeric(src) + 1, the one of the operand's own type (a
+    /// BigInt steps by `1n`). Appended last so earlier variants keep their
+    /// indices.
+    Inc { dst: Reg, src: Reg },
+    /// `--`: dst = ToNumeric(src) - 1; see `Inc`.
+    Dec { dst: Reg, src: Reg },
 }
 
 impl Ir3Instruction {
@@ -2087,6 +2095,16 @@ impl Ir3Instruction {
             ]),
             Self::UnaryPlus { dst, src } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("unary_plus")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::Inc { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("inc")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::Dec { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("dec")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
                 ("src", CanonicalValue::U64(u64::from(*src))),
             ]),
@@ -5895,6 +5913,8 @@ mod tests {
             ),
             (Ir3Instruction::UnaryNeg { dst: 0, src: 1 }, "unary_neg"),
             (Ir3Instruction::UnaryPlus { dst: 0, src: 1 }, "unary_plus"),
+            (Ir3Instruction::Inc { dst: 0, src: 1 }, "inc"),
+            (Ir3Instruction::Dec { dst: 0, src: 1 }, "dec"),
             (Ir3Instruction::LogicalNot { dst: 0, src: 1 }, "logical_not"),
             (Ir3Instruction::BitNot { dst: 0, src: 1 }, "bit_not"),
             (Ir3Instruction::TypeOf { dst: 0, src: 1 }, "typeof"),

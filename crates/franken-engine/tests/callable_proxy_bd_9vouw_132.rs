@@ -10,7 +10,8 @@
 //!
 //! No-claim: without a `construct` trap, `new.target` is the target rather
 //! than the proxy; `class X extends proxyOverFn`, util.inspect of a callable
-//! proxy and instanceof with a callable proxy on the right are not covered.
+//! proxy and instanceof with a callable proxy on the right are not covered;
+//! `Object.create(fn)` with a plain function (not a proxy) is still refused.
 
 use frankenengine_engine::HybridRouter;
 

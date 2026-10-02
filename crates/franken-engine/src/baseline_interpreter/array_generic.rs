@@ -1000,7 +1000,7 @@ impl InterpreterCore {
         }
     }
 
-    fn generic_index_key(index: u64) -> RuntimePropertyKey {
+    pub(super) fn generic_index_key(index: u64) -> RuntimePropertyKey {
         RuntimePropertyKey::String(JsString::from(index.to_string()))
     }
 
@@ -1028,7 +1028,7 @@ impl InterpreterCore {
 
     /// [[Get]](O, P). IFC: the stored label of the property read joins the
     /// pending result label, as GetProperty's does (bd-ojvo1).
-    fn generic_get(
+    pub(super) fn generic_get(
         &mut self,
         m: Option<&Ir3Module>,
         o: ObjectId,
@@ -1108,7 +1108,7 @@ impl InterpreterCore {
     }
 
     /// LengthOfArrayLike: ToLength(Get(O, "length")).
-    fn generic_length(
+    pub(super) fn generic_length(
         &mut self,
         m: Option<&Ir3Module>,
         o: ObjectId,

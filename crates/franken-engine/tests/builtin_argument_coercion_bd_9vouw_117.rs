@@ -24,6 +24,11 @@
 //! are 0, fractions truncate, a value below 0 or above 2^53 - 1 is a
 //! RangeError, and a Symbol or BigInt is a TypeError.
 //!
+//! PROGRAM_ARRAY_LIKE_AND_BITS covers the typed array constructor's and
+//! set()'s array-like source (LengthOfArrayLike and Get per index, in
+//! order, getters included; a Symbol length is a TypeError) and
+//! BigInt.asUintN/asIntN `bits` (ToPrimitive, then ToIndex).
+//!
 //! No-claim: an indexed element write (`u8[0] = obj`) does not call valueOf.
 //! The Function constructor's arguments are another path.
 
@@ -181,6 +186,38 @@ DataView offset -1 RangeError
 getUint8 -1 RangeError
 getUint8 1n TypeError"#;
 
+const PROGRAM_ARRAY_LIKE_AND_BITS: &str = r#"const log = [];
+const src = { get length() { log.push('length'); return 2; }, get 0() { log.push('get0'); return 7; }, get 1() { log.push('get1'); return 8; } };
+console.log(Array.from(new Uint8Array(src)).join(), log.join());
+log.length = 0;
+const target = new Uint8Array(3); target.set(src, 1);
+console.log(Array.from(target).join(), log.join());
+console.log(Array.from(new Uint8Array({ length: { valueOf() { return 2; } }, 0: 1, 1: 2 })).join(), Array.from(new Uint8Array({ length: 2.5, 0: 9 })).join());
+console.log(String(BigInt.asUintN(8, 257n)), String(BigInt.asIntN({ valueOf() { return 8; } }, 255n)), String(BigInt.asUintN(undefined, 5n)), String(BigInt.asUintN(2.9, 7n)));
+for (const [label, run] of [
+  ['ctor length symbol', () => new Uint8Array({ length: Symbol('s') })],
+  ['set length symbol', () => new Uint8Array(2).set({ length: Symbol('s') })],
+  ['asUintN bits -1', () => BigInt.asUintN(-1, 0n)],
+  ['asUintN bits 2^53', () => BigInt.asUintN(2 ** 53, 0n)],
+  ['asUintN bits 0n', () => BigInt.asUintN(0n, 0n)],
+  ['asUintN bits valueOf 0n', () => BigInt.asUintN({ valueOf() { return 0n; } }, 0n)],
+  ['asIntN bits symbol', () => BigInt.asIntN(Symbol('s'), 0n)],
+]) {
+  try { run(); console.log(label, 'no throw'); } catch (e) { console.log(label, e.constructor.name); }
+}"#;
+
+const NODE_OUTPUT_ARRAY_LIKE_AND_BITS: &str = r#"7,8 length,get0,get1
+0,7,8 length,get0,get1
+1,2 9,0
+1 -1 0 3
+ctor length symbol TypeError
+set length symbol TypeError
+asUintN bits -1 RangeError
+asUintN bits 2^53 RangeError
+asUintN bits 0n TypeError
+asUintN bits valueOf 0n TypeError
+asIntN bits symbol TypeError"#;
+
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
@@ -256,4 +293,20 @@ fn lengths_offsets_and_indices_use_to_index_like_node() {
         assert_eq!(actual, expected, "line {}", index + 1);
     }
     assert_eq!(output.lines().count(), NODE_OUTPUT_TO_INDEX.lines().count());
+}
+
+#[test]
+fn array_like_sources_and_bigint_bits_convert_like_node() {
+    let output = console_output(PROGRAM_ARRAY_LIKE_AND_BITS).expect("the program runs");
+    for (index, (actual, expected)) in output
+        .lines()
+        .zip(NODE_OUTPUT_ARRAY_LIKE_AND_BITS.lines())
+        .enumerate()
+    {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(
+        output.lines().count(),
+        NODE_OUTPUT_ARRAY_LIKE_AND_BITS.lines().count()
+    );
 }

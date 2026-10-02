@@ -42116,30 +42116,25 @@ impl InterpreterCore {
                 }),
             },
             BuiltinFunctionKind::BigIntAsUintN | BuiltinFunctionKind::BigIntAsIntN => {
-                // ES2020 20.2.2.1-2: ToIndex(bits), then ToBigInt(bigint).
+                // ES2020 20.2.2.1-2: ToIndex(bits), then ToBigInt(bigint). An
+                // object `bits` converts through ToPrimitive first, so one
+                // whose valueOf returns a BigInt is the TypeError ToIndex
+                // raises (it read as 0).
                 let bits = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let bits = match bits {
-                    Value::Undefined => 0.0,
-                    other => Self::coerce_to_float(&other)
-                        .map(|n| if n.is_nan() { 0.0 } else { n.trunc() })
-                        .ok_or_else(|| InterpreterError::TypeError {
-                            expected: "number-convertible bit count".to_string(),
-                            got: other.type_name().to_string(),
-                        })?,
-                };
-                if !(0.0..=9_007_199_254_740_991.0).contains(&bits) {
+                let bits = self.object_to_number_primitive(Some(module), bits)?;
+                let Some(bits) = Self::to_index_value(&bits)? else {
                     return Err(InterpreterError::RangeError {
                         message: "Invalid value: not (convertible to) a safe integer".to_string(),
                     });
-                }
+                };
                 let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 let Value::BigInt(digits) = self.coerce_to_bigint(value)? else {
                     unreachable!("coerce_to_bigint returns a BigInt");
                 };
                 let result = if builtin.kind == BuiltinFunctionKind::BigIntAsUintN {
-                    bigint_ops::as_uint_n(bits as u64, &digits)
+                    bigint_ops::as_uint_n(bits, &digits)
                 } else {
-                    bigint_ops::as_int_n(bits as u64, &digits)
+                    bigint_ops::as_int_n(bits, &digits)
                 };
                 Self::bigint_result(result)
             }
@@ -64944,9 +64939,42 @@ impl InterpreterCore {
         Ok(values)
     }
 
-    fn typed_array_source_values(&self, source: Value) -> Result<Vec<Value>, InterpreterError> {
+    /// The values of an array-like source as the typed array constructor
+    /// (ES2020 22.2.4.4 steps 8-12) and set() (22.2.3.23.1 steps 16-22)
+    /// read them: LengthOfArrayLike, which runs a `length` getter and
+    /// valueOf and makes a Symbol length a TypeError, then Get for each
+    /// index, getters included. A typed array source is read directly. The
+    /// non-observable read took a missing or Symbol length as 0.
+    fn observable_array_like_values(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        if let Some(view) = self.typed_array_view_for_object(object_id)? {
+            return self.typed_array_values_in_range(&view, 0, view.length);
+        }
+        let length = self.generic_length(module, object_id)?;
+        let length = usize::try_from(length).map_err(|_| InterpreterError::RangeError {
+            message: format!("array-like length {length} exceeds host addressable size"),
+        })?;
+        let mut values = self.element_buffer(length)?;
+        for index in 0..length {
+            values.push(self.generic_get(
+                module,
+                object_id,
+                &Self::generic_index_key(index as u64),
+            )?);
+        }
+        Ok(values)
+    }
+
+    fn typed_array_source_values(
+        &mut self,
+        module: &Ir3Module,
+        source: Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
         match source {
-            Value::Object(object_id) => self.array_like_values(object_id),
+            Value::Object(object_id) => self.observable_array_like_values(Some(module), object_id),
             other => Err(InterpreterError::TypeError {
                 expected: "array-like or TypedArray source for TypedArray.prototype.set"
                     .to_string(),
@@ -65013,7 +65041,7 @@ impl InterpreterCore {
         let offset = self.typed_array_offset_arg(module, target_view.kind, args, 1, "offset")?;
         let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         self.typed_array_content_type_check(target_view.kind, &source)?;
-        let values = self.typed_array_source_values(source)?;
+        let values = self.typed_array_source_values(module, source)?;
         let values = self.typed_array_prepare_values(target_view.kind, values)?;
         let end = offset
             .checked_add(values.len())
@@ -94016,7 +94044,7 @@ impl InterpreterCore {
 
         if let Value::Object(object_id) = first_arg {
             self.typed_array_content_type_check(kind, &first_arg)?;
-            let values = self.read_array_like_values(object_id);
+            let values = self.observable_array_like_values(module, object_id)?;
             return self.alloc_typed_array_from_values(kind, &values);
         }
 

@@ -10,10 +10,7 @@ impl Eraser<'_> {
     pub(super) fn erase_template_expressions(&mut self, depth: usize) {
         for index in 0..self.tokens.len() {
             let token = self.tokens[index];
-            if self.removed[index]
-                || token.kind != Kind::Literal
-                || !token.text.starts_with('`')
-            {
+            if self.removed[index] || token.kind != Kind::Literal || !token.text.starts_with('`') {
                 continue;
             }
             // The lexer has validated this template's boundaries. Analyze
@@ -33,20 +30,17 @@ impl Eraser<'_> {
                         .len_utf8();
                 } else if self.source[cursor..].starts_with("${") {
                     let start = cursor + 2;
-                    let Some(end) = super::interpolation_end(self.source, start, depth + 1)
-                    else {
+                    let Some(end) = super::interpolation_end(self.source, start, depth + 1) else {
                         break;
                     };
                     if end > token.end {
                         break;
                     }
-                    if let Some(inner) = super::analyze(&self.source[start..end - 1], depth + 1)
-                    {
+                    if let Some(inner) = super::analyze(&self.source[start..end - 1], depth + 1) {
                         // Translate the nested pass's exact source coordinates
                         // rather than reparsing or regenerating JavaScript.
-                        self.spans.extend(
-                            inner.spans.into_iter().map(|(a, b)| (start + a, start + b)),
-                        );
+                        self.spans
+                            .extend(inner.spans.into_iter().map(|(a, b)| (start + a, start + b)));
                     }
                     cursor = end;
                 } else {
@@ -212,7 +206,10 @@ impl Eraser<'_> {
                 parameter += 1;
             }
             let binding_end = self.binding_end(parameter)?;
-            if self.tokens[parameter..binding_end].iter().any(|token| token.text == "=") {
+            if self.tokens[parameter..binding_end]
+                .iter()
+                .any(|token| token.text == "=")
+            {
                 return None;
             }
             parameter = binding_end;
@@ -241,8 +238,7 @@ impl Eraser<'_> {
         // automatic-semicolon boundary at which deleting code is safe.
         if cursor == self.tokens.len()
             || self.text(cursor) == "}"
-            || (self.newline_before(cursor)
-                && self.tokens[cursor].kind == Kind::Word)
+            || (self.newline_before(cursor) && self.tokens[cursor].kind == Kind::Word)
         {
             Some((start, cursor))
         } else {
@@ -295,8 +291,7 @@ impl Eraser<'_> {
                 ";" => return Some((start, cursor + 1)),
                 "}" => return Some((start, cursor)),
                 _ if cursor == self.tokens.len()
-                    || (self.newline_before(cursor)
-                        && self.tokens[cursor].kind == Kind::Word) =>
+                    || (self.newline_before(cursor) && self.tokens[cursor].kind == Kind::Word) =>
                 {
                     return Some((start, cursor));
                 }
@@ -312,7 +307,11 @@ impl Eraser<'_> {
         }
         let token = self.tokens.get(cursor)?;
         let numeric = token.kind == Kind::Literal
-            && token.text.as_bytes().first().is_some_and(u8::is_ascii_digit);
+            && token
+                .text
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_digit);
         let quoted = token.kind == Kind::Literal && token.text.starts_with(['\'', '"']);
         if numeric || (!signed && (quoted || matches!(token.text, "true" | "false"))) {
             Some(cursor + 1)
@@ -338,8 +337,7 @@ impl Eraser<'_> {
                 before == 0
                     || matches!(
                         self.text(before - 1),
-                        ")" | "=>" | ";" | "{" | "}" | "else" | "try" | "finally"
-                            | "do" | "static"
+                        ")" | "=>" | ";" | "{" | "}" | "else" | "try" | "finally" | "do" | "static"
                     )
             }
             _ => {
@@ -348,8 +346,18 @@ impl Eraser<'_> {
                         || matches!(self.text(start - 1), ")" | "]" | "++" | "--"))
                     && !matches!(
                         self.text(start - 1),
-                        "throw" | "new" | "delete" | "void" | "typeof" | "instanceof"
-                            | "in" | "of" | "await" | "yield" | "extends" | "case"
+                        "throw"
+                            | "new"
+                            | "delete"
+                            | "void"
+                            | "typeof"
+                            | "instanceof"
+                            | "in"
+                            | "of"
+                            | "await"
+                            | "yield"
+                            | "extends"
+                            | "case"
                     )
             }
         }
@@ -389,9 +397,10 @@ impl Eraser<'_> {
             return false;
         }
         if (self.text(end) == "?." && self.text(end + 1) == "(")
-            || self.tokens.get(end).is_some_and(|token| {
-                token.kind == Kind::Literal && token.text.starts_with('`')
-            })
+            || self
+                .tokens
+                .get(end)
+                .is_some_and(|token| token.kind == Kind::Literal && token.text.starts_with('`'))
         {
             return true;
         }
@@ -415,9 +424,28 @@ impl Eraser<'_> {
             || self.newline_before(end)
             || matches!(
                 self.text(end),
-                ";" | "," | ")" | "]" | "}" | "?" | ":" | "=" | "==" | "!="
-                    | "*" | "/" | "%" | "&" | "|" | "^" | "&&" | "||" | "??"
-                    | "in" | "instanceof" | "as" | "satisfies"
+                ";" | ","
+                    | ")"
+                    | "]"
+                    | "}"
+                    | "?"
+                    | ":"
+                    | "="
+                    | "=="
+                    | "!="
+                    | "*"
+                    | "/"
+                    | "%"
+                    | "&"
+                    | "|"
+                    | "^"
+                    | "&&"
+                    | "||"
+                    | "??"
+                    | "in"
+                    | "instanceof"
+                    | "as"
+                    | "satisfies"
             )
     }
 
@@ -432,10 +460,29 @@ impl Eraser<'_> {
                 self.property_name(previous)
                     || !matches!(
                         token.text,
-                        "return" | "throw" | "yield" | "await" | "void" | "typeof"
-                            | "delete" | "new" | "in" | "instanceof" | "of" | "case"
-                            | "else" | "do" | "const" | "let" | "var" | "function"
-                            | "class" | "extends" | "implements" | "import" | "export"
+                        "return"
+                            | "throw"
+                            | "yield"
+                            | "await"
+                            | "void"
+                            | "typeof"
+                            | "delete"
+                            | "new"
+                            | "in"
+                            | "instanceof"
+                            | "of"
+                            | "case"
+                            | "else"
+                            | "do"
+                            | "const"
+                            | "let"
+                            | "var"
+                            | "function"
+                            | "class"
+                            | "extends"
+                            | "implements"
+                            | "import"
+                            | "export"
                             | "default"
                     )
             }
@@ -461,16 +508,45 @@ impl Eraser<'_> {
     fn expression_type_boundary(&self, index: usize) -> bool {
         index == self.tokens.len()
             || self.newline_before(index)
-            || self.tokens.get(index).is_some_and(|token| {
-                token.kind == Kind::Literal && token.text.starts_with('`')
-            })
+            || self
+                .tokens
+                .get(index)
+                .is_some_and(|token| token.kind == Kind::Literal && token.text.starts_with('`'))
             || matches!(
                 self.text(index),
-                ";" | "," | ")" | "]" | "}" | "(" | "[" | "." | "?."
-                    | "?" | ":" | "!" | "=" | "==" | "!=" | "+" | "-"
-                    | "*" | "/" | "%" | "<" | ">" | "&" | "|" | "^"
-                    | "&&" | "||" | "??" | "++" | "--" | "in" | "instanceof"
-                    | "as" | "satisfies"
+                ";" | ","
+                    | ")"
+                    | "]"
+                    | "}"
+                    | "("
+                    | "["
+                    | "."
+                    | "?."
+                    | "?"
+                    | ":"
+                    | "!"
+                    | "="
+                    | "=="
+                    | "!="
+                    | "+"
+                    | "-"
+                    | "*"
+                    | "/"
+                    | "%"
+                    | "<"
+                    | ">"
+                    | "&"
+                    | "|"
+                    | "^"
+                    | "&&"
+                    | "||"
+                    | "??"
+                    | "++"
+                    | "--"
+                    | "in"
+                    | "instanceof"
+                    | "as"
+                    | "satisfies"
             )
     }
 
@@ -545,12 +621,19 @@ mod tests {
     fn exported_ambient_bindings_preserve_an_empty_module_and_byte_positions() {
         let declaration = "export declare const host: Host;";
         let source = format!("{declaration}\nconst value = 3;");
-        let expected = format!("export{{}};{}\nconst value = 3;", " ".repeat(declaration.len() - 9));
+        let expected = format!(
+            "export{{}};{}\nconst value = 3;",
+            " ".repeat(declaration.len() - 9)
+        );
         assert_eq!(super::super::erase(&source), expected);
         assert_eq!(expected.len(), source.len());
         assert_eq!(super::super::erase(&expected), expected);
         let source = "export\ndeclare const 名称:\n 'é';";
-        let expected = format!("export\n{{}};{}\n{}", " ".repeat("declare const 名称:".len() - 3), " ".repeat(" 'é';".len()));
+        let expected = format!(
+            "export\n{{}};{}\n{}",
+            " ".repeat("declare const 名称:".len() - 3),
+            " ".repeat(" 'é';".len())
+        );
         assert_eq!(super::super::erase(source), expected);
         assert_eq!(expected.len(), source.len());
     }
@@ -562,14 +645,20 @@ mod tests {
         let source = format!("{first}\n{second}");
         assert_eq!(
             super::super::erase(&source),
-            format!("export{{}};{}\n{}", " ".repeat(first.len() - 9), " ".repeat(second.len()))
+            format!(
+                "export{{}};{}\n{}",
+                " ".repeat(first.len() - 9),
+                " ".repeat(second.len())
+            )
         );
     }
 
     #[test]
     fn invalid_nested_exports_are_not_hidden_by_declaration_erasure() {
         check("function outer() { export declare function invalid(): void; }");
-        check("const text = `${(() => { export declare function invalid(): void; return 1; })()}`;");
+        check(
+            "const text = `${(() => { export declare function invalid(): void; return 1; })()}`;",
+        );
         check("function outer() { export declare const invalid⟦: number⟧; }");
         check("class Object { ⟦export(value: number): number;⟧ export(value) { return value; } }");
     }
@@ -580,27 +669,40 @@ mod tests {
         // Deleting it could hide a ReferenceError or a host getter's effects.
         check("declare\nconst value⟦: number⟧ = 1;");
         check("declare /*\n*/ const value⟦: number⟧ = 1;");
-        check("declare\n⟦function run(value: number): number;⟧ function run(value) { return value; }");
+        check(
+            "declare\n⟦function run(value: number): number;⟧ function run(value) { return value; }",
+        );
         check("⟦declare /* inline */ const host: Host;⟧");
         check("⟦declare /* inline */ function run(value: number): number;⟧");
     }
 
     #[test]
     fn free_function_overloads_leave_one_runtime_implementation() {
-        check("⟦function choose(value: number): number;⟧ ⟦function choose(value: string): string;⟧ function choose(value⟦: unknown⟧) { return value; }");
-        check("⟦function map<T extends {value: number}>(value: T): {result: T};⟧ function map(value) { return {result: value}; }");
-        check("⟦function run(...values: [number, string]): void;⟧ function run(...values) { effect(values); }");
+        check(
+            "⟦function choose(value: number): number;⟧ ⟦function choose(value: string): string;⟧ function choose(value⟦: unknown⟧) { return value; }",
+        );
+        check(
+            "⟦function map<T extends {value: number}>(value: T): {result: T};⟧ function map(value) { return {result: value}; }",
+        );
+        check(
+            "⟦function run(...values: [number, string]): void;⟧ function run(...values) { effect(values); }",
+        );
     }
 
     #[test]
     fn exported_and_ambient_functions_have_no_runtime_binding() {
         check("⟦declare function external(value: number): string;⟧ use(external);");
-        check("⟦async function load(value: number): Promise<number>;⟧ async function load(value) { return value; }");
+        check(
+            "⟦async function load(value: number): Promise<number>;⟧ async function load(value) { return value; }",
+        );
         let declaration = "export default function choose(value: number): number;";
         let implementation = " export default function choose(value) { return value; }";
         assert_eq!(
             super::super::erase(&format!("{declaration}{implementation}")),
-            format!("export{{}};{}{implementation}", " ".repeat(declaration.len() - 9))
+            format!(
+                "export{{}};{}{implementation}",
+                " ".repeat(declaration.len() - 9)
+            )
         );
         let declaration = "export declare function external<T>(value: T): T;";
         assert_eq!(
@@ -611,23 +713,35 @@ mod tests {
 
     #[test]
     fn overload_boundaries_respect_newlines_and_implementation_bodies() {
-        check("⟦function choose(value: number): number⟧\nfunction choose(value⟦: unknown⟧)\n{ return value; }");
+        check(
+            "⟦function choose(value: number): number⟧\nfunction choose(value⟦: unknown⟧)\n{ return value; }",
+        );
         check("⟦function done(value?: number)⟧\nconst value = 1;");
         check("⟦declare function done(): void⟧");
-        check("function outer()⟦: number⟧ { ⟦function nested(value: number): number;⟧ function nested(value) { return value; } return nested(1); }");
-        check("first()\n⟦function choose(value: number): number;⟧ function choose(value) { return value; }");
+        check(
+            "function outer()⟦: number⟧ { ⟦function nested(value: number): number;⟧ function nested(value) { return value; } return nested(1); }",
+        );
+        check(
+            "first()\n⟦function choose(value: number): number;⟧ function choose(value) { return value; }",
+        );
     }
 
     #[test]
     fn overloads_preserve_receiver_types_destructuring_and_literal_bytes() {
-        check("⟦function run(this: {value: number}, {offset}: {offset: number}): number;⟧ function run(offset) { return this.value + offset; }");
-        check("⟦function 名称(値: 'é'):\n {名: string};⟧ const text = 'function f(x: T): U;'; // function f(x: T): U;");
+        check(
+            "⟦function run(this: {value: number}, {offset}: {offset: number}): number;⟧ function run(offset) { return this.value + offset; }",
+        );
+        check(
+            "⟦function 名称(値: 'é'):\n {名: string};⟧ const text = 'function f(x: T): U;'; // function f(x: T): U;",
+        );
         check("const pattern = /function f(x: T): U;/; const text = `function f(x: T): U;`;");
     }
 
     #[test]
     fn overloads_inside_template_callbacks_use_the_same_pass() {
-        check("const text = `${(() => { ⟦function f(x: number): number;⟧ function f(x⟦: number⟧) { return x; } return f(1); })()}`;");
+        check(
+            "const text = `${(() => { ⟦function f(x: number): number;⟧ function f(x⟦: number⟧) { return x; } return f(1); })()}`;",
+        );
     }
 
     #[test]
@@ -721,13 +835,17 @@ mod tests {
     fn templates_erase_only_interpolation_code() {
         check("const text = `raw as number: ${value ⟦as number⟧}: done`;");
         check("const text = `outer ${`inner ${object⟦!⟧.value}`} end`;");
-        check("const text = `\\${notCode as Type}: ${(object ⟦satisfies {value: number}⟧).value}`;");
+        check(
+            "const text = `\\${notCode as Type}: ${(object ⟦satisfies {value: number}⟧).value}`;",
+        );
     }
 
     #[test]
     fn template_callbacks_use_the_same_binding_and_signature_pass() {
         check("const text = `${((value⟦: number⟧)⟦: number⟧ => value + 1)(3)}`;");
-        check("const text = `${(() => { const value⟦: {x: number}⟧ = {x: 3}; return value.x; })()}`;");
+        check(
+            "const text = `${(() => { const value⟦: {x: number}⟧ = {x: 3}; return value.x; })()}`;",
+        );
         check("const text = `${({run(value⟦: number⟧)⟦: number⟧ { return value; }}).run(3)}`;");
     }
 
@@ -735,7 +853,9 @@ mod tests {
     fn interpolation_lexer_distinguishes_division_from_regular_expressions() {
         check("const text = `${(value ⟦as number⟧) / 2}: slash / raw`;");
         check("const text = `${object.if(value ⟦as number⟧) / 2}: slash / raw`;");
-        check("const text = `${(() => { if (ready) /}/.test('}'); return value ⟦as number⟧; })()}`;");
+        check(
+            "const text = `${(() => { if (ready) /}/.test('}'); return value ⟦as number⟧; })()}`;",
+        );
         check("const text = `${/a}b/.test('a}b') ? value⟦!⟧ : 0}`;");
     }
 

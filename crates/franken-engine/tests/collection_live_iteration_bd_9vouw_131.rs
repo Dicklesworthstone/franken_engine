@@ -72,3 +72,29 @@ fn finished_iterators_fresh_entries_and_nested_for_each() {
                   out.join(' | ');";
     assert_eq!(eval(source), "true/true | true/a | 11,12,21,22 | 1,7");
 }
+
+/// bd-9vouw.121: Map and Set iterators inherit %MapIteratorPrototype% and
+/// %SetIteratorPrototype% (ES2020 23.1.5.2, 23.2.5.2), each with `next` and
+/// its @@toStringTag, under %IteratorPrototype%; they reported
+/// %ArrayIteratorPrototype% ("[object Array Iterator]").
+#[test]
+fn map_and_set_iterators_have_their_own_prototypes() {
+    let source = "var m = new Map([[1, 2]]), s = new Set([1]);\n\
+                  var mi = m.keys(), si = s.values();\n\
+                  var MP = Object.getPrototypeOf(mi), SP = Object.getPrototypeOf(si);\n\
+                  var IP = Object.getPrototypeOf(Object.getPrototypeOf([].keys()));\n\
+                  [Object.prototype.toString.call(mi), Object.prototype.toString.call(si), \
+                  Object.prototype.toString.call([].keys()), \
+                  MP === Object.getPrototypeOf(m.entries()), MP !== SP, \
+                  SP === Object.getPrototypeOf(s.entries()), MP[Symbol.toStringTag], \
+                  SP[Symbol.toStringTag], Object.getPrototypeOf(MP) === IP, \
+                  Object.getPrototypeOf(SP) === IP, typeof MP.next, MP.hasOwnProperty('next'), \
+                  mi[Symbol.iterator]() === mi, Object.prototype.toString.call(m[Symbol.iterator]()), \
+                  String(si)].join(' ');";
+    assert_eq!(
+        eval(source),
+        "[object Map Iterator] [object Set Iterator] [object Array Iterator] true true true \
+         Map Iterator Set Iterator true true function true true [object Map Iterator] \
+         [object Set Iterator]"
+    );
+}

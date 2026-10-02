@@ -3872,6 +3872,58 @@ fn strip_leading_labels(segment: &str) -> &str {
     }
 }
 
+/// Whether `prefix`, the text before a `{`, ends with the header of a
+/// function expression (`function (a)`, `function* g(a)`, `async function
+/// (a)`) whose `function` keyword follows an operator: its body brace closes
+/// no statement. jszip's `if (e) r = c ? function () {...} : function () {};
+/// else {...}` was split after the first function body.
+fn ends_with_function_expression_header(prefix: &str) -> bool {
+    let is_identifier_char = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let prefix = prefix.trim_end();
+    if !prefix.ends_with(')') {
+        return false;
+    }
+    let Some(at) = prefix.rfind("function") else {
+        return false;
+    };
+    let (before, after) = (&prefix[..at], &prefix[at + "function".len()..]);
+    if before.ends_with(is_identifier_char) {
+        return false;
+    }
+    let mut rest = after.trim_start();
+    if let Some(star) = rest.strip_prefix('*') {
+        rest = star.trim_start();
+    }
+    let name_len = rest
+        .find(|c: char| !is_identifier_char(c))
+        .unwrap_or(rest.len());
+    rest = rest[name_len..].trim_start();
+    if !rest.starts_with('(')
+        || extract_balanced(rest, '(', ')').is_none_or(|(_, tail)| !tail.trim().is_empty())
+    {
+        return false;
+    }
+    let mut before = before.trim_end();
+    if let Some(stripped) = before
+        .strip_suffix("async")
+        .filter(|stripped| !stripped.ends_with(is_identifier_char))
+    {
+        before = stripped.trim_end();
+    }
+    // A `:` is a conditional's (`c ? f : function () {}`), not a case
+    // clause's or a label's, whose function is a declaration.
+    let conditional_colon = before.ends_with(':')
+        && before.contains('?')
+        && !starts_with_keyword(before.trim_start(), "case")
+        && !starts_with_keyword(before.trim_start(), "default");
+    conditional_colon
+        || before.ends_with([
+            '=', '?', '(', ',', '[', '!', '&', '|', '+', '-', '*', '%', '>', '<',
+        ])
+        || (before.ends_with("return")
+            && !before[..before.len() - "return".len()].ends_with(is_identifier_char))
+}
+
 fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     let mut out = Vec::with_capacity(4);
     let mut segment_start = 0usize;
@@ -3915,9 +3967,11 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                 // ends no statement: the `;` after it decides, as it does
                 // for any other expression.
                 let closes_expression_brace = outer_brace_open >= segment_start
-                    && line[segment_start..outer_brace_open].trim_end().ends_with([
+                    && (line[segment_start..outer_brace_open].trim_end().ends_with([
                         '=', '>', ',', '(', '[', '?', '!', '&', '|', '+', '-', '*', '%',
-                    ]);
+                    ]) || ends_with_function_expression_header(
+                        &line[segment_start..outer_brace_open],
+                    ));
                 // A closing brace that returns to brace_depth==0 may
                 // terminate a block-level statement (function decl,
                 // if/else, for, while, etc.).  Only split here when the
@@ -11228,8 +11282,14 @@ fn parse_if_statement(
             // SyntaxError only when the branch ran. A lone `;` is the empty
             // statement and stays.
             let cons = rest[..else_idx].trim();
+            // `if (a) for (; f(), --n;); else b()` (jszip): that `;` is the
+            // loop's empty body, not the end of an expression statement.
             let cons = match cons.strip_suffix(';') {
-                Some(body) if !body.trim().is_empty() => body.trim_end(),
+                Some(body)
+                    if !body.trim().is_empty() && !statement_header_takes_unbraced_body(body) =>
+                {
+                    body.trim_end()
+                }
                 _ => cons,
             }
             .to_string();

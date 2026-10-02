@@ -7267,18 +7267,22 @@ fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, u
     let remaining = bytes.len() - i;
 
     // Check for keyword operators first (instanceof, in). A `#` before one
-    // makes it a private name (`this.#in`), not an operator.
+    // makes it a private name (`this.#in`), and a `.` a property name
+    // (`o.in.x`, `o.in?.x`, `o.instanceof`; arktype reads `inner.in?.rawIn`),
+    // not an operator.
     if remaining >= 10 && &bytes[i..i + 10] == b"instanceof" {
-        let before_ok =
-            i == 0 || !(is_identifier_continue(bytes[i - 1] as char) || bytes[i - 1] == b'#');
+        let before_ok = i == 0
+            || !(is_identifier_continue(bytes[i - 1] as char)
+                || matches!(bytes[i - 1], b'#' | b'.'));
         let after_ok = i + 10 >= bytes.len() || !is_identifier_continue(bytes[i + 10] as char);
         if before_ok && after_ok {
             return Some((BinaryOperator::Instanceof, 10));
         }
     }
     if remaining >= 2 && &bytes[i..i + 2] == b"in" {
-        let before_ok =
-            i == 0 || !(is_identifier_continue(bytes[i - 1] as char) || bytes[i - 1] == b'#');
+        let before_ok = i == 0
+            || !(is_identifier_continue(bytes[i - 1] as char)
+                || matches!(bytes[i - 1], b'#' | b'.'));
         let after_ok = i + 2 >= bytes.len() || !is_identifier_continue(bytes[i + 2] as char);
         if before_ok && after_ok {
             return Some((BinaryOperator::In, 2));

@@ -125,6 +125,15 @@ weekday,literal,month,literal,day,literal,year,literal,hour,literal,minute,liter
 month=1|literal=/|day=1|literal=/|year=1970
 weekday=Fri|literal=, |month=June|literal= |day=7|literal= at |hour=10|literal=:|minute=00|literal=<NNBSP>|dayPeriod=AM|literal= |timeZoneName=UTC "Fri, June 7 at 10:00 AM UTC" false"#,
     ),
+    (
+        // useGrouping as ES2023 GetBooleanOrStringNumberFormatOption reads
+        // it: true "always", any falsy value false, "true"/"false" the
+        // default (temporal-polyfill: `toLocaleString('fullwide', {
+        // useGrouping: 0 })`), anything else outside the list a RangeError.
+        "number_format_use_grouping_values",
+        r#"function g(v) { try { const f = new Intl.NumberFormat('en', { useGrouping: v }); return f.format(1234567) + ':' + f.resolvedOptions().useGrouping; } catch (e) { return e.constructor.name; } } console.log([0, 1, '', 'true', 'false', 'always', 'auto', null, NaN, 'x'].map(g).join(' | '), (1234).toLocaleString('fullwide', { useGrouping: 0 }));"#,
+        r#"1234567:false | RangeError | 1234567:false | 1,234,567:auto | 1,234,567:auto | 1,234,567:always | 1,234,567:auto | 1234567:false | 1234567:false | RangeError 1234"#,
+    ),
 ];
 
 #[test]

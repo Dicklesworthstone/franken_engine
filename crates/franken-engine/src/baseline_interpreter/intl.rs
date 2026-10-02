@@ -532,18 +532,21 @@ impl InterpreterCore {
             *slot = Some(number.floor() as u32);
         }
         let grouping = self.intl_option(module, options, "useGrouping")?;
+        // ES2023 GetBooleanOrStringNumberFormatOption: true is "always", any
+        // falsy value (0, "", null, NaN) false, the strings "true" and
+        // "false" the default; temporal-polyfill passes `useGrouping: 0`.
         let use_grouping = match &grouping {
             Value::Undefined => Value::str("auto"),
-            Value::Bool(false) => Value::Bool(false),
             Value::Bool(true) => Value::str("always"),
+            falsy if !falsy.is_truthy() => Value::Bool(false),
             other => {
                 let text = self.intl_to_string(module, other.clone())?;
                 match text.as_str() {
                     "always" | "auto" => Value::str(text),
+                    "true" | "false" => Value::str("auto"),
                     "min2" => {
                         return Err(Self::intl_refusal(SERVICE, "useGrouping min2".to_string()));
                     }
-                    "false" | "" => Value::Bool(false),
                     _ => {
                         return Err(InterpreterError::RangeError {
                             message: format!(

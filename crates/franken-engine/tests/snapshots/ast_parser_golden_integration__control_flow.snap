@@ -189,22 +189,19 @@ expression: scrubbed_actual
           }
         },
         "update": {
-          "Binary": {
-            "operator": "Subtract",
-            "left": {
+          "Unary": {
+            "operator": "Decrement",
+            "argument": {
               "Assignment": {
-                "operator": "SubtractAssign",
+                "operator": "IncrementAssign",
                 "left": {
                   "Identifier": "i"
                 },
                 "right": {
-                  "NumericLiteral": -1
+                  "NumericLiteral": 1
                 },
                 "assignment_strictness": "sloppy"
               }
-            },
-            "right": {
-              "NumericLiteral": 1
             }
           }
         },

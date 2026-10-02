@@ -7480,19 +7480,19 @@ fn try_parse_update(
         return None;
     }
 
-    // Prefix: `++x` / `--x`. The update subtracts a negative or positive
-    // unit (`x -= -1` / `x -= 1`): ES2020 12.4.4.1 applies ToNumeric to the
-    // old value, which `-` does and `+` does not, so `s = '5'; ++s` is 6, not
-    // "51" (and a Date or valueOf object takes its number hint). `x - -1` is
-    // exactly `x + 1` for every Number.
-    let prefix_unit = if expr.starts_with("++") {
-        Some(-1)
+    // Prefix: `++x` / `--x`. ES2020 12.4.4.1 applies ToNumeric to the old
+    // value and adds one of its own type: `s = '5'; ++s` is 6, not "51" (a
+    // Date or valueOf object takes its number hint), and a BigInt steps by
+    // `1n` (bd-9vouw.119; the earlier `x -= -1` desugar threw "cannot mix
+    // BigInt" there).
+    let prefix_operator = if expr.starts_with("++") {
+        Some(AssignmentOperator::IncrementAssign)
     } else if expr.starts_with("--") {
-        Some(1)
+        Some(AssignmentOperator::DecrementAssign)
     } else {
         None
     };
-    if let Some(unit) = prefix_unit {
+    if let Some(operator) = prefix_operator {
         let operand_src = expr[2..].trim();
         // Reject chained/ambiguous forms (`+++x`, `++ -x`); leave them to the
         // unary path or to a fail-closed parse.
@@ -7506,24 +7506,30 @@ fn try_parse_update(
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
         }
-        // `++x` ⇒ `x -= -1` (compound assignment evaluates to the new value).
+        // `++x` evaluates to the new value, as a compound assignment does.
         return Some(Ok(Expression::Assignment {
-            operator: AssignmentOperator::SubtractAssign,
+            operator,
             left: Box::new(target),
-            right: Box::new(Expression::NumericLiteral(unit)),
+            right: Box::new(Expression::NumericLiteral(1)),
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         }));
     }
 
     // Postfix: `x++` / `x--`.
     let postfix = if expr.ends_with("++") {
-        Some((-1, BinaryOperator::Subtract))
+        Some((
+            AssignmentOperator::IncrementAssign,
+            UnaryOperator::Decrement,
+        ))
     } else if expr.ends_with("--") {
-        Some((1, BinaryOperator::Add))
+        Some((
+            AssignmentOperator::DecrementAssign,
+            UnaryOperator::Increment,
+        ))
     } else {
         None
     };
-    if let Some((unit, adjust_op)) = postfix {
+    if let Some((operator, adjust_op)) = postfix {
         let operand_src = expr[..expr.len() - 2].trim();
         if operand_src.is_empty() || operand_src.ends_with('+') || operand_src.ends_with('-') {
             return None;
@@ -7535,19 +7541,20 @@ fn try_parse_update(
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
         }
-        // `x++` ⇒ `(x -= -1) - 1`: write the increment back, evaluate to the
-        // old value, now a number (`s = '5'; s++` is 5). `x--` mirrors with
-        // `(x -= 1) + 1`.
+        // `x++` writes the increment back and evaluates to the old value as
+        // a numeric (`s = '5'; s++` is 5): the new value stepped back by one
+        // of its own type, so a BigInt stays a BigInt. For a Number this is
+        // `(x + 1) - 1`, which differs from the old value only for -0 and
+        // beyond 2^53, as the earlier desugar did.
         let write_back = Expression::Assignment {
-            operator: AssignmentOperator::SubtractAssign,
+            operator,
             left: Box::new(target),
-            right: Box::new(Expression::NumericLiteral(unit)),
+            right: Box::new(Expression::NumericLiteral(1)),
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
         };
-        return Some(Ok(Expression::Binary {
+        return Some(Ok(Expression::Unary {
             operator: adjust_op,
-            left: Box::new(write_back),
-            right: Box::new(Expression::NumericLiteral(1)),
+            argument: Box::new(write_back),
         }));
     }
 

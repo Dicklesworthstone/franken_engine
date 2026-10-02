@@ -57,45 +57,172 @@ fn layout(locale: Option<&str>) -> Result<Layout, String> {
     }
 }
 
+/// The type of one formatted piece, as Intl.DateTimeFormat's
+/// formatToParts names it (ECMA-402 11.4.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PartType {
+    Weekday,
+    Year,
+    Month,
+    Day,
+    DayPeriod,
+    Hour,
+    Minute,
+    Second,
+    TimeZoneName,
+    Literal,
+}
+
+impl PartType {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Weekday => "weekday",
+            Self::Year => "year",
+            Self::Month => "month",
+            Self::Day => "day",
+            Self::DayPeriod => "dayPeriod",
+            Self::Hour => "hour",
+            Self::Minute => "minute",
+            Self::Second => "second",
+            Self::TimeZoneName => "timeZoneName",
+            Self::Literal => "literal",
+        }
+    }
+}
+
+/// A formatted date as typed pieces. Every layout builds these and the
+/// formatted string is their concatenation, so `format` and
+/// `formatToParts` cannot disagree. Adjacent literals merge, as ICU's do.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct DateParts(pub(super) Vec<(PartType, String)>);
+
+impl DateParts {
+    fn push(&mut self, kind: PartType, text: impl Into<String>) {
+        let text = text.into();
+        if text.is_empty() {
+            return;
+        }
+        if kind == PartType::Literal
+            && let Some((PartType::Literal, last)) = self.0.last_mut()
+        {
+            last.push_str(&text);
+            return;
+        }
+        self.0.push((kind, text));
+    }
+
+    fn literal(&mut self, text: &str) {
+        self.push(PartType::Literal, text);
+    }
+
+    fn append(&mut self, other: DateParts) {
+        for (kind, text) in other.0 {
+            self.push(kind, text);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(super) fn joined(&self) -> String {
+        self.0.iter().map(|(_, text)| text.as_str()).collect()
+    }
+}
+
 /// Format `fields` for `locale`, or name what the engine does not format.
 pub(super) fn format_date_locale(
     fields: DateFields,
     locale: Option<&str>,
     kind: DateLocaleKind,
 ) -> Result<String, String> {
+    format_date_locale_parts(fields, locale, kind).map(|parts| parts.joined())
+}
+
+/// [`format_date_locale`] as typed pieces.
+pub(super) fn format_date_locale_parts(
+    fields: DateFields,
+    locale: Option<&str>,
+    kind: DateLocaleKind,
+) -> Result<DateParts, String> {
+    use PartType::{Day, DayPeriod, Hour, Minute, Month, Second, Year};
     let layout = layout(locale)?;
     // ICU's `y` is the year of the era: 1 BC is year 1.
-    let year = if fields.year <= 0 {
-        1 - fields.year
-    } else {
-        fields.year
-    };
+    let year = era_year(&fields).to_string();
     let (month, day) = (fields.month + 1, fields.day);
     let (hour, minute, second) = (fields.hour, fields.minute, fields.second);
-    let date = match layout {
-        Layout::UnitedStates => format!("{month}/{day}/{year}"),
-        Layout::Britain | Layout::French => format!("{day:02}/{month:02}/{year}"),
-        Layout::German => format!("{day}.{month}.{year}"),
-        Layout::Japanese => format!("{year}/{month}/{day}"),
+    let mut date = DateParts::default();
+    let (first, second_field, third, glue) = match layout {
+        Layout::UnitedStates => (
+            (Month, month.to_string()),
+            (Day, day.to_string()),
+            (Year, year),
+            "/",
+        ),
+        Layout::Britain | Layout::French => (
+            (Day, format!("{day:02}")),
+            (Month, format!("{month:02}")),
+            (Year, year),
+            "/",
+        ),
+        Layout::German => (
+            (Day, day.to_string()),
+            (Month, month.to_string()),
+            (Year, year),
+            ".",
+        ),
+        Layout::Japanese => (
+            (Year, year),
+            (Month, month.to_string()),
+            (Day, day.to_string()),
+            "/",
+        ),
     };
-    let time = match layout {
+    date.push(first.0, first.1);
+    date.literal(glue);
+    date.push(second_field.0, second_field.1);
+    date.literal(glue);
+    date.push(third.0, third.1);
+    let mut time = DateParts::default();
+    match layout {
         Layout::UnitedStates => {
-            let period = if hour < 12 { "AM" } else { "PM" };
             let twelve = match hour % 12 {
                 0 => 12,
                 other => other,
             };
-            format!("{twelve}:{minute:02}:{second:02} {period}")
+            time.push(Hour, twelve.to_string());
+            time.literal(":");
+            time.push(Minute, format!("{minute:02}"));
+            time.literal(":");
+            time.push(Second, format!("{second:02}"));
+            time.literal(" ");
+            time.push(DayPeriod, if hour < 12 { "AM" } else { "PM" });
         }
-        Layout::Japanese => format!("{hour}:{minute:02}:{second:02}"),
-        _ => format!("{hour:02}:{minute:02}:{second:02}"),
-    };
+        Layout::Japanese => {
+            time.push(Hour, hour.to_string());
+            time.literal(":");
+            time.push(Minute, format!("{minute:02}"));
+            time.literal(":");
+            time.push(Second, format!("{second:02}"));
+        }
+        _ => {
+            time.push(Hour, format!("{hour:02}"));
+            time.literal(":");
+            time.push(Minute, format!("{minute:02}"));
+            time.literal(":");
+            time.push(Second, format!("{second:02}"));
+        }
+    }
     let separator = match layout {
         Layout::UnitedStates | Layout::Britain | Layout::German => ", ",
         Layout::French | Layout::Japanese => " ",
     };
     Ok(match kind {
-        DateLocaleKind::DateTime => format!("{date}{separator}{time}"),
+        DateLocaleKind::DateTime => {
+            date.literal(separator);
+            date.append(time);
+            date
+        }
         DateLocaleKind::Date => date,
         DateLocaleKind::Time => time,
     })
@@ -210,12 +337,19 @@ fn era_year(fields: &DateFields) -> i64 {
     }
 }
 
-fn time_zone_suffix(name: Option<TextWidth>) -> &'static str {
-    match name {
-        None => "",
-        Some(TextWidth::Long) => " Coordinated Universal Time",
-        Some(_) => " UTC",
-    }
+/// The ` UTC` / ` Coordinated Universal Time` a `timeZoneName` adds.
+fn push_time_zone_name(parts: &mut DateParts, name: Option<TextWidth>) {
+    let Some(width) = name else {
+        return;
+    };
+    parts.literal(" ");
+    parts.push(
+        PartType::TimeZoneName,
+        match width {
+            TextWidth::Long => "Coordinated Universal Time",
+            _ => "UTC",
+        },
+    );
 }
 
 fn en_us_only(locale: Option<&str>) -> Result<(), String> {
@@ -228,31 +362,53 @@ fn en_us_only(locale: Option<&str>) -> Result<(), String> {
     }
 }
 
-/// Format `fields` with `dateStyle` / `timeStyle` (en-US).
-pub(super) fn format_date_styles(
+/// Format `fields` with `dateStyle` / `timeStyle` (en-US), as typed pieces.
+pub(super) fn format_date_styles_parts(
     fields: DateFields,
     locale: Option<&str>,
     date_style: Option<FormatStyle>,
     time_style: Option<FormatStyle>,
     hour12: bool,
-) -> Result<String, String> {
+) -> Result<DateParts, String> {
+    use PartType::{Day, Month, Weekday, Year};
     en_us_only(locale)?;
     let year = era_year(&fields);
     let month = MONTH_NAMES[fields.month as usize % 12];
-    let date = date_style.map(|style| match style {
-        FormatStyle::Full => format!(
-            "{}, {month} {}, {year}",
-            WEEKDAY_NAMES[weekday_index(&fields)],
-            fields.day
-        ),
-        FormatStyle::Long => format!("{month} {}, {year}", fields.day),
-        FormatStyle::Medium => format!("{} {}, {year}", named(month, TextWidth::Short), fields.day),
-        FormatStyle::Short => format!(
-            "{}/{}/{}",
-            fields.month + 1,
-            fields.day,
-            number(year, Digits::TwoDigit)
-        ),
+    let date = date_style.map(|style| {
+        let mut date = DateParts::default();
+        match style {
+            FormatStyle::Full => {
+                date.push(Weekday, WEEKDAY_NAMES[weekday_index(&fields)]);
+                date.literal(", ");
+                date.push(Month, month);
+                date.literal(" ");
+                date.push(Day, fields.day.to_string());
+                date.literal(", ");
+                date.push(Year, year.to_string());
+            }
+            FormatStyle::Long => {
+                date.push(Month, month);
+                date.literal(" ");
+                date.push(Day, fields.day.to_string());
+                date.literal(", ");
+                date.push(Year, year.to_string());
+            }
+            FormatStyle::Medium => {
+                date.push(Month, named(month, TextWidth::Short));
+                date.literal(" ");
+                date.push(Day, fields.day.to_string());
+                date.literal(", ");
+                date.push(Year, year.to_string());
+            }
+            FormatStyle::Short => {
+                date.push(Month, (fields.month + 1).to_string());
+                date.literal("/");
+                date.push(Day, fields.day.to_string());
+                date.literal("/");
+                date.push(Year, number(year, Digits::TwoDigit));
+            }
+        }
+        date
     });
     let time = time_style.map(|style| {
         let second = !matches!(style, FormatStyle::Short);
@@ -261,26 +417,31 @@ pub(super) fn format_date_styles(
             FormatStyle::Long => Some(TextWidth::Short),
             _ => None,
         };
-        clock(
+        let mut time = clock(
             &fields,
             Some(Digits::Numeric),
             Some(Digits::TwoDigit),
             second.then_some(Digits::TwoDigit),
             hour12,
-        ) + time_zone_suffix(zone)
+        );
+        push_time_zone_name(&mut time, zone);
+        time
     });
     Ok(match (date, time) {
-        (Some(date), Some(time)) => {
-            let glue = if matches!(date_style, Some(FormatStyle::Full | FormatStyle::Long)) {
-                " at "
-            } else {
-                ", "
-            };
-            format!("{date}{glue}{time}")
+        (Some(mut date), Some(time)) => {
+            date.literal(
+                if matches!(date_style, Some(FormatStyle::Full | FormatStyle::Long)) {
+                    " at "
+                } else {
+                    ", "
+                },
+            );
+            date.append(time);
+            date
         }
         (Some(date), None) => date,
         (None, Some(time)) => time,
-        (None, None) => String::new(),
+        (None, None) => DateParts::default(),
     })
 }
 
@@ -291,49 +452,57 @@ fn clock(
     minute: Option<Digits>,
     second: Option<Digits>,
     hour12: bool,
-) -> String {
-    let mut out = match hour {
+) -> DateParts {
+    let mut out = DateParts::default();
+    match hour {
         Some(width) if hour12 => {
             let twelve = match fields.hour % 12 {
                 0 => 12,
                 other => other,
             };
-            number(i64::from(twelve), width)
+            out.push(PartType::Hour, number(i64::from(twelve), width));
         }
         // A 24-hour hour is always two digits in en-US ("00:07", "15").
-        Some(_) => format!("{:02}", fields.hour),
-        None => String::new(),
-    };
+        Some(_) => out.push(PartType::Hour, format!("{:02}", fields.hour)),
+        None => {}
+    }
     if minute.is_some() {
         if hour.is_some() {
-            out.push_str(&format!(":{:02}", fields.minute));
+            out.literal(":");
+            out.push(PartType::Minute, format!("{:02}", fields.minute));
         } else if second.is_some() {
-            out.push_str(&format!("{:02}", fields.minute));
+            out.push(PartType::Minute, format!("{:02}", fields.minute));
         } else {
             // ICU's lone minute is unpadded.
-            out.push_str(&fields.minute.to_string());
+            out.push(PartType::Minute, fields.minute.to_string());
         }
     }
     if second.is_some() {
         if minute.is_some() {
-            out.push_str(&format!(":{:02}", fields.second));
+            out.literal(":");
+            out.push(PartType::Second, format!("{:02}", fields.second));
         } else {
-            out.push_str(&fields.second.to_string());
+            out.push(PartType::Second, fields.second.to_string());
         }
     }
     if hour.is_some() && hour12 {
-        out.push_str(if fields.hour < 12 { " AM" } else { " PM" });
+        out.literal(" ");
+        out.push(
+            PartType::DayPeriod,
+            if fields.hour < 12 { "AM" } else { "PM" },
+        );
     }
     out
 }
 
-/// Format `fields` with Intl.DateTimeFormat components (en-US), or name
-/// the combination the engine does not lay out.
-pub(super) fn format_date_components(
+/// Format `fields` with Intl.DateTimeFormat components (en-US) as typed
+/// pieces, or name the combination the engine does not lay out.
+pub(super) fn format_date_components_parts(
     fields: DateFields,
     locale: Option<&str>,
     components: &DateComponents,
-) -> Result<String, String> {
+) -> Result<DateParts, String> {
+    use PartType::{Day, Month, Weekday, Year};
     en_us_only(locale)?;
     let year = components
         .year
@@ -346,60 +515,90 @@ pub(super) fn format_date_components(
         MonthStyle::Digits(width) => number(i64::from(fields.month) + 1, width),
         MonthStyle::Text(width) => named(MONTH_NAMES[fields.month as usize % 12], width),
     });
-    let core = match (month, day, year) {
+    let mut core = DateParts::default();
+    match (month, day, year) {
         (Some(month), Some(day), Some(year)) if month_text => {
-            Some(format!("{month} {day}, {year}"))
+            core.push(Month, month);
+            core.literal(" ");
+            core.push(Day, day);
+            core.literal(", ");
+            core.push(Year, year);
         }
-        (Some(month), Some(day), None) if month_text => Some(format!("{month} {day}")),
-        (Some(month), None, Some(year)) if month_text => Some(format!("{month} {year}")),
-        (Some(month), Some(day), Some(year)) => Some(format!("{month}/{day}/{year}")),
-        (Some(month), Some(day), None) => Some(format!("{month}/{day}")),
-        (Some(month), None, Some(year)) => Some(format!("{month}/{year}")),
-        (Some(month), None, None) => Some(month),
-        (None, Some(day), None) => Some(day),
-        (None, None, Some(year)) => Some(year),
-        (None, None, None) => None,
+        (Some(month), Some(day), None) if month_text => {
+            core.push(Month, month);
+            core.literal(" ");
+            core.push(Day, day);
+        }
+        (Some(month), None, Some(year)) if month_text => {
+            core.push(Month, month);
+            core.literal(" ");
+            core.push(Year, year);
+        }
+        (Some(month), Some(day), Some(year)) => {
+            core.push(Month, month);
+            core.literal("/");
+            core.push(Day, day);
+            core.literal("/");
+            core.push(Year, year);
+        }
+        (Some(month), Some(day), None) => {
+            core.push(Month, month);
+            core.literal("/");
+            core.push(Day, day);
+        }
+        (Some(month), None, Some(year)) => {
+            core.push(Month, month);
+            core.literal("/");
+            core.push(Year, year);
+        }
+        (Some(month), None, None) => core.push(Month, month),
+        (None, Some(day), None) => core.push(Day, day),
+        (None, None, Some(year)) => core.push(Year, year),
+        (None, None, None) => {}
         (None, Some(_), Some(_)) => {
             return Err("a day and year without a month".to_string());
         }
-    };
-    let weekday = components
-        .weekday
-        .map(|width| named(WEEKDAY_NAMES[weekday_index(&fields)], width));
-    let date = match (weekday, &core) {
-        (Some(weekday), Some(core)) => Some(format!("{weekday}, {core}")),
-        (Some(weekday), None) => Some(weekday),
-        (None, Some(core)) => Some(core.clone()),
-        (None, None) => None,
-    };
+    }
+    let mut date = DateParts::default();
+    if let Some(width) = components.weekday {
+        date.push(Weekday, named(WEEKDAY_NAMES[weekday_index(&fields)], width));
+        if !core.is_empty() {
+            date.literal(", ");
+        }
+    }
+    let has_core = !core.is_empty();
+    date.append(core);
     let has_time =
         components.hour.is_some() || components.minute.is_some() || components.second.is_some();
     if components.second.is_some() && components.minute.is_none() && components.hour.is_some() {
         return Err("an hour and second without a minute".to_string());
     }
     let time = has_time.then(|| {
-        clock(
+        let mut time = clock(
             &fields,
             components.hour,
             components.minute,
             components.second,
             components.hour12,
-        ) + time_zone_suffix(components.time_zone_name)
+        );
+        push_time_zone_name(&mut time, components.time_zone_name);
+        time
     });
-    Ok(match (date, time) {
-        (Some(date), Some(time)) => {
-            let glue = if core.is_none() {
+    Ok(match time {
+        Some(time) if !date.is_empty() => {
+            let glue = if !has_core {
                 " "
             } else if matches!(components.month, Some(MonthStyle::Text(TextWidth::Long))) {
                 " at "
             } else {
                 ", "
             };
-            format!("{date}{glue}{time}")
+            date.literal(glue);
+            date.append(time);
+            date
         }
-        (Some(date), None) => date,
-        (None, Some(time)) => time,
-        (None, None) => String::new(),
+        Some(time) => time,
+        None => date,
     })
 }
 

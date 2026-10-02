@@ -7448,8 +7448,25 @@ fn try_parse_unary_prefix(
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
+            // bd-9vouw.136: a strict-mode delete throws where a sloppy one
+            // answers false, and of a bare identifier it is an early error
+            // (ES2020 12.5.3.1).
+            let op = if matches!(op, UnaryOperator::Delete) && context.strict_mode {
+                if matches!(arg, Expression::Identifier(_)) {
+                    return Some(Err(unsupported_expression_syntax_error(
+                        "delete of an unqualified identifier in strict mode",
+                        span,
+                        context,
+                    )));
+                }
+                UnaryOperator::StrictDelete
+            } else {
+                op
+            };
             // ES2022 13.5.1.1: `delete o.#x` is an early error.
-            if matches!(op, UnaryOperator::Delete) && is_private_member_expression(&arg) {
+            if matches!(op, UnaryOperator::Delete | UnaryOperator::StrictDelete)
+                && is_private_member_expression(&arg)
+            {
                 return Some(Err(unsupported_expression_syntax_error(
                     "private fields can not be deleted",
                     span,

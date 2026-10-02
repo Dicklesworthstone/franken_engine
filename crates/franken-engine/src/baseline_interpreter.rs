@@ -358,6 +358,10 @@ const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
 /// `PROXY_TARGET_SLOT` then holds the target's own-property storage, which
 /// the traps' fallbacks for [[Set]], [[Delete]], ... act on.
 const PROXY_CALL_TARGET_SLOT: &str = "__proxy_call_target";
+/// A Map's or Set's entry count (bd-9vouw.140): an internal slot, not an own
+/// `size` property, so %Map.prototype%.size / %Set.prototype%.size (and a
+/// subclass's `get size()`) answer `size` reads.
+const COLLECTION_SIZE_SLOT: &str = "__size";
 /// Built-in class parents the lowering records by name (`class X extends Map`,
 /// see `builtin_constructor_name` in the lowering); construction handles
 /// each through `initialize_builtin_subclass_instance`.
@@ -57334,7 +57338,30 @@ impl InterpreterCore {
         false
     }
 
+    /// The collection whose `size` accessor a [[Get]] or HasProperty of
+    /// `size` on `object_id` reaches: a Map or Set instance's (implicit
+    /// prototype link), or one whose chain reaches %Map.prototype% /
+    /// %Set.prototype% (a subclass instance, `Object.create(Map.prototype)`).
+    fn collection_size_owner(&self, object_id: ObjectId) -> Option<&'static str> {
+        ["Map", "Set"].into_iter().find(|owner| {
+            let storage = if *owner == "Map" {
+                "__entries"
+            } else {
+                "__values"
+            };
+            self.collection_storage_id(object_id, owner, storage)
+                .is_some()
+                || self.chain_reaches_canonical_prototype(object_id, owner)
+        })
+    }
+
     fn chain_has_virtual_builtin_property(&self, object_id: ObjectId, key: &str) -> bool {
+        if key == "size"
+            && let Some(owner) = self.collection_size_owner(object_id)
+            && !self.canonical_virtual_name_deleted(owner, key)
+        {
+            return true;
+        }
         let root_is_array = self
             .heap
             .get(object_id.0 as usize)
@@ -57557,6 +57584,21 @@ impl InterpreterCore {
             && !self.canonical_virtual_property_deleted("Function", key)
         {
             return Ok(value);
+        }
+        // `size` of a Map or Set is %Map.prototype% / %Set.prototype%'s
+        // accessor, not an own property (bd-9vouw.140): a subclass's
+        // `get size()` walked above shadows it, and its getter checks the
+        // receiver (`Object.create(Map.prototype).size` throws).
+        if key_text == "size"
+            && let Some(module) = module
+            && let Some(owner) = self.collection_size_owner(object_id)
+            && !self.canonical_virtual_property_deleted(owner, key)
+        {
+            return self.call_prototype_getter(
+                module,
+                &BuiltinFunction::prototype_getter(owner, "size"),
+                receiver,
+            );
         }
         if let Some(value) = self.url_object_property_value(object_id, key_text)? {
             return Ok(value);
@@ -58809,7 +58851,7 @@ impl InterpreterCore {
             self.mutate_heap(|heap| {
                 if is_new
                     && let Some(map_obj) = heap.get_mut(map_index)
-                    && let Some(Value::Int(size)) = map_obj.properties.get_mut("size")
+                    && let Some(Value::Int(size)) = map_obj.properties.get_mut(COLLECTION_SIZE_SLOT)
                 {
                     *size = size.saturating_add(1);
                 }
@@ -58825,8 +58867,8 @@ impl InterpreterCore {
         let entries_id = self.alloc_object_with_prototype(None)?;
         self.set_object_property(map_id, "__type".to_string(), Value::str("Map"))?;
         self.set_object_property(map_id, "__entries".to_string(), Value::Object(entries_id))?;
-        self.set_object_property(map_id, "size".to_string(), Value::Int(0))?;
-        self.hide_internal_slots(map_id, &["__type", "__entries", "size"])?;
+        self.set_object_property(map_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
+        self.hide_internal_slots(map_id, &["__type", "__entries", COLLECTION_SIZE_SLOT])?;
         Ok((map_id, entries_id))
     }
 
@@ -58931,7 +58973,7 @@ impl InterpreterCore {
             self.mutate_heap(|heap| {
                 if is_new
                     && let Some(set_obj) = heap.get_mut(set_index)
-                    && let Some(Value::Int(size)) = set_obj.properties.get_mut("size")
+                    && let Some(Value::Int(size)) = set_obj.properties.get_mut(COLLECTION_SIZE_SLOT)
                 {
                     *size = size.saturating_add(1);
                 }
@@ -59002,7 +59044,7 @@ impl InterpreterCore {
             let obj_index = obj_id.0 as usize;
             self.mutate_heap(|heap| {
                 if let Some(obj) = heap.get_mut(obj_index)
-                    && let Some(Value::Int(size)) = obj.properties.get_mut("size")
+                    && let Some(Value::Int(size)) = obj.properties.get_mut(COLLECTION_SIZE_SLOT)
                 {
                     *size = size.saturating_sub(1);
                 }
@@ -59027,7 +59069,7 @@ impl InterpreterCore {
             self.collection_storage_cleared(storage_id);
             self.mutate_heap(|heap| {
                 if let Some(obj) = heap.get_mut(obj_index)
-                    && let Some(Value::Int(size)) = obj.properties.get_mut("size")
+                    && let Some(Value::Int(size)) = obj.properties.get_mut(COLLECTION_SIZE_SLOT)
                 {
                     *size = 0;
                 }
@@ -85882,8 +85924,8 @@ impl InterpreterCore {
 
                 self.set_object_property(set_id, "__type".to_string(), Value::str("Set"))?;
                 self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
-                self.set_object_property(set_id, "size".to_string(), Value::Int(0))?;
-                self.hide_internal_slots(set_id, &["__type", "__values", "size"])?;
+                self.set_object_property(set_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
+                self.hide_internal_slots(set_id, &["__type", "__values", COLLECTION_SIZE_SLOT])?;
 
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
@@ -89693,7 +89735,8 @@ impl InterpreterCore {
         let collection_index = collection_id.0 as usize;
         self.mutate_heap(|heap| {
             if let Some(collection_obj) = heap.get_mut(collection_index)
-                && let Some(Value::Int(size)) = collection_obj.properties.get_mut("size")
+                && let Some(Value::Int(size)) =
+                    collection_obj.properties.get_mut(COLLECTION_SIZE_SLOT)
             {
                 *size = size.saturating_add(1);
             }
@@ -97749,8 +97792,15 @@ impl InterpreterCore {
                     "__entries".to_string(),
                     Value::Object(entries_id),
                 )?;
-                self.set_object_property(object_id, "size".to_string(), Value::Int(0))?;
-                self.hide_internal_slots(object_id, &["__type", "__entries", "size"])?;
+                self.set_object_property(
+                    object_id,
+                    COLLECTION_SIZE_SLOT.to_string(),
+                    Value::Int(0),
+                )?;
+                self.hide_internal_slots(
+                    object_id,
+                    &["__type", "__entries", COLLECTION_SIZE_SLOT],
+                )?;
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
                     self.seed_map_entries_from_iterable(
@@ -97769,8 +97819,12 @@ impl InterpreterCore {
                     "__values".to_string(),
                     Value::Object(values_id),
                 )?;
-                self.set_object_property(object_id, "size".to_string(), Value::Int(0))?;
-                self.hide_internal_slots(object_id, &["__type", "__values", "size"])?;
+                self.set_object_property(
+                    object_id,
+                    COLLECTION_SIZE_SLOT.to_string(),
+                    Value::Int(0),
+                )?;
+                self.hide_internal_slots(object_id, &["__type", "__values", COLLECTION_SIZE_SLOT])?;
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
                     self.seed_set_values_from_iterable(
@@ -139225,7 +139279,9 @@ mod tests {
         };
 
         assert_eq!(
-            core.heap[map_id.0 as usize].properties.get("size"),
+            core.heap[map_id.0 as usize]
+                .properties
+                .get(COLLECTION_SIZE_SLOT),
             Some(&Value::Int(2))
         );
         core.set_reg(0, Value::Object(map_id));
@@ -139255,7 +139311,9 @@ mod tests {
         };
 
         assert_eq!(
-            core.heap[set_id.0 as usize].properties.get("size"),
+            core.heap[set_id.0 as usize]
+                .properties
+                .get(COLLECTION_SIZE_SLOT),
             Some(&Value::Int(2))
         );
         core.set_reg(0, Value::Object(set_id));
@@ -144409,7 +144467,7 @@ mod tests {
             .expect("Map type tag should fit");
         core.set_object_property(map, "__entries".to_string(), Value::Object(entries))
             .expect("Map backing link should fit");
-        core.set_object_property(map, "size".to_string(), Value::Int(0))
+        core.set_object_property(map, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))
             .expect("Map size should fit");
         let exact = JsString::from_code_units(&[0xD800]);
         core.set_object_runtime_property(
@@ -144432,7 +144490,9 @@ mod tests {
                 .expect("frozen backing deletion should fail closed")
         );
         assert_eq!(
-            core.heap[map.0 as usize].properties.get("size"),
+            core.heap[map.0 as usize]
+                .properties
+                .get(COLLECTION_SIZE_SLOT),
             Some(&Value::Int(1))
         );
         assert_eq!(
@@ -144485,7 +144545,9 @@ mod tests {
             .expect("Map.clear should release ordinary and exact backing keys");
         assert!(core.heap[entries.0 as usize].properties.exact_is_empty());
         assert_eq!(
-            core.heap[map.0 as usize].properties.get("size"),
+            core.heap[map.0 as usize]
+                .properties
+                .get(COLLECTION_SIZE_SLOT),
             Some(&Value::Int(0))
         );
         assert_eq!(

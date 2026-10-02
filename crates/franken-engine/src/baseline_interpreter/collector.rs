@@ -652,6 +652,171 @@ impl GcMarker {
         }
     }
 
+    fn writable_callback(&mut self, record: &WritableCallbackRecord) {
+        let WritableCallbackRecord {
+            value,
+            label: _,
+            module_specifier: _,
+        } = record;
+        self.value(value);
+    }
+
+    /// A live Writable's guest values: its write/final callbacks, queued
+    /// chunks and their callbacks, end callbacks and terminal error.
+    fn writable_state(&mut self, state: &WritableState) {
+        let WritableState {
+            flavor: _,
+            object_mode: _,
+            high_water_mark: _,
+            write_callback,
+            final_callback,
+            writes,
+            buffered_length: _,
+            need_drain: _,
+            cork_depth: _,
+            end_requested: _,
+            destroy_requested: _,
+            end_callbacks,
+            end_callback_batch_remaining: _,
+            finished_end_callback_batch_remaining: _,
+            final_status: _,
+            prefinish_emitted: _,
+            finished: _,
+            terminal_error,
+            terminal_error_origin: _,
+            terminal_error_emitted: _,
+            tick_phase: _,
+            tick_sequence: _,
+            deferred_final_tick_sequence: _,
+            inside_write_invocation: _,
+            lifecycle_label: _,
+        } = state;
+        write_callback
+            .iter()
+            .chain(final_callback.iter())
+            .for_each(|value| self.value(value));
+        // The other WritableWriteQueue fields are byte counts.
+        let WritableWriteQueue {
+            completed, ready, ..
+        } = writes;
+        for record in completed.iter().chain(ready.iter()) {
+            let WritableWriteRecord {
+                value,
+                label: _,
+                units: _,
+                callback,
+                status: _,
+                completion_failed: _,
+            } = record;
+            self.value(value);
+            if let Some(callback) = callback {
+                self.writable_callback(callback);
+            }
+        }
+        for record in end_callbacks {
+            let WritableEndCallbackRecord {
+                callback,
+                registered_after_end: _,
+            } = record;
+            self.writable_callback(callback);
+        }
+        if let Some((value, _)) = terminal_error {
+            self.value(value);
+        }
+    }
+
+    fn writable_terminal_state(&mut self, state: &WritableTerminalState) {
+        let WritableTerminalState {
+            object_mode: _,
+            high_water_mark: _,
+            end_requested: _,
+            finished: _,
+            buffered_length: _,
+            cork_depth: _,
+            accepts_late_end_callback: _,
+            callbacks,
+            tick_sequence: _,
+            lifecycle_label: _,
+        } = state;
+        for record in callbacks {
+            let WritableTerminalCallbackRecord { callback, error: _ } = record;
+            self.writable_callback(callback);
+        }
+    }
+
+    /// A live Readable's source, read callback, buffered chunks, destroy
+    /// error and toArray waiter.
+    fn readable_from_state(&mut self, state: &ReadableFromState) {
+        let ReadableFromState {
+            source,
+            push_only: _,
+            object_mode: _,
+            high_water_mark: _,
+            read_callback,
+            buffer,
+            buffered_length: _,
+            eof_requested: _,
+            data_readable_pending: _,
+            eof_readable_pending: _,
+            read_callback_active: _,
+            decode_utf8: _,
+            utf8_pending: _,
+            destroy_requested: _,
+            destroy_error,
+            next_index: _,
+            phase: _,
+            flowing: _,
+            paused: _,
+            nonflowing_read_consumed: _,
+            lifecycle_label: _,
+            to_array_waiter,
+        } = state;
+        self.value(source);
+        read_callback
+            .iter()
+            .chain(destroy_error.iter())
+            .for_each(|value| self.value(value));
+        for chunk in buffer {
+            let ReadableBufferedChunk {
+                value,
+                label: _,
+                units: _,
+            } = chunk;
+            self.value(value);
+        }
+        if let Some(ReadableToArrayWaiter {
+            promise,
+            result,
+            label: _,
+        }) = to_array_waiter
+        {
+            self.promise(promise.0);
+            self.object(*result);
+        }
+    }
+
+    fn stream_pipeline(&mut self, state: &StreamPipelineState) {
+        let StreamPipelineState {
+            stages,
+            pending_close,
+            completion,
+            registration_label: _,
+            first_error,
+            phase: _,
+        } = state;
+        stages
+            .iter()
+            .chain(pending_close.iter())
+            .for_each(|id| self.object(*id));
+        match completion {
+            StreamPipelineCompletion::Callback(value) => self.value(value),
+            StreamPipelineCompletion::Promise(promise) => self.promise(promise.0),
+        }
+        if let Some((value, _)) = first_error {
+            self.value(value);
+        }
+    }
+
     fn async_function(&mut self, function: &AsyncFunctionObject) {
         let AsyncFunctionObject {
             owner_module: _,
@@ -1022,6 +1187,24 @@ impl InterpreterCore {
             if !live {
                 released_state_bytes = released_state_bytes
                     .saturating_add(Self::estimate_crypto_object_state_bytes(state));
+            }
+            live
+        });
+        // A reclaimed stream's terminal state had nothing pending (pending
+        // ones are roots, bd-9vouw.164).
+        self.writable_terminal_states.retain(|id, state| {
+            let live = !heap.is_reclaimed(id.0 as usize);
+            if !live {
+                released_state_bytes = released_state_bytes
+                    .saturating_add(Self::estimate_writable_terminal_state_bytes(state));
+            }
+            live
+        });
+        self.readable_terminal_states.retain(|id, state| {
+            let live = !heap.is_reclaimed(id.0 as usize);
+            if !live {
+                released_state_bytes = released_state_bytes
+                    .saturating_add(Self::estimate_readable_terminal_state_bytes(state));
             }
             live
         });
@@ -1574,7 +1757,8 @@ impl InterpreterCore {
             next_stream_pipeline_token: _,
             pending_stream_emissions,
             readable_from_streams,
-            readable_terminal_states,
+            // Labels only; weak, purged after the sweep (bd-9vouw.164).
+            readable_terminal_states: _,
             pending_readable_from_pumps,
             readable_pump_reservations,
             active_readable_listener_target,
@@ -1598,7 +1782,9 @@ impl InterpreterCore {
             writable_streams,
             writable_terminal_states,
             writable_in_flight_callback_bytes: _,
-            pending_writable_terminal_ticks,
+            // A count; the ticks it counts are the terminal states'
+            // tick_sequence, traced with them (bd-9vouw.164).
+            pending_writable_terminal_ticks: _,
             next_writable_tick_sequence: _,
             next_writable_completion_token: _,
             promise_combinators,
@@ -1652,7 +1838,7 @@ impl InterpreterCore {
 
         // Host I/O state is not traced yet: refuse to collect while any of it
         // is live.
-        let host_state: [(&'static str, bool); 27] = [
+        let host_state: [(&'static str, bool); 14] = [
             (
                 "pending_child_process_tasks",
                 pending_child_process_tasks.is_empty(),
@@ -1663,31 +1849,6 @@ impl InterpreterCore {
             ),
             ("child_process_streams", child_process_streams.is_empty()),
             ("child_process_handles", child_process_handles.is_empty()),
-            ("cluster_facades", cluster_facades.is_empty()),
-            ("stream_pipelines", stream_pipelines.is_empty()),
-            (
-                "pending_stream_emissions",
-                pending_stream_emissions.is_empty(),
-            ),
-            ("readable_from_streams", readable_from_streams.is_empty()),
-            (
-                "readable_terminal_states",
-                readable_terminal_states.is_empty(),
-            ),
-            (
-                "pending_readable_from_pumps",
-                pending_readable_from_pumps.is_empty(),
-            ),
-            (
-                "readable_pump_reservations",
-                readable_pump_reservations.is_empty(),
-            ),
-            (
-                "active_readable_listener_target",
-                active_readable_listener_target.is_none(),
-            ),
-            ("readable_pipe_links", readable_pipe_links.is_empty()),
-            ("readable_pipe_sources", readable_pipe_sources.is_empty()),
             ("loopback_servers", loopback_servers.is_empty()),
             ("loopback_sockets", loopback_sockets.is_empty()),
             ("loopback_ports", loopback_ports.is_empty()),
@@ -1698,15 +1859,6 @@ impl InterpreterCore {
             ("http_server_responses", http_server_responses.is_empty()),
             ("http_agents", http_agents.is_empty()),
             ("pending_http_tasks", pending_http_tasks.is_empty()),
-            ("writable_streams", writable_streams.is_empty()),
-            (
-                "writable_terminal_states",
-                writable_terminal_states.is_empty(),
-            ),
-            (
-                "pending_writable_terminal_ticks",
-                *pending_writable_terminal_ticks == 0,
-            ),
         ];
         if host_state.iter().any(|(_, idle)| !idle) {
             return Err(GcSkip::HostState);
@@ -1894,6 +2046,65 @@ impl InterpreterCore {
             for record in waiters.values().flatten() {
                 m.promise(record.promise.0);
             }
+        }
+
+        // Streams, pipelines and the cluster facade (bd-9vouw.164): live
+        // state is a root while its entry exists (pending callbacks, queued
+        // chunks, scheduled ticks and emissions run against these objects).
+        // A terminal state with nothing pending is weak: purged with its
+        // charge once its stream is reclaimed.
+        for (stream, state) in writable_streams {
+            m.object(*stream);
+            m.writable_state(state);
+        }
+        for (stream, state) in writable_terminal_states {
+            if state.tick_sequence.is_some() || !state.callbacks.is_empty() {
+                m.object(*stream);
+                m.writable_terminal_state(state);
+            }
+        }
+        for state in stream_pipelines.values() {
+            m.stream_pipeline(state);
+        }
+        for emission in pending_stream_emissions.values() {
+            let PendingStreamEmission {
+                object_id,
+                phase: _,
+            } = emission;
+            m.object(*object_id);
+        }
+        for (stream, state) in readable_from_streams {
+            m.object(*stream);
+            m.readable_from_state(state);
+        }
+        pending_readable_from_pumps
+            .values()
+            .for_each(|stream| m.object(*stream));
+        readable_pump_reservations
+            .keys()
+            .for_each(|stream| m.object(*stream));
+        if let Some(target) = active_readable_listener_target {
+            m.object(*target);
+        }
+        for (source, link) in readable_pipe_links {
+            let ReadablePipeLink {
+                destination,
+                token: _,
+            } = link;
+            m.object(*source);
+            m.object(*destination);
+        }
+        for (destination, source) in readable_pipe_sources {
+            m.object(*destination);
+            m.object(*source);
+        }
+        for (facade, state) in cluster_facades {
+            let ClusterRuntimeState {
+                settings,
+                lifecycle_label: _,
+            } = state;
+            m.object(*facade);
+            m.object(*settings);
         }
 
         // Modules.

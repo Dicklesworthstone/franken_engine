@@ -347,8 +347,17 @@ impl InterpreterCore {
         self.format_values(module, &values)
     }
 
+    /// `util.inspect(value)` at the default depth (console.dir).
+    pub(super) fn console_inspect(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<String, InterpreterError> {
+        self.inspect_with_depth(module, value, INSPECT_DEPTH)
+    }
+
     /// `util.format(...values)`.
-    fn format_values(
+    pub(super) fn format_values(
         &mut self,
         module: Option<&Ir3Module>,
         values: &[Value],

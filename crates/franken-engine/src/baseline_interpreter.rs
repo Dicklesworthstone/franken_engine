@@ -5787,6 +5787,11 @@ const GLOBAL_OBJECT_MEMBERS: [&str; 16] = [
 /// list the lowering declares factory hostcalls for).
 const GLOBAL_FUNCTION_VALUES: [&str; 13] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
 
+/// The RegExp flags in the order the `flags` getter lists them (ES2025
+/// 22.2.6.4): hasIndices, global, ignoreCase, multiline, dotAll, unicode,
+/// unicodeSets, sticky.
+const REGEXP_FLAG_ORDER: &str = "dgimsuvy";
+
 /// The generated Function realm's bindings to objects of its own
 /// (bd-fw7zd.8.3, bd-9vouw.133): its console, performance, Math, JSON and
 /// Reflect, and its global object under both names.
@@ -57413,7 +57418,7 @@ impl InterpreterCore {
         // ES2020 21.1.3.11 step 3: any other value is `new RegExp(value)`.
         let regex = self.compile_regexp_pattern(&self.regexp_create_source(pattern), "")?;
         Ok(self
-            .regexp_exec_at(&regex, input, 0, false)?
+            .regexp_exec_at(&regex, input, 0, false, false)?
             .map_or(Value::Null, |(result, _)| result))
     }
 
@@ -57436,7 +57441,19 @@ impl InterpreterCore {
         let regexp_id = self.alloc_object_with_prototype(Some(regexp_prototype))?;
         self.set_object_brand(regexp_id, "RegExp")?;
         self.set_object_property(regexp_id, "source".to_string(), Value::str(source))?;
-        self.set_object_property(regexp_id, "flags".to_string(), Value::str(flags))?;
+        // The `flags` getter lists the flags in "dgimsuvy" order whatever
+        // order they were written in (ES2025 22.2.6.4): `/a/gd.flags` is
+        // "dg". A letter outside that set stays, after them.
+        let canonical: String = REGEXP_FLAG_ORDER
+            .chars()
+            .filter(|flag| flags.contains(*flag))
+            .chain(
+                flags
+                    .chars()
+                    .filter(|flag| !REGEXP_FLAG_ORDER.contains(*flag)),
+            )
+            .collect();
+        self.set_object_property(regexp_id, "flags".to_string(), Value::str(canonical))?;
         self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
         // `lastIndex` is an own non-enumerable property; `source` and `flags`
         // stand in for prototype accessors.
@@ -71955,13 +71972,16 @@ impl InterpreterCore {
     /// RegExpBuiltinExec's result (ES2020 21.2.5.2.2) for the first match at
     /// or after byte offset `start` (exactly at `start` when `sticky`): the
     /// match array with every capture, `index` (UTF-16), `input` and
-    /// `groups`, plus the match's end byte offset.
+    /// `groups`, and with the `d` flag `indices` (ES2022 MakeIndicesArray:
+    /// each capture's UTF-16 `[start, end]` or undefined, and `groups`),
+    /// plus the match's end byte offset.
     fn regexp_exec_at(
         &mut self,
         regex: &CompiledRegExp,
         input: &str,
         start: usize,
         sticky: bool,
+        has_indices: bool,
     ) -> Result<Option<(Value, usize)>, InterpreterError> {
         let Some(spans) = regex.captures_at(input, start, sticky)? else {
             return Ok(None);
@@ -71998,6 +72018,40 @@ impl InterpreterCore {
             Value::Object(groups)
         };
         self.set_object_property(result, "groups".to_string(), groups)?;
+        if has_indices {
+            let utf16 = |offset: usize| {
+                Value::Int(
+                    i64::try_from(input[..offset].encode_utf16().count()).unwrap_or(i64::MAX),
+                )
+            };
+            let mut pairs = Vec::with_capacity(spans.len());
+            for span in &spans {
+                pairs.push(match span {
+                    Some((from, to)) => {
+                        Value::Object(self.alloc_array_from_values(&[utf16(*from), utf16(*to)])?)
+                    }
+                    None => Value::Undefined,
+                });
+            }
+            let indices = self.alloc_array_from_values(&pairs)?;
+            let named: Vec<(String, Value)> = regex
+                .group_names()
+                .into_iter()
+                .enumerate()
+                .filter_map(|(slot, name)| name.map(|name| (name, pairs[slot].clone())))
+                .collect();
+            let index_groups = if named.is_empty() {
+                Value::Undefined
+            } else {
+                let groups = self.alloc_object_with_prototype(None)?;
+                for (name, value) in named {
+                    self.set_object_property(groups, name, value)?;
+                }
+                Value::Object(groups)
+            };
+            self.set_object_property(indices, "groups".to_string(), index_groups)?;
+            self.set_object_property(result, "indices".to_string(), Value::Object(indices))?;
+        }
         Ok(Some((Value::Object(result), whole_end)))
     }
 
@@ -72255,7 +72309,7 @@ impl InterpreterCore {
             None
         } else {
             let start = Self::utf16_index_to_byte_offset(&text, last_index);
-            self.regexp_exec_at(&regex, &text, start, sticky)?
+            self.regexp_exec_at(&regex, &text, start, sticky, flags.contains('d'))?
         };
         match found {
             None => {

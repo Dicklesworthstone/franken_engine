@@ -96433,6 +96433,16 @@ impl InterpreterCore {
                 _ => self.ensure_builtin_prototype("Object"),
             };
         }
+        // A callable proxy newTarget (bd-9vouw.132): GetPrototypeFromConstructor
+        // reads its `prototype` through [[Get]], so its get trap or its target
+        // answers. `new P(...)` of a trapless proxy over a proxy passes P on.
+        if Self::is_callable_proxy(value) {
+            let key = RuntimePropertyKey::String(JsString::from("prototype"));
+            return match self.get_v(module, value, &key)? {
+                Value::Object(prototype) => Ok(prototype),
+                _ => self.ensure_builtin_prototype("Object"),
+            };
+        }
         self.default_constructor_prototype_for_value(module, value)
     }
 

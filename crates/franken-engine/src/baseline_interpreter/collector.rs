@@ -1559,6 +1559,10 @@ impl InterpreterCore {
             entry_module_specifier: _,
             console_output: _,
             console_output_bytes: _,
+            // Labels, counts and timer ticks: no heap references.
+            console_group_depth: _,
+            console_counts: _,
+            console_timers: _,
             process_exit_code: _,
             profiling_data: _,
             next_timer_id: _,

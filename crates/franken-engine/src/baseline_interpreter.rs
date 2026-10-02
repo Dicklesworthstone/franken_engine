@@ -952,6 +952,8 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "TextEncoder" => Some("TextEncoder"),
         "TextDecoder" => Some("TextDecoder"),
         "Buffer" => Some("Buffer"),
+        "URL" => Some("URL"),
+        "URLSearchParams" => Some("URLSearchParams"),
         // %GeneratorFunction%, %AsyncFunction%, %AsyncGeneratorFunction%:
         // not global bindings (FUNCTION_KIND_INTRINSICS).
         "GeneratorFunction" => Some("GeneratorFunction"),
@@ -3511,6 +3513,9 @@ pub enum BuiltinFunctionKind {
     /// `count`, `group`, `time`, ... named by the specifier, one of
     /// [`CONSOLE_EXTRA_METHODS`]. Append only.
     ConsoleMethod,
+    /// `URL.prototype.toString` and `toJSON` (bd-9vouw.157), named by the
+    /// specifier: the receiver URL's href. Append only.
+    UrlMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4960,6 +4965,13 @@ impl BuiltinFunction {
             }
             BuiltinFunctionKind::ProxyRevoke => "revoke",
             BuiltinFunctionKind::CallableProxy => "",
+            BuiltinFunctionKind::UrlMethod => {
+                if self.module_specifier.0.as_deref() == Some("toJSON") {
+                    "toJSON"
+                } else {
+                    "toString"
+                }
+            }
             BuiltinFunctionKind::ArrayIsArray => "isArray",
             BuiltinFunctionKind::StreamReadablePause => "pause",
             BuiltinFunctionKind::StreamReadableResume => "resume",
@@ -5546,6 +5558,7 @@ impl BuiltinFunction {
             | K::ConsoleWarn
             | K::ConsoleInfo
             | K::ConsoleMethod => "console",
+            K::UrlMethod => "URL.prototype",
             K::SetTimeout
             | K::SetInterval
             | K::SetImmediate
@@ -5657,7 +5670,7 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 39] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 41] = [
     "Object",
     "Array",
     "Number",
@@ -5711,6 +5724,10 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 39] = [
     // Node's Buffer (bd-9vouw.104): a pure-compute Uint8Array subclass. Its
     // statics are the slot-0 builtins lowering also calls directly.
     "Buffer",
+    // WHATWG URL (bd-9vouw.157): constructing through the value builds the
+    // same engine-owned objects as `new URL(...)`.
+    "URL",
+    "URLSearchParams",
 ];
 
 /// bd-9vouw.17: realm globals besides the standard constructors and global
@@ -5815,7 +5832,7 @@ const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 22] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 23] = [
     "Array",
     "String",
     "Number",
@@ -5838,6 +5855,7 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 22] = [
     "TextEncoder",
     "TextDecoder",
     "Buffer",
+    "URL",
 ];
 
 /// `console` methods besides log/error/warn/info (bd-9vouw.158), as Node
@@ -42816,6 +42834,20 @@ impl InterpreterCore {
                 let method = builtin.display_name();
                 self.dispatch_console_hostcall(&format!("console:{method}"), args, Some(module))
             }
+            // URL.prototype.toString / toJSON: the receiver URL's href
+            // (bd-9vouw.157).
+            BuiltinFunctionKind::UrlMethod => {
+                let method = builtin.display_name();
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let href = match &receiver {
+                    Value::Object(id) => self.url_object_property_value(*id, "href")?,
+                    _ => None,
+                };
+                href.ok_or_else(|| InterpreterError::TypeError {
+                    expected: format!("URL receiver for URL.prototype.{method}"),
+                    got: receiver.type_name().to_string(),
+                })
+            }
             BuiltinFunctionKind::ProxyRevoke => {
                 let proxy_id = builtin.bound_object.map(ObjectId).ok_or_else(|| {
                     InterpreterError::TypeError {
@@ -76347,9 +76379,12 @@ impl InterpreterCore {
         self.check_temporary_memory_budget(
             retained_bytes.saturating_add(Self::estimate_heap_object_bytes(&HeapObject::new())),
         )?;
+        // Materialized before the rollback point: a refusal must not drop
+        // the shared prototype (bd-9vouw.157).
+        let prototype = self.ensure_builtin_prototype("URLSearchParams")?;
         let previous_heap_len = self.heap.len();
         let previous_estimated_bytes = self.estimated_memory_bytes;
-        let object_id = self.alloc_object_with_prototype(None)?;
+        let object_id = self.alloc_object_with_prototype(Some(prototype))?;
         if let Err(error) = self.apply_memory_component_delta(0, retained_bytes) {
             self.rollback_heap_to_len(previous_heap_len);
             self.estimated_memory_bytes = previous_estimated_bytes;
@@ -76405,14 +76440,18 @@ impl InterpreterCore {
             lifecycle_label,
         };
 
+        // Materialized before the rollback point: a refusal must not drop
+        // the shared prototypes (bd-9vouw.157).
+        let url_prototype = self.ensure_builtin_prototype("URL")?;
+        let params_prototype = self.ensure_builtin_prototype("URLSearchParams")?;
         let previous_heap_len = self.heap.len();
         let previous_estimated_bytes = self.estimated_memory_bytes;
         let mut url_id = None;
         let mut params_id = None;
         let outcome = (|| {
-            let allocated_url = self.alloc_object_with_prototype(None)?;
+            let allocated_url = self.alloc_object_with_prototype(Some(url_prototype))?;
             url_id = Some(allocated_url);
-            let allocated_params = self.alloc_object_with_prototype(None)?;
+            let allocated_params = self.alloc_object_with_prototype(Some(params_prototype))?;
             params_id = Some(allocated_params);
             url_state.search_params = allocated_params;
             params_state.owner_url = Some(allocated_url);
@@ -97990,6 +98029,8 @@ impl InterpreterCore {
                 | "GeneratorFunction"
                 | "AsyncFunction"
                 | "AsyncGeneratorFunction"
+                | "URL"
+                | "URLSearchParams"
         ) {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
             self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
@@ -99418,7 +99459,13 @@ impl InterpreterCore {
             "prototype" => Value::Object(self.ensure_builtin_prototype(name)?),
             "name" => Value::str(name),
             "length" => Value::Int(match name {
-                "Map" | "Set" | "WeakMap" | "WeakSet" | "Symbol" | TYPED_ARRAY_INTRINSIC => 0,
+                "Map"
+                | "Set"
+                | "WeakMap"
+                | "WeakSet"
+                | "Symbol"
+                | "URLSearchParams"
+                | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
                 "Buffer" => 3,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
@@ -99540,6 +99587,10 @@ impl InterpreterCore {
             }
             "TextEncoder" => self.construct_text_encoder(),
             "TextDecoder" => self.construct_text_decoder(Some(module), args),
+            "URL" => self.dispatch_builtin_hostcall("builtin:Url", args, Some(module)),
+            "URLSearchParams" => {
+                self.dispatch_builtin_hostcall("builtin:UrlSearchParams", args, Some(module))
+            }
             // The deprecated Buffer(arg) / new Buffer(arg): a size allocates
             // a zero-filled buffer, anything else is Buffer.from(arg, ...).
             "Buffer" => {
@@ -99896,6 +99947,15 @@ impl InterpreterCore {
             "Buffer" => Self::buffer_prototype_method(key)
                 .map(Value::BuiltinFunction)
                 .or_else(|| Self::canonical_prototype_method("TypedArray", key)),
+            // The rest of a URL's members are answered by the instance.
+            "URL" if matches!(key, "toString" | "toJSON") => {
+                Some(Value::BuiltinFunction(BuiltinFunction {
+                    kind: BuiltinFunctionKind::UrlMethod,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(key),
+                    iterator_handle: None,
+                    bound_object: None,
+                }))
+            }
             _ => None,
         }
     }

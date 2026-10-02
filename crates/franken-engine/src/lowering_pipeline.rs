@@ -19557,10 +19557,10 @@ fn collection_constructor_capability(
     }
 }
 
-/// Capabilities for the unshadowed WHATWG URL constructors (bd-8y0gs).
-/// These globals intentionally stay lowering-only: exposing a synthetic
-/// constructor object would make aliases/escapes look supported when the
-/// authenticated engine-owned object model only accepts direct construction.
+/// Capabilities for the unshadowed WHATWG URL constructors (bd-8y0gs). The
+/// globals are also first-class constructor values (bd-9vouw.157): `URL` as
+/// a value constructs through the same builtin, so an alias, a subclass or
+/// `instanceof URL` sees the engine-owned objects this call builds.
 fn url_constructor_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,

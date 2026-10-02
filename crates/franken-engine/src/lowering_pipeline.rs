@@ -7390,6 +7390,8 @@ fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Inst
         UnaryOperator::Typeof => Ir3Instruction::TypeOf { dst, src },
         UnaryOperator::Void => Ir3Instruction::Void { dst, src },
         UnaryOperator::UnaryPlus => Ir3Instruction::UnaryPlus { dst, src },
+        UnaryOperator::Increment => Ir3Instruction::Inc { dst, src },
+        UnaryOperator::Decrement => Ir3Instruction::Dec { dst, src },
         // delete is lowered through DeleteProperty before reaching here.
         UnaryOperator::Delete => Ir3Instruction::LoadBool { dst, value: true },
     }
@@ -7419,7 +7421,9 @@ fn compound_assignment_binary_operator(
         AssignmentOperator::Assign
         | AssignmentOperator::LogicalAndAssign
         | AssignmentOperator::LogicalOrAssign
-        | AssignmentOperator::NullishCoalescingAssign => {
+        | AssignmentOperator::NullishCoalescingAssign
+        | AssignmentOperator::IncrementAssign
+        | AssignmentOperator::DecrementAssign => {
             return Err(LoweringPipelineError::InvariantViolation {
                 detail: "non-arithmetic assignment operator reached compound member lowering",
             });
@@ -7450,6 +7454,9 @@ fn lower_assign_op_to_ir3(
         AssignmentOperator::LogicalAndAssign => Ir3Instruction::Move { dst, src: rhs },
         AssignmentOperator::LogicalOrAssign => Ir3Instruction::Move { dst, src: rhs },
         AssignmentOperator::NullishCoalescingAssign => Ir3Instruction::Move { dst, src: rhs },
+        // `++`/`--` step the target's value; the `1` right operand is unused.
+        AssignmentOperator::IncrementAssign => Ir3Instruction::Inc { dst, src: lhs },
+        AssignmentOperator::DecrementAssign => Ir3Instruction::Dec { dst, src: lhs },
     }
 }
 
@@ -8512,6 +8519,8 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         });
                     }
                     UnaryOperator::UnaryPlus => Ir3Instruction::UnaryPlus { dst, src },
+                    UnaryOperator::Increment => Ir3Instruction::Inc { dst, src },
+                    UnaryOperator::Decrement => Ir3Instruction::Dec { dst, src },
                 };
                 ir3.instructions.push(instr);
                 value_stack.push(dst);
@@ -8663,6 +8672,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             lhs: dst,
                             rhs: src,
                         });
+                    }
+                    // `++`/`--` step the binding in place (bd-9vouw.119);
+                    // the `1` right operand is unused.
+                    AssignmentOperator::IncrementAssign => {
+                        ir3.instructions.push(Ir3Instruction::Inc { dst, src: dst });
+                    }
+                    AssignmentOperator::DecrementAssign => {
+                        ir3.instructions.push(Ir3Instruction::Dec { dst, src: dst });
                     }
                     AssignmentOperator::LogicalAndAssign
                     | AssignmentOperator::LogicalOrAssign
@@ -14622,19 +14639,25 @@ fn lower_expression_to_ir1_inner(
                         name: name.clone(),
                         allow_missing: false,
                     });
-                    lower_expression_to_ir1(
-                        right,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    ops.push(Ir1Op::BinaryOp {
-                        operator: compound_assignment_binary_operator(*operator)?,
-                    });
+                    if let Some(step) = operator.update_step() {
+                        // `++`/`--` (bd-9vouw.119): ToNumeric(current) plus
+                        // or minus one of its own type; no right operand.
+                        ops.push(Ir1Op::UnaryOp { operator: step });
+                    } else {
+                        lower_expression_to_ir1(
+                            right,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                        ops.push(Ir1Op::BinaryOp {
+                            operator: compound_assignment_binary_operator(*operator)?,
+                        });
+                    }
                     ops.push(Ir1Op::PutNameWithStatus {
                         name: name.clone(),
                         status_id: dynamic_status_id.expect("dynamic target status exists"),
@@ -14822,7 +14845,11 @@ fn lower_expression_to_ir1_inner(
                 // `??=` already returned; only `Assign` and arithmetic/bitwise
                 // compound ops reach here.)
                 if !matches!(operator, AssignmentOperator::Assign) {
-                    let binary_operator = compound_assignment_binary_operator(*operator)?;
+                    // `++`/`--` step the current value instead (bd-9vouw.119).
+                    let binary_operator = match operator.update_step() {
+                        Some(_) => None,
+                        None => Some(compound_assignment_binary_operator(*operator)?),
+                    };
 
                     let object_binding = alloc_internal_binding(
                         bindings,
@@ -14898,20 +14925,30 @@ fn lower_expression_to_ir1_inner(
                     ops.push(Ir1Op::GetProperty { key: key.clone() });
 
                     // result = current <op> rhs  (BinaryOp computes lhs OP rhs;
-                    // `current` is pushed first as lhs, `rhs` second.)
-                    lower_expression_to_ir1(
-                        right,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    ops.push(Ir1Op::BinaryOp {
-                        operator: binary_operator,
-                    });
+                    // `current` is pushed first as lhs, `rhs` second), or
+                    // current stepped by one for `++`/`--`.
+                    match binary_operator {
+                        Some(binary_operator) => {
+                            lower_expression_to_ir1(
+                                right,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                                span_table,
+                            )?;
+                            ops.push(Ir1Op::BinaryOp {
+                                operator: binary_operator,
+                            });
+                        }
+                        None => ops.push(Ir1Op::UnaryOp {
+                            operator: operator
+                                .update_step()
+                                .expect("only update operators have no binary operator"),
+                        }),
+                    }
 
                     // object[key] = result. SetProperty pops value, then (key),
                     // then object, so re-stage them in that order.

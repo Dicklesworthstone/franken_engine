@@ -4851,6 +4851,8 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::IteratorClose { .. } => "iterator_close",
             crate::ir_contract::Ir3Instruction::UnaryNeg { .. } => "unary_neg",
             crate::ir_contract::Ir3Instruction::UnaryPlus { .. } => "unary_plus",
+            crate::ir_contract::Ir3Instruction::Inc { .. } => "inc",
+            crate::ir_contract::Ir3Instruction::Dec { .. } => "dec",
             crate::ir_contract::Ir3Instruction::LogicalNot { .. } => "logical_not",
             crate::ir_contract::Ir3Instruction::BitNot { .. } => "bit_not",
             crate::ir_contract::Ir3Instruction::TypeOf { .. } => "typeof",

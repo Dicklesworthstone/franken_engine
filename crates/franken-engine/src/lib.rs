@@ -2583,6 +2583,8 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::Exp { dst, .. }
         | Ir3Instruction::UnaryNeg { dst, .. }
         | Ir3Instruction::UnaryPlus { dst, .. }
+        | Ir3Instruction::Inc { dst, .. }
+        | Ir3Instruction::Dec { dst, .. }
         | Ir3Instruction::LogicalNot { dst, .. }
         | Ir3Instruction::BitNot { dst, .. }
         | Ir3Instruction::TypeOf { dst, .. }

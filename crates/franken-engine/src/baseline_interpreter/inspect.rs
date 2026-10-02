@@ -867,6 +867,19 @@ impl InterpreterCore {
         value: &Value,
         recurse_times: i64,
     ) -> Result<String, InterpreterError> {
+        // Node formats a proxy as its target (showProxy is off), a revoked
+        // one as <Revoked Proxy> (bd-9vouw.132).
+        if let Value::BuiltinFunction(builtin) = value
+            && builtin.kind == BuiltinFunctionKind::CallableProxy
+        {
+            let proxy = Self::callable_proxy_record_id(builtin)?;
+            if matches!(self.proxy_record(proxy)?, Some((_, _, true))) {
+                return Ok("<Revoked Proxy>".to_string());
+            }
+            if let Some(target) = self.proxy_call_target(proxy) {
+                return self.inspect_function(state, &target, recurse_times);
+            }
+        }
         let kind = match value {
             Value::GeneratorFunction(_) => "GeneratorFunction",
             Value::AsyncFunction(_) => "AsyncFunction",

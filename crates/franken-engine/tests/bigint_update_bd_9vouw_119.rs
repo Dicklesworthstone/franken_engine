@@ -10,10 +10,10 @@
 //! conversion path (valueOf returning a BigInt, getters and computed keys
 //! evaluated once), and runs through the real `frankenctl` binary. Expected
 //! lines were produced by Node v22.2.0 on the identical text. The Number
-//! cases guard the paths that already worked.
-//! No-claim: a Number postfix value is still computed as `(x + 1) - 1`, so
-//! `z = -0; z++` evaluates to 0 where Node gives -0 (and likewise beyond
-//! 2^53); this test does not cover those.
+//! cases guard the paths that already worked. A postfix expression's value
+//! is now ToNumeric of the old value itself: the old desugar recomputed it as
+//! `(x + 1) - 1`, so `x = -0.1; x++` was -0.09999999999999998 and `-0` came
+//! back as 0 (Test262 S11.3.1_A4_T2 and S11.3.2_A4_T2).
 
 use std::fs;
 use std::path::PathBuf;
@@ -81,6 +81,11 @@ const CASES: &[(&str, &str, &str)] = &[
         "computed_key_once",
         "let kc = 0; const ko = { a: 1n }; ko[(kc++, 'a')]++; console.log(kc, String(ko.a));",
         "1 2",
+    ),
+    (
+        "postfix_value_is_old_numeric",
+        "let x = -0.1; const y = x++; let z = -0; const zr = z++; let n = new Number(1.1); const nr = n--; let big = 2 ** 53; const br = big++; const o = { v: 0.3 }; const or = o.v--; let s = '2.5'; const sr = s++; console.log(y, Object.is(zr, -0), nr, br === 2 ** 53, or, o.v, sr, typeof sr, x);",
+        "-0.1 true 1.1 true 0.3 -0.7 2.5 number 0.9",
     ),
     (
         "in_callbacks",

@@ -158,6 +158,15 @@ impl InterpreterCore {
                 matches!(flags, Value::Str(flags) if flags.to_string().contains(flag)),
             ));
         }
+        // A Map's or Set's count is an internal slot (bd-9vouw.140); reading
+        // `size` through [[Get]] would come back to this getter.
+        if matches!(owner, "Map" | "Set") && key == "size" {
+            return Ok(self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.properties.get(COLLECTION_SIZE_SLOT).cloned())
+                .unwrap_or(Value::Int(0)));
+        }
         self.proxy_aware_get_runtime_property(
             Some(module),
             id,

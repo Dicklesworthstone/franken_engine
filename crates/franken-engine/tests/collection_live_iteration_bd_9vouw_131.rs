@@ -150,3 +150,24 @@ fn overridden_collection_iterator_is_used_by_for_of_and_spread() {
         "z/z/z | 10,20/10,20 | own/own | proto/proto | k,2/3,4"
     );
 }
+
+/// bd-9vouw.140: `size` of a Map or Set is the prototype accessor, not an own
+/// data property. The instance stored its count as an own `size`, which
+/// shadowed a subclass's `get size()` (quick-lru reads its own count there)
+/// and showed in hasOwnProperty. A plain Map or Set still answers `size` and
+/// `in`, and the getter checks its receiver. Expected values are Node
+/// v22.2.0's. No-claim: the other internal slots (`__type`, `__entries`,
+/// `__values`, `__size`) are still visible to getOwnPropertyNames.
+#[test]
+fn collection_size_is_the_prototype_accessor() {
+    let source = "class M extends Map { get size() { return 42; } }\n\
+                  class S extends Set { get size() { return super.size * 10; } }\n\
+                  var m = new Map([[1, 2], [3, 4]]), s = new Set([1]); m.delete(1); s.add(2); s.add(2);\n\
+                  var e = ''; try { Object.create(Map.prototype).size; } catch (x) { e = x.constructor.name; }\n\
+                  var d = Object.getOwnPropertyDescriptor(Map.prototype, 'size');\n\
+                  [new M([[1, 2]]).size, new S([1, 2]).size, m.size, s.size, m.hasOwnProperty('size'), 'size' in m, 'size' in s, Object.keys(m).length, JSON.stringify(m), e, d.get.call(m), typeof d.set].join(' ');";
+    assert_eq!(
+        eval(source),
+        "42 20 1 2 false true true 0 {} TypeError 1 undefined"
+    );
+}

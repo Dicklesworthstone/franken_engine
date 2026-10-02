@@ -649,7 +649,7 @@ mod console_confidentiality_tests {
             .expect("map tag");
         core.set_object_property(map, "__entries".to_string(), Value::Object(storage))
             .expect("map storage");
-        core.set_object_property(map, "size".to_string(), Value::Int(0))
+        core.set_object_property(map, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))
             .expect("map size");
         core.map_collection_set(map, Value::Object(key), Value::Int(1))
             .expect("map set");

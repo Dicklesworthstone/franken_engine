@@ -562,8 +562,8 @@ impl InterpreterCore {
         let values_id = self.alloc_object_with_prototype(None)?;
         self.set_object_property(set_id, "__type".to_string(), Value::str("Set"))?;
         self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
-        self.set_object_property(set_id, "size".to_string(), Value::Int(0))?;
-        self.hide_internal_slots(set_id, &["__type", "__values", "size"])?;
+        self.set_object_property(set_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
+        self.hide_internal_slots(set_id, &["__type", "__values", COLLECTION_SIZE_SLOT])?;
         Ok(set_id)
     }
 

@@ -351,6 +351,8 @@ const INTERPRETER_EXECUTION_STACK_PER_CALL_DEPTH_BYTES: usize = 512 * 1024;
 /// Deterministic bound for baseline prototype-chain walks.
 const MAX_PROTOTYPE_CHAIN_DEPTH: u32 = 64;
 const PROXY_TYPE_TAG: &str = "Proxy";
+/// The brand of a `stream.Readable` (bd-9vouw.150).
+const READABLE_BRAND: &str = "Readable";
 const PROXY_TARGET_SLOT: &str = "__proxy_target";
 const PROXY_HANDLER_SLOT: &str = "__proxy_handler";
 const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
@@ -6126,8 +6128,7 @@ enum CollectionSeedSource {
 
 /// A typed array's heap entries that are not own properties in ES2020
 /// (prototype accessors and engine slots); see own_property_visible.
-const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
-    "__type",
+const TYPED_ARRAY_SLOT_KEYS: [&str; 6] = [
     "__typedArrayKind",
     "length",
     "byteLength",
@@ -6139,8 +6140,8 @@ const TYPED_ARRAY_SLOT_KEYS: [&str; 7] = [
 /// The heap entries of an ArrayBuffer and a DataView that model internal
 /// slots and prototype accessors, not own properties (see
 /// `own_property_visible`).
-const ARRAY_BUFFER_SLOT_KEYS: [&str; 2] = ["__type", "byteLength"];
-const DATA_VIEW_SLOT_KEYS: [&str; 4] = ["__type", "buffer", "byteLength", "byteOffset"];
+const ARRAY_BUFFER_SLOT_KEYS: [&str; 1] = ["byteLength"];
+const DATA_VIEW_SLOT_KEYS: [&str; 3] = ["buffer", "byteLength", "byteOffset"];
 
 const SLOT0_STATIC_GLOBALS: [&str; 9] = [
     "Object",
@@ -7465,6 +7466,13 @@ pub struct HeapObject {
     /// Engine-private: guest code reaches it only through the prototype
     /// methods' thisXValue and the conversions.
     primitive_value: Option<Value>,
+    /// The engine-assigned brand of a built-in or host object (`"Map"`,
+    /// `"Date"`, `"ClientRequest"`, `"Intl.NumberFormat"`, ...): what its
+    /// methods' receiver checks, member dispatch, Object.prototype.toString
+    /// and inspect consult (bd-9vouw.150). Engine-private: it is not a
+    /// property, so guest code can neither see nor forge it, and a guest
+    /// `__type` property is ordinary data.
+    brand: Option<JsString>,
     /// Whether this object was created as a true Array instance.
     pub is_array: bool,
     /// Cached dense length for arrays (None = sparse, compute from properties).
@@ -7740,6 +7748,7 @@ impl Serialize for HeapObject {
                 + usize::from(!self.property_attributes.is_empty())
                 + usize::from(self.class_fields.is_some())
                 + usize::from(self.primitive_value.is_some())
+                + usize::from(self.brand.is_some())
                 + usize::from(!self.private_elements.is_empty())
                 + usize::from(!self.deleted_virtual_keys.is_empty())
                 + if has_constructor_metadata { 4 } else { 0 },
@@ -7780,6 +7789,9 @@ impl Serialize for HeapObject {
         }
         if let Some(value) = &self.primitive_value {
             object.serialize_field("primitive_value", value)?;
+        }
+        if let Some(brand) = &self.brand {
+            object.serialize_field("brand", brand)?;
         }
         if !self.private_elements.is_empty() {
             let elements = self
@@ -7872,6 +7884,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             class_fields: Option<Value>,
             #[serde(default)]
             primitive_value: Option<Value>,
+            #[serde(default)]
+            brand: Option<JsString>,
             #[serde(default)]
             private_elements: Vec<PrivateElementWire>,
             #[serde(default)]
@@ -7999,6 +8013,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             is_default_derived_constructor: wire.is_default_derived_constructor,
             class_fields: wire.class_fields,
             primitive_value: wire.primitive_value,
+            brand: wire.brand,
             private_elements,
             deleted_virtual_keys,
         };
@@ -8199,6 +8214,12 @@ fn validate_heap_symbol_references(
 impl HeapObject {
     fn extensible(&self) -> bool {
         !self.is_non_extensible && !self.is_frozen
+    }
+
+    /// The engine-assigned brand (bd-9vouw.150): `Some("Map")` for a Map,
+    /// `None` for an ordinary object whatever its properties say.
+    fn brand(&self) -> Option<&str> {
+        self.brand.as_deref()
     }
 
     /// Effective attributes of the own property `key` (assumed present). A
@@ -15164,13 +15185,11 @@ impl InterpreterCore {
             }
             self.join_direct_object_mutation_label(target, label)?;
             current = self.heap.get(target.0 as usize).and_then(|object| {
-                let active_proxy = matches!(
-                    object.properties.get("__type"),
-                    Some(Value::Str(kind)) if kind.as_ref() == PROXY_TYPE_TAG
-                ) && !matches!(
-                    object.properties.get(PROXY_REVOKED_SLOT),
-                    Some(Value::Bool(true))
-                );
+                let active_proxy = object.brand() == Some(PROXY_TYPE_TAG)
+                    && !matches!(
+                        object.properties.get(PROXY_REVOKED_SLOT),
+                        Some(Value::Bool(true))
+                    );
                 active_proxy
                     .then(|| object.properties.get(PROXY_TARGET_SLOT))?
                     .and_then(|value| match value {
@@ -15766,16 +15785,12 @@ impl InterpreterCore {
         let stdout_stream = if options.stdio.stdout == ProcessStdioMode::Null {
             None
         } else {
-            Some(
-                self.alloc_object_with_properties(&[("__type", Value::str("ChildProcessStream"))])?,
-            )
+            Some(self.alloc_branded_object("ChildProcessStream", &[])?)
         };
         let stderr_stream = if options.stdio.stderr == ProcessStdioMode::Null {
             None
         } else {
-            Some(
-                self.alloc_object_with_properties(&[("__type", Value::str("ChildProcessStream"))])?,
-            )
+            Some(self.alloc_branded_object("ChildProcessStream", &[])?)
         };
         // bd-m42c2: a piped stdin gets a guest-writable facade backed by the
         // provider's bounded writer; `write`/`end` resolve through this
@@ -15783,19 +15798,21 @@ impl InterpreterCore {
         let stdin_stream = if options.stdio.stdin == ProcessStdioMode::Null {
             None
         } else {
-            Some(self.alloc_object_with_properties(&[("__type", Value::str("ChildProcessStdin"))])?)
+            Some(self.alloc_branded_object("ChildProcessStdin", &[])?)
         };
-        let child = self.alloc_object_with_properties(&[
-            ("__type", Value::str("ChildProcess")),
-            ("pid", Value::Int(1)),
-            ("killed", Value::Bool(false)),
-            ("stdout", stdout_stream.map_or(Value::Null, Value::Object)),
-            ("stderr", stderr_stream.map_or(Value::Null, Value::Object)),
-            (
-                "stdin",
-                stdin_stream.map_or(Value::Undefined, Value::Object),
-            ),
-        ])?;
+        let child = self.alloc_branded_object(
+            "ChildProcess",
+            &[
+                ("pid", Value::Int(1)),
+                ("killed", Value::Bool(false)),
+                ("stdout", stdout_stream.map_or(Value::Null, Value::Object)),
+                ("stderr", stderr_stream.map_or(Value::Null, Value::Object)),
+                (
+                    "stdin",
+                    stdin_stream.map_or(Value::Undefined, Value::Object),
+                ),
+            ],
+        )?;
         let stream_entries = u64::from(stdout_stream.is_some())
             + u64::from(stderr_stream.is_some())
             + u64::from(stdin_stream.is_some());
@@ -16699,13 +16716,13 @@ impl InterpreterCore {
     fn alloc_fs_date(&mut self, modified_millis: i64) -> Result<Value, InterpreterError> {
         let date_prototype = self.ensure_builtin_prototype("Date")?;
         let date_id = self.alloc_object_with_prototype(Some(date_prototype))?;
-        self.set_object_property(date_id, "__type".to_string(), Value::str("Date"))?;
+        self.set_object_brand(date_id, "Date")?;
         self.set_object_property(
             date_id,
             "__timestamp".to_string(),
             Value::Int(modified_millis),
         )?;
-        self.hide_internal_slots(date_id, &["__type", "__timestamp"])?;
+        self.hide_internal_slots(date_id, &["__timestamp"])?;
         Ok(Value::Object(date_id))
     }
 
@@ -16731,7 +16748,7 @@ impl InterpreterCore {
     fn fs_metadata_value(&mut self, metadata: FsMetadata) -> Result<Value, InterpreterError> {
         let modified = self.alloc_fs_date(metadata.modified_millis)?;
         let object_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(object_id, "__type".to_string(), Value::str("FsStats"))?;
+        self.set_object_brand(object_id, "FsStats")?;
         self.set_object_property(
             object_id,
             "size".to_string(),
@@ -16763,7 +16780,7 @@ impl InterpreterCore {
 
     fn fs_dir_entry_value(&mut self, entry: FsDirEntry) -> Result<Value, InterpreterError> {
         let object_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(object_id, "__type".to_string(), Value::str("FsDirent"))?;
+        self.set_object_brand(object_id, "FsDirent")?;
         self.set_object_property(object_id, "name".to_string(), Value::str(entry.name))?;
         self.set_object_property(
             object_id,
@@ -17456,15 +17473,17 @@ impl InterpreterCore {
         let initial_body = body
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .unwrap_or_default();
-        let request_id = self.alloc_object_with_properties(&[
-            ("__type", Value::str("ClientRequest")),
-            ("__url", Value::str(url.as_str())),
-            ("__method", Value::str(method.as_str())),
-            ("__headers", Value::Object(headers_id)),
-            ("__body", Value::str(initial_body.as_str())),
-            ("__ended", Value::Bool(false)),
-            ("__response_cb", response_callback),
-        ])?;
+        let request_id = self.alloc_branded_object(
+            "ClientRequest",
+            &[
+                ("__url", Value::str(url.as_str())),
+                ("__method", Value::str(method.as_str())),
+                ("__headers", Value::Object(headers_id)),
+                ("__body", Value::str(initial_body.as_str())),
+                ("__ended", Value::Bool(false)),
+                ("__response_cb", response_callback),
+            ],
+        )?;
         self.join_object_mutation_label(request_id, &lifecycle_label)?;
         Ok(Value::Object(request_id))
     }
@@ -18016,14 +18035,13 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let lifecycle_label = self.join_arg_range_with_object_mutation_label(args)?;
         let is_tls = tls.is_some();
-        let object_id = self.alloc_object_with_properties(&[
-            (
-                "__type",
-                Value::str(if is_tls { "TlsServer" } else { "NetServer" }),
-            ),
-            ("__maxListeners", Value::Int(10)),
-            ("listening", Value::Bool(false)),
-        ])?;
+        let object_id = self.alloc_branded_object(
+            if is_tls { "TlsServer" } else { "NetServer" },
+            &[
+                ("__maxListeners", Value::Int(10)),
+                ("listening", Value::Bool(false)),
+            ],
+        )?;
         let state = LoopbackServerState {
             address: "127.0.0.1".to_string(),
             port: None,
@@ -18059,22 +18077,24 @@ impl InterpreterCore {
         remote_port: Option<u16>,
         lifecycle_label: Label,
     ) -> Result<ObjectId, InterpreterError> {
-        let object_id = self.alloc_object_with_properties(&[
-            ("__type", Value::str("NetSocket")),
-            ("__maxListeners", Value::Int(10)),
-            ("readable", Value::Bool(true)),
-            ("writable", Value::Bool(true)),
-            ("connecting", Value::Bool(!connected)),
-            ("destroyed", Value::Bool(false)),
-            ("bytesRead", Value::Int(0)),
-            ("bytesWritten", Value::Int(0)),
-            ("localAddress", Value::str("127.0.0.1")),
-            ("remoteAddress", Value::str("127.0.0.1")),
-            (
-                "remotePort",
-                remote_port.map_or(Value::Undefined, |port| Value::Int(i64::from(port))),
-            ),
-        ])?;
+        let object_id = self.alloc_branded_object(
+            "NetSocket",
+            &[
+                ("__maxListeners", Value::Int(10)),
+                ("readable", Value::Bool(true)),
+                ("writable", Value::Bool(true)),
+                ("connecting", Value::Bool(!connected)),
+                ("destroyed", Value::Bool(false)),
+                ("bytesRead", Value::Int(0)),
+                ("bytesWritten", Value::Int(0)),
+                ("localAddress", Value::str("127.0.0.1")),
+                ("remoteAddress", Value::str("127.0.0.1")),
+                (
+                    "remotePort",
+                    remote_port.map_or(Value::Undefined, |port| Value::Int(i64::from(port))),
+                ),
+            ],
+        )?;
         let state = LoopbackSocketState {
             peer: None,
             owner_server: None,
@@ -18236,7 +18256,6 @@ impl InterpreterCore {
             .map_or(0, Self::estimate_tls_socket_state_bytes);
         let next_tls_bytes = Self::estimate_tls_socket_state_bytes(&tls);
         let property_keys = [
-            "__type",
             "encrypted",
             "authorized",
             "authorizationError",
@@ -18247,12 +18266,15 @@ impl InterpreterCore {
         let Some(object) = self.heap.get(heap_index) else {
             return Err(InterpreterError::ObjectNotFound { id: socket.0 });
         };
+        // The socket's brand becomes "TlsSocket" (bd-9vouw.150).
+        let tls_brand = JsString::from("TlsSocket");
         let previous_property_bytes = Self::saturating_sum(property_keys.iter().map(|key| {
             object
                 .properties
                 .get(key)
                 .map_or(0, |value| Self::estimate_property_entry_bytes(key, value))
-        }));
+        }))
+        .saturating_add(Self::estimate_brand_bytes(object.brand.as_ref()));
         let scalar_property_bytes = |key: &str| {
             MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                 .saturating_add(Self::estimate_string_bytes(key).saturating_mul(2))
@@ -18276,7 +18298,7 @@ impl InterpreterCore {
             || scalar_property_bytes("alpnProtocol"),
             |protocol| string_property_bytes("alpnProtocol", protocol),
         );
-        let next_property_bytes = string_property_bytes("__type", "TlsSocket")
+        let next_property_bytes = Self::estimate_brand_bytes(Some(&tls_brand))
             .saturating_add(scalar_property_bytes("encrypted"))
             .saturating_add(scalar_property_bytes("authorized"))
             .saturating_add(authorization_error_bytes)
@@ -18303,7 +18325,6 @@ impl InterpreterCore {
             .as_ref()
             .map_or(Value::Bool(false), |protocol| Value::str(protocol.as_str()));
         let property_updates = [
-            ("__type", Value::str("TlsSocket")),
             ("encrypted", Value::Bool(true)),
             ("authorized", Value::Bool(authorized)),
             ("authorizationError", authorization_error),
@@ -18326,6 +18347,7 @@ impl InterpreterCore {
             for (key, value) in property_updates {
                 object.properties.insert(key.to_string(), value);
             }
+            object.brand = Some(tls_brand);
         });
         self.gc_write_barrier(socket);
         Ok(())
@@ -19772,10 +19794,9 @@ impl InterpreterCore {
     }
 
     fn tls_create_secure_context(&mut self) -> Result<Value, InterpreterError> {
-        Ok(Value::Object(self.alloc_object_with_properties(&[(
-            "__type",
-            Value::str("TlsSecureContext"),
-        )])?))
+        Ok(Value::Object(
+            self.alloc_branded_object("TlsSecureContext", &[])?,
+        ))
     }
 
     fn net_socket_instanceof(&self, args: RegRange) -> Result<Value, InterpreterError> {
@@ -20918,12 +20939,10 @@ impl InterpreterCore {
                 got: receiver.type_name().to_string(),
             });
         };
-        let tagged = matches!(
-            self.heap
-                .get(object_id.0 as usize)
-                .and_then(|object| object.properties.get("__type")),
-            Some(Value::Str(tag)) if tag.as_ref() == expected_tag
-        );
+        let tagged = self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| object.brand() == Some(expected_tag));
         if !tagged || !contains(object_id) {
             return Err(InterpreterError::TypeError {
                 expected: format!("authenticated {expected_tag} receiver"),
@@ -20949,7 +20968,7 @@ impl InterpreterCore {
             };
             let lifecycle_label = self.writable_invocation_label(args)?;
             self.join_loopback_server_label(server, &lifecycle_label)?;
-            self.set_object_property(server, "__type".to_string(), Value::str("HttpServer"))?;
+            self.set_object_brand(server, "HttpServer")?;
             let state = HttpServerState {
                 lifecycle_label: lifecycle_label.clone(),
             };
@@ -21007,12 +21026,14 @@ impl InterpreterCore {
         let mut published_request = None;
         let result = (|| {
             self.check_temporary_memory_budget(retained.saturating_add(64 * 1024))?;
-            let request = self.alloc_object_with_properties(&[
-                ("__type", Value::str("HttpClientRequest")),
-                ("__maxListeners", Value::Int(10)),
-                ("writable", Value::Bool(true)),
-                ("writableEnded", Value::Bool(false)),
-            ])?;
+            let request = self.alloc_branded_object(
+                "HttpClientRequest",
+                &[
+                    ("__maxListeners", Value::Int(10)),
+                    ("writable", Value::Bool(true)),
+                    ("writableEnded", Value::Bool(false)),
+                ],
+            )?;
             self.apply_memory_component_delta(0, retained)?;
             self.http_client_requests.insert(request, state);
             published_request = Some(request);
@@ -21044,11 +21065,13 @@ impl InterpreterCore {
             .builtin_arg(args, 0)?
             .and_then(|options| self.fs_object_property(&options, "keepAlive"))
             .is_some_and(|value| matches!(value, Value::Bool(true)));
-        let agent = self.alloc_object_with_properties(&[
-            ("__type", Value::str("HttpAgent")),
-            ("keepAlive", Value::Bool(keep_alive)),
-            ("protocol", Value::str("http:")),
-        ])?;
+        let agent = self.alloc_branded_object(
+            "HttpAgent",
+            &[
+                ("keepAlive", Value::Bool(keep_alive)),
+                ("protocol", Value::str("http:")),
+            ],
+        )?;
         self.apply_memory_component_delta(0, MEMORY_ESTIMATE_HTTP_AGENT_BASE_BYTES)?;
         self.http_agents.insert(agent);
         Ok(Value::Object(agent))
@@ -21126,15 +21149,16 @@ impl InterpreterCore {
         let previous_estimated_bytes = self.estimated_memory_bytes;
         let result = (|| {
             self.check_temporary_memory_budget(retained.saturating_add(64 * 1024))?;
-            let socket =
-                self.alloc_object_with_properties(&[("__type", Value::str("HttpSocket"))])?;
-            let message = self.alloc_object_with_properties(&[
-                ("__type", Value::str("HttpIncomingMessage")),
-                ("__maxListeners", Value::Int(10)),
-                ("httpVersion", Value::str("1.1")),
-                ("socket", Value::Object(socket)),
-                ("readable", Value::Bool(true)),
-            ])?;
+            let socket = self.alloc_branded_object("HttpSocket", &[])?;
+            let message = self.alloc_branded_object(
+                "HttpIncomingMessage",
+                &[
+                    ("__maxListeners", Value::Int(10)),
+                    ("httpVersion", Value::str("1.1")),
+                    ("socket", Value::Object(socket)),
+                    ("readable", Value::Bool(true)),
+                ],
+            )?;
             self.apply_memory_component_delta(0, retained)?;
             self.http_incoming_messages.insert(message, state);
             Ok(message)
@@ -22427,14 +22451,16 @@ impl InterpreterCore {
                     Value::Object(raw_headers),
                 )?;
 
-                let response = self.alloc_object_with_properties(&[
-                    ("__type", Value::str("HttpServerResponse")),
-                    ("__maxListeners", Value::Int(10)),
-                    ("statusCode", Value::Int(200)),
-                    ("statusMessage", Value::str("OK")),
-                    ("writable", Value::Bool(true)),
-                    ("writableEnded", Value::Bool(false)),
-                ])?;
+                let response = self.alloc_branded_object(
+                    "HttpServerResponse",
+                    &[
+                        ("__maxListeners", Value::Int(10)),
+                        ("statusCode", Value::Int(200)),
+                        ("statusMessage", Value::str("OK")),
+                        ("writable", Value::Bool(true)),
+                        ("writableEnded", Value::Bool(false)),
+                    ],
+                )?;
                 let response_state = HttpServerResponseState {
                     client_request: request,
                     server,
@@ -24263,7 +24289,6 @@ impl InterpreterCore {
             }
         };
         let properties = [
-            ("__type", Value::str("Writable")),
             ("__maxListeners", Value::Int(10)),
             ("writable", Value::Bool(true)),
             ("writableEnded", Value::Bool(false)),
@@ -24309,6 +24334,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
+        projected_object.brand = Some(JsString::from("Writable"));
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
         let state_bytes = Self::estimate_writable_state_bytes(&state);
         let requested_bytes = self
@@ -24322,7 +24348,7 @@ impl InterpreterCore {
             ));
         }
         self.apply_memory_component_delta(0, state_bytes)?;
-        let object_id = match self.alloc_object_with_properties(&properties) {
+        let object_id = match self.alloc_branded_object("Writable", &properties) {
             Ok(object_id) => object_id,
             Err(error) => {
                 self.estimated_memory_bytes =
@@ -24407,8 +24433,8 @@ impl InterpreterCore {
             inside_write_invocation: false,
             lifecycle_label,
         };
+        let brand = "PassThrough";
         let properties = [
-            ("__type", Value::str("PassThrough")),
             ("__maxListeners", Value::Int(10)),
             ("readable", Value::Bool(true)),
             ("readableEnded", Value::Bool(false)),
@@ -24433,6 +24459,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
+        projected_object.brand = Some(JsString::from(brand));
         let readable_bytes = Self::estimate_readable_from_state_bytes(&readable_state);
         let writable_bytes = Self::estimate_writable_state_bytes(&writable_state);
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
@@ -24455,7 +24482,7 @@ impl InterpreterCore {
         let previous_total = self.estimated_memory_bytes;
         let previous_heap_len = self.heap.len();
         self.apply_memory_component_delta(0, readable_bytes.saturating_add(writable_bytes))?;
-        let object_id = match self.alloc_object_with_properties(&properties) {
+        let object_id = match self.alloc_branded_object(brand, &properties) {
             Ok(object_id) => object_id,
             Err(error) => {
                 self.rollback_heap_to_len(previous_heap_len);
@@ -24575,8 +24602,8 @@ impl InterpreterCore {
             inside_write_invocation: false,
             lifecycle_label,
         };
+        let brand = "Transform";
         let properties = [
-            ("__type", Value::str("Transform")),
             ("__maxListeners", Value::Int(10)),
             ("readable", Value::Bool(true)),
             ("readableEnded", Value::Bool(false)),
@@ -24601,6 +24628,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
+        projected_object.brand = Some(JsString::from(brand));
         let readable_bytes = Self::estimate_readable_from_state_bytes(&readable_state);
         let writable_bytes = Self::estimate_writable_state_bytes(&writable_state);
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
@@ -24619,7 +24647,7 @@ impl InterpreterCore {
         let previous_total = self.estimated_memory_bytes;
         let previous_heap_len = self.heap.len();
         self.apply_memory_component_delta(0, readable_bytes.saturating_add(writable_bytes))?;
-        let object_id = match self.alloc_object_with_properties(&properties) {
+        let object_id = match self.alloc_branded_object(brand, &properties) {
             Ok(object_id) => object_id,
             Err(error) => {
                 self.rollback_heap_to_len(previous_heap_len);
@@ -28150,6 +28178,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
+        projected_object.brand = Some(JsString::from(READABLE_BRAND));
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
         let requested_bytes = self
             .estimated_memory_bytes
@@ -28166,7 +28195,7 @@ impl InterpreterCore {
         let previous_heap_len = self.heap.len();
         self.apply_memory_component_delta(0, state_bytes)?;
 
-        let object_id = match self.alloc_object_with_properties(object_properties) {
+        let object_id = match self.alloc_branded_object(READABLE_BRAND, object_properties) {
             Ok(object_id) => object_id,
             Err(error) => {
                 self.estimated_memory_bytes =
@@ -28187,9 +28216,8 @@ impl InterpreterCore {
     fn readable_object_properties(
         object_mode: bool,
         high_water_mark: i64,
-    ) -> [(&'static str, Value); 10] {
+    ) -> [(&'static str, Value); 9] {
         [
-            ("__type", Value::str("Readable")),
             ("__maxListeners", Value::Int(10)),
             ("readable", Value::Bool(true)),
             ("readableEnded", Value::Bool(false)),
@@ -32675,14 +32703,16 @@ impl InterpreterCore {
         // (`status`/`body`/`headers`/`ok`/`statusText`) still win property resolution,
         // so the tag only adds the readable-stream `.on` method — direct reads like
         // `res.status` / `res.body` are unchanged.
-        let response_id = self.alloc_object_with_properties(&[
-            ("__type", Value::str("IncomingMessage")),
-            ("status", Value::Int(status)),
-            ("statusText", Value::str(status_text.as_str())),
-            ("ok", Value::Bool(ok)),
-            ("headers", Value::Object(headers_id)),
-            ("body", Value::str(body_str.as_str())),
-        ])?;
+        let response_id = self.alloc_branded_object(
+            "IncomingMessage",
+            &[
+                ("status", Value::Int(status)),
+                ("statusText", Value::str(status_text.as_str())),
+                ("ok", Value::Bool(ok)),
+                ("headers", Value::Object(headers_id)),
+                ("body", Value::str(body_str.as_str())),
+            ],
+        )?;
         Ok(Value::Object(response_id))
     }
 
@@ -33251,13 +33281,11 @@ impl InterpreterCore {
                 }
             }
             if let Some(object) = self.heap.get(id.0 as usize) {
-                let active_proxy_target = matches!(
-                    object.properties.get("__type"),
-                    Some(Value::Str(kind)) if kind.as_ref() == PROXY_TYPE_TAG
-                ) && !matches!(
-                    object.properties.get(PROXY_REVOKED_SLOT),
-                    Some(Value::Bool(true))
-                );
+                let active_proxy_target = object.brand() == Some(PROXY_TYPE_TAG)
+                    && !matches!(
+                        object.properties.get(PROXY_REVOKED_SLOT),
+                        Some(Value::Bool(true))
+                    );
                 current = if active_proxy_target {
                     match object.properties.get(PROXY_TARGET_SLOT) {
                         Some(Value::Object(target)) => Some(*target),
@@ -38940,12 +38968,7 @@ impl InterpreterCore {
                     Value::Object(id) => match self
                         .heap
                         .get(id.0 as usize)
-                        .filter(|object| {
-                            matches!(
-                                object.properties.get("__type"),
-                                Some(Value::Str(tag)) if tag.as_ref() == "Date"
-                            )
-                        })
+                        .filter(|object| object.brand() == Some("Date"))
                         .and_then(|object| object.properties.get("__timestamp"))
                     {
                         Some(Value::Int(value)) => Some(*value as f64),
@@ -39956,11 +39979,9 @@ impl InterpreterCore {
                         }
                         if self.heap.get(arr_id.0 as usize).is_some_and(|object| {
                             object.is_array
-                                || matches!(
-                                    object.properties.get("__type"),
-                                    Some(Value::Str(tag))
-                                        if TypedArrayKind::from_type_name(tag.as_ref()).is_some()
-                                )
+                                || object
+                                    .brand()
+                                    .is_some_and(|tag| TypedArrayKind::from_type_name(tag).is_some())
                         }) {
                             let mut active = BTreeSet::new();
                             Ok(Value::str(self.array_join_observable(
@@ -41042,7 +41063,7 @@ impl InterpreterCore {
                     return Ok(Value::Float(f64::NAN.into()));
                 };
                 if let Some(date_obj) = self.heap.get(date_id.0 as usize)
-                    && matches!(date_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Date")
+                    && date_obj.brand() == Some("Date")
                 {
                     match date_obj.properties.get("__timestamp") {
                         Some(Value::Float(ts)) => return Ok(Value::Float(*ts)),
@@ -54188,10 +54209,7 @@ impl InterpreterCore {
         // has no user-visible iterator protocol).
         if let Value::Object(object_id) = iterable
             && let Some(object) = self.heap.get(object_id.0 as usize)
-            && matches!(
-                object.properties.get("__type"),
-                Some(Value::Str(kind)) if kind.as_ref() == TIMERS_PROMISES_INTERVAL_TYPE
-            )
+            && object.brand() == Some(TIMERS_PROMISES_INTERVAL_TYPE)
         {
             let delay_ms = match object.properties.get("__delayMs") {
                 Some(Value::Int(ms)) => (*ms).max(1) as u64,
@@ -56294,10 +56312,7 @@ impl InterpreterCore {
 
     fn regexp_source_flags_from_object(&self, object_id: ObjectId) -> Option<(String, String)> {
         let object = self.heap.get(object_id.0 as usize)?;
-        if !matches!(
-            object.properties.get("__type"),
-            Some(Value::Str(kind)) if kind.as_ref() == "RegExp"
-        ) {
+        if object.brand() != Some("RegExp") {
             return None;
         }
 
@@ -56505,13 +56520,13 @@ impl InterpreterCore {
     ) -> Result<ObjectId, InterpreterError> {
         let regexp_prototype = self.ensure_builtin_prototype("RegExp")?;
         let regexp_id = self.alloc_object_with_prototype(Some(regexp_prototype))?;
-        self.set_object_property(regexp_id, "__type".to_string(), Value::str("RegExp"))?;
+        self.set_object_brand(regexp_id, "RegExp")?;
         self.set_object_property(regexp_id, "source".to_string(), Value::str(source))?;
         self.set_object_property(regexp_id, "flags".to_string(), Value::str(flags))?;
         self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
         // `lastIndex` is an own non-enumerable property; `source` and `flags`
         // stand in for prototype accessors.
-        self.hide_internal_slots(regexp_id, &["__type", "source", "flags", "lastIndex"])?;
+        self.hide_internal_slots(regexp_id, &["source", "flags", "lastIndex"])?;
         Ok(regexp_id)
     }
 
@@ -57650,12 +57665,9 @@ impl InterpreterCore {
         } else if root_has_writable {
             Some("Writable".to_string())
         } else {
-            self.heap.get(object_id.0 as usize).and_then(|object| {
-                match object.properties.get("__type") {
-                    Some(Value::Str(s)) => Some(s.to_string()),
-                    _ => None,
-                }
-            })
+            self.heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.brand().map(str::to_string))
         };
         let root_is_buffer = self.heap.get(object_id.0 as usize).is_some_and(|object| {
             object
@@ -57722,10 +57734,7 @@ impl InterpreterCore {
             || object.array_buffer.is_some()
             || object.typed_array.is_some()
             || object.data_view.is_some()
-            || matches!(
-                object.properties.get("__type"),
-                Some(Value::Str(kind)) if kind.as_ref() == PROXY_TYPE_TAG
-            )
+            || object.brand() == Some(PROXY_TYPE_TAG)
             || !object.contains_own_runtime_property(key)
         {
             return false;
@@ -58476,21 +58485,10 @@ impl InterpreterCore {
         self.object_own_property_contains(receiver, property)
     }
 
+    /// Object.prototype.valueOf (ES2020 19.1.3.7): ToObject(this) — the
+    /// object itself, a wrapper object included.
     fn object_prototype_value_of_value(&self, receiver: Value) -> Value {
-        match receiver {
-            Value::Object(object_id) => {
-                if let Some(object) = self.heap.get(object_id.0 as usize)
-                    && let Some(Value::Str(type_value)) = object.properties.get("__type")
-                    && matches!(type_value.as_ref(), "Number" | "String" | "Boolean")
-                    && let Some(value) = object.properties.get("__value")
-                {
-                    return value.clone();
-                }
-
-                Value::Object(object_id)
-            }
-            other => other,
-        }
+        receiver
     }
 
     fn object_prototype_to_string_value(&self, receiver: &Value) -> Value {
@@ -58590,8 +58588,8 @@ impl InterpreterCore {
         if object.array_buffer.is_some() {
             return prototype_tag("ArrayBuffer");
         }
-        if let Some(Value::Str(type_tag)) = object.properties.get("__type") {
-            match type_tag.as_ref() {
+        if let Some(type_tag) = object.brand() {
+            match type_tag {
                 "Date" => return "Date",
                 "RegExp" => return "RegExp",
                 "Map" => return prototype_tag("Map"),
@@ -58774,7 +58772,7 @@ impl InterpreterCore {
         storage_prop: &str,
     ) -> Option<ObjectId> {
         let obj = self.heap.get(obj_id.0 as usize)?;
-        if !matches!(obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == type_tag) {
+        if obj.brand() != Some(type_tag) {
             return None;
         }
         match obj.properties.get(storage_prop) {
@@ -58842,10 +58840,10 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype("Map")?;
         let map_id = self.alloc_object_with_prototype(Some(prototype))?;
         let entries_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(map_id, "__type".to_string(), Value::str("Map"))?;
+        self.set_object_brand(map_id, "Map")?;
         self.set_object_property(map_id, "__entries".to_string(), Value::Object(entries_id))?;
         self.set_object_property(map_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
-        self.hide_internal_slots(map_id, &["__type", "__entries", COLLECTION_SIZE_SLOT])?;
+        self.hide_internal_slots(map_id, &["__entries", COLLECTION_SIZE_SLOT])?;
         Ok((map_id, entries_id))
     }
 
@@ -59345,10 +59343,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        if !matches!(
-            object.properties.get("__type"),
-            Some(Value::Str(kind)) if kind.as_ref() == PROXY_TYPE_TAG
-        ) {
+        if object.brand() != Some(PROXY_TYPE_TAG) {
             return Ok(None);
         }
 
@@ -59397,7 +59392,7 @@ impl InterpreterCore {
         handler: ObjectId,
     ) -> Result<ObjectId, InterpreterError> {
         let proxy_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(proxy_id, "__type".to_string(), Value::str(PROXY_TYPE_TAG))?;
+        self.set_object_brand(proxy_id, PROXY_TYPE_TAG)?;
         self.set_object_property(
             proxy_id,
             PROXY_TARGET_SLOT.to_string(),
@@ -60706,7 +60701,7 @@ impl InterpreterCore {
                 return Ok(primitive.clone());
             }
             if let Some(object) = self.heap.get(object_id.0 as usize)
-                && matches!(object.properties.get("__type"), Some(Value::Str(kind)) if kind.as_ref() == "Date")
+                && object.brand() == Some("Date")
             {
                 return Ok(match object.properties.get("__timestamp") {
                     Some(time @ (Value::Float(_) | Value::Int(_))) => time.clone(),
@@ -61547,6 +61542,17 @@ impl InterpreterCore {
         for (key, value) in props {
             self.set_object_property(id, (*key).to_string(), value.clone())?;
         }
+        Ok(id)
+    }
+
+    /// A host object of kind `brand` (bd-9vouw.150) with `props`.
+    fn alloc_branded_object(
+        &mut self,
+        brand: &str,
+        props: &[(&str, Value)],
+    ) -> Result<ObjectId, InterpreterError> {
+        let id = self.alloc_object_with_properties(props)?;
+        self.set_object_brand(id, brand)?;
         Ok(id)
     }
 
@@ -64318,9 +64324,7 @@ impl InterpreterCore {
                 })?,
             );
         let mut object = HeapObject::new();
-        object
-            .properties
-            .insert("__type".to_string(), Value::str(marker));
+        object.brand = Some(JsString::from(marker));
         object
             .properties
             .insert("__timerId".to_string(), Value::Int(timer_id as i64));
@@ -64658,12 +64662,9 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let interval = match receiver {
             Some(Value::Object(object_id))
-                if matches!(
-                    self.heap
-                        .get(object_id.0 as usize)
-                        .and_then(|object| object.properties.get("__type")),
-                    Some(Value::Str(kind)) if kind.as_ref() == TIMERS_PROMISES_INTERVAL_TYPE
-                ) =>
+                if self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                    object.brand() == Some(TIMERS_PROMISES_INTERVAL_TYPE)
+                }) =>
             {
                 object_id
             }
@@ -65584,11 +65585,7 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         let view = object.typed_array.clone().ok_or_else(|| {
-            let got = object
-                .properties
-                .get("__type")
-                .map(|value| self.value_to_string(value))
-                .unwrap_or_else(|| "object".to_string());
+            let got = object.brand().unwrap_or("object").to_string();
             InterpreterError::TypeError {
                 expected: format!("TypedArray receiver for TypedArray.prototype.{method_name}"),
                 got,
@@ -68176,11 +68173,7 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         object.data_view.clone().ok_or_else(|| {
-            let got = object
-                .properties
-                .get("__type")
-                .map(|value| self.value_to_string(value))
-                .unwrap_or_else(|| "object".to_string());
+            let got = object.brand().unwrap_or("object").to_string();
             InterpreterError::TypeError {
                 expected: format!("DataView receiver for DataView.prototype.{method_name}"),
                 got,
@@ -70169,22 +70162,16 @@ impl InterpreterCore {
         match receiver {
             Value::Int(value) => Ok(*value as f64),
             Value::Float(value) => Ok(value.inner()),
-            Value::Object(id) => {
-                let wrapped = self.heap.get(id.0 as usize).and_then(|object| {
-                    matches!(object.properties.get("__type"),
-                        Some(Value::Str(tag)) if tag.as_ref() == "Number")
-                    .then(|| object.properties.get("__value").cloned())
-                    .flatten()
-                });
-                match wrapped {
-                    Some(Value::Int(value)) => Ok(value as f64),
-                    Some(Value::Float(value)) => Ok(value.inner()),
-                    _ => Err(InterpreterError::TypeError {
-                        expected: "Number receiver".to_string(),
-                        got: "object".to_string(),
-                    }),
-                }
-            }
+            // A Number wrapper's [[NumberData]] (bd-9vouw.73); a guest
+            // object is never one, whatever its properties (bd-9vouw.150).
+            Value::Object(id) => match self.primitive_wrapper_value(*id) {
+                Some(Value::Int(value)) => Ok(*value as f64),
+                Some(Value::Float(value)) => Ok(value.inner()),
+                _ => Err(InterpreterError::TypeError {
+                    expected: "Number receiver".to_string(),
+                    got: "object".to_string(),
+                }),
+            },
             other => Err(InterpreterError::TypeError {
                 expected: "Number receiver".to_string(),
                 got: other.type_name().to_string(),
@@ -70265,10 +70252,10 @@ impl InterpreterCore {
         use date_math::*;
         let date_id = match &receiver {
             Value::Object(id)
-                if matches!(
-                    self.heap.get(id.0 as usize).and_then(|object| object.properties.get("__type")),
-                    Some(Value::Str(tag)) if tag.as_ref() == "Date"
-                ) =>
+                if self
+                    .heap
+                    .get(id.0 as usize)
+                    .is_some_and(|object| object.brand() == Some("Date")) =>
             {
                 *id
             }
@@ -70501,7 +70488,7 @@ impl InterpreterCore {
         let value = self.read_reg(register)?;
         if let Value::Object(date_id) = &value
             && let Some(object) = self.heap.get(date_id.0 as usize)
-            && matches!(object.properties.get("__type"), Some(Value::Str(tag)) if tag.as_ref() == "Date")
+            && object.brand() == Some("Date")
         {
             let time = match object.properties.get("__timestamp") {
                 Some(Value::Int(millis)) => *millis as f64,
@@ -71229,14 +71216,14 @@ impl InterpreterCore {
         };
         let prototype = self.ensure_builtin_prototype("WeakRef")?;
         let weak_ref = self.alloc_object_with_prototype(Some(prototype))?;
-        self.set_object_property(weak_ref, "__type".to_string(), Value::str("WeakRef"))?;
+        self.set_object_brand(weak_ref, "WeakRef")?;
         self.set_object_property(weak_ref, "__target".to_string(), target)?;
         self.set_own_runtime_property_label(
             weak_ref,
             &RuntimePropertyKey::String(JsString::from("__target")),
             &label,
         )?;
-        self.hide_internal_slots(weak_ref, &["__type", "__target"])?;
+        self.hide_internal_slots(weak_ref, &["__target"])?;
         Ok(Value::Object(weak_ref))
     }
 
@@ -71246,12 +71233,7 @@ impl InterpreterCore {
             Value::Object(weak_ref) => self
                 .heap
                 .get(weak_ref.0 as usize)
-                .filter(|object| {
-                    matches!(
-                        object.properties.get("__type"),
-                        Some(Value::Str(tag)) if tag.as_ref() == "WeakRef"
-                    )
-                })
+                .filter(|object| object.brand() == Some("WeakRef"))
                 .and_then(|object| object.properties.get("__target").cloned()),
             _ => None,
         };
@@ -71283,13 +71265,9 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype("FinalizationRegistry")?;
         let registry = self.alloc_object_with_prototype(Some(prototype))?;
         let tokens = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(
-            registry,
-            "__type".to_string(),
-            Value::str("FinalizationRegistry"),
-        )?;
+        self.set_object_brand(registry, "FinalizationRegistry")?;
         self.set_object_property(registry, "__tokens".to_string(), Value::Object(tokens))?;
-        self.hide_internal_slots(registry, &["__type", "__tokens"])?;
+        self.hide_internal_slots(registry, &["__tokens"])?;
         Ok(Value::Object(registry))
     }
 
@@ -81826,8 +81804,8 @@ impl InterpreterCore {
                 builtin.bound_object = Some(facade.0);
                 Value::BuiltinFunction(builtin)
             };
+            self.set_object_brand(facade, "Cluster")?;
             for (key, value) in [
-                ("__type", Value::str("Cluster")),
                 ("__maxListeners", Value::Int(10)),
                 ("isPrimary", Value::Bool(true)),
                 ("isMaster", Value::Bool(true)),
@@ -81884,12 +81862,10 @@ impl InterpreterCore {
             });
         }
         let authenticated = self.cluster_facades.contains_key(&object_id)
-            && matches!(
-                self.heap
-                    .get(object_id.0 as usize)
-                    .and_then(|object| object.properties.get("__type")),
-                Some(Value::Str(tag)) if tag.as_ref() == "Cluster"
-            );
+            && self
+                .heap
+                .get(object_id.0 as usize)
+                .is_some_and(|object| object.brand() == Some("Cluster"));
         if !authenticated {
             return Err(InterpreterError::TypeError {
                 expected: format!("authenticated cluster receiver for cluster.{method}"),
@@ -82505,11 +82481,7 @@ impl InterpreterCore {
                 let previous_estimated_bytes = self.estimated_memory_bytes;
                 let result = (|| {
                     let object_id = self.alloc_object_with_prototype(Some(prototype))?;
-                    self.set_object_property(
-                        object_id,
-                        "__type".to_string(),
-                        Value::str("EventEmitter"),
-                    )?;
+                    self.set_object_brand(object_id, "EventEmitter")?;
                     self.set_object_property(
                         object_id,
                         "__maxListeners".to_string(),
@@ -84325,13 +84297,13 @@ impl InterpreterCore {
                 // capability-checked allocator rather than poking the heap Vec.
                 let date_prototype = self.ensure_builtin_prototype("Date")?;
                 let date_id = self.alloc_object_with_prototype(Some(date_prototype))?;
-                self.set_object_property(date_id, "__type".to_string(), Value::str("Date"))?;
+                self.set_object_brand(date_id, "Date")?;
                 self.set_object_property(
                     date_id,
                     "__timestamp".to_string(),
                     Value::Float(Float64::new(millis)),
                 )?;
-                self.hide_internal_slots(date_id, &["__type", "__timestamp"])?;
+                self.hide_internal_slots(date_id, &["__timestamp"])?;
                 Ok(Value::Object(date_id))
             }
             "builtin:ArrayBuffer" => {
@@ -85384,26 +85356,9 @@ impl InterpreterCore {
                     Value::BigInt(_) => "bigint",
                     Value::Symbol(_) => "symbol",
                     Value::Str(_) => "string",
-                    Value::Object(id) => {
-                        // Check if it's a function-like object
-                        if let Some(obj) = self.heap.get(id.0 as usize) {
-                            if obj.properties.contains_key("__type") {
-                                if let Some(Value::Str(t)) = obj.properties.get("__type") {
-                                    if t.as_ref() == "symbol" {
-                                        "symbol"
-                                    } else {
-                                        "object"
-                                    }
-                                } else {
-                                    "object"
-                                }
-                            } else {
-                                "object"
-                            }
-                        } else {
-                            "object"
-                        }
-                    }
+                    // A Symbol is a Value::Symbol; no heap object is one,
+                    // whatever its properties (bd-9vouw.150).
+                    Value::Object(_) => "object",
                     Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => {
                         "function"
                     }
@@ -85754,10 +85709,10 @@ impl InterpreterCore {
                 let set_id = self.alloc_object_with_prototype(Some(prototype))?;
                 let values_id = self.alloc_object_with_prototype(None)?;
 
-                self.set_object_property(set_id, "__type".to_string(), Value::str("Set"))?;
+                self.set_object_brand(set_id, "Set")?;
                 self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
                 self.set_object_property(set_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
-                self.hide_internal_slots(set_id, &["__type", "__values", COLLECTION_SIZE_SLOT])?;
+                self.hide_internal_slots(set_id, &["__values", COLLECTION_SIZE_SLOT])?;
 
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
@@ -85781,12 +85736,7 @@ impl InterpreterCore {
                     let weakmap_id = self.alloc_object_with_prototype(Some(weakmap_prototype))?;
                     published_weakmap = Some(weakmap_id);
 
-                    self.set_object_property(
-                        weakmap_id,
-                        "__type".to_string(),
-                        Value::str("WeakMap"),
-                    )?;
-                    self.hide_internal_slots(weakmap_id, &["__type"])?;
+                    self.set_object_brand(weakmap_id, "WeakMap")?;
 
                     self.apply_memory_component_delta(0, MEMORY_ESTIMATE_MAP_ENTRY_BYTES)?;
                     self.weakmap_storage
@@ -85820,13 +85770,13 @@ impl InterpreterCore {
                 let weakset_id = self.alloc_object_with_prototype(Some(weakset_prototype))?;
                 let values_id = self.alloc_object_with_prototype(None)?;
 
-                self.set_object_property(weakset_id, "__type".to_string(), Value::str("WeakSet"))?;
+                self.set_object_brand(weakset_id, "WeakSet")?;
                 self.set_object_property(
                     weakset_id,
                     "__values".to_string(),
                     Value::Object(values_id),
                 )?;
-                self.hide_internal_slots(weakset_id, &["__type", "__values"])?;
+                self.hide_internal_slots(weakset_id, &["__values"])?;
 
                 // Note: In a full implementation, WeakSet would use weak references
                 if args.count > 0 {
@@ -85850,8 +85800,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Map
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
-                    {
+                    if map_obj.brand() != Some("Map") {
                         return Ok(Value::Undefined);
                     }
                 }
@@ -85874,8 +85823,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Map
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
-                    {
+                    if map_obj.brand() != Some("Map") {
                         return Ok(Value::Undefined);
                     }
                 }
@@ -85911,8 +85859,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Set
                 if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
-                    {
+                    if set_obj.brand() != Some("Set") {
                         return Ok(Value::Undefined);
                     }
                 }
@@ -85934,8 +85881,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Set
                 if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
-                    {
+                    if set_obj.brand() != Some("Set") {
                         return Ok(Value::Bool(false));
                     }
                 }
@@ -85972,8 +85918,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Map
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
-                    {
+                    if map_obj.brand() != Some("Map") {
                         return Ok(Value::Bool(false));
                     }
                 }
@@ -86010,8 +85955,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Map
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
-                    {
+                    if map_obj.brand() != Some("Map") {
                         return Ok(Value::Bool(false));
                     }
                 } else {
@@ -86041,8 +85985,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Set
                 if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
-                    {
+                    if set_obj.brand() != Some("Set") {
                         return Ok(Value::Bool(false));
                     }
                 } else {
@@ -86065,8 +86008,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Set
                 if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
-                    {
+                    if set_obj.brand() != Some("Set") {
                         return Ok(Value::Undefined);
                     }
                 } else {
@@ -86349,7 +86291,7 @@ impl InterpreterCore {
                 let promise_id = self.alloc_object_with_prototype(None)?;
 
                 // Set Promise metadata
-                self.set_object_property(promise_id, "__type".to_string(), Value::str("Promise"))?;
+                self.set_object_brand(promise_id, "Promise")?;
                 self.set_object_property(
                     promise_id,
                     "__state".to_string(),
@@ -86441,9 +86383,7 @@ impl InterpreterCore {
                 let flags_value = self.arg_or_undefined(args, 1)?;
                 let regexp_source = match &pattern_value {
                     Value::Object(id) => self.heap.get(id.0 as usize).and_then(|object| {
-                        matches!(object.properties.get("__type"),
-                            Some(Value::Str(tag)) if tag.as_ref() == "RegExp")
-                        .then(|| {
+                        (object.brand() == Some("RegExp")).then(|| {
                             let text = |key: &str| match object.properties.get(key) {
                                 Some(Value::Str(text)) => text.to_string(),
                                 _ => String::new(),
@@ -86641,20 +86581,16 @@ impl InterpreterCore {
                 };
 
                 // Check if it's actually a Date
-                if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
-                    if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
-                        if type_val.as_ref() == "Date" {
-                            // Get the timestamp value
-                            if let Some(Value::Float(timestamp)) =
-                                date_obj.properties.get("__timestamp")
-                            {
-                                return Ok(Value::Float(*timestamp));
-                            } else if let Some(Value::Int(timestamp)) =
-                                date_obj.properties.get("__timestamp")
-                            {
-                                return Ok(Value::Int(*timestamp));
-                            }
-                        }
+                if let Some(date_obj) = self.heap.get(date_id.0 as usize)
+                    && date_obj.brand() == Some("Date")
+                {
+                    // Get the timestamp value
+                    if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
+                        return Ok(Value::Float(*timestamp));
+                    } else if let Some(Value::Int(timestamp)) =
+                        date_obj.properties.get("__timestamp")
+                    {
+                        return Ok(Value::Int(*timestamp));
                     }
                 }
 
@@ -86724,17 +86660,17 @@ impl InterpreterCore {
                 };
 
                 // Check if it's actually a Date
-                if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
-                    if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
-                        if type_val.as_ref() == "Date" {
-                            // Use locale-aware formatting with default en-US locale
-                            return self.format_date_with_locale(
-                                this_val,
-                                "en-US",
-                                DateFormatType::DateTime,
-                            );
-                        }
-                    }
+                if self
+                    .heap
+                    .get(date_id.0 as usize)
+                    .is_some_and(|date_obj| date_obj.brand() == Some("Date"))
+                {
+                    // Use locale-aware formatting with default en-US locale
+                    return self.format_date_with_locale(
+                        this_val,
+                        "en-US",
+                        DateFormatType::DateTime,
+                    );
                 }
 
                 // Invalid date or not a date object
@@ -86745,44 +86681,9 @@ impl InterpreterCore {
                 // Object.prototype.valueOf() implementation
                 let this_val = self.read_reg(args.start)?;
 
-                // For objects, return the object itself (by reference)
-                // For primitives, return the primitive value
-                match this_val {
-                    Value::Object(obj_id) => {
-                        // For most objects, valueOf returns the object itself
-                        // Special handling could be added for Date, Number wrapper objects, etc.
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            // Check for special object types that have primitive values
-                            if let Some(Value::Str(type_val)) = obj.properties.get("__type") {
-                                match type_val.as_ref() {
-                                    "Number" => {
-                                        // For Number wrapper objects, return the primitive number
-                                        if let Some(value) = obj.properties.get("__value") {
-                                            return Ok(value.clone());
-                                        }
-                                    }
-                                    "String" => {
-                                        // For String wrapper objects, return the primitive string
-                                        if let Some(value) = obj.properties.get("__value") {
-                                            return Ok(value.clone());
-                                        }
-                                    }
-                                    "Boolean" => {
-                                        // For Boolean wrapper objects, return the primitive boolean
-                                        if let Some(value) = obj.properties.get("__value") {
-                                            return Ok(value.clone());
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        // Default: return the object itself
-                        Ok(Value::Object(obj_id))
-                    }
-                    // For primitives, return the value as-is
-                    _ => Ok(this_val),
-                }
+                // An object (a wrapper object included, ES2020 19.1.3.7) is
+                // returned itself; a primitive as-is.
+                Ok(this_val)
             }
 
             // Removed duplicate ArrayPrototypeFlatMap - implementation at line ~13119 is more complete
@@ -88818,15 +88719,11 @@ impl InterpreterCore {
                     Value::Int(n) => Ok(Value::Int(n)),
                     Value::Float(f) => Ok(Value::Float(f)),
                     Value::Object(obj_id) => {
-                        // Check if it's a Number object wrapper
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if let Some(Value::Str(type_val)) = obj.properties.get("__type") {
-                                if type_val.as_ref() == "Number" {
-                                    if let Some(primitive_val) = obj.properties.get("__value") {
-                                        return Ok(primitive_val.clone());
-                                    }
-                                }
-                            }
+                        // A Number wrapper's [[NumberData]] (bd-9vouw.73).
+                        if let Some(number @ (Value::Int(_) | Value::Float(_))) =
+                            self.primitive_wrapper_value(obj_id)
+                        {
+                            return Ok(number.clone());
                         }
                         // Not a Number object, return NaN
                         Ok(Value::Float(Float64::new(f64::NAN)))
@@ -89417,23 +89314,25 @@ impl InterpreterCore {
                 } else {
                     Value::Undefined
                 };
-                let object_id = self.alloc_object_with_properties(&[
-                    ("__type", Value::str(TIMERS_PROMISES_INTERVAL_TYPE)),
-                    ("__delayMs", Value::Int(delay_ms as i64)),
-                    ("__value", value),
-                    (
-                        "next",
-                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                            BuiltinFunctionKind::TimersPromisesIntervalNext,
-                        )),
-                    ),
-                    (
-                        "return",
-                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                            BuiltinFunctionKind::TimersPromisesIntervalReturn,
-                        )),
-                    ),
-                ])?;
+                let object_id = self.alloc_branded_object(
+                    TIMERS_PROMISES_INTERVAL_TYPE,
+                    &[
+                        ("__delayMs", Value::Int(delay_ms as i64)),
+                        ("__value", value),
+                        (
+                            "next",
+                            Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                BuiltinFunctionKind::TimersPromisesIntervalNext,
+                            )),
+                        ),
+                        (
+                            "return",
+                            Value::BuiltinFunction(BuiltinFunction::new_kind(
+                                BuiltinFunctionKind::TimersPromisesIntervalReturn,
+                            )),
+                        ),
+                    ],
+                )?;
                 // `for await` (desugared to the async iteration protocol)
                 // finds the iterator through @@asyncIterator.
                 self.set_symbol_property(
@@ -89887,8 +89786,7 @@ impl InterpreterCore {
             .get(weakmap_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
 
-        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind.as_ref() == "WeakMap")
-        {
+        if weakmap_obj.brand() != Some("WeakMap") {
             return Err(InterpreterError::TypeError {
                 expected: "WeakMap".to_string(),
                 got: "object".to_string(),
@@ -89923,8 +89821,7 @@ impl InterpreterCore {
             .get(weakmap_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
 
-        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind.as_ref() == "WeakMap")
-        {
+        if weakmap_obj.brand() != Some("WeakMap") {
             return Err(InterpreterError::TypeError {
                 expected: "WeakMap".to_string(),
                 got: "object".to_string(),
@@ -90725,7 +90622,7 @@ impl InterpreterCore {
         // A Date converts through Date.prototype.toString: its
         // @@toPrimitive treats the "default" hint as "string".
         if let Some(object) = self.heap.get(id.0 as usize)
-            && matches!(object.properties.get("__type"), Some(Value::Str(tag)) if tag.as_ref() == "Date")
+            && object.brand() == Some("Date")
         {
             let t = match object.properties.get("__timestamp") {
                 Some(Value::Int(millis)) => *millis as f64,
@@ -93142,6 +93039,7 @@ impl InterpreterCore {
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
+            .saturating_add(Self::estimate_brand_bytes(object.brand.as_ref()))
             .saturating_add(Self::saturating_sum(
                 object
                     .private_elements
@@ -94445,9 +94343,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = Some(prototype);
-        object
-            .properties
-            .insert("__type".to_string(), Value::str("ArrayBuffer"));
+        object.brand = Some(JsString::from("ArrayBuffer"));
         object
             .properties
             .insert("byteLength".to_string(), Value::Int(byte_length_i64));
@@ -94484,11 +94380,7 @@ impl InterpreterCore {
             .as_ref()
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "ArrayBuffer".to_string(),
-                got: object
-                    .properties
-                    .get("__type")
-                    .map(|value| self.value_to_string(value))
-                    .unwrap_or_else(|| "object".to_string()),
+                got: object.brand().unwrap_or("object").to_string(),
             })?;
         Ok(f(&backing.bytes))
     }
@@ -94502,14 +94394,7 @@ impl InterpreterCore {
             let object = heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-            let got = object
-                .properties
-                .get("__type")
-                .map(|value| match value {
-                    Value::Str(text) => text.to_string(),
-                    other => other.type_name().to_string(),
-                })
-                .unwrap_or_else(|| "object".to_string());
+            let got = object.brand().unwrap_or("object").to_string();
             let backing =
                 object
                     .array_buffer
@@ -94609,9 +94494,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = prototype;
-        object
-            .properties
-            .insert("__type".to_string(), Value::str(kind.type_name()));
+        object.brand = Some(JsString::from(kind.type_name()));
         object
             .properties
             .insert("__typedArrayKind".to_string(), Value::str(kind.type_name()));
@@ -94732,17 +94615,13 @@ impl InterpreterCore {
         // caller-declared live temporary. Only after it succeeds are either
         // heap object and the backing Vec published.
         let mut buffer_object = HeapObject::new();
-        buffer_object
-            .properties
-            .insert("__type".to_string(), Value::str("ArrayBuffer"));
+        buffer_object.brand = Some(JsString::from("ArrayBuffer"));
         buffer_object
             .properties
             .insert("byteLength".to_string(), Value::Int(byte_length_i64));
 
         let mut view_object = HeapObject::new();
-        view_object
-            .properties
-            .insert("__type".to_string(), Value::str("Uint8Array"));
+        view_object.brand = Some(JsString::from("Uint8Array"));
         view_object
             .properties
             .insert("__typedArrayKind".to_string(), Value::str("Uint8Array"));
@@ -94995,9 +94874,7 @@ impl InterpreterCore {
             );
 
         let mut object = HeapObject::new();
-        object
-            .properties
-            .insert("__type".to_string(), Value::str("DataView"));
+        object.brand = Some(JsString::from("DataView"));
         object
             .properties
             .insert("buffer".to_string(), Value::Object(buffer));
@@ -95054,9 +94931,9 @@ impl InterpreterCore {
             let got = self
                 .heap
                 .get(buffer_id.0 as usize)
-                .and_then(|object| object.properties.get("__type"))
-                .map(|value| self.value_to_string(value))
-                .unwrap_or_else(|| "object".to_string());
+                .and_then(HeapObject::brand)
+                .unwrap_or("object")
+                .to_string();
             return Err(InterpreterError::TypeError {
                 expected: "ArrayBuffer".to_string(),
                 got,
@@ -96657,6 +96534,32 @@ impl InterpreterCore {
 
     /// Give `object_id` the [[NumberData]] (StringData, BooleanData, ...)
     /// `value`, charging its bytes.
+    /// Brand `object_id` as a built-in or host object of kind `brand`
+    /// (bd-9vouw.150), charging the name's bytes.
+    fn set_object_brand(
+        &mut self,
+        object_id: ObjectId,
+        brand: &str,
+    ) -> Result<(), InterpreterError> {
+        let index = object_id.0 as usize;
+        let previous = self
+            .heap
+            .get(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let previous_bytes = Self::estimate_brand_bytes(previous.brand.as_ref());
+        let brand = JsString::from(brand);
+        self.apply_memory_component_delta(
+            previous_bytes,
+            Self::estimate_brand_bytes(Some(&brand)),
+        )?;
+        self.mutate_heap(|heap| heap[index].brand = Some(brand));
+        Ok(())
+    }
+
+    fn estimate_brand_bytes(brand: Option<&JsString>) -> u64 {
+        brand.map_or(0, |brand| brand.len() as u64)
+    }
+
     fn set_primitive_wrapper_value(
         &mut self,
         object_id: ObjectId,
@@ -97606,7 +97509,7 @@ impl InterpreterCore {
             }
             "Map" => {
                 let entries_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(object_id, "__type".to_string(), Value::str("Map"))?;
+                self.set_object_brand(object_id, "Map")?;
                 self.set_object_property(
                     object_id,
                     "__entries".to_string(),
@@ -97617,10 +97520,7 @@ impl InterpreterCore {
                     COLLECTION_SIZE_SLOT.to_string(),
                     Value::Int(0),
                 )?;
-                self.hide_internal_slots(
-                    object_id,
-                    &["__type", "__entries", COLLECTION_SIZE_SLOT],
-                )?;
+                self.hide_internal_slots(object_id, &["__entries", COLLECTION_SIZE_SLOT])?;
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
                     self.seed_map_entries_from_iterable(
@@ -97633,7 +97533,7 @@ impl InterpreterCore {
             }
             "Set" => {
                 let values_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(object_id, "__type".to_string(), Value::str("Set"))?;
+                self.set_object_brand(object_id, "Set")?;
                 self.set_object_property(
                     object_id,
                     "__values".to_string(),
@@ -97644,7 +97544,7 @@ impl InterpreterCore {
                     COLLECTION_SIZE_SLOT.to_string(),
                     Value::Int(0),
                 )?;
-                self.hide_internal_slots(object_id, &["__type", "__values", COLLECTION_SIZE_SLOT])?;
+                self.hide_internal_slots(object_id, &["__values", COLLECTION_SIZE_SLOT])?;
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
                     self.seed_set_values_from_iterable(
@@ -102397,27 +102297,21 @@ impl InterpreterCore {
         };
 
         // Check if it's actually a Date object
-        if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
-            if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
-                if type_val.as_ref() == "Date" {
-                    let timestamp = if let Some(Value::Float(timestamp)) =
-                        date_obj.properties.get("__timestamp")
-                    {
-                        timestamp.inner() as i64
-                    } else if let Some(Value::Int(timestamp)) =
-                        date_obj.properties.get("__timestamp")
-                    {
-                        *timestamp
-                    } else {
-                        return Ok(Value::str("Invalid Date"));
-                    };
+        if let Some(date_obj) = self.heap.get(date_id.0 as usize)
+            && date_obj.brand() == Some("Date")
+        {
+            let timestamp =
+                if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
+                    timestamp.inner() as i64
+                } else if let Some(Value::Int(timestamp)) = date_obj.properties.get("__timestamp") {
+                    *timestamp
+                } else {
+                    return Ok(Value::str("Invalid Date"));
+                };
 
-                    let locale_data = Self::get_locale_data(locale);
-                    let formatted =
-                        self.format_timestamp_with_locale(timestamp, locale_data, format_type);
-                    return Ok(Value::str(formatted));
-                }
-            }
+            let locale_data = Self::get_locale_data(locale);
+            let formatted = self.format_timestamp_with_locale(timestamp, locale_data, format_type);
+            return Ok(Value::str(formatted));
         }
 
         Ok(Value::str("Invalid Date"))
@@ -103598,10 +103492,7 @@ mod active_builtin_regressions {
             .heap
             .get(buffer_id.0 as usize)
             .expect("ArrayBuffer object must be published after successful allocation");
-        assert_eq!(
-            object.properties.get("__type"),
-            Some(&Value::str("ArrayBuffer"))
-        );
+        assert_eq!(object.brand(), Some("ArrayBuffer"));
         assert_eq!(object.properties.get("byteLength"), Some(&Value::Int(3)));
         let backing = object
             .array_buffer
@@ -103759,10 +103650,7 @@ mod active_builtin_regressions {
             .heap
             .get(uint8_id.0 as usize)
             .expect("typed-array view object must be published");
-        assert_eq!(
-            uint8_object.properties.get("__type"),
-            Some(&Value::str("Uint8Array"))
-        );
+        assert_eq!(uint8_object.brand(), Some("Uint8Array"));
         assert_eq!(uint8_object.properties.get("length"), Some(&Value::Int(3)));
         assert_eq!(
             uint8_object.properties.get("byteLength"),
@@ -104337,10 +104225,7 @@ mod active_builtin_regressions {
             .heap
             .get(view_id.0 as usize)
             .expect("DataView object must be published");
-        assert_eq!(
-            view_object.properties.get("__type"),
-            Some(&Value::str("DataView"))
-        );
+        assert_eq!(view_object.brand(), Some("DataView"));
         assert_eq!(
             view_object.properties.get("buffer"),
             Some(&Value::Object(buffer_id))
@@ -106486,10 +106371,7 @@ mod async_runtime_tests_current {
         let Value::Object(weakmap_id) = result else {
             panic!("WeakMap constructor should return object, got {result:?}");
         };
-        assert_eq!(
-            core.heap[weakmap_id.0 as usize].properties.get("__type"),
-            Some(&Value::str("WeakMap"))
-        );
+        assert_eq!(core.heap[weakmap_id.0 as usize].brand(), Some("WeakMap"));
         weakmap_id
     }
 
@@ -110059,9 +109941,9 @@ mod async_runtime_tests_current {
             .get(req_id.0 as usize)
             .expect("request object on the heap");
         assert_eq!(
-            obj.properties.get("__type"),
-            Some(&Value::str("ClientRequest")),
-            "the object is tagged ClientRequest so `.write`/`.end` resolve by member access"
+            obj.brand(),
+            Some("ClientRequest"),
+            "the object is branded ClientRequest so `.write`/`.end` resolve by member access"
         );
         assert_eq!(
             obj.properties.get("__url"),
@@ -111314,8 +111196,8 @@ mod async_runtime_tests_current {
         };
         let response = core.heap.get(id.0 as usize).expect("response object");
         assert_eq!(
-            response.properties.get("__type"),
-            Some(&Value::str("IncomingMessage")),
+            response.brand(),
+            Some("IncomingMessage"),
             "the response is a readable-stream IncomingMessage"
         );
         // The data properties still win property resolution (the tag only adds `.on`).
@@ -111355,8 +111237,7 @@ mod async_runtime_tests_current {
         let target_id = core.mutate_heap(|h| {
             let id = ObjectId(h.len() as u32);
             let mut obj = HeapObject::new();
-            obj.properties
-                .insert("__type".to_string(), Value::str("IncomingMessage"));
+            obj.brand = Some(JsString::from("IncomingMessage"));
             h.push(obj);
             id
         });
@@ -111451,10 +111332,7 @@ mod async_runtime_tests_current {
             panic!("EventEmitter constructor must return an object");
         };
         let object = core.heap.get(target_id.0 as usize).expect("emitter object");
-        assert_eq!(
-            object.properties.get("__type"),
-            Some(&Value::str("EventEmitter"))
-        );
+        assert_eq!(object.brand(), Some("EventEmitter"));
         assert_eq!(
             object.properties.get("__maxListeners"),
             Some(&Value::Int(10))
@@ -111491,10 +111369,7 @@ mod async_runtime_tests_current {
         let mut core = test_interpreter();
         let module = test_module_with_functions(vec![], vec![]);
         let target_id = core
-            .alloc_object_with_properties(&[
-                ("__type", Value::str("EventEmitter")),
-                ("__maxListeners", Value::Int(10)),
-            ])
+            .alloc_branded_object("EventEmitter", &[("__maxListeners", Value::Int(10))])
             .expect("emitter object");
 
         let dispatch_listener = |core: &mut InterpreterCore,
@@ -111615,7 +111490,7 @@ mod async_runtime_tests_current {
         );
         let mut core = test_interpreter();
         let target_id = core
-            .alloc_object_with_properties(&[("__type", Value::str("Readable"))])
+            .alloc_branded_object(READABLE_BRAND, &[])
             .expect("readable emitter object");
         core.insert_event_listener(
             target_id,
@@ -114440,6 +114315,7 @@ mod async_runtime_tests_current {
         for (key, value) in properties {
             projected_object.properties.insert(key.to_string(), value);
         }
+        projected_object.brand = Some(JsString::from(READABLE_BRAND));
         let object_bytes = InterpreterCore::estimate_heap_object_bytes(&projected_object);
         core.config.max_total_memory_bytes = baseline_bytes
             .saturating_add(state_bytes)
@@ -124705,7 +124581,7 @@ mod async_runtime_tests_current {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
         let emitter = core
-            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .alloc_branded_object("EventEmitter", &[])
             .expect("emitter object");
 
         // events.once(emitter, "ready")
@@ -124861,7 +124737,7 @@ mod async_runtime_tests_current {
         // silently and emits no meta-events.
         let mut fast = test_interpreter();
         let fast_emitter = fast
-            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .alloc_branded_object("EventEmitter", &[])
             .expect("emitter object");
         register(&mut fast, fast_emitter, "ready", Value::Closure(1));
         register(&mut fast, fast_emitter, "ready", Value::Closure(2));
@@ -124877,7 +124753,7 @@ mod async_runtime_tests_current {
         // the handler stays, and accounting is exact after settlement.
         let mut done = test_interpreter();
         let done_emitter = done
-            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .alloc_branded_object("EventEmitter", &[])
             .expect("emitter object");
         register(
             &mut done,
@@ -124916,7 +124792,7 @@ mod async_runtime_tests_current {
         // listener is removed before the handler aborts.
         let mut slow = test_interpreter();
         let slow_emitter = slow
-            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .alloc_branded_object("EventEmitter", &[])
             .expect("emitter object");
         register(
             &mut slow,
@@ -125069,7 +124945,7 @@ mod async_runtime_tests_current {
     fn event_once_wrapper_allocation_is_atomic_accounted_and_seed_safe_bd_asw4m_2() {
         let mut core = test_interpreter();
         let target = core
-            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .alloc_branded_object("EventEmitter", &[])
             .expect("emitter target before seed capture");
         let seed = core
             .capture_execution_seed()
@@ -125182,10 +125058,10 @@ mod async_runtime_tests_current {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
         let source = core
-            .alloc_object_with_properties(&[("__type", Value::str("EventEmitter"))])
+            .alloc_branded_object("EventEmitter", &[])
             .expect("source emitter");
         let delivery_target = core
-            .alloc_object_with_properties(&[("__type", Value::str("ClientRequest"))])
+            .alloc_branded_object("ClientRequest", &[])
             .expect("deferred delivery emitter");
         let original =
             Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
@@ -125286,7 +125162,7 @@ mod async_runtime_tests_current {
         let module = test_module_with_functions(Vec::new(), Vec::new());
         let mut core = test_interpreter();
         let target = core
-            .alloc_object_with_properties(&[("__type", Value::str("ClientRequest"))])
+            .alloc_branded_object("ClientRequest", &[])
             .expect("response emitter");
         let original =
             Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
@@ -125505,8 +125381,7 @@ mod async_runtime_tests_current {
         let obj_id = core.mutate_heap(|h| {
             let id = ObjectId(h.len() as u32);
             let mut obj = HeapObject::new();
-            obj.properties
-                .insert("__type".to_string(), Value::str("IncomingMessage"));
+            obj.brand = Some(JsString::from("IncomingMessage"));
             obj.properties
                 .insert("body".to_string(), Value::str("chunk-bytes"));
             h.push(obj);
@@ -126948,7 +126823,7 @@ mod async_runtime_tests_current {
             &RuntimePropertyKey::String(JsString::from("__proto__")),
         ));
 
-        core.set_object_property(object, "__type".to_string(), Value::str(PROXY_TYPE_TAG))
+        core.set_object_brand(object, PROXY_TYPE_TAG)
             .expect("proxy marker should fit");
         assert!(
             !core.ordinary_own_property_read_fast_path_eligible(object, &data_key),
@@ -139008,10 +138883,7 @@ mod tests {
         };
 
         let weakmap_obj = &core.heap[weakmap_id.0 as usize];
-        assert_eq!(
-            weakmap_obj.properties.get("__type"),
-            Some(&Value::str("WeakMap"))
-        );
+        assert_eq!(weakmap_obj.brand(), Some("WeakMap"));
         weakmap_id
     }
 
@@ -144338,7 +144210,7 @@ mod tests {
         let map = core
             .alloc_object_with_prototype(None)
             .expect("Map allocation should succeed");
-        core.set_object_property(map, "__type".to_string(), Value::str("Map"))
+        core.set_object_brand(map, "Map")
             .expect("Map type tag should fit");
         core.set_object_property(map, "__entries".to_string(), Value::Object(entries))
             .expect("Map backing link should fit");
@@ -149760,7 +149632,7 @@ mod tests {
                 .alloc_object_with_prototype(None)
                 .expect("operation should succeed for valid inputs");
             interpreter
-                .set_object_property(regexp_obj_id, "__type".to_string(), Value::str("RegExp"))
+                .set_object_brand(regexp_obj_id, "RegExp")
                 .expect("operation should succeed for valid inputs");
             interpreter
                 .set_object_property(regexp_obj_id, "source".to_string(), Value::str("foo"))

@@ -1252,6 +1252,8 @@ impl InterpreterCore {
                 is_default_derived_constructor: _,
                 class_fields,
                 primitive_value,
+                // A brand name: no references.
+                brand: _,
                 is_array: _,
                 cached_dense_length: _,
                 array_buffer: _,

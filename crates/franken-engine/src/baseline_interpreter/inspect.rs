@@ -1107,16 +1107,13 @@ impl InterpreterCore {
             .collect()
     }
 
-    /// The engine's `__type` tag of a native object (Map, Set, Date, ...).
-    /// Guest data can carry a `__type` field too (a common JSON
-    /// discriminator), so only the engine's own tags count, and Map, Set and
-    /// Date must also have their storage slot.
+    /// The engine's brand of a native object (Map, Set, Date, ...). Guest
+    /// data can carry a `__type` field (a common JSON discriminator); it is
+    /// ordinary data, never the brand (bd-9vouw.150). Map, Set and Date must
+    /// also have their storage slot.
     pub(super) fn inspect_internal_type(&self, id: ObjectId) -> Option<String> {
         let object = self.heap.get(id.0 as usize)?;
-        let Some(Value::Str(kind)) = object.properties.get("__type") else {
-            return None;
-        };
-        let kind = kind.to_string();
+        let kind = object.brand()?.to_string();
         let native = match kind.as_str() {
             "Map" => self.collection_storage_id(id, "Map", "__entries").is_some(),
             "Set" => self.collection_storage_id(id, "Set", "__values").is_some(),

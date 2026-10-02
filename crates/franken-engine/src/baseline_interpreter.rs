@@ -44932,6 +44932,9 @@ impl InterpreterCore {
                     &parent_name,
                     args,
                 )?;
+                if parent_name == "Array" {
+                    self.initialize_array_subclass_instance(object_id, args)?;
+                }
                 Some(object_id)
             }
             Value::BuiltinFunction(builtin)
@@ -88935,7 +88938,11 @@ impl InterpreterCore {
             (Value::BigInt(a), Value::BigInt(b)) => a == b,
             (Value::Symbol(a), Value::Symbol(b)) => a == b,
             (Value::Object(a), Value::Object(b)) => a.0 == b.0, // Object identity comparison
-            _ => false,                                         // Different types are not equal
+            // Functions, promises, generators and iterators compare by
+            // identity too, as `===` does (strict_eq_values): `[f].indexOf(f)`
+            // was -1 and `[f].includes(f)` false.
+            (a, b) if a.is_object_like() && b.is_object_like() => a == b,
+            _ => false, // Different types are not equal
         }
     }
 
@@ -95737,6 +95744,37 @@ impl InterpreterCore {
         }
 
         Ok(None)
+    }
+
+    /// `super(...)` of a class extending Array (ES2020 22.1.1): one number
+    /// argument is the length of an empty array, any other arguments are
+    /// its elements; the instance is already an array with new.target's
+    /// prototype. It got neither elements nor a `length`: `class T extends
+    /// Array {}; new T(1, 2).length` was undefined (only `super(...xs)` took
+    /// the spread path). Base constructors whose prototype merely inherits
+    /// Array.prototype do not run this.
+    fn initialize_array_subclass_instance(
+        &mut self,
+        object_id: ObjectId,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let values = self.call_arguments(args)?;
+        if let [length @ (Value::Int(_) | Value::Float(_))] = values.as_slice() {
+            let length = length.clone();
+            return self.set_object_property(object_id, "length".to_string(), length);
+        }
+        for (index, value) in values.iter().cloned().enumerate() {
+            self.set_object_property(object_id, index.to_string(), value)?;
+        }
+        let length = i64::try_from(values.len()).unwrap_or(i64::MAX);
+        self.set_object_property(object_id, "length".to_string(), Value::Int(length))?;
+        let cached_length = u32::try_from(length).unwrap_or(u32::MAX);
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(object_id.0 as usize) {
+                object.cached_dense_length = Some(cached_length);
+            }
+        });
+        Ok(())
     }
 
     fn initialize_builtin_subclass_instance(

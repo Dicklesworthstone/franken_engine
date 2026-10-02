@@ -129,3 +129,24 @@ const o = { if: 5 }; var d = 0; if (1) d = o.if; else d = 9;
         "must match Node v22.2.0"
     );
 }
+
+/// Two shapes from jszip's minified bundle that failed to parse, so the
+/// whole package failed to load: a loop with an empty body (`;`) as the
+/// consequent before `else` ("empty expression statement": the `;` was
+/// stripped as if it ended an expression), and a function expression inside
+/// an unbraced consequent (`r = c ? function () {...} : 2`), whose body brace
+/// ended the if statement. Expected string is Node v22.2.0's output.
+#[test]
+fn empty_loop_bodies_and_function_expressions_in_unbraced_consequents() {
+    let source = r#"var n = 0, o = 3, u = 1; if (u) for (; n++, 0 != --o;); else n = 9;
+var w = 2; if (w) while (--w); else w = 9;
+var l = 1, r; if (l) r = l ? function () { return 'f'; } : 2; else { r = 3; }
+var s; if (0) {} else if (l) s = 'x' in {} ? function () {} : function () { return 'g'; }; else { s = 1; }
+var q = 0; if (q) q = 5; else q = function* g(a) { yield a; }; var a2 = [1].map(function (v) { return v + 1; }); if (1) a2 = a2 ? async function () {} : 0;
+[n, o, w, r(), s(), typeof q, q(7).next().value, typeof a2].join(' ');"#;
+    assert_eq!(
+        eval_to_string(source),
+        "3 0 0 f g function 7 function",
+        "must match Node v22.2.0"
+    );
+}

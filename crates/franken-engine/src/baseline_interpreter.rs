@@ -70485,8 +70485,38 @@ impl InterpreterCore {
         } else {
             js_number_to_value(result)
         };
-        self.set_object_property(date_id, "__timestamp".to_string(), stored.clone())?;
+        self.write_internal_slot(date_id, "__timestamp", stored.clone())?;
         Ok(stored)
+    }
+
+    /// Overwrite the existing internal slot `slot` of `object_id` in place.
+    /// An internal slot is not a property, so the object's integrity level
+    /// does not apply: `Object.freeze(date).setTime(5)` sets [[DateValue]]
+    /// (ES2020 20.4.4.27), as a frozen Map still `set`s. A missing slot is
+    /// created as an ordinary write.
+    fn write_internal_slot(
+        &mut self,
+        object_id: ObjectId,
+        slot: &str,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let index = object_id.0 as usize;
+        let Some(previous) = self
+            .heap
+            .get(index)
+            .and_then(|object| object.properties.get(slot))
+            .map(Self::estimate_value_bytes)
+        else {
+            return self.set_object_property(object_id, slot.to_string(), value);
+        };
+        self.apply_memory_component_delta(previous, Self::estimate_value_bytes(&value))?;
+        self.mutate_heap(|heap| {
+            if let Some(stored) = heap[index].properties.get_mut(slot) {
+                *stored = value;
+            }
+        });
+        self.gc_write_barrier(object_id);
+        Ok(())
     }
 
     /// ES2020 20.4.2.2 `new Date(value)`: another Date's time value; else

@@ -669,6 +669,15 @@ impl Parser {
                 }
                 None => Err("\\ at end of pattern".to_string()),
             },
+            // Without `u` a literal astral character is a surrogate pair; a
+            // quantifier after it applies to the low half (bd-9vouw.156).
+            _ if !self.unicode && u32::from(c) > 0xFFFF => {
+                self.index += 1;
+                if !self.take_low_half_quantifier()? {
+                    return Ok((self.add_class(RangeSet::default(), false), true));
+                }
+                Ok((Node::Char(c), true))
+            }
             _ => {
                 self.index += 1;
                 Ok((Node::Char(c), true))

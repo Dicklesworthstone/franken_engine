@@ -51,6 +51,19 @@ fn surrogate_pair_quantifier_pair_escape_and_low_class() {
     assert_eq!(eval(source), "[\"😀\"] [\"🏼\"] true false true false true");
 }
 
+/// A literal astral character (a surrogate pair in the source) quantified on its low half; the backreference forces the backtracking matcher.
+#[test]
+fn surrogate_pair_quantifier_literal_astral_character() {
+    let source = "var smile = String.fromCodePoint(0x1F600);\n\
+         [/^😀?$/.test(''), /^😀?$/.test(smile), /^😀+$/.test(smile), /^😀{2}$/.test(smile + smile),\n\
+          JSON.stringify(('a' + smile).match(/😀?/g)), /^(a)😀?\\1$/.test('aa'), /^(a)😀?\\1$/.test('a' + smile + 'a'),\n\
+          /^😀?$/u.test('')].join(' ');";
+    assert_eq!(
+        eval(source),
+        "false true true false [\"😀\"] false true true"
+    );
+}
+
 /// html-entities' nonAsciiPrintable replacer.
 #[test]
 fn surrogate_pair_quantifier_html_entities_encode_shape() {

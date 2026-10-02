@@ -113,6 +113,18 @@ impl Translator {
                     self.out.push_str(JS_DOT);
                     self.index += 1;
                 }
+                // Without `u` a literal astral character is a surrogate pair
+                // and a quantifier after it applies to its low half, as for
+                // the escaped pair (bd-9vouw.156): `/😀?/` matches the pair
+                // once, never the empty string.
+                _ if !self.unicode && u32::from(c) > 0xFFFF => {
+                    self.index += 1;
+                    if self.take_low_half_quantifier() {
+                        self.out.push(c);
+                    } else {
+                        self.out.push_str(NEVER);
+                    }
+                }
                 _ => {
                     self.out.push(c);
                     self.index += 1;

@@ -233,7 +233,8 @@ impl Eraser<'_> {
             body = end;
         }
         let arrow = self.text(body) == "=>";
-        if arrow && after != body
+        if arrow
+            && after != body
             && open.checked_sub(1).is_some_and(|index| {
                 (self.tokens[index].kind != Kind::Punctuation && previous != "async")
                     || matches!(previous, ")" | "]")
@@ -274,7 +275,9 @@ impl Eraser<'_> {
             if matches!(self.text(cursor), "," | ";" | ")" | "}") {
                 break;
             }
-            if field && cursor > start && self.newline_before(cursor)
+            if field
+                && cursor > start
+                && self.newline_before(cursor)
                 && self.tokens[cursor].kind == Kind::Word
                 && matches!(self.text(cursor + 1), ":" | "?" | "!" | "=" | "(")
                 && !matches!(self.text(cursor - 1), "." | "?." | "?" | ":" | "=" | "=>")
@@ -326,7 +329,10 @@ impl Eraser<'_> {
         if depth >= MAX_TYPE_DEPTH {
             return None;
         }
-        while matches!(self.text(cursor), "keyof" | "readonly" | "unique" | "typeof" | "infer" | "abstract") {
+        while matches!(
+            self.text(cursor),
+            "keyof" | "readonly" | "unique" | "typeof" | "infer" | "abstract"
+        ) {
             cursor += 1;
         }
         if self.text(cursor) == "asserts" {
@@ -357,9 +363,21 @@ impl Eraser<'_> {
         let mut type_arguments = token.kind == Kind::Word
             && !matches!(
                 token.text,
-                "any" | "unknown" | "number" | "bigint" | "boolean" | "string"
-                    | "symbol" | "object" | "void" | "undefined" | "null" | "never"
-                    | "true" | "false" | "this"
+                "any"
+                    | "unknown"
+                    | "number"
+                    | "bigint"
+                    | "boolean"
+                    | "string"
+                    | "symbol"
+                    | "object"
+                    | "void"
+                    | "undefined"
+                    | "null"
+                    | "never"
+                    | "true"
+                    | "false"
+                    | "this"
             );
         let function_parameters = token.text == "(" && self.type_parameter_list(cursor, depth + 1);
         if matches!(token.text, "(" | "[" | "{") {
@@ -374,7 +392,11 @@ impl Eraser<'_> {
         }
         loop {
             match self.text(cursor) {
-                "." if self.tokens.get(cursor + 1).is_some_and(|token| token.kind == Kind::Word) => {
+                "." if self
+                    .tokens
+                    .get(cursor + 1)
+                    .is_some_and(|token| token.kind == Kind::Word) =>
+                {
                     cursor += 2;
                     type_arguments = true;
                 }
@@ -446,7 +468,9 @@ impl Eraser<'_> {
             return false;
         };
         self.text(name) == "function"
-            || name.checked_sub(1).is_some_and(|before| self.text(before) == "function")
+            || name
+                .checked_sub(1)
+                .is_some_and(|before| self.text(before) == "function")
             || (name >= 2 && self.text(name - 1) == "*" && self.text(name - 2) == "function")
     }
 
@@ -563,7 +587,10 @@ fn delimiter_pairs(tokens: &[Token<'_>]) -> Option<Vec<Option<usize>>> {
             "(" | "[" | "{" => stack.push(index),
             ")" | "]" | "}" => {
                 let open = stack.pop()?;
-                if !matches!((tokens[open].text, token.text), ("(", ")") | ("[", "]") | ("{", "}")) {
+                if !matches!(
+                    (tokens[open].text, token.text),
+                    ("(", ")") | ("[", "]") | ("{", "}")
+                ) {
                     return None;
                 }
                 result[open] = Some(index);
@@ -656,7 +683,12 @@ fn next_token<'a>(
             *cursor += width;
             Kind::Punctuation
         };
-        return Some(Some(Token { text: &source[start..*cursor], start, end: *cursor, kind }));
+        return Some(Some(Token {
+            text: &source[start..*cursor],
+            start,
+            end: *cursor,
+            kind,
+        }));
     }
     Some(None)
 }
@@ -670,7 +702,10 @@ fn regex_after_token(
     if token.text == "(" {
         control_parens.push(
             !matches!(before_previous, "." | "?.")
-                && matches!(previous, "if" | "while" | "for" | "with" | "switch" | "catch"),
+                && matches!(
+                    previous,
+                    "if" | "while" | "for" | "with" | "switch" | "catch"
+                ),
         );
         true
     } else if token.text == ")" {
@@ -683,7 +718,22 @@ fn regex_after_token(
 fn regex_may_follow(text: &str, kind: Kind) -> bool {
     match kind {
         Kind::Literal => false,
-        Kind::Word => matches!(text, "return" | "throw" | "case" | "delete" | "void" | "typeof" | "new" | "in" | "of" | "yield" | "await" | "else" | "do"),
+        Kind::Word => matches!(
+            text,
+            "return"
+                | "throw"
+                | "case"
+                | "delete"
+                | "void"
+                | "typeof"
+                | "new"
+                | "in"
+                | "of"
+                | "yield"
+                | "await"
+                | "else"
+                | "do"
+        ),
         Kind::Punctuation => !matches!(text, "]" | ")" | "." | "?." | "++" | "--"),
     }
 }
@@ -713,7 +763,9 @@ fn regex_end(source: &str, start: usize) -> Option<usize> {
     let mut chars = source[start + 1..].char_indices();
     while let Some((offset, ch)) = chars.next() {
         match ch {
-            '\\' => { chars.next()?; }
+            '\\' => {
+                chars.next()?;
+            }
             '[' => class = true,
             ']' => class = false,
             '\n' | '\r' | '\u{2028}' | '\u{2029}' => return None,
@@ -809,7 +861,11 @@ mod tests {
         source.push_str(rest);
         expected.push_str(rest);
         assert_eq!(erase(&source), expected, "source: {source}");
-        assert_eq!(source.len(), expected.len(), "erasure preserves byte offsets");
+        assert_eq!(
+            source.len(),
+            expected.len(),
+            "erasure preserves byte offsets"
+        );
         assert_eq!(erase(&expected), expected, "erasure is idempotent");
     }
 
@@ -826,7 +882,9 @@ mod tests {
 
     #[test]
     fn class_access_modifiers_are_erased_but_runtime_modifiers_and_names_remain() {
-        check("class Box { ⟦public⟧ ⟦readonly⟧ value⟦: number⟧ = 1; ⟦private⟧ run(x⟦: number⟧)⟦: number⟧ { return x; } }");
+        check(
+            "class Box { ⟦public⟧ ⟦readonly⟧ value⟦: number⟧ = 1; ⟦private⟧ run(x⟦: number⟧)⟦: number⟧ { return x; } }",
+        );
         check("class Box { static value⟦: number⟧ = 1; get count()⟦: number⟧ { return 1; } }");
         check("class Box { readonly⟦: number⟧ = 1; public⟦: number⟧ = 2; }");
     }
@@ -843,7 +901,9 @@ mod tests {
     fn initializers_keep_conditionals_objects_and_nested_callbacks() {
         check("const a⟦: number⟧ = yes ? first : second, b⟦: number⟧ = 4;");
         check("const o⟦: {value: number}⟧ = {value: yes ? 1 : 2};");
-        check("const f = (x⟦: number⟧, o⟦: {value: number}⟧ = {value: 3})⟦: number⟧ => x + o.value;");
+        check(
+            "const f = (x⟦: number⟧, o⟦: {value: number}⟧ = {value: 3})⟦: number⟧ => x + o.value;",
+        );
     }
 
     #[test]
@@ -857,8 +917,12 @@ mod tests {
 
     #[test]
     fn typed_keyword_methods_are_not_control_flow_heads() {
-        check("const object = { if(value⟦: number⟧)⟦: number⟧ { return value; }, while()⟦: number⟧ { return 1; } };");
-        check("class Object { for(value⟦: number⟧) { return value; } switch()⟦: number⟧ { return 1; } }");
+        check(
+            "const object = { if(value⟦: number⟧)⟦: number⟧ { return value; }, while()⟦: number⟧ { return 1; } };",
+        );
+        check(
+            "class Object { for(value⟦: number⟧) { return value; } switch()⟦: number⟧ { return 1; } }",
+        );
         check("if (x ? y : z) { work(); } while (x = yes ? first : second) { work(); }");
         check("if ({value: true}.value) { work(); } switch (value) { case 1: work(); }");
     }
@@ -888,15 +952,21 @@ mod tests {
 
     #[test]
     fn receiver_and_optional_parameters_keep_runtime_arity() {
-        check("function read(⟦this: {base: number},⟧ offset⟦?: number⟧)⟦: number⟧ { return this.base; }");
+        check(
+            "function read(⟦this: {base: number},⟧ offset⟦?: number⟧)⟦: number⟧ { return this.base; }",
+        );
         check("function rest(first⟦?: number⟧, ...values⟦: number[]⟧) { return values; }");
         check("function receiverOnly(⟦this: object⟧) { return this; }");
     }
 
     #[test]
     fn class_fields_do_not_erase_runtime_object_properties() {
-        check("class Box { value⟦: {count: number}⟧ = {count: 3}; run(x⟦: number⟧)⟦: number⟧ { return x; } }");
-        check("class Box { missing⟦?: string⟧; assigned⟦!: number⟧; ['key']⟦: string⟧ = 'value'; }");
+        check(
+            "class Box { value⟦: {count: number}⟧ = {count: 3}; run(x⟦: number⟧)⟦: number⟧ { return x; } }",
+        );
+        check(
+            "class Box { missing⟦?: string⟧; assigned⟦!: number⟧; ['key']⟦: string⟧ = 'value'; }",
+        );
         check("class Box ⟦implements Contract⟧ { value⟦: number⟧ = 1; }");
         check("class Box { value⟦: number⟧ = 1\n other⟦: string⟧ = 'x'\n }");
     }

@@ -6,9 +6,11 @@
 //! the program died at the 100,000-object budget. Their state is now traced
 //! like an ephemeron (a reachable URL keeps its searchParams, a reachable
 //! URLSearchParams its URL) and purged with its charge when the object is
-//! reclaimed. Each run uses the default (QuickJS-profile) budgets, must
-//! collect, and checks estimated == recomputed memory afterwards. Expected
-//! strings are Node v22.2.0's output for the same programs.
+//! reclaimed. A crypto Hash, Hmac, Cipher or key pair's state (bytes and a
+//! label) blocked collection the same way and is now purged on reclaim too.
+//! Each run uses the default (QuickJS-profile) budgets, must collect, and
+//! checks estimated == recomputed memory afterwards. Expected strings are Node
+//! v22.2.0's output for the same programs.
 
 #![forbid(unsafe_code)]
 
@@ -18,6 +20,7 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+use frankenengine_engine::{EngineKind, HybridRouter};
 
 fn run(source: &str) -> String {
     let tree = CanonicalEs2020Parser
@@ -89,4 +92,23 @@ fn url_collection_urls_are_reclaimed() {
          for (let i = 0; i < 150000; i++) { const u = new URL('http://h.example/' + i); n += u.pathname.length; }\n\
          [n].join(' ');";
     assert_eq!(run(source), "938890");
+}
+
+/// A live crypto Hash no longer blocks collection either, on the default
+/// QuickJS lane (100,000 heap objects), and keeps its state.
+#[test]
+fn url_collection_crypto_hash_does_not_block_collection() {
+    let source = "const crypto = require('crypto');\n\
+         const h = crypto.createHash('sha256');\n\
+         let s = 0; for (let i = 0; i < 250000; i++) { const o = { a: i }; s += o.a & 1; }\n\
+         h.update('abc');\n\
+         [s, h.digest('hex')].join(' ');";
+    let outcome = HybridRouter::default()
+        .eval_with_instruction_budget(source, 1_000_000_000)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    assert_eq!(outcome.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(
+        outcome.value,
+        "125000 ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
 }

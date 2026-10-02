@@ -2980,6 +2980,11 @@ pub enum BuiltinFunctionKind {
     /// `Promise.prototype.finally` — receiver-aware finally reaction
     /// registration (bd-bpf76).
     PromiseFinally,
+    /// The executor NewPromiseCapability hands a Promise subclass's
+    /// constructor (ES2020 25.6.1.5.1 GetCapabilitiesExecutor): it records
+    /// that it was called; the resolving functions are the new promise's own
+    /// (bd-9vouw.137).
+    PromiseCapabilityExecutor,
     /// `RegExp.prototype.test` — receiver-aware; linear-time regex match via
     /// Rust's `regex` crate for the supported ES-compatible subset (bd-wni4m).
     RegExpTest,
@@ -4774,6 +4779,10 @@ impl BuiltinFunction {
         }
     }
 
+    fn promise_capability_executor() -> Self {
+        Self::new_kind(BuiltinFunctionKind::PromiseCapabilityExecutor)
+    }
+
     fn promise_finally() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseFinally,
@@ -5107,6 +5116,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::PromiseThen => "then",
             BuiltinFunctionKind::PromiseCatch => "catch",
             BuiltinFunctionKind::PromiseFinally => "finally",
+            BuiltinFunctionKind::PromiseCapabilityExecutor => "",
             BuiltinFunctionKind::RegExpTest => "test",
             BuiltinFunctionKind::ObjectHasOwnProperty => "hasOwnProperty",
             BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
@@ -13663,6 +13673,10 @@ pub struct InterpreterCore {
     /// built-in skips the identity digest (a JSON encoding and two SHA-256
     /// hashes) that locates one (bd-9vouw.17).
     builtin_function_backings: bool,
+    /// Calls of the NewPromiseCapability executor (bd-9vouw.137): a species
+    /// constructor that never calls it yields no resolving functions, the
+    /// TypeError of ES2020 25.6.1.5 step 8.
+    promise_capability_executor_calls: u64,
     /// Set once `delete` removed a virtual own property of a canonical
     /// prototype ([`HeapObject::deleted_virtual_keys`]); never cleared.
     /// Until then the virtual lookups skip the tombstone check
@@ -14896,6 +14910,7 @@ impl InterpreterCore {
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
             prototype_owner_ids: std::cell::RefCell::new(Vec::new()),
             builtin_function_backings: false,
+            promise_capability_executor_calls: 0,
             virtual_property_deletions: false,
             builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
             seed_epoch: 0,
@@ -42193,6 +42208,24 @@ impl InterpreterCore {
                         true,
                     );
                 }
+                // bd-9vouw.137: PromiseResolve(C, x) for a subclass `this`.
+                if let Some(constructor) = self.promise_static_subclass(receiver.as_ref())? {
+                    let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                    if matches!(value, Value::Promise(_)) {
+                        let value_constructor = self.get_v(
+                            module,
+                            &value,
+                            &RuntimePropertyKey::String(JsString::from("constructor")),
+                        )?;
+                        if Self::values_equal(&value_constructor, &constructor) {
+                            return Ok(value);
+                        }
+                    }
+                    let capability =
+                        self.new_promise_capability(module, constructor, vec![value.clone()])?;
+                    self.apply_promise_capability(capability, args, true)?;
+                    return Ok(Value::Promise(capability.0));
+                }
                 self.dispatch_promise_hostcall("promise:resolve", args, Some(module))
             }
             BuiltinFunctionKind::PromiseReject => {
@@ -42203,28 +42236,53 @@ impl InterpreterCore {
                         false,
                     );
                 }
+                if let Some(constructor) = self.promise_static_subclass(receiver.as_ref())? {
+                    let capability = self.new_promise_capability(module, constructor, Vec::new())?;
+                    self.apply_promise_capability(capability, args, false)?;
+                    return Ok(Value::Promise(capability.0));
+                }
                 self.dispatch_promise_hostcall("promise:reject", args, Some(module))
             }
             BuiltinFunctionKind::PromiseAll => {
-                self.dispatch_promise_hostcall("promise:all", args, Some(module))
+                self.promise_combinator_for_receiver(module, "promise:all", args, receiver.as_ref())
             }
-            BuiltinFunctionKind::PromiseRace => {
-                self.dispatch_promise_hostcall("promise:race", args, Some(module))
-            }
-            BuiltinFunctionKind::PromiseAllSettled => {
-                self.dispatch_promise_hostcall("promise:allSettled", args, Some(module))
-            }
+            BuiltinFunctionKind::PromiseRace => self.promise_combinator_for_receiver(
+                module,
+                "promise:race",
+                args,
+                receiver.as_ref(),
+            ),
+            BuiltinFunctionKind::PromiseAllSettled => self.promise_combinator_for_receiver(
+                module,
+                "promise:allSettled",
+                args,
+                receiver.as_ref(),
+            ),
             BuiltinFunctionKind::PromiseAny => {
-                self.dispatch_promise_hostcall("promise:any", args, Some(module))
+                self.promise_combinator_for_receiver(module, "promise:any", args, receiver.as_ref())
             }
-            BuiltinFunctionKind::PromiseThen => {
-                self.dispatch_promise_reaction_builtin(args, receiver, PromiseReactionKind::Then)
-            }
-            BuiltinFunctionKind::PromiseCatch => {
-                self.dispatch_promise_reaction_builtin(args, receiver, PromiseReactionKind::Catch)
-            }
-            BuiltinFunctionKind::PromiseFinally => {
-                self.dispatch_promise_reaction_builtin(args, receiver, PromiseReactionKind::Finally)
+            BuiltinFunctionKind::PromiseThen => self.dispatch_promise_reaction_builtin(
+                module,
+                args,
+                receiver,
+                PromiseReactionKind::Then,
+            ),
+            BuiltinFunctionKind::PromiseCatch => self.dispatch_promise_reaction_builtin(
+                module,
+                args,
+                receiver,
+                PromiseReactionKind::Catch,
+            ),
+            BuiltinFunctionKind::PromiseFinally => self.dispatch_promise_reaction_builtin(
+                module,
+                args,
+                receiver,
+                PromiseReactionKind::Finally,
+            ),
+            BuiltinFunctionKind::PromiseCapabilityExecutor => {
+                self.promise_capability_executor_calls =
+                    self.promise_capability_executor_calls.saturating_add(1);
+                Ok(Value::Undefined)
             }
             BuiltinFunctionKind::RegExpTest => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -45267,7 +45325,7 @@ impl InterpreterCore {
                 if parent_name == "Array" {
                     self.initialize_array_subclass_instance(object_id, args)?;
                 }
-                Some(object_id)
+                Some(Value::Object(object_id))
             }
             Value::BuiltinFunction(builtin)
                 if !matches!(
@@ -45284,8 +45342,7 @@ impl InterpreterCore {
             }
             _ => None,
         };
-        if let Some(object_id) = builtin_parent_object {
-            let result = Value::Object(object_id);
+        if let Some(result) = builtin_parent_object {
             let args_label = self.join_arg_range_label(args)?;
             let result_label =
                 self.join_owned_label_with_temporary_budget(args_label, &new_target_label)?;
@@ -49976,6 +50033,31 @@ impl InterpreterCore {
                                     // IFC: the backing object owns the stored label.
                                     primitive_owner = Some(backing);
                                     own
+                                } else if let Some(prototype) = self
+                                    .promise_prototype_override(module, &Value::Promise(promise))?
+                                {
+                                    // bd-9vouw.137: a subclass instance reads
+                                    // through its subclass prototype, which
+                                    // reaches %Promise.prototype%.
+                                    primitive_owner = Some(prototype);
+                                    let found = self.proxy_aware_get_runtime_property(
+                                        Some(module),
+                                        prototype,
+                                        &property_key,
+                                        Value::Promise(promise),
+                                        0,
+                                    )?;
+                                    if matches!(found, Value::Undefined)
+                                        && matches!(
+                                            &property_key,
+                                            RuntimePropertyKey::Symbol(symbol)
+                                                if *symbol == WellKnownSymbol::ToStringTag.id()
+                                        )
+                                    {
+                                        Value::str("Promise")
+                                    } else {
+                                        found
+                                    }
                                 } else if matches!(
                                     &property_key,
                                     RuntimePropertyKey::Symbol(symbol)
@@ -51002,7 +51084,7 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_value {
-                        let object_id = self.construct_builtin_with_new_target(
+                        let constructed = self.construct_builtin_with_new_target(
                             module,
                             builtin,
                             args,
@@ -51015,7 +51097,7 @@ impl InterpreterCore {
                             result_label,
                             &new_target_label,
                         )?;
-                        self.write_reg_with_label(dst, Value::Object(object_id), result_label)?;
+                        self.write_reg_with_label(dst, constructed, result_label)?;
                         self.ip += 1;
                         continue;
                     }
@@ -53654,6 +53736,14 @@ impl InterpreterCore {
                 };
                 if supplied {
                     return Ok(Value::Bool(true));
+                }
+                if let Some(prototype) = self.promise_prototype_override(module, object_like)? {
+                    return Ok(Value::Bool(self.proxy_aware_has_runtime_property(
+                        Some(module),
+                        prototype,
+                        &key,
+                        0,
+                    )?));
                 }
                 if let Some(&intrinsic_prototype) = self
                     .exotic_intrinsic_prototype_name(object_like)
@@ -57195,7 +57285,13 @@ impl InterpreterCore {
                 callable if callable.is_callable() => {
                     self.function_value_prototype(module, callable)?
                 }
-                Value::Promise(_) => Value::Object(self.ensure_builtin_prototype("Promise")?),
+                Value::Promise(_) => match match module {
+                    Some(module) => self.promise_prototype_override(module, &current)?,
+                    None => None,
+                } {
+                    Some(prototype) => Value::Object(prototype),
+                    None => Value::Object(self.ensure_builtin_prototype("Promise")?),
+                },
                 _ => return Ok(false),
             };
             if next == *needle {
@@ -61197,6 +61293,15 @@ impl InterpreterCore {
         {
             return Ok(own);
         }
+        if let Some(prototype) = self.promise_prototype_override(module, value)? {
+            return self.proxy_aware_get_runtime_property(
+                Some(module),
+                prototype,
+                key,
+                value.clone(),
+                0,
+            );
+        }
         // Unallocated intrinsic prototypes hold no program-added members, so
         // reading through Object.prototype then is the same answer.
         let prototype = self
@@ -61651,6 +61756,49 @@ impl InterpreterCore {
             .expect("preflighted Promise.then mutation must remain valid");
         self.settle_projected_promise_bytes(next_promise_bytes)?;
         Ok(result)
+    }
+
+    /// [`Self::register_promise_then`] into an existing result promise
+    /// (bd-9vouw.137), with the same exact memory preflight.
+    fn register_promise_then_into(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        on_fulfilled: Option<crate::closure_model::ClosureHandle>,
+        on_rejected: Option<crate::closure_model::ClosureHandle>,
+        result_promise: crate::promise_model::PromiseHandle,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let (next_store_bytes, next_queue_bytes) = self
+            .promise_store
+            .projected_then_into_memory_bytes(handle, &label, &self.event_loop.microtasks)
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid promise handle".to_string(),
+                got: error.to_string(),
+            })?;
+        let next_promise_bytes = next_store_bytes
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        self.promise_store
+            .then_into(
+                handle,
+                on_fulfilled,
+                on_rejected,
+                result_promise,
+                label,
+                &mut self.event_loop.microtasks,
+            )
+            .expect("preflighted Promise.then mutation must remain valid");
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
+        Ok(())
     }
 
     /// An await's internal reaction promise (`register_promise_then_for_await`)
@@ -62442,11 +62590,19 @@ impl InterpreterCore {
 
     fn dispatch_promise_reaction_builtin(
         &mut self,
+        module: &Ir3Module,
         args: RegRange,
         receiver: Option<Value>,
         kind: PromiseReactionKind,
     ) -> Result<Value, InterpreterError> {
         let receiver = receiver.unwrap_or(Value::Undefined);
+        // ES2020 25.6.5.4 steps 3-4 (and catch/finally through then): the
+        // result comes from SpeciesConstructor(promise, %Promise%).
+        let species_result = if matches!(receiver, Value::Promise(_)) {
+            self.promise_species_result(module, &receiver)?
+        } else {
+            None
+        };
         let handle = match receiver {
             Value::Promise(h) => crate::promise_model::PromiseHandle(h),
             other => {
@@ -62493,8 +62649,169 @@ impl InterpreterCore {
                 self.promise_finally_handlers(on_finally)?
             }
         };
-        let result = self.register_promise_then(handle, on_fulfilled, on_rejected, label)?;
+        let result = match species_result {
+            Some(result) => {
+                self.register_promise_then_into(handle, on_fulfilled, on_rejected, result, label)?;
+                result
+            }
+            None => self.register_promise_then(handle, on_fulfilled, on_rejected, label)?,
+        };
         Ok(Value::Promise(result.0))
+    }
+
+    /// bd-9vouw.137: the result promise of then/catch/finally on `promise`
+    /// when SpeciesConstructor(promise, %Promise%) is not %Promise%: the
+    /// promise NewPromiseCapability gets from constructing the species with
+    /// the capability executor. `None` keeps %Promise%: `constructor`
+    /// undefined or %Promise%, or a species that is undefined, null or
+    /// %Promise%. A non-object `constructor`, a species that is not a
+    /// constructor, or one that never calls the executor or returns
+    /// something other than a promise, is a TypeError.
+    fn promise_species_result(
+        &mut self,
+        module: &Ir3Module,
+        promise: &Value,
+    ) -> Result<Option<crate::promise_model::PromiseHandle>, InterpreterError> {
+        let constructor = self.get_v(
+            module,
+            promise,
+            &RuntimePropertyKey::String(JsString::from("constructor")),
+        )?;
+        let is_intrinsic_promise = |value: &Value| {
+            matches!(value, Value::BuiltinFunction(builtin)
+                if Self::materialized_global_prototype_name(builtin) == Some("Promise")
+                    || (builtin.kind == BuiltinFunctionKind::StandardConstructor
+                        && Self::standard_constructor_name(builtin)
+                            .is_ok_and(|name| name == "Promise")))
+        };
+        if matches!(constructor, Value::Undefined) || is_intrinsic_promise(&constructor) {
+            return Ok(None);
+        }
+        if !constructor.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined promise constructor".to_string(),
+                got: constructor.type_name().to_string(),
+            });
+        }
+        let species = self.species_of_constructor(module, &constructor)?;
+        if matches!(species, Value::Undefined | Value::Null) || is_intrinsic_promise(&species) {
+            return Ok(None);
+        }
+        if !self.is_constructible_value(&species) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructor @@species for a promise".to_string(),
+                got: species.type_name().to_string(),
+            });
+        }
+        self.new_promise_capability(module, species, vec![promise.clone()])
+            .map(Some)
+    }
+
+    /// bd-9vouw.137: ES2020 25.6.1.5 NewPromiseCapability(C) for a Promise
+    /// subclass (or any constructor): construct C with the capability
+    /// executor. The resolving functions it receives are the new promise's
+    /// own when C reaches %Promise% through `super(executor)`, so the
+    /// capability is that promise. A C that never calls the executor (no
+    /// resolving functions, step 8), or that returns something other than
+    /// a promise, is a TypeError. `roots` stay reachable while C runs.
+    fn new_promise_capability(
+        &mut self,
+        module: &Ir3Module,
+        constructor: Value,
+        roots: Vec<Value>,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        let calls_before = self.promise_capability_executor_calls;
+        let executor = Value::BuiltinFunction(BuiltinFunction::promise_capability_executor());
+        let (result, label) = self.with_gc_nested_request(roots, |core| {
+            core.invoke_inline_construct_with_labels(
+                Some(module),
+                constructor,
+                vec![executor],
+                None,
+                None,
+            )
+        })?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        match result {
+            Value::Promise(handle) if self.promise_capability_executor_calls > calls_before => {
+                Ok(crate::promise_model::PromiseHandle(handle))
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "promise capability whose executor received resolving functions"
+                    .to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// bd-9vouw.137: the subclass a Promise static was called on, when that
+    /// `this` is a constructor other than %Promise%; `None` for %Promise%,
+    /// and for a call without a receiver (a detached static keeps working
+    /// as %Promise%'s, as before). Any other receiver is the TypeError of
+    /// NewPromiseCapability's IsConstructor check.
+    fn promise_static_subclass(
+        &self,
+        receiver: Option<&Value>,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(receiver) = receiver else {
+            return Ok(None);
+        };
+        let is_intrinsic_promise = matches!(receiver, Value::BuiltinFunction(builtin)
+            if Self::materialized_global_prototype_name(builtin) == Some("Promise")
+                || (builtin.kind == BuiltinFunctionKind::StandardConstructor
+                    && Self::standard_constructor_name(builtin)
+                        .is_ok_and(|name| name == "Promise")));
+        if is_intrinsic_promise || matches!(receiver, Value::Undefined) {
+            return Ok(None);
+        }
+        if !self.is_constructible_value(receiver) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructor as the receiver of a Promise static".to_string(),
+                got: receiver.type_name().to_string(),
+            });
+        }
+        Ok(Some(receiver.clone()))
+    }
+
+    /// bd-9vouw.137: Promise.all / race / allSettled / any with a subclass
+    /// `this`: the capability first (a constructor that never calls the
+    /// executor throws before the iterable is read), then the combinator
+    /// over %Promise%, whose settlement passes to the subclass promise.
+    fn promise_combinator_for_receiver(
+        &mut self,
+        module: &Ir3Module,
+        capability: &str,
+        args: RegRange,
+        receiver: Option<&Value>,
+    ) -> Result<Value, InterpreterError> {
+        let Some(constructor) = self.promise_static_subclass(receiver)? else {
+            return self.dispatch_promise_hostcall(capability, args, Some(module));
+        };
+        let iterable = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let result_capability = self.new_promise_capability(module, constructor, vec![iterable])?;
+        let combined = self
+            .with_gc_nested_request(vec![Value::Promise(result_capability.0)], |core| {
+                core.dispatch_promise_hostcall(capability, args, Some(module))
+            })?;
+        let Value::Promise(combined) = combined else {
+            return Err(InterpreterError::TypeError {
+                expected: "promise from a Promise combinator".to_string(),
+                got: combined.type_name().to_string(),
+            });
+        };
+        self.register_promise_then_into(
+            crate::promise_model::PromiseHandle(combined),
+            None,
+            None,
+            result_capability,
+            Label::Public,
+        )?;
+        Ok(Value::Promise(result_capability.0))
     }
 
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
@@ -95905,7 +96222,7 @@ impl InterpreterCore {
         builtin: &BuiltinFunction,
         args: RegRange,
         new_target: &Value,
-    ) -> Result<ObjectId, InterpreterError> {
+    ) -> Result<Value, InterpreterError> {
         let standard_name = (builtin.kind == BuiltinFunctionKind::StandardConstructor)
             .then(|| Self::standard_constructor_name(builtin).ok())
             .flatten();
@@ -95922,6 +96239,25 @@ impl InterpreterCore {
         {
             result = Value::Object(self.alloc_primitive_wrapper(result)?);
         }
+        // bd-9vouw.137: a promise has no ordinary object of its own; a
+        // subclass's prototype goes on its backing object, which its
+        // [[Get]], instanceof and getPrototypeOf consult.
+        if let Value::Promise(_) = result {
+            if self.builtin_prototypes.get("Promise") != Some(&prototype) {
+                let backing = self
+                    .ensure_function_own_property_object(module, &result)?
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "promise with property storage".to_string(),
+                        got: "promise without property storage".to_string(),
+                    })?;
+                self.mutate_heap(|heap| {
+                    if let Some(object) = heap.get_mut(backing.0 as usize) {
+                        object.prototype = Some(prototype);
+                    }
+                });
+            }
+            return Ok(result);
+        }
         let Value::Object(object_id) = result else {
             return Err(InterpreterError::TypeError {
                 expected: "object result from constructible builtin target".to_string(),
@@ -95933,7 +96269,24 @@ impl InterpreterCore {
                 object.prototype = Some(prototype);
             }
         });
-        Ok(object_id)
+        Ok(Value::Object(object_id))
+    }
+
+    /// bd-9vouw.137: the [[Prototype]] a promise built through a Promise
+    /// subclass records on its backing object; `None` for any other value
+    /// and for a promise that reports %Promise.prototype%.
+    fn promise_prototype_override(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        if !matches!(value, Value::Promise(_)) {
+            return Ok(None);
+        }
+        Ok(self
+            .function_own_property_object(module, value)?
+            .and_then(|backing| self.heap.get(backing.0 as usize))
+            .and_then(|object| object.prototype))
     }
 
     fn constructor_function_index(&self, value: &Value) -> Result<u32, InterpreterError> {
@@ -97724,6 +98077,21 @@ impl InterpreterCore {
                     if builtin.kind == BuiltinFunctionKind::StandardConstructor =>
                 {
                     return self.standard_constructor_property(&builtin, key);
+                }
+                // bd-9vouw.137: Promise and Date keep their statics on a
+                // property object (`class P extends Promise {}; P.resolve`).
+                Some(Value::BuiltinFunction(builtin)) => {
+                    let Some(property_object) = Self::builtin_function_property_object(&builtin)
+                    else {
+                        return Ok(Value::Undefined);
+                    };
+                    return self.proxy_aware_get_runtime_property(
+                        Some(module),
+                        property_object,
+                        &RuntimePropertyKey::String(JsString::from(key)),
+                        Value::BuiltinFunction(builtin),
+                        0,
+                    );
                 }
                 Some(parent @ (Value::Closure(_) | Value::Function(_))) => current = parent,
                 _ => return Ok(Value::Undefined),

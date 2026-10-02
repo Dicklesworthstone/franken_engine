@@ -106,6 +106,14 @@ impl InterpreterCore {
             if let Some(name) = self.exotic_intrinsic_prototype_name(&target) {
                 match operation {
                     ObjectIntegrityOperation::GetPrototype => {
+                        // bd-9vouw.137: a Promise subclass instance reports
+                        // the prototype its backing object records.
+                        if let Some(module) = module
+                            && let Some(prototype) =
+                                self.promise_prototype_override(module, &target)?
+                        {
+                            return Ok(Value::Object(prototype));
+                        }
                         return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
                     }
                     ObjectIntegrityOperation::IsExtensible => return Ok(Value::Bool(true)),

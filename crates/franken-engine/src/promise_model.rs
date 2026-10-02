@@ -961,8 +961,33 @@ impl PromiseStore {
         label: &Label,
         queue: &MicrotaskQueue,
     ) -> Result<(u64, u64), PromiseError> {
+        self.projected_then_with_result_memory_bytes(handle, label, queue, true)
+    }
+
+    /// [`Self::projected_then_memory_bytes`] for [`Self::then_into`]: the
+    /// result promise exists already, so no record is created.
+    pub(crate) fn projected_then_into_memory_bytes(
+        &self,
+        handle: PromiseHandle,
+        label: &Label,
+        queue: &MicrotaskQueue,
+    ) -> Result<(u64, u64), PromiseError> {
+        self.projected_then_with_result_memory_bytes(handle, label, queue, false)
+    }
+
+    fn projected_then_with_result_memory_bytes(
+        &self,
+        handle: PromiseHandle,
+        label: &Label,
+        queue: &MicrotaskQueue,
+        creates_result: bool,
+    ) -> Result<(u64, u64), PromiseError> {
         let record = self.get(handle)?;
-        let mut next_store_bytes = self.projected_create_memory_bytes();
+        let mut next_store_bytes = if creates_result {
+            self.projected_create_memory_bytes()
+        } else {
+            self.estimated_memory_bytes()
+        };
         let mut next_queue_bytes = queue.estimated_memory_bytes();
         match &record.state {
             PromiseState::Pending => {
@@ -1378,10 +1403,35 @@ impl PromiseStore {
         label: Label,
         queue: &mut MicrotaskQueue,
     ) -> Result<PromiseHandle, PromiseError> {
+        self.get(handle)?;
+        let result_promise = self.create();
+        self.then_into(
+            handle,
+            on_fulfilled,
+            on_rejected,
+            result_promise,
+            label,
+            queue,
+        )?;
+        Ok(result_promise)
+    }
+
+    /// PerformPromiseThen with a result promise that already exists: the
+    /// promise a Promise subclass's constructor made for NewPromiseCapability
+    /// (bd-9vouw.137). Settling `handle` settles `result_promise` through
+    /// the reaction, as for [`Self::then`]'s own result.
+    pub fn then_into(
+        &mut self,
+        handle: PromiseHandle,
+        on_fulfilled: Option<ClosureHandle>,
+        on_rejected: Option<ClosureHandle>,
+        result_promise: PromiseHandle,
+        label: Label,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<(), PromiseError> {
         let record = self.get(handle)?;
         let state = record.state.clone();
         let settlement_label = record.label.clone();
-        let result_promise = self.create();
 
         match state {
             PromiseState::Pending => {
@@ -1431,7 +1481,7 @@ impl PromiseStore {
         // job transfers any unhandled rejection to `result_promise`.
         self.update(handle, |record| record.rejection_handled = true)?;
 
-        Ok(result_promise)
+        Ok(())
     }
 
     /// Projected store-byte growth of [`Self::register_native_adoption`] on a

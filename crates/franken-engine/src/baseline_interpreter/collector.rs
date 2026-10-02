@@ -1398,6 +1398,8 @@ impl InterpreterCore {
             // Digests of module headers: no references (bd-9vouw.124).
             prototype_owner_ids: _,
             builtin_function_backings: _,
+            // A call counter; it holds no heap reference.
+            promise_capability_executor_calls: _,
             virtual_property_deletions: _,
             builtin_prototypes,
             seed_epoch: _,

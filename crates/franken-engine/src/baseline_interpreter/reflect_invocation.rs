@@ -137,6 +137,22 @@ impl InterpreterCore {
                     {
                         self.reflect_admit_mutation_label(receiver_object)?;
                     }
+                    // A plain function receiver (`Reflect.set(fn, k, v)`
+                    // defaults it to fn) stores on its own-property storage,
+                    // as `fn.k = v` does.
+                    let receiver = match module {
+                        Some(module)
+                            if receiver.is_callable()
+                                && !matches!(&receiver, Value::BuiltinFunction(builtin)
+                                    if Self::builtin_function_property_object(builtin).is_some()) =>
+                        {
+                            match self.own_property_holder(Some(module), &receiver, true)? {
+                                Some(storage) => Value::Object(storage),
+                                None => receiver,
+                            }
+                        }
+                        _ => receiver,
+                    };
                     let receiver = self.reflect_data_property_receiver(target, &key, receiver)?;
                     Value::Bool(self.proxy_aware_set_runtime_property(
                         module, target, &key, value, receiver, 0,

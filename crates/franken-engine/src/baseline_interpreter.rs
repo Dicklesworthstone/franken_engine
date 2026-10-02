@@ -53765,6 +53765,13 @@ impl InterpreterCore {
         function: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<bool, InterpreterError> {
+        // A callable proxy answers through its `has` trap (bd-9vouw.132).
+        if let Value::BuiltinFunction(builtin) = function
+            && builtin.kind == BuiltinFunctionKind::CallableProxy
+        {
+            let proxy = Self::callable_proxy_record_id(builtin)?;
+            return self.proxy_aware_has_runtime_property(Some(module), proxy, key, 0);
+        }
         let own = match self.function_own_property_exists(module, function, key)? {
             Some(own) => own,
             None => self.object_own_property_contains(function, &key.value()),
@@ -83457,6 +83464,16 @@ impl InterpreterCore {
                 let prototype = match prototype_arg {
                     Value::Null => None,
                     Value::Object(proto_id) => Some(proto_id),
+                    // A callable proxy's record is its object identity:
+                    // lookups through it reach its traps and its function
+                    // target (bd-9vouw.132). No-claim: a plain function as
+                    // the prototype is still refused (its property storage
+                    // does not inherit Function.prototype).
+                    Value::BuiltinFunction(ref builtin)
+                        if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+                    {
+                        Some(Self::callable_proxy_record_id(builtin)?)
+                    }
                     other => {
                         return Err(InterpreterError::TypeError {
                             expected: "object or null prototype for Object.create".to_string(),

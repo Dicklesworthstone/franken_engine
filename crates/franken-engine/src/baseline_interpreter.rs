@@ -354,6 +354,10 @@ const PROXY_TYPE_TAG: &str = "Proxy";
 const PROXY_TARGET_SLOT: &str = "__proxy_target";
 const PROXY_HANDLER_SLOT: &str = "__proxy_handler";
 const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
+/// The callable target of a proxy over a function (bd-9vouw.132). Its
+/// `PROXY_TARGET_SLOT` then holds the target's own-property storage, which
+/// the traps' fallbacks for [[Set]], [[Delete]], ... act on.
+const PROXY_CALL_TARGET_SLOT: &str = "__proxy_call_target";
 /// Built-in class parents the lowering records by name (`class X extends Map`,
 /// see `builtin_constructor_name` in the lowering); construction handles
 /// each through `initialize_builtin_subclass_instance`.
@@ -3486,6 +3490,13 @@ pub enum BuiltinFunctionKind {
     MathTanh,
     MathExpm1,
     MathLog1p,
+    /// A Proxy whose target is callable (ES2020 9.5.12, 9.5.13): the value
+    /// guest code holds for `new Proxy(fn, handler)`. `bound_object` is the
+    /// proxy record (target, handler, revoked flag and the callable target),
+    /// so [[Get]]/[[Set]]/... reach its traps like an object proxy's, while
+    /// [[Call]] and [[Construct]] go through `apply` / `construct` (or the
+    /// target). Append only.
+    CallableProxy,
 }
 
 impl BuiltinFunctionKind {
@@ -3505,6 +3516,9 @@ impl BuiltinFunctionKind {
                 | Self::PromiseConstructor
                 | Self::StandardConstructor
                 | Self::IntlConstructor
+                // Whether a callable proxy constructs depends on its target;
+                // `construct_callable_proxy` checks that.
+                | Self::CallableProxy
         )
     }
 }
@@ -4917,6 +4931,7 @@ impl BuiltinFunction {
                 "@@iterator"
             }
             BuiltinFunctionKind::ProxyRevoke => "revoke",
+            BuiltinFunctionKind::CallableProxy => "",
             BuiltinFunctionKind::ArrayIsArray => "isArray",
             BuiltinFunctionKind::StreamReadablePause => "pause",
             BuiltinFunctionKind::StreamReadableResume => "resume",
@@ -38746,6 +38761,9 @@ impl InterpreterCore {
                 args,
             ),
             BuiltinFunctionKind::BoundFunction => self.invoke_bound_function(module, builtin, args),
+            BuiltinFunctionKind::CallableProxy => {
+                self.call_callable_proxy(module, builtin, args, receiver)
+            }
             BuiltinFunctionKind::UrlSearchParamsKeys
             | BuiltinFunctionKind::UrlSearchParamsValues
             | BuiltinFunctionKind::UrlSearchParamsEntries => {
@@ -49626,7 +49644,11 @@ impl InterpreterCore {
                     // A function, generator object or iterator whose own
                     // properties lack the key continues its [[Get]] on its
                     // intrinsic prototype (after the match).
-                    let inherited_base = if function_backing.is_none() {
+                    // A callable proxy's [[Get]] is its trap's (or its
+                    // target's) answer, never continued here.
+                    let inherited_base = if function_backing.is_none()
+                        && !Self::is_callable_proxy(&obj_val)
+                    {
                         Self::function_intrinsic_prototype_name(&obj_val)
                             .or(self
                                 .exotic_intrinsic_prototype_name(&obj_val)
@@ -51050,6 +51072,23 @@ impl InterpreterCore {
                                   in v1 (bd-8enww.3.3): invoke it as a plain call instead"
                                 .to_string(),
                         });
+                    }
+
+                    if let Value::BuiltinFunction(builtin) = &callee_val
+                        && builtin.kind == BuiltinFunctionKind::CallableProxy
+                    {
+                        let (result, result_label) = match self
+                            .construct_callable_proxy(module, builtin, args)
+                        {
+                            Ok(value) => value,
+                            Err(err) => match self.route_isolated_explicit_throw(module, err)? {
+                                None => continue,
+                                Some(err) => return Err(err),
+                            },
+                        };
+                        self.write_reg_with_label(dst, result, result_label.join(&callee_label))?;
+                        self.ip += 1;
+                        continue;
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val
@@ -59208,6 +59247,93 @@ impl InterpreterCore {
         }
     }
 
+    /// ProxyCreate's target (ES2020 9.5.14 step 1): an object, or a function
+    /// (bd-9vouw.132), whose own-property storage the proxy record's target
+    /// slot then holds, returned with the function itself.
+    fn read_proxy_target_argument(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+        expected: &str,
+    ) -> Result<(ObjectId, Option<Value>), InterpreterError> {
+        let target = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        if let Value::Object(object_id) = target {
+            return Ok((object_id, None));
+        }
+        if target.is_callable()
+            && let Some(storage) = self.own_property_holder(module, &target, true)?
+        {
+            return Ok((storage, Some(target)));
+        }
+        Err(InterpreterError::TypeError {
+            expected: expected.to_string(),
+            got: target.type_name().to_string(),
+        })
+    }
+
+    /// The value guest code holds for a new proxy: the record itself over an
+    /// object target, a callable proxy over a function target.
+    fn proxy_value(
+        &mut self,
+        proxy_id: ObjectId,
+        call_target: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let Some(call_target) = call_target else {
+            return Ok(Value::Object(proxy_id));
+        };
+        self.set_object_property(proxy_id, PROXY_CALL_TARGET_SLOT.to_string(), call_target)?;
+        Ok(Self::callable_proxy_value(proxy_id))
+    }
+
+    /// The callable proxy value of a proxy record over a function.
+    fn callable_proxy_value(proxy_id: ObjectId) -> Value {
+        Value::BuiltinFunction(BuiltinFunction {
+            kind: BuiltinFunctionKind::CallableProxy,
+            module_specifier: BuiltinModuleSpecifier::default(),
+            iterator_handle: None,
+            bound_object: Some(proxy_id.0),
+        })
+    }
+
+    /// Whether `value` is a proxy over a function (bd-9vouw.132).
+    fn is_callable_proxy(value: &Value) -> bool {
+        matches!(
+            value,
+            Value::BuiltinFunction(builtin) if builtin.kind == BuiltinFunctionKind::CallableProxy
+        )
+    }
+
+    /// The proxy record of a callable proxy value.
+    fn callable_proxy_record_id(builtin: &BuiltinFunction) -> Result<ObjectId, InterpreterError> {
+        builtin
+            .bound_object
+            .map(ObjectId)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "callable Proxy record".to_string(),
+                got: "missing proxy object".to_string(),
+            })
+    }
+
+    /// The callable target of a proxy record over a function.
+    fn proxy_call_target(&self, proxy_id: ObjectId) -> Option<Value> {
+        self.heap
+            .get(proxy_id.0 as usize)?
+            .properties
+            .get(PROXY_CALL_TARGET_SLOT)
+            .cloned()
+    }
+
+    /// The target a trap receives: the function for a callable proxy (whose
+    /// target slot holds the function's property storage), else the object.
+    fn proxy_trap_target(&self, proxy_id: ObjectId, target: ObjectId) -> Value {
+        self.proxy_call_target(proxy_id)
+            .unwrap_or(Value::Object(target))
+    }
+
     fn proxy_record(
         &self,
         object_id: ObjectId,
@@ -59352,6 +59478,20 @@ impl InterpreterCore {
         let Some(trap) = self.proxy_trap_value(module, handler_id, trap_name)? else {
             return Ok(None);
         };
+        self.call_proxy_trap(module, handler_id, trap_name, trap, arguments)
+            .map(Some)
+    }
+
+    /// Call a trap already read from the handler (with the handler as
+    /// `this`), joining its result label into the pending hostcall result.
+    fn call_proxy_trap(
+        &mut self,
+        module: Option<&Ir3Module>,
+        handler_id: ObjectId,
+        trap_name: &str,
+        trap: Value,
+        arguments: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: format!("module-backed Proxy.{trap_name} trap dispatch"),
             got: "missing module context".to_string(),
@@ -59369,7 +59509,133 @@ impl InterpreterCore {
             .unwrap_or(&Label::Public)
             .join(&label);
         self.replace_pending_hostcall_result_label(Some(label))?;
-        Ok(Some(value))
+        Ok(value)
+    }
+
+    /// The live record of a callable proxy: its handler and function target
+    /// (a revoked proxy is a TypeError).
+    fn callable_proxy_parts(
+        &self,
+        builtin: &BuiltinFunction,
+    ) -> Result<(ObjectId, ObjectId, Value), InterpreterError> {
+        let proxy = Self::callable_proxy_record_id(builtin)?;
+        let (_target, handler) =
+            self.active_proxy_record(proxy)?
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "callable Proxy record".to_string(),
+                    got: "ordinary object".to_string(),
+                })?;
+        let function = self
+            .proxy_call_target(proxy)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "callable Proxy target".to_string(),
+                got: "missing target".to_string(),
+            })?;
+        Ok((proxy, handler, function))
+    }
+
+    /// ES2020 9.5.12 [[Call]] of a proxy over a function: the handler's
+    /// `apply` trap with (target, thisArgument, CreateArrayFromList(args)),
+    /// else a call of the target with the same `this` and arguments
+    /// (bd-9vouw.132).
+    fn call_callable_proxy(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+        receiver: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let (_proxy, handler, function) = self.callable_proxy_parts(builtin)?;
+        let this_argument = receiver.unwrap_or(Value::Undefined);
+        let mut arguments = Vec::with_capacity(args.count as usize);
+        for index in 0..args.count {
+            arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+        }
+        let label = self.join_arg_range_label(args)?;
+        if let Some(trap) = self.proxy_trap_value(Some(module), handler, "apply")? {
+            let list = self.alloc_array_from_values(&arguments)?;
+            return self.call_proxy_trap(
+                Some(module),
+                handler,
+                "apply",
+                trap,
+                vec![function, this_argument, Value::Object(list)],
+            );
+        }
+        self.preflight_inline_method_call_with_argument_label(
+            Some(module),
+            &function,
+            arguments.len(),
+            Some(&label),
+        )?;
+        let (result, result_label) = self
+            .invoke_inline_method_call_with_argument_label_preflighted(
+                Some(module),
+                function,
+                this_argument,
+                arguments,
+                Some(label),
+            )?;
+        self.replace_pending_hostcall_result_label(Some(result_label))?;
+        Ok(result)
+    }
+
+    /// ES2020 9.5.13 [[Construct]] of a proxy over a function: the target
+    /// must be a constructor; the handler's `construct` trap gets (target,
+    /// CreateArrayFromList(args), newTarget) and must return an object, else
+    /// the target is constructed. No-claim: `new.target` is the target, not
+    /// the proxy, when there is no trap (a `get` trap does not see the
+    /// `prototype` read of OrdinaryCreateFromConstructor).
+    fn construct_callable_proxy(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<(Value, Label), InterpreterError> {
+        let (_proxy, handler, function) = self.callable_proxy_parts(builtin)?;
+        if !self.is_constructible_value(&function) {
+            return Err(InterpreterError::TypeError {
+                expected: "Proxy with a constructor target".to_string(),
+                got: format!("{} is not a constructor", function.type_name()),
+            });
+        }
+        let mut arguments = Vec::with_capacity(args.count as usize);
+        for index in 0..args.count {
+            arguments.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
+        }
+        let label = self.join_arg_range_label(args)?;
+        if let Some(trap) = self.proxy_trap_value(Some(module), handler, "construct")? {
+            let list = self.alloc_array_from_values(&arguments)?;
+            let result = self.call_proxy_trap(
+                Some(module),
+                handler,
+                "construct",
+                trap,
+                vec![
+                    function,
+                    Value::Object(list),
+                    Value::BuiltinFunction(builtin.clone()),
+                ],
+            )?;
+            if !result.is_object_like() {
+                return Err(InterpreterError::TypeError {
+                    expected: "object from the Proxy construct trap".to_string(),
+                    got: result.type_name().to_string(),
+                });
+            }
+            return Ok((result, label));
+        }
+        let (value, result_label) = self.invoke_inline_construct_with_labels(
+            Some(module),
+            function,
+            arguments,
+            Some(IsolatedCallLabels {
+                receiver: Label::Public,
+                arguments: IsolatedArgumentLabels::Uniform(label.clone()),
+            }),
+            None,
+        )?;
+        Ok((value, result_label.join(&label)))
     }
 
     fn proxy_aware_get_property(
@@ -59425,11 +59691,18 @@ impl InterpreterCore {
             module,
             handler,
             "get",
-            vec![Value::Object(target), key.value(), receiver.clone()],
+            vec![self.proxy_trap_target(object_id, target), key.value(), receiver.clone()],
         )? {
             return Ok(value);
         }
 
+        // Without a trap a callable proxy reads its function target (whose
+        // `call`, `prototype`, ... are not on its property storage).
+        if let Some(module) = module
+            && let Some(function) = self.proxy_call_target(object_id)
+        {
+            return self.get_v_with_receiver(module, &function, key, receiver, depth + 1);
+        }
         self.proxy_aware_get_runtime_property(module, target, key, receiver, depth + 1)
     }
 
@@ -59588,7 +59861,7 @@ impl InterpreterCore {
             handler,
             "set",
             vec![
-                Value::Object(target),
+                self.proxy_trap_target(object_id, target),
                 key.value(),
                 value.clone(),
                 receiver.clone(),
@@ -59608,10 +59881,13 @@ impl InterpreterCore {
         &self,
         receiver: &Value,
     ) -> Result<Option<ObjectId>, InterpreterError> {
-        let Value::Object(object_id) = receiver else {
-            return Ok(None);
+        let mut object_id = match receiver {
+            Value::Object(object_id) => *object_id,
+            Value::BuiltinFunction(builtin) if builtin.kind == BuiltinFunctionKind::CallableProxy => {
+                Self::callable_proxy_record_id(builtin)?
+            }
+            _ => return Ok(None),
         };
-        let mut object_id = *object_id;
         let mut depth = 0u32;
         while depth < MAX_PROTOTYPE_CHAIN_DEPTH {
             let Some((target, _handler)) = self.active_proxy_record(object_id)? else {
@@ -59702,11 +59978,23 @@ impl InterpreterCore {
             module,
             handler,
             "has",
-            vec![Value::Object(target), key.value()],
+            vec![self.proxy_trap_target(object_id, target), key.value()],
         )? {
             return Ok(result.is_truthy());
         }
 
+        // A callable proxy without the trap asks its function target.
+        if let Some(module) = module
+            && let Some(function) = self.proxy_call_target(object_id)
+        {
+            return match &function {
+                Value::BuiltinFunction(inner) if inner.kind == BuiltinFunctionKind::CallableProxy => {
+                    let inner = Self::callable_proxy_record_id(inner)?;
+                    self.proxy_aware_has_runtime_property(Some(module), inner, key, depth + 1)
+                }
+                _ => self.function_has_property(module, &function, key),
+            };
+        }
         self.proxy_aware_has_runtime_property(module, target, key, depth + 1)
     }
 
@@ -59779,7 +60067,7 @@ impl InterpreterCore {
             module,
             handler,
             "deleteProperty",
-            vec![Value::Object(target), key.value()],
+            vec![self.proxy_trap_target(object_id, target), key.value()],
         )? {
             return Ok(result.is_truthy());
         }
@@ -59864,7 +60152,7 @@ impl InterpreterCore {
         };
 
         if let Some(result) =
-            self.invoke_proxy_trap(module, handler, "ownKeys", vec![Value::Object(target)])?
+            self.invoke_proxy_trap(module, handler, "ownKeys", vec![self.proxy_trap_target(object_id, target)])?
         {
             let key_values = self.observable_proxy_own_keys_list(module, result)?;
             let mut seen = BTreeSet::new();
@@ -59917,7 +60205,7 @@ impl InterpreterCore {
             module,
             handler,
             "getOwnPropertyDescriptor",
-            vec![Value::Object(target), Value::Str(key.clone())],
+            vec![self.proxy_trap_target(object_id, target), Value::Str(key.clone())],
         )?;
         match descriptor {
             // Trap absent: the target governs the descriptor.
@@ -59976,7 +60264,7 @@ impl InterpreterCore {
             module,
             handler,
             "getPrototypeOf",
-            vec![Value::Object(target)],
+            vec![self.proxy_trap_target(object_id, target)],
         )? {
             // Trap absent: the target's prototype governs.
             None => Ok(self.observable_prototype_of(target)),
@@ -60130,7 +60418,7 @@ impl InterpreterCore {
                 module,
                 handler,
                 "getOwnPropertyDescriptor",
-                vec![Value::Object(target), key.value()],
+                vec![self.proxy_trap_target(object_id, target), key.value()],
             )? {
                 None => self.copy_own_key_is_enumerable(module, target, key, depth + 1),
                 Some(Value::Undefined) => Ok(false),
@@ -60832,14 +61120,42 @@ impl InterpreterCore {
         value: &Value,
         key: &RuntimePropertyKey,
     ) -> Result<Value, InterpreterError> {
+        self.get_v_with_receiver(module, value, key, value.clone(), 0)
+    }
+
+    /// [[Get]] of `key` on any value with an explicit receiver (the `this` of
+    /// a getter): an object's (Proxy-aware), a function's own and
+    /// synthesized members then Function.prototype's, a primitive's
+    /// prototype's. `Reflect.get(fn, key, receiver)` and the fallback of a
+    /// callable proxy without a `get` trap read functions through it.
+    fn get_v_with_receiver(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+        depth: u32,
+    ) -> Result<Value, InterpreterError> {
         let prototype = match value {
             Value::Object(object_id) => {
                 return self.proxy_aware_get_runtime_property(
                     Some(module),
                     *object_id,
                     key,
-                    value.clone(),
-                    0,
+                    receiver,
+                    depth,
+                );
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+            {
+                let proxy = Self::callable_proxy_record_id(builtin)?;
+                return self.proxy_aware_get_runtime_property(
+                    Some(module),
+                    proxy,
+                    key,
+                    receiver,
+                    depth,
                 );
             }
             Value::Promise(_)
@@ -60853,16 +61169,10 @@ impl InterpreterCore {
                 });
             }
             callable if callable.is_callable() => {
-                if let Some(backing) = self.function_own_property_object(module, callable)?
-                    && self.chain_contains_runtime_property(backing, key)
+                if let Some(own) =
+                    self.function_own_get(module, callable, key, receiver.clone(), depth)?
                 {
-                    return self.proxy_aware_get_runtime_property(
-                        Some(module),
-                        backing,
-                        key,
-                        value.clone(),
-                        0,
-                    );
+                    return Ok(own);
                 }
                 let prototype =
                     Self::function_intrinsic_prototype_name(callable).unwrap_or("Function");
@@ -60879,8 +61189,94 @@ impl InterpreterCore {
             _ => "Object",
         };
         Ok(self
-            .primitive_prototype_get(module, prototype, key, value.clone())?
+            .primitive_prototype_get(module, prototype, key, receiver)?
             .0)
+    }
+
+    /// A function's own or synthesized member `key`, as the GetProperty
+    /// instruction reads it: its backing object's (own, or inherited there
+    /// as a class's parent statics; a deleted `name` / `length` falls to
+    /// Function.prototype), else its `name`, `length`, `prototype`, a bound
+    /// function's or a standard constructor's members and Function.prototype's
+    /// builtins. `None` when the read continues on its intrinsic prototype.
+    fn function_own_get(
+        &mut self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+        receiver: Value,
+        depth: u32,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let name_or_length = matches!(key.as_str(), Some("name" | "length"));
+        if key.as_str() != Some("prototype")
+            && let Some(backing) = self.function_own_property_object(module, function)?
+        {
+            let own = self
+                .heap
+                .get(backing.0 as usize)
+                .is_some_and(|object| object.contains_own_runtime_property(key));
+            if own || (!name_or_length && self.chain_contains_runtime_property(backing, key)) {
+                return self
+                    .proxy_aware_get_runtime_property(Some(module), backing, key, receiver, depth)
+                    .map(Some);
+            }
+            if name_or_length {
+                return Ok(None);
+            }
+        }
+        let Some(name) = key.as_str() else {
+            return Ok(None);
+        };
+        let value = match function {
+            Value::Function(index) => self.function_property_value(module, *index, name)?,
+            Value::Closure(closure_id) => {
+                let owner_module = self.foreign_closure_module(function, module)?;
+                self.closure_property_value(
+                    owner_module.as_deref().unwrap_or(module),
+                    *closure_id,
+                    name,
+                )?
+            }
+            Value::BuiltinFunction(builtin) if builtin.kind == BuiltinFunctionKind::BoundFunction => {
+                match self.bound_function_property(module, builtin, name)? {
+                    Some(value) => value,
+                    None => Self::function_prototype_property(name).unwrap_or(Value::Undefined),
+                }
+            }
+            Value::BuiltinFunction(builtin)
+                if name == "prototype"
+                    && Self::materialized_global_prototype_name(builtin).is_some() =>
+            {
+                let prototype = Self::materialized_global_prototype_name(builtin)
+                    .expect("checked by the guard");
+                Value::Object(self.ensure_builtin_prototype(prototype)?)
+            }
+            Value::BuiltinFunction(builtin)
+                if Self::builtin_function_property_object(builtin).is_some() =>
+            {
+                let property_object = Self::builtin_function_property_object(builtin)
+                    .expect("checked by the guard");
+                self.proxy_aware_get_runtime_property(
+                    Some(module),
+                    property_object,
+                    key,
+                    receiver,
+                    depth,
+                )?
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::StandardConstructor =>
+            {
+                self.standard_constructor_property(builtin, name)?
+            }
+            other => match name {
+                "name" | "length" => self
+                    .function_standard_own_value(module, other, name)?
+                    .unwrap_or(Value::Undefined),
+                _ => Self::function_prototype_property(name).unwrap_or(Value::Undefined),
+            },
+        };
+        Ok((!matches!(value, Value::Undefined)).then_some(value))
     }
 
     /// [[Get]] of a conversion method on a promise, generator, async
@@ -85155,17 +85551,21 @@ impl InterpreterCore {
                 Ok(obj_val)
             }
             "builtin:Proxy" => {
-                let target = self.read_object_argument(args, 0, "Proxy target object")?;
+                let (target, call_target) =
+                    self.read_proxy_target_argument(module, args, "Proxy target object")?;
                 let handler = self.read_object_argument(args, 1, "Proxy handler object")?;
-                Ok(Value::Object(self.create_proxy_object(target, handler)?))
+                let proxy_id = self.create_proxy_object(target, handler)?;
+                self.proxy_value(proxy_id, call_target)
             }
             "builtin:ProxyRevocable" => {
-                let target = self.read_object_argument(args, 0, "Proxy.revocable target object")?;
+                let (target, call_target) =
+                    self.read_proxy_target_argument(module, args, "Proxy.revocable target object")?;
                 let handler =
                     self.read_object_argument(args, 1, "Proxy.revocable handler object")?;
                 let proxy_id = self.create_proxy_object(target, handler)?;
+                let proxy = self.proxy_value(proxy_id, call_target)?;
                 let result_id = self.alloc_object_with_properties(&[
-                    ("proxy", Value::Object(proxy_id)),
+                    ("proxy", proxy),
                     (
                         "revoke",
                         Value::BuiltinFunction(BuiltinFunction::proxy_revoke(proxy_id)),
@@ -95652,6 +96052,16 @@ impl InterpreterCore {
                 self.bound_function_parts(builtin)
                     .is_ok_and(|(target, ..)| self.is_constructible_value(&target))
             }
+            // A proxy is a constructor exactly when its target is (ES2020
+            // 9.5.14 step 7), revoked or not.
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+            {
+                Self::callable_proxy_record_id(builtin)
+                    .ok()
+                    .and_then(|proxy| self.proxy_call_target(proxy))
+                    .is_some_and(|target| self.is_constructible_value(&target))
+            }
             Value::BuiltinFunction(builtin) => builtin.kind.is_constructible(),
             _ => false,
         }
@@ -97684,6 +98094,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::DateConstructor
                 | BuiltinFunctionKind::PromiseConstructor
                 | BuiltinFunctionKind::EmitterOnceWrapper
+                // A callable proxy's properties are its proxy record's: every
+                // property operation reaches the traps (bd-9vouw.132).
+                | BuiltinFunctionKind::CallableProxy
         )
         .then_some(builtin.bound_object)
         .flatten()
@@ -98915,12 +99328,19 @@ impl InterpreterCore {
         let value_label = self.get_register_label(val)?.clone();
         let previous_label = self.own_stored_runtime_property_label(property_object, property_key);
         self.set_own_runtime_property_label(property_object, property_key, &value_label)?;
+        // A callable proxy is its own receiver (a `set` trap sees the value
+        // the program holds, not the record).
+        let receiver = if self.proxy_call_target(property_object).is_some() {
+            Self::callable_proxy_value(property_object)
+        } else {
+            Value::Object(property_object)
+        };
         let set_result = self.proxy_aware_set_runtime_property(
             Some(module),
             property_object,
             property_key,
             set_val,
-            Value::Object(property_object),
+            receiver,
             0,
         );
         let committed = match set_result {

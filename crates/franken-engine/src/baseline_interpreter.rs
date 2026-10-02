@@ -37404,24 +37404,52 @@ impl InterpreterCore {
                 label: "<function-constructor>".to_string(),
                 text: generated_source,
             };
-            let syntax_tree = CanonicalEs2020Parser
-                .parse_with_options(parser_source, ParseGoal::Script, &ParserOptions::default())
-                .map_err(|error| InterpreterError::ModuleParseFailed {
-                    specifier: "<function-constructor>".to_string(),
-                    error: error.to_string(),
-                })?;
+            // ES2020 19.2.1.1.1 CreateDynamicFunction steps 18-20: a body or
+            // parameter list that is not valid source is a SyntaxError the
+            // caller can catch, as is an early error in it (`break` outside a
+            // loop, a duplicate `let`, a strict `with`). They aborted the whole
+            // program. Syntax the parser or lowering does not support
+            // (`UnsupportedSyntax`) stays a refusal: it says nothing about the
+            // source being invalid.
+            let syntax_tree = match CanonicalEs2020Parser.parse_with_options(
+                parser_source,
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            ) {
+                Ok(syntax_tree) => syntax_tree,
+                Err(error)
+                    if matches!(
+                        error.code,
+                        ParseErrorCode::StrictModeWithStatement | ParseErrorCode::AwaitOutsideAsync
+                    ) =>
+                {
+                    return Err(self.throw_js_error("SyntaxError", error.message.clone()));
+                }
+                Err(error) => {
+                    return Err(InterpreterError::ModuleParseFailed {
+                        specifier: "<function-constructor>".to_string(),
+                        error: error.to_string(),
+                    });
+                }
+            };
             let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<function-constructor>");
             let lowering_ctx = LoweringContext::new(
                 &self.trace_id,
                 "function-constructor",
                 "baseline_interpreter",
             );
-            let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
-                InterpreterError::ModuleLoweringFailed {
-                    specifier: "<function-constructor>".to_string(),
-                    error: error.to_string(),
+            let lowering_output = match lower_ir0_to_ir3(&ir0, &lowering_ctx) {
+                Ok(lowering_output) => lowering_output,
+                Err(crate::lowering_pipeline::LoweringPipelineError::SemanticViolation(error)) => {
+                    return Err(self.throw_js_error("SyntaxError", error.to_string()));
                 }
-            })?;
+                Err(error) => {
+                    return Err(InterpreterError::ModuleLoweringFailed {
+                        specifier: "<function-constructor>".to_string(),
+                        error: error.to_string(),
+                    });
+                }
+            };
             let function_index = lowering_output
                 .ir3
                 .function_table

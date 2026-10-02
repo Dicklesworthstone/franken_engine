@@ -122,9 +122,9 @@ impl InterpreterCore {
                     Some(module) if plain_function => {
                         Value::Bool(self.function_has_property(module, &target_value, &key)?)
                     }
-                    _ => Value::Bool(
-                        self.proxy_aware_has_runtime_property(module, target, &key, 0)?,
-                    ),
+                    _ => {
+                        Value::Bool(self.proxy_aware_has_runtime_property(module, target, &key, 0)?)
+                    }
                 },
                 ReflectPropertyOperation::Set => {
                     // Admit provenance BEFORE guest state can change. Refused

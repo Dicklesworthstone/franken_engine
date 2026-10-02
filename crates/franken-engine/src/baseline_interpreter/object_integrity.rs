@@ -506,8 +506,12 @@ impl InterpreterCore {
         let Some((target, handler)) = self.active_proxy_record(id)? else {
             return Ok(self.heap[id.0 as usize].extensible());
         };
-        let Some(result) =
-            self.invoke_proxy_trap(module, handler, "isExtensible", vec![self.proxy_trap_target(id, target)])?
+        let Some(result) = self.invoke_proxy_trap(
+            module,
+            handler,
+            "isExtensible",
+            vec![self.proxy_trap_target(id, target)],
+        )?
         else {
             return self.object_is_extensible(module, target, depth + 1);
         };

@@ -112,5 +112,8 @@ fn callable_proxy_writes() {
 fn callable_proxy_reflect() {
     let source = "function f(a, b) {} f.x = 1;\n\
          [Reflect.get(f, 'length'), Reflect.get(f, 'name'), Reflect.get(f, 'x'), typeof Reflect.get(f, 'call'), typeof Reflect.get(f, 'prototype'), Reflect.has(f, 'call'), Reflect.has(f, 'zz'), Reflect.set(f, 'y', 2), f.y, Reflect.deleteProperty(f, 'y'), String(f.y), typeof Reflect.get(String, 'fromCharCode'), Reflect.get(String, 'name')].join(' ');";
-    assert_eq!(eval(source), "2 f 1 function object true false true 2 true undefined function String");
+    assert_eq!(
+        eval(source),
+        "2 f 1 function object true false true 2 true undefined function String"
+    );
 }

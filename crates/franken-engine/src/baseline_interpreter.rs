@@ -39462,6 +39462,7 @@ impl InterpreterCore {
                     let Some(element) = self.array_index_value(arr_id, i)? else {
                         continue;
                     };
+                    self.join_element_stored_label(arr_id, i as u64)?;
                     if Self::values_equal(&element, &search) {
                         found = i64::try_from(i).unwrap_or(i64::MAX);
                         break;
@@ -39493,6 +39494,7 @@ impl InterpreterCore {
                     let element = self
                         .array_index_value(arr_id, i)?
                         .unwrap_or(Value::Undefined);
+                    self.join_element_stored_label(arr_id, i as u64)?;
                     if Self::values_equal(&element, &search) || Self::both_nan(&element, &search) {
                         present = true;
                         break;
@@ -40190,6 +40192,9 @@ impl InterpreterCore {
                 while index >= 0 {
                     // Holes are skipped, as in indexOf.
                     let element = self.array_index_value(arr_id, index as usize)?;
+                    if element.is_some() {
+                        self.join_element_stored_label(arr_id, index as u64)?;
+                    }
                     if element.is_some_and(|element| Self::values_equal(&element, &search)) {
                         found = index;
                         break;
@@ -89097,6 +89102,10 @@ impl InterpreterCore {
             let element = self
                 .array_index_value(array_id, index)?
                 .unwrap_or(Value::Undefined);
+            if let Err(error) = self.join_element_stored_label(array_id, index as u64) {
+                active.remove(&array_id.0);
+                return Err(error);
+            }
             let rendered = match element {
                 Value::Undefined | Value::Null => String::new(),
                 Value::Object(nested_id)
@@ -93670,6 +93679,36 @@ impl InterpreterCore {
         self.check_temporary_memory_budget(next_bytes)?;
         self.apply_memory_component_delta(previous_bytes, next_bytes)?;
         self.mutate_heap(|heap| heap[heap_index].property_labels = projected);
+        Ok(())
+    }
+
+    /// IFC: join the stored label of element `index` of `object_id` into the
+    /// pending hostcall result label. bd-ojvo1 stores a label per element and
+    /// an index read (GetProperty) joins it, but join, indexOf, includes and
+    /// lastIndexOf read elements natively, so `[secret].join()` and
+    /// `[secret].includes(x)` came out Public. Objects with no stored labels
+    /// pay one emptiness check.
+    fn join_element_stored_label(
+        &mut self,
+        object_id: ObjectId,
+        index: u64,
+    ) -> Result<(), InterpreterError> {
+        let label = match self.heap.get(object_id.0 as usize) {
+            Some(object) if !object.property_labels.is_empty() => object
+                .property_labels
+                .get_exact(&JsString::from(index.to_string()))
+                .filter(|label| **label != Label::Public)
+                .cloned(),
+            _ => None,
+        };
+        if let Some(label) = label {
+            let joined = self
+                .pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public)
+                .join(&label);
+            self.replace_pending_hostcall_result_label(Some(joined))?;
+        }
         Ok(())
     }
 
@@ -100931,7 +100970,7 @@ mod active_builtin_regressions {
         }
     }
 
-    fn call_builtin_for_test(
+    pub(super) fn call_builtin_for_test(
         core: &mut InterpreterCore,
         builtin: BuiltinFunction,
         receiver: ObjectId,
@@ -124385,6 +124424,98 @@ mod async_runtime_tests_current {
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// IFC: join, indexOf, includes and lastIndexOf read elements natively,
+    /// and the generic array-like path reads them through [[Get]]; the stored
+    /// element label (bd-ojvo1) joins their result label, so a Secret element
+    /// does not come back Public through an aggregate read (`[secret].join()`
+    /// was Public).
+    #[test]
+    fn array_aggregate_reads_join_stored_element_labels() {
+        use super::active_builtin_regressions::call_builtin_for_test;
+
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::ArrayPush {
+                    array: 0,
+                    element: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        let mut core = test_interpreter();
+        let array = core
+            .alloc_array_with_prototype(None)
+            .expect("array should allocate");
+        core.write_reg_with_label(0, Value::Object(array), Label::Public)
+            .expect("array register should fit");
+        core.write_reg_with_label(1, Value::str("classified"), Label::Secret)
+            .expect("Secret element register should fit");
+        core.execute(&module)
+            .expect("ArrayPush of a Secret element");
+
+        for (kind, args, expected) in [
+            (
+                BuiltinFunctionKind::ArrayJoin,
+                vec![],
+                Value::str("classified"),
+            ),
+            (
+                BuiltinFunctionKind::ArrayIncludes,
+                vec![Value::str("x")],
+                Value::Bool(false),
+            ),
+            (
+                BuiltinFunctionKind::ArrayIndexOf,
+                vec![Value::str("classified")],
+                Value::Int(0),
+            ),
+            (
+                BuiltinFunctionKind::ArrayLastIndexOf,
+                vec![Value::str("x")],
+                Value::Int(-1),
+            ),
+        ] {
+            core.clear_pending_hostcall_result_label();
+            let result =
+                call_builtin_for_test(&mut core, BuiltinFunction::new_kind(kind), array, &args)
+                    .expect("aggregate read should succeed");
+            assert_eq!(result, expected, "{kind:?}");
+            assert_eq!(
+                core.take_pending_hostcall_result_label(),
+                Some(Label::Secret),
+                "{kind:?} must carry the Secret element's label"
+            );
+        }
+
+        // The generic array-like path ([[Get]] through generic_get).
+        let array_like = core
+            .alloc_object_with_properties(&[
+                ("0", Value::str("classified")),
+                ("length", Value::Int(1)),
+            ])
+            .expect("array-like should allocate");
+        core.set_own_runtime_property_label(
+            array_like,
+            &RuntimePropertyKey::String(JsString::from("0")),
+            &Label::Secret,
+        )
+        .expect("Secret element label should fit");
+        core.clear_pending_hostcall_result_label();
+        let joined = call_builtin_for_test(
+            &mut core,
+            BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayJoin),
+            array_like,
+            &[],
+        )
+        .expect("generic join should succeed");
+        assert_eq!(joined, Value::str("classified"));
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret)
         );
     }
 

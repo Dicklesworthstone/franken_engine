@@ -951,6 +951,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "FinalizationRegistry" => Some("FinalizationRegistry"),
         "TextEncoder" => Some("TextEncoder"),
         "TextDecoder" => Some("TextDecoder"),
+        "Buffer" => Some("Buffer"),
         // %GeneratorFunction%, %AsyncFunction%, %AsyncGeneratorFunction%:
         // not global bindings (FUNCTION_KIND_INTRINSICS).
         "GeneratorFunction" => Some("GeneratorFunction"),
@@ -5644,7 +5645,7 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 38] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 39] = [
     "Object",
     "Array",
     "Number",
@@ -5695,6 +5696,9 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 38] = [
     // WHATWG Encoding (bd-3l74k): pure builtins, no authority.
     "TextEncoder",
     "TextDecoder",
+    // Node's Buffer (bd-9vouw.104): a pure-compute Uint8Array subclass. Its
+    // statics are the slot-0 builtins lowering also calls directly.
+    "Buffer",
 ];
 
 /// bd-9vouw.17: realm globals besides the standard constructors and global
@@ -5799,7 +5803,7 @@ const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 21] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 22] = [
     "Array",
     "String",
     "Number",
@@ -5821,6 +5825,7 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 21] = [
     "TypedArray",
     "TextEncoder",
     "TextDecoder",
+    "Buffer",
 ];
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
@@ -6153,7 +6158,7 @@ const TYPED_ARRAY_SLOT_KEYS: [&str; 6] = [
 const ARRAY_BUFFER_SLOT_KEYS: [&str; 1] = ["byteLength"];
 const DATA_VIEW_SLOT_KEYS: [&str; 3] = ["buffer", "byteLength", "byteOffset"];
 
-const SLOT0_STATIC_GLOBALS: [&str; 9] = [
+const SLOT0_STATIC_GLOBALS: [&str; 10] = [
     "Object",
     "JSON",
     "Array",
@@ -6163,8 +6168,9 @@ const SLOT0_STATIC_GLOBALS: [&str; 9] = [
     "Map",
     "ArrayBuffer",
     "Number",
+    "Buffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 36] = [
+const SLOT0_STATIC_MEMBERS: [&str; 42] = [
     "keys",
     "hasOwn",
     "values",
@@ -6201,6 +6207,12 @@ const SLOT0_STATIC_MEMBERS: [&str; 36] = [
     "isNaN",
     "parseInt",
     "parseFloat",
+    "alloc",
+    "allocUnsafe",
+    "byteLength",
+    "concat",
+    "compare",
+    "isBuffer",
 ];
 
 /// Owner global and member name for a slot-0 static hostcall tag, for
@@ -95155,12 +95167,13 @@ impl InterpreterCore {
         // so `instanceof`, `constructor` and Object.getPrototypeOf see its
         // class. Unlinked, every typed array reported Object. Materialized
         // before the view's id is taken, since the first use allocates the
-        // prototype objects. Buffers keep their own surface (not linked).
-        let prototype = if is_buffer {
-            None
+        // prototype objects. A Buffer inherits from Buffer.prototype, whose
+        // own methods shadow the typed array ones (bd-9vouw.104).
+        let prototype = Some(self.ensure_builtin_prototype(if is_buffer {
+            "Buffer"
         } else {
-            Some(self.ensure_builtin_prototype(kind.type_name())?)
-        };
+            kind.type_name()
+        })?);
 
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
@@ -95261,6 +95274,10 @@ impl InterpreterCore {
                 capability: "HeapAllocate".to_string(),
             });
         }
+        // Materialized before the heap indices below are taken: the first
+        // use allocates the prototype objects (bd-9vouw.104).
+        let view_prototype = self.ensure_builtin_prototype("Buffer")?;
+        let buffer_prototype = self.ensure_builtin_prototype("ArrayBuffer")?;
 
         let byte_length_i64 =
             i64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
@@ -95301,12 +95318,14 @@ impl InterpreterCore {
         // heap object and the backing Vec published.
         let mut buffer_object = HeapObject::new();
         buffer_object.brand = Some(JsString::from("ArrayBuffer"));
+        buffer_object.prototype = Some(buffer_prototype);
         buffer_object
             .properties
             .insert("byteLength".to_string(), Value::Int(byte_length_i64));
 
         let mut view_object = HeapObject::new();
         view_object.brand = Some(JsString::from("Uint8Array"));
+        view_object.prototype = Some(view_prototype);
         view_object
             .properties
             .insert("__typedArrayKind".to_string(), Value::str("Uint8Array"));
@@ -97989,6 +98008,8 @@ impl InterpreterCore {
             name if TypedArrayKind::from_type_name(name).is_some() => {
                 Some(self.ensure_builtin_prototype("TypedArray")?)
             }
+            // Node: Buffer.prototype inherits from Uint8Array.prototype.
+            "Buffer" => Some(self.ensure_builtin_prototype("Uint8Array")?),
             _ => None,
         };
         let prototype = self.alloc_object_with_prototype(parent)?;
@@ -99474,9 +99495,11 @@ impl InterpreterCore {
             "length" => Value::Int(match name {
                 "Map" | "Set" | "WeakMap" | "WeakSet" | "Symbol" | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
+                "Buffer" => 3,
                 name if TypedArrayKind::from_type_name(name).is_some() => 3,
                 _ => 1,
             }),
+            "poolSize" if name == "Buffer" => Value::Int(8192),
             "asUintN" if name == "BigInt" => Value::BuiltinFunction(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::BigIntAsUintN,
             )),
@@ -99592,6 +99615,19 @@ impl InterpreterCore {
             }
             "TextEncoder" => self.construct_text_encoder(),
             "TextDecoder" => self.construct_text_decoder(Some(module), args),
+            // The deprecated Buffer(arg) / new Buffer(arg): a size allocates
+            // a zero-filled buffer, anything else is Buffer.from(arg, ...).
+            "Buffer" => {
+                let tag = if matches!(
+                    self.builtin_arg(args, 0)?,
+                    Some(Value::Int(_) | Value::Float(_))
+                ) {
+                    "builtin:BufferAlloc"
+                } else {
+                    "builtin:BufferFrom"
+                };
+                self.dispatch_builtin_hostcall(tag, args, Some(module))
+            }
             "ArrayBuffer" | "DataView" => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }
@@ -99928,6 +99964,13 @@ impl InterpreterCore {
             "TypedArray" => {
                 Self::typed_array_prototype_method("Int8Array", key).map(Value::BuiltinFunction)
             }
+            // Buffer.prototype's own methods (toString, slice, read*, ...)
+            // shadow %TypedArray.prototype%'s; the rest are inherited
+            // (bd-9vouw.104). The chain lookup stops at the first canonical
+            // prototype, so this answers for both.
+            "Buffer" => Self::buffer_prototype_method(key)
+                .map(Value::BuiltinFunction)
+                .or_else(|| Self::canonical_prototype_method("TypedArray", key)),
             _ => None,
         }
     }

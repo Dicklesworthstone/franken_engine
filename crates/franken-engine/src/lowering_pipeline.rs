@@ -27574,6 +27574,16 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         ("Object", "hasOwn") => Some("builtin:ObjectHasOwn"),
         ("Map", "groupBy") => Some("builtin:MapGroupBy"),
         ("ArrayBuffer", "isView") => Some("builtin:ArrayBufferIsView"),
+        // Node's Buffer statics read as values off the global constructor
+        // (bd-9vouw.104); direct calls keep buffer_static_builtin_call_capability,
+        // which maps to the same builtins.
+        ("Buffer", "from") => Some("builtin:BufferFrom"),
+        ("Buffer", "alloc") => Some("builtin:BufferAlloc"),
+        ("Buffer", "allocUnsafe") => Some("builtin:BufferAllocUnsafe"),
+        ("Buffer", "byteLength") => Some("builtin:BufferByteLength"),
+        ("Buffer", "concat") => Some("builtin:BufferConcat"),
+        ("Buffer", "compare") => Some("builtin:BufferCompare"),
+        ("Buffer", "isBuffer") => Some("builtin:BufferIsBuffer"),
         // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
         // calling convention (handler reads args.start+1.., guards count<N
         // counting a slot-0 receiver) — they are wired via

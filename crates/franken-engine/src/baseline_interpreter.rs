@@ -42457,7 +42457,7 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ObjectPrototypeToString => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                Ok(self.object_prototype_to_string_value(&receiver))
+                self.object_prototype_to_string_with_getters(module, &receiver)
             }
             BuiltinFunctionKind::SymbolPrototypeToString => {
                 let Value::Symbol(symbol) = receiver.unwrap_or(Value::Undefined) else {
@@ -58600,6 +58600,59 @@ impl InterpreterCore {
             "[object {}]",
             self.object_to_string_tag(*object_id)
         ))
+    }
+
+    /// Object.prototype.toString called as a function (ES2020 19.1.3.6). When
+    /// the first @@toStringTag along the receiver's chain is an accessor (a
+    /// class's `get [Symbol.toStringTag]()`, %TypedArray.prototype%'s),
+    /// Get(O, @@toStringTag) runs the getter on the receiver, and a String
+    /// result is the tag; otherwise the builtinTag (bd-9vouw.93). Without an
+    /// accessor this is [`Self::object_prototype_to_string_value`].
+    fn object_prototype_to_string_with_getters(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let Value::Object(object_id) = receiver else {
+            return Ok(self.object_prototype_to_string_value(receiver));
+        };
+        if !self.first_to_string_tag_is_accessor(*object_id) {
+            return Ok(self.object_prototype_to_string_value(receiver));
+        }
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+        let tag = match self.get_v(module, receiver, &key)? {
+            Value::Str(tag) => tag.to_string(),
+            // Typed arrays have no builtinTag of their own: theirs comes
+            // from the %TypedArray.prototype% getter a subclass replaced.
+            _ if self
+                .heap
+                .get(object_id.0 as usize)
+                .is_some_and(|object| object.typed_array.is_some()) =>
+            {
+                "Object".to_string()
+            }
+            _ => self.object_to_string_tag(*object_id).to_string(),
+        };
+        Ok(Value::str(format!("[object {tag}]")))
+    }
+
+    /// Whether the first @@toStringTag property along `object_id`'s chain
+    /// is an accessor.
+    fn first_to_string_tag_is_accessor(&self, object_id: ObjectId) -> bool {
+        let to_string_tag = core_symbol_id(WellKnownSymbol::ToStringTag.id());
+        let mut current = Some(object_id);
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(object) = current.and_then(|id| self.heap.get(id.0 as usize)) else {
+                return false;
+            };
+            match object.properties.baseline_symbol_property(to_string_tag) {
+                Some(BaselineSymbolProperty::Accessor { .. }) => return true,
+                Some(_) => return false,
+                None => {}
+            }
+            current = current.and_then(|id| self.observable_prototype_of(id));
+        }
+        false
     }
 
     /// ES2020 19.1.3.6 steps 15-16: a String-valued @@toStringTag found on

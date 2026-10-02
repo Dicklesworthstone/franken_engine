@@ -86,6 +86,8 @@ fn loops_over_a_guest_chosen_length_end_at_the_budget() {
         "var a = []; a.length = 2 ** 32 - 1; a.indexOf(1);".to_string(),
         "var a = []; a.length = 2 ** 32 - 1; a.join();".to_string(),
         "var a = [1]; a.length = 2 ** 32 - 1; a.lastIndexOf(2);".to_string(),
+        // Below the string limit, so only the budget can stop it.
+        "Array.prototype.toLocaleString.call({ length: 10000000 });".to_string(),
     ];
     for source in cases {
         let started = Instant::now();

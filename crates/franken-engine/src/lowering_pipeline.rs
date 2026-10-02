@@ -4728,7 +4728,8 @@ fn lower_statement_to_ir1_with_flow(
                     // (`builtin:Querystring*` / `builtin:Os*` hostcalls and
                     // string constants). Unused aliases stay ambient-refused.
                     if let BindingPattern::Identifier(alias) = &d.pattern
-                        && is_require_event_emitter_member_initializer(init, binding_lookup)
+                        && (is_require_event_emitter_member_initializer(init, binding_lookup)
+                            || is_require_events_module_initializer(init, binding_lookup))
                         && binding_lookup.contains_key(&event_emitter_binding_sentinel(alias))
                     {
                         ops.push(Ir1Op::HostCall {
@@ -23277,7 +23278,8 @@ fn module_alias_expr_contains_unshadowed_usage(
                 return true;
             }
             super_class.as_deref().is_some_and(|super_class| {
-                module_alias_expr_contains_unshadowed_usage(super_class, alias, surface)
+                is_event_emitter_heritage(super_class, alias, surface)
+                    || module_alias_expr_contains_unshadowed_usage(super_class, alias, surface)
             }) || (name.as_deref() != Some(alias)
                 && body.iter().any(|method| {
                     (method.computed
@@ -23768,7 +23770,8 @@ fn module_alias_expr_has_rejected_use(
                 return true;
             }
             super_class.as_deref().is_some_and(|super_class| {
-                module_alias_expr_has_rejected_use(super_class, alias, surface)
+                !is_event_emitter_heritage(super_class, alias, surface)
+                    && module_alias_expr_has_rejected_use(super_class, alias, surface)
             }) || (name.as_deref() != Some(alias)
                 && body.iter().any(|method| {
                     (method.computed
@@ -23840,7 +23843,8 @@ fn module_alias_statement_contains_unshadowed_usage(
         }
         Statement::ClassDeclaration(class) => {
             class.super_class.as_deref().is_some_and(|super_class| {
-                module_alias_expr_contains_unshadowed_usage(super_class, alias, surface)
+                is_event_emitter_heritage(super_class, alias, surface)
+                    || module_alias_expr_contains_unshadowed_usage(super_class, alias, surface)
             }) || (class.name.as_deref() != Some(alias)
                 && class.body.iter().any(|method| {
                     (method.computed
@@ -24118,7 +24122,8 @@ fn module_alias_statement_has_rejected_use(
                 return true;
             }
             class.super_class.as_deref().is_some_and(|super_class| {
-                module_alias_expr_has_rejected_use(super_class, alias, surface)
+                !is_event_emitter_heritage(super_class, alias, surface)
+                    && module_alias_expr_has_rejected_use(super_class, alias, surface)
             }) || (class.name.as_deref() != Some(alias)
                 && class.body.iter().any(|method| {
                     (method.computed
@@ -25443,6 +25448,19 @@ fn events_capture_rejections_member(
         && well_formed_static_name(property).is_some_and(|name| name == "captureRejections")
 }
 
+/// `class X extends <EventEmitter binding>` (bd-9vouw.165): the binding is a
+/// real constructor value (builtin:EventEmitterConstructorRef, bd-dspwz), and
+/// a class heritage reads it as one. Only the bare binding counts; any other
+/// heritage expression is judged as an ordinary use.
+fn is_event_emitter_heritage(
+    super_class: &Expression,
+    alias: &str,
+    surface: LoweringOnlyModuleAliasSurface,
+) -> bool {
+    surface == LoweringOnlyModuleAliasSurface::EventEmitter
+        && matches!(super_class, Expression::Identifier(name) if name == alias)
+}
+
 fn is_event_emitter_usage(expr: &Expression, local: &str) -> bool {
     match expr {
         Expression::Call { callee, .. } | Expression::New { callee, .. } => {
@@ -25526,6 +25544,9 @@ fn confirmed_event_emitter_bindings(
                 match &declarator.pattern {
                     BindingPattern::Identifier(local)
                         if is_require_event_emitter_member_initializer(
+                            initializer,
+                            binding_lookup,
+                        ) || is_require_events_module_initializer(
                             initializer,
                             binding_lookup,
                         ) =>

@@ -143,6 +143,27 @@ fn exotic_for_in_enumeration() {
     );
 }
 
+/// Object.freeze/seal/isFrozen/isSealed of a Proxy run through its traps (they marked the proxy record itself).
+#[test]
+fn exotic_integrity_of_proxies() {
+    let source = "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\n\
+         var log = []; var target = { a: 1 }; Object.defineProperty(target, 'b', { get: function () { return 2; }, configurable: true });\n\
+         var p = new Proxy(target, { preventExtensions: function (t) { log.push('pe'); return Reflect.preventExtensions(t); },\n\
+           ownKeys: function (t) { log.push('ok'); return Reflect.ownKeys(t); },\n\
+           defineProperty: function (t, k, d) { log.push('dp:' + k + ':' + JSON.stringify(d)); return Reflect.defineProperty(t, k, d); },\n\
+           getOwnPropertyDescriptor: function (t, k) { log.push('gopd:' + k); return Reflect.getOwnPropertyDescriptor(t, k); },\n\
+           isExtensible: function (t) { log.push('ie'); return Reflect.isExtensible(t); } });\n\
+         Object.freeze(p); var freezeLog = log.join(','); log = []; var isFrozen = Object.isFrozen(p); var testLog = log.join(',');\n\
+         var r = Proxy.revocable({}, {}); r.revoke(); var fn = new Proxy(function () {}, {});\n\
+         [freezeLog, isFrozen, testLog, Object.isFrozen(target), Object.isSealed(new Proxy({}, {})), Object.isSealed(Object.seal(new Proxy({ x: 1 }, {}))),\n\
+          attempt(() => Object.freeze(new Proxy({}, { preventExtensions: function () { return false; } }))), Object.isFrozen(Object.freeze(fn)),\n\
+          attempt(() => Object.freeze(r.proxy)), attempt(() => Object.isFrozen(r.proxy))].join(' | ');";
+    assert_eq!(
+        eval(source),
+        "pe,ok,gopd:a,dp:a:{\"writable\":false,\"configurable\":false},gopd:b,dp:b:{\"configurable\":false} | true | ie,ok,gopd:a,gopd:b | true | false | true | TypeError | true | TypeError | TypeError"
+    );
+}
+
 /// Functions, classes and arrows: Object.freeze/seal/preventExtensions take effect (they were no-ops or threw).
 #[test]
 fn exotic_integrity_of_functions() {

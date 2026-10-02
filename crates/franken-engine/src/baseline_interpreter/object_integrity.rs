@@ -248,6 +248,83 @@ impl InterpreterCore {
         outcome
     }
 
+    /// The record of a Proxy (an object one or a callable one) whose
+    /// integrity operations run through its traps; `None` for anything else.
+    pub(super) fn integrity_proxy_id(
+        &self,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        Ok(match value {
+            Value::Object(id) if self.active_proxy_record(*id)?.is_some() => Some(*id),
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+            {
+                Some(Self::callable_proxy_record_id(builtin)?)
+            }
+            _ => None,
+        })
+    }
+
+    /// ES2020 7.3.14 SetIntegrityLevel of a Proxy: [[PreventExtensions]],
+    /// then DefinePropertyOrThrow of every key [[OwnPropertyKeys]] lists, all
+    /// through its traps (bd-9vouw.149). `false` when preventExtensions is
+    /// refused.
+    pub(super) fn proxy_set_integrity_level(
+        &mut self,
+        module: Option<&Ir3Module>,
+        proxy_id: ObjectId,
+        frozen: bool,
+    ) -> Result<bool, InterpreterError> {
+        if !self.object_prevent_extensions(module, proxy_id, 0)? {
+            return Ok(false);
+        }
+        for key_value in self.proxy_aware_own_property_keys(module, proxy_id, 0)? {
+            let key = self.executable_property_key_from_value(&key_value);
+            let mut fields = PropertyDescriptorFields {
+                configurable: Some(false),
+                ..PropertyDescriptorFields::default()
+            };
+            if frozen {
+                match self.proxy_target_descriptor_fields(module, proxy_id, &key, 0)? {
+                    None => continue,
+                    Some(current) if current.is_accessor() => {}
+                    Some(_) => fields.writable = Some(false),
+                }
+            }
+            if !self.proxy_aware_define_own_property(module, proxy_id, key, fields, 0)? {
+                return Err(InterpreterError::TypeError {
+                    expected: DEFINE_PROPERTY_REJECTED.to_string(),
+                    got: "a defineProperty trap that refused the integrity level".to_string(),
+                });
+            }
+        }
+        Ok(true)
+    }
+
+    /// ES2020 7.3.15 TestIntegrityLevel of a Proxy, through its
+    /// isExtensible, ownKeys and getOwnPropertyDescriptor traps.
+    pub(super) fn proxy_test_integrity_level(
+        &mut self,
+        module: Option<&Ir3Module>,
+        proxy_id: ObjectId,
+        frozen: bool,
+    ) -> Result<bool, InterpreterError> {
+        if self.object_is_extensible(module, proxy_id, 0)? {
+            return Ok(false);
+        }
+        for key_value in self.proxy_aware_own_property_keys(module, proxy_id, 0)? {
+            let key = self.executable_property_key_from_value(&key_value);
+            if let Some(current) = self.proxy_target_descriptor_fields(module, proxy_id, &key, 0)? {
+                if current.configurable == Some(true)
+                    || (frozen && current.is_data() && current.writable == Some(true))
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     /// [[IsExtensible]] of a function, promise, generator or iterator value:
     /// its backing object's, and true before one exists (bd-9vouw.149).
     fn backing_is_extensible(

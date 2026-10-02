@@ -83883,6 +83883,16 @@ impl InterpreterCore {
                 }
 
                 let obj_val = self.read_reg(args.start)?;
+                // A Proxy freezes through its traps (ES2020 7.3.14).
+                if let Some(proxy) = self.integrity_proxy_id(&obj_val)? {
+                    if !self.proxy_set_integrity_level(module, proxy, true)? {
+                        return Err(InterpreterError::TypeError {
+                            expected: "successful preventExtensions".to_string(),
+                            got: "falsy Proxy trap result".to_string(),
+                        });
+                    }
+                    return Ok(obj_val);
+                }
                 match obj_val {
                     Value::Object(obj_id) => {
                         // Actually freeze the object by setting the is_frozen flag
@@ -83925,6 +83935,11 @@ impl InterpreterCore {
                 }
 
                 let obj_val = self.read_reg(args.start)?;
+                if let Some(proxy) = self.integrity_proxy_id(&obj_val)? {
+                    return Ok(Value::Bool(
+                        self.proxy_test_integrity_level(module, proxy, true)?,
+                    ));
+                }
                 match obj_val {
                     Value::Object(obj_id) => {
                         Ok(Value::Bool(self.object_has_integrity_level(obj_id, true)?))
@@ -88724,7 +88739,14 @@ impl InterpreterCore {
                 // Object.seal(O), ES2020 19.1.2.20 / 7.3.14 SetIntegrityLevel
                 // "sealed": non-extensible, every own property non-configurable.
                 let obj_val = self.arg_or_undefined(args, 1)?;
-                if let Value::Object(obj_id) = obj_val {
+                if let Some(proxy) = self.integrity_proxy_id(&obj_val)? {
+                    if !self.proxy_set_integrity_level(module, proxy, false)? {
+                        return Err(InterpreterError::TypeError {
+                            expected: "successful preventExtensions".to_string(),
+                            got: "falsy Proxy trap result".to_string(),
+                        });
+                    }
+                } else if let Value::Object(obj_id) = obj_val {
                     self.seal_object(obj_id)?;
                 } else if Self::stores_own_properties_on_backing(&obj_val)
                     && let Some(backing) = self.own_property_holder(module, &obj_val, true)?
@@ -88925,6 +88947,11 @@ impl InterpreterCore {
             "builtin:ObjectIsSealed" => {
                 // Object.isSealed(O), ES2020 19.1.2.15 / 7.3.15 TestIntegrityLevel.
                 let obj_val = self.arg_or_undefined(args, 1)?;
+                if let Some(proxy) = self.integrity_proxy_id(&obj_val)? {
+                    return Ok(Value::Bool(
+                        self.proxy_test_integrity_level(module, proxy, false)?,
+                    ));
+                }
                 match obj_val {
                     Value::Object(obj_id) => {
                         Ok(Value::Bool(self.object_has_integrity_level(obj_id, false)?))

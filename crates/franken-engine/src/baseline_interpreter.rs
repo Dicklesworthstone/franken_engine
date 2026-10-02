@@ -9160,16 +9160,45 @@ impl ScopeBinding {
 /// call deep-copied every captured binding name, twice.
 #[derive(Debug, Clone)]
 struct ScopeFrame {
-    bindings: Rc<BTreeMap<String, ScopeBinding>>,
+    bindings: Rc<FrameBindings>,
     /// Sum of [`Self::binding_key_bytes`] over `bindings`, kept current by
     /// every structural change so a scope-chain clone charge is O(depth).
     key_bytes: u64,
 }
 
+/// A scope frame's binding map, shared copy-on-write by the frames that alias
+/// it, plus how many registrations in the cold-cell ledger hold it
+/// (bd-9vouw.154). The ledger charges a held map's key bytes once; the count
+/// lives with the map so the live-chain accounting can tell in O(1) which
+/// maps it still charges itself. A copy-on-write copy is a new map that no
+/// registration holds.
+#[derive(Debug, Default)]
+struct FrameBindings {
+    map: BTreeMap<String, ScopeBinding>,
+    ledger_holds: Cell<usize>,
+}
+
+impl Clone for FrameBindings {
+    fn clone(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+            ledger_holds: Cell::new(0),
+        }
+    }
+}
+
+impl std::ops::Deref for FrameBindings {
+    type Target = BTreeMap<String, ScopeBinding>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
 impl ScopeFrame {
     fn new() -> Self {
         Self {
-            bindings: Rc::new(BTreeMap::new()),
+            bindings: Rc::new(FrameBindings::default()),
             key_bytes: 0,
         }
     }
@@ -9179,7 +9208,10 @@ impl ScopeFrame {
             bindings.keys().map(|name| Self::binding_key_bytes(name)),
         );
         Self {
-            bindings: Rc::new(bindings),
+            bindings: Rc::new(FrameBindings {
+                map: bindings,
+                ledger_holds: Cell::new(0),
+            }),
             key_bytes,
         }
     }
@@ -9201,7 +9233,7 @@ impl ScopeFrame {
 
     fn insert_binding(&mut self, name: String, binding: ScopeBinding) -> Option<ScopeBinding> {
         let added = Self::binding_key_bytes(&name);
-        let replaced = Rc::make_mut(&mut self.bindings).insert(name, binding);
+        let replaced = Rc::make_mut(&mut self.bindings).map.insert(name, binding);
         if replaced.is_none() {
             self.key_bytes = self.key_bytes.saturating_add(added);
         }
@@ -9212,7 +9244,7 @@ impl ScopeFrame {
         if !self.bindings.contains_key(name) {
             return None;
         }
-        let removed = Rc::make_mut(&mut self.bindings).remove(name);
+        let removed = Rc::make_mut(&mut self.bindings).map.remove(name);
         if removed.is_some() {
             self.key_bytes = self.key_bytes.saturating_sub(Self::binding_key_bytes(name));
         }
@@ -9231,7 +9263,7 @@ impl ScopeFrame {
         if !self.bindings.contains_key(name) {
             return None;
         }
-        Rc::make_mut(&mut self.bindings).get_mut(name)
+        Rc::make_mut(&mut self.bindings).map.get_mut(name)
     }
 }
 
@@ -9349,18 +9381,30 @@ struct ColdBindingCell {
 /// live scope chain and the top frame's saved chain are still walked per
 /// operation, skipping cells this ledger already charges;
 /// `shared_binding_cell_payloads_memory_bytes` remains the full-walk oracle.
-#[derive(Debug, Clone, Default)]
+///
+/// The ledger also charges the key bytes of each registered map once
+/// (bd-9vouw.154): closures, suspended activations and saved caller chains
+/// share their frame maps, so charging every holder for the whole map made N
+/// closures (or N pending async calls, or a recursion N deep) over a scope of
+/// B bindings cost O(N x B) of the budget while the process held O(N + B).
+/// The holders charge only their own frame slots.
+///
+/// Not `Clone`: the holder counts live in the shared maps, so a copy of the
+/// ledger would disagree with them.
+#[derive(Debug, Default)]
 struct ColdBindingCells {
     cells: BTreeMap<usize, ColdBindingCell>,
     payload_bytes: u64,
     /// Registered bindings maps, by address: how many registrations hold
-    /// each, and the map itself. A map's cells are registered by its first
-    /// registration and released by its last, so re-registering a scope that
-    /// is already held (the global scope, at every call) costs O(1), not
-    /// O(bindings). Holding the `Rc` makes every structural write elsewhere
-    /// copy the map first (`Rc::make_mut`), so a registered map's bindings
-    /// cannot change while it is held.
-    maps: BTreeMap<usize, (usize, Rc<BTreeMap<String, ScopeBinding>>)>,
+    /// each, the map itself, and the key bytes charged for it. A map's cells
+    /// are registered by its first registration and released by its last,
+    /// so re-registering a scope that is already held (the global scope, at
+    /// every call) costs O(1), not O(bindings). Holding the `Rc` makes every
+    /// structural write elsewhere copy the map first (`Rc::make_mut`), so a
+    /// registered map's bindings cannot change while it is held.
+    maps: BTreeMap<usize, (usize, Rc<FrameBindings>, u64)>,
+    /// Key bytes of the registered maps, each map once.
+    map_key_bytes: u64,
 }
 
 impl ColdBindingCells {
@@ -9408,19 +9452,29 @@ impl ColdBindingCells {
         Rc::as_ptr(&frame.bindings) as usize
     }
 
-    /// Whether every cell of `frame` is charged here: its map is held.
+    /// Whether every cell and the key bytes of `frame` are charged here: its
+    /// map is held. O(1) through the count kept in the map.
     fn holds_frame(&self, frame: &ScopeFrame) -> bool {
-        self.maps.contains_key(&Self::map_key(frame))
+        let held = frame.bindings.ledger_holds.get() > 0;
+        debug_assert_eq!(
+            held,
+            self.maps.contains_key(&Self::map_key(frame)),
+            "a frame map's ledger count drifted from the ledger (bd-9vouw.154)"
+        );
+        held
     }
 
     fn register_frames(&mut self, frames: &[ScopeFrame]) {
         for frame in frames {
+            let holds = &frame.bindings.ledger_holds;
+            holds.set(holds.get() + 1);
             match self.maps.entry(Self::map_key(frame)) {
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     entry.get_mut().0 += 1;
                 }
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((1, Rc::clone(&frame.bindings)));
+                    entry.insert((1, Rc::clone(&frame.bindings), frame.key_bytes));
+                    self.map_key_bytes = self.map_key_bytes.saturating_add(frame.key_bytes);
                     for binding in frame.bindings.values() {
                         self.register_cell(&binding.state);
                     }
@@ -9437,9 +9491,12 @@ impl ColdBindingCells {
                 debug_assert!(false, "released a scope map the ledger does not hold");
                 continue;
             };
+            let holds = &frame.bindings.ledger_holds;
+            holds.set(holds.get().saturating_sub(1));
             entry.get_mut().0 -= 1;
             if entry.get().0 == 0 {
-                let (_, bindings) = entry.remove();
+                let (_, bindings, key_bytes) = entry.remove();
+                self.map_key_bytes = self.map_key_bytes.saturating_sub(key_bytes);
                 for binding in bindings.values() {
                     self.release_cell(&binding.state);
                 }
@@ -9495,15 +9552,16 @@ struct ClosureChunk {
 
 /// The closure store plus the running accounting totals derived from it
 /// (bd-9vouw.31). Entries are only appended, popped on rollback, cleared, or
-/// reclaimed by the collector, so the structural bytes of every captured
-/// environment are summed as closures come and go, and each captured cell is
-/// registered in the shared cold-cell ledger. Reads go through `get`, `len`
-/// and `iter`; there is deliberately no mutable access to an entry.
+/// reclaimed by the collector, so each closure's own structure is summed as
+/// closures come and go, and each captured frame map (its key bytes and
+/// cells) is registered in the shared cold-cell ledger. Reads go through
+/// `get`, `len` and `iter`; there is deliberately no mutable access to an
+/// entry.
 ///
 /// Closure ids are never reused. A reclaimed closure reads as an entry with
 /// `RECLAIMED_CLOSURE_FUNCTION_INDEX`, so calling it fails; once every
 /// closure of a full chunk is reclaimed, the chunk itself is released.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ClosureTable {
     /// `None`: a released chunk, every entry of which was reclaimed.
     chunks: Vec<Option<ClosureChunk>>,
@@ -9511,16 +9569,8 @@ struct ClosureTable {
     /// What an entry of a released chunk reads as.
     reclaimed: ClosureValue,
     /// Sum of `InterpreterCore::estimate_closure_alias_bytes` over the
-    /// entries plus the key bytes of each distinct captured frame map.
+    /// entries.
     structural_bytes: u64,
-    /// Captured frame maps by `Rc` address: how many captured frames alias
-    /// each, and the key bytes charged for it (bd-9vouw.154). Closures share
-    /// their scope maps copy-on-write, so N closures over a scope with B
-    /// bindings hold one map; charging every closure for the whole map made
-    /// 1,000 top-level functions exceed the default heap budget. A map held
-    /// here is also held by `cold_cells`, so it cannot change, and its
-    /// address cannot be reused, while it is counted.
-    frame_maps: BTreeMap<usize, (usize, u64)>,
     /// Cells reachable from closure environments and from suspended
     /// generator / isolated async activations, deduplicated across both.
     cold_cells: ColdBindingCells,
@@ -9536,7 +9586,6 @@ impl Default for ClosureTable {
                 captured_env: Vec::new(),
             },
             structural_bytes: 0,
-            frame_maps: BTreeMap::new(),
             cold_cells: ColdBindingCells::default(),
         }
     }
@@ -9593,7 +9642,6 @@ impl ClosureTable {
         self.structural_bytes = self
             .structural_bytes
             .saturating_add(InterpreterCore::estimate_closure_alias_bytes(&closure));
-        self.register_frame_maps(&closure.captured_env);
         self.cold_cells.register_frames(&closure.captured_env);
         if self.len.is_multiple_of(CLOSURE_CHUNK_SLOTS) {
             self.chunks.push(Some(ClosureChunk::default()));
@@ -9635,42 +9683,8 @@ impl ClosureTable {
         self.structural_bytes = self
             .structural_bytes
             .saturating_sub(InterpreterCore::estimate_closure_alias_bytes(&closure));
-        self.release_frame_maps(&closure.captured_env);
         self.cold_cells.release_frames(&closure.captured_env);
         Some(closure)
-    }
-
-    /// Charge the key bytes of each captured frame map no closure held yet.
-    fn register_frame_maps(&mut self, frames: &[ScopeFrame]) {
-        for frame in frames {
-            match self.frame_maps.entry(ColdBindingCells::map_key(frame)) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().0 += 1;
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    self.structural_bytes = self.structural_bytes.saturating_add(frame.key_bytes);
-                    entry.insert((1, frame.key_bytes));
-                }
-            }
-        }
-    }
-
-    /// Release the key bytes of each captured frame map no closure holds any
-    /// more.
-    fn release_frame_maps(&mut self, frames: &[ScopeFrame]) {
-        for frame in frames {
-            let std::collections::btree_map::Entry::Occupied(mut entry) =
-                self.frame_maps.entry(ColdBindingCells::map_key(frame))
-            else {
-                debug_assert!(false, "released a frame map no closure holds");
-                continue;
-            };
-            entry.get_mut().0 -= 1;
-            if entry.get().0 == 0 {
-                let (_, charged_bytes) = entry.remove();
-                self.structural_bytes = self.structural_bytes.saturating_sub(charged_bytes);
-            }
-        }
     }
 
     fn clear(&mut self) {
@@ -9702,7 +9716,6 @@ impl ClosureTable {
             self.chunks[chunk_index] = None;
         }
         self.structural_bytes = self.structural_bytes.saturating_sub(previous_bytes);
-        self.release_frame_maps(&captured_env);
         self.cold_cells.release_frames(&captured_env);
         true
     }
@@ -9925,8 +9938,8 @@ struct CallFrame {
 #[derive(Debug, Default)]
 struct CallStack {
     frames: Vec<CallFrame>,
-    /// [`InterpreterCore::estimate_call_frame_bytes`] summed over every frame
-    /// but the top one.
+    /// [`InterpreterCore::estimate_live_call_frame_bytes`] summed over every
+    /// frame but the top one.
     below_top_bytes: u64,
     /// For each frame below the top, the index of the first frame at or
     /// below it with the strictly greatest `super_label` among the frames
@@ -9948,7 +9961,7 @@ impl CallStack {
         self.below_top_bytes.saturating_add(
             self.frames
                 .last()
-                .map_or(0, InterpreterCore::estimate_call_frame_bytes),
+                .map_or(0, InterpreterCore::estimate_live_call_frame_bytes),
         )
     }
 
@@ -9964,7 +9977,7 @@ impl CallStack {
         if let Some(top) = self.frames.last() {
             self.below_top_bytes = self
                 .below_top_bytes
-                .saturating_add(InterpreterCore::estimate_call_frame_bytes(top));
+                .saturating_add(InterpreterCore::estimate_live_call_frame_bytes(top));
             if let Some(saved) = &top.saved_scope_chain {
                 cold.register_frames(saved);
             }
@@ -10006,7 +10019,7 @@ impl CallStack {
         let frame = self.frames.pop()?;
         if let Some(top) = self.frames.last() {
             self.below_top_super_winner.pop();
-            let bytes = InterpreterCore::estimate_call_frame_bytes(top);
+            let bytes = InterpreterCore::estimate_live_call_frame_bytes(top);
             debug_assert!(
                 self.below_top_bytes >= bytes,
                 "call-stack running total lost a frame (bd-9vouw.72)"
@@ -43191,11 +43204,15 @@ impl InterpreterCore {
                 expected: "async function frame".to_string(),
                 got: "missing async function id".to_string(),
             })?;
-        let previous_scope_bytes = self.scope_chain_memory_bytes();
+        // The frame is already popped: add back what it was charged as the
+        // top frame, its own bytes and its saved chain's walked maps.
+        let previous_scope_bytes = self
+            .scope_chain_memory_bytes()
+            .saturating_add(self.popped_frame_unwalked_map_key_bytes(&frame));
         let previous_closure_bytes = self.closures_memory_bytes();
         let previous_call_stack_bytes = self
             .call_stack_memory_bytes()
-            .saturating_add(Self::estimate_call_frame_bytes(&frame));
+            .saturating_add(Self::estimate_live_call_frame_bytes(&frame));
         let return_ip = frame.return_ip;
         let failure_label = Self::terminal_async_failure_label(&label);
         self.restore_call_frame_state(&mut frame);
@@ -92610,7 +92627,7 @@ impl InterpreterCore {
                 function
                     .isolated_execution
                     .as_ref()
-                    .map(Self::estimate_generator_execution_bytes)
+                    .map(Self::estimate_held_activation_bytes)
                     .unwrap_or(0),
             )
     }
@@ -93226,6 +93243,20 @@ impl InterpreterCore {
         Self::estimate_scope_chain_shallow_clone_bytes(frames)
     }
 
+    /// One slot per frame of a chain whose frame maps are charged elsewhere,
+    /// once per distinct map: by the cold-cell ledger, or by the live-only
+    /// walk for the live chain and the top saved chain (bd-9vouw.154).
+    fn estimate_scope_chain_slot_bytes(frames: &[ScopeFrame]) -> u64 {
+        u64::try_from(frames.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES)
+    }
+
+    /// Key bytes of a chain's frame maps, counted per alias.
+    fn scope_chain_key_bytes(frames: &[ScopeFrame]) -> u64 {
+        Self::saturating_sum(frames.iter().map(|frame| frame.key_bytes))
+    }
+
     /// Physical payload owned by one shared lexical binding cell: the
     /// `ScopeBindingState` allocation plus the estimated bytes of its value
     /// and IFC label (bd-sblaq).
@@ -93378,6 +93409,19 @@ impl InterpreterCore {
                     .map_or(0, |frames| Self::estimate_scope_chain_bytes(frames)),
             )
             .saturating_add(frame.scope_inert_virtual_scope_bytes)
+    }
+
+    /// A frame of the live call stack: [`Self::estimate_call_frame_bytes`]
+    /// with its saved caller chain charged one slot per frame. The chain's
+    /// maps are charged once each by the cold-cell ledger (frames below the
+    /// top) or by the live-only scope walk (the top frame) (bd-9vouw.154).
+    fn estimate_live_call_frame_bytes(frame: &CallFrame) -> u64 {
+        Self::estimate_call_frame_bytes(frame).saturating_sub(
+            frame
+                .saved_scope_chain
+                .as_deref()
+                .map_or(0, Self::scope_chain_key_bytes),
+        )
     }
 
     fn estimate_call_frame_snapshot_clone_bytes(frame: &CallFrame) -> u64 {
@@ -93708,62 +93752,47 @@ impl InterpreterCore {
                 generator
                     .execution
                     .as_ref()
-                    .map(Self::estimate_generator_execution_bytes)
+                    .map(Self::estimate_held_activation_bytes)
                     .unwrap_or(0),
             )
+    }
+
+    /// A suspended activation the cold-cell ledger holds (a generator's or
+    /// an isolated async call's): [`Self::estimate_generator_execution_bytes`]
+    /// less the key bytes of its scope chain and saved caller chains, which
+    /// the ledger charges once per distinct map (bd-9vouw.154). A snapshot
+    /// the ledger does not hold (a caller set aside during an isolated call)
+    /// keeps the per-alias estimate.
+    fn estimate_held_activation_bytes(execution: &GeneratorExecutionSnapshot) -> u64 {
+        let key_bytes = Self::scope_chain_key_bytes(&execution.scope_chain.frames).saturating_add(
+            Self::saturating_sum(execution.call_stack.iter().map(|frame| {
+                frame
+                    .saved_scope_chain
+                    .as_deref()
+                    .map_or(0, Self::scope_chain_key_bytes)
+            })),
+        );
+        Self::estimate_generator_execution_bytes(execution).saturating_sub(key_bytes)
     }
 
     fn estimate_generators_bytes<'a>(generators: impl Iterator<Item = &'a GeneratorObject>) -> u64 {
         Self::saturating_sum(generators.map(Self::estimate_generator_bytes))
     }
 
-    /// What one closure adds when no other closure holds its frame maps.
-    #[cfg(test)]
-    fn estimate_closure_bytes(closure: &ClosureValue) -> u64 {
-        if closure.function_index == RECLAIMED_CLOSURE_FUNCTION_INDEX {
-            return 0;
-        }
-        MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
-            .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
-    }
-
     /// A closure's own structure: its base plus one slot per captured frame.
-    /// The frame maps are shared, so their key bytes are charged once per
-    /// distinct map (bd-9vouw.154). A reclaimed closure is charged nothing:
-    /// its entry is released with its chunk (bd-9vouw.57).
+    /// The frame maps are shared, so the cold-cell ledger charges their key
+    /// bytes once per distinct map (bd-9vouw.154). A reclaimed closure is
+    /// charged nothing: its entry is released with its chunk (bd-9vouw.57).
     fn estimate_closure_alias_bytes(closure: &ClosureValue) -> u64 {
         if closure.function_index == RECLAIMED_CLOSURE_FUNCTION_INDEX {
             return 0;
         }
-        MEMORY_ESTIMATE_CLOSURE_BASE_BYTES.saturating_add(
-            u64::try_from(closure.captured_env.len())
-                .unwrap_or(u64::MAX)
-                .saturating_mul(MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES),
-        )
+        MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
+            .saturating_add(Self::estimate_scope_chain_slot_bytes(&closure.captured_env))
     }
 
-    /// Full-walk reference for [`ClosureTable`]'s structural total: every
-    /// closure's own structure plus each distinct captured frame map's key
-    /// bytes once.
     fn estimate_closures_bytes<'a>(closures: impl Iterator<Item = &'a ClosureValue>) -> u64 {
-        let mut seen_maps = BTreeSet::new();
-        Self::saturating_sum(closures.map(|closure| {
-            let map_bytes = Self::saturating_sum(
-                closure
-                    .captured_env
-                    .iter()
-                    .filter(|frame| seen_maps.insert(ColdBindingCells::map_key(frame)))
-                    .map(|frame| {
-                        Self::saturating_sum(
-                            frame
-                                .bindings
-                                .keys()
-                                .map(|name| ScopeFrame::binding_key_bytes(name)),
-                        )
-                    }),
-            );
-            Self::estimate_closure_alias_bytes(closure).saturating_add(map_bytes)
-        }))
+        Self::saturating_sum(closures.map(Self::estimate_closure_alias_bytes))
     }
 
     fn estimate_closure_method_metadata_entry_bytes(metadata: &ClosureMethodMetadata) -> u64 {
@@ -93849,8 +93878,12 @@ impl InterpreterCore {
     /// chain and the top frame's saved chain are walked. Equal to
     /// [`Self::scope_chain_memory_bytes_by_walk`] by construction; unit-test
     /// builds assert that on every call.
+    ///
+    /// bd-9vouw.154: the frame maps' key bytes are in this component too, each
+    /// distinct map once (see [`Self::scope_chain_structural_bytes`]).
     fn scope_chain_memory_bytes(&self) -> u64 {
-        let bytes = Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
+        let bytes = self
+            .scope_chain_structural_bytes()
             .saturating_add(self.closures.cold_cells.payload_bytes)
             .saturating_add(self.live_only_binding_cell_payload_bytes());
         #[cfg(test)]
@@ -93865,8 +93898,130 @@ impl InterpreterCore {
     /// Full-walk reference for [`Self::scope_chain_memory_bytes`], used by the
     /// `recompute_estimated_memory_bytes` oracle.
     fn scope_chain_memory_bytes_by_walk(&self) -> u64 {
-        Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
+        Self::estimate_scope_chain_slot_bytes(&self.scope_chain.frames)
+            .saturating_add(self.shared_frame_map_key_bytes())
             .saturating_add(self.shared_binding_cell_payloads_memory_bytes())
+    }
+
+    /// Key bytes of every frame map reachable from the accounted surfaces —
+    /// the live chain, the call frames' saved caller chains, closure
+    /// environments and suspended activations — each distinct map once,
+    /// recomputed from its bindings (bd-9vouw.154). Full-walk oracle for the
+    /// ledger's `map_key_bytes` plus [`Self::live_only_frame_map_key_bytes`].
+    fn shared_frame_map_key_bytes(&self) -> u64 {
+        fn add(frames: &[ScopeFrame], seen: &mut BTreeSet<usize>, total: &mut u64) {
+            for frame in frames {
+                if seen.insert(ColdBindingCells::map_key(frame)) {
+                    *total = total.saturating_add(InterpreterCore::saturating_sum(
+                        frame
+                            .bindings
+                            .keys()
+                            .map(|name| ScopeFrame::binding_key_bytes(name)),
+                    ));
+                }
+            }
+        }
+        fn add_execution(
+            execution: &GeneratorExecutionSnapshot,
+            seen: &mut BTreeSet<usize>,
+            total: &mut u64,
+        ) {
+            add(&execution.scope_chain.frames, seen, total);
+            for frame in &execution.call_stack {
+                if let Some(saved) = &frame.saved_scope_chain {
+                    add(saved, seen, total);
+                }
+            }
+        }
+        let mut seen = BTreeSet::new();
+        let mut total = 0u64;
+        add(&self.scope_chain.frames, &mut seen, &mut total);
+        for frame in self.call_stack.iter() {
+            if let Some(saved) = &frame.saved_scope_chain {
+                add(saved, &mut seen, &mut total);
+            }
+        }
+        for closure in self.closures.iter() {
+            add(&closure.captured_env, &mut seen, &mut total);
+        }
+        for generator in self.generators.iter() {
+            if let Some(execution) = &generator.execution {
+                add_execution(execution, &mut seen, &mut total);
+            }
+        }
+        for function in self.async_functions.iter() {
+            if let Some(execution) = &function.isolated_execution {
+                add_execution(execution, &mut seen, &mut total);
+            }
+        }
+        total
+    }
+
+    /// Structural bytes of the scope component: the live chain's frame slots
+    /// plus the key bytes of the frame maps, each distinct map once
+    /// (bd-9vouw.154). The ledger charges the maps closures, suspended
+    /// activations and the saved chains below the top call frame hold; the
+    /// live chain and the top frame's saved chain add the maps it does not
+    /// hold. O(depth): the ledger's total is kept current and a map's holder
+    /// count is read from the map. Moving a map between the ledger and the
+    /// live chain (a capture, a call, a return) leaves this total unchanged,
+    /// so the scope-swap deltas stay structural.
+    fn scope_chain_structural_bytes(&self) -> u64 {
+        Self::estimate_scope_chain_slot_bytes(&self.scope_chain.frames)
+            .saturating_add(self.closures.cold_cells.map_key_bytes)
+            .saturating_add(self.live_only_frame_map_key_bytes())
+    }
+
+    /// Key bytes of the frame maps on the live chain and the top call frame's
+    /// saved chain that the cold-cell ledger does not hold, each distinct map
+    /// once (bd-9vouw.154).
+    fn live_only_frame_map_key_bytes(&self) -> u64 {
+        let cold = &self.closures.cold_cells;
+        let live = &self.scope_chain.frames;
+        let mut total = Self::saturating_sum(
+            live.iter()
+                .filter(|frame| !cold.holds_frame(frame))
+                .map(|frame| frame.key_bytes),
+        );
+        if let Some(saved) = self.call_stack.top_saved_scope_chain() {
+            total = total.saturating_add(Self::saturating_sum(
+                saved
+                    .iter()
+                    .filter(|frame| !cold.holds_frame(frame) && !Self::chain_has_map(live, frame))
+                    .map(|frame| frame.key_bytes),
+            ));
+        }
+        total
+    }
+
+    /// Whether `frames` contains `frame`'s map.
+    fn chain_has_map(frames: &[ScopeFrame], frame: &ScopeFrame) -> bool {
+        frames
+            .iter()
+            .any(|other| Rc::ptr_eq(&other.bindings, &frame.bindings))
+    }
+
+    /// Key bytes the live-only walk charged for a just-popped top frame's
+    /// saved chain that nothing charges until that chain is restored: maps
+    /// the ledger does not hold, on neither the live chain nor the new top
+    /// frame's saved chain (bd-9vouw.154). A delta measured between the pop
+    /// and the restore adds them to its starting point.
+    fn popped_frame_unwalked_map_key_bytes(&self, frame: &CallFrame) -> u64 {
+        let Some(saved) = frame.saved_scope_chain.as_deref() else {
+            return 0;
+        };
+        let cold = &self.closures.cold_cells;
+        let top_saved = self.call_stack.top_saved_scope_chain().unwrap_or_default();
+        Self::saturating_sum(
+            saved
+                .iter()
+                .filter(|saved_frame| {
+                    !cold.holds_frame(saved_frame)
+                        && !Self::chain_has_map(&self.scope_chain.frames, saved_frame)
+                        && !Self::chain_has_map(top_saved, saved_frame)
+                })
+                .map(|saved_frame| saved_frame.key_bytes),
+        )
     }
 
     /// Payload of the cells reachable from the live scope chain or the top
@@ -94031,7 +94186,11 @@ impl InterpreterCore {
         #[cfg(test)]
         debug_assert_eq!(
             bytes,
-            Self::saturating_sum(self.call_stack.iter().map(Self::estimate_call_frame_bytes)),
+            Self::saturating_sum(
+                self.call_stack
+                    .iter()
+                    .map(Self::estimate_live_call_frame_bytes)
+            ),
             "call-stack running total drifted from the full walk (bd-9vouw.72)"
         );
         bytes
@@ -94472,12 +94631,6 @@ impl InterpreterCore {
             previous_payload_bytes,
             Self::estimate_binding_cell_payload_bytes(cell),
         )
-    }
-
-    /// Structural bytes of the active scope chain: frame bases plus binding
-    /// names, O(depth) from each frame's cached total (bd-9vouw.31).
-    fn scope_chain_structural_bytes(&self) -> u64 {
-        Self::estimate_scope_chain_bytes(&self.scope_chain.frames)
     }
 
     /// Payload of the cells a returning callee's chain held that are
@@ -100867,11 +101020,11 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         assert_invariant(&core, "after three closure aliases");
 
         let growth = core.estimated_memory_bytes() - before_aliases;
-        // Each alias pays its own structure; the frame maps they share are
-        // charged once (bd-9vouw.154).
+        // Each alias pays its own structure. The frame maps it shares with
+        // the live chain were charged once already (bd-9vouw.154).
         let frame_slots = env.len() as u64 * MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES;
-        let expected_structural = (MEMORY_ESTIMATE_CLOSURE_BASE_BYTES + frame_slots) * 3
-            + (shallow_env_bytes - frame_slots);
+        assert!(shallow_env_bytes > frame_slots, "the frames have bindings");
+        let expected_structural = (MEMORY_ESTIMATE_CLOSURE_BASE_BYTES + frame_slots) * 3;
         assert_eq!(
             growth, expected_structural,
             "aliases must add structural bytes only, never re-charge the {payload_bytes}-byte payload"
@@ -100933,12 +101086,14 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         }
         core.sync_estimated_memory_bytes().expect("sync");
         let env = core.scope_chain.snapshot();
-        let map_key_bytes: u64 = env.iter().map(|frame| frame.key_bytes).sum();
+        let scope_key_bytes = env.last().expect("pushed frame").key_bytes;
         let alias_bytes = MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
             + env.len() as u64 * MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES;
-        assert!(map_key_bytes > 200 * MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES);
-        let before = core.closures_memory_bytes();
+        assert!(scope_key_bytes > 200 * MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES);
+        let before = core.estimated_memory_bytes();
 
+        // Fifty closures over the scope: each pays its own structure, the
+        // scope's map is not charged again.
         for _ in 0..50 {
             let previous_closure_bytes = core.closures_memory_bytes();
             core.closures.push(ClosureValue {
@@ -100949,32 +101104,63 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
                 .expect("closure fits");
         }
         assert_invariant(&core, "after 50 closures over one scope");
+        assert_eq!(core.estimated_memory_bytes() - before, 50 * alias_bytes);
+
+        // Leaving the scope keeps its map charged, once, by the ledger.
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        core.scope_chain.pop().expect("pop the captured scope");
+        core.apply_scope_chain_memory_delta(previous_scope_bytes)
+            .expect("pop shrinks");
+        assert_invariant(&core, "scope left, closures hold it");
         assert_eq!(
-            core.closures_memory_bytes() - before,
-            50 * alias_bytes + map_key_bytes,
-            "50 closures over one scope hold one copy of its map"
+            core.estimated_memory_bytes() - before,
+            50 * alias_bytes - MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
         );
 
-        // The collector reclaiming all but one keeps the map charged; the
-        // last one releases it.
+        // The collector reclaiming all but one keeps it; the last one
+        // releases the map and its cells.
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
         let previous_closure_bytes = core.closures_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
         for index in 0..49 {
             assert!(core.closures.reclaim(index));
         }
-        core.apply_closures_memory_delta(previous_closure_bytes)
-            .expect("reclaim shrinks");
+        core.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("reclaim shrinks");
         assert_invariant(&core, "one closure left");
         assert_eq!(
-            core.closures_memory_bytes() - before,
-            alias_bytes + map_key_bytes
+            core.estimated_memory_bytes() - before,
+            alias_bytes - MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
         );
+        let held_before_last = core.closures.cold_cells.map_key_bytes;
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
         let previous_closure_bytes = core.closures_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
         assert!(core.closures.reclaim(49));
-        core.apply_closures_memory_delta(previous_closure_bytes)
-            .expect("reclaim shrinks");
+        core.apply_scope_closure_call_stack_memory_delta(
+            previous_scope_bytes,
+            previous_closure_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("reclaim shrinks");
         assert_invariant(&core, "every closure reclaimed");
-        assert_eq!(core.closures_memory_bytes(), before);
-        assert!(core.closures.frame_maps.is_empty());
+        assert_eq!(
+            held_before_last,
+            env.iter().map(|frame| frame.key_bytes).sum::<u64>(),
+            "the ledger held each captured map once"
+        );
+        assert_eq!(core.closures.cold_cells.map_key_bytes, 0);
+        assert!(core.closures.cold_cells.maps.is_empty());
+        // The live global frame is charged by the walk again; the scope's
+        // map, slot and cells are gone.
+        assert!(
+            core.estimated_memory_bytes()
+                <= before - MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES - scope_key_bytes
+        );
     }
 
     #[test]
@@ -100990,20 +101176,11 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
                 .declare(format!("binding_{index}"), BindingKind::Var);
         }
         core.sync_estimated_memory_bytes().expect("sync");
-        let before = core.closures_memory_bytes();
-        let shared_key_bytes: u64 = core.scope_chain.frames[..core.scope_chain.depth() - 1]
-            .iter()
-            .map(|frame| frame.key_bytes)
-            .sum();
-        let mut expected = shared_key_bytes;
+        let first_key_bytes = core.scope_chain.current().expect("live frame").key_bytes;
         let mut live_maps = BTreeSet::new();
         for round in 0..5 {
             let env = core.scope_chain.snapshot();
-            let live = env.last().expect("live frame");
-            live_maps.insert(Rc::as_ptr(&live.bindings) as usize);
-            expected += MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
-                + env.len() as u64 * MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
-                + live.key_bytes;
+            live_maps.insert(ColdBindingCells::map_key(env.last().expect("live frame")));
             let previous_closure_bytes = core.closures_memory_bytes();
             core.closures.push(ClosureValue {
                 function_index: 0,
@@ -101013,7 +101190,7 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
                 .expect("closure fits");
             // A declaration in the captured live scope copies its map
             // (copy-on-write), so the next closure holds a different one:
-            // these are distinct physical maps and each must be charged.
+            // distinct physical maps, each of which must be charged.
             let previous_scope_bytes = core.scope_chain_memory_bytes();
             core.scope_chain
                 .current_mut()
@@ -101024,7 +101201,19 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         }
         assert_eq!(live_maps.len(), 5, "every round captured a new map");
         assert_invariant(&core, "after closures over five distinct maps");
-        assert_eq!(core.closures_memory_bytes() - before, expected);
+
+        // The ledger charges every distinct captured map once.
+        let mut seen = BTreeSet::new();
+        let mut held_key_bytes = 0u64;
+        for closure in core.closures.iter() {
+            for frame in &closure.captured_env {
+                if seen.insert(ColdBindingCells::map_key(frame)) {
+                    held_key_bytes += frame.key_bytes;
+                }
+            }
+        }
+        assert_eq!(core.closures.cold_cells.map_key_bytes, held_key_bytes);
+        assert!(held_key_bytes >= 5 * first_key_bytes);
     }
 
     fn lower_script_bd_9vouw_31(source: &str) -> Ir3Module {
@@ -145164,7 +145353,9 @@ mod tests {
             function_index: 7,
             captured_env: core.scope_chain.snapshot(),
         };
-        let closure_bytes = InterpreterCore::estimate_closure_bytes(&closure);
+        // The captured frames are the live chain's, already charged: the
+        // closure adds its own structure (bd-9vouw.154).
+        let closure_bytes = InterpreterCore::estimate_closure_alias_bytes(&closure);
         let before = core.estimated_memory_bytes();
         let previous_closure_bytes = core.closures_memory_bytes();
         core.closures.push(closure);

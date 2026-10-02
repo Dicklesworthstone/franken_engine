@@ -53637,7 +53637,20 @@ impl InterpreterCore {
         if !candidate.is_object_like() {
             return Ok(Value::Bool(false));
         }
-        let prototype = if let Some((value, _)) =
+        // A callable proxy (bd-9vouw.132): OrdinaryHasInstance reads its
+        // `prototype` through [[Get]], so its get trap or its target answers.
+        let prototype = if Self::is_callable_proxy(&constructor) {
+            let key = RuntimePropertyKey::String(JsString::from("prototype"));
+            match self.get_v(module, &constructor, &key)? {
+                Value::Object(prototype) => prototype,
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object-valued constructor prototype".into(),
+                        got: other.type_name().into(),
+                    });
+                }
+            }
+        } else if let Some((value, _)) =
             self.constructor_prototype_override(module, &constructor)?
         {
             match value {

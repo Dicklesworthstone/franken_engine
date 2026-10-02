@@ -2896,8 +2896,8 @@ pub enum BuiltinFunctionKind {
     /// `undefined` (bd-juodx).
     SetClear,
     /// `Date.prototype.getTime()` — receiver-aware; returns the Date object's
-    /// internal `__timestamp` in milliseconds, or NaN for a non-Date receiver
-    /// (bd-cseei).
+    /// internal `__timestamp` in milliseconds and throws a TypeError for a
+    /// non-Date receiver (bd-cseei, bd-9vouw.150).
     DateGetTime,
     /// bd-3894s slice (2b): `ClientRequest.prototype.write(chunk)` — receiver-aware;
     /// appends `chunk` (string/number-coerced) to the request object's writable
@@ -41071,22 +41071,28 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(result)))
             }
             BuiltinFunctionKind::DateGetTime => {
-                // `Date.prototype.getTime()` — read the receiver Date object's
-                // internal `__timestamp`; NaN for a non-Date receiver (bd-cseei).
+                // `Date.prototype.getTime()` — the receiver's [[DateValue]];
+                // thisTimeValue throws for a receiver that is not a Date, as
+                // every other Date.prototype method does (bd-9vouw.150).
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Value::Object(date_id) = receiver else {
-                    return Ok(Value::Float(f64::NAN.into()));
+                let date_obj = match &receiver {
+                    Value::Object(date_id) => self
+                        .heap
+                        .get(date_id.0 as usize)
+                        .filter(|object| object.brand() == Some("Date")),
+                    _ => None,
                 };
-                if let Some(date_obj) = self.heap.get(date_id.0 as usize)
-                    && date_obj.brand() == Some("Date")
-                {
-                    match date_obj.properties.get("__timestamp") {
-                        Some(Value::Float(ts)) => return Ok(Value::Float(*ts)),
-                        Some(Value::Int(ts)) => return Ok(Value::Int(*ts)),
-                        _ => {}
-                    }
+                let Some(date_obj) = date_obj else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Date receiver for Date.prototype.getTime".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                match date_obj.properties.get("__timestamp") {
+                    Some(Value::Float(ts)) => Ok(Value::Float(*ts)),
+                    Some(Value::Int(ts)) => Ok(Value::Int(*ts)),
+                    _ => Ok(Value::Float(f64::NAN.into())),
                 }
-                Ok(Value::Float(f64::NAN.into()))
             }
             BuiltinFunctionKind::UrlSearchParamsGet => {
                 let object_id = self.url_search_params_receiver_id(receiver, "get")?;

@@ -556,7 +556,7 @@ impl InterpreterCore {
 
     /// A new empty Set: the object and its value storage, as `new Set()`
     /// makes them.
-    fn alloc_empty_set(&mut self) -> Result<ObjectId, InterpreterError> {
+    pub(super) fn alloc_empty_set(&mut self) -> Result<ObjectId, InterpreterError> {
         let prototype = self.ensure_builtin_prototype("Set")?;
         let set_id = self.alloc_object_with_prototype(Some(prototype))?;
         let values_id = self.alloc_object_with_prototype(None)?;

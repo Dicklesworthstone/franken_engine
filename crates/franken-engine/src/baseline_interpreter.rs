@@ -54140,7 +54140,10 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(current.0 as usize) else {
                 return false;
             };
-            if object.properties.baseline_symbol_property(iterator).is_some()
+            if object
+                .properties
+                .baseline_symbol_property(iterator)
+                .is_some()
                 || !matches!(self.proxy_record(current), Ok(None))
             {
                 return false;
@@ -54151,12 +54154,10 @@ impl InterpreterCore {
             match object.prototype {
                 Some(prototype) => current = prototype,
                 // The implicit canonical prototype.
-                None if !object.is_null_prototype && current == object_id => {
-                    match canonical {
-                        Some(prototype) => current = prototype,
-                        None => break,
-                    }
-                }
+                None if !object.is_null_prototype && current == object_id => match canonical {
+                    Some(prototype) => current = prototype,
+                    None => break,
+                },
                 None => return false,
             }
         }

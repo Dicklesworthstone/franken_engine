@@ -76999,17 +76999,24 @@ impl InterpreterCore {
         self.check_temporary_memory_budget(
             retained_bytes.saturating_add(Self::estimate_heap_object_bytes(&HeapObject::new())),
         )?;
-        // Materialized before the rollback point: a refusal must not drop
-        // the shared prototype (bd-9vouw.157).
-        let prototype = self.ensure_builtin_prototype("URLSearchParams")?;
+        // The first use materializes the prototype past the rollback point;
+        // a refusal takes it back with the object (bd-9vouw.157).
         let previous_heap_len = self.heap.len();
         let previous_estimated_bytes = self.estimated_memory_bytes;
-        let object_id = self.alloc_object_with_prototype(Some(prototype))?;
-        if let Err(error) = self.apply_memory_component_delta(0, retained_bytes) {
-            self.rollback_heap_to_len(previous_heap_len);
-            self.estimated_memory_bytes = previous_estimated_bytes;
-            return Err(error);
-        }
+        let allocated = self
+            .ensure_builtin_prototype("URLSearchParams")
+            .and_then(|prototype| self.alloc_object_with_prototype(Some(prototype)))
+            .and_then(|object_id| {
+                self.apply_memory_component_delta(0, retained_bytes)?;
+                Ok(object_id)
+            });
+        let object_id = match allocated {
+            Ok(object_id) => object_id,
+            Err(error) => {
+                self.rollback_heap_and_new_prototypes(previous_heap_len, previous_estimated_bytes);
+                return Err(error);
+            }
+        };
         self.url_search_params.insert(object_id, state);
         Ok(object_id)
     }
@@ -77060,15 +77067,15 @@ impl InterpreterCore {
             lifecycle_label,
         };
 
-        // Materialized before the rollback point: a refusal must not drop
-        // the shared prototypes (bd-9vouw.157).
-        let url_prototype = self.ensure_builtin_prototype("URL")?;
-        let params_prototype = self.ensure_builtin_prototype("URLSearchParams")?;
+        // The first use materializes the prototypes past the rollback point;
+        // a refusal takes them back with the objects (bd-9vouw.157).
         let previous_heap_len = self.heap.len();
         let previous_estimated_bytes = self.estimated_memory_bytes;
         let mut url_id = None;
         let mut params_id = None;
         let outcome = (|| {
+            let url_prototype = self.ensure_builtin_prototype("URL")?;
+            let params_prototype = self.ensure_builtin_prototype("URLSearchParams")?;
             let allocated_url = self.alloc_object_with_prototype(Some(url_prototype))?;
             url_id = Some(allocated_url);
             let allocated_params = self.alloc_object_with_prototype(Some(params_prototype))?;
@@ -77090,8 +77097,7 @@ impl InterpreterCore {
             if let Some(id) = params_id {
                 self.url_search_params.remove(&id);
             }
-            self.rollback_heap_to_len(previous_heap_len);
-            self.estimated_memory_bytes = previous_estimated_bytes;
+            self.rollback_heap_and_new_prototypes(previous_heap_len, previous_estimated_bytes);
         }
         outcome
     }

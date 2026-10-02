@@ -7517,19 +7517,13 @@ fn try_parse_update(
 
     // Postfix: `x++` / `x--`.
     let postfix = if expr.ends_with("++") {
-        Some((
-            AssignmentOperator::IncrementAssign,
-            UnaryOperator::Decrement,
-        ))
+        Some(AssignmentOperator::PostIncrementAssign)
     } else if expr.ends_with("--") {
-        Some((
-            AssignmentOperator::DecrementAssign,
-            UnaryOperator::Increment,
-        ))
+        Some(AssignmentOperator::PostDecrementAssign)
     } else {
         None
     };
-    if let Some((operator, adjust_op)) = postfix {
+    if let Some(operator) = postfix {
         let operand_src = expr[..expr.len() - 2].trim();
         if operand_src.is_empty() || operand_src.ends_with('+') || operand_src.ends_with('-') {
             return None;
@@ -7541,20 +7535,16 @@ fn try_parse_update(
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
         }
-        // `x++` writes the increment back and evaluates to the old value as
-        // a numeric (`s = '5'; s++` is 5): the new value stepped back by one
-        // of its own type, so a BigInt stays a BigInt. For a Number this is
-        // `(x + 1) - 1`, which differs from the old value only for -0 and
-        // beyond 2^53, as the earlier desugar did.
-        let write_back = Expression::Assignment {
+        // `x++` writes the increment back and evaluates to ToNumeric of the
+        // old value (`s = '5'; s++` is 5, a BigInt stays a BigInt). The
+        // earlier `(x -= -1) - 1` desugar recomputed it from the new value,
+        // which is inexact for a fraction (`x = -0.1; x++` gave
+        // -0.09999999999999998) and for -0.
+        return Some(Ok(Expression::Assignment {
             operator,
             left: Box::new(target),
             right: Box::new(Expression::NumericLiteral(1)),
             assignment_strictness: AssignmentStrictness::from_strict_mode(context.strict_mode),
-        };
-        return Some(Ok(Expression::Unary {
-            operator: adjust_op,
-            argument: Box::new(write_back),
         }));
     }
 

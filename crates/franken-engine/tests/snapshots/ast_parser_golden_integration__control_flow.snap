@@ -189,20 +189,15 @@ expression: scrubbed_actual
           }
         },
         "update": {
-          "Unary": {
-            "operator": "Decrement",
-            "argument": {
-              "Assignment": {
-                "operator": "IncrementAssign",
-                "left": {
-                  "Identifier": "i"
-                },
-                "right": {
-                  "NumericLiteral": 1
-                },
-                "assignment_strictness": "sloppy"
-              }
-            }
+          "Assignment": {
+            "operator": "PostIncrementAssign",
+            "left": {
+              "Identifier": "i"
+            },
+            "right": {
+              "NumericLiteral": 1
+            },
+            "assignment_strictness": "sloppy"
           }
         },
         "body": {

@@ -107,7 +107,7 @@ use primitive_conversion::PrimitiveConversion;
 use reflect_invocation::ReflectPropertyOperation;
 
 use frankenengine_core::object_model::{
-    BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId,
+    BaselineSymbolProperty, OrderedStringMap, SymbolId as CoreSymbolId, canonical_array_index,
 };
 use frankenengine_extension_host::host_effect_journal::InMemoryHostEffectJournal;
 use frankenengine_extension_host::host_io::{
@@ -71403,11 +71403,7 @@ impl InterpreterCore {
     }
 
     fn canonical_array_index_key(key: &str) -> Option<u32> {
-        let index = key.parse::<u32>().ok()?;
-        if index == u32::MAX || index.to_string() != key {
-            return None;
-        }
-        Some(index)
+        canonical_array_index(key)
     }
 
     fn canonical_array_index_property(key: &str, length: usize) -> Option<usize> {

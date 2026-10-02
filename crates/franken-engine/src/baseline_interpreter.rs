@@ -59305,6 +59305,12 @@ impl InterpreterCore {
                     }
                     break;
                 }
+                // bd-9vouw.17: so do %Function.prototype%'s virtual `length`
+                // and `name` (ES2020 19.2.3); a write must not shadow them
+                // with a new own property.
+                if !self.virtual_property_is_writable(owner, key) {
+                    return Ok(false);
+                }
                 // Only stored links (bd-9vouw.34): array and object literals
                 // still initialize through [[Set]] (NewArray/NewObject plus
                 // SetProperty), so following the implicit Object.prototype /
@@ -98435,6 +98441,18 @@ impl InterpreterCore {
     /// Whether the virtual own property `key` of the canonical prototype
     /// `object_id` is configurable: all are but %Array.prototype%.length
     /// (ES2020 22.1.3, an Array's `length`).
+    /// Whether a write may replace the virtual own property `key` of the
+    /// canonical prototype `object_id`: every one is writable except
+    /// %Function.prototype%'s `length` and `name` (ES2020 19.2.3), while they
+    /// have not been deleted.
+    fn virtual_property_is_writable(&self, object_id: ObjectId, key: &RuntimePropertyKey) -> bool {
+        !(matches!(key.as_str(), Some("length" | "name"))
+            && self.builtin_prototypes.get("Function") == Some(&object_id)
+            && self
+                .canonical_prototype_virtual_property(object_id, key)
+                .is_some())
+    }
+
     fn virtual_property_is_configurable(
         &self,
         object_id: ObjectId,

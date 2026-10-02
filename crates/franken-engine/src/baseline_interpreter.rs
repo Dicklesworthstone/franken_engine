@@ -9500,8 +9500,17 @@ struct ClosureTable {
     len: usize,
     /// What an entry of a released chunk reads as.
     reclaimed: ClosureValue,
-    /// Sum of `InterpreterCore::estimate_closure_bytes` over the entries.
+    /// Sum of `InterpreterCore::estimate_closure_alias_bytes` over the
+    /// entries plus the key bytes of each distinct captured frame map.
     structural_bytes: u64,
+    /// Captured frame maps by `Rc` address: how many captured frames alias
+    /// each, and the key bytes charged for it (bd-9vouw.154). Closures share
+    /// their scope maps copy-on-write, so N closures over a scope with B
+    /// bindings hold one map; charging every closure for the whole map made
+    /// 1,000 top-level functions exceed the default heap budget. A map held
+    /// here is also held by `cold_cells`, so it cannot change, and its
+    /// address cannot be reused, while it is counted.
+    frame_maps: BTreeMap<usize, (usize, u64)>,
     /// Cells reachable from closure environments and from suspended
     /// generator / isolated async activations, deduplicated across both.
     cold_cells: ColdBindingCells,
@@ -9517,6 +9526,7 @@ impl Default for ClosureTable {
                 captured_env: Vec::new(),
             },
             structural_bytes: 0,
+            frame_maps: BTreeMap::new(),
             cold_cells: ColdBindingCells::default(),
         }
     }
@@ -9572,7 +9582,8 @@ impl ClosureTable {
     fn push(&mut self, closure: ClosureValue) {
         self.structural_bytes = self
             .structural_bytes
-            .saturating_add(InterpreterCore::estimate_closure_bytes(&closure));
+            .saturating_add(InterpreterCore::estimate_closure_alias_bytes(&closure));
+        self.register_frame_maps(&closure.captured_env);
         self.cold_cells.register_frames(&closure.captured_env);
         if self.len.is_multiple_of(CLOSURE_CHUNK_SLOTS) {
             self.chunks.push(Some(ClosureChunk::default()));
@@ -9613,9 +9624,43 @@ impl ClosureTable {
         }
         self.structural_bytes = self
             .structural_bytes
-            .saturating_sub(InterpreterCore::estimate_closure_bytes(&closure));
+            .saturating_sub(InterpreterCore::estimate_closure_alias_bytes(&closure));
+        self.release_frame_maps(&closure.captured_env);
         self.cold_cells.release_frames(&closure.captured_env);
         Some(closure)
+    }
+
+    /// Charge the key bytes of each captured frame map no closure held yet.
+    fn register_frame_maps(&mut self, frames: &[ScopeFrame]) {
+        for frame in frames {
+            match self.frame_maps.entry(ColdBindingCells::map_key(frame)) {
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().0 += 1;
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    self.structural_bytes = self.structural_bytes.saturating_add(frame.key_bytes);
+                    entry.insert((1, frame.key_bytes));
+                }
+            }
+        }
+    }
+
+    /// Release the key bytes of each captured frame map no closure holds any
+    /// more.
+    fn release_frame_maps(&mut self, frames: &[ScopeFrame]) {
+        for frame in frames {
+            let std::collections::btree_map::Entry::Occupied(mut entry) =
+                self.frame_maps.entry(ColdBindingCells::map_key(frame))
+            else {
+                debug_assert!(false, "released a frame map no closure holds");
+                continue;
+            };
+            entry.get_mut().0 -= 1;
+            if entry.get().0 == 0 {
+                let (_, charged_bytes) = entry.remove();
+                self.structural_bytes = self.structural_bytes.saturating_sub(charged_bytes);
+            }
+        }
     }
 
     fn clear(&mut self) {
@@ -9639,7 +9684,7 @@ impl ClosureTable {
         if closure.function_index == RECLAIMED_CLOSURE_FUNCTION_INDEX {
             return false;
         }
-        let previous_bytes = InterpreterCore::estimate_closure_bytes(closure);
+        let previous_bytes = InterpreterCore::estimate_closure_alias_bytes(closure);
         let captured_env = std::mem::take(&mut closure.captured_env);
         closure.function_index = RECLAIMED_CLOSURE_FUNCTION_INDEX;
         chunk.live -= 1;
@@ -9647,6 +9692,7 @@ impl ClosureTable {
             self.chunks[chunk_index] = None;
         }
         self.structural_bytes = self.structural_bytes.saturating_sub(previous_bytes);
+        self.release_frame_maps(&captured_env);
         self.cold_cells.release_frames(&captured_env);
         true
     }
@@ -93357,9 +93403,9 @@ impl InterpreterCore {
         Self::saturating_sum(generators.map(Self::estimate_generator_bytes))
     }
 
+    /// What one closure adds when no other closure holds its frame maps.
+    #[cfg(test)]
     fn estimate_closure_bytes(closure: &ClosureValue) -> u64 {
-        // A reclaimed closure is charged nothing: its entry is released with
-        // its chunk (bd-9vouw.57).
         if closure.function_index == RECLAIMED_CLOSURE_FUNCTION_INDEX {
             return 0;
         }
@@ -93367,8 +93413,43 @@ impl InterpreterCore {
             .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
     }
 
+    /// A closure's own structure: its base plus one slot per captured frame.
+    /// The frame maps are shared, so their key bytes are charged once per
+    /// distinct map (bd-9vouw.154). A reclaimed closure is charged nothing:
+    /// its entry is released with its chunk (bd-9vouw.57).
+    fn estimate_closure_alias_bytes(closure: &ClosureValue) -> u64 {
+        if closure.function_index == RECLAIMED_CLOSURE_FUNCTION_INDEX {
+            return 0;
+        }
+        MEMORY_ESTIMATE_CLOSURE_BASE_BYTES.saturating_add(
+            u64::try_from(closure.captured_env.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES),
+        )
+    }
+
+    /// Full-walk reference for [`ClosureTable`]'s structural total: every
+    /// closure's own structure plus each distinct captured frame map's key
+    /// bytes once.
     fn estimate_closures_bytes<'a>(closures: impl Iterator<Item = &'a ClosureValue>) -> u64 {
-        Self::saturating_sum(closures.map(Self::estimate_closure_bytes))
+        let mut seen_maps = BTreeSet::new();
+        Self::saturating_sum(closures.map(|closure| {
+            let map_bytes = Self::saturating_sum(
+                closure
+                    .captured_env
+                    .iter()
+                    .filter(|frame| seen_maps.insert(ColdBindingCells::map_key(frame)))
+                    .map(|frame| {
+                        Self::saturating_sum(
+                            frame
+                                .bindings
+                                .keys()
+                                .map(|name| ScopeFrame::binding_key_bytes(name)),
+                        )
+                    }),
+            );
+            Self::estimate_closure_alias_bytes(closure).saturating_add(map_bytes)
+        }))
     }
 
     fn estimate_closure_method_metadata_entry_bytes(metadata: &ClosureMethodMetadata) -> u64 {
@@ -100421,8 +100502,11 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         assert_invariant(&core, "after three closure aliases");
 
         let growth = core.estimated_memory_bytes() - before_aliases;
-        let expected_structural =
-            (MEMORY_ESTIMATE_CLOSURE_BASE_BYTES.saturating_add(shallow_env_bytes)) * 3;
+        // Each alias pays its own structure; the frame maps they share are
+        // charged once (bd-9vouw.154).
+        let frame_slots = env.len() as u64 * MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES;
+        let expected_structural = (MEMORY_ESTIMATE_CLOSURE_BASE_BYTES + frame_slots) * 3
+            + (shallow_env_bytes - frame_slots);
         assert_eq!(
             growth, expected_structural,
             "aliases must add structural bytes only, never re-charge the {payload_bytes}-byte payload"
@@ -100468,6 +100552,114 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
             walk >= payload_bytes && walk < payload_bytes * 2,
             "walk must contain the shared payload exactly once (walk {walk}, payload {payload_bytes})"
         );
+    }
+
+    #[test]
+    fn closures_sharing_a_scope_map_charge_its_keys_once_bd_9vouw_154() {
+        let mut core = accounting_test_core();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push frame");
+        for index in 0..200 {
+            core.scope_chain
+                .current_mut()
+                .expect("live frame")
+                .declare(format!("binding_{index}"), BindingKind::Var);
+        }
+        core.sync_estimated_memory_bytes().expect("sync");
+        let env = core.scope_chain.snapshot();
+        let map_key_bytes: u64 = env.iter().map(|frame| frame.key_bytes).sum();
+        let alias_bytes = MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
+            + env.len() as u64 * MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES;
+        assert!(map_key_bytes > 200 * MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES);
+        let before = core.closures_memory_bytes();
+
+        for _ in 0..50 {
+            let previous_closure_bytes = core.closures_memory_bytes();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: core.scope_chain.snapshot(),
+            });
+            core.apply_closures_memory_delta(previous_closure_bytes)
+                .expect("closure fits");
+        }
+        assert_invariant(&core, "after 50 closures over one scope");
+        assert_eq!(
+            core.closures_memory_bytes() - before,
+            50 * alias_bytes + map_key_bytes,
+            "50 closures over one scope hold one copy of its map"
+        );
+
+        // The collector reclaiming all but one keeps the map charged; the
+        // last one releases it.
+        let previous_closure_bytes = core.closures_memory_bytes();
+        for index in 0..49 {
+            assert!(core.closures.reclaim(index));
+        }
+        core.apply_closures_memory_delta(previous_closure_bytes)
+            .expect("reclaim shrinks");
+        assert_invariant(&core, "one closure left");
+        assert_eq!(
+            core.closures_memory_bytes() - before,
+            alias_bytes + map_key_bytes
+        );
+        let previous_closure_bytes = core.closures_memory_bytes();
+        assert!(core.closures.reclaim(49));
+        core.apply_closures_memory_delta(previous_closure_bytes)
+            .expect("reclaim shrinks");
+        assert_invariant(&core, "every closure reclaimed");
+        assert_eq!(core.closures_memory_bytes(), before);
+        assert!(core.closures.frame_maps.is_empty());
+    }
+
+    #[test]
+    fn closures_over_distinct_scope_maps_charge_each_bd_9vouw_154() {
+        let mut core = accounting_test_core();
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("push frame");
+        for index in 0..20 {
+            core.scope_chain
+                .current_mut()
+                .expect("live frame")
+                .declare(format!("binding_{index}"), BindingKind::Var);
+        }
+        core.sync_estimated_memory_bytes().expect("sync");
+        let before = core.closures_memory_bytes();
+        let shared_key_bytes: u64 = core.scope_chain.frames[..core.scope_chain.depth() - 1]
+            .iter()
+            .map(|frame| frame.key_bytes)
+            .sum();
+        let mut expected = shared_key_bytes;
+        let mut live_maps = BTreeSet::new();
+        for round in 0..5 {
+            let env = core.scope_chain.snapshot();
+            let live = env.last().expect("live frame");
+            live_maps.insert(Rc::as_ptr(&live.bindings) as usize);
+            expected += MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
+                + env.len() as u64 * MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES
+                + live.key_bytes;
+            let previous_closure_bytes = core.closures_memory_bytes();
+            core.closures.push(ClosureValue {
+                function_index: 0,
+                captured_env: env,
+            });
+            core.apply_closures_memory_delta(previous_closure_bytes)
+                .expect("closure fits");
+            // A declaration in the captured live scope copies its map
+            // (copy-on-write), so the next closure holds a different one:
+            // these are distinct physical maps and each must be charged.
+            let previous_scope_bytes = core.scope_chain_memory_bytes();
+            core.scope_chain
+                .current_mut()
+                .expect("live frame")
+                .declare(format!("round_{round}"), BindingKind::Var);
+            core.apply_scope_chain_memory_delta(previous_scope_bytes)
+                .expect("declaration fits");
+        }
+        assert_eq!(live_maps.len(), 5, "every round captured a new map");
+        assert_invariant(&core, "after closures over five distinct maps");
+        assert_eq!(core.closures_memory_bytes() - before, expected);
     }
 
     fn lower_script_bd_9vouw_31(source: &str) -> Ir3Module {

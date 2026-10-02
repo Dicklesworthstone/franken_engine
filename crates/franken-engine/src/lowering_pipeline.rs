@@ -7423,7 +7423,9 @@ fn compound_assignment_binary_operator(
         | AssignmentOperator::LogicalOrAssign
         | AssignmentOperator::NullishCoalescingAssign
         | AssignmentOperator::IncrementAssign
-        | AssignmentOperator::DecrementAssign => {
+        | AssignmentOperator::DecrementAssign
+        | AssignmentOperator::PostIncrementAssign
+        | AssignmentOperator::PostDecrementAssign => {
             return Err(LoweringPipelineError::InvariantViolation {
                 detail: "non-arithmetic assignment operator reached compound member lowering",
             });
@@ -7455,9 +7457,51 @@ fn lower_assign_op_to_ir3(
         AssignmentOperator::LogicalOrAssign => Ir3Instruction::Move { dst, src: rhs },
         AssignmentOperator::NullishCoalescingAssign => Ir3Instruction::Move { dst, src: rhs },
         // `++`/`--` step the target's value; the `1` right operand is unused.
-        AssignmentOperator::IncrementAssign => Ir3Instruction::Inc { dst, src: lhs },
-        AssignmentOperator::DecrementAssign => Ir3Instruction::Dec { dst, src: lhs },
+        // A postfix caller also keeps the old value (lower_postfix_update_to_ir3).
+        AssignmentOperator::IncrementAssign | AssignmentOperator::PostIncrementAssign => {
+            Ir3Instruction::Inc { dst, src: lhs }
+        }
+        AssignmentOperator::DecrementAssign | AssignmentOperator::PostDecrementAssign => {
+            Ir3Instruction::Dec { dst, src: lhs }
+        }
     }
+}
+
+/// ToNumeric of the IR1 stack top, as `-(-value)`: an object converts once
+/// (ToPrimitive, hint number) and every Number, -0 included, and BigInt
+/// comes back exactly. The value of `x++`/`x--` (bd-9vouw.119).
+fn push_to_numeric_ir1(ops: &mut Vec<Ir1Op>) {
+    for _ in 0..2 {
+        ops.push(Ir1Op::UnaryOp {
+            operator: UnaryOperator::Negate,
+        });
+    }
+}
+
+/// `x++`/`x--` (bd-9vouw.119) on the target value in `target`: the
+/// expression's value is ToNumeric of the old value, computed as `-(-old)`
+/// (one conversion of an object, exact for every Number and BigInt), and the
+/// target's new value is that stepped by one of its own type. Returns
+/// `(new value, expression value)`.
+fn lower_postfix_update_to_ir3(
+    operator: AssignmentOperator,
+    target: Reg,
+    cursor: &mut Reg,
+    instructions: &mut Vec<Ir3Instruction>,
+) -> (Reg, Reg) {
+    let negated = alloc_register(cursor);
+    instructions.push(Ir3Instruction::UnaryNeg {
+        dst: negated,
+        src: target,
+    });
+    let old = alloc_register(cursor);
+    instructions.push(Ir3Instruction::UnaryNeg {
+        dst: old,
+        src: negated,
+    });
+    let new = alloc_register(cursor);
+    instructions.push(lower_assign_op_to_ir3(operator, new, old, old));
+    (new, old)
 }
 
 fn pop_lowering_value(stack: &mut ArenaVec<'_, Reg>) -> Result<Reg, LoweringPipelineError> {
@@ -8565,14 +8609,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 dst: lhs,
                                 name_pool_index: pool_index,
                             });
-                            let result = alloc_register(&mut register_cursor);
-                            let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
-                            ir3.instructions.push(instr);
+                            let (result, value) = if operator.is_postfix_update() {
+                                lower_postfix_update_to_ir3(
+                                    *operator,
+                                    lhs,
+                                    &mut register_cursor,
+                                    &mut ir3.instructions,
+                                )
+                            } else {
+                                let result = alloc_register(&mut register_cursor);
+                                let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
+                                ir3.instructions.push(instr);
+                                (result, result)
+                            };
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src: result,
                                 name_pool_index: pool_index,
                             });
-                            value_stack.push(result);
+                            value_stack.push(value);
                         }
                     }
                     continue;
@@ -8585,6 +8639,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     )
                 });
                 let src = pop_lowering_value(&mut value_stack)?;
+                if operator.is_postfix_update() {
+                    // `x++`/`x--` keep the old value as the expression's.
+                    let (result, value) = lower_postfix_update_to_ir3(
+                        *operator,
+                        dst,
+                        &mut register_cursor,
+                        &mut ir3.instructions,
+                    );
+                    ir3.instructions
+                        .push(Ir3Instruction::Move { dst, src: result });
+                    value_stack.push(value);
+                    continue;
+                }
                 match operator {
                     AssignmentOperator::Assign => {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
@@ -8674,11 +8741,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         });
                     }
                     // `++`/`--` step the binding in place (bd-9vouw.119);
-                    // the `1` right operand is unused.
-                    AssignmentOperator::IncrementAssign => {
+                    // the `1` right operand is unused. Postfix forms
+                    // continued above.
+                    AssignmentOperator::IncrementAssign
+                    | AssignmentOperator::PostIncrementAssign => {
                         ir3.instructions.push(Ir3Instruction::Inc { dst, src: dst });
                     }
-                    AssignmentOperator::DecrementAssign => {
+                    AssignmentOperator::DecrementAssign
+                    | AssignmentOperator::PostDecrementAssign => {
                         ir3.instructions.push(Ir3Instruction::Dec { dst, src: dst });
                     }
                     AssignmentOperator::LogicalAndAssign
@@ -10622,6 +10692,8 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         .or_else(|| runtime_local_id_to_name.get(binding_id))
                     {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
+                        let mut postfix_value = None;
                         let result = if *operator == AssignmentOperator::Assign {
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src,
@@ -10643,13 +10715,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 dst: lhs,
                                 name_pool_index: pool_idx,
                             });
-                            let result = alloc_register(&mut fn_reg);
-                            let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
-                            ir3.instructions.push(instr);
+                            let (result, value) = if operator.is_postfix_update() {
+                                lower_postfix_update_to_ir3(
+                                    *operator,
+                                    lhs,
+                                    &mut fn_reg,
+                                    &mut ir3.instructions,
+                                )
+                            } else {
+                                let result = alloc_register(&mut fn_reg);
+                                let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
+                                ir3.instructions.push(instr);
+                                (result, result)
+                            };
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src: result,
                                 name_pool_index: pool_idx,
                             });
+                            postfix_value = Some(value);
                             result
                         };
                         if let Some(child_name) = child_capture_id_to_name.get(binding_id)
@@ -10662,7 +10745,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 name_pool_index: child_pool_idx,
                             });
                         }
-                        fn_value_stack.push(result);
+                        fn_value_stack.push(postfix_value.unwrap_or(result));
                         continue;
                     }
                     let dst = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
@@ -10674,6 +10757,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                     if *operator == AssignmentOperator::Assign {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    } else if operator.is_postfix_update() {
+                        // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
+                        let (result, value) = lower_postfix_update_to_ir3(
+                            *operator,
+                            dst,
+                            &mut fn_reg,
+                            &mut ir3.instructions,
+                        );
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst, src: result });
+                        fn_value_stack.push(value);
+                        continue;
                     } else {
                         let result = alloc_register(&mut fn_reg);
                         let instr = lower_assign_op_to_ir3(*operator, result, dst, src);
@@ -14639,6 +14734,23 @@ fn lower_expression_to_ir1_inner(
                         name: name.clone(),
                         allow_missing: false,
                     });
+                    // `x++`/`x--` evaluate to ToNumeric(old), `-(-old)`.
+                    let postfix_old = if operator.is_postfix_update() {
+                        let old_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "name_postfix_old",
+                        )?;
+                        push_to_numeric_ir1(ops);
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: old_binding,
+                        });
+                        Some(old_binding)
+                    } else {
+                        None
+                    };
                     if let Some(step) = operator.update_step() {
                         // `++`/`--` (bd-9vouw.119): ToNumeric(current) plus
                         // or minus one of its own type; no right operand.
@@ -14663,6 +14775,12 @@ fn lower_expression_to_ir1_inner(
                         status_id: dynamic_status_id.expect("dynamic target status exists"),
                         strict: dynamic_strict.expect("dynamic target strictness exists"),
                     });
+                    if let Some(old_binding) = postfix_old {
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: old_binding,
+                        });
+                    }
                 }
             } else if let Expression::Member {
                 object,
@@ -14924,6 +15042,25 @@ fn lower_expression_to_ir1_inner(
                     }
                     ops.push(Ir1Op::GetProperty { key: key.clone() });
 
+                    // `x++`/`x--` evaluate to ToNumeric(current), `-(-current)`,
+                    // which the step below then uses.
+                    let postfix_old = if operator.is_postfix_update() {
+                        let old_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "member_postfix_old",
+                        )?;
+                        push_to_numeric_ir1(ops);
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: old_binding,
+                        });
+                        Some(old_binding)
+                    } else {
+                        None
+                    };
+
                     // result = current <op> rhs  (BinaryOp computes lhs OP rhs;
                     // `current` is pushed first as lhs, `rhs` second), or
                     // current stepped by one for `++`/`--`.
@@ -14975,6 +15112,12 @@ fn lower_expression_to_ir1_inner(
                         binding_id: result_binding,
                     });
                     ops.push(Ir1Op::SetProperty { key });
+                    if let Some(old_binding) = postfix_old {
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: old_binding,
+                        });
+                    }
                     return Ok(());
                 }
 

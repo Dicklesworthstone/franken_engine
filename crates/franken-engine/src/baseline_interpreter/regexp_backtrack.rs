@@ -573,6 +573,23 @@ impl Parser {
         })
     }
 
+    /// After a surrogate pair matched as one character (without `u`), at a
+    /// quantifier written on the low half: see
+    /// `regexp_syntax`'s `take_low_half_quantifier` (bd-9vouw.156). Consumes
+    /// the quantifier and a lazy `?`; whether the pair can match.
+    fn take_low_half_quantifier(&mut self) -> Result<bool, String> {
+        let Some((min, max)) = self.quantifier()? else {
+            return Ok(true);
+        };
+        if self.peek(0) == Some('?') {
+            self.index += 1;
+        }
+        if max.is_some_and(|max| max < min) {
+            return Err("numbers out of order in {} quantifier".to_string());
+        }
+        Ok(min <= 1)
+    }
+
     /// A quantifier at the cursor; `{` that starts no quantifier is left for
     /// the next atom (Annex B).
     fn quantifier(&mut self) -> Result<Option<(u32, Option<u32>)>, String> {
@@ -875,6 +892,9 @@ impl Parser {
             && is_in(low, LOW_SURROGATES)
         {
             self.index += 6;
+            if !self.unicode && !self.take_low_half_quantifier()? {
+                return Ok(self.add_class(RangeSet::default(), false));
+            }
             return Ok(Node::Char(char_from(combine(unit, low))));
         }
         let mut set = RangeSet::default();
@@ -884,6 +904,9 @@ impl Parser {
                 && let Some((first, last, length)) = self.low_surrogate_class()
             {
                 self.index += length;
+                if !self.take_low_half_quantifier()? {
+                    return Ok(self.add_class(RangeSet::default(), false));
+                }
                 set.push(combine(unit, first), combine(unit, last));
             } else {
                 set.push_code_units(unit, unit);
@@ -1016,7 +1039,9 @@ impl Parser {
         if !self.unicode && self.is_surrogate_pair_idiom() {
             self.index += 30;
             let mut set = RangeSet::default();
-            set.push(SUPPLEMENTARY.0, SUPPLEMENTARY.1);
+            if self.take_low_half_quantifier()? {
+                set.push(SUPPLEMENTARY.0, SUPPLEMENTARY.1);
+            }
             return Ok(self.add_class(set, false));
         }
         self.index += 1;

@@ -14,10 +14,12 @@
 //!
 //! No-claim: no ICU and no locale negotiation (an unsupported locale throws
 //! instead of falling back, except a five-to-eight-letter language such as
-//! `generic`, which falls back to en-US as in Node); no formatToParts, formatRange, BigInt
-//! formatting, RelativeTimeFormat, ListFormat, DisplayNames, Locale or
-//! Segmenter. The methods are own properties of each object, not prototype
-//! accessors, and `instanceof Intl.NumberFormat` is false.
+//! `generic`, which falls back to en-US as in Node); DateTimeFormat has
+//! formatToParts (the pieces `format` joins), NumberFormat does not; no
+//! formatRange, BigInt formatting, RelativeTimeFormat, ListFormat,
+//! DisplayNames, Locale or Segmenter. The methods are own properties of each
+//! object, not prototype methods: `Intl.DateTimeFormat.prototype` is
+//! undefined and `instanceof Intl.NumberFormat` is false.
 
 use super::*;
 
@@ -144,7 +146,8 @@ impl InterpreterCore {
         )?;
         self.set_object_property(object, "__resolved".to_string(), Value::Object(resolved_id))?;
         let methods: &[&str] = match service {
-            "NumberFormat" | "DateTimeFormat" => &["format", "resolvedOptions"],
+            "NumberFormat" => &["format", "resolvedOptions"],
+            "DateTimeFormat" => &["format", "formatToParts", "resolvedOptions"],
             "Collator" => &["compare", "resolvedOptions"],
             _ => &["select", "resolvedOptions"],
         };
@@ -237,7 +240,9 @@ impl InterpreterCore {
                     .map(Value::str)
                     .map_err(Self::intl_number_error)
             }
-            "format" => {
+            // format and formatToParts (ECMA-402 11.4.3, 11.4.4) lay out
+            // the same pieces; formatToParts returns them as { type, value }.
+            "format" | "formatToParts" => {
                 let date = arg(self, 0)?;
                 let time = match date {
                     Value::Undefined => {
@@ -276,12 +281,24 @@ impl InterpreterCore {
                     });
                 }
                 let request = self.intl_date_request_from(resolved)?;
-                self.intl_format_date(time.trunc(), &request)
-                    .map(Value::str)
+                let parts = self
+                    .intl_format_date_parts(time.trunc(), &request)
                     .map_err(|what| InterpreterError::TypeError {
                         expected: "a date Intl.DateTimeFormat formats".to_string(),
                         got: what,
-                    })
+                    })?;
+                if method == "format" {
+                    return Ok(Value::str(parts.joined()));
+                }
+                let mut list = Vec::with_capacity(parts.0.len());
+                for (kind, text) in parts.0 {
+                    let part = self.alloc_object_with_properties(&[
+                        ("type", Value::str(kind.name())),
+                        ("value", Value::str(text)),
+                    ])?;
+                    list.push(Value::Object(part));
+                }
+                Ok(Value::Object(self.alloc_array_from_values(&list)?))
             }
             "compare" => {
                 let (a, b) = (arg(self, 0)?, arg(self, 1)?);
@@ -888,6 +905,17 @@ impl InterpreterCore {
     }
 
     fn intl_format_date(&self, time: f64, request: &IntlDateRequest) -> Result<String, String> {
+        self.intl_format_date_parts(time, request)
+            .map(|parts| parts.joined())
+    }
+
+    /// The typed pieces of a formatted date (formatToParts; `format` joins
+    /// them).
+    fn intl_format_date_parts(
+        &self,
+        time: f64,
+        request: &IntlDateRequest,
+    ) -> Result<date_locale::DateParts, String> {
         use date_math::*;
         let fields = date_locale::DateFields {
             year: year_from_time(time) as i64,
@@ -899,7 +927,7 @@ impl InterpreterCore {
         };
         let locale = Some(request.locale.as_str());
         if request.date_style.is_some() || request.time_style.is_some() {
-            return date_locale::format_date_styles(
+            return date_locale::format_date_styles_parts(
                 fields,
                 locale,
                 request.date_style,
@@ -947,8 +975,8 @@ impl InterpreterCore {
             None
         };
         match kind {
-            Some(kind) => date_locale::format_date_locale(fields, locale, kind),
-            None => date_locale::format_date_components(fields, locale, &request.components),
+            Some(kind) => date_locale::format_date_locale_parts(fields, locale, kind),
+            None => date_locale::format_date_components_parts(fields, locale, &request.components),
         }
     }
 

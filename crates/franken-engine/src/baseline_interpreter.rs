@@ -81264,6 +81264,25 @@ impl InterpreterCore {
                     }),
                 }
             }
+            "builtin:StrictDeleteResult" => {
+                // bd-9vouw.136: ES2020 12.5.3.2 step 5.d. A strict-mode
+                // delete whose [[Delete]] answered false (a non-configurable
+                // property, a frozen object, a Proxy trap returning false)
+                // is a TypeError; otherwise it evaluates to true.
+                if args.count != 1 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "one strict-delete result argument".to_string(),
+                        got: format!("{} arguments", args.count),
+                    });
+                }
+                match self.read_reg(args.start)? {
+                    Value::Bool(false) => Err(InterpreterError::TypeError {
+                        expected: "a deletable property in strict mode code".to_string(),
+                        got: "a property that cannot be deleted".to_string(),
+                    }),
+                    _ => Ok(Value::Bool(true)),
+                }
+            }
             "builtin:ArgumentsObject" => {
                 // bd-9vouw.25: the object staged by call setup for this frame.
                 // A body entered without staging (a generator resumed by

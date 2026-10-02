@@ -7393,7 +7393,9 @@ fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Inst
         UnaryOperator::Increment => Ir3Instruction::Inc { dst, src },
         UnaryOperator::Decrement => Ir3Instruction::Dec { dst, src },
         // delete is lowered through DeleteProperty before reaching here.
-        UnaryOperator::Delete => Ir3Instruction::LoadBool { dst, value: true },
+        UnaryOperator::Delete | UnaryOperator::StrictDelete => {
+            Ir3Instruction::LoadBool { dst, value: true }
+        }
     }
 }
 
@@ -8581,7 +8583,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     UnaryOperator::LogicalNot => Ir3Instruction::LogicalNot { dst, src },
                     UnaryOperator::Typeof => Ir3Instruction::TypeOf { dst, src },
                     UnaryOperator::Void => Ir3Instruction::Void { dst, src },
-                    UnaryOperator::Delete => {
+                    UnaryOperator::Delete | UnaryOperator::StrictDelete => {
                         return Err(LoweringPipelineError::InvariantViolation {
                             detail: "delete must lower through delete_property or literal-true path before IR3",
                         });
@@ -14434,7 +14436,20 @@ fn lower_expression_to_ir1_inner(
         Expression::Unary {
             operator, argument, ..
         } => {
-            if *operator == UnaryOperator::Delete {
+            if matches!(
+                operator,
+                UnaryOperator::Delete | UnaryOperator::StrictDelete
+            ) {
+                // bd-9vouw.136: a strict-mode delete turns a `false` result
+                // into a TypeError.
+                let strict_check = |ops: &mut Vec<Ir1Op>| {
+                    if *operator == UnaryOperator::StrictDelete {
+                        ops.push(Ir1Op::HostCall {
+                            capability: STRICT_DELETE_RESULT_CAPABILITY.to_string(),
+                            arg_count: 1,
+                        });
+                    }
+                };
                 // `delete o?.a` / `delete o?.a.b` delete through the chain and
                 // answer `true` when it short-circuits.
                 if try_lower_optional_chain_to_ir1(
@@ -14448,6 +14463,7 @@ fn lower_expression_to_ir1_inner(
                     label_counter,
                     span_table,
                 )? {
+                    strict_check(ops);
                     return Ok(());
                 }
                 match argument.as_ref() {
@@ -14511,6 +14527,7 @@ fn lower_expression_to_ir1_inner(
                         });
                     }
                 }
+                strict_check(ops);
                 return Ok(());
             }
 
@@ -19068,6 +19085,10 @@ pub(crate) const ARGUMENTS_OBJECT_CAPABILITY: &str = "builtin:ArgumentsObject";
 /// argument, the converted value of a `this` read; with none, a function
 /// prologue that converts its frame's `this` in place.
 pub(crate) const SLOPPY_THIS_CAPABILITY: &str = "builtin:SloppyThis";
+
+/// bd-9vouw.136: the result of a strict-mode `delete`, which is a TypeError
+/// when `false` (ES2020 12.5.3.2 step 5.d).
+pub(crate) const STRICT_DELETE_RESULT_CAPABILITY: &str = "builtin:StrictDeleteResult";
 
 /// Whether a function body reads `arguments`, directly or through nested
 /// arrow functions (which have no `arguments` of their own).
@@ -23677,7 +23698,7 @@ fn module_alias_expr_has_rejected_use(
                 || module_alias_expr_has_rejected_use(right, alias, surface)
         }
         Expression::Unary {
-            operator: UnaryOperator::Delete,
+            operator: UnaryOperator::Delete | UnaryOperator::StrictDelete,
             argument,
         } => module_alias_write_target_has_rejected_use(argument, alias, surface),
         Expression::Unary { argument, .. }
@@ -30026,7 +30047,10 @@ fn simulate_ir2_flow_labels(
                 label
             }
             Ir1Op::UnaryOp { operator } => {
-                if matches!(operator, UnaryOperator::Delete) {
+                if matches!(
+                    operator,
+                    UnaryOperator::Delete | UnaryOperator::StrictDelete
+                ) {
                     return Err(LoweringPipelineError::InvariantViolation {
                         detail: "delete must lower through delete_property or literal-true path before IR3",
                     });

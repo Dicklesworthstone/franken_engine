@@ -189,23 +189,15 @@ expression: scrubbed_actual
           }
         },
         "update": {
-          "Binary": {
-            "operator": "Subtract",
+          "Assignment": {
+            "operator": "PostIncrementAssign",
             "left": {
-              "Assignment": {
-                "operator": "SubtractAssign",
-                "left": {
-                  "Identifier": "i"
-                },
-                "right": {
-                  "NumericLiteral": -1
-                },
-                "assignment_strictness": "sloppy"
-              }
+              "Identifier": "i"
             },
             "right": {
               "NumericLiteral": 1
-            }
+            },
+            "assignment_strictness": "sloppy"
           }
         },
         "body": {

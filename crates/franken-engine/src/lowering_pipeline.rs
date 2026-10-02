@@ -5089,7 +5089,7 @@ fn lower_statement_to_ir1_with_flow(
             }
             if let Some(update) = &for_stmt.update {
                 lower_expression_to_ir1(
-                    update,
+                    &discarded_update_form(update),
                     ops,
                     bindings,
                     binding_lookup,
@@ -7390,6 +7390,8 @@ fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Inst
         UnaryOperator::Typeof => Ir3Instruction::TypeOf { dst, src },
         UnaryOperator::Void => Ir3Instruction::Void { dst, src },
         UnaryOperator::UnaryPlus => Ir3Instruction::UnaryPlus { dst, src },
+        UnaryOperator::Increment => Ir3Instruction::Inc { dst, src },
+        UnaryOperator::Decrement => Ir3Instruction::Dec { dst, src },
         // delete is lowered through DeleteProperty before reaching here.
         UnaryOperator::Delete => Ir3Instruction::LoadBool { dst, value: true },
     }
@@ -7419,7 +7421,11 @@ fn compound_assignment_binary_operator(
         AssignmentOperator::Assign
         | AssignmentOperator::LogicalAndAssign
         | AssignmentOperator::LogicalOrAssign
-        | AssignmentOperator::NullishCoalescingAssign => {
+        | AssignmentOperator::NullishCoalescingAssign
+        | AssignmentOperator::IncrementAssign
+        | AssignmentOperator::DecrementAssign
+        | AssignmentOperator::PostIncrementAssign
+        | AssignmentOperator::PostDecrementAssign => {
             return Err(LoweringPipelineError::InvariantViolation {
                 detail: "non-arithmetic assignment operator reached compound member lowering",
             });
@@ -7450,7 +7456,76 @@ fn lower_assign_op_to_ir3(
         AssignmentOperator::LogicalAndAssign => Ir3Instruction::Move { dst, src: rhs },
         AssignmentOperator::LogicalOrAssign => Ir3Instruction::Move { dst, src: rhs },
         AssignmentOperator::NullishCoalescingAssign => Ir3Instruction::Move { dst, src: rhs },
+        // `++`/`--` step the target's value; the `1` right operand is unused.
+        // A postfix caller also keeps the old value (lower_postfix_update_to_ir3).
+        AssignmentOperator::IncrementAssign | AssignmentOperator::PostIncrementAssign => {
+            Ir3Instruction::Inc { dst, src: lhs }
+        }
+        AssignmentOperator::DecrementAssign | AssignmentOperator::PostDecrementAssign => {
+            Ir3Instruction::Dec { dst, src: lhs }
+        }
     }
+}
+
+/// The update clause of a `for` discards its value, so `i++` lowers as
+/// `++i`: the same write without keeping the old value (bd-9vouw.119), which
+/// keeps a counting loop's step at one instruction.
+fn discarded_update_form(expression: &Expression) -> std::borrow::Cow<'_, Expression> {
+    match expression {
+        Expression::Assignment {
+            operator,
+            left,
+            right,
+            assignment_strictness,
+        } if operator.is_postfix_update() => std::borrow::Cow::Owned(Expression::Assignment {
+            operator: if *operator == AssignmentOperator::PostIncrementAssign {
+                AssignmentOperator::IncrementAssign
+            } else {
+                AssignmentOperator::DecrementAssign
+            },
+            left: left.clone(),
+            right: right.clone(),
+            assignment_strictness: *assignment_strictness,
+        }),
+        _ => std::borrow::Cow::Borrowed(expression),
+    }
+}
+
+/// ToNumeric of the IR1 stack top, as `-(-value)`: an object converts once
+/// (ToPrimitive, hint number) and every Number, -0 included, and BigInt
+/// comes back exactly. The value of `x++`/`x--` (bd-9vouw.119).
+fn push_to_numeric_ir1(ops: &mut Vec<Ir1Op>) {
+    for _ in 0..2 {
+        ops.push(Ir1Op::UnaryOp {
+            operator: UnaryOperator::Negate,
+        });
+    }
+}
+
+/// `x++`/`x--` (bd-9vouw.119) on the target value in `target`: the
+/// expression's value is ToNumeric of the old value, computed as `-(-old)`
+/// (one conversion of an object, exact for every Number and BigInt), and the
+/// target's new value is that stepped by one of its own type. Returns
+/// `(new value, expression value)`.
+fn lower_postfix_update_to_ir3(
+    operator: AssignmentOperator,
+    target: Reg,
+    cursor: &mut Reg,
+    instructions: &mut Vec<Ir3Instruction>,
+) -> (Reg, Reg) {
+    let negated = alloc_register(cursor);
+    instructions.push(Ir3Instruction::UnaryNeg {
+        dst: negated,
+        src: target,
+    });
+    let old = alloc_register(cursor);
+    instructions.push(Ir3Instruction::UnaryNeg {
+        dst: old,
+        src: negated,
+    });
+    let new = alloc_register(cursor);
+    instructions.push(lower_assign_op_to_ir3(operator, new, old, old));
+    (new, old)
 }
 
 fn pop_lowering_value(stack: &mut ArenaVec<'_, Reg>) -> Result<Reg, LoweringPipelineError> {
@@ -8512,6 +8587,8 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         });
                     }
                     UnaryOperator::UnaryPlus => Ir3Instruction::UnaryPlus { dst, src },
+                    UnaryOperator::Increment => Ir3Instruction::Inc { dst, src },
+                    UnaryOperator::Decrement => Ir3Instruction::Dec { dst, src },
                 };
                 ir3.instructions.push(instr);
                 value_stack.push(dst);
@@ -8556,14 +8633,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 dst: lhs,
                                 name_pool_index: pool_index,
                             });
-                            let result = alloc_register(&mut register_cursor);
-                            let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
-                            ir3.instructions.push(instr);
+                            let (result, value) = if operator.is_postfix_update() {
+                                lower_postfix_update_to_ir3(
+                                    *operator,
+                                    lhs,
+                                    &mut register_cursor,
+                                    &mut ir3.instructions,
+                                )
+                            } else {
+                                let result = alloc_register(&mut register_cursor);
+                                let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
+                                ir3.instructions.push(instr);
+                                (result, result)
+                            };
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src: result,
                                 name_pool_index: pool_index,
                             });
-                            value_stack.push(result);
+                            value_stack.push(value);
                         }
                     }
                     continue;
@@ -8576,6 +8663,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     )
                 });
                 let src = pop_lowering_value(&mut value_stack)?;
+                if operator.is_postfix_update() {
+                    // `x++`/`x--` keep the old value as the expression's.
+                    let (result, value) = lower_postfix_update_to_ir3(
+                        *operator,
+                        dst,
+                        &mut register_cursor,
+                        &mut ir3.instructions,
+                    );
+                    ir3.instructions
+                        .push(Ir3Instruction::Move { dst, src: result });
+                    value_stack.push(value);
+                    continue;
+                }
                 match operator {
                     AssignmentOperator::Assign => {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
@@ -8663,6 +8763,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             lhs: dst,
                             rhs: src,
                         });
+                    }
+                    // `++`/`--` step the binding in place (bd-9vouw.119);
+                    // the `1` right operand is unused. Postfix forms
+                    // continued above.
+                    AssignmentOperator::IncrementAssign
+                    | AssignmentOperator::PostIncrementAssign => {
+                        ir3.instructions.push(Ir3Instruction::Inc { dst, src: dst });
+                    }
+                    AssignmentOperator::DecrementAssign
+                    | AssignmentOperator::PostDecrementAssign => {
+                        ir3.instructions.push(Ir3Instruction::Dec { dst, src: dst });
                     }
                     AssignmentOperator::LogicalAndAssign
                     | AssignmentOperator::LogicalOrAssign
@@ -10605,6 +10716,8 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         .or_else(|| runtime_local_id_to_name.get(binding_id))
                     {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
+                        let mut postfix_value = None;
                         let result = if *operator == AssignmentOperator::Assign {
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src,
@@ -10626,13 +10739,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 dst: lhs,
                                 name_pool_index: pool_idx,
                             });
-                            let result = alloc_register(&mut fn_reg);
-                            let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
-                            ir3.instructions.push(instr);
+                            let (result, value) = if operator.is_postfix_update() {
+                                lower_postfix_update_to_ir3(
+                                    *operator,
+                                    lhs,
+                                    &mut fn_reg,
+                                    &mut ir3.instructions,
+                                )
+                            } else {
+                                let result = alloc_register(&mut fn_reg);
+                                let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
+                                ir3.instructions.push(instr);
+                                (result, result)
+                            };
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src: result,
                                 name_pool_index: pool_idx,
                             });
+                            postfix_value = Some(value);
                             result
                         };
                         if let Some(child_name) = child_capture_id_to_name.get(binding_id)
@@ -10645,7 +10769,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 name_pool_index: child_pool_idx,
                             });
                         }
-                        fn_value_stack.push(result);
+                        fn_value_stack.push(postfix_value.unwrap_or(result));
                         continue;
                     }
                     let dst = *fn_binding_regs.entry(*binding_id).or_insert_with(|| {
@@ -10657,6 +10781,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                     if *operator == AssignmentOperator::Assign {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    } else if operator.is_postfix_update() {
+                        // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
+                        let (result, value) = lower_postfix_update_to_ir3(
+                            *operator,
+                            dst,
+                            &mut fn_reg,
+                            &mut ir3.instructions,
+                        );
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst, src: result });
+                        fn_value_stack.push(value);
+                        continue;
                     } else {
                         let result = alloc_register(&mut fn_reg);
                         let instr = lower_assign_op_to_ir3(*operator, result, dst, src);
@@ -14622,24 +14758,53 @@ fn lower_expression_to_ir1_inner(
                         name: name.clone(),
                         allow_missing: false,
                     });
-                    lower_expression_to_ir1(
-                        right,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    ops.push(Ir1Op::BinaryOp {
-                        operator: compound_assignment_binary_operator(*operator)?,
-                    });
+                    // `x++`/`x--` evaluate to ToNumeric(old), `-(-old)`.
+                    let postfix_old = if operator.is_postfix_update() {
+                        let old_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "name_postfix_old",
+                        )?;
+                        push_to_numeric_ir1(ops);
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: old_binding,
+                        });
+                        Some(old_binding)
+                    } else {
+                        None
+                    };
+                    if let Some(step) = operator.update_step() {
+                        // `++`/`--` (bd-9vouw.119): ToNumeric(current) plus
+                        // or minus one of its own type; no right operand.
+                        ops.push(Ir1Op::UnaryOp { operator: step });
+                    } else {
+                        lower_expression_to_ir1(
+                            right,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                            span_table,
+                        )?;
+                        ops.push(Ir1Op::BinaryOp {
+                            operator: compound_assignment_binary_operator(*operator)?,
+                        });
+                    }
                     ops.push(Ir1Op::PutNameWithStatus {
                         name: name.clone(),
                         status_id: dynamic_status_id.expect("dynamic target status exists"),
                         strict: dynamic_strict.expect("dynamic target strictness exists"),
                     });
+                    if let Some(old_binding) = postfix_old {
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: old_binding,
+                        });
+                    }
                 }
             } else if let Expression::Member {
                 object,
@@ -14822,7 +14987,11 @@ fn lower_expression_to_ir1_inner(
                 // `??=` already returned; only `Assign` and arithmetic/bitwise
                 // compound ops reach here.)
                 if !matches!(operator, AssignmentOperator::Assign) {
-                    let binary_operator = compound_assignment_binary_operator(*operator)?;
+                    // `++`/`--` step the current value instead (bd-9vouw.119).
+                    let binary_operator = match operator.update_step() {
+                        Some(_) => None,
+                        None => Some(compound_assignment_binary_operator(*operator)?),
+                    };
 
                     let object_binding = alloc_internal_binding(
                         bindings,
@@ -14897,21 +15066,50 @@ fn lower_expression_to_ir1_inner(
                     }
                     ops.push(Ir1Op::GetProperty { key: key.clone() });
 
+                    // `x++`/`x--` evaluate to ToNumeric(current), `-(-current)`,
+                    // which the step below then uses.
+                    let postfix_old = if operator.is_postfix_update() {
+                        let old_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "member_postfix_old",
+                        )?;
+                        push_to_numeric_ir1(ops);
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: old_binding,
+                        });
+                        Some(old_binding)
+                    } else {
+                        None
+                    };
+
                     // result = current <op> rhs  (BinaryOp computes lhs OP rhs;
-                    // `current` is pushed first as lhs, `rhs` second.)
-                    lower_expression_to_ir1(
-                        right,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                        span_table,
-                    )?;
-                    ops.push(Ir1Op::BinaryOp {
-                        operator: binary_operator,
-                    });
+                    // `current` is pushed first as lhs, `rhs` second), or
+                    // current stepped by one for `++`/`--`.
+                    match binary_operator {
+                        Some(binary_operator) => {
+                            lower_expression_to_ir1(
+                                right,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                                span_table,
+                            )?;
+                            ops.push(Ir1Op::BinaryOp {
+                                operator: binary_operator,
+                            });
+                        }
+                        None => ops.push(Ir1Op::UnaryOp {
+                            operator: operator
+                                .update_step()
+                                .expect("only update operators have no binary operator"),
+                        }),
+                    }
 
                     // object[key] = result. SetProperty pops value, then (key),
                     // then object, so re-stage them in that order.
@@ -14938,6 +15136,12 @@ fn lower_expression_to_ir1_inner(
                         binding_id: result_binding,
                     });
                     ops.push(Ir1Op::SetProperty { key });
+                    if let Some(old_binding) = postfix_old {
+                        ops.push(Ir1Op::Pop);
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: old_binding,
+                        });
+                    }
                     return Ok(());
                 }
 

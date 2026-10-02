@@ -3872,6 +3872,26 @@ fn strip_leading_labels(segment: &str) -> &str {
     }
 }
 
+/// Whether `prefix`, the text before a `{`, ends with a keyword after which
+/// an expression starts (`'x' in {}`, `typeof {}`, `return {}`): that brace
+/// opens an object literal, which closes no statement (jszip's
+/// `s = 'x' in {} ? f : g` in an unbraced consequent). A `.` before the word
+/// makes it a property name.
+fn ends_with_expression_keyword(prefix: &str) -> bool {
+    let trimmed = prefix.trim_end();
+    let word_start = trimmed
+        .char_indices()
+        .rev()
+        .take_while(|(_, ch)| is_identifier_continue(*ch))
+        .last()
+        .map_or(trimmed.len(), |(index, _)| index);
+    let word = &trimmed[word_start..];
+    matches!(
+        word,
+        "in" | "instanceof" | "typeof" | "void" | "delete" | "return" | "throw" | "yield" | "await"
+    ) && !trimmed[..word_start].trim_end().ends_with('.')
+}
+
 /// Whether `prefix`, the text before a `{`, ends with the header of a
 /// function expression (`function (a)`, `function* g(a)`, `async function
 /// (a)`) whose `function` keyword follows an operator: its body brace closes
@@ -3971,7 +3991,7 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         '=', '>', ',', '(', '[', '?', '!', '&', '|', '+', '-', '*', '%',
                     ]) || ends_with_function_expression_header(
                         &line[segment_start..outer_brace_open],
-                    ));
+                    ) || ends_with_expression_keyword(&line[segment_start..outer_brace_open]));
                 // A closing brace that returns to brace_depth==0 may
                 // terminate a block-level statement (function decl,
                 // if/else, for, while, etc.).  Only split here when the

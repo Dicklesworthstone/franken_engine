@@ -115,3 +115,38 @@ fn string_iterator_accepts_wrapper_number_and_object_receivers() {
                   [w.join(','), n.join(','), o.join(','), e].join(' ');";
     assert_eq!(eval(source), "a,b 1,2 x,y TypeError");
 }
+
+/// for-of and spread honor an overridden @@iterator on a Map or Set: a
+/// subclass generator method, an own property on the instance, and a
+/// replaced Set.prototype[@@iterator] (ES2020 7.4.1 GetIterator). The native
+/// entry walk applied whenever the collection storage was present, so
+/// `class M extends Map { *[Symbol.iterator]() {} }` iterated its entries in
+/// for-of and spread while Array.from called the override. Expected values
+/// are Node v22.2.0's. A subclass without an override still iterates entries.
+#[test]
+fn overridden_collection_iterator_is_used_by_for_of_and_spread() {
+    let source = "var out = [];\n\
+                  class M extends Map { *[Symbol.iterator]() { yield 'z'; } }\n\
+                  var m = new M([['a', 1]]), f = [];\n\
+                  for (var x of m) f.push(x);\n\
+                  out.push(f.join(',') + '/' + [...m].join(',') + '/' + Array.from(m).join(','));\n\
+                  class S extends Set { *[Symbol.iterator]() { for (var v of super.values()) yield v * 10; } }\n\
+                  var s = new S([1, 2]), g = [];\n\
+                  for (var y of s) g.push(y);\n\
+                  out.push(g.join(',') + '/' + [...s].join(','));\n\
+                  var own = new Set([1, 2]); own[Symbol.iterator] = function* () { yield 'own'; };\n\
+                  out.push([...own].join(',') + '/' + Array.from(own).join(','));\n\
+                  var saved = Set.prototype[Symbol.iterator];\n\
+                  Set.prototype[Symbol.iterator] = function* () { yield 'proto'; };\n\
+                  var p = [];\n\
+                  for (var w of new Set([7])) p.push(w);\n\
+                  out.push(p.join(',') + '/' + [...new Set([8])].join(','));\n\
+                  Set.prototype[Symbol.iterator] = saved;\n\
+                  class Plain extends Map {}\n\
+                  out.push([...new Plain([['k', 2]])].join(',') + '/' + [...new Set([3, 4])].join(','));\n\
+                  out.join(' | ');";
+    assert_eq!(
+        eval(source),
+        "z/z/z | 10,20/10,20 | own/own | proto/proto | k,2/3,4"
+    );
+}

@@ -44,7 +44,10 @@ impl Eraser<'_> {
         if self.text(cursor) != "{" || self.pairs[cursor].is_none() {
             return None;
         }
-        Some(ClassHeader { body: cursor, erased })
+        Some(ClassHeader {
+            body: cursor,
+            erased,
+        })
     }
 
     /// Parse the left-hand-side expression in an extends clause. Balanced
@@ -121,7 +124,10 @@ impl Eraser<'_> {
                 }
                 _ if self.tokens.get(cursor).is_some_and(|token| {
                     token.kind == Kind::Literal && token.text.starts_with('`')
-                }) => cursor += 1,
+                }) =>
+                {
+                    cursor += 1
+                }
                 _ => return Some(cursor),
             }
         }
@@ -163,12 +169,26 @@ impl Eraser<'_> {
             let mut type_only = false;
             while matches!(
                 self.text(cursor),
-                "public" | "private" | "protected" | "readonly" | "abstract" | "declare"
-                    | "override" | "static" | "get" | "set" | "async"
-            ) && !matches!(self.text(cursor + 1), ":" | "=" | ";" | "(" | "?" | "!" | "<")
-            {
+                "public"
+                    | "private"
+                    | "protected"
+                    | "readonly"
+                    | "abstract"
+                    | "declare"
+                    | "override"
+                    | "static"
+                    | "get"
+                    | "set"
+                    | "async"
+            ) && !matches!(
+                self.text(cursor + 1),
+                ":" | "=" | ";" | "(" | "?" | "!" | "<"
+            ) {
                 type_only |= matches!(self.text(cursor), "abstract" | "declare");
-                if matches!(self.text(cursor), "public" | "private" | "protected" | "readonly" | "override") {
+                if matches!(
+                    self.text(cursor),
+                    "public" | "private" | "protected" | "readonly" | "override"
+                ) {
                     self.mark(cursor, cursor + 1);
                 }
                 cursor += 1;
@@ -190,7 +210,11 @@ impl Eraser<'_> {
                     Some(end) => end,
                     None => return,
                 }
-            } else if self.tokens.get(cursor).is_some_and(|token| token.kind != Kind::Punctuation) {
+            } else if self
+                .tokens
+                .get(cursor)
+                .is_some_and(|token| token.kind != Kind::Punctuation)
+            {
                 cursor + 1
             } else {
                 return;
@@ -269,7 +293,9 @@ impl Eraser<'_> {
         let Some(close) = self.pairs[open] else {
             return false;
         };
-        self.tokens.get(open + 1).is_some_and(|token| token.kind == Kind::Word)
+        self.tokens
+            .get(open + 1)
+            .is_some_and(|token| token.kind == Kind::Word)
             && self.text(open + 2) == ":"
             && self.type_end(open + 3, 0) == Some(close)
     }
@@ -291,7 +317,6 @@ impl Eraser<'_> {
             None
         }
     }
-
 }
 
 #[cfg(test)]
@@ -300,9 +325,15 @@ mod tests {
 
     #[test]
     fn overload_signatures_are_erased_without_replacing_implementations() {
-        check("class C { ⟦constructor(value: number);⟧ constructor(value⟦: number | string⟧) { this.value = value; } }");
-        check("class C { ⟦run(value: number): number;⟧ ⟦run(value: string): string;⟧ run(value⟦: unknown⟧) { return value; } }");
-        check("class C { ⟦static choose<T>(value: T): T;⟧ static choose(value⟦: unknown⟧) { return value; } }");
+        check(
+            "class C { ⟦constructor(value: number);⟧ constructor(value⟦: number | string⟧) { this.value = value; } }",
+        );
+        check(
+            "class C { ⟦run(value: number): number;⟧ ⟦run(value: string): string;⟧ run(value⟦: unknown⟧) { return value; } }",
+        );
+        check(
+            "class C { ⟦static choose<T>(value: T): T;⟧ static choose(value⟦: unknown⟧) { return value; } }",
+        );
     }
 
     #[test]
@@ -314,22 +345,34 @@ mod tests {
 
     #[test]
     fn abstract_and_declared_members_create_no_runtime_properties() {
-        check("abstract class C { ⟦abstract run(value: number): number;⟧ ⟦abstract get size(): number;⟧ ⟦abstract set size(value: number);⟧ }");
-        check("class C { ⟦declare value: number;⟧ ⟦declare readonly missing?: string;⟧ ⟦declare static count: number;⟧ }");
-        check("abstract class C { ⟦protected abstract readonly value: {count: number};⟧ run() { return 1; } }");
+        check(
+            "abstract class C { ⟦abstract run(value: number): number;⟧ ⟦abstract get size(): number;⟧ ⟦abstract set size(value: number);⟧ }",
+        );
+        check(
+            "class C { ⟦declare value: number;⟧ ⟦declare readonly missing?: string;⟧ ⟦declare static count: number;⟧ }",
+        );
+        check(
+            "abstract class C { ⟦protected abstract readonly value: {count: number};⟧ run() { return 1; } }",
+        );
     }
 
     #[test]
     fn index_signatures_are_not_computed_runtime_keys() {
-        check("class C { ⟦[key: string]: number;⟧ ⟦readonly [key: symbol]: unknown;⟧ run() { return 1; } }");
+        check(
+            "class C { ⟦[key: string]: number;⟧ ⟦readonly [key: symbol]: unknown;⟧ run() { return 1; } }",
+        );
         check("class C { [Symbol.iterator]() { return iterator; } [key()]⟦: number⟧ = value; }");
         check("class C { [(ready ? first : second)]⟦: number⟧ = value; }");
     }
 
     #[test]
     fn contextual_modifier_names_with_bodies_remain_runtime_members() {
-        check("class C { abstract⟦<T>⟧(value⟦: T⟧)⟦: T⟧ { return value; } declare() { return 2; } }");
-        check("class C { abstract⟦: number⟧ = 1; declare⟦: number⟧ = 2; get readonly() { return 3; } }");
+        check(
+            "class C { abstract⟦<T>⟧(value⟦: T⟧)⟦: T⟧ { return value; } declare() { return 2; } }",
+        );
+        check(
+            "class C { abstract⟦: number⟧ = 1; declare⟦: number⟧ = 2; get readonly() { return 3; } }",
+        );
         check("class C { ⟦public⟧ abstract() { return 1; } ⟦private⟧ declare() { return 2; } }");
     }
 
@@ -351,33 +394,47 @@ mod tests {
     fn type_only_computed_names_and_unicode_spans_are_erased_as_a_unit() {
         check("class C { ⟦declare [Symbol.iterator]: () => Iterator<number>;⟧ }");
         check("abstract class C { ⟦abstract 名称(値: 'é'):\n {名: string};⟧ }");
-        check("class C { ⟦run(...values: readonly [number, string]): number;⟧ run(...values⟦: unknown[]⟧) { return values.length; } }");
+        check(
+            "class C { ⟦run(...values: readonly [number, string]): number;⟧ run(...values⟦: unknown[]⟧) { return values.length; } }",
+        );
     }
 
     #[test]
     fn generic_heritage_finds_the_body_after_nested_types() {
         check("class Child extends Base⟦<number>⟧ { value⟦: number⟧ = 2; }");
-        check("class Child⟦<T>⟧ extends Base⟦<{value: T}, readonly [number, string]>⟧ { value⟦: T⟧; }");
-        check("class Child extends Base⟦<(x: number) => {result: string}>⟧ { run(x⟦: number⟧) { return x; } }");
+        check(
+            "class Child⟦<T>⟧ extends Base⟦<{value: T}, readonly [number, string]>⟧ { value⟦: T⟧; }",
+        );
+        check(
+            "class Child extends Base⟦<(x: number) => {result: string}>⟧ { run(x⟦: number⟧) { return x; } }",
+        );
     }
 
     #[test]
     fn implements_clauses_are_type_only_and_can_span_lines() {
         check("class Child ⟦implements Named, Store<{value: number}>⟧ { value⟦: number⟧ = 2; }");
-        check("class Child extends Base⟦<number>⟧\n⟦implements\n Named,\n Store<{value: number}>⟧ { value⟦: number⟧ = 2; }");
+        check(
+            "class Child extends Base⟦<number>⟧\n⟦implements\n Named,\n Store<{value: number}>⟧ { value⟦: number⟧ = 2; }",
+        );
         check("class Child ⟦implements 名称<{名: 'é'}>⟧ { value⟦: number⟧ = 2; }");
     }
 
     #[test]
     fn heritage_preserves_factory_calls_getters_and_computed_keys() {
-        check("class Child extends mixin⟦<number>⟧(Base)⟦<{value: number}>⟧ { value⟦: number⟧ = 2; }");
+        check(
+            "class Child extends mixin⟦<number>⟧(Base)⟦<{value: number}>⟧ { value⟦: number⟧ = 2; }",
+        );
         check("class Child extends namespace[key()]⟦<number>⟧ { run()⟦: number⟧ { return 1; } }");
-        check("const Child = class extends (choose ? First : Second)⟦<number>⟧ { value⟦: number⟧ = 2; };");
+        check(
+            "const Child = class extends (choose ? First : Second)⟦<number>⟧ { value⟦: number⟧ = 2; };",
+        );
     }
 
     #[test]
     fn class_atoms_in_heritage_do_not_steal_the_outer_body() {
-        check("class Child extends class Base⟦<T>⟧ { inner⟦: number⟧ = 1; } { outer⟦: number⟧ = 2; }");
+        check(
+            "class Child extends class Base⟦<T>⟧ { inner⟦: number⟧ = 1; } { outer⟦: number⟧ = 2; }",
+        );
         check("class Child extends function Base() { this.inner = 1; } { outer⟦: number⟧ = 2; }");
         check("class Child extends null ⟦implements Named⟧ { value⟦: number⟧; }");
     }

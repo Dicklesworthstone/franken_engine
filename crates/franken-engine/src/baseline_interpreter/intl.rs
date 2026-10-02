@@ -117,16 +117,7 @@ impl InterpreterCore {
                 got: "null".to_string(),
             });
         }
-        // A well-formed tag whose language subtag has five to eight letters
-        // (`new Intl.Collator('generic')`, fast-levenshtein) names no locale
-        // ICU has data for: Node falls back to its default locale, en-US, as
-        // the service does here. A real language the formatters do not
-        // cover still refuses.
-        let requested = self
-            .intl_locale_list(&locales)?
-            .into_iter()
-            .next()
-            .filter(|tag| !(5..=8).contains(&tag.split('-').next().unwrap_or_default().len()));
+        let requested = self.intl_requested_locale(&locales)?;
         let resolved = match service {
             "NumberFormat" => self.intl_number_format_options(module, requested, &options)?,
             "DateTimeFormat" => self.intl_date_time_format_options(
@@ -580,29 +571,55 @@ impl InterpreterCore {
         &self,
         resolved: ObjectId,
     ) -> Result<(String, number_locale::NumberLocaleOptions), InterpreterError> {
-        let style = match self.intl_resolved_string(resolved, "style").as_str() {
-            "percent" => number_locale::NumberLocaleStyle::Percent,
-            "currency" => number_locale::NumberLocaleStyle::Currency(
-                self.intl_resolved_string(resolved, "currency"),
-            ),
-            _ => number_locale::NumberLocaleStyle::Decimal,
-        };
-        let digits = |key: &str| match self.intl_resolved_value(resolved, key) {
-            Some(Value::Int(value)) => u32::try_from(value).ok(),
-            _ => None,
-        };
-        Ok((
-            self.intl_resolved_string(resolved, "locale"),
-            number_locale::NumberLocaleOptions {
-                style,
-                minimum_fraction_digits: digits("minimumFractionDigits"),
-                maximum_fraction_digits: digits("maximumFractionDigits"),
-                use_grouping: !matches!(
-                    self.intl_resolved_value(resolved, "useGrouping"),
-                    Some(Value::Bool(false))
-                ),
-            },
-        ))
+        Ok(intl_number_options_from_lookup(|key| {
+            self.intl_resolved_value(resolved, key)
+        }))
+    }
+
+    /// The service locale a `locales` argument requests: its first tag. A
+    /// well-formed tag whose language subtag has five to eight letters
+    /// (`new Intl.Collator('generic')`, fast-levenshtein; temporal-polyfill's
+    /// `toLocaleString('fullwide')`) names no locale ICU has data for: Node
+    /// falls back to its default locale, en-US, as the services do here
+    /// (`None`). A real language the formatters do not cover still refuses.
+    pub(super) fn intl_requested_locale(
+        &self,
+        locales: &Value,
+    ) -> Result<Option<String>, InterpreterError> {
+        Ok(self
+            .intl_locale_list(locales)?
+            .into_iter()
+            .next()
+            .filter(|tag| !(5..=8).contains(&tag.split('-').next().unwrap_or_default().len())))
+    }
+
+    /// ECMA-402 15.4.1 Number.prototype.toLocaleString(locales, options):
+    /// format as `new Intl.NumberFormat(locales, options).format(x)` would,
+    /// with the same option reading and refusals (no service object).
+    pub(super) fn intl_format_number(
+        &mut self,
+        module: &Ir3Module,
+        number: f64,
+        locales: &Value,
+        options: &Value,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(options, Value::Null) {
+            return Err(InterpreterError::TypeError {
+                expected: "an options object for toLocaleString".to_string(),
+                got: "null".to_string(),
+            });
+        }
+        let requested = self.intl_requested_locale(locales)?;
+        let resolved = self.intl_number_format_options(module, requested, options)?;
+        let (locale, options) = intl_number_options_from_lookup(|key| {
+            resolved
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.clone())
+        });
+        number_locale::format_number_locale(number, Some(&locale), &options)
+            .map(Value::str)
+            .map_err(Self::intl_number_error)
     }
 
     fn intl_date_time_format_options(
@@ -1141,6 +1158,35 @@ struct IntlDateRequest {
 
 /// A BCP 47 tag in canonical case (language lower, script title, region
 /// upper), or `None` when it is not well formed.
+/// The locale and formatter options of resolved NumberFormat options read
+/// through `lookup` (a service's resolved object or the entries directly).
+fn intl_number_options_from_lookup(
+    lookup: impl Fn(&str) -> Option<Value>,
+) -> (String, number_locale::NumberLocaleOptions) {
+    let string = |key: &str| match lookup(key) {
+        Some(Value::Str(text)) => text.to_string(),
+        _ => String::new(),
+    };
+    let style = match string("style").as_str() {
+        "percent" => number_locale::NumberLocaleStyle::Percent,
+        "currency" => number_locale::NumberLocaleStyle::Currency(string("currency")),
+        _ => number_locale::NumberLocaleStyle::Decimal,
+    };
+    let digits = |key: &str| match lookup(key) {
+        Some(Value::Int(value)) => u32::try_from(value).ok(),
+        _ => None,
+    };
+    (
+        string("locale"),
+        number_locale::NumberLocaleOptions {
+            style,
+            minimum_fraction_digits: digits("minimumFractionDigits"),
+            maximum_fraction_digits: digits("maximumFractionDigits"),
+            use_grouping: !matches!(lookup("useGrouping"), Some(Value::Bool(false))),
+        },
+    )
+}
+
 fn canonicalize_locale_tag(tag: &str) -> Option<String> {
     let mut subtags = tag.split('-');
     let language = subtags.next()?;

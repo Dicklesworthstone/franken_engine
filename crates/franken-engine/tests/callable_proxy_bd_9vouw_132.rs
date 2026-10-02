@@ -145,3 +145,20 @@ fn callable_proxy_reflect() {
         "2 f 1 function object true false true 2 true undefined function String"
     );
 }
+
+/// A callable proxy as newTarget: GetPrototypeFromConstructor reads its `prototype` through [[Get]] (Test262 built-ins/Proxy/construct/trap-is-missing-target-is-proxy.js: new of a proxy over a proxy over Array).
+#[test]
+fn callable_proxy_proxy_new_target_prototype() {
+    let source = "var ArrayProxy = new Proxy(new Proxy(Array, {}), {});\n\
+         var arr = new ArrayProxy(1, 2, 3);\n\
+         function F() { this.made = true; } F.prototype.kind = 'F';\n\
+         var FP = new Proxy(new Proxy(F, {}), {});\n\
+         var f = new FP();\n\
+         var trapped = new Proxy(F, { get(t, k) { return k === 'prototype' ? { kind: 'trap' } : t[k]; } });\n\
+         var viaTrap = Reflect.construct(F, [], trapped);\n\
+         var viaArray = Reflect.construct(Array, [5], ArrayProxy);\n\
+         class MyArray extends Array {}\n\
+         var mine = Reflect.construct(ArrayProxy, [], MyArray);\n\
+         [Array.isArray(arr), arr.join(), f.made, f.kind, Object.getPrototypeOf(f) === F.prototype, viaTrap.kind, viaTrap.made, Array.isArray(viaArray), viaArray.length, mine instanceof MyArray].join(' ');";
+    assert_eq!(eval(source), "true 1,2,3 true F true trap true true 5 true");
+}

@@ -134,6 +134,15 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"var k = { toString() { return 'key'; } }; var o = {}; o[k] = 1; var a = {}; a[{}] = 2; var d = new Date(0); var c = {}; c[d] = 'd'; var both = { toString() { return 'ts'; }, valueOf() { return 'vo'; } }; c[both] = 3; var has = k in o; delete o[k]; console.log(Object.keys(a).join(), has, 'key' in o, Object.keys(c).length, c[d], c.ts, c[both]);"#,
         "[object Object] true false 2 d 3 3",
     ),
+    // A null or undefined base throws before an object key's toString runs
+    // (EvaluatePropertyAccessWithExpressionKey: RequireObjectCoercible, then
+    // ToPropertyKey), and so does a non-object `in` operand (Test262
+    // compound-assignment S11.13.2_A7.*).
+    (
+        "member_base_checked_before_key",
+        r#"const log = []; const key = { toString() { log.push('key'); return 'k'; } }; const r = []; try { null[key]; } catch (e) { r.push(e.constructor.name); } try { undefined[key] = 1; } catch (e) { r.push(e.constructor.name); } try { key in 5; } catch (e) { r.push(e.constructor.name); } try { delete null[key]; } catch (e) { r.push(e.constructor.name); } let base = null; try { base[key] &= 1; } catch (e) { r.push(e.constructor.name); } r.push(log.length, ({ k: 1 })[key], key in { k: 1 }); console.log(r.join(' '));"#,
+        "TypeError TypeError TypeError TypeError TypeError 0 1 true",
+    ),
     // A String.prototype method ToStrings an object `this` (its toString,
     // else valueOf, runs) and concat ToStrings object arguments; both read
     // "[object Object]".

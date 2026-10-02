@@ -98,3 +98,20 @@ fn map_and_set_iterators_have_their_own_prototypes() {
          [object Set Iterator]"
     );
 }
+
+/// String.prototype[@@iterator] iterates ToString(RequireObjectCoercible(this))
+/// (ES2020 21.1.3.29): core-js's iterator feature detection calls it on `new
+/// String`, and the engine's "expected string iterator receiver" error aborted
+/// xregexp's bundle while it loaded. Expected values are Node v22.2.0's.
+/// No-claim: the iterator's own prototype and toStringTag ("String Iterator")
+/// are not covered (bd-9vouw.121 remainder).
+#[test]
+fn string_iterator_accepts_wrapper_number_and_object_receivers() {
+    let source = "var it = String.prototype[Symbol.iterator];\n\
+                  var w = Array.from({ [Symbol.iterator]: function () { return it.call(new String('ab')); } });\n\
+                  var n = Array.from({ [Symbol.iterator]: function () { return it.call(12); } });\n\
+                  var o = Array.from({ [Symbol.iterator]: function () { return it.call({ toString: function () { return 'xy'; } }); } });\n\
+                  var e = ''; try { it.call(null); } catch (err) { e = err.constructor.name; }\n\
+                  [w.join(','), n.join(','), o.join(','), e].join(' ');";
+    assert_eq!(eval(source), "a,b 1,2 x,y TypeError");
+}

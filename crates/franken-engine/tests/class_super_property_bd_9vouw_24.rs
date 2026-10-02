@@ -96,3 +96,25 @@ fn object_literal_super_still_works() {
         "pc",
     );
 }
+
+/// `super.m(...xs)` spreads its arguments. CallMethod took a fixed argument
+/// count and the spread evaluated to its array, so the parent received the
+/// array as one argument: espree's parser subclass forwards
+/// `finishNode(...args)` to `super.finishNode(...args)`, and `espree.parse`
+/// threw "expected object, got undefined". Instance, computed, static and
+/// object-literal super calls; `this` stays the caller's.
+#[test]
+fn super_method_calls_spread_their_arguments() {
+    check(
+        "class A { f(...a) { return a.join(\",\"); } static s(a, b) { return a + b; } }\n\
+         class B extends A { g(...x) { return super.f(...x); } h(x) { return super.f(0, ...x, 9); } \
+         c(x) { return super[\"f\"](...x); } static t(...x) { return super.s(...x); } }\n\
+         var base = { f(a, b) { return a + \"/\" + b + \"/\" + this.tag; } };\n\
+         var o = { __proto__: base, tag: \"t\", g(...x) { return super.f(...x); } };\n\
+         class P { finishNode(n, t) { n.type = t; return n; } }\n\
+         class E extends P { finishNode(...args) { const r = super.finishNode(...args); r.z = 1; return r; } }\n\
+         [new B().g(1, 2, 3), new B().h([1, 2]), new B().c([4, 5]), B.t(1, 2), o.g(\"a\", \"b\"), \
+         JSON.stringify(new E().finishNode({}, \"Program\"))].join(\" \");",
+        "1,2,3 0,1,2,9 4,5 3 a/b/t {\"type\":\"Program\",\"z\":1}",
+    );
+}

@@ -154,6 +154,7 @@ impl InterpreterCore {
         &mut self,
         owner_module: Arc<Ir3Module>,
         invocation: GeneratorInvocation,
+        prototype: Option<ObjectId>,
     ) -> Result<u32, InterpreterError> {
         let generator_id = self.push_generator_object(GeneratorObject {
             owner_module,
@@ -161,6 +162,7 @@ impl InterpreterCore {
             execution: None,
             resume_dst: None,
             phase: GeneratorPhase::SuspendedStart,
+            prototype,
         })?;
         match self.push_async_generator_object(AsyncGeneratorObject {
             generator_id,

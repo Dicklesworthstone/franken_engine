@@ -5897,6 +5897,10 @@ const CONSOLE_EXTRA_METHODS: [&str; 15] = [
     "table",
 ];
 
+/// A console.table: its header row and its columns, each a cell per row
+/// (`None` where an item has no such property), bd-9vouw.158.
+type ConsoleTableColumns = (Vec<String>, Vec<Vec<Option<String>>>);
+
 /// Node's `console.time` rendering of an elapsed time in milliseconds
 /// (lib/internal/console/constructor.js formatTime), bd-9vouw.158.
 fn console_elapsed_time(elapsed_ms: f64) -> String {
@@ -34565,7 +34569,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         data: &Value,
         properties: Option<&[String]>,
-    ) -> Result<(Vec<String>, Vec<Vec<Option<String>>>), InterpreterError> {
+    ) -> Result<ConsoleTableColumns, InterpreterError> {
         let index_keys = self.console_object_keys(module, data)?;
         let rows = index_keys.len();
         let mut columns: Vec<(String, Vec<Option<String>>)> = Vec::new();

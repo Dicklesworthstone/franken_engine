@@ -62,6 +62,11 @@ enum InspectIdentity {
 struct InspectState<'m> {
     module: Option<&'m Ir3Module>,
     depth: i64,
+    /// `maxArrayLength`: array, typed array, Map and Set entries shown.
+    max_array_length: usize,
+    /// `breakLength`: the width past which entries go on separate lines
+    /// (`usize::MAX` for Infinity).
+    break_length: usize,
     seen: Vec<InspectIdentity>,
     /// Targets of `[Circular *n]` references; reference `n` is index `n - 1`.
     circular: Vec<InspectIdentity>,
@@ -75,6 +80,8 @@ impl<'m> InspectState<'m> {
         Self {
             module,
             depth,
+            max_array_length: INSPECT_MAX_ARRAY_LENGTH,
+            break_length: INSPECT_BREAK_LENGTH,
             seen: Vec::new(),
             circular: Vec::new(),
             indentation: 0,
@@ -127,6 +134,53 @@ fn js_length(text: &str) -> usize {
 /// without its East Asian wide-character table).
 fn display_width(text: &str) -> usize {
     text.chars().count()
+}
+
+/// Node's internal/cli_table (bd-9vouw.158): a box table of `head` over
+/// `columns`, rows as long as the longest column, a missing cell empty, every
+/// cell left-justified to its column's display width.
+pub(super) fn console_table_text(head: &[String], columns: &[Vec<Option<String>>]) -> String {
+    let rows = columns.iter().map(Vec::len).max().unwrap_or(0);
+    let cell = |column: usize, row: usize| -> &str {
+        columns
+            .get(column)
+            .and_then(|cells| cells.get(row))
+            .and_then(|cell| cell.as_deref())
+            .unwrap_or("")
+    };
+    let mut widths: Vec<usize> = head.iter().map(|text| display_width(text)).collect();
+    for (column, width) in widths.iter_mut().enumerate() {
+        for row in 0..rows {
+            *width = (*width).max(display_width(cell(column, row)));
+        }
+    }
+    let render = |cells: &[&str]| {
+        let mut out = String::from("\u{2502} ");
+        for (index, text) in cells.iter().enumerate() {
+            out.push_str(text);
+            out.push_str(&" ".repeat(widths[index].saturating_sub(display_width(text))));
+            if index + 1 != cells.len() {
+                out.push_str(" \u{2502} ");
+            }
+        }
+        out.push_str(" \u{2502}");
+        out
+    };
+    let divider: Vec<String> = widths
+        .iter()
+        .map(|width| "\u{2500}".repeat(width + 2))
+        .collect();
+    let head: Vec<&str> = head.iter().map(String::as_str).collect();
+    let mut out = format!("\u{250c}{}\u{2510}\n", divider.join("\u{252c}"));
+    out.push_str(&render(&head));
+    out.push_str(&format!("\n\u{251c}{}\u{2524}\n", divider.join("\u{253c}")));
+    for row in 0..rows {
+        let cells: Vec<&str> = (0..head.len()).map(|column| cell(column, row)).collect();
+        out.push_str(&render(&cells));
+        out.push('\n');
+    }
+    out.push_str(&format!("\u{2514}{}\u{2518}", divider.join("\u{2534}")));
+    out
 }
 
 fn pad_start(text: &str, width: usize) -> String {
@@ -228,7 +282,12 @@ fn inspect_key_name(key: &JsString) -> String {
 
 /// Node's `groupArrayElements`: lay out more than six short array entries
 /// in aligned columns.
-fn group_array_elements(output: Vec<String>, has_more: bool, numeric: &[bool]) -> Vec<String> {
+fn group_array_elements(
+    output: Vec<String>,
+    has_more: bool,
+    numeric: &[bool],
+    break_length: usize,
+) -> Vec<String> {
     let mut total_length = 0usize;
     let mut max_length = 0usize;
     let output_length = if has_more {
@@ -246,7 +305,7 @@ fn group_array_elements(output: Vec<String>, has_more: bool, numeric: &[bool]) -
         max_length = max_length.max(len);
     }
     let actual_max = max_length + SEPARATOR_SPACE;
-    if actual_max * 3 < INSPECT_BREAK_LENGTH
+    if actual_max * 3 < break_length
         && (total_length as f64 / actual_max as f64 > 5.0 || max_length <= 6)
     {
         let approx_char_heights = 2.5_f64;
@@ -255,7 +314,7 @@ fn group_array_elements(output: Vec<String>, has_more: bool, numeric: &[bool]) -
         let columns = ((approx_char_heights * biased_max * output_length as f64).sqrt()
             / biased_max)
             .round()
-            .min((INSPECT_BREAK_LENGTH / actual_max) as f64)
+            .min((break_length / actual_max) as f64)
             .min((INSPECT_COMPACT * 4) as f64)
             .min(15.0) as usize;
         if columns <= 1 {
@@ -345,6 +404,20 @@ impl InterpreterCore {
             values.push(self.builtin_arg(args, offset)?.unwrap_or(Value::Undefined));
         }
         self.format_values(module, &values)
+    }
+
+    /// `console.table`'s cell: `util.inspect(value, { depth, maxArrayLength:
+    /// 3, breakLength: Infinity })` (bd-9vouw.158).
+    pub(super) fn inspect_table_cell(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+        depth: i64,
+    ) -> Result<String, InterpreterError> {
+        let mut state = InspectState::new(module, depth);
+        state.max_array_length = 3;
+        state.break_length = usize::MAX;
+        self.inspect_value(&mut state, value, 0)
     }
 
     /// `util.inspect(value)` at the default depth (console.dir).
@@ -802,7 +875,7 @@ impl InterpreterCore {
             );
         }
         if units.len() > INSPECT_MIN_LINE_WIDTH
-            && units.len() + state.indentation + 4 > INSPECT_BREAK_LENGTH
+            && units.len() + state.indentation + 4 > state.break_length
         {
             // Split after each line break.
             let mut lines = Vec::new();
@@ -1460,13 +1533,13 @@ impl InterpreterCore {
                     .unwrap_or_default();
                 let mut index = 0;
                 for present in indices {
-                    if entries.len() >= INSPECT_MAX_ARRAY_LENGTH {
+                    if entries.len() >= state.max_array_length {
                         break;
                     }
                     if present != index {
                         entries.push(empty_items(present - index));
                         index = present;
-                        if entries.len() == INSPECT_MAX_ARRAY_LENGTH {
+                        if entries.len() == state.max_array_length {
                             break;
                         }
                     }
@@ -1480,7 +1553,7 @@ impl InterpreterCore {
                     index += 1;
                 }
                 let remaining = length - index.min(length);
-                if entries.len() != INSPECT_MAX_ARRAY_LENGTH {
+                if entries.len() != state.max_array_length {
                     if remaining > 0 {
                         entries.push(empty_items(remaining));
                     }
@@ -1503,7 +1576,7 @@ impl InterpreterCore {
             }
             Body::Typed(view) => {
                 let length = view.length;
-                let shown = length.min(INSPECT_MAX_ARRAY_LENGTH);
+                let shown = length.min(state.max_array_length);
                 for index in 0..shown {
                     let element = self
                         .array_index_value(id, index)?
@@ -1532,7 +1605,7 @@ impl InterpreterCore {
                     .unwrap_or_default();
                 let total = pairs.len();
                 state.indentation += 2;
-                for (key, value) in pairs.into_iter().take(INSPECT_MAX_ARRAY_LENGTH) {
+                for (key, value) in pairs.into_iter().take(state.max_array_length) {
                     let key = self.inspect_value(state, &key, recurse_times);
                     let value = key.and_then(|key| {
                         self.inspect_value(state, &value, recurse_times)
@@ -1547,8 +1620,8 @@ impl InterpreterCore {
                     }
                 }
                 state.indentation -= 2;
-                if total > INSPECT_MAX_ARRAY_LENGTH {
-                    entries.push(more_items(total - INSPECT_MAX_ARRAY_LENGTH));
+                if total > state.max_array_length {
+                    entries.push(more_items(total - state.max_array_length));
                 }
             }
             Body::Set => {
@@ -1559,7 +1632,7 @@ impl InterpreterCore {
                     .unwrap_or_default();
                 let total = values.len();
                 state.indentation += 2;
-                for value in values.into_iter().take(INSPECT_MAX_ARRAY_LENGTH) {
+                for value in values.into_iter().take(state.max_array_length) {
                     match self.inspect_value(state, &value, recurse_times) {
                         Ok(entry) => entries.push(entry),
                         Err(error) => {
@@ -1569,8 +1642,8 @@ impl InterpreterCore {
                     }
                 }
                 state.indentation -= 2;
-                if total > INSPECT_MAX_ARRAY_LENGTH {
-                    entries.push(more_items(total - INSPECT_MAX_ARRAY_LENGTH));
+                if total > state.max_array_length {
+                    entries.push(more_items(total - state.max_array_length));
                 }
             }
             Body::Weak => entries.push("<items unknown>".to_string()),
@@ -1793,7 +1866,7 @@ impl InterpreterCore {
             .last()
             .is_some_and(|last| last.starts_with("... ") && last.contains(" more item"));
         let output = if entry_kind == EntryKind::Array && entries > 6 {
-            group_array_elements(output, has_more, numeric)
+            group_array_elements(output, has_more, numeric, state.break_length)
         } else {
             output
         };
@@ -1806,11 +1879,11 @@ impl InterpreterCore {
             let start =
                 output.len() + state.indentation + js_length(&braces.0) + js_length(base) + 10;
             let mut total = output.len() + start;
-            let mut fits = total + output.len() <= INSPECT_BREAK_LENGTH;
+            let mut fits = total + output.len() <= state.break_length;
             if fits {
                 for entry in &output {
                     total += js_length(entry);
-                    if total > INSPECT_BREAK_LENGTH {
+                    if total > state.break_length {
                         fits = false;
                         break;
                     }

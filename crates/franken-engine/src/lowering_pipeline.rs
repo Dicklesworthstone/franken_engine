@@ -19704,6 +19704,7 @@ fn console_builtin_call_capability(
         "groupEnd" => Some("console:groupEnd"),
         "assert" => Some("console:assert"),
         "clear" => Some("console:clear"),
+        "table" => Some("console:table"),
         _ => None,
     }
 }
@@ -29400,6 +29401,7 @@ fn hostcall_exception_is_operand_derived(
         | "console:groupEnd"
         | "console:assert"
         | "console:clear"
+        | "console:table"
         // bd-dign3 follow-up: the whole zlib sync family shares this arm -
         // pure-compute engine implementations over closed inputs whose only
         // exceptional outcomes are engine-owned validation errors.

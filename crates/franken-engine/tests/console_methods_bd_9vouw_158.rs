@@ -11,8 +11,12 @@
 //! NODE_STDOUT is Node v22.2.0's stdout for PROGRAM and NODE_STDERR_LINES
 //! the stderr lines that carry no process id or stack.
 //!
-//! No-claim: console.table is not implemented; trace prints no stack
-//! frames; elapsed times come from the engine's deterministic
+//! table draws Node's box table (internal/cli_table) for arrays, objects,
+//! Maps and Sets. NODE_TABLE_STDOUT is Node's stdout for TABLE.
+//!
+//! No-claim: console.table does not preview Map or Set iterators (Node does);
+//! cell widths count code points, not East Asian display width; trace prints
+//! no stack frames; elapsed times come from the engine's deterministic
 //! instruction-tick clock (performance.now()), not wall time; Node's
 //! process-warning prefix "(node:PID)" for unknown count/time labels is not
 //! reproduced.
@@ -99,6 +103,88 @@ console.time();
 console.time();
 console.timeEnd();"#;
 
+const TABLE: &str = r#"console.table([{ a: 1, b: 'x' }, { a: 2, c: true }]);
+console.table({ r1: { x: 1 }, r2: { y: [1, 2, 3, 4] } });
+console.table([1, 'two', { three: 3 }]);
+console.table(new Map([['k1', 1], ['k2', { v: 2 }]]));
+console.table(new Set(['a', 'b']));
+console.table([{ a: 1, b: 2 }, { a: 3, b: 4 }], ['a']);
+console.table('not an object');
+console.table([[1, 2], [3, 4]]);
+console.table({ 10: 'ten', 2: 'two', b: { 1: 'x', a: 'y' } });
+console.table([{ deep: { a: 1, b: 2, c: 3 }, list: [1, 2, 3, 4, 5] }]);
+console.group('grouped');
+console.table([{ a: 1 }]);
+console.groupEnd();
+console.table([]);"#;
+
+const NODE_TABLE_STDOUT: &str = r#"┌─────────┬───┬─────┬──────┐
+│ (index) │ a │ b   │ c    │
+├─────────┼───┼─────┼──────┤
+│ 0       │ 1 │ 'x' │      │
+│ 1       │ 2 │     │ true │
+└─────────┴───┴─────┴──────┘
+┌─────────┬───┬──────────────────────────────┐
+│ (index) │ x │ y                            │
+├─────────┼───┼──────────────────────────────┤
+│ r1      │ 1 │                              │
+│ r2      │   │ [ 1, 2, 3, ... 1 more item ] │
+└─────────┴───┴──────────────────────────────┘
+┌─────────┬───────┬────────┐
+│ (index) │ three │ Values │
+├─────────┼───────┼────────┤
+│ 0       │       │ 1      │
+│ 1       │       │ 'two'  │
+│ 2       │ 3     │        │
+└─────────┴───────┴────────┘
+┌───────────────────┬──────┬──────────┐
+│ (iteration index) │ Key  │ Values   │
+├───────────────────┼──────┼──────────┤
+│ 0                 │ 'k1' │ 1        │
+│ 1                 │ 'k2' │ { v: 2 } │
+└───────────────────┴──────┴──────────┘
+┌───────────────────┬────────┐
+│ (iteration index) │ Values │
+├───────────────────┼────────┤
+│ 0                 │ 'a'    │
+│ 1                 │ 'b'    │
+└───────────────────┴────────┘
+┌─────────┬───┐
+│ (index) │ a │
+├─────────┼───┤
+│ 0       │ 1 │
+│ 1       │ 3 │
+└─────────┴───┘
+not an object
+┌─────────┬───┬───┐
+│ (index) │ 0 │ 1 │
+├─────────┼───┼───┤
+│ 0       │ 1 │ 2 │
+│ 1       │ 3 │ 4 │
+└─────────┴───┴───┘
+┌─────────┬─────┬─────┬────────┐
+│ (index) │ 1   │ a   │ Values │
+├─────────┼─────┼─────┼────────┤
+│ 2       │     │     │ 'two'  │
+│ 10      │     │     │ 'ten'  │
+│ b       │ 'x' │ 'y' │        │
+└─────────┴─────┴─────┴────────┘
+┌─────────┬──────────┬───────────────────────────────┐
+│ (index) │ deep     │ list                          │
+├─────────┼──────────┼───────────────────────────────┤
+│ 0       │ [Object] │ [ 1, 2, 3, ... 2 more items ] │
+└─────────┴──────────┴───────────────────────────────┘
+grouped
+  ┌─────────┬───┐
+  │ (index) │ a │
+  ├─────────┼───┤
+  │ 0       │ 1 │
+  └─────────┴───┘
+┌─────────┐
+│ (index) │
+├─────────┤
+└─────────┘"#;
+
 /// (stdout lines, stderr messages) of a program.
 fn run(source: &str) -> (String, Vec<String>) {
     let tree = CanonicalEs2020Parser
@@ -154,6 +240,13 @@ fn console_methods_write_what_node_writes() {
         .filter(|line| line.starts_with("Assertion failed") || line.starts_with("Trace:"))
         .collect::<Vec<_>>();
     assert_eq!(first_lines, NODE_STDERR_LINES);
+}
+
+#[test]
+fn console_table_draws_what_node_draws() {
+    let (stdout, stderr) = run(TABLE);
+    assert_eq!(stdout, NODE_TABLE_STDOUT);
+    assert!(stderr.is_empty(), "{stderr:?}");
 }
 
 /// timeLog/timeEnd print "label: <n>ms" (and the extra data); a second

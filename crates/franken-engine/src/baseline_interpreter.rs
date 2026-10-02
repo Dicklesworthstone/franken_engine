@@ -92465,6 +92465,28 @@ impl InterpreterCore {
             .retain(|object_id| (object_id.0 as usize) < previous_heap_len);
     }
 
+    /// Undo a refused allocation that materialized intrinsic prototypes on
+    /// its way (bd-9vouw.104, bd-9vouw.157): truncate the heap, drop the
+    /// registry entries of the prototypes allocated past the checkpoint
+    /// (nothing else can hold them yet) and restore the estimate.
+    fn rollback_heap_and_new_prototypes(
+        &mut self,
+        previous_heap_len: usize,
+        previous_estimated_bytes: u64,
+    ) {
+        self.rollback_heap_to_len(previous_heap_len);
+        if self
+            .builtin_prototypes
+            .values()
+            .any(|id| id.0 as usize >= previous_heap_len)
+        {
+            self.mutate_builtin_prototypes(|prototypes| {
+                prototypes.retain(|_, id| (id.0 as usize) < previous_heap_len);
+            });
+        }
+        self.estimated_memory_bytes = previous_estimated_bytes;
+    }
+
     fn estimate_string_bytes(text: &str) -> u64 {
         MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(text.len() as u64)
     }
@@ -95910,9 +95932,19 @@ impl InterpreterCore {
             });
         }
         // Materialized before the heap indices below are taken: the first
-        // use allocates the prototype objects (bd-9vouw.104).
-        let view_prototype = self.ensure_builtin_prototype("Buffer")?;
-        let buffer_prototype = self.ensure_builtin_prototype("ArrayBuffer")?;
+        // use allocates the prototype objects (bd-9vouw.104). A refusal below
+        // takes them back with the pair.
+        let checkpoint = (self.heap.len(), self.estimated_memory_bytes);
+        let prototypes = self
+            .ensure_builtin_prototype("Buffer")
+            .and_then(|view| Ok((view, self.ensure_builtin_prototype("ArrayBuffer")?)));
+        let (view_prototype, buffer_prototype) = match prototypes {
+            Ok(prototypes) => prototypes,
+            Err(error) => {
+                self.rollback_heap_and_new_prototypes(checkpoint.0, checkpoint.1);
+                return Err(error);
+            }
+        };
 
         let byte_length_i64 =
             i64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
@@ -95942,9 +95974,10 @@ impl InterpreterCore {
             );
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(2);
         if requested_heap_objects > self.config.max_heap_objects {
-            return Err(
-                self.memory_budget_error(self.estimated_memory_bytes, requested_heap_objects)
-            );
+            let error =
+                self.memory_budget_error(self.estimated_memory_bytes, requested_heap_objects);
+            self.rollback_heap_and_new_prototypes(checkpoint.0, checkpoint.1);
+            return Err(error);
         }
 
         // Build both metadata records without allocating backing bytes. The
@@ -96005,7 +96038,9 @@ impl InterpreterCore {
             .saturating_add(temporary_bytes)
             .saturating_add(committed_bytes);
         if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
+            let error = self.memory_budget_error(requested_bytes, requested_heap_objects);
+            self.rollback_heap_and_new_prototypes(checkpoint.0, checkpoint.1);
+            return Err(error);
         }
 
         buffer_object.array_buffer = Some(match contents {

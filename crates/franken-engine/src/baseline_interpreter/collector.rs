@@ -998,27 +998,37 @@ impl InterpreterCore {
 
         // The state of reclaimed URL and URLSearchParams objects can never be
         // read again (bd-9vouw.163): drop it with its charge.
-        let mut released_url_bytes = 0u64;
+        let mut released_state_bytes = 0u64;
         self.url_objects.retain(|id, state| {
             let live = !heap.is_reclaimed(id.0 as usize);
             if !live {
-                released_url_bytes =
-                    released_url_bytes.saturating_add(Self::estimate_url_state_bytes(state));
+                released_state_bytes =
+                    released_state_bytes.saturating_add(Self::estimate_url_state_bytes(state));
             }
             live
         });
         self.url_search_params.retain(|id, state| {
             let live = !heap.is_reclaimed(id.0 as usize);
             if !live {
-                released_url_bytes = released_url_bytes
+                released_state_bytes = released_state_bytes
                     .saturating_add(Self::estimate_url_search_params_state_bytes(state));
+            }
+            live
+        });
+        // So can a reclaimed crypto Hash, Hmac, Cipher or key pair's
+        // (bytes and a label, no heap references).
+        self.crypto_objects.retain(|id, state| {
+            let live = !heap.is_reclaimed(id.0 as usize);
+            if !live {
+                released_state_bytes = released_state_bytes
+                    .saturating_add(Self::estimate_crypto_object_state_bytes(state));
             }
             live
         });
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
-            .saturating_sub(released_url_bytes);
-        reclaimed_bytes = reclaimed_bytes.saturating_add(released_url_bytes);
+            .saturating_sub(released_state_bytes);
+        reclaimed_bytes = reclaimed_bytes.saturating_add(released_state_bytes);
 
         // The write-barrier remembered set records objects written since the
         // last collection. A full collection leaves no younger generation, so
@@ -1558,7 +1568,8 @@ impl InterpreterCore {
             url_objects: _,
             url_search_params: _,
             cluster_facades,
-            crypto_objects,
+            // Weak: no heap references, purged after the sweep.
+            crypto_objects: _,
             stream_pipelines,
             next_stream_pipeline_token: _,
             pending_stream_emissions,
@@ -1641,7 +1652,7 @@ impl InterpreterCore {
 
         // Host I/O state is not traced yet: refuse to collect while any of it
         // is live.
-        let host_state: [(&'static str, bool); 28] = [
+        let host_state: [(&'static str, bool); 27] = [
             (
                 "pending_child_process_tasks",
                 pending_child_process_tasks.is_empty(),
@@ -1653,7 +1664,6 @@ impl InterpreterCore {
             ("child_process_streams", child_process_streams.is_empty()),
             ("child_process_handles", child_process_handles.is_empty()),
             ("cluster_facades", cluster_facades.is_empty()),
-            ("crypto_objects", crypto_objects.is_empty()),
             ("stream_pipelines", stream_pipelines.is_empty()),
             (
                 "pending_stream_emissions",

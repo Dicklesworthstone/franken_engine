@@ -80,6 +80,27 @@ impl InterpreterCore {
         Ok(self.value_to_string(&primitive))
     }
 
+    /// ES2020 7.1.22 ToIndex of a primitive (an object argument has been
+    /// through ToPrimitive already): ToIntegerOrInfinity of ToNumber, so NaN
+    /// and undefined are 0 and fractions truncate toward zero. A Symbol or
+    /// BigInt is the TypeError ToNumber raises. `Ok(None)` is the RangeError
+    /// case, an index below 0 or above 2^53 - 1, which the caller reports
+    /// with its own message.
+    pub(super) fn to_index_value(value: &Value) -> Result<Option<u64>, InterpreterError> {
+        if matches!(value, Value::Symbol(_) | Value::BigInt(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: "value convertible to a number".to_string(),
+                got: value.type_name().to_string(),
+            });
+        }
+        let number = Self::coerce_to_float(value).unwrap_or(f64::NAN);
+        let integer = if number.is_nan() { 0.0 } else { number.trunc() };
+        if !(0.0..=MAX_SAFE_INTEGER as f64).contains(&integer) {
+            return Ok(None);
+        }
+        Ok(Some(integer as u64))
+    }
+
     /// ToNumber's ToPrimitive step (hint "number") for an object, observable
     /// through @@toPrimitive, valueOf and toString. An object that converts
     /// to undefined comes back as NaN, which is ToNumber(undefined), so the

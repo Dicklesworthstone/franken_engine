@@ -64279,10 +64279,10 @@ impl InterpreterCore {
         }
         let raw_length = self.object_to_number_primitive(module, raw_length)?;
 
-        let Some(length) = Self::coerce_to_number(&raw_length) else {
+        let Some(length) = Self::to_index_value(&raw_length)? else {
             return Err(InterpreterError::RangeError {
                 message: format!(
-                    "invalid ArrayBuffer byteLength {}; requested value must be a finite integer, per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
+                    "invalid ArrayBuffer byteLength {}; requested value must be an integer from 0 to 2^53 - 1, per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
                     self.value_to_string(&raw_length),
                     MAX_ARRAY_BUFFER_BYTE_LENGTH,
                     self.config.max_total_memory_bytes,
@@ -64291,18 +64291,6 @@ impl InterpreterCore {
             });
         };
 
-        if length < 0 {
-            return Err(InterpreterError::RangeError {
-                message: format!(
-                    "invalid ArrayBuffer byteLength {length}; requested value must be non-negative, per-buffer cap is {} bytes, total cap is {} bytes, committed bytes are {}",
-                    MAX_ARRAY_BUFFER_BYTE_LENGTH,
-                    self.config.max_total_memory_bytes,
-                    self.estimated_memory_bytes(),
-                ),
-            });
-        }
-
-        let length = length as u64;
         if length > MAX_ARRAY_BUFFER_BYTE_LENGTH {
             return Err(InterpreterError::RangeError {
                 message: format!(
@@ -64330,23 +64318,15 @@ impl InterpreterCore {
         field: &str,
         value: &Value,
     ) -> Result<usize, InterpreterError> {
-        let Some(index) = Self::coerce_to_number(value) else {
+        let Some(index) = Self::to_index_value(value)? else {
             return Err(InterpreterError::RangeError {
                 message: format!(
-                    "invalid {} {field} {}; requested value must be a finite integer",
+                    "invalid {} {field} {}; requested value must be an integer from 0 to 2^53 - 1",
                     kind.type_name(),
                     self.value_to_string(value),
                 ),
             });
         };
-        if index < 0 {
-            return Err(InterpreterError::RangeError {
-                message: format!(
-                    "invalid {} {field} {index}; requested value must be non-negative",
-                    kind.type_name(),
-                ),
-            });
-        }
         usize::try_from(index).map_err(|_| InterpreterError::RangeError {
             message: format!(
                 "{} {field} {index} exceeds host addressable size",
@@ -67047,21 +67027,14 @@ impl InterpreterCore {
         field: &str,
         value: &Value,
     ) -> Result<usize, InterpreterError> {
-        let Some(index) = Self::coerce_to_number(value) else {
+        let Some(index) = Self::to_index_value(value)? else {
             return Err(InterpreterError::RangeError {
                 message: format!(
-                    "invalid DataView {field} {}; requested value must be a finite integer",
+                    "invalid DataView {field} {}; requested value must be an integer from 0 to 2^53 - 1",
                     self.value_to_string(value),
                 ),
             });
         };
-        if index < 0 {
-            return Err(InterpreterError::RangeError {
-                message: format!(
-                    "invalid DataView {field} {index}; requested value must be non-negative"
-                ),
-            });
-        }
         usize::try_from(index).map_err(|_| InterpreterError::RangeError {
             message: format!("DataView {field} {index} exceeds host addressable size"),
         })
@@ -102124,14 +102097,20 @@ mod active_builtin_regressions {
 
     #[test]
     fn array_buffer_constructor_rejects_invalid_lengths_without_publication() {
+        // ES2020 7.1.22 ToIndex: below 0 or above 2^53 - 1 is a RangeError;
+        // a BigInt is the TypeError ToNumber raises. (NaN and 1.5 are valid
+        // lengths, 0 and 1: see the next test.)
         let invalid_lengths = [
-            Value::Int(-1),
-            Value::Float(Float64::new(f64::NAN)),
-            Value::Float(Float64::new(1.5)),
-            Value::BigInt(Arc::from("1")),
+            (Value::Int(-1), "RangeError"),
+            (Value::Float(Float64::new(f64::INFINITY)), "RangeError"),
+            (
+                Value::Float(Float64::new(9_007_199_254_740_992.0)),
+                "RangeError",
+            ),
+            (Value::BigInt(Arc::from("1")), "TypeError"),
         ];
 
-        for invalid_length in invalid_lengths {
+        for (invalid_length, expected) in invalid_lengths {
             let mut core = test_core();
             core.mutate_registers(|r| {
                 r[0] = invalid_length.clone();
@@ -102144,14 +102123,51 @@ mod active_builtin_regressions {
                     None,
                 )
                 .expect_err("invalid ArrayBuffer length should fail closed");
-            assert!(
-                matches!(err, InterpreterError::RangeError { .. }),
-                "expected RangeError for {invalid_length:?}, got {err:?}"
+            let got = match &err {
+                InterpreterError::RangeError { .. } => "RangeError",
+                InterpreterError::TypeError { .. } => "TypeError",
+                _ => "other",
+            };
+            assert_eq!(
+                got, expected,
+                "expected {expected} for {invalid_length:?}, got {err:?}"
             );
             assert_eq!(
                 core.heap_size(),
                 0,
                 "invalid ArrayBuffer length must not publish a partial object"
+            );
+        }
+    }
+
+    #[test]
+    fn array_buffer_constructor_length_is_to_index() {
+        // ES2020 7.1.22: NaN is 0 and a fraction truncates toward zero; Node
+        // v22.2.0 gives byteLength 0, 1 and 2 for these.
+        for (length, expected) in [
+            (Value::Float(Float64::new(f64::NAN)), 0),
+            (Value::Float(Float64::new(1.5)), 1),
+            (Value::str("2.9"), 2),
+        ] {
+            let mut core = test_core();
+            core.mutate_registers(|r| {
+                r[0] = length.clone();
+            });
+            let buffer = core
+                .dispatch_builtin_hostcall(
+                    "builtin:ArrayBuffer",
+                    RegRange { start: 0, count: 1 },
+                    None,
+                )
+                .expect("a ToIndex-convertible length allocates");
+            let Value::Object(buffer_id) = buffer else {
+                panic!("ArrayBuffer constructor must return an object");
+            };
+            assert_eq!(
+                core.array_buffer_byte_length(buffer_id)
+                    .expect("byteLength of the new buffer"),
+                expected,
+                "byteLength for {length:?}"
             );
         }
     }

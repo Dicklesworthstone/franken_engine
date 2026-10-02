@@ -19,10 +19,13 @@
 //! URI functions, and an object whose valueOf/toString returns undefined
 //! (NaN or "undefined", not an absent argument).
 //!
-//! No-claim: ToIndex still rejects a fractional or NaN length or offset
-//! (`new ArrayBuffer(1.5)` is a RangeError, Node gives 1), and an indexed
-//! element write (`u8[0] = obj`) does not call valueOf. The Function
-//! constructor's arguments are another path.
+//! PROGRAM_TO_INDEX covers ES2020 7.1.22 ToIndex for ArrayBuffer,
+//! TypedArray and DataView lengths, offsets and indices: NaN and undefined
+//! are 0, fractions truncate, a value below 0 or above 2^53 - 1 is a
+//! RangeError, and a Symbol or BigInt is a TypeError.
+//!
+//! No-claim: an indexed element write (`u8[0] = obj`) does not call valueOf.
+//! The Function constructor's arguments are another path.
 
 #![forbid(unsafe_code)]
 
@@ -139,6 +142,45 @@ encodeURIComponent symbol TypeError
 normalize undefined form RangeError
 abrupt valueOf true from valueOf"#;
 
+const PROGRAM_TO_INDEX: &str = r#"const lines = [
+  () => [new ArrayBuffer(1.5).byteLength, new ArrayBuffer(NaN).byteLength, new ArrayBuffer('2.9').byteLength, new ArrayBuffer(undefined).byteLength, new ArrayBuffer(null).byteLength, new ArrayBuffer(true).byteLength, new ArrayBuffer(-0.5).byteLength],
+  () => [new Uint8Array(1.5).length, new Uint8Array(new ArrayBuffer(8), 2.9).byteOffset, new Uint8Array(new ArrayBuffer(8), 0, 2.5).length, new Uint8Array(NaN).length],
+  () => { const dv = new DataView(new ArrayBuffer(8), 1.5, NaN); return [dv.byteOffset, dv.byteLength]; },
+  () => { const dv = new DataView(new ArrayBuffer(4)); dv.setUint8(1.9, 7); dv.setUint8(0, 3); return [dv.getUint8(1), dv.getUint8('1'), dv.getUint8('x'), dv.getUint8(NaN), dv.getUint8(-0.5)]; },
+  () => { const u = new Uint8Array(4); u.set([5], 1.9); return [Array.from(u).join()]; },
+];
+lines.forEach(function (run, i) { try { console.log(i, ...run()); } catch (e) { console.log(i, 'threw', e.constructor.name); } });
+for (const [label, run] of [
+  ['ArrayBuffer -1', () => new ArrayBuffer(-1)],
+  ['ArrayBuffer Infinity', () => new ArrayBuffer(Infinity)],
+  ['ArrayBuffer 2^53', () => new ArrayBuffer(2 ** 53)],
+  ['ArrayBuffer 1n', () => new ArrayBuffer(1n)],
+  ['ArrayBuffer symbol', () => new ArrayBuffer(Symbol('s'))],
+  ['Uint8Array -1', () => new Uint8Array(-1)],
+  ['Uint8Array symbol', () => new Uint8Array(Symbol('s'))],
+  ['DataView offset -1', () => new DataView(new ArrayBuffer(4), -1)],
+  ['getUint8 -1', () => new DataView(new ArrayBuffer(4)).getUint8(-1)],
+  ['getUint8 1n', () => new DataView(new ArrayBuffer(4)).getUint8(1n)],
+]) {
+  try { run(); console.log(label, 'no throw'); } catch (e) { console.log(label, e.constructor.name); }
+}"#;
+
+const NODE_OUTPUT_TO_INDEX: &str = r#"0 1 0 2 0 0 1 0
+1 1 2 2 0
+2 1 0
+3 7 7 3 3 3
+4 0,5,0,0
+ArrayBuffer -1 RangeError
+ArrayBuffer Infinity RangeError
+ArrayBuffer 2^53 RangeError
+ArrayBuffer 1n TypeError
+ArrayBuffer symbol TypeError
+Uint8Array -1 RangeError
+Uint8Array symbol TypeError
+DataView offset -1 RangeError
+getUint8 -1 RangeError
+getUint8 1n TypeError"#;
+
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
@@ -204,4 +246,14 @@ fn binary_data_and_string_arguments_convert_like_node() {
         output.lines().count(),
         NODE_OUTPUT_BINARY_AND_STRINGS.lines().count()
     );
+}
+
+#[test]
+fn lengths_offsets_and_indices_use_to_index_like_node() {
+    let output = console_output(PROGRAM_TO_INDEX).expect("the program runs");
+    for (index, (actual, expected)) in output.lines().zip(NODE_OUTPUT_TO_INDEX.lines()).enumerate()
+    {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(output.lines().count(), NODE_OUTPUT_TO_INDEX.lines().count());
 }

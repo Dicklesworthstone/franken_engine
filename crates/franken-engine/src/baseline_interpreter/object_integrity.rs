@@ -563,6 +563,262 @@ impl InterpreterCore {
     }
 }
 
+/// Proxy [[GetOwnProperty]] and [[DefineOwnProperty]] (ES2020 9.5.5, 9.5.6;
+/// bd-9vouw.147): `Object.getOwnPropertyDescriptor(proxy, k)` answered
+/// undefined and `Object.defineProperty(proxy, ...)` neither called the trap
+/// nor reached the target.
+impl InterpreterCore {
+    /// ES2020 6.2.5.4 FromPropertyDescriptor, after CompletePropertyDescriptor
+    /// (6.2.5.6) when `complete`: the descriptor object a trap receives or a
+    /// getOwnPropertyDescriptor call returns.
+    fn descriptor_object_from_fields(
+        &mut self,
+        fields: &PropertyDescriptorFields,
+        complete: bool,
+    ) -> Result<Value, InterpreterError> {
+        let object = self.alloc_object_with_prototype(None)?;
+        let accessor = fields.is_accessor();
+        if !accessor && (complete || fields.value.is_some()) {
+            let value = fields.value.clone().unwrap_or(Value::Undefined);
+            self.set_object_property(object, "value".to_string(), value)?;
+        }
+        if !accessor && (complete || fields.writable.is_some()) {
+            let writable = fields.writable.unwrap_or(false);
+            self.set_object_property(object, "writable".to_string(), Value::Bool(writable))?;
+        }
+        if accessor && (complete || fields.get.is_some()) {
+            let get = fields.get.clone().unwrap_or(Value::Undefined);
+            self.set_object_property(object, "get".to_string(), get)?;
+        }
+        if accessor && (complete || fields.set.is_some()) {
+            let set = fields.set.clone().unwrap_or(Value::Undefined);
+            self.set_object_property(object, "set".to_string(), set)?;
+        }
+        for (name, field) in [
+            ("enumerable", fields.enumerable),
+            ("configurable", fields.configurable),
+        ] {
+            if complete || field.is_some() {
+                self.set_object_property(
+                    object,
+                    name.to_string(),
+                    Value::Bool(field.unwrap_or(false)),
+                )?;
+            }
+        }
+        Ok(Value::Object(object))
+    }
+
+    /// ES2020 9.1.6.2 IsCompatiblePropertyDescriptor(Extensible, Desc,
+    /// Current): whether an ordinary object could hold `desc` given
+    /// `current`.
+    fn descriptor_is_compatible(
+        extensible: bool,
+        desc: &PropertyDescriptorFields,
+        current: Option<&PropertyDescriptorFields>,
+    ) -> bool {
+        let Some(current) = current else {
+            return extensible;
+        };
+        if current.configurable != Some(true) {
+            if desc.configurable == Some(true) {
+                return false;
+            }
+            if desc.enumerable.is_some() && desc.enumerable != current.enumerable {
+                return false;
+            }
+        }
+        if !desc.is_accessor() && !desc.is_data() {
+            return true;
+        }
+        if current.is_data() != desc.is_data() {
+            return current.configurable == Some(true);
+        }
+        if current.configurable == Some(true) {
+            return true;
+        }
+        if current.is_data() {
+            if current.writable != Some(true) {
+                if desc.writable == Some(true) {
+                    return false;
+                }
+                if let (Some(value), Some(existing)) = (&desc.value, &current.value)
+                    && !Self::same_value(value, existing)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        for (wanted, existing) in [(&desc.get, &current.get), (&desc.set, &current.set)] {
+            if let Some(wanted) = wanted
+                && !Self::same_value(wanted, existing.as_ref().unwrap_or(&Value::Undefined))
+            {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The target's own descriptor as fields, for the invariant checks.
+    fn proxy_target_descriptor_fields(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target: ObjectId,
+        key: &RuntimePropertyKey,
+        depth: u32,
+    ) -> Result<Option<PropertyDescriptorFields>, InterpreterError> {
+        match self.proxy_aware_own_property_descriptor(module, target, key, depth)? {
+            descriptor @ Value::Object(_) => {
+                Ok(Some(self.read_property_descriptor(module, &descriptor)?))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// [[GetOwnProperty]] of `object_id` as a descriptor object or undefined,
+    /// through a Proxy's `getOwnPropertyDescriptor` trap (ES2020 9.5.5).
+    pub(super) fn proxy_aware_own_property_descriptor(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        depth: u32,
+    ) -> Result<Value, InterpreterError> {
+        self.integrity_step(object_id, depth)?;
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            if let Some(descriptor) = self.prototype_getter_descriptor(object_id, key)? {
+                return Ok(descriptor);
+            }
+            return self.own_property_descriptor_value(object_id, key);
+        };
+        let Some(trap) = self.proxy_trap_value(module, handler, "getOwnPropertyDescriptor")? else {
+            return self.proxy_aware_own_property_descriptor(module, target, key, depth + 1);
+        };
+        let trap_target = self.proxy_trap_target(object_id, target);
+        let result = self.call_proxy_trap(
+            module,
+            handler,
+            "getOwnPropertyDescriptor",
+            trap,
+            vec![trap_target, key.value()],
+        )?;
+        let invariant = |what: &str| {
+            Self::integrity_type_error(
+                "a getOwnPropertyDescriptor trap result the target allows",
+                what,
+            )
+        };
+        if !matches!(result, Value::Undefined | Value::Object(_)) {
+            return Err(invariant(&format!("{} result", result.type_name())));
+        }
+        let target_fields = self.proxy_target_descriptor_fields(module, target, key, depth + 1)?;
+        if matches!(result, Value::Undefined) {
+            if let Some(target_fields) = &target_fields {
+                if target_fields.configurable != Some(true) {
+                    return Err(invariant("a non-configurable property reported missing"));
+                }
+                if !self.object_is_extensible(module, target, depth + 1)? {
+                    return Err(invariant(
+                        "a non-extensible target's property reported missing",
+                    ));
+                }
+            }
+            return Ok(Value::Undefined);
+        }
+        let extensible = self.object_is_extensible(module, target, depth + 1)?;
+        let fields = self.read_property_descriptor(module, &result)?;
+        if !Self::descriptor_is_compatible(extensible, &fields, target_fields.as_ref()) {
+            return Err(invariant("a descriptor incompatible with the target's"));
+        }
+        if fields.configurable != Some(true) {
+            match &target_fields {
+                None => return Err(invariant("a missing property reported non-configurable")),
+                Some(target_fields) if target_fields.configurable == Some(true) => {
+                    return Err(invariant(
+                        "a configurable property reported non-configurable",
+                    ));
+                }
+                Some(target_fields)
+                    if fields.writable == Some(false) && target_fields.writable == Some(true) =>
+                {
+                    return Err(invariant("a writable property reported non-writable"));
+                }
+                _ => {}
+            }
+        }
+        self.descriptor_object_from_fields(&fields, true)
+    }
+
+    /// [[DefineOwnProperty]] of `object_id`, through a Proxy's
+    /// `defineProperty` trap (ES2020 9.5.6); `Ok(false)` is a rejected
+    /// definition (Object.defineProperty throws, Reflect answers false).
+    pub(super) fn proxy_aware_define_own_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: RuntimePropertyKey,
+        fields: PropertyDescriptorFields,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
+        self.integrity_step(object_id, depth)?;
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            return self.define_own_property_from_descriptor(object_id, key, fields);
+        };
+        let Some(trap) = self.proxy_trap_value(module, handler, "defineProperty")? else {
+            return self.proxy_aware_define_own_property(module, target, key, fields, depth + 1);
+        };
+        let descriptor = self.descriptor_object_from_fields(&fields, false)?;
+        let trap_target = self.proxy_trap_target(object_id, target);
+        let result = self.call_proxy_trap(
+            module,
+            handler,
+            "defineProperty",
+            trap,
+            vec![trap_target, key.value(), descriptor],
+        )?;
+        if !result.is_truthy() {
+            return Ok(false);
+        }
+        let invariant = |what: &str| {
+            Self::integrity_type_error("a defineProperty trap result the target allows", what)
+        };
+        let target_fields = self.proxy_target_descriptor_fields(module, target, &key, depth + 1)?;
+        let extensible = self.object_is_extensible(module, target, depth + 1)?;
+        let setting_config_false = fields.configurable == Some(false);
+        match &target_fields {
+            None => {
+                if !extensible {
+                    return Err(invariant("a new property on a non-extensible target"));
+                }
+                if setting_config_false {
+                    return Err(invariant("a non-configurable property the target lacks"));
+                }
+            }
+            Some(target_fields) => {
+                if !Self::descriptor_is_compatible(extensible, &fields, Some(target_fields)) {
+                    return Err(invariant("a descriptor incompatible with the target's"));
+                }
+                if setting_config_false && target_fields.configurable == Some(true) {
+                    return Err(invariant(
+                        "a configurable property defined non-configurable",
+                    ));
+                }
+                if target_fields.is_data()
+                    && target_fields.configurable != Some(true)
+                    && target_fields.writable == Some(true)
+                    && fields.writable == Some(false)
+                {
+                    return Err(invariant(
+                        "a non-configurable writable property made non-writable",
+                    ));
+                }
+            }
+        }
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

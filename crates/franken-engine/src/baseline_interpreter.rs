@@ -49724,7 +49724,21 @@ impl InterpreterCore {
                                 }
                             }
                             Value::Iterator(iterator_handle) => {
-                                self.iterator_runtime_property_value(iterator_handle, &property_key)
+                                match self.exotic_own_property_get(
+                                    module,
+                                    &Value::Iterator(iterator_handle),
+                                    &property_key,
+                                )? {
+                                    // IFC: the backing object owns the stored label.
+                                    Some((own, backing)) => {
+                                        primitive_owner = Some(backing);
+                                        own
+                                    }
+                                    None => self.iterator_runtime_property_value(
+                                        iterator_handle,
+                                        &property_key,
+                                    ),
+                                }
                             }
                             Value::Str(s) => {
                                 if matches!(
@@ -53676,56 +53690,68 @@ impl InterpreterCore {
             | Value::Generator(_)
             | Value::AsyncGeneratorObject(_)
             | Value::Iterator(_)
-            | Value::AsyncFunctionObject(_)) => {
-                if self.exotic_has_own_property(module, object_like, &key)? {
-                    return Ok(Value::Bool(true));
-                }
-                let supplied = match object_like {
-                    Value::Promise(_) => key.as_str().is_some_and(|name| {
-                        !matches!(Self::promise_property_value(name), Value::Undefined)
-                    }),
-                    Value::Generator(_) | Value::AsyncGeneratorObject(_) => match &key {
-                        RuntimePropertyKey::String(_) => key
-                            .as_str()
-                            .is_some_and(|name| matches!(name, "next" | "return" | "throw")),
-                        RuntimePropertyKey::Symbol(symbol) => {
-                            let iterator = if matches!(object_like, Value::Generator(_)) {
-                                WellKnownSymbol::Iterator
-                            } else {
-                                WellKnownSymbol::AsyncIterator
-                            };
-                            *symbol == iterator.id()
-                        }
-                    },
-                    Value::Iterator(handle) => !matches!(
-                        self.iterator_runtime_property_value(*handle, &key),
-                        Value::Undefined
-                    ),
-                    _ => false,
-                };
-                if supplied {
-                    return Ok(Value::Bool(true));
-                }
-                if let Some(&intrinsic_prototype) = self
-                    .exotic_intrinsic_prototype_name(object_like)
-                    .and_then(|name| self.builtin_prototypes.get(name))
-                {
-                    return Ok(Value::Bool(self.proxy_aware_has_runtime_property(
-                        Some(module),
-                        intrinsic_prototype,
-                        &key,
-                        0,
-                    )?));
-                }
-                Ok(Value::Bool(
-                    self.object_prototype_has_property(module, &key)?,
-                ))
-            }
+            | Value::AsyncFunctionObject(_)) => Ok(Value::Bool(self.exotic_has_property(
+                module,
+                object_like,
+                &key,
+            )?)),
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
                 got: other.type_name().to_string(),
             }),
         }
+    }
+
+    /// [[HasProperty]] of a promise, generator, async generator, iterator or
+    /// async function object: its own properties (on its backing object),
+    /// the members its [[Get]] supplies, then its prototype's chain.
+    fn exotic_has_property(
+        &mut self,
+        module: &Ir3Module,
+        object_like: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        if self.exotic_has_own_property(module, object_like, key)? {
+            return Ok(true);
+        }
+        let supplied = match object_like {
+            Value::Promise(_) => key.as_str().is_some_and(|name| {
+                !matches!(Self::promise_property_value(name), Value::Undefined)
+            }),
+            Value::Generator(_) | Value::AsyncGeneratorObject(_) => match key {
+                RuntimePropertyKey::String(_) => key
+                    .as_str()
+                    .is_some_and(|name| matches!(name, "next" | "return" | "throw")),
+                RuntimePropertyKey::Symbol(symbol) => {
+                    let iterator = if matches!(object_like, Value::Generator(_)) {
+                        WellKnownSymbol::Iterator
+                    } else {
+                        WellKnownSymbol::AsyncIterator
+                    };
+                    *symbol == iterator.id()
+                }
+            },
+            Value::Iterator(handle) => !matches!(
+                self.iterator_runtime_property_value(*handle, key),
+                Value::Undefined
+            ),
+            _ => false,
+        };
+        if supplied {
+            return Ok(true);
+        }
+        if let Some(&intrinsic_prototype) = self
+            .exotic_intrinsic_prototype_name(object_like)
+            .and_then(|name| self.builtin_prototypes.get(name))
+        {
+            return self.proxy_aware_has_runtime_property(
+                Some(module),
+                intrinsic_prototype,
+                key,
+                0,
+            );
+        }
+        self.object_prototype_has_property(module, key)
     }
 
     /// Whether Object.prototype (allocated, or the builtins it supplies
@@ -60335,8 +60361,9 @@ impl InterpreterCore {
             // RequireObjectCoercible before entering this shared operation.
             return Ok(());
         }
-        let Some(source_id) = self.iterator_carrier_backing_id(&source, "object copy source")?
-        else {
+        // A function's, promise's, generator's or iterator's own properties
+        // are on its backing object; none exist until one was stored.
+        let Some(source_id) = self.own_property_holder(module, &source, false)? else {
             return Ok(());
         };
         let source_object = self
@@ -75116,6 +75143,21 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// TestIntegrityLevel of a function, promise, generator or iterator
+    /// value: its backing object's; false before one exists (it is
+    /// extensible) (bd-9vouw.149).
+    fn backing_has_integrity_level(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+        frozen: bool,
+    ) -> Result<bool, InterpreterError> {
+        match self.own_property_holder(module, value, false)? {
+            Some(backing) => self.object_has_integrity_level(backing, frozen),
+            None => Ok(false),
+        }
+    }
+
     /// ES2020 7.3.15 TestIntegrityLevel: sealed (`frozen == false`) or frozen.
     fn object_has_integrity_level(
         &self,
@@ -83293,6 +83335,15 @@ impl InterpreterCore {
                         let array_id = self.alloc_array_from_values(&values)?;
                         Ok(Value::Object(array_id))
                     }
+                    ref holder if Self::stores_own_properties_on_backing(holder) => {
+                        let values = self
+                            .backing_enumerable_own_entries(module, holder)?
+                            .into_iter()
+                            .map(|(_, value)| value)
+                            .collect::<Vec<_>>();
+                        let array_id = self.alloc_array_from_values(&values)?;
+                        Ok(Value::Object(array_id))
+                    }
                     _ => {
                         // Non-object argument - return empty array per JavaScript behavior
                         let array_id = self.alloc_array_from_values(&[])?;
@@ -83362,6 +83413,17 @@ impl InterpreterCore {
                         let mut entry_values = Vec::with_capacity(entries.len());
 
                         // Set array elements as numeric properties, each containing a [key, value] pair
+                        for (key, value) in entries {
+                            let entry_array_id =
+                                self.alloc_array_from_values(&[Value::Str(key), value])?;
+                            entry_values.push(Value::Object(entry_array_id));
+                        }
+                        let array_id = self.alloc_array_from_values(&entry_values)?;
+                        Ok(Value::Object(array_id))
+                    }
+                    ref holder if Self::stores_own_properties_on_backing(holder) => {
+                        let entries = self.backing_enumerable_own_entries(module, holder)?;
+                        let mut entry_values = Vec::with_capacity(entries.len());
                         for (key, value) in entries {
                             let entry_array_id =
                                 self.alloc_array_from_values(&[Value::Str(key), value])?;
@@ -83483,11 +83545,18 @@ impl InterpreterCore {
                     let source_val = self.read_reg(args.start + i)?;
                     let source_obj_id = match &source_val {
                         Value::Object(source_obj_id) => Some(*source_obj_id),
-                        // A function source's own enumerable properties.
-                        function if function.is_callable() => match module {
-                            Some(module) => self.function_own_property_object(module, function)?,
-                            None => None,
-                        },
+                        // A function source's own enumerable properties, and
+                        // a promise's, generator's or iterator's.
+                        holder
+                            if holder.is_callable() || Self::has_exotic_backing_object(holder) =>
+                        {
+                            match module {
+                                Some(module) => {
+                                    self.function_own_property_object(module, holder)?
+                                }
+                                None => None,
+                            }
+                        }
                         // Skip non-object sources (null, undefined, primitives)
                         _ => None,
                     };
@@ -83534,6 +83603,15 @@ impl InterpreterCore {
 
                         Ok(Value::Object(obj_id))
                     }
+                    // A function, promise, generator or iterator freezes the
+                    // backing object that holds its own properties
+                    // (bd-9vouw.149).
+                    ref holder if Self::stores_own_properties_on_backing(holder) => {
+                        if let Some(backing) = self.own_property_holder(module, holder, true)? {
+                            self.mutate_heap(|heap| heap[backing.0 as usize].is_frozen = true);
+                        }
+                        Ok(holder.clone())
+                    }
                     _ => {
                         // Non-object values are returned as-is (they're already "immutable")
                         Ok(obj_val)
@@ -83551,6 +83629,9 @@ impl InterpreterCore {
                     Value::Object(obj_id) => {
                         Ok(Value::Bool(self.object_has_integrity_level(obj_id, true)?))
                     }
+                    ref holder if Self::stores_own_properties_on_backing(holder) => Ok(
+                        Value::Bool(self.backing_has_integrity_level(module, holder, true)?),
+                    ),
                     _ => {
                         // Non-object values are considered frozen
                         Ok(Value::Bool(true))
@@ -85633,6 +85714,12 @@ impl InterpreterCore {
                     let array_id = self.alloc_array_from_values(&keys)?;
                     return Ok(Value::Object(array_id));
                 }
+                // So is a promise, generator or iterator (bd-9vouw.149).
+                if Self::has_exotic_backing_object(&value) {
+                    let keys = self.exotic_own_property_keys(module, &value)?;
+                    let array_id = self.alloc_array_from_values(&keys)?;
+                    return Ok(Value::Object(array_id));
+                }
                 let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
                 let keys = self.proxy_aware_own_property_keys(module, target, 0)?;
                 self.join_pending_hostcall_stream_label(target)?;
@@ -86203,6 +86290,15 @@ impl InterpreterCore {
                         let array_id = self.alloc_array_from_values(&names)?;
                         Ok(Value::Object(array_id))
                     }
+                    ref exotic if Self::has_exotic_backing_object(exotic) => {
+                        let names = self
+                            .exotic_own_property_keys(module, exotic)?
+                            .into_iter()
+                            .filter(|key| matches!(key, Value::Str(_)))
+                            .collect::<Vec<_>>();
+                        let array_id = self.alloc_array_from_values(&names)?;
+                        Ok(Value::Object(array_id))
+                    }
                     _ => {
                         // Non-object argument, return empty array
                         let empty_array_id = self.alloc_array_from_values(&[])?;
@@ -86224,6 +86320,11 @@ impl InterpreterCore {
                     ref function if function.is_callable() => {
                         self.function_own_property_symbols(module, function)?
                     }
+                    ref exotic if Self::has_exotic_backing_object(exotic) => self
+                        .exotic_own_property_keys(module, exotic)?
+                        .into_iter()
+                        .filter(|key| matches!(key, Value::Symbol(_)))
+                        .collect(),
                     _ => Vec::new(),
                 };
                 Ok(Value::Object(self.alloc_array_from_values(&values)?))
@@ -88396,6 +88497,10 @@ impl InterpreterCore {
                 let obj_val = self.arg_or_undefined(args, 1)?;
                 if let Value::Object(obj_id) = obj_val {
                     self.seal_object(obj_id)?;
+                } else if Self::stores_own_properties_on_backing(&obj_val)
+                    && let Some(backing) = self.own_property_holder(module, &obj_val, true)?
+                {
+                    self.seal_object(backing)?;
                 }
                 Ok(obj_val)
             }
@@ -88595,6 +88700,9 @@ impl InterpreterCore {
                     Value::Object(obj_id) => {
                         Ok(Value::Bool(self.object_has_integrity_level(obj_id, false)?))
                     }
+                    ref holder if Self::stores_own_properties_on_backing(holder) => Ok(
+                        Value::Bool(self.backing_has_integrity_level(module, holder, false)?),
+                    ),
                     _ => Ok(Value::Bool(true)),
                 }
             }
@@ -98190,23 +98298,28 @@ impl InterpreterCore {
                 digest.update(&identity);
                 (5u8, ContentHash::from_bytes(digest.finalize().into()), 0)
             }
-            // A promise, generator or async generator object has no heap
-            // storage of its own either: its own properties (`p.cancel =
+            // A promise, generator, async generator or iterator object has no
+            // heap storage of its own either: its own properties (`p.cancel =
             // fn`, `Object.assign(promise, ...)`) live on a backing object
-            // too. Their ids are the runtime's, not a module's, so the owner
-            // is a constant (computed once: every `p.then` read asks).
-            Value::Promise(id) | Value::Generator(id) | Value::AsyncGeneratorObject(id) => {
-                static OWNERS: OnceLock<[ContentHash; 3]> = OnceLock::new();
+            // too. Their ids are the runtime's (never reused), not a
+            // module's, so the owner is a constant (computed once: every
+            // `p.then` read asks).
+            Value::Promise(id)
+            | Value::Generator(id)
+            | Value::AsyncGeneratorObject(id)
+            | Value::Iterator(id) => {
+                static OWNERS: OnceLock<[ContentHash; 4]> = OnceLock::new();
                 let owners = OWNERS.get_or_init(|| {
                     let mut digest = Sha256::new();
                     digest.update(b"FrankenEngine.ExoticObjectOwnProperties.v1");
                     let base = ContentHash::from_bytes(digest.finalize().into());
-                    [6u8, 7, 8].map(|kind| Self::function_own_property_owner(kind, &base))
+                    [6u8, 7, 8, 9].map(|kind| Self::function_own_property_owner(kind, &base))
                 });
                 let slot = match function {
                     Value::Promise(_) => 0,
                     Value::Generator(_) => 1,
-                    _ => 2,
+                    Value::AsyncGeneratorObject(_) => 2,
+                    _ => 3,
                 };
                 return Ok(Some((owners[slot], *id)));
             }
@@ -98375,13 +98488,16 @@ impl InterpreterCore {
         })
     }
 
-    /// Whether `value` is a promise, generator or async generator object,
-    /// whose own properties live on a backing object (see
+    /// Whether `value` is a promise, generator, async generator or iterator
+    /// object, whose own properties live on a backing object (see
     /// `function_own_property_key`).
     fn has_exotic_backing_object(value: &Value) -> bool {
         matches!(
             value,
-            Value::Promise(_) | Value::Generator(_) | Value::AsyncGeneratorObject(_)
+            Value::Promise(_)
+                | Value::Generator(_)
+                | Value::AsyncGeneratorObject(_)
+                | Value::Iterator(_)
         )
     }
 
@@ -98418,6 +98534,68 @@ impl InterpreterCore {
         let own =
             self.proxy_aware_get_runtime_property(Some(module), backing, key, value.clone(), 0)?;
         Ok(Some((own, backing)))
+    }
+
+    /// [[OwnPropertyKeys]] of a promise, generator, async generator or
+    /// iterator object (bd-9vouw.149): its backing object's keys, or none
+    /// when nothing was ever stored on it. Creates no backing object.
+    fn exotic_own_property_keys(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let Some(backing) = self.own_property_holder(module, value, false)? else {
+            return Ok(Vec::new());
+        };
+        self.join_pending_hostcall_stream_label(backing)?;
+        self.proxy_aware_own_property_keys(module, backing, 0)
+    }
+
+    /// Whether `value` is an object whose own properties live on a backing
+    /// object: a function (not a callable proxy, whose traps decide), a
+    /// promise, a generator or an iterator.
+    fn stores_own_properties_on_backing(value: &Value) -> bool {
+        (value.is_callable()
+            && !matches!(value, Value::Object(_))
+            && !Self::is_callable_proxy(value))
+            || Self::has_exotic_backing_object(value)
+    }
+
+    /// The enumerable own String-keyed properties of a function, promise,
+    /// generator or iterator, in property order, each read by [[Get]] with
+    /// `value` as the receiver (Object.values / Object.entries, ES2020
+    /// 7.3.23 EnumerableOwnPropertyNames). Creates no backing object.
+    fn backing_enumerable_own_entries(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<Vec<(JsString, Value)>, InterpreterError> {
+        let Some(backing) = self.own_property_holder(module, value, false)? else {
+            return Ok(Vec::new());
+        };
+        self.join_pending_hostcall_stream_label(backing)?;
+        let keys = self
+            .heap
+            .get(backing.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: backing.0 })?
+            .properties
+            .exact_keys()
+            .into_iter()
+            .filter(|key| self.ordinary_own_string_key_is_enumerable(backing, key))
+            .collect::<Vec<_>>();
+        let mut entries = Vec::with_capacity(keys.len());
+        for key in keys {
+            let property_key = RuntimePropertyKey::String(key.clone());
+            let property_value = self.proxy_aware_get_runtime_property(
+                module,
+                backing,
+                &property_key,
+                value.clone(),
+                0,
+            )?;
+            entries.push((key, property_value));
+        }
+        Ok(entries)
     }
 
     /// bd-9vouw.17: the object that holds `value`'s own properties for the

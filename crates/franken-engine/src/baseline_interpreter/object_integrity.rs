@@ -90,11 +90,13 @@ impl InterpreterCore {
                             ))
                         }
                     }
-                    ObjectIntegrityOperation::IsExtensible => Ok(Value::Bool(true)),
-                    ObjectIntegrityOperation::PreventExtensions => Err(Self::integrity_type_error(
-                        "function with property storage",
-                        "function without property storage",
-                    )),
+                    // [[Extensible]] is its backing object's (bd-9vouw.149).
+                    ObjectIntegrityOperation::IsExtensible => {
+                        Ok(Value::Bool(self.backing_is_extensible(module, &target)?))
+                    }
+                    ObjectIntegrityOperation::PreventExtensions => {
+                        self.prevent_backing_extensions(module, &target, reflect)
+                    }
                 };
             }
             // A promise, generator, async generator or iterator value has no
@@ -102,14 +104,20 @@ impl InterpreterCore {
             // prototype (%Promise.prototype%, bd-9vouw.34; %GeneratorPrototype%,
             // %AsyncGeneratorPrototype%, %ArrayIteratorPrototype%), which
             // core-js and regenerator-runtime read at load
-            // (`getProto(getProto([].keys()))`), and it is extensible.
+            // (`getProto(getProto([].keys()))`). Its [[Extensible]] is its
+            // backing object's, true until one exists (bd-9vouw.149).
             if let Some(name) = self.exotic_intrinsic_prototype_name(&target) {
                 match operation {
                     ObjectIntegrityOperation::GetPrototype => {
                         return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
                     }
-                    ObjectIntegrityOperation::IsExtensible => return Ok(Value::Bool(true)),
-                    _ => {}
+                    ObjectIntegrityOperation::IsExtensible => {
+                        return Ok(Value::Bool(self.backing_is_extensible(module, &target)?));
+                    }
+                    ObjectIntegrityOperation::PreventExtensions => {
+                        return self.prevent_backing_extensions(module, &target, reflect);
+                    }
+                    ObjectIntegrityOperation::SetPrototype => {}
                 }
             }
             let target_id = match &target {
@@ -230,6 +238,42 @@ impl InterpreterCore {
             .saturating_add(saved_bytes);
         self.json_release_temporary(scratch);
         outcome
+    }
+
+    /// [[IsExtensible]] of a function, promise, generator or iterator value:
+    /// its backing object's, and true before one exists (bd-9vouw.149).
+    fn backing_is_extensible(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<bool, InterpreterError> {
+        match self.own_property_holder(module, value, false)? {
+            Some(backing) => self.object_is_extensible(module, backing, 0),
+            None => Ok(true),
+        }
+    }
+
+    /// [[PreventExtensions]] of a function, promise, generator or iterator
+    /// value, on its backing object (created for it): Reflect's result is
+    /// `true`, Object.preventExtensions returns the value.
+    fn prevent_backing_extensions(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+        reflect: bool,
+    ) -> Result<Value, InterpreterError> {
+        let Some(backing) = self.own_property_holder(module, value, true)? else {
+            return Err(Self::integrity_type_error(
+                "object with property storage",
+                value.type_name(),
+            ));
+        };
+        let success = self.object_prevent_extensions(module, backing, 0)?;
+        Ok(if reflect {
+            Value::Bool(success)
+        } else {
+            value.clone()
+        })
     }
 
     /// [[GetPrototypeOf]] of a function value: a derived class's parent, the

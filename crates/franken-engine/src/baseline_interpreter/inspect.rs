@@ -1066,7 +1066,6 @@ impl InterpreterCore {
                 "buffer",
                 "BYTES_PER_ELEMENT",
             ],
-            Some("Map" | "Set") => &["size"],
             Some("RegExp") => &["source", "flags", "lastIndex"],
             _ => &[],
         };

@@ -49646,17 +49646,16 @@ impl InterpreterCore {
                     // intrinsic prototype (after the match).
                     // A callable proxy's [[Get]] is its trap's (or its
                     // target's) answer, never continued here.
-                    let inherited_base = if function_backing.is_none()
-                        && !Self::is_callable_proxy(&obj_val)
-                    {
-                        Self::function_intrinsic_prototype_name(&obj_val)
-                            .or(self
-                                .exotic_intrinsic_prototype_name(&obj_val)
-                                .filter(|name| *name != "Promise"))
-                            .map(|prototype| (prototype, obj_val.clone()))
-                    } else {
-                        None
-                    };
+                    let inherited_base =
+                        if function_backing.is_none() && !Self::is_callable_proxy(&obj_val) {
+                            Self::function_intrinsic_prototype_name(&obj_val)
+                                .or(self
+                                    .exotic_intrinsic_prototype_name(&obj_val)
+                                    .filter(|name| *name != "Promise"))
+                                .map(|prototype| (prototype, obj_val.clone()))
+                        } else {
+                            None
+                        };
 
                     // The prototype object a primitive base's property came
                     // from, for the stored-label join below.
@@ -59525,12 +59524,12 @@ impl InterpreterCore {
                     expected: "callable Proxy record".to_string(),
                     got: "ordinary object".to_string(),
                 })?;
-        let function = self
-            .proxy_call_target(proxy)
-            .ok_or_else(|| InterpreterError::TypeError {
-                expected: "callable Proxy target".to_string(),
-                got: "missing target".to_string(),
-            })?;
+        let function =
+            self.proxy_call_target(proxy)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "callable Proxy target".to_string(),
+                    got: "missing target".to_string(),
+                })?;
         Ok((proxy, handler, function))
     }
 
@@ -59691,7 +59690,11 @@ impl InterpreterCore {
             module,
             handler,
             "get",
-            vec![self.proxy_trap_target(object_id, target), key.value(), receiver.clone()],
+            vec![
+                self.proxy_trap_target(object_id, target),
+                key.value(),
+                receiver.clone(),
+            ],
         )? {
             return Ok(value);
         }
@@ -59883,7 +59886,9 @@ impl InterpreterCore {
     ) -> Result<Option<ObjectId>, InterpreterError> {
         let mut object_id = match receiver {
             Value::Object(object_id) => *object_id,
-            Value::BuiltinFunction(builtin) if builtin.kind == BuiltinFunctionKind::CallableProxy => {
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+            {
                 Self::callable_proxy_record_id(builtin)?
             }
             _ => return Ok(None),
@@ -59988,7 +59993,9 @@ impl InterpreterCore {
             && let Some(function) = self.proxy_call_target(object_id)
         {
             return match &function {
-                Value::BuiltinFunction(inner) if inner.kind == BuiltinFunctionKind::CallableProxy => {
+                Value::BuiltinFunction(inner)
+                    if inner.kind == BuiltinFunctionKind::CallableProxy =>
+                {
                     let inner = Self::callable_proxy_record_id(inner)?;
                     self.proxy_aware_has_runtime_property(Some(module), inner, key, depth + 1)
                 }
@@ -60151,9 +60158,12 @@ impl InterpreterCore {
             return self.ordinary_own_property_key_values(object_id);
         };
 
-        if let Some(result) =
-            self.invoke_proxy_trap(module, handler, "ownKeys", vec![self.proxy_trap_target(object_id, target)])?
-        {
+        if let Some(result) = self.invoke_proxy_trap(
+            module,
+            handler,
+            "ownKeys",
+            vec![self.proxy_trap_target(object_id, target)],
+        )? {
             let key_values = self.observable_proxy_own_keys_list(module, result)?;
             let mut seen = BTreeSet::new();
             for key_value in &key_values {
@@ -60205,7 +60215,10 @@ impl InterpreterCore {
             module,
             handler,
             "getOwnPropertyDescriptor",
-            vec![self.proxy_trap_target(object_id, target), Value::Str(key.clone())],
+            vec![
+                self.proxy_trap_target(object_id, target),
+                Value::Str(key.clone()),
+            ],
         )?;
         match descriptor {
             // Trap absent: the target governs the descriptor.
@@ -61237,7 +61250,9 @@ impl InterpreterCore {
                     name,
                 )?
             }
-            Value::BuiltinFunction(builtin) if builtin.kind == BuiltinFunctionKind::BoundFunction => {
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::BoundFunction =>
+            {
                 match self.bound_function_property(module, builtin, name)? {
                     Some(value) => value,
                     None => Self::function_prototype_property(name).unwrap_or(Value::Undefined),
@@ -61254,8 +61269,8 @@ impl InterpreterCore {
             Value::BuiltinFunction(builtin)
                 if Self::builtin_function_property_object(builtin).is_some() =>
             {
-                let property_object = Self::builtin_function_property_object(builtin)
-                    .expect("checked by the guard");
+                let property_object =
+                    Self::builtin_function_property_object(builtin).expect("checked by the guard");
                 self.proxy_aware_get_runtime_property(
                     Some(module),
                     property_object,

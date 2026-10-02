@@ -9200,16 +9200,18 @@ impl ScopeChain {
     }
 
     fn current(&self) -> Result<&ScopeFrame, InterpreterError> {
-        self.frames.last().ok_or(InterpreterError::InternalError {
-            details: "scope chain unexpectedly empty".to_string(),
-        })
+        self.frames
+            .last()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "scope chain unexpectedly empty".to_string(),
+            })
     }
 
     fn current_mut(&mut self) -> Result<&mut ScopeFrame, InterpreterError> {
         // Scope chain is initialized with global frame and should never be emptied
         self.frames
             .last_mut()
-            .ok_or(InterpreterError::InternalError {
+            .ok_or_else(|| InterpreterError::InternalError {
                 details: "scope chain unexpectedly empty".to_string(),
             })
     }
@@ -35673,13 +35675,13 @@ impl InterpreterCore {
     fn snapshot_current_scope_frame_bindings(
         &self,
     ) -> Result<BTreeMap<String, ScopeBinding>, InterpreterError> {
-        let frame = self
-            .scope_chain
-            .frames
-            .last()
-            .ok_or(InterpreterError::InternalError {
-                details: "scope chain unexpectedly empty".to_string(),
-            })?;
+        let frame =
+            self.scope_chain
+                .frames
+                .last()
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "scope chain unexpectedly empty".to_string(),
+                })?;
         let mut snapshot = BTreeMap::new();
         for (name, binding) in frame.bindings.iter() {
             snapshot.insert(name.clone(), binding.detached_clone()?);
@@ -98311,9 +98313,11 @@ impl InterpreterCore {
                 return Ok(None);
             };
             self.json_store_parsed_property(id, JsString::from(len.to_string()), value)?;
-            len = len.checked_add(1).ok_or(InterpreterError::RangeError {
-                message: "JSON array length exceeds the array-index range".to_string(),
-            })?;
+            len = len
+                .checked_add(1)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "JSON array length exceeds the array-index range".to_string(),
+                })?;
             Self::json_skip_ws(units, pos);
             match units.get(*pos) {
                 Some(0x2C) => *pos += 1,

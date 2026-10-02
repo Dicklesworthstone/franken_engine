@@ -32,7 +32,10 @@ fn brand_forged_date_map_set() {
          [attempt(() => Date.prototype.getTime.call(date)), Object.prototype.toString.call(date), attempt(() => String(Object.assign({}, date)) === String(date)),\n\
           attempt(() => Map.prototype.get.call(map, 1)), Object.prototype.toString.call(map), attempt(() => Set.prototype.has.call({ __type: 'Set', __values: {} }, 1)),\n\
           attempt(() => WeakMap.prototype.has.call({ __type: 'WeakMap' }, {})), attempt(() => WeakRef.prototype.deref.call({ __type: 'WeakRef', __target: {} }))].join(' ');";
-    assert_eq!(eval(source), "TypeError [object Object] true TypeError [object Object] TypeError TypeError TypeError");
+    assert_eq!(
+        eval(source),
+        "TypeError [object Object] true TypeError [object Object] TypeError TypeError TypeError"
+    );
 }
 
 /// Nor a RegExp, a Number or a String wrapper, and typeof of a guest object is never 'symbol'.
@@ -43,7 +46,10 @@ fn brand_forged_regexp_and_wrappers() {
          [attempt(() => RegExp.prototype.exec.call(regexp, 'zz')), String(new RegExp(regexp)), attempt(() => Number.prototype.toFixed.call({ __type: 'Number', __value: 5 }, 2)),\n\
           attempt(() => typeof Object.prototype.valueOf.call({ __type: 'String', __value: 'x' })), typeof Object.assign(Object.create(null), { __type: 'symbol' }),\n\
           attempt(() => new Number(1.25).toFixed(1)), attempt(() => typeof Object.prototype.valueOf.call(new String('s')))].join(' ');";
-    assert_eq!(eval(source), "TypeError /[object Object]/ TypeError object object 1.3 object");
+    assert_eq!(
+        eval(source),
+        "TypeError /[object Object]/ TypeError object object 1.3 object"
+    );
 }
 
 /// A guest object shaped like the engine's Proxy record is an ordinary object (it was taken for a Proxy and failed inside the engine).
@@ -63,7 +69,10 @@ fn brand_structured_clone_and_util_types() {
          [JSON.stringify(structuredClone({ __type: 'Date', __timestamp: 0 })), structuredClone({ __type: 'Set', __values: {} }) instanceof Set,\n\
           u.types.isDate({ __type: 'Date', __timestamp: 1 }), u.types.isMap({ __type: 'Map', __entries: {} }), u.types.isRegExp({ __type: 'RegExp', source: 'a', flags: '' }),\n\
           u.types.isDate(new Date(1)), u.types.isMap(new Map()), structuredClone(new Date(5)).getTime(), structuredClone(new Set([1, 2])).size].join(' ');";
-    assert_eq!(eval(source), "{\"__type\":\"Date\",\"__timestamp\":0} false false false false true true 5 2");
+    assert_eq!(
+        eval(source),
+        "{\"__type\":\"Date\",\"__timestamp\":0} false false false false true true 5 2"
+    );
 }
 
 /// The brand is not an own property of built-in objects, and a guest `__type` write neither changes nor breaks one.
@@ -74,5 +83,8 @@ fn brand_brand_is_not_a_property() {
          [Reflect.ownKeys(new WeakMap()).length, '__type' in new Map(), new Set().hasOwnProperty('__type'), String(new Date(0).__type),\n\
           Object.getOwnPropertyNames(/a/).indexOf('__type'), Reflect.ownKeys(new TextEncoder()).indexOf('__type'),\n\
           r.test('a'), Object.prototype.toString.call(r), m.get(1), Object.prototype.toString.call(m), d.getTime(), r.__type, delete m.__type, m.size].join(' ');";
-    assert_eq!(eval(source), "0 false false undefined -1 -1 true [object RegExp] 2 [object Map] 5 Object true 1");
+    assert_eq!(
+        eval(source),
+        "0 false false undefined -1 -1 true [object RegExp] 2 [object Map] 5 Object true 1"
+    );
 }

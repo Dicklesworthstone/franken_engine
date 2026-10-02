@@ -652,7 +652,7 @@ impl InterpreterCore {
                     trap,
                     Value::Object(handler),
                     vec![
-                        Value::Object(target),
+                        self.proxy_trap_target(object, target),
                         key.value(),
                         Value::Object(descriptor),
                     ],

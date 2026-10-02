@@ -399,7 +399,7 @@ impl InterpreterCore {
             module,
             handler,
             "getPrototypeOf",
-            vec![Value::Object(target)],
+            vec![self.proxy_trap_target(id, target)],
         )?
         else {
             return self.object_get_prototype(module, target, depth + 1);
@@ -433,7 +433,7 @@ impl InterpreterCore {
                 handler,
                 "setPrototypeOf",
                 vec![
-                    Value::Object(target),
+                    self.proxy_trap_target(id, target),
                     prototype.map_or(Value::Null, Value::Object),
                 ],
             )?
@@ -507,7 +507,7 @@ impl InterpreterCore {
             return Ok(self.heap[id.0 as usize].extensible());
         };
         let Some(result) =
-            self.invoke_proxy_trap(module, handler, "isExtensible", vec![Value::Object(target)])?
+            self.invoke_proxy_trap(module, handler, "isExtensible", vec![self.proxy_trap_target(id, target)])?
         else {
             return self.object_is_extensible(module, target, depth + 1);
         };
@@ -540,7 +540,7 @@ impl InterpreterCore {
             module,
             handler,
             "preventExtensions",
-            vec![Value::Object(target)],
+            vec![self.proxy_trap_target(id, target)],
         )?
         else {
             return self.object_prevent_extensions(module, target, depth + 1);

@@ -1112,7 +1112,9 @@ impl<V> IntoIterator for OrderedStringMap<V> {
 
 /// The array index `key` names: a decimal integer below 2^32 - 1 with no
 /// sign and no leading zero (`"0"` itself is one). Allocation-free, since
-/// every property lookup asks.
+/// every property lookup asks. Inlined: a non-digit first byte answers at
+/// once, the common case for named keys.
+#[inline]
 pub fn canonical_array_index(key: &str) -> Option<u32> {
     let (&first, rest) = key.as_bytes().split_first()?;
     if !first.is_ascii_digit() || (first == b'0' && !rest.is_empty()) || rest.len() > 9 {

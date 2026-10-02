@@ -632,7 +632,11 @@ impl GcMarker {
             execution,
             resume_dst: _,
             phase: _,
+            prototype,
         } = generator;
+        if let Some(prototype) = prototype {
+            self.object(*prototype);
+        }
         if let Some(invocation) = invocation {
             invocation
                 .arguments

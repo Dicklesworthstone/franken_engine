@@ -812,7 +812,10 @@ impl InterpreterCore {
         let ids = self.prototype_owner_ids(owner);
         Ok(match function {
             Value::Function(index) => Some((ids.constructor_override[0], *index)),
-            Value::Closure(index) => Some((ids.constructor_override[1], *index)),
+            // Generator functions index the closure table too (bd-9vouw.120).
+            Value::Closure(index)
+            | Value::GeneratorFunction(index)
+            | Value::AsyncGeneratorFunction(index) => Some((ids.constructor_override[1], *index)),
             _ => None,
         })
     }

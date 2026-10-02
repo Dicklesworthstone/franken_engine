@@ -97692,6 +97692,30 @@ impl InterpreterCore {
                 },
             )?;
         }
+        // %TypedArray%.prototype[@@toStringTag] is an accessor whose getter
+        // answers the receiver's kind (ES2020 22.2.3.32, bd-9vouw.155):
+        // safe-stable-stringify reads it with getOwnPropertyDescriptor.
+        if canonical == TYPED_ARRAY_INTRINSIC {
+            let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+            self.define_accessor_property(
+                prototype,
+                key.clone(),
+                Value::BuiltinFunction(BuiltinFunction::prototype_getter(
+                    TYPED_ARRAY_INTRINSIC,
+                    prototype_getters::TYPED_ARRAY_TO_STRING_TAG,
+                )),
+                AccessorKind::Get,
+            )?;
+            self.set_own_property_attributes(
+                prototype,
+                &key,
+                PropertyAttributes {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                },
+            )?;
+        }
         self.install_iteration_prototype_members(canonical, prototype)?;
         // %GeneratorFunction.prototype%.prototype is %GeneratorPrototype%
         // (ES2020 25.2.3.2), linked when that one is created.

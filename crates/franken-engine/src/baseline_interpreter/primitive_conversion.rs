@@ -363,7 +363,7 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn conversion_to_string(
+    pub(super) fn conversion_to_string(
         &mut self,
         module: Option<&Ir3Module>,
         input: Value,

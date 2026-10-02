@@ -19688,6 +19688,22 @@ fn console_builtin_call_capability(
         "error" => Some("console:error"),
         "warn" => Some("console:warn"),
         "info" => Some("console:info"),
+        // The other Node console methods (bd-9vouw.158): the same sink,
+        // label checks and output channel as log.
+        "debug" => Some("console:debug"),
+        "trace" => Some("console:trace"),
+        "dir" => Some("console:dir"),
+        "dirxml" => Some("console:dirxml"),
+        "time" => Some("console:time"),
+        "timeEnd" => Some("console:timeEnd"),
+        "timeLog" => Some("console:timeLog"),
+        "count" => Some("console:count"),
+        "countReset" => Some("console:countReset"),
+        "group" => Some("console:group"),
+        "groupCollapsed" => Some("console:groupCollapsed"),
+        "groupEnd" => Some("console:groupEnd"),
+        "assert" => Some("console:assert"),
+        "clear" => Some("console:clear"),
         _ => None,
     }
 }
@@ -29370,6 +29386,20 @@ fn hostcall_exception_is_operand_derived(
         | "console:error"
         | "console:warn"
         | "console:info"
+        | "console:debug"
+        | "console:trace"
+        | "console:dir"
+        | "console:dirxml"
+        | "console:time"
+        | "console:timeEnd"
+        | "console:timeLog"
+        | "console:count"
+        | "console:countReset"
+        | "console:group"
+        | "console:groupCollapsed"
+        | "console:groupEnd"
+        | "console:assert"
+        | "console:clear"
         // bd-dign3 follow-up: the whole zlib sync family shares this arm -
         // pure-compute engine implementations over closed inputs whose only
         // exceptional outcomes are engine-owned validation errors.

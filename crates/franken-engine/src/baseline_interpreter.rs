@@ -2656,6 +2656,10 @@ pub enum BuiltinFunctionKind {
     ConsoleError,
     ConsoleWarn,
     ConsoleInfo,
+    /// The other `console` methods (bd-9vouw.158): `debug`, `assert`,
+    /// `count`, `group`, `time`, ... named by the specifier, one of
+    /// [`CONSOLE_EXTRA_METHODS`].
+    ConsoleMethod,
     StringCharAt,
     StringCharCodeAt,
     /// `String.prototype.at` - receiver-aware UTF-16 code-unit access with
@@ -4829,6 +4833,15 @@ impl BuiltinFunction {
         }
     }
 
+    fn console_method(method: &str) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ConsoleMethod,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn proxy_revoke(proxy_id: ObjectId) -> Self {
         Self {
             kind: BuiltinFunctionKind::ProxyRevoke,
@@ -4903,6 +4916,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ConsoleError => "error",
             BuiltinFunctionKind::ConsoleWarn => "warn",
             BuiltinFunctionKind::ConsoleInfo => "info",
+            BuiltinFunctionKind::ConsoleMethod => CONSOLE_EXTRA_METHODS
+                .iter()
+                .copied()
+                .find(|method| self.module_specifier.0.as_deref() == Some(*method))
+                .unwrap_or("log"),
             BuiltinFunctionKind::StringCharAt => "charAt",
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
             BuiltinFunctionKind::StringAt => "at",
@@ -5523,7 +5541,11 @@ impl BuiltinFunction {
                 Some("Collator") => "Intl.Collator.prototype",
                 _ => "Intl.PluralRules.prototype",
             },
-            K::ConsoleLog | K::ConsoleError | K::ConsoleWarn | K::ConsoleInfo => "console",
+            K::ConsoleLog
+            | K::ConsoleError
+            | K::ConsoleWarn
+            | K::ConsoleInfo
+            | K::ConsoleMethod => "console",
             K::SetTimeout
             | K::SetInterval
             | K::SetImmediate
@@ -5817,6 +5839,62 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 22] = [
     "TextDecoder",
     "Buffer",
 ];
+
+/// `console` methods besides log/error/warn/info (bd-9vouw.158), as Node
+/// v22.2.0 has them. `table` is not among them yet.
+const CONSOLE_EXTRA_METHODS: [&str; 14] = [
+    "debug",
+    "trace",
+    "dir",
+    "dirxml",
+    "time",
+    "timeEnd",
+    "timeLog",
+    "count",
+    "countReset",
+    "group",
+    "groupCollapsed",
+    "groupEnd",
+    "assert",
+    "clear",
+];
+
+/// Node's `console.time` rendering of an elapsed time in milliseconds
+/// (lib/internal/console/constructor.js formatTime), bd-9vouw.158.
+fn console_elapsed_time(elapsed_ms: f64) -> String {
+    const SECOND: f64 = 1000.0;
+    const MINUTE: f64 = 60.0 * SECOND;
+    const HOUR: f64 = 60.0 * MINUTE;
+    let (mut hours, mut minutes, mut seconds, mut ms) = (0.0, 0.0, 0.0, elapsed_ms);
+    if ms >= SECOND {
+        if ms >= MINUTE {
+            if ms >= HOUR {
+                hours = (ms / HOUR).floor();
+                ms %= HOUR;
+            }
+            minutes = (ms / MINUTE).floor();
+            ms %= MINUTE;
+        }
+        seconds = ms / SECOND;
+    }
+    if hours != 0.0 || minutes != 0.0 {
+        let fixed = format!("{seconds:.3}");
+        let (whole, fraction) = fixed.split_once('.').unwrap_or((fixed.as_str(), "000"));
+        let head = if hours != 0.0 {
+            format!("{hours}:{minutes:0>2}")
+        } else {
+            format!("{minutes}")
+        };
+        let unit = if hours != 0.0 { "h:m" } else { "" };
+        return format!("{head}:{whole:0>2}.{fraction} ({unit}m:ss.mmm)");
+    }
+    if seconds != 0.0 {
+        return format!("{seconds:.3}s");
+    }
+    // Number(ms.toFixed(3)): trailing zeros dropped.
+    let rounded = (ms * 1000.0).round() / 1000.0;
+    format!("{}ms", ryu_js::Buffer::new().format(rounded))
+}
 
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
 /// FrankenEngine is hermetic: local time is UTC, so each local accessor
@@ -14259,6 +14337,13 @@ pub struct InterpreterCore {
     /// Total message bytes in `console_output`, held under
     /// `config.max_console_bytes`.
     console_output_bytes: usize,
+    /// `console.group` nesting (bd-9vouw.158): later console output is
+    /// indented two spaces per level.
+    console_group_depth: usize,
+    /// `console.count` counters by label.
+    console_counts: BTreeMap<String, u64>,
+    /// `console.time` starts (performance.now() ticks) by label.
+    console_timers: BTreeMap<String, f64>,
     /// Exit status set by `process.exitCode = n` or `process.exit(n)`
     /// (bd-my9hk); `None` means the program never set one.
     process_exit_code: Option<i32>,
@@ -15156,6 +15241,9 @@ impl InterpreterCore {
             entry_module_specifier: None,
             console_output: Vec::new(),
             console_output_bytes: 0,
+            console_group_depth: 0,
+            console_counts: BTreeMap::new(),
+            console_timers: BTreeMap::new(),
             process_exit_code: None,
             virtual_clock_instruction_mark: 0,
             profiling_data: None,
@@ -34169,6 +34257,184 @@ impl InterpreterCore {
     /// Retain one console entry, or fail the run when the console budget is
     /// spent. Output is never dropped silently: a truncated transcript would
     /// be a wrong answer that still exits 0.
+    /// Console output under the current `console.group` indentation: two
+    /// spaces per level before every line, as Node's groupIndent.
+    fn push_indented_console_output(
+        &mut self,
+        level: ConsoleLevel,
+        message: String,
+    ) -> Result<(), InterpreterError> {
+        if self.console_group_depth == 0 {
+            return self.push_console_output(level, message);
+        }
+        let indent = "  ".repeat(self.console_group_depth);
+        let indented = message
+            .split('\n')
+            .map(|line| format!("{indent}{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.push_console_output(level, indented)
+    }
+
+    /// `console.count` / `time` label: `${label}`, 'default' when absent or
+    /// undefined.
+    fn console_label(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Option<Value>,
+    ) -> Result<String, InterpreterError> {
+        match value {
+            None | Some(Value::Undefined) => Ok("default".to_string()),
+            Some(value) => Ok(self.conversion_to_string(module, value)?.to_string()),
+        }
+    }
+
+    /// Record a new count/time label, charging its bytes to the console
+    /// budget like output.
+    fn charge_console_label(&mut self, label: &str) -> Result<(), InterpreterError> {
+        let entries = self
+            .console_counts
+            .len()
+            .saturating_add(self.console_timers.len())
+            .saturating_add(1);
+        let bytes = self.console_output_bytes.saturating_add(label.len());
+        let (max_entries, max_bytes) = (
+            self.config.max_console_entries,
+            self.config.max_console_bytes,
+        );
+        if entries > max_entries || bytes > max_bytes {
+            return Err(InterpreterError::ConsoleBudgetExceeded {
+                entries,
+                max_entries,
+                bytes,
+                max_bytes,
+            });
+        }
+        self.console_output_bytes = bytes;
+        Ok(())
+    }
+
+    /// The `console` methods besides log/error/warn/info (bd-9vouw.158), as
+    /// Node v22.2.0 implements them: assert and trace write to stderr, the
+    /// rest to stdout; warnings Node emits as process warnings are console
+    /// warnings here. Timers read the deterministic performance.now() clock.
+    fn console_extra_method(
+        &mut self,
+        method: &str,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let arg = |core: &Self, index: u32| core.builtin_arg(args, index);
+        match method {
+            // Normally routed as console:log; the same output either way.
+            "debug" | "dirxml" => {
+                let message = self.console_format_arguments(module, args)?;
+                self.push_indented_console_output(ConsoleLevel::Log, message)?;
+            }
+            // util.inspect of the first argument, also for a string.
+            "dir" => {
+                let value = arg(self, 0)?.unwrap_or(Value::Undefined);
+                let text = self.console_inspect(module, &value)?;
+                self.push_indented_console_output(ConsoleLevel::Log, text)?;
+            }
+            "trace" => {
+                let message = self.console_format_arguments(module, args)?;
+                let text = if message.is_empty() {
+                    "Trace".to_string()
+                } else {
+                    format!("Trace: {message}")
+                };
+                self.push_indented_console_output(ConsoleLevel::Error, text)?;
+            }
+            // Never throws. A falsy assertion warns its data: a leading
+            // string becomes "Assertion failed: <string>", anything else is
+            // preceded by "Assertion failed".
+            "assert" => {
+                if arg(self, 0)?.is_some_and(|condition| condition.is_truthy()) {
+                    return Ok(());
+                }
+                let mut values = Vec::new();
+                for offset in 1..args.count {
+                    values.push(arg(self, offset)?.unwrap_or(Value::Undefined));
+                }
+                match values.first() {
+                    Some(Value::Str(first)) => {
+                        values[0] = Value::str(format!("Assertion failed: {first}"));
+                    }
+                    _ => values.insert(0, Value::str("Assertion failed")),
+                }
+                let text = self.format_values(module, &values)?;
+                self.push_indented_console_output(ConsoleLevel::Warn, text)?;
+            }
+            "count" => {
+                let label = self.console_label(module, arg(self, 0)?)?;
+                if !self.console_counts.contains_key(&label) {
+                    self.charge_console_label(&label)?;
+                }
+                let count = self.console_counts.entry(label.clone()).or_insert(0);
+                *count = count.saturating_add(1);
+                let text = format!("{label}: {count}");
+                self.push_indented_console_output(ConsoleLevel::Log, text)?;
+            }
+            "countReset" => {
+                let label = self.console_label(module, arg(self, 0)?)?;
+                if self.console_counts.remove(&label).is_none() {
+                    let text = format!("Warning: Count for '{label}' does not exist");
+                    self.push_indented_console_output(ConsoleLevel::Warn, text)?;
+                }
+            }
+            "group" | "groupCollapsed" => {
+                if args.count > 0 {
+                    let message = self.console_format_arguments(module, args)?;
+                    self.push_indented_console_output(ConsoleLevel::Log, message)?;
+                }
+                self.console_group_depth = self.console_group_depth.saturating_add(1);
+            }
+            "groupEnd" => {
+                self.console_group_depth = self.console_group_depth.saturating_sub(1);
+            }
+            "time" => {
+                let label = self.console_label(module, arg(self, 0)?)?;
+                if self.console_timers.contains_key(&label) {
+                    let text =
+                        format!("Warning: Label '{label}' already exists for console.time()");
+                    self.push_indented_console_output(ConsoleLevel::Warn, text)?;
+                    return Ok(());
+                }
+                self.charge_console_label(&label)?;
+                let now =
+                    Self::coerce_to_float(&self.deterministic_performance_now()).unwrap_or(0.0);
+                self.console_timers.insert(label, now);
+            }
+            "timeEnd" | "timeLog" => {
+                let label = self.console_label(module, arg(self, 0)?)?;
+                let Some(&start) = self.console_timers.get(&label) else {
+                    let text = format!("Warning: No such label '{label}' for console.{method}()");
+                    self.push_indented_console_output(ConsoleLevel::Warn, text)?;
+                    return Ok(());
+                };
+                let now =
+                    Self::coerce_to_float(&self.deterministic_performance_now()).unwrap_or(start);
+                let mut text = format!("{label}: {}", console_elapsed_time(now - start));
+                if method == "timeEnd" {
+                    self.console_timers.remove(&label);
+                } else if args.count > 1 {
+                    let mut values = Vec::new();
+                    for offset in 1..args.count {
+                        values.push(arg(self, offset)?.unwrap_or(Value::Undefined));
+                    }
+                    text.push(' ');
+                    text.push_str(&self.format_values(module, &values)?);
+                }
+                self.push_indented_console_output(ConsoleLevel::Log, text)?;
+            }
+            // Node clears only a TTY; output here is never one.
+            "clear" => {}
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn push_console_output(
         &mut self,
         level: ConsoleLevel,
@@ -35338,7 +35604,7 @@ impl InterpreterCore {
     }
 
     fn alloc_console_global(&mut self) -> Result<Value, InterpreterError> {
-        Ok(Value::Object(self.alloc_object_with_properties(&[
+        let console = self.alloc_object_with_properties(&[
             (
                 "log",
                 Value::BuiltinFunction(BuiltinFunction::console_log()),
@@ -35355,7 +35621,15 @@ impl InterpreterCore {
                 "info",
                 Value::BuiltinFunction(BuiltinFunction::console_info()),
             ),
-        ])?))
+        ])?;
+        for method in CONSOLE_EXTRA_METHODS {
+            self.set_object_property(
+                console,
+                method.to_string(),
+                Value::BuiltinFunction(BuiltinFunction::console_method(method)),
+            )?;
+        }
+        Ok(Value::Object(console))
     }
 
     /// The global `Promise`: a constructible builtin (bd-auy04) whose statics
@@ -37752,7 +38026,8 @@ impl InterpreterCore {
             BuiltinFunctionKind::ConsoleLog
             | BuiltinFunctionKind::ConsoleError
             | BuiltinFunctionKind::ConsoleWarn
-            | BuiltinFunctionKind::ConsoleInfo => Some(RuntimeCapability::Console),
+            | BuiltinFunctionKind::ConsoleInfo
+            | BuiltinFunctionKind::ConsoleMethod => Some(RuntimeCapability::Console),
             BuiltinFunctionKind::SetTimeout
             | BuiltinFunctionKind::ClearTimeout
             | BuiltinFunctionKind::SetInterval
@@ -42536,6 +42811,10 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ConsoleInfo => {
                 self.dispatch_console_hostcall("console:info", args, Some(module))
+            }
+            BuiltinFunctionKind::ConsoleMethod => {
+                let method = builtin.display_name();
+                self.dispatch_console_hostcall(&format!("console:{method}"), args, Some(module))
             }
             BuiltinFunctionKind::ProxyRevoke => {
                 let proxy_id = builtin.bound_object.map(ObjectId).ok_or_else(|| {
@@ -74736,11 +75015,22 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         let level = match cap {
-            "console:log" => ConsoleLevel::Log,
+            // Node's debug and dirxml are log.
+            "console:log" | "console:debug" | "console:dirxml" => ConsoleLevel::Log,
             "console:error" => ConsoleLevel::Error,
             "console:warn" => ConsoleLevel::Warn,
             "console:info" => ConsoleLevel::Info,
-            _ => return Ok(Value::Undefined), // Unknown console method
+            other => {
+                let Some(method) = other
+                    .strip_prefix("console:")
+                    .filter(|method| CONSOLE_EXTRA_METHODS.contains(method))
+                else {
+                    return Ok(Value::Undefined); // Unknown console method
+                };
+                self.check_console_confidentiality(args, cap)?;
+                self.console_extra_method(method, args, module)?;
+                return Ok(Value::Undefined);
+            }
         };
 
         self.check_console_confidentiality(args, cap)?;
@@ -74749,7 +75039,7 @@ impl InterpreterCore {
         // `util.inspect`, `%` directives in a leading string.
         let message = self.console_format_arguments(module, args)?;
 
-        self.push_console_output(level, message)?;
+        self.push_indented_console_output(level, message)?;
 
         self.emit_witness(
             WitnessEventKind::HostcallDispatched,

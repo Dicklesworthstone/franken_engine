@@ -17,7 +17,7 @@ use super::*;
 /// (prototype owner, property key, getter name). A key starting with `@@`
 /// names a well-known symbol ([`TYPED_ARRAY_TO_STRING_TAG`]); those accessors
 /// are real own properties of the prototype, installed when it is created.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 20] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 22] = [
     ("Map", "size", "get size"),
     ("Set", "size", "get size"),
     ("ArrayBuffer", "byteLength", "get byteLength"),
@@ -37,11 +37,13 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 20] = [
     ("RegExp", "dotAll", "get dotAll"),
     ("RegExp", "flags", "get flags"),
     ("RegExp", "global", "get global"),
+    ("RegExp", "hasIndices", "get hasIndices"),
     ("RegExp", "ignoreCase", "get ignoreCase"),
     ("RegExp", "multiline", "get multiline"),
     ("RegExp", "source", "get source"),
     ("RegExp", "sticky", "get sticky"),
     ("RegExp", "unicode", "get unicode"),
+    ("RegExp", "unicodeSets", "get unicodeSets"),
     ("Symbol", "description", "get description"),
 ];
 
@@ -163,10 +165,12 @@ impl InterpreterCore {
         let flag = match key {
             "dotAll" => Some('s'),
             "global" => Some('g'),
+            "hasIndices" => Some('d'),
             "ignoreCase" => Some('i'),
             "multiline" => Some('m'),
             "sticky" => Some('y'),
             "unicode" => Some('u'),
+            "unicodeSets" => Some('v'),
             _ => None,
         };
         if owner == "RegExp"

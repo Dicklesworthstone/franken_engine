@@ -110,10 +110,11 @@ impl InterpreterCore {
                 match operation {
                     ObjectIntegrityOperation::GetPrototype => {
                         // bd-9vouw.137: a Promise subclass instance reports
-                        // the prototype its backing object records.
+                        // the prototype its backing object records; a
+                        // generator its function's `prototype` (bd-9vouw.120).
                         if let Some(module) = module
                             && let Some(prototype) =
-                                self.promise_prototype_override(module, &target)?
+                                self.exotic_prototype_override(module, &target)?
                         {
                             return Ok(Value::Object(prototype));
                         }

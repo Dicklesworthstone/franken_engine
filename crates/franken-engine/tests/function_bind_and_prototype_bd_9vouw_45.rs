@@ -139,3 +139,23 @@ fn bound_functions_construct_and_report_name_and_length() {
         "bound named,bound max",
     );
 }
+
+/// A plain call's `this` is undefined (strict code; ES2020 9.2.1.2): a
+/// function called without a receiver inside a method used to inherit the
+/// method's `this`, so the factory idiom `if (!(this instanceof F)) return
+/// new F(v)` ran its body on the caller's receiver and returned undefined
+/// (currency.js' `add`), and `g()` in a method saw the method's object. An
+/// arrow keeps its lexical `this`; callbacks get their thisArg.
+#[test]
+fn plain_calls_inside_methods_do_not_inherit_this() {
+    check(
+        "'use strict'; function F(v) { if (!(this instanceof F)) return new F(v); this.v = v; } \
+         F.prototype.add = function (n) { return F(this.v + n); }; function g() { return this; } \
+         const o = { m() { return [g() === undefined, (0, g)() === undefined, \
+         [1].map(function () { return this; })[0] === undefined, (() => this)() === o].join(); }, \
+         n: function () { const self = this; return (function () { return this === undefined && self === o; })(); } }; \
+         class C { m() { return g() === undefined; } static s() { return g() === undefined; } } \
+         [F(1).add(2).v, o.m(), o.n(), new C().m(), C.s()].join(' ')",
+        "3 true,true,true,true true true true",
+    );
+}

@@ -56,9 +56,14 @@ fn constants_diagnostic_are_non_empty() {
 // Section 2: ParseErrorCode
 // ---------------------------------------------------------------------------
 
+/// ALL lists every code, including the two added after its count was
+/// pinned at 7 (StrictModeWithStatement, AwaitOutsideAsync); uniqueness is
+/// checked by parse_error_code_stable_diagnostic_codes_are_unique.
 #[test]
-fn parse_error_code_all_has_seven_elements() {
-    assert_eq!(ParseErrorCode::ALL.len(), 7);
+fn parse_error_code_all_lists_every_code() {
+    assert_eq!(ParseErrorCode::ALL.len(), 9);
+    assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::StrictModeWithStatement));
+    assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::AwaitOutsideAsync));
 }
 
 #[test]
@@ -244,9 +249,9 @@ fn parse_diagnostic_severity_serde_round_trip() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn taxonomy_v1_produces_seven_rules() {
+fn taxonomy_v1_has_one_rule_per_error_code() {
     let taxonomy = ParseDiagnosticTaxonomy::v1();
-    assert_eq!(taxonomy.rules.len(), 7);
+    assert_eq!(taxonomy.rules.len(), ParseErrorCode::ALL.len());
     assert_eq!(
         taxonomy.taxonomy_version,
         ParseDiagnosticTaxonomy::taxonomy_version()

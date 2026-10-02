@@ -59830,18 +59830,6 @@ impl InterpreterCore {
     }
 
     /// A new empty Map: the object and its entry storage.
-    /// A new empty Set with %Set.prototype%.
-    fn alloc_empty_set(&mut self) -> Result<ObjectId, InterpreterError> {
-        let prototype = self.ensure_builtin_prototype("Set")?;
-        let set_id = self.alloc_object_with_prototype(Some(prototype))?;
-        let values_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_brand(set_id, "Set")?;
-        self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
-        self.set_object_property(set_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
-        self.hide_internal_slots(set_id, &["__values", COLLECTION_SIZE_SLOT])?;
-        Ok(set_id)
-    }
-
     fn alloc_empty_map(&mut self) -> Result<(ObjectId, ObjectId), InterpreterError> {
         let prototype = self.ensure_builtin_prototype("Map")?;
         let map_id = self.alloc_object_with_prototype(Some(prototype))?;

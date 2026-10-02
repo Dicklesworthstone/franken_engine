@@ -199,7 +199,11 @@ impl Translator {
                     .iter()
                     .position(|&c| c == '}')
                     .map_or(self.index + 2, |close| self.index + close + 1);
-                self.out.extend(&self.chars[self.index..end]);
+                let text: String = self.chars[self.index..end].iter().collect();
+                match surrogate_property_class(&text) {
+                    Some(class) => self.out.push_str(class),
+                    None => self.out.push_str(&text),
+                }
                 self.index = end;
             }
             // ASCII word boundaries, as `\w` is ASCII.
@@ -478,7 +482,9 @@ impl Translator {
                 let end = close.map_or(self.index, |close| self.index + close + 1);
                 let text: String = self.chars[self.index - 2..end].iter().collect();
                 self.index = end;
-                ClassAtom::Set(text)
+                ClassAtom::Set(
+                    surrogate_property_class(&text).map_or(text, |class| class.to_string()),
+                )
             }
             other => ClassAtom::Char(u32::from(other)),
         }
@@ -1293,6 +1299,24 @@ pub(super) fn unicode_property_escape_error(pattern: &str, flags: &str) -> Optio
     None
 }
 
+/// The class for a `\p{..}` or `\P{..}` (whole escape text) that names the
+/// surrogate category, which the `regex` crate does not know. Matching runs
+/// over strings that hold no lone surrogate (see the module notes), so
+/// `\p{Cs}` matches nothing and `\P{Cs}` any character. ohm-js compiles
+/// `\p{Cs}` among all General_Category values when it loads.
+pub(super) fn surrogate_property_class(text: &str) -> Option<&'static str> {
+    let body = text.get(3..text.len().checked_sub(1)?)?;
+    let surrogate = matches!(
+        body,
+        "Cs" | "Surrogate"
+            | "gc=Cs"
+            | "gc=Surrogate"
+            | "General_Category=Cs"
+            | "General_Category=Surrogate"
+    );
+    surrogate.then_some(if text.starts_with(r"\P") { ANY } else { NEVER })
+}
+
 fn valid_property_escape(body: &str, negated: bool, unicode_sets: bool) -> bool {
     match body.split_once('=') {
         Some(("General_Category" | "gc", value)) => {
@@ -1472,6 +1496,41 @@ mod tests {
         assert!(rust(r"\ude00").is_match("😀"));
         assert!(!rust(r"\ude00").is_match("😁"));
         assert!(rust(r"[\u0000-\udfff]").is_match("😀"));
+    }
+
+    /// ohm-js compiles `\p{Cs}` for every General_Category value when it
+    /// loads, and the `regex` crate has no surrogate category, so ohm failed
+    /// with "Invalid property name". Strings here hold no lone surrogate, so
+    /// `\p{Cs}` matches nothing and `\P{Cs}` any character, inside and
+    /// outside classes. No-claim: Node matches `\p{Cs}` against a lone
+    /// surrogate (`/\p{Cs}/u.test("\uD800")` is true); this engine cannot.
+    #[test]
+    fn surrogate_category_escapes_compile_and_match_no_character() {
+        for name in ["Cs", "Surrogate", "gc=Cs", "General_Category=Surrogate"] {
+            let escape = format!(r"\p{{{name}}}");
+            assert!(!rust_with(&escape, "u").is_match("a😀\u{FFFF}\n"), "{name}");
+            assert!(
+                rust_with(&format!(r"^\P{{{name}}}+$"), "u").is_match("a😀\n"),
+                "{name}"
+            );
+            assert!(
+                rust_with(&format!(r"^[{escape}b]$"), "u").is_match("b"),
+                "{name}"
+            );
+            assert!(
+                !rust_with(&format!(r"^[{escape}b]$"), "u").is_match("a"),
+                "{name}"
+            );
+            assert!(
+                !rust_with(&format!(r"^[^\P{{{name}}}]$"), "u").is_match("a"),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            unicode_property_escape_error(r"\p{Cs}\P{Surrogate}", "u"),
+            None
+        );
+        assert!(rust_with(r"^\p{Lu}\p{Cs}?$", "u").is_match("A"));
     }
 
     #[test]

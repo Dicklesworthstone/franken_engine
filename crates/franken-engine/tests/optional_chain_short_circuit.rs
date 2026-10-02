@@ -126,3 +126,17 @@ fn optional_chains_inside_assignment_targets_are_ordinary_expressions() {
         assert!(error.to_string().contains("target"), "{target}: {error}");
     }
 }
+
+/// A property named `in` or `instanceof` is a member access, not the
+/// relational operator: the binary-operator scan split `o.in.x` at `in`
+/// ("unsupported expression syntax: o."), so `o.in + 1`, `o.in()`,
+/// `o.instanceof.y` and arktype's `this.inner.in?.rawIn` failed. The
+/// operators themselves still work next to them. Expected values are Node
+/// v22.2.0's.
+#[test]
+fn properties_named_in_and_instanceof_are_member_accesses() {
+    let source = "var o = { in: { x: 8 }, instanceof: { y: 9 }, f: { in: function () { return 3; } } };\n\
+                  [o.in.x, o.in?.x, o['in']?.x, o.instanceof.y, o.instanceof?.y, o.f.in(), o.in.x + 1, \
+                  'in' in o, o.in.x in { 8: 0 }, o instanceof Object].join(' ');";
+    assert_eq!(eval(source), "8 8 8 9 9 3 9 true true true");
+}

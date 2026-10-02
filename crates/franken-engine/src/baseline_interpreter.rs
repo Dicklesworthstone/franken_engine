@@ -45638,7 +45638,10 @@ impl InterpreterCore {
             .closure_index
             .and_then(|closure_id| self.closure_method_metadata.get(&closure_id))
         {
-            Some(metadata) => (metadata.definition_label.clone(), Some(metadata.home_object)),
+            Some(metadata) => (
+                metadata.definition_label.clone(),
+                Some(metadata.home_object),
+            ),
             None => (Label::Public, None),
         };
         let execution = GeneratorExecutionSnapshot {

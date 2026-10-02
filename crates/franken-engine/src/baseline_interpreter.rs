@@ -51087,6 +51087,37 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    // Reflect.construct(proxy, args, newTarget) on a callable
+                    // proxy (bd-9vouw.132): its construct trap or target, with
+                    // that newTarget; the builtin path would call it.
+                    if let Value::BuiltinFunction(builtin) = &callee_value
+                        && builtin.kind == BuiltinFunctionKind::CallableProxy
+                    {
+                        let (result, result_label) = match self.construct_callable_proxy(
+                            module,
+                            builtin,
+                            args,
+                            Some(new_target_value.clone()),
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                match self.route_isolated_explicit_throw(module, error)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        };
+                        let result_label = self
+                            .join_owned_label_with_temporary_budget(result_label, &callee_label)?;
+                        let result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            &new_target_label,
+                        )?;
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     if let Value::BuiltinFunction(builtin) = &callee_value {
                         let constructed = self.construct_builtin_with_new_target(
                             module,
@@ -51168,7 +51199,7 @@ impl InterpreterCore {
                         && builtin.kind == BuiltinFunctionKind::CallableProxy
                     {
                         let (result, result_label) = match self
-                            .construct_callable_proxy(module, builtin, args)
+                            .construct_callable_proxy(module, builtin, args, None)
                         {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(module, err)? {
@@ -59617,7 +59648,14 @@ impl InterpreterCore {
         module: &Ir3Module,
         builtin: &BuiltinFunction,
         args: RegRange,
+        new_target: Option<Value>,
     ) -> Result<(Value, Label), InterpreterError> {
+        // `new P()` passes the proxy itself; Reflect.construct its newTarget.
+        let explicit_new_target = new_target.filter(|value| {
+            !matches!(value, Value::BuiltinFunction(other)
+                if other.kind == BuiltinFunctionKind::CallableProxy
+                    && other.bound_object == builtin.bound_object)
+        });
         let (_proxy, handler, function) = self.callable_proxy_parts(builtin)?;
         if !self.is_constructible_value(&function) {
             return Err(InterpreterError::TypeError {
@@ -59640,7 +59678,7 @@ impl InterpreterCore {
                 vec![
                     function,
                     Value::Object(list),
-                    Value::BuiltinFunction(builtin.clone()),
+                    explicit_new_target.unwrap_or_else(|| Value::BuiltinFunction(builtin.clone())),
                 ],
             )?;
             if !result.is_object_like() {
@@ -59651,6 +59689,7 @@ impl InterpreterCore {
             }
             return Ok((result, label));
         }
+        let target_is_proxy = Self::is_callable_proxy(&function);
         let (value, result_label) = self.invoke_inline_construct_with_labels(
             Some(module),
             function,
@@ -59659,7 +59698,10 @@ impl InterpreterCore {
                 receiver: Label::Public,
                 arguments: IsolatedArgumentLabels::Uniform(label.clone()),
             }),
-            None,
+            // A callable proxy target receives this proxy as newTarget too.
+            explicit_new_target
+                .or_else(|| target_is_proxy.then(|| Value::BuiltinFunction(builtin.clone())))
+                .map(|value| (value, Label::Public)),
         )?;
         Ok((value, result_label.join(&label)))
     }

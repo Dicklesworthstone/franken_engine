@@ -592,6 +592,7 @@ impl GcMarker {
                     next_index: _,
                     array,
                     typed_array,
+                    collection,
                     iterator_receiver,
                     next_method,
                     timers_interval,
@@ -603,6 +604,10 @@ impl GcMarker {
                 values.iter().for_each(|value| self.value(value));
                 if let Some(array) = array {
                     self.object(array.object_id);
+                }
+                if let Some(collection) = collection {
+                    self.object(collection.collection);
+                    self.object(collection.storage);
                 }
                 if let Some(typed_array) = typed_array {
                     self.object(typed_array.view.buffer);
@@ -1384,6 +1389,10 @@ impl InterpreterCore {
             temporarily_suspended_execution_bytes: _,
             // Traced from the values and delegations that name them.
             iterators: _,
+            // Weak: a reclaimed iterator or storage is pruned on the next
+            // visit (bd-9vouw.131).
+            collection_iterators: _,
+            collection_for_each_cursors,
             iteration_traces: _,
             function_prototypes,
             builtin_function_backings: _,
@@ -1717,6 +1726,10 @@ impl InterpreterCore {
         // Intrinsics.
         function_prototypes.values().for_each(|id| m.object(*id));
         builtin_prototypes.values().for_each(|id| m.object(*id));
+        // A forEach in progress keeps its collection's storage.
+        collection_for_each_cursors
+            .iter()
+            .for_each(|(storage, _)| m.object(*storage));
 
         // Tables whose entries are never reclaimed. Closures are traced from
         // the values that reference them (`gc_trace_closure`).

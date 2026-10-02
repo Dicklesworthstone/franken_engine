@@ -734,6 +734,22 @@ impl<V> OrderedStringMap<V> {
             .chain(self.string_insertion_order.iter())
     }
 
+    /// The non-index string key at `position` in insertion order, `None`
+    /// past its end. For a map whose keys are never array indices (an
+    /// engine's Map and Set entry storage) this is [`Self::keys`]'s order,
+    /// with constant-time access for a live cursor.
+    pub fn insertion_key_at(&self, position: usize) -> Option<&String> {
+        self.string_insertion_order.get(position)
+    }
+
+    /// The insertion-order position of the non-index string key `key`, as
+    /// [`Self::insertion_key_at`] counts it.
+    pub fn insertion_key_position(&self, key: &str) -> Option<usize> {
+        self.string_insertion_order
+            .iter()
+            .position(|candidate| candidate == key)
+    }
+
     /// Iterate values in ES own-property string-key order.
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.iter().map(|(_, value)| value)

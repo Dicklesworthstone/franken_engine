@@ -15480,6 +15480,31 @@ fn lower_expression_to_ir1_inner(
                 )?;
                 ops.push(Ir1Op::GetProperty { key });
                 ops.push(Ir1Op::LoadThis);
+                // `super.m(...xs)`: CallMethod takes a fixed argument count
+                // and a SpreadElement evaluates to its inner value, so the
+                // spread array arrived as ONE argument (espree's
+                // `finishNode(...args) { super.finishNode(...args) }`). Build
+                // the argument array and call through ReflectApply, which
+                // reads [method, this, argsList] like the free-callee path.
+                if stages_argument_array(arguments) {
+                    let argument_list =
+                        Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+                    lower_expression_to_ir1(
+                        &argument_list,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ReflectApply".to_string(),
+                        arg_count: 3,
+                    });
+                    return Ok(());
+                }
                 for argument in arguments {
                     lower_expression_to_ir1(
                         argument,

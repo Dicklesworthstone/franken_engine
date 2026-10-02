@@ -114,14 +114,16 @@ Invalid Date"#,
         r#"$53.75 | 1234.5 | 12 | 50% | 1,234.5 | TypeError"#,
     ),
     (
-        // DateTimeFormat formatToParts (bd-9vouw.142): the pieces format
-        // joins, typed; croner reads the UTC fields of a date through it.
+        // DateTimeFormat formatToParts (bd-9vouw.142): the typed pieces format
+        // lays out; croner reads the UTC fields of a date through it. The
+        // literal before a day period is U+202F in the parts while format()
+        // has an ASCII space there (V8), so those two do not join equal.
         "date_time_format_to_parts",
-        r#"const f = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false }); const d = new Date(Date.UTC(2024, 5, 7, 10, 0, 5)); const p = f.formatToParts(d); console.log(p.map(x => x.type + '=' + x.value).join('|'), p.map(x => x.value).join('') === f.format(d), Object.keys(p[0]).join()); console.log(new Intl.DateTimeFormat('en-US', { dateStyle: 'full', timeStyle: 'long', timeZone: 'UTC' }).formatToParts(d).map(x => x.type).join(',')); console.log(new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' }).formatToParts(0).map(x => x.type + '=' + x.value).join('|')); console.log(new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' }).formatToParts(d).map(x => x.type + '=' + x.value).join('|'));"#,
+        r#"const f = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false }); const d = new Date(Date.UTC(2024, 5, 7, 10, 0, 5)); const p = f.formatToParts(d); const show = (parts) => parts.map(x => x.type + '=' + x.value.replace(/\u202f/g, '<NNBSP>')).join('|'); console.log(show(p), p.map(x => x.value).join('') === f.format(d), Object.keys(p[0]).join()); console.log(new Intl.DateTimeFormat('en-US', { dateStyle: 'full', timeStyle: 'long', timeZone: 'UTC' }).formatToParts(d).map(x => x.type).join(',')); console.log(show(new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' }).formatToParts(0))); const g = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' }); console.log(show(g.formatToParts(d)), JSON.stringify(g.format(d)), g.formatToParts(d).map(x => x.value).join('') === g.format(d));"#,
         r#"month=6|literal=/|day=7|literal=/|year=2024|literal=, |hour=10|literal=:|minute=00|literal=:|second=05 true type,value
 weekday,literal,month,literal,day,literal,year,literal,hour,literal,minute,literal,second,literal,dayPeriod,literal,timeZoneName
 month=1|literal=/|day=1|literal=/|year=1970
-weekday=Fri|literal=, |month=June|literal= |day=7|literal= at |hour=10|literal=:|minute=00|literal= |dayPeriod=AM|literal= |timeZoneName=UTC"#,
+weekday=Fri|literal=, |month=June|literal= |day=7|literal= at |hour=10|literal=:|minute=00|literal=<NNBSP>|dayPeriod=AM|literal= |timeZoneName=UTC "Fri, June 7 at 10:00 AM UTC" false"#,
     ),
 ];
 

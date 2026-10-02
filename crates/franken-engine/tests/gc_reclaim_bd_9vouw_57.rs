@@ -151,7 +151,11 @@ fn garbage_loops_complete_past_the_object_budget() {
 
 /// Closures are not heap objects, but each captures an environment that the
 /// byte budget charges. The perf suite's `closures` workload died on the
-/// 64 MiB budget near 100,000 closures before closures were reclaimed.
+/// 64 MiB budget near 100,000 closures before closures were reclaimed. Since
+/// closures sharing a frame map are charged it once (bd-9vouw.154), 150,000
+/// of these fit 64 MiB without a collection, so the loops run under 8 MiB:
+/// they still allocate more closure environments than the budget holds.
+const CLOSURE_LOOP_BYTE_BUDGET: u64 = 8 * 1024 * 1024;
 const CLOSURE_LOOPS: &[(&str, &str)] = &[
     (
         "let s = 0; for (let i = 0; i < 250000; i++) { const f = () => i; s += f() & 1; } String(s)",
@@ -167,7 +171,8 @@ const CLOSURE_LOOPS: &[(&str, &str)] = &[
 #[test]
 fn closure_garbage_loops_complete_past_the_byte_budget() {
     for (source, node) in CLOSURE_LOOPS {
-        let run = run(source, None);
+        let run = try_run_with_budgets(source, None, None, Some(CLOSURE_LOOP_BYTE_BUDGET))
+            .expect("source must parse and lower");
         assert_eq!(value_of(&run, source), *node, "{source}");
         assert!(
             run.gc.reclaimed_closures >= 50_000,

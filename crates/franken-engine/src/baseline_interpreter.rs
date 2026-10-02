@@ -9362,6 +9362,29 @@ impl ScopeFrame {
         replaced
     }
 
+    /// The frame's map before a change that may be refused, when other
+    /// holders share it (so the change will copy it on write anyway). `None`
+    /// when this frame alone owns the map: the change is made in place and
+    /// holding a second handle here would force a copy.
+    fn bindings_checkpoint(&self) -> Option<(Rc<FrameBindings>, u64)> {
+        (Rc::strong_count(&self.bindings) > 1).then(|| (Rc::clone(&self.bindings), self.key_bytes))
+    }
+
+    /// Undo a refused change that copied a shared map on write: put the
+    /// original map back, still shared. Removing the change from the copy
+    /// would leave two maps where the estimate charged one (bd-9vouw.154).
+    /// `false` when the change was made in place, for the caller to undo.
+    fn restore_copied_bindings(&mut self, checkpoint: Option<(Rc<FrameBindings>, u64)>) -> bool {
+        match checkpoint {
+            Some((original, key_bytes)) if !Rc::ptr_eq(&original, &self.bindings) => {
+                self.bindings = original;
+                self.key_bytes = key_bytes;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn remove_binding(&mut self, name: &str) -> Option<ScopeBinding> {
         if !self.bindings.contains_key(name) {
             return None;
@@ -53016,6 +53039,7 @@ impl InterpreterCore {
                     };
                     #[cfg(debug_assertions)]
                     let walked_scope_before = self.scope_chain_memory_bytes();
+                    let checkpoint = self.scope_chain.current()?.bindings_checkpoint();
                     let replaced = self
                         .scope_chain
                         .current_mut()?
@@ -53046,7 +53070,9 @@ impl InterpreterCore {
                         self.apply_scope_chain_memory_delta(previous_scope_bytes)
                     };
                     if let Err(err) = memory_result {
-                        if let Ok(current) = self.scope_chain.current_mut() {
+                        if let Ok(current) = self.scope_chain.current_mut()
+                            && !current.restore_copied_bindings(checkpoint)
+                        {
                             if let Some(old) = replaced {
                                 current.insert_binding(name, old);
                             } else {
@@ -102296,6 +102322,11 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
         // A second FRESH cell of the same size must still be refused — the
         // dedup must never under-charge new physical allocations.
         let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let checkpoint = core
+            .scope_chain
+            .current()
+            .expect("live frame")
+            .bindings_checkpoint();
         core.scope_chain
             .current_mut()
             .expect("live frame")
@@ -102308,10 +102339,11 @@ mod shared_binding_cell_accounting_tests_bd_sblaq {
             matches!(refusal, Err(InterpreterError::MemoryBudgetExceeded { .. })),
             "fresh physical payload must hit the budget: {refusal:?}"
         );
-        core.scope_chain
-            .current_mut()
-            .expect("live frame")
-            .remove_binding("fresh");
+        // The interpreter's DeclareBinding rollback (bd-9vouw.154): the insert
+        // copied the map the closure shares, so the original map goes back.
+        let frame = core.scope_chain.current_mut().expect("live frame");
+        assert!(frame.restore_copied_bindings(checkpoint));
+        assert!(frame.get("fresh").is_none());
         assert_invariant(&core, "after refused declaration rollback");
     }
 }

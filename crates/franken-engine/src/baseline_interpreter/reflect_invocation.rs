@@ -29,7 +29,23 @@ impl InterpreterCore {
         operation: ReflectPropertyOperation,
     ) -> Result<Value, InterpreterError> {
         let target_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let target = self.reflection_target_object(&target_value)?;
+        // A function is an object (bd-9vouw.132: `Reflect.get(fn, key,
+        // receiver)` in a callable proxy's trap): Set and Delete act on its
+        // own-property storage, created on demand; Get and Has also see its
+        // synthesized members and Function.prototype.
+        let plain_function = module.is_some()
+            && target_value.is_callable()
+            && self
+                .iterator_carrier_backing_id(&target_value, "object target")?
+                .is_none();
+        let target = match self.own_property_holder(
+            module.filter(|_| plain_function),
+            &target_value,
+            true,
+        )? {
+            Some(storage) if plain_function => storage,
+            _ => self.reflection_target_object(&target_value)?,
+        };
         if let Value::BuiltinFunction(builtin) = &target_value
             && let Some(name) = Self::materialized_global_prototype_name(builtin)
         {
@@ -96,12 +112,20 @@ impl InterpreterCore {
             self.observe_scoped_callback_result()?;
             self.reflect_observe_selected_property(target, &key)?;
             let result = match operation {
-                ReflectPropertyOperation::Get => {
-                    self.iterator_protocol_property(module, target, &key, receiver)?
-                }
-                ReflectPropertyOperation::Has => {
-                    Value::Bool(self.proxy_aware_has_runtime_property(module, target, &key, 0)?)
-                }
+                ReflectPropertyOperation::Get => match module {
+                    Some(module) if plain_function => {
+                        self.get_v_with_receiver(module, &target_value, &key, receiver, 0)?
+                    }
+                    _ => self.iterator_protocol_property(module, target, &key, receiver)?,
+                },
+                ReflectPropertyOperation::Has => match module {
+                    Some(module) if plain_function => {
+                        Value::Bool(self.function_has_property(module, &target_value, &key)?)
+                    }
+                    _ => Value::Bool(
+                        self.proxy_aware_has_runtime_property(module, target, &key, 0)?,
+                    ),
+                },
                 ReflectPropertyOperation::Set => {
                     // Admit provenance BEFORE guest state can change. Refused
                     // writes may keep a conservative floor; successful writes

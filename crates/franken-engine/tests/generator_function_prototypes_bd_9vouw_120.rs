@@ -43,8 +43,8 @@ fn eval_under_gc_stress(source: &str) -> String {
             ParserSource {
                 label: "generator_prototypes.js".into(),
                 text: source.into(),
-                goal: ParseGoal::Script,
             },
+            ParseGoal::Script,
             &ParserOptions::default(),
         )
         .expect("source parses");

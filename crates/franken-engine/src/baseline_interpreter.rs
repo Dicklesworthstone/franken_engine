@@ -3529,6 +3529,9 @@ pub enum BuiltinFunctionKind {
     /// `symmetricDifference`, `isSubsetOf`, `isSupersetOf` and
     /// `isDisjointFrom` (set_algebra.rs), named by the specifier. Append only.
     SetMethod,
+    /// `URL.canParse` and `URL.parse` (URL Standard 6.1), named by the
+    /// specifier. Append only.
+    UrlStatic,
 }
 
 impl BuiltinFunctionKind {
@@ -4998,6 +5001,13 @@ impl BuiltinFunction {
                     "toString"
                 }
             }
+            BuiltinFunctionKind::UrlStatic => {
+                if self.module_specifier.0.as_deref() == Some("parse") {
+                    "parse"
+                } else {
+                    "canParse"
+                }
+            }
             BuiltinFunctionKind::ArrayIsArray => "isArray",
             BuiltinFunctionKind::StreamReadablePause => "pause",
             BuiltinFunctionKind::StreamReadableResume => "resume",
@@ -5588,6 +5598,7 @@ impl BuiltinFunction {
             | K::ConsoleInfo
             | K::ConsoleMethod => "console",
             K::UrlMethod => "URL.prototype",
+            K::UrlStatic => "URL",
             K::SetMethod => "Set.prototype",
             K::SetTimeout
             | K::SetInterval
@@ -43240,6 +43251,7 @@ impl InterpreterCore {
                 let method = builtin.display_name();
                 self.dispatch_console_hostcall(&format!("console:{method}"), args, Some(module))
             }
+            BuiltinFunctionKind::UrlStatic => self.url_static(builtin.display_name(), args),
             BuiltinFunctionKind::SetMethod => {
                 let method = builtin.display_name();
                 self.set_algebra_method(module, method, receiver.unwrap_or(Value::Undefined), args)
@@ -77173,6 +77185,39 @@ impl InterpreterCore {
         Ok(object_id)
     }
 
+    /// `URL.canParse(input, base)`: whether `new URL(input, base)` would
+    /// succeed; `URL.parse(input, base)`: that URL, or null where the
+    /// constructor throws (URL Standard 6.1). Neither allocates an error.
+    fn url_static(&mut self, method: &str, args: RegRange) -> Result<Value, InterpreterError> {
+        let input_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let base_value = match self.builtin_arg(args, 1)? {
+            None | Some(Value::Undefined) => None,
+            Some(value) => Some(value),
+        };
+        let input_bound = self.url_value_to_string_upper_bound(&input_value);
+        let base_bound = base_value
+            .as_ref()
+            .map(|value| self.url_value_to_string_upper_bound(value))
+            .unwrap_or(0);
+        self.check_temporary_memory_budget(Self::url_parse_working_upper_bound(
+            input_bound,
+            base_bound,
+        ))?;
+        let input = self.value_to_string(&input_value);
+        let base = base_value.map(|value| self.value_to_string(&value));
+        let parses = match base.as_deref() {
+            Some(base) => Url::parse(base)
+                .ok()
+                .is_some_and(|base| base.join(&input).is_ok()),
+            None => Url::parse(&input).is_ok(),
+        };
+        match (method, parses) {
+            ("parse", true) => self.construct_url(args),
+            ("parse", false) => Ok(Value::Null),
+            (_, parses) => Ok(Value::Bool(parses)),
+        }
+    }
+
     fn construct_url(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
         let input_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let base_value = match self.builtin_arg(args, 1)? {
@@ -100380,6 +100425,12 @@ impl InterpreterCore {
                 _ => 1,
             }),
             "poolSize" if name == "Buffer" => Value::Int(8192),
+            "canParse" | "parse" if name == "URL" => Value::BuiltinFunction(BuiltinFunction {
+                kind: BuiltinFunctionKind::UrlStatic,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(key),
+                iterator_handle: None,
+                bound_object: None,
+            }),
             "asUintN" if name == "BigInt" => Value::BuiltinFunction(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::BigIntAsUintN,
             )),

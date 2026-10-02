@@ -42309,15 +42309,27 @@ impl InterpreterCore {
                 };
                 Ok(Value::Str(self.symbol_to_string(symbol)))
             }
+            // String.prototype[@@iterator] (ES2020 21.1.3.29) iterates
+            // ToString(RequireObjectCoercible(this)): a String wrapper (core-js
+            // feature detection calls it on `new String`, which aborted
+            // xregexp's load), a number, or an object whose toString runs.
             BuiltinFunctionKind::StringIterator => {
-                let receiver = receiver.unwrap_or(Value::Undefined);
-                if !matches!(receiver, Value::Str(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "string iterator receiver".to_string(),
-                        got: receiver.type_name().to_string(),
-                    });
-                }
-                self.init_for_of_iterator(None, receiver)
+                let receiver = match receiver.unwrap_or(Value::Undefined) {
+                    object if object.is_object_like() => {
+                        let primitive = self.coerce_runtime_primitive(Some(module), object, true)?;
+                        if matches!(primitive, Value::Symbol(_)) {
+                            return Err(InterpreterError::TypeError {
+                                expected: "string-convertible this for String.prototype[@@iterator]"
+                                    .to_string(),
+                                got: "symbol".to_string(),
+                            });
+                        }
+                        primitive
+                    }
+                    other => other,
+                };
+                let string = Self::require_object_coercible_to_js_string(&receiver)?;
+                self.init_for_of_iterator(None, Value::Str(string))
             }
             // %IteratorPrototype%[@@iterator] (ES2020 25.1.2.1), which
             // generators inherit: it returns its receiver, whatever it is.

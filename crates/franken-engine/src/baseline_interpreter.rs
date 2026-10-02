@@ -33482,14 +33482,17 @@ impl InterpreterCore {
 
             match iterable_value {
                 // `[...map]` / `[...set]`: collections iterate their entries
-                // (Map: `[key, value]` pairs, Set: values) in insertion order.
+                // (Map: `[key, value]` pairs, Set: values) in insertion order,
+                // unless @@iterator is overridden (a subclass's own generator).
                 Value::Object(iterable_id)
-                    if self
+                    if (self
                         .collection_storage_id(iterable_id, "Map", "__entries")
                         .is_some()
-                        || self
+                        && self.collection_iterates_intrinsically(iterable_id, "Map"))
+                        || (self
                             .collection_storage_id(iterable_id, "Set", "__values")
-                            .is_some() =>
+                            .is_some()
+                            && self.collection_iterates_intrinsically(iterable_id, "Set")) =>
                 {
                     let values = self
                         .collection_iteration_values(iterable_id)?
@@ -54003,15 +54006,22 @@ impl InterpreterCore {
         }
 
         // A Map's or Set's live entry list (bd-9vouw.131): entries added
-        // by the loop body are visited, deleted ones are not.
+        // by the loop body are visited, deleted ones are not. Only when
+        // GetMethod(obj, @@iterator) would find the intrinsic method: a
+        // subclass instance or an @@iterator override takes the ordinary
+        // path below (quick-lru's `class QuickLRU extends Map` iterates
+        // itself with its own generator).
         if let Value::Object(object_id) = iterable {
-            let collection =
-                if let Some(storage) = self.collection_storage_id(*object_id, "Map", "__entries") {
-                    Some((storage, true, RuntimeTypedArrayIteratorKind::Entries))
-                } else {
-                    self.collection_storage_id(*object_id, "Set", "__values")
-                        .map(|storage| (storage, false, RuntimeTypedArrayIteratorKind::Values))
-                };
+            let collection = if let Some(storage) = self
+                .collection_storage_id(*object_id, "Map", "__entries")
+                .filter(|_| self.collection_iterates_intrinsically(*object_id, "Map"))
+            {
+                Some((storage, true, RuntimeTypedArrayIteratorKind::Entries))
+            } else {
+                self.collection_storage_id(*object_id, "Set", "__values")
+                    .filter(|_| self.collection_iterates_intrinsically(*object_id, "Set"))
+                    .map(|storage| (storage, false, RuntimeTypedArrayIteratorKind::Values))
+            };
             if let Some((storage, is_map, kind)) = collection {
                 return Ok(RuntimeForOfInit::from_collection(
                     RuntimeCollectionIterator {
@@ -54043,6 +54053,50 @@ impl InterpreterCore {
         Ok(RuntimeForOfInit::from_values(
             self.collect_for_of_values(iterable)?,
         ))
+    }
+
+    /// Whether GetMethod(`object_id`, @@iterator) on a Map or Set (`kind`)
+    /// finds the intrinsic iterator method: no object on the prototype chain
+    /// up to the implicit or materialized %Map.prototype% / %Set.prototype%
+    /// (a plain subclass's prototypes included) stores its own @@iterator or
+    /// is a Proxy, the chain reaches that prototype, and `delete` did not
+    /// remove the virtual method. Anything else (an override, a reparented
+    /// collection) has to go through the lookup and call.
+    fn collection_iterates_intrinsically(&self, object_id: ObjectId, kind: &str) -> bool {
+        let iterator = core_symbol_id(WellKnownSymbol::Iterator.id());
+        let canonical = self.builtin_prototypes.get(kind).copied();
+        let mut current = object_id;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(object) = self.heap.get(current.0 as usize) else {
+                return false;
+            };
+            if object.properties.baseline_symbol_property(iterator).is_some()
+                || !matches!(self.proxy_record(current), Ok(None))
+            {
+                return false;
+            }
+            if Some(current) == canonical {
+                break;
+            }
+            match object.prototype {
+                Some(prototype) => current = prototype,
+                // The implicit canonical prototype.
+                None if !object.is_null_prototype && current == object_id => {
+                    match canonical {
+                        Some(prototype) => current = prototype,
+                        None => break,
+                    }
+                }
+                None => return false,
+            }
+        }
+        if canonical.is_some_and(|prototype| prototype != current) {
+            return false;
+        }
+        !self.canonical_virtual_property_deleted(
+            kind,
+            &RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+        )
     }
 
     /// Look up the exact typed `Symbol.iterator` property. Ordinary strings

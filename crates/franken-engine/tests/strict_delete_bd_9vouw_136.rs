@@ -10,7 +10,7 @@
 //! identical text. The sloppy case guards the unchanged behaviour.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -53,7 +53,7 @@ fn scratch_dir() -> PathBuf {
     dir
 }
 
-fn run(dir: &PathBuf, name: &str, source: &str) -> std::process::Output {
+fn run(dir: &Path, name: &str, source: &str) -> std::process::Output {
     let input = dir.join(format!("{name}.js"));
     fs::write(&input, source).expect("program");
     Command::new(env!("CARGO_BIN_EXE_frankenctl"))

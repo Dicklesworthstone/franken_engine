@@ -191,3 +191,14 @@ fn exotic_integrity_of_functions() {
         "true/false/false/true,TypeError,,false,true,false,false,,false,function,true,1,true,false,false,,false,false,true,false,false"
     );
 }
+
+/// A promise a Promise subclass built: for-in and `in` reach that class's prototype (bd-9vouw.137).
+#[test]
+fn exotic_promise_subclass_instances() {
+    let source = "class P extends Promise {}\n\
+         P.prototype.extra = 1;\n\
+         var p = P.resolve(1); p.own = 2;\n\
+         var keys = []; for (var k in p) keys.push(k);\n\
+         [keys.join('/'), 'extra' in p, 'then' in p, 'own' in p, 'missing' in p, p instanceof P, Reflect.ownKeys(p).join('/')].join(',');";
+    assert_eq!(eval(source), "own/extra,true,true,true,false,true,own");
+}

@@ -5776,6 +5776,19 @@ const GLOBAL_OBJECT_MEMBERS: [&str; 16] = [
 /// list the lowering declares factory hostcalls for).
 const GLOBAL_FUNCTION_VALUES: [&str; 13] = crate::lowering_pipeline::GLOBAL_FUNCTION_VALUE_NAMES;
 
+/// The generated Function realm's bindings to objects of its own
+/// (bd-fw7zd.8.3, bd-9vouw.133): its console, performance, Math, JSON and
+/// Reflect, and its global object under both names.
+const GENERATED_REALM_OBJECT_GLOBALS: [&str; 7] = [
+    "console",
+    "performance",
+    "Math",
+    "JSON",
+    "Reflect",
+    "globalThis",
+    "global",
+];
+
 /// Name of a first-class static builtin, or `None` if `tag` is not one the
 /// shared lowering tables can produce. `None` is also the dispatch guard: a
 /// `StaticHostcall` value whose tag does not resolve here is never executed.
@@ -36219,6 +36232,16 @@ impl InterpreterCore {
         ]
     }
 
+    /// The stateless global values the generated Function realm binds
+    /// (bd-9vouw.133): all but `Function` itself, so generated code gets no
+    /// recursive code generation through a bare name (bd-fw7zd.8.3).
+    fn generated_realm_stateless_values() -> Vec<(&'static str, Value)> {
+        Self::stateless_global_values()
+            .into_iter()
+            .filter(|(name, _)| *name != "Function")
+            .collect()
+    }
+
     fn projected_generated_function_realm_registry_bytes() -> u64 {
         // Every `ScopeBindingState` retains a public IFC label even when the
         // label has no dynamic payload.  Keep this projection in lockstep with
@@ -36226,28 +36249,34 @@ impl InterpreterCore {
         // undercharged the twelve canonical bindings by 384 bytes on this
         // target and made the debug recomputation assertion fail.
         let binding_label_bytes = std::mem::size_of::<Label>() as u64;
-        let object_entries = ["console", "performance", "Math"];
-        let object_bytes = Self::saturating_sum(object_entries.into_iter().map(|name| {
+        let binding_bytes = |name: &str, value_bytes: u64| {
             MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
                 .saturating_add(Self::estimate_string_bytes(name))
+                .saturating_add(value_bytes)
                 .saturating_add(binding_label_bytes)
-        }));
+        };
+        let object_bytes = Self::saturating_sum(
+            GENERATED_REALM_OBJECT_GLOBALS
+                .into_iter()
+                .map(|name| binding_bytes(name, 0)),
+        );
         // `Date` and `Promise` are constructible builtin function values
         // (`alloc_date_global` / `alloc_promise_global`), not plain objects:
         // each carries a builtin payload like the timer globals.
         let empty_builtin_bytes = Self::estimate_string_bytes("");
-        let builtin_bytes = Self::saturating_sum(
+        let constructor_bytes = Self::saturating_sum(
             ["Date", "Promise"]
                 .into_iter()
-                .chain(Self::timer_global_kinds().into_iter().map(|(name, _)| name))
-                .map(|name| {
-                    MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
-                        .saturating_add(Self::estimate_string_bytes(name))
-                        .saturating_add(empty_builtin_bytes)
-                        .saturating_add(binding_label_bytes)
-                }),
+                .map(|name| binding_bytes(name, empty_builtin_bytes)),
         );
-        object_bytes.saturating_add(builtin_bytes)
+        let stateless_bytes = Self::saturating_sum(
+            Self::generated_realm_stateless_values()
+                .iter()
+                .map(|(name, value)| binding_bytes(name, Self::estimate_value_bytes(value))),
+        );
+        object_bytes
+            .saturating_add(constructor_bytes)
+            .saturating_add(stateless_bytes)
     }
 
     /// Materialize the engine-owned safe outer environment used by generated
@@ -36269,32 +36298,53 @@ impl InterpreterCore {
             let promise = self.alloc_promise_global()?;
             let math = self.alloc_math_global()?;
             let date = self.alloc_date_global()?;
+            // bd-9vouw.133: the realm's own JSON and Reflect namespaces, the
+            // standard constructors and global functions as values (`typeof
+            // Object`, `[].map(String)`, `x instanceof Array` in a Function
+            // body), and its own global object, bound as `globalThis` and
+            // `global` and so the sloppy `this` of its functions: core-js 2's
+            // `Function('return this')()` global detection (json5, UMD
+            // builds). Its members are a snapshot of these bindings, so a
+            // write through it stays in this realm.
+            let json = self.alloc_json_global()?;
+            let reflect = self.alloc_reflect_global()?;
+            let mut entries = vec![
+                ("console", console),
+                ("performance", performance),
+                ("Promise", promise),
+                ("Math", math),
+                ("Date", date),
+                ("JSON", Value::Object(json)),
+                ("Reflect", Value::Object(reflect)),
+            ];
+            entries.extend(Self::generated_realm_stateless_values());
+            let global = self.alloc_object_with_properties(&entries)?;
+            for name in ["globalThis", "global"] {
+                self.set_object_property(global, name.to_string(), Value::Object(global))?;
+            }
+            for name in entries
+                .iter()
+                .map(|(name, _)| *name)
+                .chain(["globalThis", "global"])
+            {
+                self.set_own_property_attributes(
+                    global,
+                    &RuntimePropertyKey::String(JsString::from(name)),
+                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                )?;
+            }
+            entries.push(("globalThis", Value::Object(global)));
+            entries.push(("global", Value::Object(global)));
             let registry_bytes = Self::projected_generated_function_realm_registry_bytes();
             // No map/key allocation occurs until its complete retained charge
             // fits alongside every newly allocated canonical heap object.
             self.check_temporary_memory_budget(registry_bytes)?;
 
             let mut globals = BTreeMap::new();
-            for (name, value) in [
-                ("console", console),
-                ("performance", performance),
-                ("Promise", promise),
-                ("Math", math),
-                ("Date", date),
-            ] {
+            for (name, value) in entries {
                 globals.insert(
                     name.to_string(),
                     ScopeBinding::with_state(BindingKind::Var, value, true),
-                );
-            }
-            for (name, kind) in Self::timer_global_kinds() {
-                globals.insert(
-                    name.to_string(),
-                    ScopeBinding::with_state(
-                        BindingKind::Var,
-                        Value::BuiltinFunction(BuiltinFunction::timer_global(kind)),
-                        true,
-                    ),
                 );
             }
 
@@ -36517,41 +36567,59 @@ impl InterpreterCore {
         if let Some(date) = date {
             self.put_realm_runtime_name("Date", date)?;
         }
-        self.inject_runtime_global_binding(
+        for (name, value) in Self::stateless_global_values() {
+            self.inject_runtime_global_binding(name, value)?;
+        }
+        let json = self.alloc_json_global()?;
+        self.inject_runtime_global_binding("JSON", Value::Object(json))?;
+        let reflect = self.alloc_reflect_global()?;
+        self.inject_runtime_global_binding("Reflect", Value::Object(reflect))?;
+        self.seed_global_object()
+    }
+
+    /// The globals whose values hold no state of their own, so every realm
+    /// binds the same values: `Function`; the timer globals (bd-suwvw: direct
+    /// calls are still intercepted at lowering by
+    /// `timer_builtin_call_capability`, these bindings make bare references
+    /// work: `typeof setTimeout` is "function", a stored alias is callable,
+    /// and `require('timers').setTimeout === setTimeout` holds via structural
+    /// `BuiltinFunction` equality); and (bd-9vouw.17) the standard
+    /// constructors and the bare global functions. Direct calls (`new
+    /// TypeError(m)`, `parseInt(s)`) stay intercepted at lowering; these
+    /// bindings make bare references work: `typeof TypeError`,
+    /// `assert.throws(TypeError, f)`, `[1, 2].map(String)`, `new Array(n)`.
+    fn stateless_global_values() -> Vec<(&'static str, Value)> {
+        let mut values = vec![(
             "Function",
             Value::BuiltinFunction(BuiltinFunction::function_constructor()),
-        )?;
-        // bd-suwvw: timer globals as first-class values. Direct calls are
-        // still intercepted at lowering (`timer_builtin_call_capability`);
-        // these injected bindings make bare references work — `typeof
-        // setTimeout` is "function", a stored alias is callable, and
-        // `require('timers').setTimeout === setTimeout` holds via structural
-        // `BuiltinFunction` equality.
+        )];
         for (name, kind) in Self::timer_global_kinds() {
-            self.inject_runtime_global_binding(
+            values.push((
                 name,
                 Value::BuiltinFunction(BuiltinFunction::timer_global(kind)),
-            )?;
+            ));
         }
-        // bd-9vouw.17: standard constructors, the bare global functions and
-        // `JSON` as first-class values. Direct calls (`new TypeError(m)`,
-        // `parseInt(s)`, `JSON.stringify(v)`) stay intercepted at lowering;
-        // these bindings make bare references work: `typeof TypeError`,
-        // `assert.throws(TypeError, f)`, `[1, 2].map(String)`, `new Array(n)`.
         for name in STANDARD_CONSTRUCTOR_GLOBALS {
-            self.inject_runtime_global_binding(
+            values.push((
                 name,
                 Value::BuiltinFunction(BuiltinFunction::standard_constructor(name)),
-            )?;
+            ));
         }
         for name in GLOBAL_FUNCTION_VALUES {
             let tag = crate::lowering_pipeline::global_function_capability(name)
                 .expect("GLOBAL_FUNCTION_VALUES names are all in the shared lowering table");
-            self.inject_runtime_global_binding(
+            values.push((
                 name,
                 Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
-            )?;
+            ));
         }
+        values
+    }
+
+    /// A `JSON` namespace object (bd-9vouw.17): direct `JSON.stringify(v)`
+    /// calls stay intercepted at lowering; its members are the same
+    /// hostcalls, so `typeof JSON` and `const { parse } = JSON` work.
+    fn alloc_json_global(&mut self) -> Result<ObjectId, InterpreterError> {
         let json = self.alloc_object_with_properties(&[
             (
                 "parse",
@@ -36577,11 +36645,14 @@ impl InterpreterCore {
                 configurable: true,
             },
         )?;
-        self.inject_runtime_global_binding("JSON", Value::Object(json))?;
-        // `Reflect` as a first-class namespace object, like `JSON`: direct
-        // `Reflect.get(o, k)` calls stay intercepted at lowering, and the
-        // object's members are the same hostcalls, so `typeof Reflect`,
-        // `const { ownKeys } = Reflect` and `Reflect.apply.call(...)` work.
+        Ok(json)
+    }
+
+    /// `Reflect` as a first-class namespace object, like `JSON`: direct
+    /// `Reflect.get(o, k)` calls stay intercepted at lowering, and the
+    /// object's members are the same hostcalls, so `typeof Reflect`,
+    /// `const { ownKeys } = Reflect` and `Reflect.apply.call(...)` work.
+    fn alloc_reflect_global(&mut self) -> Result<ObjectId, InterpreterError> {
         let reflect_members: Vec<(&str, Value)> = REFLECT_MEMBERS
             .iter()
             .filter_map(|member| {
@@ -36601,8 +36672,7 @@ impl InterpreterCore {
                 NON_ENUMERABLE_DATA_ATTRIBUTES,
             )?;
         }
-        self.inject_runtime_global_binding("Reflect", Value::Object(reflect))?;
-        self.seed_global_object()
+        Ok(reflect)
     }
 
     /// bd-9vouw.17: the global object, bound as `globalThis` and as Node's
@@ -133592,19 +133662,32 @@ mod function_prototype_call_apply_tests_current {
             "setImmediate",
             "setInterval",
             "setTimeout",
+            // bd-9vouw.133: the realm's namespaces, global object and the
+            // stateless standard values.
+            "JSON",
+            "Reflect",
+            "globalThis",
+            "global",
+            "Object",
+            "Array",
+            "Symbol",
+            "parseInt",
+            "structuredClone",
         ] {
             assert!(
                 globals.contains_key(safe_name),
                 "missing safe global {safe_name}"
             );
         }
-        for forbidden_name in ["Function", "process", "require"] {
+        for forbidden_name in ["Function", "process", "require", "eval"] {
             assert!(
                 !globals.contains_key(forbidden_name),
                 "ambient or recursive authority leaked through {forbidden_name}"
             );
         }
-        assert_eq!(globals.len(), 12);
+        // 7 realm objects, Date and Promise, 7 timers, 41 standard
+        // constructors, 13 global functions.
+        assert_eq!(globals.len(), 70);
         assert_eq!(
             InterpreterCore::projected_generated_function_realm_registry_bytes(),
             InterpreterCore::estimate_generated_function_realm_globals_bytes(globals),

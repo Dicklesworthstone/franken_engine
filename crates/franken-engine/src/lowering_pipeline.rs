@@ -14341,31 +14341,6 @@ fn lower_expression_to_ir1_inner(
             }
 
             if *operator == BinaryOperator::Instanceof
-                && matches!(right.as_ref(), Expression::Identifier(name) if name == "Array")
-                && !is_lexically_shadowed(binding_lookup, "Array")
-            {
-                // `Array` is not a scope binding on the eval path, but the
-                // runtime already has the canonical `Array.isArray` predicate.
-                // Route the unshadowed built-in RHS through that predicate
-                // while preserving normal `instanceof` for user-shadowed Array.
-                lower_expression_to_ir1(
-                    left,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                    span_table,
-                )?;
-                ops.push(Ir1Op::HostCall {
-                    capability: "builtin:ArrayIsArray".to_string(),
-                    arg_count: 1,
-                });
-                return Ok(());
-            }
-
-            if *operator == BinaryOperator::Instanceof
                 && net_member_name(right.as_ref(), binding_lookup) == Some("Socket")
             {
                 // bd-70cv1: a hermetic TLSSocket is a Node-shaped net.Socket.

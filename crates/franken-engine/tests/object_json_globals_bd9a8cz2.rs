@@ -10,10 +10,10 @@
 //! stays `undefined` — there is still no scope binding, matching how `Math`
 //! behaves; this wires the method calls, which is the actual fault.)
 //!
-//! Also covers bd-ck8ui's `Array` RHS for `instanceof`: the bare global is not
-//! scope-bound, so unshadowed `lhs instanceof Array` lowers through the existing
-//! `Array.isArray` hostcall while shadowed user constructors keep normal
-//! `instanceof` semantics.
+//! Also covers bd-ck8ui's `Array` RHS for `instanceof`: unshadowed
+//! `lhs instanceof Array` reads the global Array constructor (an
+//! `Array.isArray` rewrite until bd-9vouw.152) while shadowed user
+//! constructors keep normal `instanceof` semantics.
 
 use frankenengine_engine::HybridRouter;
 

@@ -58040,13 +58040,14 @@ impl InterpreterCore {
         let mut current = value.clone();
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
             let next = match &current {
-                Value::Object(id) => {
-                    if let Value::Object(needle) = needle {
-                        return self.prototype_chain_contains(*id, *needle);
-                    }
-                    self.observable_prototype_of(*id)
-                        .map_or(Value::Null, Value::Object)
+                // A proxy answers [[GetPrototypeOf]] through its trap or its
+                // target (ES2020 9.5.1): `new Proxy([], {}) instanceof Array`.
+                Value::Object(id) if self.active_proxy_record(*id)?.is_some() => {
+                    self.object_get_prototype(module, *id, 0)?
                 }
+                Value::Object(id) => self
+                    .observable_prototype_of(*id)
+                    .map_or(Value::Null, Value::Object),
                 callable if callable.is_callable() => {
                     self.function_value_prototype(module, callable)?
                 }

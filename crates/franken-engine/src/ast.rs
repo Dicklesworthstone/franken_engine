@@ -1508,6 +1508,13 @@ pub enum UnaryOperator {
     Void,
     Delete,
     UnaryPlus,
+    /// ToNumeric of the operand plus one of its own type (`1` or `1n`).
+    /// Not source syntax: the parser emits it for the value of a postfix
+    /// `x--` (bd-9vouw.119), and lowering for a `++`/`--` member or name
+    /// target.
+    Increment,
+    /// ToNumeric of the operand minus one of its own type; see `Increment`.
+    Decrement,
 }
 
 impl UnaryOperator {
@@ -1520,6 +1527,8 @@ impl UnaryOperator {
             Self::Void => "void",
             Self::Delete => "delete",
             Self::UnaryPlus => "+",
+            Self::Increment => "++",
+            Self::Decrement => "--",
         }
     }
 }
@@ -1543,6 +1552,12 @@ pub enum AssignmentOperator {
     LogicalAndAssign,
     LogicalOrAssign,
     NullishCoalescingAssign,
+    /// `++x`, and the write of `x++` (bd-9vouw.119): the target becomes
+    /// ToNumeric(target) plus one of the same type, so a BigInt steps by
+    /// `1n`. The right operand is the literal `1` and is not used.
+    IncrementAssign,
+    /// `--x`, and the write of `x--`; see `IncrementAssign`.
+    DecrementAssign,
 }
 
 /// Effective strict-mode provenance for assignment targets.
@@ -1597,6 +1612,17 @@ impl AssignmentOperator {
             Self::LogicalAndAssign => "&&=",
             Self::LogicalOrAssign => "||=",
             Self::NullishCoalescingAssign => "??=",
+            Self::IncrementAssign => "++",
+            Self::DecrementAssign => "--",
+        }
+    }
+
+    /// The step operator of `++` and `--`, `None` for the others.
+    pub fn update_step(self) -> Option<UnaryOperator> {
+        match self {
+            Self::IncrementAssign => Some(UnaryOperator::Increment),
+            Self::DecrementAssign => Some(UnaryOperator::Decrement),
+            _ => None,
         }
     }
 }
@@ -3302,13 +3328,15 @@ mod tests {
             (UnaryOperator::Void, "void"),
             (UnaryOperator::Delete, "delete"),
             (UnaryOperator::UnaryPlus, "+"),
+            (UnaryOperator::Increment, "++"),
+            (UnaryOperator::Decrement, "--"),
         ];
         let mut seen = std::collections::BTreeSet::new();
         for (op, expected) in &cases {
             assert_eq!(op.as_str(), *expected);
             assert!(seen.insert(op.as_str()), "duplicate: {expected}");
         }
-        assert_eq!(seen.len(), 7);
+        assert_eq!(seen.len(), 9);
     }
 
     #[test]
@@ -3321,6 +3349,8 @@ mod tests {
             UnaryOperator::Void,
             UnaryOperator::Delete,
             UnaryOperator::UnaryPlus,
+            UnaryOperator::Increment,
+            UnaryOperator::Decrement,
         ];
         for op in ops {
             let json = serde_json::to_string(&op).expect("serialize derived Serialize");
@@ -3349,13 +3379,15 @@ mod tests {
             (AssignmentOperator::LogicalAndAssign, "&&="),
             (AssignmentOperator::LogicalOrAssign, "||="),
             (AssignmentOperator::NullishCoalescingAssign, "??="),
+            (AssignmentOperator::IncrementAssign, "++"),
+            (AssignmentOperator::DecrementAssign, "--"),
         ];
         let mut seen = std::collections::BTreeSet::new();
         for (op, expected) in &cases {
             assert_eq!(op.as_str(), *expected);
             assert!(seen.insert(op.as_str()), "duplicate: {expected}");
         }
-        assert_eq!(seen.len(), 16);
+        assert_eq!(seen.len(), 18);
     }
 
     #[test]
@@ -3377,6 +3409,8 @@ mod tests {
             AssignmentOperator::LogicalAndAssign,
             AssignmentOperator::LogicalOrAssign,
             AssignmentOperator::NullishCoalescingAssign,
+            AssignmentOperator::IncrementAssign,
+            AssignmentOperator::DecrementAssign,
         ];
         for op in ops {
             let json = serde_json::to_string(&op).expect("serialize derived Serialize");

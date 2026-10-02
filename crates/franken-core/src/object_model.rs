@@ -43,8 +43,12 @@ use crate::js_string::{ExactPropertyMap, JsString};
 /// format, matching the JSON replay/checkpoint boundary used by this carrier.
 #[derive(Debug, Clone)]
 pub struct OrderedStringMap<V> {
+    // Ordinary (non-index) well-formed keys.
     by_key: KeyedValues<V>,
-    array_indices: BTreeMap<u32, String>,
+    // Canonical array-index keys with their values, in numeric order. A
+    // lookup compares integers, not decimal strings: an array of N elements
+    // used to cost about log2(N) string comparisons per element access.
+    array_entries: BTreeMap<u32, (String, V)>,
     string_insertion_order: Vec<String>,
     // Allocated on first use: an ordinary object's properties have none.
     sidecars: Option<Box<Sidecars<V>>>,
@@ -280,7 +284,7 @@ impl<'a, V> Iterator for KeyedValuesIter<'a, V> {
 impl<V: PartialEq> PartialEq for OrderedStringMap<V> {
     fn eq(&self, other: &Self) -> bool {
         self.by_key == other.by_key
-            && self.array_indices == other.array_indices
+            && self.array_entries == other.array_entries
             && self.string_insertion_order == other.string_insertion_order
             && Sidecars::equal(self.sidecars.as_deref(), other.sidecars.as_deref())
     }
@@ -292,7 +296,7 @@ impl<V> Default for OrderedStringMap<V> {
     fn default() -> Self {
         Self {
             by_key: KeyedValues::new(),
-            array_indices: BTreeMap::new(),
+            array_entries: BTreeMap::new(),
             string_insertion_order: Vec::new(),
             sidecars: None,
         }
@@ -325,7 +329,7 @@ impl<V> OrderedStringMap<V> {
 
     /// Return the number of well-formed entries in the compatibility view.
     pub fn len(&self) -> usize {
-        self.array_indices.len() + self.string_insertion_order.len()
+        self.array_entries.len() + self.string_insertion_order.len()
     }
 
     /// Return whether the well-formed compatibility view has no entries.
@@ -335,17 +339,32 @@ impl<V> OrderedStringMap<V> {
 
     /// Return a shared value for `key`.
     pub fn get(&self, key: &str) -> Option<&V> {
-        self.by_key.get(key)
+        match canonical_array_index(key) {
+            Some(index) => self.get_index(index),
+            None => self.by_key.get(key),
+        }
     }
 
     /// Return a mutable value for `key` without changing its position.
     pub fn get_mut(&mut self, key: &str) -> Option<&mut V> {
-        self.by_key.get_mut(key)
+        match canonical_array_index(key) {
+            Some(index) => self.array_entries.get_mut(&index).map(|(_, value)| value),
+            None => self.by_key.get_mut(key),
+        }
     }
 
     /// Return whether `key` is present.
     pub fn contains_key(&self, key: &str) -> bool {
-        self.by_key.contains_key(key)
+        match canonical_array_index(key) {
+            Some(index) => self.array_entries.contains_key(&index),
+            None => self.by_key.contains_key(key),
+        }
+    }
+
+    /// Return the value stored under the canonical array index `index`
+    /// (the key `index.to_string()`), without building that key.
+    pub fn get_index(&self, index: u32) -> Option<&V> {
+        self.array_entries.get(&index).map(|(_, value)| value)
     }
 
     /// Insert or replace a value.
@@ -353,21 +372,28 @@ impl<V> OrderedStringMap<V> {
     /// New canonical array indices join the numeric index set. New ordinary
     /// strings append to creation order. Replacing a value moves neither.
     pub fn insert(&mut self, key: String, value: V) -> Option<V> {
+        if let Some(index) = canonical_array_index(&key) {
+            return match self.array_entries.entry(index) {
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    Some(std::mem::replace(&mut entry.get_mut().1, value))
+                }
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert((key, value));
+                    None
+                }
+            };
+        }
         if !self.by_key.contains_key(&key) {
-            if let Some(index) = canonical_array_index(&key) {
-                self.array_indices.insert(index, key.clone());
-            } else {
-                self.string_insertion_order.push(key.clone());
-                if let Some(sidecars) = self.sidecars.as_deref_mut() {
-                    let exact_key = JsString::from(&key);
-                    if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
-                        order.push(exact_key.clone());
-                    }
-                    if let Some(order) = sidecars.baseline_string_key_order.as_mut()
-                        && !order.iter().any(|candidate| candidate == &exact_key)
-                    {
-                        order.push(exact_key);
-                    }
+            self.string_insertion_order.push(key.clone());
+            if let Some(sidecars) = self.sidecars.as_deref_mut() {
+                let exact_key = JsString::from(&key);
+                if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
+                    order.push(exact_key.clone());
+                }
+                if let Some(order) = sidecars.baseline_string_key_order.as_mut()
+                    && !order.iter().any(|candidate| candidate == &exact_key)
+                {
+                    order.push(exact_key);
                 }
             }
         }
@@ -376,18 +402,20 @@ impl<V> OrderedStringMap<V> {
 
     /// Return the number of exact data entries, including exact-only keys.
     pub fn exact_len(&self) -> usize {
-        self.by_key.len() + self.exact_only_by_key().map_or(0, ExactPropertyMap::len)
+        self.by_key.len()
+            + self.array_entries.len()
+            + self.exact_only_by_key().map_or(0, ExactPropertyMap::len)
     }
 
     /// Return whether the exact data carrier has no entries.
     pub fn exact_is_empty(&self) -> bool {
-        self.by_key.is_empty() && self.exact_only_is_empty()
+        self.by_key.is_empty() && self.array_entries.is_empty() && self.exact_only_is_empty()
     }
 
     /// Return a shared value for an exact key.
     pub fn get_exact(&self, key: &JsString) -> Option<&V> {
         match key.as_str() {
-            Some(key) => self.by_key.get(key),
+            Some(key) => self.get(key),
             None => self
                 .sidecars
                 .as_deref()
@@ -398,7 +426,7 @@ impl<V> OrderedStringMap<V> {
     /// Return a mutable value for an exact key without changing its position.
     pub fn get_exact_mut(&mut self, key: &JsString) -> Option<&mut V> {
         match key.as_str() {
-            Some(key) => self.by_key.get_mut(key),
+            Some(key) => self.get_mut(key),
             None => self
                 .sidecars
                 .as_deref_mut()
@@ -409,7 +437,7 @@ impl<V> OrderedStringMap<V> {
     /// Return whether an exact data key is present.
     pub fn contains_exact_key(&self, key: &JsString) -> bool {
         match key.as_str() {
-            Some(key) => self.by_key.contains_key(key),
+            Some(key) => self.contains_key(key),
             None => self
                 .exact_only_by_key()
                 .is_some_and(|exact_only| exact_only.contains_key(key)),
@@ -455,7 +483,10 @@ impl<V> OrderedStringMap<V> {
 
     /// Return all exact data keys in ES string-key order.
     pub fn exact_keys(&self) -> Vec<JsString> {
-        let array_indices = self.array_indices.values().map(JsString::from);
+        let array_indices = self
+            .array_entries
+            .values()
+            .map(|(key, _)| JsString::from(key));
         let ordinary = self
             .exact_string_insertion_order()
             .map_or_else(
@@ -491,16 +522,24 @@ impl<V> OrderedStringMap<V> {
     /// Borrow every data value without allocating or imposing observable
     /// property order. Used by seed validation and other whole-carrier scans.
     pub fn all_data_values(&self) -> impl Iterator<Item = &V> {
-        self.by_key.values().chain(
-            self.exact_only_by_key()
-                .into_iter()
-                .flat_map(ExactPropertyMap::values),
-        )
+        self.array_entries
+            .values()
+            .map(|(_, value)| value)
+            .chain(self.by_key.values())
+            .chain(
+                self.exact_only_by_key()
+                    .into_iter()
+                    .flat_map(ExactPropertyMap::values),
+            )
     }
 
-    /// Borrow well-formed data entries in deterministic storage order.
+    /// Borrow well-formed data entries in deterministic storage order:
+    /// canonical array indices numerically, then the other keys sorted.
     pub fn well_formed_data_entries(&self) -> impl Iterator<Item = (&String, &V)> {
-        self.by_key.iter()
+        self.array_entries
+            .values()
+            .map(|(key, value)| (key, value))
+            .chain(self.by_key.iter())
     }
 
     /// Borrow exact-only data entries in deterministic storage order.
@@ -624,24 +663,23 @@ impl<V> OrderedStringMap<V> {
     }
 
     fn remove_internal(&mut self, key: &str, remove_from_baseline_order: bool) -> Option<V> {
+        if let Some(index) = canonical_array_index(key) {
+            return self.array_entries.remove(&index).map(|(_, value)| value);
+        }
         let removed = self.by_key.remove(key);
         if removed.is_some() {
-            if let Some(index) = canonical_array_index(key) {
-                self.array_indices.remove(&index);
-            } else {
-                self.string_insertion_order
-                    .retain(|candidate| candidate != key);
-                if let Some(sidecars) = self.sidecars.as_deref_mut() {
-                    if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
-                        let exact_key = JsString::from(key);
-                        order.retain(|candidate| candidate != &exact_key);
-                    }
-                    if remove_from_baseline_order
-                        && let Some(order) = sidecars.baseline_string_key_order.as_mut()
-                    {
-                        let exact_key = JsString::from(key);
-                        order.retain(|candidate| candidate != &exact_key);
-                    }
+            self.string_insertion_order
+                .retain(|candidate| candidate != key);
+            if let Some(sidecars) = self.sidecars.as_deref_mut() {
+                if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
+                    let exact_key = JsString::from(key);
+                    order.retain(|candidate| candidate != &exact_key);
+                }
+                if remove_from_baseline_order
+                    && let Some(order) = sidecars.baseline_string_key_order.as_mut()
+                {
+                    let exact_key = JsString::from(key);
+                    order.retain(|candidate| candidate != &exact_key);
                 }
             }
         }
@@ -681,7 +719,7 @@ impl<V> OrderedStringMap<V> {
             .is_some_and(|sidecars| sidecars.baseline_string_key_order.is_some())
             .then(|| self.exact_keys().into_iter().collect::<BTreeSet<_>>());
         self.by_key.clear();
-        self.array_indices.clear();
+        self.array_entries.clear();
         self.string_insertion_order.clear();
         if let Some(sidecars) = self.sidecars.as_deref_mut() {
             sidecars.exact_only_by_key = ExactPropertyMap::new();
@@ -702,26 +740,35 @@ impl<V> OrderedStringMap<V> {
     where
         F: FnMut(&String, &mut V) -> bool,
     {
-        let old_keys = self.by_key.keys().cloned().collect::<BTreeSet<_>>();
+        let old_keys = self
+            .by_key
+            .keys()
+            .chain(self.array_entries.values().map(|(key, _)| key))
+            .cloned()
+            .collect::<BTreeSet<_>>();
         self.by_key.retain(|key, value| keep(key, value));
+        self.array_entries
+            .retain(|_, (key, value)| keep(key, value));
         let by_key = &self.by_key;
-        self.array_indices.retain(|_, key| by_key.contains_key(key));
+        let array_entries = &self.array_entries;
+        let still_present = |key: &str| match canonical_array_index(key) {
+            Some(index) => array_entries.contains_key(&index),
+            None => by_key.contains_key(key),
+        };
         self.string_insertion_order
             .retain(|key| by_key.contains_key(key));
         if let Some(sidecars) = self.sidecars.as_deref_mut() {
             let exact_only_by_key = &sidecars.exact_only_by_key;
             if let Some(order) = sidecars.exact_string_insertion_order.as_mut() {
                 order.retain(|key| {
-                    key.as_str().map_or_else(
-                        || exact_only_by_key.contains_key(key),
-                        |key| by_key.contains_key(key),
-                    )
+                    key.as_str()
+                        .map_or_else(|| exact_only_by_key.contains_key(key), still_present)
                 });
             }
             if let Some(order) = sidecars.baseline_string_key_order.as_mut() {
                 order.retain(|key| {
                     key.as_str()
-                        .is_none_or(|key| !old_keys.contains(key) || by_key.contains_key(key))
+                        .is_none_or(|key| !old_keys.contains(key) || still_present(key))
                 });
             }
         }
@@ -729,8 +776,9 @@ impl<V> OrderedStringMap<V> {
 
     /// Iterate keys in ES own-property string-key order.
     pub fn keys(&self) -> impl Iterator<Item = &String> {
-        self.array_indices
+        self.array_entries
             .values()
+            .map(|(key, _)| key)
             .chain(self.string_insertion_order.iter())
     }
 
@@ -758,10 +806,8 @@ impl<V> OrderedStringMap<V> {
     /// Iterate entries in ES own-property string-key order.
     pub fn iter(&self) -> OrderedStringMapIter<'_, V> {
         OrderedStringMapIter {
-            keys: self
-                .array_indices
-                .values()
-                .chain(self.string_insertion_order.iter()),
+            indexed: self.array_entries.values(),
+            named: self.string_insertion_order.iter(),
             by_key: &self.by_key,
         }
     }
@@ -998,10 +1044,8 @@ impl<'de, V: Deserialize<'de>> Deserialize<'de> for OrderedStringMap<V> {
 
 /// Iterator over [`OrderedStringMap`] entries.
 pub struct OrderedStringMapIter<'a, V> {
-    keys: std::iter::Chain<
-        std::collections::btree_map::Values<'a, u32, String>,
-        std::slice::Iter<'a, String>,
-    >,
+    indexed: std::collections::btree_map::Values<'a, u32, (String, V)>,
+    named: std::slice::Iter<'a, String>,
     by_key: &'a KeyedValues<V>,
 }
 
@@ -1009,7 +1053,10 @@ impl<'a, V> Iterator for OrderedStringMapIter<'a, V> {
     type Item = (&'a String, &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        for key in self.keys.by_ref() {
+        if let Some((key, value)) = self.indexed.next() {
+            return Some((key, value));
+        }
+        for key in self.named.by_ref() {
             if let Some(value) = self.by_key.get(key) {
                 return Some((key, value));
             }
@@ -1029,6 +1076,7 @@ impl<'a, V> IntoIterator for &'a OrderedStringMap<V> {
 
 /// Owning iterator over [`OrderedStringMap`] entries.
 pub struct OrderedStringMapIntoIter<V> {
+    indexed: std::collections::btree_map::IntoValues<u32, (String, V)>,
     keys: std::vec::IntoIter<String>,
     by_key: KeyedValues<V>,
 }
@@ -1037,6 +1085,9 @@ impl<V> Iterator for OrderedStringMapIntoIter<V> {
     type Item = (String, V);
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(entry) = self.indexed.next() {
+            return Some(entry);
+        }
         for key in self.keys.by_ref() {
             if let Some(value) = self.by_key.remove(&key) {
                 return Some((key, value));
@@ -1051,22 +1102,30 @@ impl<V> IntoIterator for OrderedStringMap<V> {
     type IntoIter = OrderedStringMapIntoIter<V>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let keys = self
-            .array_indices
-            .into_values()
-            .chain(self.string_insertion_order)
-            .collect::<Vec<_>>()
-            .into_iter();
         OrderedStringMapIntoIter {
-            keys,
+            indexed: self.array_entries.into_values(),
+            keys: self.string_insertion_order.into_iter(),
             by_key: self.by_key,
         }
     }
 }
 
-pub(crate) fn canonical_array_index(key: &str) -> Option<u32> {
-    let index = key.parse::<u32>().ok()?;
-    (index < u32::MAX && index.to_string() == key).then_some(index)
+/// The array index `key` names: a decimal integer below 2^32 - 1 with no
+/// sign and no leading zero (`"0"` itself is one). Allocation-free, since
+/// every property lookup asks.
+pub fn canonical_array_index(key: &str) -> Option<u32> {
+    let (&first, rest) = key.as_bytes().split_first()?;
+    if !first.is_ascii_digit() || (first == b'0' && !rest.is_empty()) || rest.len() > 9 {
+        return None;
+    }
+    let mut index = u64::from(first - b'0');
+    for &byte in rest {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        index = index * 10 + u64::from(byte - b'0');
+    }
+    u32::try_from(index).ok().filter(|index| *index < u32::MAX)
 }
 
 // ---------------------------------------------------------------------------
@@ -3850,6 +3909,138 @@ mod tests {
             map.keys().map(String::as_str).collect::<Vec<_>>(),
             vec!["a", "b"]
         );
+    }
+
+    /// Canonical array-index keys live in their own integer-keyed store.
+    /// Every lookup path (string key, exact key, `get_index`), replacement,
+    /// removal, retain, clear, iteration and serde agree with the ES key
+    /// order, and keys that only look numeric stay ordinary strings.
+    #[test]
+    fn ordered_string_map_array_index_store_agrees_with_string_keys() {
+        let mut map = OrderedStringMap::new();
+        for (key, value) in [
+            ("x", 0),
+            ("7", 1),
+            ("01", 2),
+            ("0", 3),
+            ("+1", 4),
+            ("4294967295", 5),
+            ("4294967294", 6),
+            ("1e3", 7),
+            ("-0", 8),
+            ("10", 9),
+        ] {
+            assert_eq!(map.insert(key.to_string(), value), None);
+        }
+        assert_eq!((map.len(), map.exact_len()), (10, 10));
+        assert_eq!(map.array_entries.len(), 4);
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "0",
+                "7",
+                "10",
+                "4294967294",
+                "x",
+                "01",
+                "+1",
+                "4294967295",
+                "1e3",
+                "-0"
+            ]
+        );
+        assert_eq!(map.get("7"), Some(&1));
+        assert_eq!(map.get_index(7), Some(&1));
+        assert_eq!(map.get_index(1), None);
+        assert_eq!(map.get("01"), Some(&2));
+        assert_eq!(map.get_exact(&JsString::from("10")), Some(&9));
+        assert!(map.contains_key("4294967294"));
+        assert!(map.contains_exact_key(&JsString::from("0")));
+        assert!(!map.contains_key("1"));
+
+        // Replacing an index keeps its place; get_mut reaches the same slot.
+        assert_eq!(map.insert("7".to_string(), 70), Some(1));
+        *map.get_mut("0").expect("index 0") += 30;
+        assert_eq!(map.get_index(0), Some(&33));
+        assert_eq!(map.remove("10"), Some(9));
+        assert_eq!(map.remove("10"), None);
+        assert_eq!(map.remove_exact(&JsString::from("4294967294")), Some(6));
+
+        let mut rebuilt = OrderedStringMap::new();
+        for (key, value) in map.iter() {
+            rebuilt.insert(key.clone(), *value);
+        }
+        assert_eq!(map, rebuilt);
+        let json = serde_json::to_string(&map).expect("ordered map should serialize");
+        assert_eq!(
+            json,
+            r#"{"0":33,"7":70,"x":0,"01":2,"+1":4,"4294967295":5,"1e3":7,"-0":8}"#
+        );
+        let back: OrderedStringMap<i32> =
+            serde_json::from_str(&json).expect("ordered map should deserialize");
+        assert_eq!(back, map);
+        assert_eq!(
+            map.clone()
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect::<Vec<_>>(),
+            map.keys().cloned().collect::<Vec<_>>()
+        );
+        let mut scanned = map.all_data_values().copied().collect::<Vec<_>>();
+        let mut ordered = map.values().copied().collect::<Vec<_>>();
+        scanned.sort_unstable();
+        ordered.sort_unstable();
+        assert_eq!(scanned, ordered);
+        assert_eq!(map.well_formed_data_entries().count(), map.len());
+
+        map.retain(|key, value| key != "7" && *value != 2);
+        assert_eq!(
+            map.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["0", "x", "+1", "4294967295", "1e3", "-0"]
+        );
+        map.clear();
+        assert!(map.is_empty() && map.array_entries.is_empty());
+        assert_eq!(map.get_index(0), None);
+    }
+
+    /// The allocation-free index test agrees with the definition it replaced:
+    /// a `u32` parse that round-trips through `to_string`, below 2^32 - 1.
+    #[test]
+    fn canonical_array_index_matches_round_trip_definition() {
+        fn reference(key: &str) -> Option<u32> {
+            let index = key.parse::<u32>().ok()?;
+            (index < u32::MAX && index.to_string() == key).then_some(index)
+        }
+        let mut keys = [
+            "",
+            "0",
+            "00",
+            "01",
+            "1",
+            "+1",
+            "-1",
+            " 1",
+            "1 ",
+            "1.0",
+            "1e3",
+            "1x",
+            "a",
+            "٣",
+            "4294967294",
+            "4294967295",
+            "4294967296",
+            "04294967294",
+            "99999999999",
+            "18446744073709551616",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        keys.extend((0..2000u32).map(|n| n.to_string()));
+        keys.extend((0..2000u32).map(|n| format!("0{n}")));
+        keys.extend((0..64u64).map(|delta| (u64::from(u32::MAX) - 32 + delta).to_string()));
+        for key in &keys {
+            assert_eq!(canonical_array_index(key), reference(key), "{key:?}");
+        }
     }
 
     #[test]

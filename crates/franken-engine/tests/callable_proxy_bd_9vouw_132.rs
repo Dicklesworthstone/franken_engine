@@ -108,6 +108,19 @@ fn callable_proxy_writes() {
     assert_eq!(eval(source), "1 1 true 2 true undefined");
 }
 
+/// Reflect.construct(proxy, args, newTarget) constructs (it called the proxy) and passes newTarget to the construct trap; a proxy without a trap forwards itself as newTarget to a proxy target.
+#[test]
+fn callable_proxy_construct_new_target() {
+    let source = "var calls = 0, seen;\n\
+         var Target = new Proxy(function () { throw new Error('called'); }, { construct(t, args, nt) { calls++; seen = nt; return { sum: args[0] + args[1] }; } });\n\
+         var P = new Proxy(Target, {});\n\
+         function NT() {}\n\
+         var a = Reflect.construct(P, [3, 4], NT); var first = seen === NT;\n\
+         var b = new P(1, 2);\n\
+         [calls, first, seen === P, a.sum, b.sum].join(' ');";
+    assert_eq!(eval(source), "2 true true 7 3");
+}
+
 /// Reflect.get/has/set/deleteProperty on a plain function (they threw "expected object with property storage").
 #[test]
 fn callable_proxy_reflect() {

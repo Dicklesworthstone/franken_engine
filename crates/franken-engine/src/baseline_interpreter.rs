@@ -95133,6 +95133,7 @@ impl InterpreterCore {
             .ok_or(InterpreterError::IteratorNotFound { handle })
     }
 
+    #[cfg(test)]
     fn collect_for_in_keys(
         &mut self,
         module: Option<&Ir3Module>,

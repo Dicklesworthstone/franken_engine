@@ -1402,6 +1402,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
         },
         Ir1Op::SetProperty {
             key: Ir1PropertyKey::Static("val".into()),
+            strict: true,
         },
         Ir1Op::DeleteProperty {
             key: Ir1PropertyKey::Dynamic,

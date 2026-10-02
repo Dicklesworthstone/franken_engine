@@ -12238,7 +12238,10 @@ impl CompactTier1Program {
             | Ir3Instruction::DeleteProperty { obj, key, dst } => {
                 requirement(&[*obj, *key, *dst], &[])
             }
-            Ir3Instruction::SetProperty { obj, key, val } => requirement(&[*obj, *key, *val], &[]),
+            Ir3Instruction::SetProperty { obj, key, val }
+            | Ir3Instruction::SetPropertySloppy { obj, key, val } => {
+                requirement(&[*obj, *key, *val], &[])
+            }
             Ir3Instruction::DefineAccessor { obj, key, func, .. }
             | Ir3Instruction::DefineMethod { obj, key, func } => {
                 requirement(&[*obj, *key, *func], &[])
@@ -51433,7 +51436,11 @@ impl InterpreterCore {
                         });
                     self.ip += 1;
                 }
-                Ir3Instruction::SetProperty { obj, key, val } => {
+                set_instruction @ (Ir3Instruction::SetProperty { obj, key, val }
+                | Ir3Instruction::SetPropertySloppy { obj, key, val }) => {
+                    // bd-9vouw.146: PutValue throws for a write that [[Set]]
+                    // rejects only in strict code (ES2020 6.2.4.9 step 6.d).
+                    let strict = matches!(set_instruction, Ir3Instruction::SetProperty { .. });
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     // ES2022 `o.#x = v` (PrivateSet). The value keeps its own
@@ -51544,7 +51551,7 @@ impl InterpreterCore {
                                         return Err(error);
                                     }
                                 };
-                                if !committed {
+                                if !committed && strict {
                                     self.set_own_runtime_property_label(
                                         label_owner,
                                         &property_key,
@@ -51555,8 +51562,10 @@ impl InterpreterCore {
                                         got: "falsy set trap result".to_string(),
                                     });
                                 }
-                                let owns_property =
-                                    self.heap.get(label_owner.0 as usize).is_some_and(|object| {
+                                // A sloppy write that [[Set]] rejected left the
+                                // object as it was: restore the prior label.
+                                let owns_property = committed
+                                    && self.heap.get(label_owner.0 as usize).is_some_and(|object| {
                                         object.contains_own_runtime_property(&property_key)
                                     });
                                 if !owns_property {
@@ -51593,7 +51602,12 @@ impl InterpreterCore {
                         // are non-writable too.
                         Value::BuiltinFunction(ref builtin)
                             if Self::builtin_function_property_object(builtin).is_none()
-                                && matches!(property_key.as_str(), Some("name" | "length")) => {}
+                                && matches!(property_key.as_str(), Some("name" | "length")) =>
+                        {
+                            if strict {
+                                return Err(Self::read_only_property_error(&property_key));
+                            }
+                        }
                         Value::BuiltinFunction(builtin) => {
                             let property_object =
                                 match Self::builtin_function_property_object(&builtin) {
@@ -51616,17 +51630,30 @@ impl InterpreterCore {
                                 &property_key,
                                 val,
                                 set_val,
+                                strict,
                             )?;
                         }
                         // bd-9vouw.17: a function's own `name` and `length`
-                        // are non-writable, so a sloppy-mode assignment is a
-                        // silent no-op (ES2020 9.2.4 / 9.2.8).
-                        Value::Function(_)
+                        // are non-writable (ES2020 9.2.4 / 9.2.8), so [[Set]]
+                        // rejects the write, unless the program redefined
+                        // them on the backing object (a `static name()`
+                        // method, Object.defineProperty).
+                        ref function @ (Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)
                         | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_)
-                            if matches!(property_key.as_str(), Some("name" | "length")) => {}
+                        | Value::AsyncGeneratorFunction(_))
+                            if matches!(property_key.as_str(), Some("name" | "length"))
+                                && !self.function_backing_has_own_property(
+                                    module,
+                                    function,
+                                    &property_key,
+                                )? =>
+                        {
+                            if strict {
+                                return Err(Self::read_only_property_error(&property_key));
+                            }
+                        }
                         // Other own properties (`F.x = 1`,
                         // `Test262Error.thrower = ...`) live on the function's
                         // backing object.
@@ -51649,6 +51676,7 @@ impl InterpreterCore {
                                 &property_key,
                                 val,
                                 set_val,
+                                strict,
                             )?;
                         }
                         // A promise, generator or async generator object keeps
@@ -51669,8 +51697,20 @@ impl InterpreterCore {
                                 &property_key,
                                 val,
                                 set_val,
+                                strict,
                             )?;
                         }
+                        // bd-9vouw.146: [[Set]] with a primitive base creates
+                        // no property (its receiver is not an object), so
+                        // sloppy code ignores the write. undefined and null
+                        // have no properties at all and throw in either mode.
+                        Value::Bool(_)
+                        | Value::Int(_)
+                        | Value::Float(_)
+                        | Value::BigInt(_)
+                        | Value::Str(_)
+                        | Value::Symbol(_)
+                            if !strict => {}
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -77145,6 +77185,11 @@ impl InterpreterCore {
         definition_label: Label,
     ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(&key)?;
+        let replaced_read_only = self
+            .heap
+            .get(object_id.0 as usize)
+            .map(|object| object.own_property_attributes(&key))
+            .filter(|attributes| !attributes.writable && attributes.configurable);
         let closure_id = match function {
             // Generator and async-generator methods (`*m(){}`, `async *m(){}`)
             // get a [[HomeObject]] too: `super.x` in their bodies reads the
@@ -77180,13 +77225,36 @@ impl InterpreterCore {
         };
         let metadata_bytes = Self::estimate_closure_method_metadata_entry_bytes(&metadata);
         self.apply_memory_component_delta(0, metadata_bytes)?;
-        if let Err(error) = self.set_object_runtime_property(object_id, key, function) {
+        if let Err(error) = self.set_object_runtime_property(object_id, key.clone(), function) {
             self.estimated_memory_bytes =
                 self.estimated_memory_bytes.saturating_sub(metadata_bytes);
             return Err(error);
         }
         self.closure_method_metadata.insert(closure_id, metadata);
-        Ok(())
+        self.make_replaced_method_writable(object_id, &key, replaced_read_only)
+    }
+
+    /// ES2020 14.3.8 DefineMethod defines a writable, configurable property,
+    /// so a method that replaced a read-only one (`static name()` over a
+    /// class's own `name`, bd-9vouw.146) is writable; it keeps the replaced
+    /// property's enumerability.
+    fn make_replaced_method_writable(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        replaced_read_only: Option<PropertyAttributes>,
+    ) -> Result<(), InterpreterError> {
+        let Some(attributes) = replaced_read_only else {
+            return Ok(());
+        };
+        self.set_own_property_attributes(
+            object_id,
+            key,
+            PropertyAttributes {
+                writable: true,
+                ..attributes
+            },
+        )
     }
 
     fn dispatch_timer_hostcall(
@@ -100751,6 +100819,30 @@ impl InterpreterCore {
     /// Whether `value` is a promise, generator, async generator or iterator
     /// object, whose own properties live on a backing object (see
     /// `function_own_property_key`).
+    /// bd-9vouw.146: the TypeError of a strict-mode write to a read-only
+    /// property (a function's `name` or `length`).
+    fn read_only_property_error(key: &RuntimePropertyKey) -> InterpreterError {
+        InterpreterError::TypeError {
+            expected: "writable property".to_string(),
+            got: format!("read-only property {}", key.diagnostic()),
+        }
+    }
+
+    /// Whether a function's backing object holds an own `key` (the program
+    /// redefined it), without allocating a backing object. Runs no guest
+    /// code.
+    fn function_backing_has_own_property(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        Ok(self
+            .function_own_property_object(module, function)?
+            .and_then(|backing| self.heap.get(backing.0 as usize))
+            .is_some_and(|object| object.contains_own_runtime_property(key)))
+    }
+
     fn has_exotic_backing_object(value: &Value) -> bool {
         matches!(
             value,
@@ -101866,6 +101958,7 @@ impl InterpreterCore {
         property_key: &RuntimePropertyKey,
         val: u32,
         set_val: Value,
+        strict: bool,
     ) -> Result<(), InterpreterError> {
         self.run_pre_runtime_property_access_hook(module, property_object, property_key)?;
         let value_label = self.get_register_label(val)?.clone();
@@ -101899,6 +101992,10 @@ impl InterpreterCore {
         };
         if !committed {
             self.set_own_runtime_property_label(property_object, property_key, &previous_label)?;
+            // bd-9vouw.146: a sloppy write that [[Set]] rejects is ignored.
+            if !strict {
+                return Ok(());
+            }
             return Err(InterpreterError::TypeError {
                 expected: "successful builtin property write".to_string(),
                 got: "falsy set result".to_string(),

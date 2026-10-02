@@ -4899,6 +4899,7 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::HostCall { .. } => "host_call",
             crate::ir_contract::Ir3Instruction::GetProperty { .. } => "get_property",
             crate::ir_contract::Ir3Instruction::SetProperty { .. } => "set_property",
+            crate::ir_contract::Ir3Instruction::SetPropertySloppy { .. } => "set_property_sloppy",
             crate::ir_contract::Ir3Instruction::DefineAccessor { .. } => "define_accessor",
             crate::ir_contract::Ir3Instruction::DefineMethod { .. } => "define_method",
             crate::ir_contract::Ir3Instruction::DeleteProperty { .. } => "delete_property",

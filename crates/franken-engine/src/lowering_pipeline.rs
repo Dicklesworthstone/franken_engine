@@ -211,6 +211,13 @@ fn assignment_strictness_is_strict(
     }
 }
 
+/// bd-9vouw.146: whether a member write throws when [[Set]] rejects it.
+/// Only a write known to be sloppy is lenient; a legacy serialized AST
+/// (`Unknown`) keeps the throwing write it always had.
+fn member_assignment_is_strict(assignment_strictness: AssignmentStrictness) -> bool {
+    !matches!(assignment_strictness, AssignmentStrictness::Sloppy)
+}
+
 fn is_lexically_shadowed(binding_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
     binding_lookup.contains_key(name)
         || has_source_lexical_binding(binding_lookup, name)
@@ -4023,7 +4030,10 @@ fn lower_destructuring_assignment_element_to_ir1(
         ops.push(Ir1Op::LoadBinding {
             binding_id: value_bid,
         });
-        ops.push(Ir1Op::SetProperty { key });
+        ops.push(Ir1Op::SetProperty {
+            key,
+            strict: member_assignment_is_strict(assignment_strictness),
+        });
     } else {
         // Internal registers are not source lexical names. Reifying value_bid
         // as an Identifier would send it through dynamic global resolution.
@@ -9029,7 +9039,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 });
                 value_stack.push(dst);
             }
-            Ir1Op::SetProperty { key } => {
+            Ir1Op::SetProperty { key, strict } => {
                 let val = pop_lowering_value(&mut value_stack)?;
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
@@ -9048,10 +9058,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         (obj, key_reg)
                     }
                 };
-                ir3.instructions.push(Ir3Instruction::SetProperty {
-                    obj,
-                    key: key_reg,
-                    val,
+                ir3.instructions.push(if *strict {
+                    Ir3Instruction::SetProperty {
+                        obj,
+                        key: key_reg,
+                        val,
+                    }
+                } else {
+                    Ir3Instruction::SetPropertySloppy {
+                        obj,
+                        key: key_reg,
+                        val,
+                    }
                 });
                 value_stack.push(val);
             }
@@ -10964,7 +10982,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                     fn_value_stack.push(dst);
                 }
-                Ir1Op::SetProperty { key } => {
+                Ir1Op::SetProperty { key, strict } => {
                     let value = pop_lowering_value(&mut fn_value_stack)?;
                     let (obj, key_reg) = match key {
                         Ir1PropertyKey::Static(k) => {
@@ -10983,10 +11001,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             (obj, kr)
                         }
                     };
-                    ir3.instructions.push(Ir3Instruction::SetProperty {
-                        obj,
-                        key: key_reg,
-                        val: value,
+                    ir3.instructions.push(if *strict {
+                        Ir3Instruction::SetProperty {
+                            obj,
+                            key: key_reg,
+                            val: value,
+                        }
+                    } else {
+                        Ir3Instruction::SetPropertySloppy {
+                            obj,
+                            key: key_reg,
+                            val: value,
+                        }
                     });
                     fn_value_stack.push(value);
                 }
@@ -15117,7 +15143,10 @@ fn lower_expression_to_ir1_inner(
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: current_binding,
                     });
-                    ops.push(Ir1Op::SetProperty { key });
+                    ops.push(Ir1Op::SetProperty {
+                        key,
+                        strict: member_assignment_is_strict(*assignment_strictness),
+                    });
                     ops.push(Ir1Op::Pop);
                     ops.push(Ir1Op::Label { id: end_label });
                     ops.push(Ir1Op::LoadBinding {
@@ -15284,7 +15313,10 @@ fn lower_expression_to_ir1_inner(
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: result_binding,
                     });
-                    ops.push(Ir1Op::SetProperty { key });
+                    ops.push(Ir1Op::SetProperty {
+                        key,
+                        strict: member_assignment_is_strict(*assignment_strictness),
+                    });
                     if let Some(old_binding) = postfix_old {
                         ops.push(Ir1Op::Pop);
                         ops.push(Ir1Op::LoadBinding {
@@ -15325,7 +15357,10 @@ fn lower_expression_to_ir1_inner(
                     label_counter,
                     span_table,
                 )?;
-                ops.push(Ir1Op::SetProperty { key });
+                ops.push(Ir1Op::SetProperty {
+                    key,
+                    strict: member_assignment_is_strict(*assignment_strictness),
+                });
             } else if let Expression::ArrayLiteral(elements) = left.as_ref() {
                 // Evaluate the RHS once and retain it independently of selected
                 // default values, rest arrays, and every target assignment.
@@ -30578,7 +30613,7 @@ fn simulate_ir2_flow_labels(
                 ));
                 label
             }
-            Ir1Op::SetProperty { key } => {
+            Ir1Op::SetProperty { key, .. } => {
                 let mut value = pop_flow_value(&mut value_stack)?;
                 let value_is_callable = value.shape == FlowValueShape::Callable;
                 let mut inputs = vec![value.clone()];
@@ -34887,6 +34922,7 @@ mod tests {
             Ir1Op::LoadBinding { binding_id: 0 },
             Ir1Op::SetProperty {
                 key: Ir1PropertyKey::Static("k".into()),
+                strict: true,
             },
             Ir1Op::Pop,
             Ir1Op::LoadLiteral {
@@ -35941,6 +35977,7 @@ mod tests {
         assert!(matches!(
             classify_ir1_op(&Ir1Op::SetProperty {
                 key: Ir1PropertyKey::Static("x".into()),
+                strict: true,
             })
             .0,
             EffectBoundary::ReadEffect
@@ -37888,6 +37925,7 @@ mod tests {
                     },
                     Ir1Op::SetProperty {
                         key: Ir1PropertyKey::Dynamic,
+                        strict: true,
                     },
                     Ir1Op::Pop,
                 ],
@@ -38754,6 +38792,7 @@ mod tests {
                     },
                     Ir1Op::SetProperty {
                         key: Ir1PropertyKey::Dynamic,
+                        strict: true,
                     },
                     Ir1Op::Pop,
                     Ir1Op::LoadBinding { binding_id: 77 },
@@ -43213,9 +43252,44 @@ mod tests {
         assert!(result.module.ops.iter().any(|op| matches!(
             op,
             Ir1Op::SetProperty {
-                key: Ir1PropertyKey::Static(key)
+                key: Ir1PropertyKey::Static(key),
+                strict: false,
             } if key == "prop"
         )));
+    }
+
+    #[test]
+    fn member_assignment_strictness_reaches_set_property_bd_9vouw_146() {
+        // A strict write, and a legacy AST of unknown strictness, keep the
+        // throwing SetProperty; only a known-sloppy write is lenient.
+        for (assignment_strictness, strict) in [
+            (AssignmentStrictness::Strict, true),
+            (AssignmentStrictness::Unknown, true),
+            (AssignmentStrictness::Sloppy, false),
+        ] {
+            let ir0 = expr_ir0(Expression::Assignment {
+                operator: AssignmentOperator::AddAssign,
+                left: Box::new(Expression::Member {
+                    object: Box::new(Expression::Identifier("obj".into())),
+                    property: Box::new(Expression::Identifier("prop".into())),
+                    computed: false,
+                    span: None,
+                }),
+                right: Box::new(Expression::NumericLiteral(1)),
+                assignment_strictness,
+            });
+            let result = lower_ir0_to_ir1(&ir0).expect("member assignment should lower");
+            let writes: Vec<bool> = result
+                .module
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    Ir1Op::SetProperty { strict, .. } => Some(*strict),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(writes, vec![strict], "{assignment_strictness:?}");
+        }
     }
 
     #[test]
@@ -44124,7 +44198,8 @@ mod tests {
         assert!(result.module.ops.iter().any(|op| matches!(
             op,
             Ir1Op::SetProperty {
-                key: Ir1PropertyKey::Static(name)
+                key: Ir1PropertyKey::Static(name),
+                ..
             } if name == "render"
         )));
 
@@ -44177,7 +44252,8 @@ mod tests {
         assert!(result.module.ops.iter().any(|op| matches!(
             op,
             Ir1Op::SetProperty {
-                key: Ir1PropertyKey::Static(key)
+                key: Ir1PropertyKey::Static(key),
+                ..
             } if key == &exact
         )));
         assert_ne!(
@@ -44235,7 +44311,8 @@ mod tests {
         assert!(result.module.ops.iter().any(|op| matches!(
             op,
             Ir1Op::SetProperty {
-                key: Ir1PropertyKey::Dynamic
+                key: Ir1PropertyKey::Dynamic,
+                strict: false,
             }
         )));
         assert!(!result.module.ops.iter().any(|op| matches!(op, Ir1Op::Nop)));

@@ -542,6 +542,7 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
         },
         Ir1Op::SetProperty {
             key: Ir1PropertyKey::Dynamic,
+            strict: true,
         },
         Ir1Op::DeleteProperty {
             key: Ir1PropertyKey::Static("y".into()),

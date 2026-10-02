@@ -1514,6 +1514,10 @@ pub enum UnaryOperator {
     Increment,
     /// ToNumeric of the operand minus one of its own type; see `Increment`.
     Decrement,
+    /// `delete` in strict-mode code (bd-9vouw.136): a property that cannot
+    /// be deleted is a TypeError instead of `false` (ES2020 12.5.3.2 step
+    /// 5.d), and the parser rejects a bare identifier operand.
+    StrictDelete,
 }
 
 impl UnaryOperator {
@@ -1528,6 +1532,7 @@ impl UnaryOperator {
             Self::UnaryPlus => "+",
             Self::Increment => "++",
             Self::Decrement => "--",
+            Self::StrictDelete => "strict delete",
         }
     }
 }
@@ -3342,13 +3347,14 @@ mod tests {
             (UnaryOperator::UnaryPlus, "+"),
             (UnaryOperator::Increment, "++"),
             (UnaryOperator::Decrement, "--"),
+            (UnaryOperator::StrictDelete, "strict delete"),
         ];
         let mut seen = std::collections::BTreeSet::new();
         for (op, expected) in &cases {
             assert_eq!(op.as_str(), *expected);
             assert!(seen.insert(op.as_str()), "duplicate: {expected}");
         }
-        assert_eq!(seen.len(), 9);
+        assert_eq!(seen.len(), 10);
     }
 
     #[test]
@@ -3363,6 +3369,7 @@ mod tests {
             UnaryOperator::UnaryPlus,
             UnaryOperator::Increment,
             UnaryOperator::Decrement,
+            UnaryOperator::StrictDelete,
         ];
         for op in ops {
             let json = serde_json::to_string(&op).expect("serialize derived Serialize");

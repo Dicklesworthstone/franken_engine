@@ -2656,10 +2656,6 @@ pub enum BuiltinFunctionKind {
     ConsoleError,
     ConsoleWarn,
     ConsoleInfo,
-    /// The other `console` methods (bd-9vouw.158): `debug`, `assert`,
-    /// `count`, `group`, `time`, ... named by the specifier, one of
-    /// [`CONSOLE_EXTRA_METHODS`].
-    ConsoleMethod,
     StringCharAt,
     StringCharCodeAt,
     /// `String.prototype.at` - receiver-aware UTF-16 code-unit access with
@@ -3511,6 +3507,10 @@ pub enum BuiltinFunctionKind {
     /// [[Call]] and [[Construct]] go through `apply` / `construct` (or the
     /// target). Append only.
     CallableProxy,
+    /// The other `console` methods (bd-9vouw.158): `debug`, `assert`,
+    /// `count`, `group`, `time`, ... named by the specifier, one of
+    /// [`CONSOLE_EXTRA_METHODS`]. Append only.
+    ConsoleMethod,
 }
 
 impl BuiltinFunctionKind {

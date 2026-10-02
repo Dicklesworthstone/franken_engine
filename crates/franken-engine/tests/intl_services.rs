@@ -104,6 +104,15 @@ TypeError
 TypeError
 Invalid Date"#,
     ),
+    (
+        // Number.prototype.toLocaleString formats as NumberFormat does: a
+        // defaulted option (`currencyDisplay: 'symbol'`, dinero), the en-US
+        // fallback for a five-to-eight-letter language (`fullwide`,
+        // temporal-polyfill), string useGrouping and a null options object.
+        "number_to_locale_string_as_number_format",
+        r#"function attempt(f) { try { f(); return 'ok'; } catch (e) { return e.constructor.name; } } console.log([(53.75).toLocaleString('en-US', { style: 'currency', currency: 'USD', currencyDisplay: 'symbol' }), (1234.5).toLocaleString('fullwide', { useGrouping: false }), (12).toLocaleString('fullwide'), (0.5).toLocaleString('en-US', { style: 'percent', signDisplay: 'auto' }), (1234.5).toLocaleString(undefined, { useGrouping: 'always' }), attempt(() => (1).toLocaleString('en', null))].join(' | '));"#,
+        r#"$53.75 | 1234.5 | 12 | 50% | 1,234.5 | TypeError"#,
+    ),
 ];
 
 #[test]

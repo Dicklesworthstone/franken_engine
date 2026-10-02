@@ -1257,6 +1257,8 @@ impl InterpreterCore {
                 is_import_meta: _,
                 is_null_prototype: _,
                 private_elements,
+                // String keys and well-known Symbols: no references.
+                deleted_virtual_keys: _,
             } = object;
             for value in private_elements.values().flat_map(PrivateElement::values) {
                 marker.value(value);
@@ -1385,6 +1387,7 @@ impl InterpreterCore {
             iteration_traces: _,
             function_prototypes,
             builtin_function_backings: _,
+            virtual_property_deletions: _,
             builtin_prototypes,
             seed_epoch: _,
             // Seeds hold their own heap copies; restoring one replaces the

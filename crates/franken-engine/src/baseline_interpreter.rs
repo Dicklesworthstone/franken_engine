@@ -32821,9 +32821,14 @@ impl InterpreterCore {
         f(&mut self.symbol_state.value)
     }
 
+    #[inline]
     fn before_seed_surface_write(&mut self) {
         self.last_post_run_epoch = None;
-        self.materialize_pending_lazy_seeds_with_current_state();
+        // Every register write comes through here, and almost always with no
+        // lazy seed pending (bd-9vouw.124: 7.8% of an arithmetic loop).
+        if !self.pending_lazy_seeds.is_empty() {
+            self.materialize_pending_lazy_seeds_with_current_state();
+        }
         self.seed_epoch = self.seed_epoch.wrapping_add(1);
     }
 

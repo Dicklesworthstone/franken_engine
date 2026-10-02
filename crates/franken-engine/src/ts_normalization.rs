@@ -1168,9 +1168,11 @@ fn is_valid_capability_annotation(value: &str) -> bool {
 
 fn elide_type_only_imports(source: &str) -> String {
     rewrite_outside_strings_and_comments(source, |source, index, output| {
-        if !is_statement_start(source, index)
-            || (!starts_with_keyword(source, index, "import")
-                && !starts_with_keyword(source, index, "export"))
+        // Keyword first: is_statement_start scans back over whitespace, so
+        // asking it at every position is quadratic in a long blank run.
+        if (!starts_with_keyword(source, index, "import")
+            && !starts_with_keyword(source, index, "export"))
+            || !is_statement_start(source, index)
         {
             return None;
         }
@@ -1341,29 +1343,25 @@ fn match_type_space_declaration(
     source: &str,
     index: usize,
 ) -> Option<(TypeSpaceDeclarationKind, usize)> {
-    if !is_statement_start(source, index) {
-        return None;
-    }
-
-    if starts_with_keyword(source, index, "export") {
+    let declaration = if starts_with_keyword(source, index, "export") {
         let after_export = skip_ascii_whitespace(source, index + "export".len());
         if starts_with_keyword(source, after_export, "interface") {
-            return Some((TypeSpaceDeclarationKind::Interface, after_export));
+            Some((TypeSpaceDeclarationKind::Interface, after_export))
+        } else if starts_with_keyword(source, after_export, "type") {
+            Some((TypeSpaceDeclarationKind::TypeAlias, after_export))
+        } else {
+            None
         }
-        if starts_with_keyword(source, after_export, "type") {
-            return Some((TypeSpaceDeclarationKind::TypeAlias, after_export));
-        }
-        return None;
-    }
-
-    if starts_with_keyword(source, index, "interface") {
-        return Some((TypeSpaceDeclarationKind::Interface, index));
-    }
-    if starts_with_keyword(source, index, "type") {
-        return Some((TypeSpaceDeclarationKind::TypeAlias, index));
-    }
-
-    None
+    } else if starts_with_keyword(source, index, "interface") {
+        Some((TypeSpaceDeclarationKind::Interface, index))
+    } else if starts_with_keyword(source, index, "type") {
+        Some((TypeSpaceDeclarationKind::TypeAlias, index))
+    } else {
+        None
+    };
+    // Checked last: is_statement_start scans back over whitespace, so asking
+    // it at every position is quadratic in a long blank run.
+    declaration.filter(|_| is_statement_start(source, index))
 }
 
 fn is_statement_start(source: &str, index: usize) -> bool {
@@ -1888,9 +1886,11 @@ fn source_contains_type_only_import_export_syntax(source: &str) -> bool {
     let mut cursor = 0usize;
     let mut state = LexicalRewriteState::Code;
     while let Some((index, _)) = next_code_scan_char(source, &mut cursor, &mut state) {
-        if !is_statement_start(source, index)
-            || (!starts_with_keyword(source, index, "import")
-                && !starts_with_keyword(source, index, "export"))
+        // Keyword first: is_statement_start scans back over whitespace, and
+        // a blanked string literal is one long run of it.
+        if (!starts_with_keyword(source, index, "import")
+            && !starts_with_keyword(source, index, "export"))
+            || !is_statement_start(source, index)
         {
             continue;
         }
@@ -1934,8 +1934,8 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
     let mut state = LexicalRewriteState::Code;
 
     while let Some((index, _)) = next_code_scan_char(source, &mut scan_cursor, &mut state) {
-        if !is_statement_start(source, index)
-            || !starts_with_keyword(source, index, "namespace")
+        if !starts_with_keyword(source, index, "namespace")
+            || !is_statement_start(source, index)
             || !namespace_keyword_starts_declaration(source, index)
         {
             continue;
@@ -4224,6 +4224,30 @@ abstract class Base { }"#;
         );
         assert_eq!(
             classify_source_language(None, "export { type Foo, bar } from './foo';"),
+            SourceLanguage::TypeScript
+        );
+    }
+
+    /// zxcvbn's bundle holds 240 KB string literals. The classifier blanks
+    /// literals to spaces and used to test "statement start" (a backward scan
+    /// over whitespace) at every blank position: quadratic, 59 s of a 61 s
+    /// release run. Markers after a long literal must still be found.
+    #[test]
+    fn classify_source_language_is_linear_in_long_string_literals() {
+        let words = "the,of,and,".repeat(30_000);
+        let javascript = format!("var lists = {{ english: \"{words}\" }};\nconsole.log(1);\n");
+        assert_eq!(
+            classify_source_language(None, &javascript),
+            SourceLanguage::JavaScript
+        );
+        let typescript = format!("{javascript}export interface Shape {{ size: number }}\n");
+        assert_eq!(
+            classify_source_language(None, &typescript),
+            SourceLanguage::TypeScript
+        );
+        let type_import = format!("{javascript}import type {{ Foo }} from './foo';\n");
+        assert_eq!(
+            classify_source_language(None, &type_import),
             SourceLanguage::TypeScript
         );
     }

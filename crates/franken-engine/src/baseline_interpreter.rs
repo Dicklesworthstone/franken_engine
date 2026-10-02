@@ -54077,6 +54077,7 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         // ES2020 13.7.5.12 ForIn/OfHeadEvaluation: ToObject(exprValue), so a
         // primitive enumerates its wrapper (a string its indices).
+        let mut continue_at = None;
         let object_id = match value {
             Value::Object(object_id) => object_id,
             // Step 7.a: an undefined or null object enumerates nothing (the
@@ -54114,6 +54115,19 @@ impl InterpreterCore {
                         got: function.type_name().to_string(),
                     })?
             }
+            // So do a promise's, generator's or iterator's; its inherited
+            // ones come from its intrinsic prototype (bd-9vouw.149).
+            ref exotic if Self::has_exotic_backing_object(exotic) && module.is_some() => {
+                let module = module.expect("checked above");
+                if let Some(name) = self.exotic_intrinsic_prototype_name(exotic) {
+                    continue_at = Some(self.ensure_builtin_prototype(name)?);
+                }
+                self.ensure_function_own_property_object(module, exotic)?
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "object with an own-property object".to_string(),
+                        got: exotic.type_name().to_string(),
+                    })?
+            }
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "object".to_string(),
@@ -54122,7 +54136,7 @@ impl InterpreterCore {
             }
         };
 
-        let keys = self.collect_for_in_keys(module, object_id)?;
+        let keys = self.collect_for_in_keys_continuing(module, object_id, continue_at)?;
         let trace_index =
             self.start_iteration_trace(IterationKind::ForIn, || format!("object:{}", object_id.0));
         if self.iteration_traced(trace_index) {
@@ -95054,6 +95068,19 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         object_id: ObjectId,
     ) -> Result<Vec<JsString>, InterpreterError> {
+        self.collect_for_in_keys_continuing(module, object_id, None)
+    }
+
+    /// The for-in keys of `object_id` and its prototype chain; when the
+    /// object itself has no prototype link the walk continues at
+    /// `continue_at` (a promise's, generator's or iterator's backing object
+    /// inherits from its intrinsic prototype, bd-9vouw.149).
+    fn collect_for_in_keys_continuing(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        continue_at: Option<ObjectId>,
+    ) -> Result<Vec<JsString>, InterpreterError> {
         let mut keys = Vec::new();
         let mut seen = BTreeSet::new();
         let mut visited = BTreeSet::new();
@@ -95097,6 +95124,9 @@ impl InterpreterCore {
                 }
             }
             current = self.proxy_aware_prototype_link(module, id)?;
+            if current.is_none() && id == object_id {
+                current = continue_at;
+            }
             depth += 1;
         }
 

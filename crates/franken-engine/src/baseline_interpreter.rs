@@ -39295,12 +39295,17 @@ impl InterpreterCore {
                 }
                 Ok(Value::str(number_to_fixed_string(num, digits as usize)))
             }
+            // ECMA-402 15.4.1: formatted as `new Intl.NumberFormat(locales,
+            // options).format(x)`, so the two share option reading, defaults
+            // and refusals. Its own option table refused `currencyDisplay:
+            // 'symbol'` (dinero) and the `fullwide` fallback
+            // (temporal-polyfill) that NumberFormat accepts.
             BuiltinFunctionKind::NumberToLocaleString => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let num = self.this_number_value(&receiver)?;
                 let locales = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let options = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-                self.number_to_locale_string(module, num, &locales, &options)
+                self.intl_format_number(module, num, &locales, &options)
             }
             BuiltinFunctionKind::NumberToString => {
                 // ES2020 20.1.3.6: string form, optional radix, default 10.
@@ -56740,129 +56745,6 @@ impl InterpreterCore {
             Value::Bool(false) | Value::Null => 0.0,
             Value::Str(s) => s.trim().parse::<f64>().unwrap_or(f64::NAN),
             _ => f64::NAN,
-        }
-    }
-
-    /// `Number.prototype.toLocaleString(locales, options)` through
-    /// number_locale.rs: the first locale tag (`undefined` is en-US), the
-    /// `style`, `currency`, fraction-digit and `useGrouping` options. An
-    /// option or locale the engine does not format is a TypeError naming it,
-    /// never a silently different string.
-    fn number_to_locale_string(
-        &mut self,
-        module: &Ir3Module,
-        num: f64,
-        locales: &Value,
-        options: &Value,
-    ) -> Result<Value, InterpreterError> {
-        use number_locale::{NumberLocaleError, NumberLocaleOptions, NumberLocaleStyle};
-        const UNSUPPORTED_OPTIONS: [&str; 14] = [
-            "minimumIntegerDigits",
-            "minimumSignificantDigits",
-            "maximumSignificantDigits",
-            "notation",
-            "compactDisplay",
-            "currencyDisplay",
-            "currencySign",
-            "signDisplay",
-            "unit",
-            "unitDisplay",
-            "roundingMode",
-            "roundingPriority",
-            "roundingIncrement",
-            "trailingZeroDisplay",
-        ];
-        let unsupported = |what: String| InterpreterError::TypeError {
-            expected: "a locale and options toLocaleString formats".to_string(),
-            got: what,
-        };
-        let locale = match locales {
-            Value::Undefined => None,
-            Value::Str(tag) => Some(tag.to_string()),
-            Value::Object(list) if self.heap.get(list.0 as usize).is_some_and(|o| o.is_array) => {
-                match self.array_like_values(*list)?.into_iter().next() {
-                    None => None,
-                    Some(Value::Str(tag)) => Some(tag.to_string()),
-                    Some(other) => {
-                        return Err(unsupported(format!("locale {}", other.type_name())));
-                    }
-                }
-            }
-            other => return Err(unsupported(format!("locales {}", other.type_name()))),
-        };
-        let mut parsed = NumberLocaleOptions::default();
-        match options {
-            Value::Undefined => {}
-            Value::Object(options_id) => {
-                let options_id = *options_id;
-                let read = |this: &mut Self, key: &str| {
-                    this.proxy_aware_get_property(
-                        Some(module),
-                        options_id,
-                        key,
-                        Value::Object(options_id),
-                        0,
-                    )
-                };
-                for key in UNSUPPORTED_OPTIONS {
-                    if !matches!(read(self, key)?, Value::Undefined) {
-                        return Err(unsupported(format!("option {key}")));
-                    }
-                }
-                let currency = read(self, "currency")?;
-                parsed.style = match read(self, "style")? {
-                    Value::Undefined => NumberLocaleStyle::Decimal,
-                    Value::Str(style) if style.as_str() == Some("decimal") => {
-                        NumberLocaleStyle::Decimal
-                    }
-                    Value::Str(style) if style.as_str() == Some("percent") => {
-                        NumberLocaleStyle::Percent
-                    }
-                    Value::Str(style) if style.as_str() == Some("currency") => match currency {
-                        Value::Str(code) => {
-                            NumberLocaleStyle::Currency(code.to_string().to_ascii_uppercase())
-                        }
-                        _ => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "a currency code with style \"currency\"".to_string(),
-                                got: currency.type_name().to_string(),
-                            });
-                        }
-                    },
-                    other => {
-                        return Err(InterpreterError::RangeError {
-                            message: format!(
-                                "Value {} out of range for toLocaleString options property style",
-                                self.value_to_string(&other)
-                            ),
-                        });
-                    }
-                };
-                for (key, slot) in [
-                    ("minimumFractionDigits", &mut parsed.minimum_fraction_digits),
-                    ("maximumFractionDigits", &mut parsed.maximum_fraction_digits),
-                ] {
-                    let value = read(self, key)?;
-                    if matches!(value, Value::Undefined) {
-                        continue;
-                    }
-                    let number = Self::coerce_to_float(&value).unwrap_or(f64::NAN);
-                    if !(0.0..=100.0).contains(&number) {
-                        return Err(InterpreterError::RangeError {
-                            message: format!("{key} value is out of range."),
-                        });
-                    }
-                    *slot = Some(number.floor() as u32);
-                }
-                let grouping = read(self, "useGrouping")?;
-                parsed.use_grouping = matches!(grouping, Value::Undefined) || grouping.is_truthy();
-            }
-            other => return Err(unsupported(format!("options {}", other.type_name()))),
-        }
-        match number_locale::format_number_locale(num, locale.as_deref(), &parsed) {
-            Ok(text) => Ok(Value::str(text)),
-            Err(NumberLocaleError::Range(message)) => Err(InterpreterError::RangeError { message }),
-            Err(NumberLocaleError::Unsupported(what)) => Err(unsupported(what)),
         }
     }
 

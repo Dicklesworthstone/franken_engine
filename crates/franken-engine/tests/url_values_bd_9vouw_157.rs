@@ -15,7 +15,7 @@
 //! No-claim: `URL(...)` without `new` constructs instead of throwing a
 //! TypeError; URL.prototype has no accessors of its own (instances answer
 //! href, host, ...), and URLSearchParams.prototype no methods (instances
-//! answer them); URL.canParse and the other statics are not covered.
+//! answer them); URL.createObjectURL and revokeObjectURL are not covered.
 
 use frankenengine_engine::HybridRouter;
 
@@ -63,6 +63,18 @@ fn url_type_checks() {
     assert_eq!(
         eval(source),
         "true false false https://b.example/c https://b.example/?q=1 {\"u\":\"https://b.example/x\"}"
+    );
+}
+
+/// URL.canParse and URL.parse: whether the constructor would succeed, and the URL or null.
+#[test]
+fn url_statics() {
+    let source = "[URL.canParse('https://a.example/'), URL.canParse('/x'), URL.canParse('/x', 'https://a.example/c'), URL.parse('nope'),\n\
+          URL.parse('/p?q=1', 'https://a.example').href, URL.parse('https://a.example/') instanceof URL, URL.canParse.length,\n\
+          URL.parse.name, typeof URL.canParse, URL.canParse({ toString() { return 'https://x.example'; } })].join(' ');";
+    assert_eq!(
+        eval(source),
+        "true false true  https://a.example/p?q=1 true 1 parse function true"
     );
 }
 

@@ -940,8 +940,9 @@ impl Parser {
             .iter()
             .collect();
         self.index += close + 1;
+        let class = super::regexp_syntax::surrogate_property_class(&text).unwrap_or(text.as_str());
         let set =
-            Regex::new(&format!("^[{text}]$")).map_err(|_| "Invalid property name".to_string())?;
+            Regex::new(&format!("^[{class}]$")).map_err(|_| "Invalid property name".to_string())?;
         Ok(RangeSet {
             ranges: Vec::new(),
             properties: vec![set],
@@ -1914,6 +1915,21 @@ mod tests {
     }
 
     // Expected values are Node v22.2.0's exec results.
+
+    /// `\p{Cs}` on this engine too (a look-behind keeps the pattern here):
+    /// it compiles, `\P{Cs}` matches any character and `\p{Cs}` none.
+    #[test]
+    fn surrogate_category_escapes_compile() {
+        assert_eq!(
+            exec(r"(?<=a)\P{Cs}", "u", "ab"),
+            Some((1, groups(&[Some("b")])))
+        );
+        assert_eq!(
+            exec(r"(?<=a)[\p{Surrogate}b]", "u", "ab"),
+            Some((1, groups(&[Some("b")])))
+        );
+        assert_eq!(exec(r"(?<=a)\p{gc=Cs}", "u", "ab"), None);
+    }
 
     /// Counted repetition above MAX_UNROLLED_REPEAT runs as a loop over a
     /// counter register instead of being unrolled; the semantics match the

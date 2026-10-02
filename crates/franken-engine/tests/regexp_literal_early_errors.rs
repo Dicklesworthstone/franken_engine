@@ -121,3 +121,21 @@ fn unicode_property_names_are_exact() {
         Ok("false,true,true".to_string())
     );
 }
+
+/// The surrogate category (`Cs`, `Surrogate`, `gc=Cs`) is a valid
+/// General_Category value, but the `regex` crate does not know it, so the
+/// literal failed to parse and `new RegExp('\\p{Cs}', 'u')` threw. ohm-js
+/// builds that pattern for every category when it loads. Expected values are
+/// Node v22.2.0's on the same source. No-claim: Node also matches `\p{Cs}`
+/// against a lone surrogate string; that is not covered here.
+#[test]
+fn surrogate_category_escapes_compile() {
+    assert_eq!(
+        eval(
+            "[/\\p{Cs}/u.test('a'), /^\\P{Cs}+$/u.test('ab😀'), /[\\p{Surrogate}b]/u.exec('ab')[0], \
+             new RegExp('\\\\p{gc=Cs}', 'u').test('x'), /(?<=a)\\P{Cs}/u.exec('ab')[0], \
+             ['Cs', 'Lu'].map(n => new RegExp('\\\\p{' + n + '}', 'u').test('A')).join('/')].join()"
+        ),
+        Ok("false,true,b,false,b,false/true".to_string())
+    );
+}

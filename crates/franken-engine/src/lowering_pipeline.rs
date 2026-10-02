@@ -5089,7 +5089,7 @@ fn lower_statement_to_ir1_with_flow(
             }
             if let Some(update) = &for_stmt.update {
                 lower_expression_to_ir1(
-                    update,
+                    &discarded_update_form(update),
                     ops,
                     bindings,
                     binding_lookup,
@@ -7464,6 +7464,30 @@ fn lower_assign_op_to_ir3(
         AssignmentOperator::DecrementAssign | AssignmentOperator::PostDecrementAssign => {
             Ir3Instruction::Dec { dst, src: lhs }
         }
+    }
+}
+
+/// The update clause of a `for` discards its value, so `i++` lowers as
+/// `++i`: the same write without keeping the old value (bd-9vouw.119), which
+/// keeps a counting loop's step at one instruction.
+fn discarded_update_form(expression: &Expression) -> std::borrow::Cow<'_, Expression> {
+    match expression {
+        Expression::Assignment {
+            operator,
+            left,
+            right,
+            assignment_strictness,
+        } if operator.is_postfix_update() => std::borrow::Cow::Owned(Expression::Assignment {
+            operator: if *operator == AssignmentOperator::PostIncrementAssign {
+                AssignmentOperator::IncrementAssign
+            } else {
+                AssignmentOperator::DecrementAssign
+            },
+            left: left.clone(),
+            right: right.clone(),
+            assignment_strictness: *assignment_strictness,
+        }),
+        _ => std::borrow::Cow::Borrowed(expression),
     }
 }
 

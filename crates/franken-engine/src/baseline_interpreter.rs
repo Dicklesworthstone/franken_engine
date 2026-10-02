@@ -39931,7 +39931,7 @@ impl InterpreterCore {
                                 arr_id,
                             )
                         })?;
-                    self.set_object_property(result, index.to_string(), mapped)?;
+                    self.create_data_property_or_throw(result, index.to_string(), mapped)?;
                 }
                 // An array result keeps its length in step; another
                 // species object gets only the data properties.
@@ -39966,7 +39966,7 @@ impl InterpreterCore {
                         )
                     })?;
                     if keep.is_truthy() {
-                        self.set_object_property(result, out.to_string(), element)?;
+                        self.create_data_property_or_throw(result, out.to_string(), element)?;
                         out += 1;
                     }
                 }
@@ -40111,7 +40111,7 @@ impl InterpreterCore {
                             self.array_flatten_into(eid, 0, result, &mut out)?;
                         }
                     } else {
-                        self.set_object_property(result, out.to_string(), mapped)?;
+                        self.create_data_property_or_throw(result, out.to_string(), mapped)?;
                         out += 1;
                     }
                 }
@@ -40291,7 +40291,7 @@ impl InterpreterCore {
                     let element = self
                         .array_index_value(arr_id, i)?
                         .unwrap_or(Value::Undefined);
-                    self.set_object_property(result, out.to_string(), element)?;
+                    self.create_data_property_or_throw(result, out.to_string(), element)?;
                     out += 1;
                 }
                 for k in 0..args.count {
@@ -40309,11 +40309,11 @@ impl InterpreterCore {
                             let element = self
                                 .array_index_value(arg_id, i)?
                                 .unwrap_or(Value::Undefined);
-                            self.set_object_property(result, out.to_string(), element)?;
+                            self.create_data_property_or_throw(result, out.to_string(), element)?;
                             out += 1;
                         }
                     } else {
-                        self.set_object_property(result, out.to_string(), arg)?;
+                        self.create_data_property_or_throw(result, out.to_string(), arg)?;
                         out += 1;
                     }
                 }
@@ -40351,7 +40351,7 @@ impl InterpreterCore {
                     let element = self
                         .array_index_value(arr_id, index)?
                         .unwrap_or(Value::Undefined);
-                    self.set_object_property(result, out.to_string(), element)?;
+                    self.create_data_property_or_throw(result, out.to_string(), element)?;
                     out += 1;
                     index += 1;
                 }
@@ -40469,7 +40469,7 @@ impl InterpreterCore {
                 self.refresh_dense_length_cache(arr_id, new_len, was_dense);
                 let removed_len = removed.len();
                 for (i, element) in removed.into_iter().enumerate() {
-                    self.set_object_property(removed_arr, i.to_string(), element)?;
+                    self.create_data_property_or_throw(removed_arr, i.to_string(), element)?;
                 }
                 self.set_object_property(
                     removed_arr,
@@ -68356,6 +68356,59 @@ impl InterpreterCore {
     /// `depth` further levels (ES2019 `FlattenIntoArray`). `out` tracks the next
     /// write index. Mirrors `Array.prototype.concat`'s one-level spread but
     /// recurses while `depth > 0`.
+    /// ES2020 7.3.6 CreateDataPropertyOrThrow for the result objects the
+    /// Array methods fill (bd-9vouw.94): the property becomes a writable,
+    /// enumerable, configurable data property, replacing a configurable one
+    /// whatever its attributes (an @@species constructor may have defined
+    /// it non-writable); a non-configurable one, or a new key on a
+    /// non-extensible object, is a TypeError. A fresh key takes the plain
+    /// store, as before.
+    fn create_data_property_or_throw(
+        &mut self,
+        object_id: ObjectId,
+        key: String,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let runtime_key = RuntimePropertyKey::String(JsString::from(key.as_str()));
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let Some(property) = object.own_runtime_property_descriptor(&runtime_key) else {
+            if !object.extensible() {
+                return Err(InterpreterError::TypeError {
+                    expected: "extensible object for CreateDataPropertyOrThrow".to_string(),
+                    got: format!("non-extensible object without property {key}"),
+                });
+            }
+            return self.set_object_property(object_id, key, value);
+        };
+        let attributes = object.own_property_attributes(&runtime_key);
+        let plain_data = matches!(property, BaselineSymbolProperty::Data(_))
+            && attributes.writable
+            && attributes.enumerable
+            && attributes.configurable;
+        if plain_data {
+            return self.set_object_property(object_id, key, value);
+        }
+        if !attributes.configurable {
+            return Err(InterpreterError::TypeError {
+                expected: "configurable property for CreateDataPropertyOrThrow".to_string(),
+                got: format!("non-configurable property {key}"),
+            });
+        }
+        self.set_object_property(object_id, key, value)?;
+        self.set_own_property_attributes(
+            object_id,
+            &runtime_key,
+            PropertyAttributes {
+                writable: true,
+                enumerable: true,
+                configurable: true,
+            },
+        )
+    }
+
     fn array_flatten_into(
         &mut self,
         src_id: ObjectId,
@@ -68381,7 +68434,7 @@ impl InterpreterCore {
                     self.array_flatten_into(eid, depth - 1, result, out)?;
                 }
             } else {
-                self.set_object_property(result, out.to_string(), element)?;
+                self.create_data_property_or_throw(result, out.to_string(), element)?;
                 *out += 1;
             }
         }

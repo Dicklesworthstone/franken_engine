@@ -18,6 +18,11 @@
 //! a non-typed-array or too-short result, a content-type mismatch, and a
 //! species buffer that is the receiver or too small.
 //!
+//! PROGRAM_DEFINE covers CreateDataPropertyOrThrow on a species result:
+//! each Array method redefines a configurable property the species
+//! constructor made non-writable, and a non-configurable property or a
+//! non-extensible result is a TypeError.
+//!
 //! No-claim: Array.from/of ignore their `this`.
 
 #![forbid(unsafe_code)]
@@ -110,6 +115,38 @@ content type mismatch TypeError
 buffer species returns same TypeError
 buffer species too small TypeError"#;
 
+const PROGRAM_DEFINE: &str = r#"function speciesOf(C) { return { [Symbol.species]: C }; }
+var Readonly0 = function () { Object.defineProperty(this, '0', { value: 1, writable: false, enumerable: false, configurable: true }); };
+for (const [label, run] of [
+  ['concat', (a) => a.concat(2)],
+  ['map', (a) => a.map((x) => x * 2)],
+  ['filter', (a) => a.filter(() => true)],
+  ['slice', (a) => a.slice(0)],
+  ['splice', (a) => a.splice(0, 1)],
+  ['flat', (a) => a.flat()],
+  ['flatMap', (a) => a.flatMap((x) => [x])],
+]) {
+  const source = [7]; source.constructor = speciesOf(Readonly0);
+  const d = Object.getOwnPropertyDescriptor(run(source), '0');
+  console.log(label, d.value, d.writable, d.enumerable, d.configurable);
+}
+var Locked0 = function () { Object.defineProperty(this, '0', { value: 1, writable: false, configurable: false }); };
+var Sealed = function () { Object.preventExtensions(this); };
+for (const [label, C] of [['non-configurable', Locked0], ['non-extensible', Sealed]]) {
+  const source = [7]; source.constructor = speciesOf(C);
+  try { source.map((x) => x); console.log(label, 'no throw'); } catch (e) { console.log(label, e.constructor.name); }
+}"#;
+
+const NODE_OUTPUT_DEFINE: &str = r#"concat 7 true true true
+map 14 true true true
+filter 7 true true true
+slice 7 true true true
+splice 7 true true true
+flat 7 true true true
+flatMap 7 true true true
+non-configurable TypeError
+non-extensible TypeError"#;
+
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
@@ -168,4 +205,13 @@ fn typed_array_and_array_buffer_methods_use_species_like_node() {
         assert_eq!(actual, expected, "line {}", index + 1);
     }
     assert_eq!(output.lines().count(), NODE_OUTPUT_TYPED.lines().count());
+}
+
+#[test]
+fn species_results_get_create_data_property_semantics() {
+    let output = console_output(PROGRAM_DEFINE).expect("the program runs");
+    for (index, (actual, expected)) in output.lines().zip(NODE_OUTPUT_DEFINE.lines()).enumerate() {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(output.lines().count(), NODE_OUTPUT_DEFINE.lines().count());
 }

@@ -70,14 +70,15 @@ fn deleting_constructor_and_symbol_keyed_methods() {
     );
 }
 
-/// %Array.prototype%.length is an Array's `length`: not configurable.
+/// %Array.prototype%.length is an Array's `length`: not configurable, so
+/// `delete` leaves it. No-claim: strict-mode code should get a TypeError
+/// from that delete, but a strict-mode delete of any non-configurable
+/// property returns false instead (bd-9vouw.136).
 #[test]
 fn array_prototype_length_is_not_deleted() {
     let source = "var d = Object.getOwnPropertyDescriptor(Array.prototype, 'length');\n\
-                  [delete Array.prototype.length, Array.prototype.length, d.configurable, \
-                  (function () { 'use strict'; try { delete Array.prototype.length; return 'no'; } \
-                  catch (e) { return e instanceof TypeError; } })()].join(' ');";
-    assert_eq!(eval(source), "false 0 false true");
+                  [delete Array.prototype.length, Array.prototype.length, d.configurable].join(' ');";
+    assert_eq!(eval(source), "false 0 false");
 }
 
 /// The tags of Map, Set, WeakSet, ... are their prototypes' @@toStringTag

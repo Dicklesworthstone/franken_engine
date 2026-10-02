@@ -11,8 +11,14 @@
 //! changes), the TypeErrors, and a non-array receiver (no species).
 //! NODE_OUTPUT is Node v22.2.0's output.
 //!
-//! No-claim: TypedArray and ArrayBuffer species (TypedArraySpeciesCreate)
-//! are not covered here; Array.from/of ignore their `this`.
+//! PROGRAM_TYPED covers TypedArraySpeciesCreate (map, filter, slice,
+//! subarray) and ArrayBuffer.prototype.slice's SpeciesConstructor: subclass
+//! results, a species of another kind, the order (map's species before its
+//! callbacks, filter's after), and the TypeErrors for a bad constructor,
+//! a non-typed-array or too-short result, a content-type mismatch, and a
+//! species buffer that is the receiver or too small.
+//!
+//! No-claim: Array.from/of ignore their `this`.
 
 #![forbid(unsafe_code)]
 
@@ -64,6 +70,46 @@ constructor not object TypeError
 species not constructor TypeError
 non-array receiver ignores constructor no throw true"#;
 
+const PROGRAM_TYPED: &str = r#"class U extends Uint8Array {}
+const u = new U([1, 2, 3, 4]);
+console.log(u instanceof U, u.map((x) => x * 2) instanceof U, u.filter((x) => x > 1) instanceof U, u.slice(1) instanceof U, u.subarray(1) instanceof U);
+console.log(Array.from(u.map((x) => x * 2)).join(), Array.from(u.filter((x) => x > 2)).join(), Array.from(u.slice(1, 3)).join(), Array.from(u.subarray(2)).join(), u.subarray(1).byteOffset);
+const plain = new Uint8Array([1, 2]);
+plain.constructor = { [Symbol.species]: Uint16Array };
+const widened = plain.map((x) => x * 300);
+console.log(widened.constructor.name, Array.from(widened).join(), plain.slice().constructor.name);
+const order = [];
+const ordered = new Uint8Array([5, 6]);
+ordered.constructor = { [Symbol.species]: function (n) { order.push('species:' + n); return new Uint8Array(n); } };
+ordered.map((x) => { order.push('cb:' + x); return x; });
+ordered.filter((x) => { order.push('fcb:' + x); return true; });
+console.log(order.join());
+class AB extends ArrayBuffer {}
+const ab = new AB(8);
+console.log(ab instanceof AB, ab.slice(2) instanceof AB, ab.slice(2).byteLength, ArrayBuffer[Symbol.species] === ArrayBuffer, AB[Symbol.species] === AB);
+for (const [label, run] of [
+  ['constructor not object', () => { const x = new Uint8Array(1); x.constructor = 1; x.map((v) => v); }],
+  ['species result not typed array', () => { const x = new Uint8Array(1); x.constructor = { [Symbol.species]: function () { return {}; } }; x.filter(() => true); }],
+  ['species result too short', () => { const x = new Uint8Array(4); x.constructor = { [Symbol.species]: function () { return new Uint8Array(1); } }; x.slice(); }],
+  ['content type mismatch', () => { const x = new Uint8Array(1); x.constructor = { [Symbol.species]: BigInt64Array }; x.map((v) => v); }],
+  ['buffer species returns same', () => { const b = new ArrayBuffer(4); b.constructor = { [Symbol.species]: function () { return b; } }; b.slice(); }],
+  ['buffer species too small', () => { const b = new ArrayBuffer(4); b.constructor = { [Symbol.species]: function () { return new ArrayBuffer(1); } }; b.slice(); }],
+]) {
+  try { run(); console.log(label, 'no throw'); } catch (e) { console.log(label, e.constructor.name); }
+}"#;
+
+const NODE_OUTPUT_TYPED: &str = r#"true true true true true
+2,4,6,8 3,4 2,3 3,4 1
+Uint16Array 300,600 Uint16Array
+species:2,cb:5,cb:6,fcb:5,fcb:6,species:2
+true true 6 true true
+constructor not object TypeError
+species result not typed array TypeError
+species result too short TypeError
+content type mismatch TypeError
+buffer species returns same TypeError
+buffer species too small TypeError"#;
+
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
@@ -113,4 +159,13 @@ fn array_methods_use_species_like_node() {
         assert_eq!(actual, expected, "line {}", index + 1);
     }
     assert_eq!(output.lines().count(), NODE_OUTPUT.lines().count());
+}
+
+#[test]
+fn typed_array_and_array_buffer_methods_use_species_like_node() {
+    let output = console_output(PROGRAM_TYPED).expect("the program runs");
+    for (index, (actual, expected)) in output.lines().zip(NODE_OUTPUT_TYPED.lines()).enumerate() {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(output.lines().count(), NODE_OUTPUT_TYPED.lines().count());
 }

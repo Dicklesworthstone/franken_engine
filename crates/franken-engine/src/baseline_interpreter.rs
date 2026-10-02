@@ -65055,7 +65055,7 @@ impl InterpreterCore {
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let (_, view) = self.typed_array_receiver_view(receiver, "subarray")?;
+        let (target_id, view) = self.typed_array_receiver_view(receiver, "subarray")?;
         let (start, end) = self.typed_array_method_range(module, args, 0, 1, view.length)?;
         let length = end.saturating_sub(start);
         let element_size = view.kind.element_size();
@@ -65086,6 +65086,18 @@ impl InterpreterCore {
                         view.kind.type_name()
                     ),
                 })?;
+        // ES2020 22.2.3.27 step 17: TypedArraySpeciesCreate(O, «buffer,
+        // beginByteOffset, newLength»).
+        let species_args = vec![
+            Value::Object(view.buffer),
+            Value::Int(i64::try_from(byte_offset).unwrap_or(i64::MAX)),
+            Value::Int(i64::try_from(length).unwrap_or(i64::MAX)),
+        ];
+        if let Some(created) =
+            self.typed_array_species_result(module, target_id, view.kind, species_args)?
+        {
+            return Ok(Value::Object(created));
+        }
         let result = self.alloc_typed_array_view_object(
             view.kind,
             view.buffer,
@@ -65096,16 +65108,145 @@ impl InterpreterCore {
         Ok(Value::Object(result))
     }
 
+    /// bd-9vouw.94: ES2020 22.2.4.7 TypedArraySpeciesCreate(exemplar, args).
+    /// `None` when the species is the exemplar's own intrinsic constructor
+    /// (the caller allocates as before): `constructor` undefined, or its
+    /// @@species undefined, null or that intrinsic. Otherwise the species
+    /// is constructed with `args` and validated (22.2.4.6
+    /// TypedArrayCreate): a TypeError when `constructor` is not an object,
+    /// the species is not a constructor, the result is not a typed array,
+    /// is shorter than a single numeric argument asks, or holds BigInts
+    /// where the exemplar holds Numbers (or the reverse).
+    fn typed_array_species_result(
+        &mut self,
+        module: &Ir3Module,
+        exemplar: ObjectId,
+        kind: TypedArrayKind,
+        args: Vec<Value>,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
+        let constructor = self.proxy_aware_get_runtime_property(
+            Some(module),
+            exemplar,
+            &constructor_key,
+            Value::Object(exemplar),
+            0,
+        )?;
+        let is_own_intrinsic = |value: &Value| {
+            matches!(value, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::StandardConstructor
+                    && Self::standard_constructor_name(builtin)
+                        .is_ok_and(|name| name == kind.type_name()))
+        };
+        if matches!(constructor, Value::Undefined) || is_own_intrinsic(&constructor) {
+            return Ok(None);
+        }
+        if !constructor.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined constructor for TypedArraySpeciesCreate".to_string(),
+                got: constructor.type_name().to_string(),
+            });
+        }
+        let species = self.species_of_constructor(module, &constructor)?;
+        if matches!(species, Value::Undefined | Value::Null) || is_own_intrinsic(&species) {
+            return Ok(None);
+        }
+        if !self.is_constructible_value(&species) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructor @@species for TypedArraySpeciesCreate".to_string(),
+                got: species.type_name().to_string(),
+            });
+        }
+        let requested_length = match args.as_slice() {
+            [Value::Int(length)] => usize::try_from(*length).ok(),
+            _ => None,
+        };
+        let (result, label) =
+            self.with_gc_nested_request(vec![Value::Object(exemplar)], |core| {
+                core.invoke_inline_construct_with_labels(Some(module), species, args, None, None)
+            })?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        let created_view = match &result {
+            Value::Object(object_id) => self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.typed_array.clone()),
+            _ => None,
+        };
+        let (Value::Object(created), Some(created_view)) = (result.clone(), created_view) else {
+            return Err(InterpreterError::TypeError {
+                expected: "typed array from the @@species constructor".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        if requested_length.is_some_and(|length| created_view.length < length) {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "typed array of length {} or more from the @@species constructor",
+                    requested_length.unwrap_or_default()
+                ),
+                got: format!("length {}", created_view.length),
+            });
+        }
+        if created_view.kind.is_bigint() != kind.is_bigint() {
+            return Err(InterpreterError::TypeError {
+                expected: format!(
+                    "{} content from the @@species constructor",
+                    if kind.is_bigint() { "BigInt" } else { "Number" }
+                ),
+                got: created_view.kind.type_name().to_string(),
+            });
+        }
+        Ok(Some(created))
+    }
+
+    /// Set(A, index, value) for each value, in order: the elements of a
+    /// typed array a @@species constructor returned. The target's bytes
+    /// also take the source bytes' IFC label (conservatively, whatever was
+    /// copied).
+    fn typed_array_write_values(
+        &mut self,
+        target: ObjectId,
+        source: ObjectId,
+        values: &[Value],
+    ) -> Result<(), InterpreterError> {
+        for (index, value) in values.iter().enumerate() {
+            self.typed_array_indexed_set_property(target, &index.to_string(), value)?;
+        }
+        let label = self
+            .array_buffer_id_for_object(source)
+            .and_then(|buffer| self.heap.get(buffer.0 as usize))
+            .and_then(|object| object.array_buffer.as_ref())
+            .map(|backing| backing.label.clone())
+            .unwrap_or(Label::Public);
+        self.join_binary_storage_label(target, &label)
+    }
+
     fn typed_array_slice(
         &mut self,
         module: &Ir3Module,
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let (_, view) = self.typed_array_receiver_view(receiver, "slice")?;
+        let (target_id, view) = self.typed_array_receiver_view(receiver, "slice")?;
         let (start, end) = self.typed_array_method_range(module, args, 0, 1, view.length)?;
+        // ES2020 22.2.3.24 step 9: the result exists before any element is
+        // read.
+        let count = Value::Int(i64::try_from(end.saturating_sub(start)).unwrap_or(i64::MAX));
+        let species = self.typed_array_species_result(module, target_id, view.kind, vec![count])?;
         let values = self.typed_array_values_in_range(&view, start, end.max(start))?;
-        let result = self.alloc_typed_array_from_values(view.kind, &values)?;
+        let result = match species {
+            Some(created) => {
+                self.typed_array_write_values(created, target_id, &values)?;
+                created
+            }
+            None => self.alloc_typed_array_from_values(view.kind, &values)?,
+        };
         Ok(Value::Object(result))
     }
 
@@ -65114,6 +65255,99 @@ impl InterpreterCore {
     /// (relative indices clamped to byteLength, as for typed arrays). The new
     /// buffer is charged like the constructor's, and its bytes keep the
     /// source bytes' IFC label.
+    /// bd-9vouw.94: the result buffer of ArrayBuffer.prototype.slice through
+    /// SpeciesConstructor(O, %ArrayBuffer%) (ES2020 24.1.4.3 steps 15-22).
+    /// `None` for %ArrayBuffer% itself. Another species is constructed with
+    /// the new length. A TypeError results when that is not an ArrayBuffer,
+    /// is the receiver itself, or is shorter than the new length.
+    fn array_buffer_species_result(
+        &mut self,
+        module: &Ir3Module,
+        source: ObjectId,
+        new_length: usize,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
+        let constructor = self.proxy_aware_get_runtime_property(
+            Some(module),
+            source,
+            &constructor_key,
+            Value::Object(source),
+            0,
+        )?;
+        let is_intrinsic = |value: &Value| {
+            matches!(value, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::StandardConstructor
+                    && Self::standard_constructor_name(builtin)
+                        .is_ok_and(|name| name == "ArrayBuffer"))
+        };
+        if matches!(constructor, Value::Undefined) || is_intrinsic(&constructor) {
+            return Ok(None);
+        }
+        if !constructor.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined constructor for ArrayBuffer.prototype.slice"
+                    .to_string(),
+                got: constructor.type_name().to_string(),
+            });
+        }
+        let species = self.species_of_constructor(module, &constructor)?;
+        if matches!(species, Value::Undefined | Value::Null) || is_intrinsic(&species) {
+            return Ok(None);
+        }
+        if !self.is_constructible_value(&species) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructor @@species for ArrayBuffer.prototype.slice".to_string(),
+                got: species.type_name().to_string(),
+            });
+        }
+        let length = Value::Int(i64::try_from(new_length).unwrap_or(i64::MAX));
+        let (result, label) = self.with_gc_nested_request(vec![Value::Object(source)], |core| {
+            core.invoke_inline_construct_with_labels(
+                Some(module),
+                species,
+                vec![length],
+                None,
+                None,
+            )
+        })?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        let created = match result {
+            Value::Object(object_id)
+                if self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                    object.array_buffer.is_some()
+                        && object.typed_array.is_none()
+                        && object.data_view.is_none()
+                }) =>
+            {
+                object_id
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "ArrayBuffer from the @@species constructor".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        if created == source {
+            return Err(InterpreterError::TypeError {
+                expected: "a new ArrayBuffer from the @@species constructor".to_string(),
+                got: "the receiver itself".to_string(),
+            });
+        }
+        if self.array_buffer_byte_length(created)? < new_length {
+            return Err(InterpreterError::TypeError {
+                expected: format!("ArrayBuffer of byteLength {new_length} or more"),
+                got: format!("byteLength {}", self.array_buffer_byte_length(created)?),
+            });
+        }
+        Ok(Some(created))
+    }
+
     fn array_buffer_slice(
         &mut self,
         module: &Ir3Module,
@@ -65139,8 +65373,25 @@ impl InterpreterCore {
         };
         let length = self.with_array_buffer_bytes(source, <[u8]>::len)?;
         let (first, last) = self.typed_array_method_range(module, args, 0, 1, length)?;
+        let species =
+            self.array_buffer_species_result(module, source, last.saturating_sub(first))?;
         let copied =
             self.with_array_buffer_bytes(source, |bytes| bytes[first..last.max(first)].to_vec())?;
+        if let Some(created) = species {
+            self.with_array_buffer_bytes_mut(created, |bytes| {
+                bytes[..copied.len()].copy_from_slice(&copied);
+            })?;
+            // The copied bytes keep the source bytes' IFC label, as on the
+            // %ArrayBuffer% path below.
+            let label = self
+                .heap
+                .get(source.0 as usize)
+                .and_then(|object| object.array_buffer.as_ref())
+                .map(|backing| backing.label.clone())
+                .unwrap_or(Label::Public);
+            self.join_binary_storage_label(created, &label)?;
+            return Ok(Value::Object(created));
+        }
         let label = self
             .heap
             .get(source.0 as usize)
@@ -65216,6 +65467,14 @@ impl InterpreterCore {
                     });
                 }
                 let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                // ES2020 22.2.3.19 step 5: map creates its result before the
+                // callbacks run; filter (22.2.3.9 step 10) after them.
+                let mapped_species = if method == "map" {
+                    let length = Value::Int(i64::try_from(view.length).unwrap_or(i64::MAX));
+                    self.typed_array_species_result(module, target_id, view.kind, vec![length])?
+                } else {
+                    None
+                };
                 let mut results = Vec::with_capacity(values.len());
                 for (index, element) in values.into_iter().enumerate() {
                     let result = self.invoke_array_callback(
@@ -65232,7 +65491,21 @@ impl InterpreterCore {
                         results.push(element);
                     }
                 }
-                let created = self.alloc_typed_array_from_values(view.kind, &results)?;
+                let species = match mapped_species {
+                    Some(created) => Some(created),
+                    None if method == "filter" => {
+                        let length = Value::Int(i64::try_from(results.len()).unwrap_or(i64::MAX));
+                        self.typed_array_species_result(module, target_id, view.kind, vec![length])?
+                    }
+                    None => None,
+                };
+                let created = match species {
+                    Some(created) => {
+                        self.typed_array_write_values(created, target_id, &results)?;
+                        created
+                    }
+                    None => self.alloc_typed_array_from_values(view.kind, &results)?,
+                };
                 return Ok(Value::Object(created));
             }
             "reverse" => {

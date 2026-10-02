@@ -90,9 +90,15 @@ impl PartType {
     }
 }
 
+/// The literal ICU puts before a day period (`10:00` + U+202F + `AM`).
+/// formatToParts returns it; `format` gives an ASCII space there, as V8
+/// does (Node v22.2.0: the parts join to a different string than format).
+const DAY_PERIOD_SEPARATOR: &str = "\u{202f}";
+
 /// A formatted date as typed pieces. Every layout builds these and the
-/// formatted string is their concatenation, so `format` and
-/// `formatToParts` cannot disagree. Adjacent literals merge, as ICU's do.
+/// formatted string is their concatenation (with an ASCII space for
+/// [`DAY_PERIOD_SEPARATOR`]), so `format` and `formatToParts` cannot
+/// otherwise disagree. Adjacent literals merge, as ICU's do.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct DateParts(pub(super) Vec<(PartType, String)>);
 
@@ -126,7 +132,10 @@ impl DateParts {
     }
 
     pub(super) fn joined(&self) -> String {
-        self.0.iter().map(|(_, text)| text.as_str()).collect()
+        self.0
+            .iter()
+            .map(|(_, text)| text.replace(DAY_PERIOD_SEPARATOR, " "))
+            .collect()
     }
 }
 
@@ -195,7 +204,7 @@ pub(super) fn format_date_locale_parts(
             time.push(Minute, format!("{minute:02}"));
             time.literal(":");
             time.push(Second, format!("{second:02}"));
-            time.literal(" ");
+            time.literal(DAY_PERIOD_SEPARATOR);
             time.push(DayPeriod, if hour < 12 { "AM" } else { "PM" });
         }
         Layout::Japanese => {
@@ -486,7 +495,7 @@ fn clock(
         }
     }
     if hour.is_some() && hour12 {
-        out.literal(" ");
+        out.literal(DAY_PERIOD_SEPARATOR);
         out.push(
             PartType::DayPeriod,
             if fields.hour < 12 { "AM" } else { "PM" },

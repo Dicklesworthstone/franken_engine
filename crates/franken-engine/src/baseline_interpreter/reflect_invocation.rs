@@ -32,9 +32,13 @@ impl InterpreterCore {
         // A function is an object (bd-9vouw.132: `Reflect.get(fn, key,
         // receiver)` in a callable proxy's trap): Set and Delete act on its
         // own-property storage, created on demand; Get and Has also see its
-        // synthesized members and Function.prototype.
+        // synthesized members and Function.prototype. So is a promise,
+        // generator or iterator object, whose storage is its backing object
+        // and whose [[Get]] continues on its intrinsic prototype
+        // (bd-9vouw.149).
+        let exotic = Self::has_exotic_backing_object(&target_value);
         let plain_function = module.is_some()
-            && target_value.is_callable()
+            && (target_value.is_callable() || exotic)
             && self
                 .iterator_carrier_backing_id(&target_value, "object target")?
                 .is_none();
@@ -119,6 +123,9 @@ impl InterpreterCore {
                     _ => self.iterator_protocol_property(module, target, &key, receiver)?,
                 },
                 ReflectPropertyOperation::Has => match module {
+                    Some(module) if plain_function && exotic => {
+                        Value::Bool(self.exotic_has_property(module, &target_value, &key)?)
+                    }
                     Some(module) if plain_function => {
                         Value::Bool(self.function_has_property(module, &target_value, &key)?)
                     }
@@ -139,12 +146,14 @@ impl InterpreterCore {
                     }
                     // A plain function receiver (`Reflect.set(fn, k, v)`
                     // defaults it to fn) stores on its own-property storage,
-                    // as `fn.k = v` does.
+                    // as `fn.k = v` does; so does a promise, generator or
+                    // iterator receiver.
                     let receiver = match module {
                         Some(module)
-                            if receiver.is_callable()
+                            if (receiver.is_callable()
                                 && !matches!(&receiver, Value::BuiltinFunction(builtin)
-                                    if Self::builtin_function_property_object(builtin).is_some()) =>
+                                    if Self::builtin_function_property_object(builtin).is_some()))
+                                || Self::has_exotic_backing_object(&receiver) =>
                         {
                             match self.own_property_holder(Some(module), &receiver, true)? {
                                 Some(storage) => Value::Object(storage),

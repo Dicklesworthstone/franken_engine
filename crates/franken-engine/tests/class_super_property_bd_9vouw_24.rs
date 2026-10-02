@@ -118,3 +118,24 @@ fn super_method_calls_spread_their_arguments() {
         "1,2,3 0,1,2,9 4,5 3 a/b/t {\"type\":\"Program\",\"z\":1}",
     );
 }
+
+/// bd-9vouw.143: `super` in a generator method. Generator methods had no
+/// [[HomeObject]] and the generator's frame no super binding, so
+/// `*g() { yield super.v(); }` threw "expected object, got undefined"; a Set
+/// subclass's `*[Symbol.iterator]() { ... super.values() ... }` failed once
+/// bd-9vouw.141 made for-of call it. Class and object-literal generator
+/// methods, computed keys and `yield*` over a super call; the method keeps
+/// its name. No-claim: async generator methods take the same path but are
+/// not covered here.
+#[test]
+fn super_in_generator_methods() {
+    check(
+        "class A { v() { return 1; } }\n\
+         class B extends A { *g() { yield super.v(); } *[\"c\"]() { yield super.v() + 1; } }\n\
+         class S extends Set { *g() { yield* super.values(); } }\n\
+         var o = { __proto__: { w() { return 3; } }, *g() { yield super.w(); } };\n\
+         [[...new B().g()].join(), [...new B().c()].join(), [...new S([4, 5]).g()].join(), \
+         [...o.g()].join(), new B().g.name].join(\" \");",
+        "1 2 4,5 3 g",
+    );
+}

@@ -256,7 +256,7 @@ fn special_url_backslashes_and_invalid_url_errors_match_node() {
 }
 
 #[test]
-fn constructor_lowering_is_shadow_aware_and_aliases_fail_closed() {
+fn constructor_lowering_is_shadow_aware_and_aliases_construct() {
     let src = r#"
         class URL { constructor(value) { this.value = value; } }
         class URLSearchParams { constructor(value) { this.value = value; } }
@@ -264,10 +264,14 @@ fn constructor_lowering_is_shadow_aware_and_aliases_fail_closed() {
     "#;
     assert_eq!(eval_console(src), "local params");
 
-    let error = eval_err("const Constructor = URL; new Constructor('http://example.com')");
-    assert!(
-        error.contains("undefined") || error.contains("function") || error.contains("not defined"),
-        "unexpected alias failure: {error}"
+    // URL is a global constructor value (bd-9vouw.157): an alias constructs
+    // through the same branded constructor as Node does. (It failed closed
+    // while URL existed only as lowering's rewrite of `new URL(...)`.)
+    assert_eq!(
+        eval_console(
+            "const Constructor = URL; const u = new Constructor('http://example.com'); console.log(u.href, u instanceof URL, Object.prototype.toString.call(u))"
+        ),
+        "http://example.com/ true [object URL]"
     );
 
     assert_eq!(

@@ -8851,6 +8851,10 @@ struct GeneratorObject {
     resume_dst: Option<u32>,
     /// Current phase of the generator.
     phase: GeneratorPhase,
+    /// The object its generator function's `prototype` held at the call
+    /// (bd-9vouw.120); `None` when that was no object, so the generator
+    /// inherits from %GeneratorPrototype% / %AsyncGeneratorPrototype%.
+    prototype: Option<ObjectId>,
 }
 
 /// Generator arguments and receiver state captured synchronously at call time.
@@ -49094,6 +49098,7 @@ impl InterpreterCore {
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
+                        let prototype = self.generator_instance_prototype(module, &callee_val)?;
                         let gen_id = self.push_generator_object(GeneratorObject {
                             owner_module,
                             invocation: Some(GeneratorInvocation {
@@ -49112,6 +49117,7 @@ impl InterpreterCore {
                             execution: None,
                             resume_dst: None,
                             phase: GeneratorPhase::SuspendedStart,
+                            prototype,
                         })?;
                         if let Err(error) = self.write_reg(dst, Value::Generator(gen_id)) {
                             self.pop_generator_object_and_release();
@@ -49335,6 +49341,7 @@ impl InterpreterCore {
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
+                        let prototype = self.generator_instance_prototype(module, &callee_val)?;
                         let async_gen_id = self.create_async_generator(
                             owner_module,
                             GeneratorInvocation {
@@ -49350,6 +49357,7 @@ impl InterpreterCore {
                                 module_specifier: Some(module_specifier),
                                 generated_function_artifact,
                             },
+                            prototype,
                         )?;
                         if let Err(error) =
                             self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))
@@ -49744,6 +49752,7 @@ impl InterpreterCore {
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
+                        let prototype = self.generator_instance_prototype(module, &callee_val)?;
                         let gen_id = self.push_generator_object(GeneratorObject {
                             owner_module,
                             invocation: Some(GeneratorInvocation {
@@ -49762,6 +49771,7 @@ impl InterpreterCore {
                             execution: None,
                             resume_dst: None,
                             phase: GeneratorPhase::SuspendedStart,
+                            prototype,
                         })?;
                         if let Err(error) = self.write_reg(dst, Value::Generator(gen_id)) {
                             self.pop_generator_object_and_release();
@@ -49973,6 +49983,7 @@ impl InterpreterCore {
                         let owner_module = self.continuation_owner_module(*cid, module)?;
                         let (module_specifier, generated_function_artifact) =
                             self.closure_execution_provenance(&callee_val, module)?;
+                        let prototype = self.generator_instance_prototype(module, &callee_val)?;
                         let async_gen_id = self.create_async_generator(
                             owner_module,
                             GeneratorInvocation {
@@ -49988,6 +49999,7 @@ impl InterpreterCore {
                                 module_specifier: Some(module_specifier),
                                 generated_function_artifact,
                             },
+                            prototype,
                         )?;
                         if let Err(error) =
                             self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))
@@ -50664,6 +50676,11 @@ impl InterpreterCore {
                                             .unwrap_or(Value::Undefined)
                                         }
                                     }
+                                    // bd-9vouw.120: a generator function's
+                                    // own `prototype` object.
+                                    Some("prototype") => self
+                                        .generator_function_prototype(module, function)?
+                                        .unwrap_or(Value::Undefined),
                                     key => key
                                         .and_then(Self::function_prototype_property)
                                         .unwrap_or(Value::Undefined),
@@ -50839,6 +50856,20 @@ impl InterpreterCore {
                         {
                             if property_key.as_str() == Some("__proto__") && base.is_callable() {
                                 self.function_value_prototype(Some(module), &base)?
+                            } else if let Some(function_prototype) =
+                                self.exotic_prototype_override(module, &base)?
+                            {
+                                // bd-9vouw.120: a generator inherits from its
+                                // function's `prototype` (members a program
+                                // adds there, then %GeneratorPrototype%).
+                                primitive_owner = Some(function_prototype);
+                                self.proxy_aware_get_runtime_property(
+                                    Some(module),
+                                    function_prototype,
+                                    &property_key,
+                                    base,
+                                    0,
+                                )?
                             } else {
                                 // The kind prototypes exist once read, so
                                 // Function.prototype's members are behind them.
@@ -51056,7 +51087,10 @@ impl InterpreterCore {
                                 }
                             }
                         }
-                        function @ (Value::Function(_) | Value::Closure(_))
+                        function @ (Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncGeneratorFunction(_))
                             if property_key.as_str() == Some("prototype") =>
                         {
                             let label = self
@@ -54531,8 +54565,9 @@ impl InterpreterCore {
             return Ok(true);
         }
         // A promise built by a Promise subclass inherits from that class's
-        // prototype (bd-9vouw.137).
-        if let Some(prototype) = self.promise_prototype_override(module, object_like)? {
+        // prototype (bd-9vouw.137), a generator from its function's
+        // `prototype` (bd-9vouw.120).
+        if let Some(prototype) = self.exotic_prototype_override(module, object_like)? {
             return self.proxy_aware_has_runtime_property(Some(module), prototype, key, 0);
         }
         if let Some(&intrinsic_prototype) = self
@@ -54891,10 +54926,11 @@ impl InterpreterCore {
             }
             // So do a promise's, generator's or iterator's; its inherited
             // ones come from its intrinsic prototype (bd-9vouw.149), or for
-            // a promise a Promise subclass built, that class's (bd-9vouw.137).
+            // a promise a Promise subclass built, that class's (bd-9vouw.137),
+            // and for a generator its function's `prototype` (bd-9vouw.120).
             ref exotic if Self::has_exotic_backing_object(exotic) && module.is_some() => {
                 let module = module.expect("checked above");
-                continue_at = match self.promise_prototype_override(module, exotic)? {
+                continue_at = match self.exotic_prototype_override(module, exotic)? {
                     Some(prototype) => Some(prototype),
                     None => match self.exotic_intrinsic_prototype_name(exotic) {
                         Some(name) => Some(self.ensure_builtin_prototype(name)?),
@@ -58082,14 +58118,14 @@ impl InterpreterCore {
                     self.function_value_prototype(module, callable)?
                 }
                 // A promise (a subclass's through its prototype, bd-9vouw.137),
-                // generator, async generator or iterator continues at its
-                // intrinsic prototype: `gen() instanceof genFn`,
-                // `it instanceof Object` (bd-9vouw.120).
+                // generator, async generator (its function's `prototype`) or
+                // iterator continues at its prototype: `gen() instanceof
+                // genFn`, `it instanceof Object` (bd-9vouw.120).
                 exotic @ (Value::Promise(_)
                 | Value::Generator(_)
                 | Value::AsyncGeneratorObject(_)
                 | Value::Iterator(_)) => match match module {
-                    Some(module) => self.promise_prototype_override(module, exotic)?,
+                    Some(module) => self.exotic_prototype_override(module, exotic)?,
                     None => None,
                 } {
                     Some(prototype) => Value::Object(prototype),
@@ -62160,6 +62196,12 @@ impl InterpreterCore {
             {
                 self.standard_constructor_property(builtin, name)?
             }
+            Value::GeneratorFunction(_) | Value::AsyncGeneratorFunction(_)
+                if name == "prototype" =>
+            {
+                self.generator_function_prototype(module, function)?
+                    .unwrap_or(Value::Undefined)
+            }
             other => match name {
                 "name" | "length" => self
                     .function_standard_own_value(module, other, name)?
@@ -62184,7 +62226,7 @@ impl InterpreterCore {
         {
             return Ok(own);
         }
-        if let Some(prototype) = self.promise_prototype_override(module, value)? {
+        if let Some(prototype) = self.exotic_prototype_override(module, value)? {
             return self.proxy_aware_get_runtime_property(
                 Some(module),
                 prototype,
@@ -86710,7 +86752,13 @@ impl InterpreterCore {
                     let descriptor =
                         self.read_property_descriptor(Some(module), &descriptor_val)?;
                     if let Some(value) = descriptor.value
-                        && matches!(obj_val, Value::Function(_) | Value::Closure(_))
+                        && matches!(
+                            obj_val,
+                            Value::Function(_)
+                                | Value::Closure(_)
+                                | Value::GeneratorFunction(_)
+                                | Value::AsyncGeneratorFunction(_)
+                        )
                     {
                         let label = self.join_arg_range_with_object_mutation_label(args)?;
                         self.set_constructor_prototype_override(module, &obj_val, value, label)?;
@@ -96490,10 +96538,14 @@ impl InterpreterCore {
                     }
                 }
             }
-            current = self.proxy_aware_prototype_link(module, id)?;
-            if current.is_none() && id == object_id {
-                current = continue_at;
-            }
+            // An exotic value's backing object continues at the value's own
+            // [[Prototype]] (a generator's recorded `prototype`, a Promise
+            // subclass's, or the intrinsic), not at the backing object's link
+            // (bd-9vouw.120).
+            current = match continue_at {
+                Some(prototype) if id == object_id => Some(prototype),
+                _ => self.proxy_aware_prototype_link(module, id)?,
+            };
             depth += 1;
         }
 
@@ -97462,6 +97514,77 @@ impl InterpreterCore {
             .and_then(|object| object.prototype))
     }
 
+    /// The object a promise, generator or async generator inherits from in
+    /// place of its intrinsic prototype: a Promise subclass instance's
+    /// (bd-9vouw.137), the `prototype` a generator's function held at the
+    /// call (bd-9vouw.120).
+    fn exotic_prototype_override(
+        &self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let generator_id = match value {
+            Value::Promise(_) => return self.promise_prototype_override(module, value),
+            Value::Generator(id) => *id,
+            Value::AsyncGeneratorObject(id) => match self.async_generators.get(*id as usize) {
+                Some(generator) => generator.generator_id,
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        Ok(self
+            .generators
+            .get(generator_id as usize)
+            .and_then(|generator| generator.prototype))
+    }
+
+    /// The `prototype` property of a generator or async generator function
+    /// (bd-9vouw.120): an assigned value, else the function's own object,
+    /// created on first use, which inherits %GeneratorPrototype% /
+    /// %AsyncGeneratorPrototype% and has no `constructor` (ES2020 14.4.11).
+    /// `None` for other values.
+    fn generator_function_prototype(
+        &mut self,
+        module: &Ir3Module,
+        function: &Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let (closure_id, intrinsic) = match function {
+            Value::GeneratorFunction(id) => (*id, GENERATOR_PROTOTYPE),
+            Value::AsyncGeneratorFunction(id) => (*id, ASYNC_GENERATOR_PROTOTYPE),
+            _ => return Ok(None),
+        };
+        if let Some((value, _)) = self.constructor_prototype_override(module, function)? {
+            return Ok(Some(value));
+        }
+        let owner_module = self.foreign_closure_module(function, module)?;
+        let key = (
+            self.prototype_owner_ids(owner_module.as_deref().unwrap_or(module))
+                .closure,
+            closure_id,
+        );
+        if let Some(existing) = self.function_prototypes.get(&key) {
+            return Ok(Some(Value::Object(*existing)));
+        }
+        let parent = self.ensure_builtin_prototype(intrinsic)?;
+        let prototype = self.alloc_object_with_prototype(Some(parent))?;
+        self.mutate_function_prototypes(|prototypes| prototypes.insert(key, prototype));
+        Ok(Some(Value::Object(prototype)))
+    }
+
+    /// The prototype a generator made by calling `function` inherits from
+    /// (OrdinaryCreateFromConstructor in EvaluateBody, ES2020 14.4.10): its
+    /// `prototype` when that is an object, else the intrinsic (`None`).
+    fn generator_instance_prototype(
+        &mut self,
+        module: &Ir3Module,
+        function: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        Ok(match self.generator_function_prototype(module, function)? {
+            Some(Value::Object(prototype)) => Some(prototype),
+            _ => None,
+        })
+    }
+
     fn constructor_function_index(&self, value: &Value) -> Result<u32, InterpreterError> {
         match value {
             Value::Function(index) => Ok(*index),
@@ -97907,6 +98030,11 @@ impl InterpreterCore {
                 true,
             ),
             Value::Closure(id) => (self.closure_property_value(module, *id, "prototype")?, true),
+            Value::GeneratorFunction(_) | Value::AsyncGeneratorFunction(_) => (
+                self.generator_function_prototype(module, function)?
+                    .unwrap_or(Value::Undefined),
+                true,
+            ),
             // bd-9vouw.17: a built-in constructor's `prototype` is not
             // writable (ES2020 19.1.2.19, 20.1.2.15, ...).
             Value::BuiltinFunction(builtin) => {
@@ -148118,6 +148246,7 @@ mod tests {
             execution: None,
             resume_dst: None,
             phase: GeneratorPhase::SuspendedStart,
+            prototype: None,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed generator object should fit memory budget");
@@ -148275,6 +148404,7 @@ mod tests {
                 execution: None,
                 resume_dst: None,
                 phase: GeneratorPhase::SuspendedStart,
+                prototype: None,
             });
         }
 
@@ -148366,6 +148496,7 @@ mod tests {
                 execution: None,
                 resume_dst: None,
                 phase: GeneratorPhase::SuspendedStart,
+                prototype: None,
             });
         }
         core.sync_estimated_memory_bytes()
@@ -148430,6 +148561,7 @@ mod tests {
             execution: None,
             resume_dst: None,
             phase: GeneratorPhase::SuspendedStart,
+            prototype: None,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed generator object should fit memory budget");
@@ -148501,6 +148633,7 @@ mod tests {
             execution: None,
             resume_dst: None,
             phase: GeneratorPhase::SuspendedStart,
+            prototype: None,
         });
         core.sync_estimated_memory_bytes()
             .expect("seed generator object should fit memory budget");
@@ -150855,6 +150988,7 @@ mod tests {
                     execution: None,
                     resume_dst: None,
                     phase: GeneratorPhase::Completed,
+                    prototype: None,
                 })
                 .unwrap();
             let async_gen_id = core
@@ -150921,6 +151055,7 @@ mod tests {
                         module_specifier: None,
                         generated_function_artifact: None,
                     },
+                    None,
                 )
                 .unwrap();
             for (expected, done) in [(41, false), (42, true)] {

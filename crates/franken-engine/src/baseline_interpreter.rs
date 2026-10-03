@@ -8943,8 +8943,16 @@ struct GeneratorInvocation {
 /// state from the caller that resumes the generator.
 #[derive(Debug, Clone)]
 struct GeneratorExecutionSnapshot {
+    /// The register file without its cleared tail (bd-9vouw.167); see
+    /// [`GeneratorExecutionSnapshot::trim_cleared_register_tail`].
     registers: Vec<Value>,
     register_labels: Vec<Label>,
+    /// The register file's length when the activation was parked, which
+    /// `install_generator_execution` restores.
+    register_len: usize,
+    /// The label file's length then; the two files need not be equally long
+    /// (an isolated wrapper replaces the value file and keeps the labels).
+    register_label_len: usize,
     delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
@@ -8966,6 +8974,33 @@ struct GeneratorExecutionSnapshot {
     /// Validated contained-codegen authority to reinstall whenever this
     /// generated activation resumes. `None` for ordinary continuations.
     contained_codegen_grant: Option<ContainedCodegenGrant>,
+}
+
+impl GeneratorExecutionSnapshot {
+    /// Drop the register file's cleared tail, every register past the last
+    /// one that is not undefined with a Public label (the state a frame
+    /// entry's reset leaves), before the activation is parked. A pending
+    /// async call held two full register windows (512 registers on the
+    /// deterministic lane, 8,192 on the throughput lane) that were almost all
+    /// cleared (bd-9vouw.167). `register_len` keeps the length to restore.
+    fn trim_cleared_register_tail(&mut self) {
+        let len = self.registers.len().max(self.register_labels.len());
+        let live = (0..len)
+            .rev()
+            .find(|&index| {
+                !matches!(self.registers.get(index), Some(Value::Undefined) | None)
+                    || !matches!(self.register_labels.get(index), Some(Label::Public) | None)
+            })
+            .map_or(0, |index| index + 1);
+        if live < self.registers.len() {
+            self.registers.truncate(live);
+            self.registers.shrink_to_fit();
+        }
+        if live < self.register_labels.len() {
+            self.register_labels.truncate(live);
+            self.register_labels.shrink_to_fit();
+        }
+    }
 }
 
 /// Execution phases for async function objects.
@@ -44045,8 +44080,12 @@ impl InterpreterCore {
                 got: format!("async#{async_function_id} not found"),
             })?;
         let reg_start = self.register_base;
-        let reg_end =
+        let window_end =
             (self.register_base + self.config.max_registers as usize).min(self.registers.len());
+        // Only the window's live prefix is saved; its tail is in the state the
+        // frame's entry reset left it, which resume restores (bd-9vouw.167). A
+        // full V8-lane window is 4,096 registers, about 268 KB per pending call.
+        let reg_end = self.register_window_live_end(reg_start, window_end);
         let saved_label_bytes = self
             .register_labels
             .get(reg_start..reg_end)
@@ -44242,6 +44281,13 @@ impl InterpreterCore {
         };
 
         let reg_end = saved_register_base.saturating_add(saved_register_count);
+        // The saved prefix is the window's live part; the rest of the window
+        // goes back to its cleared state (bd-9vouw.167).
+        let window_end = saved_register_base
+            .saturating_add(self.config.max_registers as usize)
+            .min(self.registers.len())
+            .min(self.register_labels.len())
+            .max(reg_end);
         if reg_end > self.registers.len() {
             return Err(InterpreterError::TypeError {
                 expected: "sufficient register capacity".to_string(),
@@ -44262,7 +44308,7 @@ impl InterpreterCore {
         // are the register component delta. Measuring the whole file walked
         // every live frame twice per await.
         let previous_register_bytes =
-            self.register_range_memory_bytes(saved_register_base..reg_end);
+            self.register_range_memory_bytes(saved_register_base..window_end);
         let (saved_registers, saved_register_labels) = {
             let async_function = self
                 .async_functions
@@ -44288,6 +44334,7 @@ impl InterpreterCore {
             for (i, value) in saved_registers.into_iter().enumerate() {
                 r[reg_start + i] = value;
             }
+            r[reg_end..window_end].fill(Value::Undefined);
         });
         for (slot, label) in self.register_labels[reg_start..reg_end]
             .iter_mut()
@@ -44295,6 +44342,7 @@ impl InterpreterCore {
         {
             *slot = label;
         }
+        self.register_labels[reg_end..window_end].fill(Label::Public);
 
         // Resume execution - now we can safely get the mutable reference
         let async_function = self
@@ -44306,7 +44354,7 @@ impl InterpreterCore {
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
         let next_async_bytes = Self::estimate_async_function_bytes(async_function);
-        let next_register_bytes = self.register_range_memory_bytes(reg_start..reg_end);
+        let next_register_bytes = self.register_range_memory_bytes(reg_start..window_end);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_register_bytes)
@@ -46591,9 +46639,11 @@ impl InterpreterCore {
             ),
             None => (Label::Public, None),
         };
-        let execution = GeneratorExecutionSnapshot {
+        let mut execution = GeneratorExecutionSnapshot {
             registers,
             register_labels,
+            register_len: max_registers,
+            register_label_len: max_registers,
             delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
             call_stack: vec![CallFrame {
@@ -46642,6 +46692,7 @@ impl InterpreterCore {
             active_generated_function_artifact: invocation.generated_function_artifact,
             contained_codegen_grant,
         };
+        execution.trim_cleared_register_tail();
         self.check_temporary_memory_budget(Self::estimate_generator_execution_bytes(&execution))?;
         if let Some((object, label)) = arguments_object {
             self.pending_arguments_object = Some((1, Value::Object(object), label));
@@ -46651,9 +46702,13 @@ impl InterpreterCore {
 
     fn take_generator_execution(&mut self) -> GeneratorExecutionSnapshot {
         self.before_seed_surface_write();
-        GeneratorExecutionSnapshot {
-            registers: std::mem::take(&mut self.registers.value),
-            register_labels: std::mem::take(&mut self.register_labels),
+        let registers = std::mem::take(&mut self.registers.value);
+        let register_labels = std::mem::take(&mut self.register_labels);
+        let mut execution = GeneratorExecutionSnapshot {
+            register_len: registers.len(),
+            register_label_len: register_labels.len(),
+            registers,
+            register_labels,
             delegation: self.generator_delegation.take(),
             active_inline_callback_context_label: self.active_inline_callback_context_label.take(),
             call_stack: self.call_stack.take(&mut self.closures.cold_cells),
@@ -46679,7 +46734,9 @@ impl InterpreterCore {
             current_module_specifier: self.current_module_specifier.take(),
             active_generated_function_artifact: self.active_generated_function_artifact.take(),
             contained_codegen_grant: None,
-        }
+        };
+        execution.trim_cleared_register_tail();
+        execution
     }
 
     fn async_function_ids_in_call_stack(
@@ -47060,8 +47117,16 @@ impl InterpreterCore {
 
     fn install_generator_execution(&mut self, execution: GeneratorExecutionSnapshot) {
         self.before_seed_surface_write();
-        self.registers.value = execution.registers;
-        self.register_labels = execution.register_labels;
+        let mut registers = execution.registers;
+        let mut register_labels = execution.register_labels;
+        if registers.len() < execution.register_len {
+            registers.resize(execution.register_len, Value::Undefined);
+        }
+        if register_labels.len() < execution.register_label_len {
+            register_labels.resize(execution.register_label_len, Label::Public);
+        }
+        self.registers.value = registers;
+        self.register_labels = register_labels;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
         self.call_stack
@@ -74751,6 +74816,7 @@ impl InterpreterCore {
             let (mut arguments, mut argument_labels) = (arguments, argument_labels);
             overflow_depth =
                 Some(self.stage_argument_overflow(2, &mut arguments, &mut argument_labels)?);
+            let wrapper_width = 2usize.saturating_add(arguments.len());
             self.seed_isolated_arguments(
                 2,
                 arguments,
@@ -74758,6 +74824,11 @@ impl InterpreterCore {
                 &mut remaining_label_transport_bytes,
                 "Function.prototype.call/apply argument register",
             )?;
+            // The wrapper frame uses r0 (receiver and destination), r1 (the
+            // callee) and the argument registers; the callee's window starts
+            // right above them, not a whole window up, so a parked async
+            // activation holds one window, not two (bd-9vouw.167).
+            self.register_width = wrapper_width.min(self.config.max_registers as usize);
             let previous_reentrant_depth = self.module_reentrant_call_depth;
             let previous_foreign_call_depth = self.active_foreign_module_call_depth;
             self.module_reentrant_call_depth = hidden_call_depth;
@@ -92734,6 +92805,21 @@ impl InterpreterCore {
         self.clear_current_register_frame_width(self.config.max_registers as usize);
     }
 
+    /// End of the live prefix of the register window `start..end`: every
+    /// register past it is cleared (undefined with a Public label), the state
+    /// `clear_current_register_frame_width` leaves (bd-9vouw.167). A register
+    /// without a parallel label counts as live, so a short label file still
+    /// fails the caller's own range checks.
+    fn register_window_live_end(&self, start: usize, end: usize) -> usize {
+        (start..end)
+            .rev()
+            .find(|&index| {
+                !matches!(self.registers.get(index), Some(Value::Undefined))
+                    || !matches!(self.register_labels.get(index), Some(Label::Public))
+            })
+            .map_or(start, |index| index + 1)
+    }
+
     fn clear_current_register_frame_width(&mut self, clear_width: usize) {
         let frame_start = self.register_base;
         let frame_end = frame_start + clear_width;
@@ -109887,6 +109973,78 @@ mod async_runtime_tests_current {
         );
         assert!(core.async_functions[0].saved_registers.is_empty());
         assert!(core.async_functions[0].saved_register_labels.is_empty());
+    }
+
+    /// A pending await saves the live prefix of its register window, through
+    /// its last live register, not the whole `max_registers` window; resume
+    /// puts the prefix back and clears the rest of the window, as the frame
+    /// had it (bd-9vouw.167).
+    #[test]
+    fn pending_await_saves_the_live_register_prefix_bd_9vouw_167() {
+        let mut instructions = vec![
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 2,
+                },
+                dst: 1,
+            },
+            Ir3Instruction::Halt,
+        ];
+        instructions.extend([
+            Ir3Instruction::Move { dst: 40, src: 1 },
+            Ir3Instruction::AwaitValue { promise_reg: 0 },
+            Ir3Instruction::AsyncReturn { value_reg: 40 },
+        ]);
+        let module = test_module_with_functions(
+            instructions,
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 64,
+                name: Some("pending_await_live_prefix".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        let awaited = core.promise_store.create();
+        core.write_reg_with_label(10, Value::Promise(awaited.0), Label::Public)
+            .expect("awaited handle should be writable");
+        core.write_reg_with_label(11, Value::str("kept-local"), Label::Internal)
+            .expect("local should be writable");
+
+        core.execute(&module).expect("pending await should suspend");
+        let async_result = async_label_test_result_handle(&core);
+        let suspended = &core.async_functions[0];
+        // r40 is the last live register: the prefix is r0..=r40.
+        assert_eq!(suspended.saved_registers.len(), 41);
+        assert_eq!(suspended.saved_register_labels.len(), 41);
+        assert!(41 < core.config.max_registers as usize);
+        assert_eq!(suspended.saved_registers[40], Value::str("kept-local"));
+        assert_eq!(suspended.saved_register_labels[40], Label::Internal);
+        // No estimate check here: this hand-built program's estimate is 208
+        // bytes below the walk after it parks, on main's code before this
+        // change too (bd-9vouw.173). The accounting of this change is checked
+        // on lowered programs by a_pending_async_call_holds_its_live_registers.
+
+        core.fulfill_promise(awaited, crate::object_model::JsValue::Int(7), Label::Public)
+            .expect("awaited Promise should be fulfillable");
+        core.drain_microtasks(Some(&module))
+            .expect("pending fulfillment should resume");
+        let record = core
+            .promise_store
+            .get(async_result)
+            .expect("result Promise should exist");
+        assert_eq!(
+            record.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                "kept-local".into()
+            ))
+        );
+        assert!(core.async_functions[0].saved_registers.is_empty());
     }
 
     #[test]
@@ -158768,5 +158926,85 @@ mod object_copy_runtime_regression {
         assert_eq!(core.instructions_executed, 1);
         assert!(core.heap[target.0 as usize].properties.contains_key("0"));
         assert!(!core.heap[target.0 as usize].properties.contains_key("1"));
+    }
+}
+
+/// bd-9vouw.167: what a pending async call holds, on both lanes.
+#[cfg(test)]
+mod pending_async_register_cost_bd_9vouw_167 {
+    use super::*;
+    use crate::ast::ParseGoal;
+    use crate::ir_contract::Ir0Module;
+    use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+    use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
+
+    fn module_for(source: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "pending.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("source parses");
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "pending.js"),
+            &LoweringContext::new("pending-trace", "pending-decision", "pending-policy"),
+        )
+        .expect("source lowers")
+        .ir3
+    }
+
+    /// The estimate after `n` async calls parked on a promise that never
+    /// settles, checked against the full walk.
+    fn parked_estimate(config: &InterpreterConfig, n: usize) -> u64 {
+        let module = module_for(&format!(
+            "var never = new Promise(function () {{}}); var ps = [];\n\
+             async function wait(i) {{ var a = i, b = 'k' + i; await never; return a + b.length; }}\n\
+             for (var i = 0; i < {n}; i++) ps.push(wait(i));\n\
+             ps.length;"
+        ));
+        let mut config = config.clone();
+        config.instruction_budget = 1_000_000_000;
+        config.granted_capabilities = [
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
+        ]
+        .into_iter()
+        .collect();
+        let mut core = InterpreterCore::new(config, "pending");
+        let result = core.execute(&module).expect("the calls park");
+        assert_eq!(result.value, Value::Int(n as i64));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "estimate after {n} parked calls"
+        );
+        core.estimated_memory_bytes()
+    }
+
+    /// A parked async call held three register windows: its isolated
+    /// activation's file (the wrapper's window and its own) and the copy of
+    /// its window it saved at the await, about 55 KB on the deterministic
+    /// lane and 885 KB on the throughput lane. It now holds its live
+    /// registers: each extra pending call costs less than 8 KiB on either.
+    #[test]
+    fn a_pending_async_call_holds_its_live_registers() {
+        for (lane, config) in [
+            ("deterministic", InterpreterConfig::quickjs_defaults()),
+            ("throughput", InterpreterConfig::v8_defaults()),
+        ] {
+            let ten = parked_estimate(&config, 10);
+            let twenty = parked_estimate(&config, 20);
+            let per_call = (twenty - ten) / 10;
+            eprintln!("bd-9vouw.167 {lane}: {per_call} bytes per pending async call");
+            assert!(
+                per_call < 8 * 1024,
+                "{lane}: a pending async call costs {per_call} bytes"
+            );
+        }
     }
 }

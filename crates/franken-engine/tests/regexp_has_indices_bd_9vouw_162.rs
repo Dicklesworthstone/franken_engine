@@ -8,6 +8,15 @@
 //! lists them in "dgimsuvy" order (ES2025 22.2.6.4), and RegExp.prototype
 //! has the hasIndices and unicodeSets accessors. Expected strings are Node
 //! v22.2.0's output for the same programs.
+//!
+//! The flag accessors were only described, by getOwnPropertyDescriptor:
+//! [[Get]] and `in` never found them, so `/a/g.global` and `/a/d.hasIndices`
+//! were undefined (on every build back to the rc-next8 landing at least).
+//! [[Get]] and [[HasProperty]] now find them on RegExp.prototype, as they
+//! find Map.prototype.size and the other described accessors.
+//!
+//! No-claim: Object.getOwnPropertyNames(RegExp.prototype) and Reflect.ownKeys
+//! still leave the accessors out.
 
 use frankenengine_engine::HybridRouter;
 
@@ -57,4 +66,20 @@ fn regexp_has_indices_other_entry_points() {
          [ 'zzb'.match(/(b)/d).indices[1].join(), [...'abcb'.matchAll(re)].map((m) => m.indices[1].join('-')).join(),\n\
           new RegExp(re).exec('xb').indices[0].join(), new RegExp(re.source, 'd').exec('b').indices[0].join()].join(' ');";
     assert_eq!(eval(source), "2,3 1-2,3-4 1,2 0,1");
+}
+
+/// The flag accessors live on RegExp.prototype: [[Get]] and `in` find them
+/// for a regexp or a RegExp subclass instance; on RegExp.prototype itself they
+/// answer undefined (source "(?:)", flags ""), and another receiver is a TypeError.
+#[test]
+fn regexp_has_indices_flag_accessors() {
+    let source = "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\n\
+         var r = /a/gimsuy, P = RegExp.prototype;\n\
+         [r.global, r.ignoreCase, r.multiline, r.dotAll, r.unicode, r.sticky, /a/.global, 'global' in r, 'sticky' in /b/,\n\
+          r.hasOwnProperty('global'), P.global, P.source, JSON.stringify(P.flags), attempt(() => Object.create(P).global),\n\
+          Reflect.get(P, 'global', r), new (class R extends RegExp {})('x', 'y').sticky].join(' ');";
+    assert_eq!(
+        eval(source),
+        "true true true true true true false true true false  (?:) \"\" TypeError true true"
+    );
 }

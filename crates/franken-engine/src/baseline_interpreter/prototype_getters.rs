@@ -72,6 +72,28 @@ impl BuiltinFunction {
 }
 
 impl InterpreterCore {
+    /// The getter of accessor `key` when `object` is the prototype of an
+    /// owner in PROTOTYPE_GETTERS: [[Get]] and [[HasProperty]] find these
+    /// accessors there (`/a/g.global`, `'global' in re`), bd-9vouw.162.
+    pub(super) fn prototype_getter_at(
+        &self,
+        object: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Option<BuiltinFunction> {
+        let RuntimePropertyKey::String(key) = key else {
+            return None;
+        };
+        let key = key.as_str()?;
+        PROTOTYPE_GETTERS
+            .iter()
+            .find(|(owner, entry_key, _)| {
+                *entry_key == key
+                    && !entry_key.starts_with("@@")
+                    && self.builtin_prototypes.get(*owner) == Some(&object)
+            })
+            .map(|(owner, key, _)| BuiltinFunction::prototype_getter(owner, key))
+    }
+
     /// `{ get, set: undefined, enumerable: false, configurable: true }` when
     /// `object` is the prototype of an owner in PROTOTYPE_GETTERS and `key`
     /// one of its accessors.
@@ -154,6 +176,18 @@ impl InterpreterCore {
                 .symbol_description(symbol)
                 .map_or(Value::Undefined, Value::Str));
         }
+        // ES2020 21.2.5.3 ff.: on %RegExp.prototype% itself the flag
+        // accessors answer undefined, `source` "(?:)" and `flags` "".
+        if owner == "RegExp"
+            && let Value::Object(id) = &receiver
+            && self.builtin_prototypes.get("RegExp") == Some(id)
+        {
+            return Ok(match key {
+                "source" => Value::str("(?:)"),
+                "flags" => Value::str(""),
+                _ => Value::Undefined,
+            });
+        }
         let Value::Object(id) = receiver else {
             return Err(incompatible());
         };
@@ -176,13 +210,7 @@ impl InterpreterCore {
         if owner == "RegExp"
             && let Some(flag) = flag
         {
-            let flags = self.proxy_aware_get_runtime_property(
-                Some(module),
-                id,
-                &RuntimePropertyKey::String("flags".into()),
-                receiver,
-                0,
-            )?;
+            let flags = self.prototype_getter_own_slot(module, id, "flags", receiver)?;
             return Ok(Value::Bool(
                 matches!(flags, Value::Str(flags) if flags.to_string().contains(flag)),
             ));
@@ -196,13 +224,28 @@ impl InterpreterCore {
                 .and_then(|object| object.properties.get(COLLECTION_SIZE_SLOT).cloned())
                 .unwrap_or(Value::Int(0)));
         }
-        self.proxy_aware_get_runtime_property(
-            Some(module),
-            id,
-            &RuntimePropertyKey::String(key.into()),
-            receiver,
-            0,
-        )
+        self.prototype_getter_own_slot(module, id, key, receiver)
+    }
+
+    /// The receiver's own `key` slot (`flags`, `source`, `byteLength`, ...).
+    /// Not its prototype chain: the accessor is found there, so a chain read
+    /// of a deleted slot would call this getter again.
+    fn prototype_getter_own_slot(
+        &mut self,
+        module: &Ir3Module,
+        id: ObjectId,
+        key: &str,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        let slot = self
+            .heap
+            .get(id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?
+            .own_runtime_property_value(&RuntimePropertyKey::String(key.into()));
+        match slot {
+            Some(value) => self.resolve_accessor_get(Some(module), value, receiver),
+            None => Ok(Value::Undefined),
+        }
     }
 
     /// The internal slot each owner's accessors require of their receiver.

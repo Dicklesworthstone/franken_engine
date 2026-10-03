@@ -58438,6 +58438,14 @@ impl InterpreterCore {
                 self.capture_property_resolution_found(key, id, depth);
                 return self.resolve_accessor_get(module, val, receiver);
             }
+            // RegExp.prototype.global, Map.prototype.size, ...: accessors the
+            // prototype describes without storing (bd-9vouw.162).
+            if let Some(module) = module
+                && let Some(getter) = self.prototype_getter_at(id, key)
+            {
+                self.capture_property_resolution_found(key, id, depth);
+                return self.call_prototype_getter(module, &getter, receiver);
+            }
             current = next_prototype;
             depth += 1;
         }
@@ -60984,7 +60992,9 @@ impl InterpreterCore {
                     .heap
                     .get(id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-                if object.contains_own_runtime_property(key) {
+                if object.contains_own_runtime_property(key)
+                    || self.prototype_getter_at(id, key).is_some()
+                {
                     return Ok(true);
                 }
                 current = self.observable_prototype_link(object, id);

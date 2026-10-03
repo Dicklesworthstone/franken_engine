@@ -94,6 +94,7 @@ mod prototype_getters;
 mod reflect_invocation;
 mod regexp_backtrack;
 mod regexp_syntax;
+mod set_algebra;
 mod structured_clone;
 mod text_codec;
 #[cfg(test)]
@@ -3524,6 +3525,10 @@ pub enum BuiltinFunctionKind {
     /// ES2024 `Promise.withResolvers()`: `{ promise, resolve, reject }`
     /// for a new promise of `this` (bd-9vouw.160). Append only.
     PromiseWithResolvers,
+    /// ES2025 `Set.prototype.union`, `intersection`, `difference`,
+    /// `symmetricDifference`, `isSubsetOf`, `isSupersetOf` and
+    /// `isDisjointFrom` (set_algebra.rs), named by the specifier. Append only.
+    SetMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -4942,6 +4947,11 @@ impl BuiltinFunction {
                 .copied()
                 .find(|method| self.module_specifier.0.as_deref() == Some(*method))
                 .unwrap_or("log"),
+            BuiltinFunctionKind::SetMethod => set_algebra::SET_ALGEBRA_METHODS
+                .iter()
+                .copied()
+                .find(|method| self.module_specifier.0.as_deref() == Some(*method))
+                .unwrap_or("union"),
             BuiltinFunctionKind::StringCharAt => "charAt",
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
             BuiltinFunctionKind::StringAt => "at",
@@ -5578,6 +5588,7 @@ impl BuiltinFunction {
             | K::ConsoleInfo
             | K::ConsoleMethod => "console",
             K::UrlMethod => "URL.prototype",
+            K::SetMethod => "Set.prototype",
             K::SetTimeout
             | K::SetInterval
             | K::SetImmediate
@@ -43251,6 +43262,10 @@ impl InterpreterCore {
                 let method = builtin.display_name();
                 self.dispatch_console_hostcall(&format!("console:{method}"), args, Some(module))
             }
+            BuiltinFunctionKind::SetMethod => {
+                let method = builtin.display_name();
+                self.set_algebra_method(module, method, receiver.unwrap_or(Value::Undefined), args)
+            }
             // URL.prototype.toString / toJSON: the receiver URL's href
             // (bd-9vouw.157).
             BuiltinFunctionKind::UrlMethod => {
@@ -58894,6 +58909,14 @@ impl InterpreterCore {
                 Some(BuiltinFunction::new_kind(BuiltinFunctionKind::SetValues))
             }
             ("Set", "entries") => Some(BuiltinFunction::new_kind(BuiltinFunctionKind::SetEntries)),
+            ("Set", method) if set_algebra::SET_ALGEBRA_METHODS.contains(&method) => {
+                Some(BuiltinFunction {
+                    kind: BuiltinFunctionKind::SetMethod,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                    iterator_handle: None,
+                    bound_object: None,
+                })
+            }
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
             ("Date", method) if DATE_PROTOTYPE_METHODS.contains(&method) => Some(BuiltinFunction {
                 kind: BuiltinFunctionKind::DatePrototypeMethod,
@@ -62305,11 +62328,14 @@ impl InterpreterCore {
                 0,
             );
         }
-        // Unallocated intrinsic prototypes hold no program-added members, so
-        // reading through Object.prototype then is the same answer.
+        // The intrinsic prototype is materialized for the read: it holds the
+        // built-in members, such as an array or Map iterator's `next`, which
+        // Object.prototype does not (the Set methods call `keys().next`
+        // through [[Get]], bd-9vouw.161).
         let prototype = self
             .exotic_intrinsic_prototype_name(value)
             .unwrap_or("Object");
+        self.ensure_builtin_prototype(prototype)?;
         Ok(self
             .primitive_prototype_get(module, prototype, key, value.clone())?
             .0)
@@ -86978,14 +87004,10 @@ impl InterpreterCore {
             }
             "builtin:Set" => {
                 // Set([iterable]) constructor implementation
-                let prototype = self.ensure_builtin_prototype("Set")?;
-                let set_id = self.alloc_object_with_prototype(Some(prototype))?;
-                let values_id = self.alloc_object_with_prototype(None)?;
-
-                self.set_object_brand(set_id, "Set")?;
-                self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
-                self.set_object_property(set_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
-                self.hide_internal_slots(set_id, &["__values", COLLECTION_SIZE_SLOT])?;
+                let set_id = self.alloc_empty_set()?;
+                let values_id = self
+                    .collection_storage_id(set_id, "Set", "__values")
+                    .expect("a new Set has its value storage");
 
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;

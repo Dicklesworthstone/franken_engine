@@ -96754,10 +96754,14 @@ impl InterpreterCore {
                     }
                 }
             }
-            current = self.proxy_aware_prototype_link(module, id)?;
-            if current.is_none() && id == object_id {
-                current = continue_at;
-            }
+            // An exotic value's backing object continues at the value's own
+            // [[Prototype]] (a generator's recorded `prototype`, a Promise
+            // subclass's, or the intrinsic), not at the backing object's link
+            // (bd-9vouw.120).
+            current = match continue_at {
+                Some(prototype) if id == object_id => Some(prototype),
+                _ => self.proxy_aware_prototype_link(module, id)?,
+            };
             depth += 1;
         }
 

@@ -5869,8 +5869,8 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 23] = [
 ];
 
 /// `console` methods besides log/error/warn/info (bd-9vouw.158), as Node
-/// v22.2.0 has them. `table` is not among them yet.
-const CONSOLE_EXTRA_METHODS: [&str; 14] = [
+/// v22.2.0 has them.
+const CONSOLE_EXTRA_METHODS: [&str; 15] = [
     "debug",
     "trace",
     "dir",
@@ -5885,7 +5885,12 @@ const CONSOLE_EXTRA_METHODS: [&str; 14] = [
     "groupEnd",
     "assert",
     "clear",
+    "table",
 ];
+
+/// A console.table: its header row and its columns, each a cell per row
+/// (`None` where an item has no such property), bd-9vouw.158.
+type ConsoleTableColumns = (Vec<String>, Vec<Vec<Option<String>>>);
 
 /// Node's `console.time` rendering of an elapsed time in milliseconds
 /// (lib/internal/console/constructor.js formatTime), bd-9vouw.158.
@@ -34486,9 +34491,231 @@ impl InterpreterCore {
             }
             // Node clears only a TTY; output here is never one.
             "clear" => {}
+            "table" => self.console_table(module, args)?,
             _ => {}
         }
         Ok(())
+    }
+
+    /// `console.table(data, properties)` (bd-9vouw.158), as Node v22.2.0's
+    /// Console.prototype.table over internal/cli_table: a Map's entries, a
+    /// Set's values, or any other object's own enumerable keys and, per key,
+    /// the item (a primitive) or its own properties (an object) as columns.
+    /// Anything but an object is logged.
+    fn console_table(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let data = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let properties = match self.builtin_arg(args, 1)? {
+            None | Some(Value::Undefined) => None,
+            Some(Value::Object(id)) if self.heap.get(id.0 as usize).is_some_and(|o| o.is_array) => {
+                let mut names = Vec::new();
+                for value in self.array_like_values(id)? {
+                    names.push(self.conversion_to_string(module, value)?.to_string());
+                }
+                Some(names)
+            }
+            Some(other) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "an Array for the \"properties\" argument of console.table"
+                        .to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let (Value::Object(data_id), Some(module)) = (&data, module) else {
+            let text = self.format_values(module, std::slice::from_ref(&data))?;
+            return self.push_indented_console_output(ConsoleLevel::Log, text);
+        };
+        let brand = self
+            .heap
+            .get(data_id.0 as usize)
+            .and_then(|object| object.brand().map(str::to_string));
+        let (head, columns) = match brand.as_deref() {
+            Some(kind @ ("Map" | "Set")) => {
+                let items = self.promise_combinator_iterable_values(Some(module), data.clone())?;
+                let mut index = Vec::with_capacity(items.len());
+                let mut keys = Vec::with_capacity(items.len());
+                let mut values = Vec::with_capacity(items.len());
+                for (position, item) in items.into_iter().enumerate() {
+                    index.push(Some(
+                        self.console_table_cell(module, &Value::Int(position as i64))?,
+                    ));
+                    if kind == "Map" {
+                        let key =
+                            self.get_v(module, &item, &RuntimePropertyKey::String("0".into()))?;
+                        let value =
+                            self.get_v(module, &item, &RuntimePropertyKey::String("1".into()))?;
+                        keys.push(Some(self.console_table_cell(module, &key)?));
+                        values.push(Some(self.console_table_cell(module, &value)?));
+                    } else {
+                        values.push(Some(self.console_table_cell(module, &item)?));
+                    }
+                }
+                if kind == "Map" {
+                    (
+                        vec![
+                            "(iteration index)".to_string(),
+                            "Key".to_string(),
+                            "Values".to_string(),
+                        ],
+                        vec![index, keys, values],
+                    )
+                } else {
+                    (
+                        vec!["(iteration index)".to_string(), "Values".to_string()],
+                        vec![index, values],
+                    )
+                }
+            }
+            _ => self.console_table_columns(module, &data, properties.as_deref())?,
+        };
+        let text = inspect::console_table_text(&head, &columns);
+        self.push_indented_console_output(ConsoleLevel::Log, text)
+    }
+
+    /// The `(index)` column, one column per property in Object.keys order
+    /// (array indices first), and a `Values` column for primitive items.
+    fn console_table_columns(
+        &mut self,
+        module: &Ir3Module,
+        data: &Value,
+        properties: Option<&[String]>,
+    ) -> Result<ConsoleTableColumns, InterpreterError> {
+        let index_keys = self.console_object_keys(module, data)?;
+        let rows = index_keys.len();
+        let mut columns: Vec<(String, Vec<Option<String>>)> = Vec::new();
+        let mut values_column: Vec<Option<String>> = vec![None; rows];
+        let mut has_primitives = false;
+        for (row, index_key) in index_keys.iter().enumerate() {
+            let item = self.get_v(
+                module,
+                data,
+                &RuntimePropertyKey::String(index_key.as_str().into()),
+            )?;
+            let primitive = matches!(
+                item,
+                Value::Undefined
+                    | Value::Null
+                    | Value::Bool(_)
+                    | Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Str(_)
+                    | Value::Symbol(_)
+                    | Value::BigInt(_)
+            );
+            if properties.is_none() && primitive {
+                has_primitives = true;
+                values_column[row] = Some(self.console_table_cell(module, &item)?);
+                continue;
+            }
+            let keys = match properties {
+                Some(names) => names.to_vec(),
+                None => self.console_object_keys(module, &item)?,
+            };
+            for key in keys {
+                let cell = if primitive || !self.console_has_own_property(module, &item, &key)? {
+                    String::new()
+                } else {
+                    let value = self.get_v(
+                        module,
+                        &item,
+                        &RuntimePropertyKey::String(key.as_str().into()),
+                    )?;
+                    self.console_table_cell(module, &value)?
+                };
+                let position = match columns.iter().position(|(name, _)| *name == key) {
+                    Some(position) => position,
+                    None => {
+                        columns.push((key, vec![None; rows]));
+                        columns.len() - 1
+                    }
+                };
+                columns[position].1[row] = Some(cell);
+            }
+        }
+        // The column map is an object: array-index keys come first, in
+        // numeric order, then the rest in insertion order.
+        let array_index = |key: &str| {
+            key.parse::<u32>()
+                .ok()
+                .filter(|index| *index != u32::MAX && index.to_string() == key)
+        };
+        columns.sort_by_key(|(key, _)| array_index(key).map_or((1, 0), |index| (0, index)));
+        let mut head = vec!["(index)".to_string()];
+        let mut cells = vec![index_keys.into_iter().map(Some).collect::<Vec<_>>()];
+        for (key, column) in columns {
+            head.push(key);
+            cells.push(column);
+        }
+        if has_primitives {
+            head.push("Values".to_string());
+            cells.push(values_column);
+        }
+        Ok((head, cells))
+    }
+
+    /// A table cell: `util.inspect` at depth 0, or -1 for an object with
+    /// more than two keys, three array entries at most, on one line.
+    fn console_table_cell(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<String, InterpreterError> {
+        let is_array = matches!(value, Value::Object(id)
+            if self.heap.get(id.0 as usize).is_some_and(|object| object.is_array));
+        let depth = if matches!(value, Value::Object(_))
+            && !is_array
+            && self.console_object_keys(module, value)?.len() > 2
+        {
+            -1
+        } else {
+            0
+        };
+        self.inspect_table_cell(Some(module), value, depth)
+    }
+
+    /// `Object.keys(value)` through the builtin, so proxies, accessors and
+    /// exotic objects answer as they do for guest code.
+    fn console_object_keys(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<Vec<String>, InterpreterError> {
+        let (keys, _) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:ObjectKeys")),
+            Value::Undefined,
+            vec![value.clone()],
+            None,
+        )?;
+        let Value::Object(array) = keys else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .array_like_values(array)?
+            .into_iter()
+            .map(|key| self.value_to_string(&key))
+            .collect())
+    }
+
+    /// `Object.prototype.hasOwnProperty.call(value, key)`.
+    fn console_has_own_property(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &str,
+    ) -> Result<bool, InterpreterError> {
+        let (owned, _) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            Value::BuiltinFunction(BuiltinFunction::object_has_own_property()),
+            value.clone(),
+            vec![Value::str(key)],
+            None,
+        )?;
+        Ok(owned.is_truthy())
     }
 
     fn push_console_output(

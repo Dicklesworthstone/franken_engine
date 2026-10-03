@@ -2509,10 +2509,8 @@ fn enrichment_module_id_in_artifact() {
 #[test]
 fn enrichment_instanceof_lowering() {
     let parser = CanonicalEs2020Parser;
-    // Use a user-defined RHS, not `Array`: unshadowed `instanceof Array` is
-    // intentionally routed to the `Array.isArray` predicate (bd-ck8ui,
-    // 5040f7b3), so it never emits InstanceOf. A non-builtin constructor
-    // exercises the genuine InstanceOf lowering this test targets.
+    // A user-defined RHS exercises the genuine InstanceOf lowering this test
+    // targets.
     let tree = parser
         .parse("x instanceof Shape;", ParseGoal::Script)
         .expect("parse");

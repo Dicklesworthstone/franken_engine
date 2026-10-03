@@ -512,7 +512,7 @@ impl InterpreterCore {
         Ok(())
     }
 
-    fn object_get_prototype(
+    pub(super) fn object_get_prototype(
         &mut self,
         module: Option<&Ir3Module>,
         id: ObjectId,

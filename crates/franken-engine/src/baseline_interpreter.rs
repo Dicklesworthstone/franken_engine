@@ -99968,6 +99968,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::DateConstructor => Some("Date"),
             BuiltinFunctionKind::PromiseConstructor => Some("Promise"),
             BuiltinFunctionKind::FunctionConstructor => Some("Function"),
+            // `class S extends EventEmitter` links S.prototype to it
+            // (bd-9vouw.165).
+            BuiltinFunctionKind::EventEmitterConstructor => Some("EventEmitter"),
             _ => None,
         }
     }

@@ -9,9 +9,9 @@
 //! strings are Node v22.2.0's output for the same programs.
 //!
 //! No-claim: without a `construct` trap, `new.target` is the target rather
-//! than the proxy; `class X extends proxyOverFn`, util.inspect of a callable
-//! proxy and instanceof with a callable proxy on the right are not covered;
-//! `Object.create(fn)` with a plain function (not a proxy) is still refused.
+//! than the proxy; `class X extends proxyOverFn` and util.inspect's
+//! showProxy form are not covered; `Object.create(fn)` with a plain function
+//! (not a proxy) is still refused.
 
 use frankenengine_engine::HybridRouter;
 
@@ -119,6 +119,20 @@ fn callable_proxy_construct_new_target() {
          var b = new P(1, 2);\n\
          [calls, first, seen === P, a.sum, b.sum].join(' ');";
     assert_eq!(eval(source), "2 true true 7 3");
+}
+
+/// util.inspect shows a callable proxy as its target (a revoked one as <Revoked Proxy>), and instanceof reads its prototype through [[Get]].
+#[test]
+fn callable_proxy_inspect_instanceof() {
+    let source = "var util = require('util');\n\
+         function add(a, b) {} class A {}\n\
+         var P = new Proxy(A, {});\n\
+         var r = Proxy.revocable(function f() {}, {}); r.revoke();\n\
+         [util.inspect(new Proxy(add, {})), util.inspect(new Proxy(new Proxy(add, {}), {})), util.inspect(r.proxy), new A() instanceof P, {} instanceof P].join(' | ');";
+    assert_eq!(
+        eval(source),
+        "[Function: add] | [Function: add] | <Revoked Proxy> | true | false"
+    );
 }
 
 /// Reflect.get/has/set/deleteProperty on a plain function (they threw "expected object with property storage").

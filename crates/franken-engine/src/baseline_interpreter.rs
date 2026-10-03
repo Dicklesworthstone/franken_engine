@@ -3532,6 +3532,10 @@ pub enum BuiltinFunctionKind {
     /// `URL.canParse` and `URL.parse` (URL Standard 6.1), named by the
     /// specifier. Append only.
     UrlStatic,
+    /// Annex B `Object.prototype.__defineGetter__`, `__defineSetter__`,
+    /// `__lookupGetter__` and `__lookupSetter__` (bd-9vouw.172), named by
+    /// the specifier. Append only.
+    ObjectLegacyAccessor,
 }
 
 impl BuiltinFunctionKind {
@@ -5008,6 +5012,11 @@ impl BuiltinFunction {
                     "canParse"
                 }
             }
+            BuiltinFunctionKind::ObjectLegacyAccessor => object_integrity::LEGACY_ACCESSOR_METHODS
+                .iter()
+                .copied()
+                .find(|method| self.module_specifier.0.as_deref() == Some(*method))
+                .unwrap_or("__defineGetter__"),
             BuiltinFunctionKind::ArrayIsArray => "isArray",
             BuiltinFunctionKind::StreamReadablePause => "pause",
             BuiltinFunctionKind::StreamReadableResume => "resume",
@@ -5599,6 +5608,7 @@ impl BuiltinFunction {
             | K::ConsoleMethod => "console",
             K::UrlMethod => "URL.prototype",
             K::UrlStatic => "URL",
+            K::ObjectLegacyAccessor => "Object.prototype",
             K::SetMethod => "Set.prototype",
             K::SetTimeout
             | K::SetInterval
@@ -43279,6 +43289,10 @@ impl InterpreterCore {
                 self.dispatch_console_hostcall(&format!("console:{method}"), args, Some(module))
             }
             BuiltinFunctionKind::UrlStatic => self.url_static(builtin.display_name(), args),
+            BuiltinFunctionKind::ObjectLegacyAccessor => {
+                let method = builtin.display_name();
+                self.legacy_accessor_method(module, method, receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::SetMethod => {
                 let method = builtin.display_name();
                 self.set_algebra_method(module, method, receiver.unwrap_or(Value::Undefined), args)
@@ -59364,6 +59378,14 @@ impl InterpreterCore {
             "toLocaleString" => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::ObjectPrototypeToLocaleString,
             )),
+            method if object_integrity::LEGACY_ACCESSOR_METHODS.contains(&method) => {
+                Some(BuiltinFunction {
+                    kind: BuiltinFunctionKind::ObjectLegacyAccessor,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                    iterator_handle: None,
+                    bound_object: None,
+                })
+            }
             _ => None,
         }
     }

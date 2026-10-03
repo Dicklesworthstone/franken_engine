@@ -14,8 +14,10 @@
 
 use super::*;
 
-/// (prototype owner, property key, getter name).
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 19] = [
+/// (prototype owner, property key, getter name). A key starting with `@@`
+/// names a well-known symbol ([`TYPED_ARRAY_TO_STRING_TAG`]); those accessors
+/// are real own properties of the prototype, installed when it is created.
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 20] = [
     ("Map", "size", "get size"),
     ("Set", "size", "get size"),
     ("ArrayBuffer", "byteLength", "get byteLength"),
@@ -26,6 +28,12 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 19] = [
     ("TypedArray", "byteLength", "get byteLength"),
     ("TypedArray", "byteOffset", "get byteOffset"),
     ("TypedArray", "length", "get length"),
+    // ES2020 22.2.3.32 (bd-9vouw.155).
+    (
+        "TypedArray",
+        TYPED_ARRAY_TO_STRING_TAG,
+        "get [Symbol.toStringTag]",
+    ),
     ("RegExp", "dotAll", "get dotAll"),
     ("RegExp", "flags", "get flags"),
     ("RegExp", "global", "get global"),
@@ -36,6 +44,9 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 19] = [
     ("RegExp", "unicode", "get unicode"),
     ("Symbol", "description", "get description"),
 ];
+
+/// The key of %TypedArray%.prototype[@@toStringTag] in [`PROTOTYPE_GETTERS`].
+pub(super) const TYPED_ARRAY_TO_STRING_TAG: &str = "@@toStringTag";
 
 /// The table entry a getter's specifier (`"Map.size"`) names.
 pub(super) fn prototype_getter_entry(
@@ -74,7 +85,9 @@ impl InterpreterCore {
             return Ok(None);
         };
         let Some((owner, key, _)) = PROTOTYPE_GETTERS.iter().find(|(owner, entry_key, _)| {
-            *entry_key == key && self.builtin_prototypes.get(*owner) == Some(&object)
+            *entry_key == key
+                && !entry_key.starts_with("@@")
+                && self.builtin_prototypes.get(*owner) == Some(&object)
         }) else {
             return Ok(None);
         };
@@ -106,6 +119,18 @@ impl InterpreterCore {
                 got: "unknown accessor".to_string(),
             });
         };
+        // ES2020 22.2.3.32: the receiver's [[TypedArrayName]], and undefined
+        // (never a TypeError) for anything else (bd-9vouw.155).
+        if key == TYPED_ARRAY_TO_STRING_TAG {
+            return Ok(match receiver {
+                Value::Object(id) => self
+                    .heap
+                    .get(id.0 as usize)
+                    .and_then(|object| object.typed_array.as_ref())
+                    .map_or(Value::Undefined, |view| Value::str(view.kind.type_name())),
+                _ => Value::Undefined,
+            });
+        }
         let incompatible = || InterpreterError::TypeError {
             expected: format!("{owner} receiver for get {owner}.prototype.{key}"),
             got: receiver.type_name().to_string(),

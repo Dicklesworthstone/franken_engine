@@ -53663,18 +53663,25 @@ impl InterpreterCore {
                 None => break,
             }
         }
-        if !self.is_constructible_value(&constructor) {
+        // ES2020 12.10.4 InstanceofOperator step 4: the target must be
+        // callable, not constructible; a generator function has an object
+        // `prototype` its generators inherit from (bd-9vouw.120).
+        if !constructor.is_callable() {
             return Err(InterpreterError::TypeError {
-                expected: "constructible function".to_string(),
+                expected: "callable instanceof target".to_string(),
                 got: constructor.type_name().to_string(),
             });
         }
         if !candidate.is_object_like() {
             return Ok(Value::Bool(false));
         }
-        // A callable proxy (bd-9vouw.132): OrdinaryHasInstance reads its
-        // `prototype` through [[Get]], so its get trap or its target answers.
-        let prototype = if Self::is_callable_proxy(&constructor) {
+        // A callable proxy (bd-9vouw.132) or a callable that is no
+        // constructor (generator, async and arrow functions, methods):
+        // OrdinaryHasInstance reads `prototype` through [[Get]]; anything but
+        // an object (an arrow's undefined) is a TypeError.
+        let prototype = if Self::is_callable_proxy(&constructor)
+            || !self.is_constructible_value(&constructor)
+        {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             match self.get_v(module, &constructor, &key)? {
                 Value::Object(prototype) => prototype,

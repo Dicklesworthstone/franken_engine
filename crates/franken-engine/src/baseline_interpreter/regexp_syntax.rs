@@ -52,10 +52,15 @@ const LOW_SURROGATES: (u32, u32) = (0xDC00, 0xDFFF);
 /// with nothing to rewrite are returned as they are.
 pub(super) fn js_pattern_to_rust<'a>(pattern: &'a str, flags: &str) -> Cow<'a, str> {
     let dot_all = flags.contains('s');
-    if !pattern
-        .bytes()
-        .any(|byte| matches!(byte, b'\\' | b'[' | b'{') || (byte == b'.' && !dot_all))
-    {
+    let unicode = flags.contains('u') || flags.contains('v');
+    // A 4-byte UTF-8 sequence is a supplementary character, which without
+    // `u` is a surrogate pair whose low half a quantifier binds to
+    // (bd-9vouw.156): `/^😀?$/` has nothing else to rewrite.
+    if !pattern.bytes().any(|byte| {
+        matches!(byte, b'\\' | b'[' | b'{')
+            || (byte == b'.' && !dot_all)
+            || (byte >= 0xF0 && !unicode)
+    }) {
         return Cow::Borrowed(pattern);
     }
     let chars: Vec<char> = pattern.chars().collect();
@@ -66,7 +71,7 @@ pub(super) fn js_pattern_to_rust<'a>(pattern: &'a str, flags: &str) -> Cow<'a, s
         chars,
         index: 0,
         out: String::with_capacity(pattern.len() + 16),
-        unicode: flags.contains('u') || flags.contains('v'),
+        unicode,
         unicode_sets: flags.contains('v'),
         dot_all,
         named_groups,

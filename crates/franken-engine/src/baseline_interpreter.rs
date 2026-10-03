@@ -77122,7 +77122,40 @@ impl InterpreterCore {
     /// coercion. URL entry points reserve this before calling
     /// `value_to_string`, so even Buffer/Error object coercions cannot create
     /// an unmetered host allocation before URL parsing starts.
+    /// A URL constructor or static argument as a string: a URL object gives
+    /// its href, its stringifier (URL Standard 6.1), where the engine's
+    /// conversion gave "[object URL]"; anything else that conversion
+    /// (bd-9vouw.168: a user toString is not called).
+    fn url_input_to_string(&self, value: &Value) -> String {
+        if let Value::Object(id) = value
+            && let Some(state) = self.url_objects.get(id)
+        {
+            return state.href.clone();
+        }
+        self.value_to_string(value)
+    }
+
+    /// The join of the state labels of the URL objects among `values`: a
+    /// URL argument's href flows into what the constructor or static returns.
+    fn url_argument_state_label(&self, values: &[Option<&Value>]) -> Label {
+        values
+            .iter()
+            .flatten()
+            .filter_map(|value| match value {
+                Value::Object(id) => self.url_objects.get(id),
+                _ => None,
+            })
+            .fold(Label::Public, |label, state| {
+                label.join(&state.lifecycle_label)
+            })
+    }
+
     fn url_value_to_string_upper_bound(&self, value: &Value) -> u64 {
+        if let Value::Object(id) = value
+            && let Some(state) = self.url_objects.get(id)
+        {
+            return Self::estimate_string_bytes(&state.href);
+        }
         match value {
             Value::Str(text) => Self::estimate_js_string_bytes(text),
             Value::BigInt(digits) => Self::estimate_string_bytes(digits),
@@ -77253,8 +77286,17 @@ impl InterpreterCore {
             input_bound,
             base_bound,
         ))?;
-        let input = self.value_to_string(&input_value);
-        let base = base_value.map(|value| self.value_to_string(&value));
+        let url_label = self.url_argument_state_label(&[Some(&input_value), base_value.as_ref()]);
+        if url_label != Label::Public {
+            let label = self
+                .pending_hostcall_result_label
+                .clone()
+                .unwrap_or(Label::Public)
+                .join(&url_label);
+            self.replace_pending_hostcall_result_label(Some(label))?;
+        }
+        let input = self.url_input_to_string(&input_value);
+        let base = base_value.map(|value| self.url_input_to_string(&value));
         let parses = match base.as_deref() {
             Some(base) => Url::parse(base)
                 .ok()
@@ -77283,15 +77325,16 @@ impl InterpreterCore {
             input_bound,
             base_bound,
         ))?;
-        let input = self.value_to_string(&input_value);
-        let base = base_value.map(|value| self.value_to_string(&value));
+        let url_label = self.url_argument_state_label(&[Some(&input_value), base_value.as_ref()]);
+        let input = self.url_input_to_string(&input_value);
+        let base = base_value.map(|value| self.url_input_to_string(&value));
         let parsed = self.parse_whatwg_url(&input, base.as_deref())?;
         let href = parsed.as_str().to_string();
         let pairs = Self::url_pairs(&parsed);
         drop(parsed);
         drop(input);
         drop(base);
-        let lifecycle_label = self.join_arg_range_label(args)?;
+        let lifecycle_label = self.join_arg_range_label(args)?.join(&url_label);
 
         let projected_state_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
             .saturating_mul(2)

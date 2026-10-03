@@ -15,7 +15,9 @@
 //! No-claim: `URL(...)` without `new` constructs instead of throwing a
 //! TypeError; URL.prototype has no accessors of its own (instances answer
 //! href, host, ...), and URLSearchParams.prototype no methods (instances
-//! answer them); URL.createObjectURL and revokeObjectURL are not covered.
+//! answer them); URL.createObjectURL and revokeObjectURL are not covered; an
+//! object argument with its own toString is converted without calling it
+//! (bd-9vouw.168; a URL object converts to its href).
 
 use frankenengine_engine::HybridRouter;
 
@@ -71,10 +73,22 @@ fn url_type_checks() {
 fn url_statics() {
     let source = "[URL.canParse('https://a.example/'), URL.canParse('/x'), URL.canParse('/x', 'https://a.example/c'), URL.parse('nope'),\n\
           URL.parse('/p?q=1', 'https://a.example').href, URL.parse('https://a.example/') instanceof URL, URL.canParse.length,\n\
-          URL.parse.name, typeof URL.canParse, URL.canParse({ toString() { return 'https://x.example'; } })].join(' ');";
+          URL.parse.name, typeof URL.canParse, URL.canParse(new URL('https://x.example'))].join(' ');";
     assert_eq!(
         eval(source),
         "true false true  https://a.example/p?q=1 true 1 parse function true"
+    );
+}
+
+/// A URL object as the input or base converts to its href (it was "[object URL]", an Invalid URL).
+#[test]
+fn url_object_arguments() {
+    let source = "[new URL(new URL('https://y.example/a')).href, new URL('b', new URL('https://y.example/a/')).href,\n\
+          URL.canParse('/q', new URL('https://z.example')), URL.parse(new URL('https://x.example/q')).pathname,\n\
+          new URLSearchParams(new URL('https://w.example/?k=v').search).get('k')].join(' ');";
+    assert_eq!(
+        eval(source),
+        "https://y.example/a https://y.example/a/b true /q v"
     );
 }
 

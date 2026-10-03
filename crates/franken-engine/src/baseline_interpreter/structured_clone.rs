@@ -397,9 +397,9 @@ impl InterpreterCore {
                     .unwrap_or(Value::Float(Float64::new(f64::NAN)));
                 let prototype = self.ensure_builtin_prototype("Date")?;
                 let clone = self.alloc_object_with_prototype(Some(prototype))?;
-                self.set_object_property(clone, "__type".to_string(), Value::str("Date"))?;
+                self.set_object_brand(clone, "Date")?;
                 self.set_object_property(clone, "__timestamp".to_string(), time)?;
-                self.hide_internal_slots(clone, &["__type", "__timestamp"])?;
+                self.hide_internal_slots(clone, &["__timestamp"])?;
                 state.memory.insert(id, clone);
                 return Ok(Some(Value::Object(clone)));
             }
@@ -560,10 +560,10 @@ impl InterpreterCore {
         let prototype = self.ensure_builtin_prototype("Set")?;
         let set_id = self.alloc_object_with_prototype(Some(prototype))?;
         let values_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(set_id, "__type".to_string(), Value::str("Set"))?;
+        self.set_object_brand(set_id, "Set")?;
         self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
         self.set_object_property(set_id, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))?;
-        self.hide_internal_slots(set_id, &["__type", "__values", COLLECTION_SIZE_SLOT])?;
+        self.hide_internal_slots(set_id, &["__values", COLLECTION_SIZE_SLOT])?;
         Ok(set_id)
     }
 

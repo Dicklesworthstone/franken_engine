@@ -54,9 +54,9 @@ impl InterpreterCore {
     pub(super) fn construct_text_encoder(&mut self) -> Result<Value, InterpreterError> {
         let prototype = self.ensure_builtin_prototype(TEXT_ENCODER_TYPE)?;
         let encoder = self.alloc_object_with_prototype(Some(prototype))?;
-        self.set_object_property(encoder, "__type".to_string(), Value::str(TEXT_ENCODER_TYPE))?;
+        self.set_object_brand(encoder, TEXT_ENCODER_TYPE)?;
         self.set_object_property(encoder, "encoding".to_string(), Value::str("utf-8"))?;
-        self.hide_internal_slots(encoder, &["__type", "encoding"])?;
+        self.hide_internal_slots(encoder, &["encoding"])?;
         Ok(Value::Object(encoder))
     }
 
@@ -97,11 +97,11 @@ impl InterpreterCore {
         };
         let prototype = self.ensure_builtin_prototype(TEXT_DECODER_TYPE)?;
         let decoder = self.alloc_object_with_prototype(Some(prototype))?;
-        self.set_object_property(decoder, "__type".to_string(), Value::str(TEXT_DECODER_TYPE))?;
+        self.set_object_brand(decoder, TEXT_DECODER_TYPE)?;
         self.set_object_property(decoder, "encoding".to_string(), Value::str(encoding))?;
         self.set_object_property(decoder, "fatal".to_string(), Value::Bool(fatal))?;
         self.set_object_property(decoder, "ignoreBOM".to_string(), Value::Bool(ignore_bom))?;
-        self.hide_internal_slots(decoder, &["__type", "encoding", "fatal", "ignoreBOM"])?;
+        self.hide_internal_slots(decoder, &["encoding", "fatal", "ignoreBOM"])?;
         Ok(Value::Object(decoder))
     }
 
@@ -113,9 +113,10 @@ impl InterpreterCore {
         method: &str,
     ) -> Result<ObjectId, InterpreterError> {
         if let Value::Object(object_id) = receiver
-            && self.heap.get(object_id.0 as usize).is_some_and(|object| {
-                matches!(object.properties.get("__type"), Some(Value::Str(tag)) if tag == type_name)
-            })
+            && self
+                .heap
+                .get(object_id.0 as usize)
+                .is_some_and(|object| object.brand() == Some(type_name))
         {
             return Ok(*object_id);
         }

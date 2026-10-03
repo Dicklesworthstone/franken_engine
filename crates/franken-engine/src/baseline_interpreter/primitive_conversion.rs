@@ -645,8 +645,7 @@ mod console_confidentiality_tests {
     fn map_with_key(core: &mut InterpreterCore, key: ObjectId) -> ObjectId {
         let map = object(core, None);
         let storage = object(core, None);
-        core.set_object_property(map, "__type".to_string(), Value::str("Map"))
-            .expect("map tag");
+        core.set_object_brand(map, "Map").expect("map tag");
         core.set_object_property(map, "__entries".to_string(), Value::Object(storage))
             .expect("map storage");
         core.set_object_property(map, COLLECTION_SIZE_SLOT.to_string(), Value::Int(0))

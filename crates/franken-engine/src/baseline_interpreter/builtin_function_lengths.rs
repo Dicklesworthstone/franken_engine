@@ -393,6 +393,8 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("TypedArray.prototype", "toString", 0),
     ("TypedArray.prototype", "values", 0),
     ("TypedArray.prototype", "with", 2),
+    ("URL", "canParse", 1),
+    ("URL", "parse", 1),
     ("WeakMap.prototype", "delete", 1),
     ("WeakMap.prototype", "get", 1),
     ("WeakMap.prototype", "has", 1),

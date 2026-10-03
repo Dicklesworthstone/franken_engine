@@ -18,12 +18,12 @@
 //! isolated call, a module's parked async evaluation) and the transient
 //! budget checks before a scope clone still count per holder. Lowering N
 //! top-level functions is still quadratic (bd-9vouw.153), which is why these
-//! programs create their closures and calls in loops. A suspended activation
-//! still saves its register frame: on HybridRouter's throughput lane, where
-//! any `await` routes a script, a frame is 4,096 registers (about 268 KB per
-//! pending call), so 2,000 pending calls exceed that lane's 512 MiB whatever
-//! the scope maps cost. The async case runs on the deterministic
-//! (QuickJS-profile) configuration, 256 registers and 64 MiB.
+//! programs create their closures and calls in loops. The async case runs on
+//! the deterministic (QuickJS-profile) configuration, 256 registers and 64
+//! MiB: it was written while a suspended activation saved its whole register
+//! window, 4,096 registers (about 268 KB per pending call) on HybridRouter's
+//! throughput lane, where any `await` routes a script;
+//! pending_async_register_frames_bd_9vouw_167.rs covers that lane.
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;

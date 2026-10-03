@@ -52,10 +52,15 @@ const LOW_SURROGATES: (u32, u32) = (0xDC00, 0xDFFF);
 /// with nothing to rewrite are returned as they are.
 pub(super) fn js_pattern_to_rust<'a>(pattern: &'a str, flags: &str) -> Cow<'a, str> {
     let dot_all = flags.contains('s');
-    if !pattern
-        .bytes()
-        .any(|byte| matches!(byte, b'\\' | b'[' | b'{') || (byte == b'.' && !dot_all))
-    {
+    let unicode = flags.contains('u') || flags.contains('v');
+    // A 4-byte UTF-8 sequence is a supplementary character, which without
+    // `u` is a surrogate pair whose low half a quantifier binds to
+    // (bd-9vouw.156): `/^😀?$/` has nothing else to rewrite.
+    if !pattern.bytes().any(|byte| {
+        matches!(byte, b'\\' | b'[' | b'{')
+            || (byte == b'.' && !dot_all)
+            || (byte >= 0xF0 && !unicode)
+    }) {
         return Cow::Borrowed(pattern);
     }
     let chars: Vec<char> = pattern.chars().collect();
@@ -66,7 +71,7 @@ pub(super) fn js_pattern_to_rust<'a>(pattern: &'a str, flags: &str) -> Cow<'a, s
         chars,
         index: 0,
         out: String::with_capacity(pattern.len() + 16),
-        unicode: flags.contains('u') || flags.contains('v'),
+        unicode,
         unicode_sets: flags.contains('v'),
         dot_all,
         named_groups,
@@ -112,6 +117,18 @@ impl Translator {
                 '.' if !self.dot_all => {
                     self.out.push_str(JS_DOT);
                     self.index += 1;
+                }
+                // Without `u` a literal astral character is a surrogate pair
+                // and a quantifier after it applies to its low half, as for
+                // the escaped pair (bd-9vouw.156): `/😀?/` matches the pair
+                // once, never the empty string.
+                _ if !self.unicode && u32::from(c) > 0xFFFF => {
+                    self.index += 1;
+                    if self.take_low_half_quantifier() {
+                        self.out.push(c);
+                    } else {
+                        self.out.push_str(NEVER);
+                    }
                 }
                 _ => {
                     self.out.push(c);
@@ -234,8 +251,12 @@ impl Translator {
                 && let Some(low) = self.code_unit_escape_at(0)
                 && is_in(low, LOW_SURROGATES)
             {
-                push_char(&mut self.out, combine(unit, low));
                 self.index += 6;
+                if !self.unicode && !self.take_low_half_quantifier() {
+                    self.out.push_str(NEVER);
+                    return;
+                }
+                push_char(&mut self.out, combine(unit, low));
                 return;
             }
             if self.unicode {
@@ -246,10 +267,14 @@ impl Translator {
             if is_in(unit, HIGH_SURROGATES)
                 && let Some((first, last, length)) = self.low_surrogate_class()
             {
+                self.index += length;
+                if !self.take_low_half_quantifier() {
+                    self.out.push_str(NEVER);
+                    return;
+                }
                 self.out.push('[');
                 push_range(&mut self.out, combine(unit, first), combine(unit, last));
                 self.out.push(']');
-                self.index += length;
                 return;
             }
             self.out.push('[');
@@ -301,13 +326,60 @@ impl Translator {
         range_class(0, HIGH_SURROGATES) && range_class(15, LOW_SURROGATES)
     }
 
+    /// After a surrogate pair written as two halves and emitted as the one
+    /// character it encodes (without `u`), at a quantifier written on the low
+    /// half. JavaScript repeats that code unit only; here the character is
+    /// one unit, and no low surrogate follows a pair's low half in a
+    /// well-formed string, so the pair matches the character once unless the
+    /// quantifier demands two or more low halves, when it matches nothing
+    /// (bd-9vouw.156). Applying `?` to the whole character instead made
+    /// `[\uD800-\uDBFF][\uDC00-\uDFFF]?` match the empty string everywhere.
+    /// Where JavaScript would match the high half alone (`??`, `{0}`) the
+    /// character is matched, as for any surrogate half (see the module docs).
+    /// Consumes the quantifier and a lazy `?`; returns whether the pair can
+    /// match.
+    fn take_low_half_quantifier(&mut self) -> bool {
+        let min_low_halves = match self.peek(0) {
+            Some('?' | '*') => {
+                self.index += 1;
+                0
+            }
+            Some('+') => {
+                self.index += 1;
+                1
+            }
+            Some('{') if self.is_braced_quantifier() => {
+                let mut min = 0u32;
+                self.index += 1;
+                while let Some(digit) = self.peek(0).and_then(|c| c.to_digit(10)) {
+                    min = min.saturating_mul(10).saturating_add(digit);
+                    self.index += 1;
+                }
+                while self.peek(0).is_some_and(|c| c != '}') {
+                    self.index += 1;
+                }
+                self.index += 1;
+                min
+            }
+            _ => return true,
+        };
+        if self.peek(0) == Some('?') {
+            self.index += 1;
+        }
+        min_low_halves <= 1
+    }
+
     /// A character class; the cursor is on the `[`.
     fn class(&mut self) {
         if !self.unicode && self.is_surrogate_pair_idiom() {
+            self.index += 30;
+            if !self.take_low_half_quantifier() {
+                self.out.push_str(NEVER);
+                return;
+            }
             self.out.push('[');
             self.out.push_str(SUPPLEMENTARY_RANGE);
             self.out.push(']');
-            self.index += 30;
             return;
         }
         match (self.peek(1), self.peek(2)) {
@@ -1496,6 +1568,34 @@ mod tests {
         assert!(rust(r"\ude00").is_match("😀"));
         assert!(!rust(r"\ude00").is_match("😁"));
         assert!(rust(r"[\u0000-\udfff]").is_match("😀"));
+    }
+
+    /// html-entities' `[\uD800-\uDBFF][\uDC00-\uDFFF]?` matched the empty
+    /// string everywhere: the `?` on the low half applied to the whole
+    /// character the pair was rewritten as (bd-9vouw.156).
+    #[test]
+    fn quantified_low_half_of_a_pair_matches_the_character_once() {
+        let idiom = r"[\uD800-\uDBFF][\uDC00-\uDFFF]";
+        for quantifier in ["", "?", "*", "+", "{1}", "{0,3}", "{1,}?", "??", "{0}"] {
+            let whole = rust(&format!("^{idiom}{quantifier}$"));
+            assert!(whole.is_match("😀"), "{quantifier}");
+            assert!(!whole.is_match(""), "{quantifier} matched the empty string");
+            assert!(!whole.is_match("é"), "{quantifier}");
+            assert!(
+                !rust(&format!("{idiom}{quantifier}")).is_match("abc é"),
+                "{quantifier}"
+            );
+        }
+        assert!(!rust(&format!("{idiom}{{2}}")).is_match("😀😀"));
+        assert!(rust(r"^😀?$").is_match("😀"));
+        assert!(!rust(r"^😀?$").is_match(""));
+        assert!(rust(r"^\ud83c[\udffb-\udfff]*$").is_match("\u{1F3FC}"));
+        assert!(!rust(r"^\ud83c[\udffb-\udfff]*$").is_match(""));
+        assert!(!rust(r"\ud83c[\udffb-\udfff]{2}").is_match("\u{1F3FC}\u{1F3FC}"));
+        // A group around the pair is quantified as a whole, and with `u` the
+        // pair is one code point the quantifier applies to.
+        assert!(rust(r"^(?:😀)?$").is_match(""));
+        assert!(rust_with(r"^😀?$", "u").is_match(""));
     }
 
     /// ohm-js compiles `\p{Cs}` for every General_Category value when it

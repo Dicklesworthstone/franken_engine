@@ -3521,6 +3521,9 @@ pub enum BuiltinFunctionKind {
     /// `URL.prototype.toString` and `toJSON` (bd-9vouw.157), named by the
     /// specifier: the receiver URL's href. Append only.
     UrlMethod,
+    /// ES2024 `Promise.withResolvers()`: `{ promise, resolve, reject }`
+    /// for a new promise of `this` (bd-9vouw.160). Append only.
+    PromiseWithResolvers,
 }
 
 impl BuiltinFunctionKind {
@@ -4798,6 +4801,10 @@ impl BuiltinFunction {
         }
     }
 
+    fn promise_with_resolvers() -> Self {
+        Self::new_kind(BuiltinFunctionKind::PromiseWithResolvers)
+    }
+
     fn promise_capability_executor() -> Self {
         Self::new_kind(BuiltinFunctionKind::PromiseCapabilityExecutor)
     }
@@ -5152,6 +5159,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::PromiseAll => "all",
             BuiltinFunctionKind::PromiseRace => "race",
             BuiltinFunctionKind::PromiseAllSettled => "allSettled",
+            BuiltinFunctionKind::PromiseWithResolvers => "withResolvers",
             BuiltinFunctionKind::PromiseAny => "any",
             BuiltinFunctionKind::PromiseThen => "then",
             BuiltinFunctionKind::PromiseCatch => "catch",
@@ -5507,7 +5515,8 @@ impl BuiltinFunction {
             | K::PromiseAny
             | K::PromiseRace
             | K::PromiseReject
-            | K::PromiseResolve => "Promise",
+            | K::PromiseResolve
+            | K::PromiseWithResolvers => "Promise",
             K::PromiseThen | K::PromiseCatch | K::PromiseFinally => "Promise.prototype",
             K::TypedArrayCopyWithin
             | K::TypedArrayEntries
@@ -35945,6 +35954,10 @@ impl InterpreterCore {
                 "any",
                 Value::BuiltinFunction(BuiltinFunction::promise_any()),
             ),
+            (
+                "withResolvers",
+                Value::BuiltinFunction(BuiltinFunction::promise_with_resolvers()),
+            ),
         ])?;
         self.mark_builtin_members_non_enumerable(properties)?;
         self.mark_materialized_constructor_name_and_length(properties)?;
@@ -38325,6 +38338,7 @@ impl InterpreterCore {
             | BuiltinFunctionKind::PromiseRace
             | BuiltinFunctionKind::PromiseAllSettled
             | BuiltinFunctionKind::PromiseAny
+            | BuiltinFunctionKind::PromiseWithResolvers
             | BuiltinFunctionKind::PromiseConstructor
             | BuiltinFunctionKind::DateConstructor
             | BuiltinFunctionKind::DateNow
@@ -42908,6 +42922,27 @@ impl InterpreterCore {
             ),
             BuiltinFunctionKind::PromiseAny => {
                 self.promise_combinator_for_receiver(module, "promise:any", args, receiver.as_ref())
+            }
+            // ES2024 27.2.4.8: NewPromiseCapability(this) as an object. A
+            // subclass `this` builds its own promise (bd-9vouw.137); the
+            // resolving functions settle that promise.
+            BuiltinFunctionKind::PromiseWithResolvers => {
+                let promise = match self.promise_static_subclass(receiver.as_ref())? {
+                    Some(constructor) => {
+                        self.new_promise_capability(module, constructor, Vec::new())?
+                    }
+                    None => self.create_promise()?,
+                };
+                let resolve =
+                    self.make_promise_capability(BuiltinFunctionKind::PromiseResolve, promise);
+                let reject =
+                    self.make_promise_capability(BuiltinFunctionKind::PromiseReject, promise);
+                let result = self.alloc_object_with_properties(&[
+                    ("promise", Value::Promise(promise.0)),
+                    ("resolve", resolve),
+                    ("reject", reject),
+                ])?;
+                Ok(Value::Object(result))
             }
             BuiltinFunctionKind::PromiseThen => self.dispatch_promise_reaction_builtin(
                 module,

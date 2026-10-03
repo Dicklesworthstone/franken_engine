@@ -8950,6 +8950,9 @@ struct GeneratorExecutionSnapshot {
     /// The register file's length when the activation was parked, which
     /// `install_generator_execution` restores.
     register_len: usize,
+    /// The label file's length then; the two files need not be equally long
+    /// (an isolated wrapper replaces the value file and keeps the labels).
+    register_label_len: usize,
     delegation: Option<GeneratorDelegation>,
     active_inline_callback_context_label: Option<Label>,
     call_stack: Vec<CallFrame>,
@@ -8981,19 +8984,19 @@ impl GeneratorExecutionSnapshot {
     /// deterministic lane, 8,192 on the throughput lane) that were almost all
     /// cleared (bd-9vouw.167). `register_len` keeps the length to restore.
     fn trim_cleared_register_tail(&mut self) {
-        if self.registers.len() != self.register_labels.len() {
-            return;
-        }
-        let live = (0..self.registers.len())
+        let len = self.registers.len().max(self.register_labels.len());
+        let live = (0..len)
             .rev()
             .find(|&index| {
-                !matches!(self.registers[index], Value::Undefined)
-                    || !matches!(self.register_labels[index], Label::Public)
+                !matches!(self.registers.get(index), Some(Value::Undefined) | None)
+                    || !matches!(self.register_labels.get(index), Some(Label::Public) | None)
             })
             .map_or(0, |index| index + 1);
         if live < self.registers.len() {
             self.registers.truncate(live);
             self.registers.shrink_to_fit();
+        }
+        if live < self.register_labels.len() {
             self.register_labels.truncate(live);
             self.register_labels.shrink_to_fit();
         }
@@ -46640,6 +46643,7 @@ impl InterpreterCore {
             registers,
             register_labels,
             register_len: max_registers,
+            register_label_len: max_registers,
             delegation: None,
             active_inline_callback_context_label: invocation.inline_context_label,
             call_stack: vec![CallFrame {
@@ -46699,11 +46703,12 @@ impl InterpreterCore {
     fn take_generator_execution(&mut self) -> GeneratorExecutionSnapshot {
         self.before_seed_surface_write();
         let registers = std::mem::take(&mut self.registers.value);
-        let register_len = registers.len();
+        let register_labels = std::mem::take(&mut self.register_labels);
         let mut execution = GeneratorExecutionSnapshot {
+            register_len: registers.len(),
+            register_label_len: register_labels.len(),
             registers,
-            register_labels: std::mem::take(&mut self.register_labels),
-            register_len,
+            register_labels,
             delegation: self.generator_delegation.take(),
             active_inline_callback_context_label: self.active_inline_callback_context_label.take(),
             call_stack: self.call_stack.take(&mut self.closures.cold_cells),
@@ -47117,8 +47122,8 @@ impl InterpreterCore {
         if registers.len() < execution.register_len {
             registers.resize(execution.register_len, Value::Undefined);
         }
-        if register_labels.len() < execution.register_len {
-            register_labels.resize(execution.register_len, Label::Public);
+        if register_labels.len() < execution.register_label_len {
+            register_labels.resize(execution.register_label_len, Label::Public);
         }
         self.registers.value = registers;
         self.register_labels = register_labels;

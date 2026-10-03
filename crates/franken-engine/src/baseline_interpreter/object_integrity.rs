@@ -7,6 +7,14 @@
 
 use super::*;
 
+/// Annex B.2.2.2-5 (bd-9vouw.172).
+pub(super) const LEGACY_ACCESSOR_METHODS: [&str; 4] = [
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+];
+
 #[derive(Clone, Copy)]
 pub(super) enum ObjectIntegrityOperation {
     GetPrototype,
@@ -16,6 +24,87 @@ pub(super) enum ObjectIntegrityOperation {
 }
 
 impl InterpreterCore {
+    /// Annex B.2.2.2-5: `o.__defineGetter__(P, getter)` (and the setter
+    /// form) is `Object.defineProperty(o, P, { get: getter, enumerable:
+    /// true, configurable: true })` after a callable check;
+    /// `o.__lookupGetter__(P)` (and the setter form) returns the getter of the
+    /// first own property named P up the prototype chain, undefined for a
+    /// data property or none. `this` is ToObject'd: a primitive acts on a
+    /// fresh wrapper, undefined and null throw.
+    pub(super) fn legacy_accessor_method(
+        &mut self,
+        module: &Ir3Module,
+        method: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(receiver, Value::Undefined | Value::Null) {
+            return Err(Self::integrity_type_error(
+                "object-coercible this",
+                receiver.type_name(),
+            ));
+        }
+        let object_id = match self.own_property_holder(Some(module), &receiver, true)? {
+            Some(id) => id,
+            None => self.alloc_primitive_wrapper(receiver)?,
+        };
+        let key_value = self.arg_or_undefined(args, 0)?;
+        let key_value = self.property_key_primitive(module, key_value)?;
+        let key = self.executable_property_key_from_value(&key_value);
+        let getter = method.ends_with("Getter__");
+        if method.starts_with("__define") {
+            let function = self.arg_or_undefined(args, 1)?;
+            if !function.is_callable() {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("callable argument for Object.prototype.{method}"),
+                    got: function.type_name().to_string(),
+                });
+            }
+            let fields = PropertyDescriptorFields {
+                value: None,
+                writable: None,
+                get: getter.then(|| function.clone()),
+                set: (!getter).then_some(function),
+                enumerable: Some(true),
+                configurable: Some(true),
+            };
+            if !self.proxy_aware_define_own_property(Some(module), object_id, key, fields, 0)? {
+                return Err(InterpreterError::TypeError {
+                    expected: DEFINE_PROPERTY_REJECTED.to_string(),
+                    got: format!("Object.prototype.{method} on a non-configurable property"),
+                });
+            }
+            let label = self.join_arg_range_with_object_mutation_label(args)?;
+            self.join_object_mutation_label(object_id, &label)?;
+            return Ok(Value::Undefined);
+        }
+        let field = RuntimePropertyKey::String((if getter { "get" } else { "set" }).into());
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                break;
+            }
+            self.join_pending_hostcall_stream_label(id)?;
+            let descriptor = self.proxy_aware_own_property_descriptor(Some(module), id, &key, 0)?;
+            if let Value::Object(descriptor_id) = descriptor {
+                return self.proxy_aware_get_runtime_property(
+                    Some(module),
+                    descriptor_id,
+                    &field,
+                    descriptor,
+                    0,
+                );
+            }
+            current = match self.object_get_prototype(Some(module), id, 0)? {
+                Value::Object(parent) => Some(parent),
+                _ => None,
+            };
+            depth += 1;
+        }
+        Ok(Value::Undefined)
+    }
+
     /// Use the same private property object as ordinary builtin member access.
     /// A callable value is not a primitive, but accepting it must not invent
     /// a second object whose prototype/extensibility diverges from its storage.

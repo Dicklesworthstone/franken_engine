@@ -45442,11 +45442,13 @@ impl InterpreterCore {
         } else {
             let prototype = self.constructor_prototype_for_value(module, &new_target_value)?;
             let builtin_parent = self.builtin_subclass_ancestor_name(prototype)?;
-            let object_id = if builtin_parent.as_deref() == Some("Array") {
-                self.alloc_array_with_prototype(Some(prototype))?
-            } else {
-                self.alloc_object_with_prototype(Some(prototype))?
-            };
+            // ES2020 9.1.13 OrdinaryCreateFromConstructor: `new F()` makes an
+            // ordinary object even when F.prototype inherits from
+            // Array.prototype; only an Array constructor call (a class's
+            // super()) makes an Array exotic object. Treating it as an array
+            // made `this[this.length] = x; this.length++` count twice
+            // (cytoscape's collections, bd-9vouw.152).
+            let object_id = self.alloc_object_with_prototype(Some(prototype))?;
             self.mutate_heap(|heap| {
                 if let Some(object) = heap.get_mut(object_id.0 as usize) {
                     object.constructor_function = Some(function_index);
@@ -51413,11 +51415,9 @@ impl InterpreterCore {
                             let prototype =
                                 self.constructor_prototype_for_value(module, &callee_val)?;
                             let builtin_parent = self.builtin_subclass_ancestor_name(prototype)?;
-                            let this_id = if builtin_parent.as_deref() == Some("Array") {
-                                self.alloc_array_with_prototype(Some(prototype))?
-                            } else {
-                                self.alloc_object_with_prototype(Some(prototype))?
-                            };
+                            // An ordinary object, never an Array exotic
+                            // (OrdinaryCreateFromConstructor, bd-9vouw.152).
+                            let this_id = self.alloc_object_with_prototype(Some(prototype))?;
                             let this_index = this_id.0 as usize;
                             self.mutate_heap(|heap| {
                                 if let Some(this_obj) = heap.get_mut(this_index) {

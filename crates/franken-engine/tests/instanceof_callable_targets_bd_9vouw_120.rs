@@ -2,8 +2,13 @@
 //!
 //! InstanceofOperator (ES2020 12.10.4) requires a callable target and
 //! OrdinaryHasInstance reads its `prototype` through [[Get]]; the engine
-//! required a constructor, so `gen() instanceof genFn` threw a TypeError.
+//! required a constructor, so `gen() instanceof genFn` threw a TypeError,
+//! and its chain walk stopped at a generator or iterator left operand.
 //! Expected strings are Node v22.2.0's output for the same programs.
+//!
+//! No-claim: every generator function here shares one `prototype` object
+//! (%GeneratorPrototype%; Node gives each its own), so `g() instanceof h`
+//! for two generator functions is true here and false in Node.
 
 use frankenengine_engine::HybridRouter;
 
@@ -23,6 +28,19 @@ fn instanceof_generator_functions() {
          [it instanceof g, g() instanceof g, ({}) instanceof g, Object.create(g.prototype) instanceof g, ag() instanceof ag, it instanceof ag,\n\
           attempt(() => (function* () {})() instanceof Object)].join(' ');";
     assert_eq!(eval(source), "true true false true true false true");
+}
+
+/// Generator, async generator, iterator and promise values walk their prototype chains to Object.prototype.
+#[test]
+fn instanceof_exotic_left_operands() {
+    let source = "async function* ag() {}\n\
+         [(function* () {})() instanceof Object, ag() instanceof Object, [].keys() instanceof Object, new Map().entries() instanceof Object,\n\
+          new Set().values() instanceof Object, 'ab'[Symbol.iterator]() instanceof Object, Promise.resolve(1) instanceof Object,\n\
+          [].keys() instanceof Function, (function* () {})() instanceof Function].join(' ');";
+    assert_eq!(
+        eval(source),
+        "true true true true true true true false false"
+    );
 }
 
 /// Arrow functions, async functions and methods have no prototype: an object operand is a TypeError, a primitive is false.

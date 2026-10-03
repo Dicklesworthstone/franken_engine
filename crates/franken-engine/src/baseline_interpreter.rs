@@ -58081,12 +58081,24 @@ impl InterpreterCore {
                 callable if callable.is_callable() => {
                     self.function_value_prototype(module, callable)?
                 }
-                Value::Promise(_) => match match module {
-                    Some(module) => self.promise_prototype_override(module, &current)?,
+                // A promise (a subclass's through its prototype, bd-9vouw.137),
+                // generator, async generator or iterator continues at its
+                // intrinsic prototype: `gen() instanceof genFn`,
+                // `it instanceof Object` (bd-9vouw.120).
+                exotic @ (Value::Promise(_)
+                | Value::Generator(_)
+                | Value::AsyncGeneratorObject(_)
+                | Value::Iterator(_)) => match match module {
+                    Some(module) => self.promise_prototype_override(module, exotic)?,
                     None => None,
                 } {
                     Some(prototype) => Value::Object(prototype),
-                    None => Value::Object(self.ensure_builtin_prototype("Promise")?),
+                    None => {
+                        let name = self
+                            .exotic_intrinsic_prototype_name(exotic)
+                            .expect("an exotic value has an intrinsic prototype");
+                        Value::Object(self.ensure_builtin_prototype(name)?)
+                    }
                 },
                 _ => return Ok(false),
             };

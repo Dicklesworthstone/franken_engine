@@ -44031,8 +44031,12 @@ impl InterpreterCore {
                 got: format!("async#{async_function_id} not found"),
             })?;
         let reg_start = self.register_base;
-        let reg_end =
+        let window_end =
             (self.register_base + self.config.max_registers as usize).min(self.registers.len());
+        // Only the window's live prefix is saved; its tail is in the state the
+        // frame's entry reset left it, which resume restores (bd-9vouw.167). A
+        // full V8-lane window is 4,096 registers, about 268 KB per pending call.
+        let reg_end = self.register_window_live_end(reg_start, window_end);
         let saved_label_bytes = self
             .register_labels
             .get(reg_start..reg_end)
@@ -44228,6 +44232,13 @@ impl InterpreterCore {
         };
 
         let reg_end = saved_register_base.saturating_add(saved_register_count);
+        // The saved prefix is the window's live part; the rest of the window
+        // goes back to its cleared state (bd-9vouw.167).
+        let window_end = saved_register_base
+            .saturating_add(self.config.max_registers as usize)
+            .min(self.registers.len())
+            .min(self.register_labels.len())
+            .max(reg_end);
         if reg_end > self.registers.len() {
             return Err(InterpreterError::TypeError {
                 expected: "sufficient register capacity".to_string(),
@@ -44248,7 +44259,7 @@ impl InterpreterCore {
         // are the register component delta. Measuring the whole file walked
         // every live frame twice per await.
         let previous_register_bytes =
-            self.register_range_memory_bytes(saved_register_base..reg_end);
+            self.register_range_memory_bytes(saved_register_base..window_end);
         let (saved_registers, saved_register_labels) = {
             let async_function = self
                 .async_functions
@@ -44274,6 +44285,7 @@ impl InterpreterCore {
             for (i, value) in saved_registers.into_iter().enumerate() {
                 r[reg_start + i] = value;
             }
+            r[reg_end..window_end].fill(Value::Undefined);
         });
         for (slot, label) in self.register_labels[reg_start..reg_end]
             .iter_mut()
@@ -44281,6 +44293,7 @@ impl InterpreterCore {
         {
             *slot = label;
         }
+        self.register_labels[reg_end..window_end].fill(Label::Public);
 
         // Resume execution - now we can safely get the mutable reference
         let async_function = self
@@ -44292,7 +44305,7 @@ impl InterpreterCore {
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
         let next_async_bytes = Self::estimate_async_function_bytes(async_function);
-        let next_register_bytes = self.register_range_memory_bytes(reg_start..reg_end);
+        let next_register_bytes = self.register_range_memory_bytes(reg_start..window_end);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_register_bytes)
@@ -92656,6 +92669,21 @@ impl InterpreterCore {
         self.clear_current_register_frame_width(self.config.max_registers as usize);
     }
 
+    /// End of the live prefix of the register window `start..end`: every
+    /// register past it is cleared (undefined with a Public label), the state
+    /// `clear_current_register_frame_width` leaves (bd-9vouw.167). A register
+    /// without a parallel label counts as live, so a short label file still
+    /// fails the caller's own range checks.
+    fn register_window_live_end(&self, start: usize, end: usize) -> usize {
+        (start..end)
+            .rev()
+            .find(|&index| {
+                !matches!(self.registers.get(index), Some(Value::Undefined))
+                    || !matches!(self.register_labels.get(index), Some(Label::Public))
+            })
+            .map_or(start, |index| index + 1)
+    }
+
     fn clear_current_register_frame_width(&mut self, clear_width: usize) {
         let frame_start = self.register_base;
         let frame_end = frame_start + clear_width;
@@ -109802,6 +109830,84 @@ mod async_runtime_tests_current {
         );
         assert!(core.async_functions[0].saved_registers.is_empty());
         assert!(core.async_functions[0].saved_register_labels.is_empty());
+    }
+
+    /// A pending await saves the live prefix of its register window, through
+    /// its last live register, not the whole `max_registers` window; resume
+    /// puts the prefix back and clears the rest of the window, as the frame
+    /// had it (bd-9vouw.167).
+    #[test]
+    fn pending_await_saves_the_live_register_prefix_bd_9vouw_167() {
+        let mut instructions = vec![
+            Ir3Instruction::Call {
+                callee: 3,
+                args: RegRange {
+                    start: 10,
+                    count: 2,
+                },
+                dst: 1,
+            },
+            Ir3Instruction::Halt,
+        ];
+        instructions.extend([
+            Ir3Instruction::Move { dst: 40, src: 1 },
+            Ir3Instruction::AwaitValue { promise_reg: 0 },
+            Ir3Instruction::AsyncReturn { value_reg: 40 },
+        ]);
+        let module = test_module_with_functions(
+            instructions,
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 64,
+                name: Some("pending_await_live_prefix".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        let mut core = test_interpreter();
+        install_async_label_test_closure(&mut core);
+        let awaited = core.promise_store.create();
+        core.write_reg_with_label(10, Value::Promise(awaited.0), Label::Public)
+            .expect("awaited handle should be writable");
+        core.write_reg_with_label(11, Value::str("kept-local"), Label::Internal)
+            .expect("local should be writable");
+
+        core.execute(&module).expect("pending await should suspend");
+        let async_result = async_label_test_result_handle(&core);
+        let suspended = &core.async_functions[0];
+        // r40 is the last live register: the prefix is r0..=r40.
+        assert_eq!(suspended.saved_registers.len(), 41);
+        assert_eq!(suspended.saved_register_labels.len(), 41);
+        assert!(41 < core.config.max_registers as usize);
+        assert_eq!(suspended.saved_registers[40], Value::str("kept-local"));
+        assert_eq!(suspended.saved_register_labels[40], Label::Internal);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "estimate after suspension"
+        );
+
+        core.fulfill_promise(awaited, crate::object_model::JsValue::Int(7), Label::Public)
+            .expect("awaited Promise should be fulfillable");
+        core.drain_microtasks(Some(&module))
+            .expect("pending fulfillment should resume");
+        let record = core
+            .promise_store
+            .get(async_result)
+            .expect("result Promise should exist");
+        assert_eq!(
+            record.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                "kept-local".into()
+            ))
+        );
+        assert!(core.async_functions[0].saved_registers.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "estimate after resumption"
+        );
     }
 
     #[test]

@@ -503,6 +503,7 @@ impl GcMarker {
         let GeneratorExecutionSnapshot {
             registers,
             register_labels: _,
+            register_len: _,
             delegation,
             active_inline_callback_context_label: _,
             call_stack,

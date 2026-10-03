@@ -164,6 +164,16 @@ fn exotic_integrity_of_proxies() {
     );
 }
 
+/// Freezing a Date, Map or Set freezes its properties, not its internal slots: setTime, set and add still work.
+#[test]
+fn exotic_frozen_builtins_keep_internal_state() {
+    let source = "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\n\
+         var d = Object.freeze(new Date(0)); var m = Object.freeze(new Map()); var s = Object.seal(new Set()); var r = Object.freeze(/a/g);\n\
+         [attempt(() => d.setTime(5)), d.getTime(), attempt(() => d.setUTCFullYear(2000)), Object.isFrozen(d), attempt(() => m.set(1, 2).size), m.get(1),\n\
+          attempt(() => s.add('x').size), attempt(() => r.test('a')), r.lastIndex].join(' ');";
+    assert_eq!(eval(source), "5 5 946684800005 true 1 2 1 TypeError 0");
+}
+
 /// Functions, classes and arrows: Object.freeze/seal/preventExtensions take effect (they were no-ops or threw).
 #[test]
 fn exotic_integrity_of_functions() {

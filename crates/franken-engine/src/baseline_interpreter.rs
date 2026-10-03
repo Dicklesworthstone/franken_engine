@@ -54628,12 +54628,17 @@ impl InterpreterCore {
                     })?
             }
             // So do a promise's, generator's or iterator's; its inherited
-            // ones come from its intrinsic prototype (bd-9vouw.149).
+            // ones come from its intrinsic prototype (bd-9vouw.149), or for
+            // a promise a Promise subclass built, that class's (bd-9vouw.137).
             ref exotic if Self::has_exotic_backing_object(exotic) && module.is_some() => {
                 let module = module.expect("checked above");
-                if let Some(name) = self.exotic_intrinsic_prototype_name(exotic) {
-                    continue_at = Some(self.ensure_builtin_prototype(name)?);
-                }
+                continue_at = match self.promise_prototype_override(module, exotic)? {
+                    Some(prototype) => Some(prototype),
+                    None => match self.exotic_intrinsic_prototype_name(exotic) {
+                        Some(name) => Some(self.ensure_builtin_prototype(name)?),
+                        None => None,
+                    },
+                };
                 self.ensure_function_own_property_object(module, exotic)?
                     .ok_or_else(|| InterpreterError::TypeError {
                         expected: "object with an own-property object".to_string(),

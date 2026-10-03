@@ -62357,11 +62357,14 @@ impl InterpreterCore {
                 0,
             );
         }
-        // Unallocated intrinsic prototypes hold no program-added members, so
-        // reading through Object.prototype then is the same answer.
+        // The intrinsic prototype is materialized for the read: it holds the
+        // built-in members, such as an array or Map iterator's `next`, which
+        // Object.prototype does not (the Set methods call `keys().next`
+        // through [[Get]], bd-9vouw.161).
         let prototype = self
             .exotic_intrinsic_prototype_name(value)
             .unwrap_or("Object");
+        self.ensure_builtin_prototype(prototype)?;
         Ok(self
             .primitive_prototype_get(module, prototype, key, value.clone())?
             .0)

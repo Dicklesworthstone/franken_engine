@@ -996,6 +996,30 @@ impl InterpreterCore {
             .saturating_sub(released_label_bytes);
         reclaimed_bytes = reclaimed_bytes.saturating_add(released_label_bytes);
 
+        // The state of reclaimed URL and URLSearchParams objects can never be
+        // read again (bd-9vouw.163): drop it with its charge.
+        let mut released_url_bytes = 0u64;
+        self.url_objects.retain(|id, state| {
+            let live = !heap.is_reclaimed(id.0 as usize);
+            if !live {
+                released_url_bytes =
+                    released_url_bytes.saturating_add(Self::estimate_url_state_bytes(state));
+            }
+            live
+        });
+        self.url_search_params.retain(|id, state| {
+            let live = !heap.is_reclaimed(id.0 as usize);
+            if !live {
+                released_url_bytes = released_url_bytes
+                    .saturating_add(Self::estimate_url_search_params_state_bytes(state));
+            }
+            live
+        });
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(released_url_bytes);
+        reclaimed_bytes = reclaimed_bytes.saturating_add(released_url_bytes);
+
         // The write-barrier remembered set records objects written since the
         // last collection. A full collection leaves no younger generation, so
         // it restarts empty, as its contract states; nothing else clears it.
@@ -1358,6 +1382,21 @@ impl InterpreterCore {
                     }
                 }
             }
+            // A reachable URL keeps its searchParams object, and a reachable
+            // URLSearchParams the URL it updates (bd-9vouw.163). Their state
+            // holds no other heap reference.
+            for (url, state) in &self.url_objects {
+                if marker.is_marked(url.0) {
+                    marker.object(state.search_params);
+                }
+            }
+            for (params, state) in &self.url_search_params {
+                if marker.is_marked(params.0)
+                    && let Some(owner) = state.owner_url
+                {
+                    marker.object(owner);
+                }
+            }
             if marker.stack.len() > before {
                 added = true;
                 self.gc_drain(marker);
@@ -1515,8 +1554,9 @@ impl InterpreterCore {
             completed_child_processes,
             child_process_streams,
             child_process_handles,
-            url_objects,
-            url_search_params,
+            // Weak: traced in gc_mark_ephemerons, purged after the sweep.
+            url_objects: _,
+            url_search_params: _,
             cluster_facades,
             crypto_objects,
             stream_pipelines,
@@ -1601,7 +1641,7 @@ impl InterpreterCore {
 
         // Host I/O state is not traced yet: refuse to collect while any of it
         // is live.
-        let host_state: [(&'static str, bool); 30] = [
+        let host_state: [(&'static str, bool); 28] = [
             (
                 "pending_child_process_tasks",
                 pending_child_process_tasks.is_empty(),
@@ -1612,8 +1652,6 @@ impl InterpreterCore {
             ),
             ("child_process_streams", child_process_streams.is_empty()),
             ("child_process_handles", child_process_handles.is_empty()),
-            ("url_objects", url_objects.is_empty()),
-            ("url_search_params", url_search_params.is_empty()),
             ("cluster_facades", cluster_facades.is_empty()),
             ("crypto_objects", crypto_objects.is_empty()),
             ("stream_pipelines", stream_pipelines.is_empty()),

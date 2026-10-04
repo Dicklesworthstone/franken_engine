@@ -22,9 +22,11 @@ fn policy_theorem_engine_creation_and_configuration() {
     assert!(engine.policy_rules.is_empty());
     assert!(engine.capability_hierarchy.is_empty());
     assert!(engine.theorems.is_empty());
-    assert_eq!(engine.smt_context.solver_backend, SmtSolver::Internal);
+    // Since 7ef7aec53 the default context discharges obligations with the
+    // external Z3 solver over the full logic.
+    assert_eq!(engine.smt_context.solver_backend, SmtSolver::Z3);
     assert_eq!(engine.smt_context.timeout_seconds, 30);
-    assert_eq!(engine.smt_context.logic, SmtLogic::QF_UF);
+    assert_eq!(engine.smt_context.logic, SmtLogic::ALL);
 
     // Configure security lattice
     engine.add_security_classification("public_data".to_string(), SecurityLevel::Public);

@@ -156258,32 +156258,30 @@ mod class_feature_bd_bg9l1_16_tests {
         }
     }
 
+    /// `super.method()` calls the parent's method (Node: 42). This test once
+    /// pinned the refusal from before super property lowering existed.
     #[test]
-    fn super_method_fails_closed_until_lowered() {
-        let err = eval_class_source(concat!(
+    fn super_method_calls_the_parent_method() {
+        let value = eval_class_source(concat!(
             "class Parent { value(){ return 40; } }\n",
             "class Child extends Parent { value(){ return super.value() + 2; } }\n",
             "let child = new Child(); child.value();\n",
         ))
-        .expect_err("super.method() source must fail closed until super lowering is implemented");
-        assert!(
-            err.contains("super expressions are not supported") || err.contains("super"),
-            "super.method() rejection should name the unsupported feature, got: {err}"
-        );
+        .expect("super.method() calls the parent's method");
+        assert_eq!(value, "42");
     }
 
+    /// A static method is a property of the constructor (Node: "static
+    /// called"). This test once pinned the refusal from before constructor
+    /// properties existed.
     #[test]
-    fn static_method_on_constructor_fails_closed_on_function_receiver_property_access() {
-        let err = eval_class_source(concat!(
+    fn static_method_on_constructor_is_callable() {
+        let value = eval_class_source(concat!(
             "class TestClass { static staticMethod(){ return \"static called\"; } }\n",
             "TestClass.staticMethod();\n",
         ))
-        .expect_err("static method dispatch should fail closed until constructor properties work");
-        assert!(
-            err.contains("expected object, got function")
-                || (err.contains("type error") && err.contains("function")),
-            "static method dispatch must fail closed on constructor-function property access, got: {err}"
-        );
+        .expect("a static method is callable on its class");
+        assert_eq!(value, "static called");
     }
 
     #[test]

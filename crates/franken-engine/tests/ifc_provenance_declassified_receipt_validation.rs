@@ -56,6 +56,16 @@ fn receipt(
     }
 }
 
+/// A pre-typed generic row. The store accepts a generic write to the IFC
+/// provenance store only when it is explicitly marked as a legacy
+/// compatibility row (`typed_authority_mode = explicit_legacy_compat_v1`).
+fn legacy_compat_metadata() -> BTreeMap<String, String> {
+    BTreeMap::from([(
+        "typed_authority_mode".to_string(),
+        "explicit_legacy_compat_v1".to_string(),
+    )])
+}
+
 fn put_raw_flow_event(
     idx: &mut IfcProvenanceIndex<InMemoryStorageAdapter>,
     event: &FlowEventRecord,
@@ -66,7 +76,7 @@ fn put_raw_flow_event(
             StoreKind::IfcProvenance,
             format!("flow_event::{}", event.event_id),
             serde_json::to_vec(event).expect("event json"),
-            BTreeMap::new(),
+            legacy_compat_metadata(),
             ctx,
         )
         .expect("raw event insert");
@@ -83,10 +93,23 @@ fn put_raw_receipt_bytes(
             StoreKind::IfcProvenance,
             format!("declass_receipt::{receipt_id}"),
             bytes.to_vec(),
-            BTreeMap::new(),
+            legacy_compat_metadata(),
             ctx,
         )
         .expect("raw receipt insert");
+}
+
+/// Primary reads refuse to interpret a legacy generic row: the error names
+/// the record type and the row's key.
+fn assert_legacy_row_rejected(err: &ProvenanceError, record_type: &str, key: &str) {
+    assert_eq!(error_code(err), "PROV_STORAGE_ERROR", "{err}");
+    let message = err.to_string();
+    assert!(
+        message.contains("legacy generic IFC provenance"),
+        "{message}"
+    );
+    assert!(message.contains(record_type), "{message}");
+    assert!(message.contains(key), "{message}");
 }
 
 #[test]
@@ -236,14 +259,10 @@ fn join_events_with_receipts_rejects_legacy_dangling_declassified_event() {
         &ctx,
     );
 
+    // The legacy row is never read as a flow event, so its dangling receipt
+    // reference cannot reach a join result.
     let err = idx.join_events_with_receipts("ext-a", &ctx).unwrap_err();
-
-    assert_eq!(error_code(&err), "PROV_MISSING_DECLASS_RECEIPT");
-    assert!(matches!(
-        err,
-        ProvenanceError::MissingDeclassificationReceipt { event_id, receipt_ref }
-            if event_id == "ev-legacy-dangling" && receipt_ref == "receipt-absent"
-    ));
+    assert_legacy_row_rejected(&err, "flow_event", "flow_event::ev-legacy-dangling");
 }
 
 #[test]
@@ -259,24 +278,13 @@ fn lineage_queries_reject_legacy_dangling_declassified_event() {
     let err = idx
         .source_to_sink_lineage("ext-a", &Label::Confidential, &ctx)
         .unwrap_err();
-
-    assert_eq!(error_code(&err), "PROV_MISSING_DECLASS_RECEIPT");
-    assert!(matches!(
-        err,
-        ProvenanceError::MissingDeclassificationReceipt { event_id, receipt_ref }
-            if event_id == "ev-lineage-dangling" && receipt_ref == "receipt-absent"
-    ));
+    assert_legacy_row_rejected(&err, "flow_event", "flow_event::ev-lineage-dangling");
 }
 
 #[test]
 fn join_events_with_receipts_rejects_corrupt_referenced_receipt_record() {
     let mut idx = make_index();
     let ctx = ctx();
-    put_raw_flow_event(
-        &mut idx,
-        &declassified_event("ev-corrupt-receipt", "receipt-corrupt"),
-        &ctx,
-    );
     put_raw_receipt_bytes(
         &mut idx,
         "receipt-corrupt",
@@ -284,8 +292,21 @@ fn join_events_with_receipts_rejects_corrupt_referenced_receipt_record() {
         &ctx,
     );
 
-    let err = idx.join_events_with_receipts("ext-a", &ctx).unwrap_err();
+    // A declassified event naming the corrupt receipt is refused.
+    let err = idx
+        .insert_flow_event(
+            &declassified_event("ev-corrupt-receipt", "receipt-corrupt"),
+            &ctx,
+        )
+        .unwrap_err();
+    assert_legacy_row_rejected(&err, "declass_receipt", "declass_receipt::receipt-corrupt");
+    assert!(
+        idx.get_flow_event("ev-corrupt-receipt", &ctx)
+            .unwrap()
+            .is_none()
+    );
 
-    assert_eq!(error_code(&err), "PROV_SERIALIZATION_ERROR");
-    assert!(matches!(err, ProvenanceError::SerializationError(_)));
+    // And the join does not skip over the corrupt row.
+    let err = idx.join_events_with_receipts("ext-a", &ctx).unwrap_err();
+    assert_legacy_row_rejected(&err, "declass_receipt", "declass_receipt::receipt-corrupt");
 }

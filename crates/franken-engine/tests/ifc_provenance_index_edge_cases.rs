@@ -516,6 +516,18 @@ fn declassified_events_appear_in_lineage() {
     let mut idx = make_index();
     let c = ctx();
 
+    // A declassified event is admitted only once its Allow receipt is stored.
+    idx.insert_declass_receipt(
+        &receipt(
+            "receipt-declass-ev",
+            "ext-a",
+            Label::Secret,
+            Label::Public,
+            DeclassificationDecision::Allow,
+        ),
+        &c,
+    )
+    .unwrap();
     idx.insert_flow_event(
         &{
             let mut ev = event(
@@ -532,11 +544,21 @@ fn declassified_events_appear_in_lineage() {
     )
     .unwrap();
 
+    // The event and its Allow receipt are each a Secret -> Public hop.
     let paths = idx
         .source_to_sink_lineage("ext-a", &Label::Secret, &c)
         .unwrap();
-    assert_eq!(paths.len(), 1);
+    assert_eq!(paths.len(), 2);
     assert_eq!(paths[0].hops[0].evidence_ref, "declass-ev");
+    assert_eq!(
+        paths[0].hops[0].evidence_type,
+        LineageEvidenceType::FlowEvent
+    );
+    assert_eq!(paths[1].hops[0].evidence_ref, "receipt-declass-ev");
+    assert_eq!(
+        paths[1].hops[0].evidence_type,
+        LineageEvidenceType::DeclassificationReceipt
+    );
 }
 
 // =========================================================================
@@ -846,12 +868,17 @@ fn join_with_missing_receipt_ref() {
         FlowDecision::Declassified,
     );
     ev.receipt_ref = Some("nonexistent-receipt".to_string());
-    idx.insert_flow_event(&ev, &c).unwrap();
+    // A declassified event naming a missing receipt is refused, so the join
+    // never sees a dangling reference.
+    let err = idx.insert_flow_event(&ev, &c).unwrap_err();
+    assert!(matches!(
+        err,
+        ProvenanceError::MissingDeclassificationReceipt { ref event_id, ref receipt_ref }
+            if event_id == "ev1" && receipt_ref == "nonexistent-receipt"
+    ));
 
     let joined = idx.join_events_with_receipts("ext-a", &c).unwrap();
-    assert_eq!(joined.len(), 1);
-    // Receipt not found → None.
-    assert!(joined[0].1.is_none());
+    assert!(joined.is_empty());
 }
 
 #[test]
@@ -917,16 +944,6 @@ fn join_isolates_extensions() {
     let mut idx = make_index();
     let c = ctx();
 
-    let mut ev = event(
-        "ev1",
-        "ext-a",
-        Label::Confidential,
-        Label::Public,
-        FlowDecision::Declassified,
-    );
-    ev.receipt_ref = Some("r1".to_string());
-    idx.insert_flow_event(&ev, &c).unwrap();
-
     // Receipt belongs to ext-b.
     idx.insert_declass_receipt(
         &receipt(
@@ -940,10 +957,37 @@ fn join_isolates_extensions() {
     )
     .unwrap();
 
-    // Joining for ext-a: receipt r1 exists globally but belongs to ext-b,
-    // so ext-a's query won't find it.
+    // An ext-a declassification cannot rest on ext-b's receipt.
+    let mut declassified = event(
+        "ev-declassified",
+        "ext-a",
+        Label::Confidential,
+        Label::Public,
+        FlowDecision::Declassified,
+    );
+    declassified.receipt_ref = Some("r1".to_string());
+    let err = idx.insert_flow_event(&declassified, &c).unwrap_err();
+    assert!(matches!(
+        err,
+        ProvenanceError::InvalidDeclassificationReceipt { ref reason, .. }
+            if reason.contains("extension_id")
+    ));
+
+    // An ordinary ext-a event that names r1 is stored, but joining for ext-a
+    // looks only at ext-a's receipts, so r1 (ext-b's) is not attached.
+    let mut ev = event(
+        "ev1",
+        "ext-a",
+        Label::Confidential,
+        Label::Public,
+        FlowDecision::Allowed,
+    );
+    ev.receipt_ref = Some("r1".to_string());
+    idx.insert_flow_event(&ev, &c).unwrap();
+
     let joined = idx.join_events_with_receipts("ext-a", &c).unwrap();
     assert_eq!(joined.len(), 1);
+    assert_eq!(joined[0].0.event_id, "ev1");
     assert!(joined[0].1.is_none());
 }
 
@@ -1063,6 +1107,18 @@ fn flow_event_fields_preserved() {
         receipt_ref: Some("receipt-xyz".to_string()),
         timestamp_ms: 987_654_321,
     };
+    // A declassified event is admitted only once its Allow receipt is stored.
+    idx.insert_declass_receipt(
+        &receipt(
+            "receipt-xyz",
+            "ext-fields",
+            Label::Confidential,
+            Label::Internal,
+            DeclassificationDecision::Allow,
+        ),
+        &c,
+    )
+    .unwrap();
     idx.insert_flow_event(&ev, &c).unwrap();
 
     let got = idx.get_flow_event("ev-field-test", &c).unwrap().unwrap();
@@ -1360,11 +1416,11 @@ fn drain_events_from_integration() {
 }
 
 // =========================================================================
-// 15. Overwrite semantics (InMemoryStorageAdapter doesn't reject duplicates)
+// 15. Duplicate ids: the index refuses a second record with the same id
 // =========================================================================
 
 #[test]
-fn duplicate_key_overwrites_silently() {
+fn duplicate_key_is_rejected_and_first_record_kept() {
     let mut idx = make_index();
     let c = ctx();
 
@@ -1384,12 +1440,17 @@ fn duplicate_key_overwrites_silently() {
         Label::Secret,
         FlowDecision::Blocked,
     );
-    idx.insert_flow_event(&ev2, &c).unwrap();
+    let err = idx.insert_flow_event(&ev2, &c).unwrap_err();
+    assert_eq!(error_code(&err), "PROV_DUPLICATE");
+    assert!(matches!(
+        err,
+        ProvenanceError::DuplicateRecord { ref key } if key == "same-id"
+    ));
 
-    // The second write overwrites the first.
+    // The first record is unchanged.
     let got = idx.get_flow_event("same-id", &c).unwrap().unwrap();
-    assert_eq!(got.source_label, Label::Internal);
-    assert_eq!(got.decision, FlowDecision::Blocked);
+    assert_eq!(got.source_label, Label::Public);
+    assert_eq!(got.decision, FlowDecision::Allowed);
 }
 
 // =========================================================================
@@ -2275,9 +2336,12 @@ fn timestamp_zero() {
 }
 
 #[test]
-fn timestamp_u64_max() {
+fn timestamp_at_typed_row_maximum() {
+    // Typed IFC rows store `timestamp_ms` as i64: the largest storable value
+    // is i64::MAX, and a larger one is refused rather than wrapped.
     let mut idx = make_index();
     let c = ctx();
+    let max = i64::MAX as u64;
 
     idx.insert_flow_event(
         &event_ts(
@@ -2286,16 +2350,34 @@ fn timestamp_u64_max() {
             Label::Public,
             Label::Internal,
             FlowDecision::Allowed,
-            u64::MAX,
+            max,
         ),
         &c,
     )
     .unwrap();
 
     let results = idx
-        .flow_events_by_time_range("ext-a", u64::MAX, u64::MAX, &c)
+        .flow_events_by_time_range("ext-a", max, u64::MAX, &c)
         .unwrap();
     assert_eq!(results.len(), 1);
+    assert_eq!(results[0].timestamp_ms, max);
+
+    let err = idx
+        .insert_flow_event(
+            &event_ts(
+                "ts-over",
+                "ext-a",
+                Label::Public,
+                Label::Internal,
+                FlowDecision::Allowed,
+                max + 1,
+            ),
+            &c,
+        )
+        .unwrap_err();
+    assert_eq!(error_code(&err), "PROV_STORAGE_ERROR");
+    assert!(err.to_string().contains("does not fit in i64"), "{err}");
+    assert!(idx.get_flow_event("ts-over", &c).unwrap().is_none());
 }
 
 // =========================================================================

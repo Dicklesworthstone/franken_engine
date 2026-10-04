@@ -1404,16 +1404,7 @@ fn enrichment_confinement_status_latest_epoch() {
 fn enrichment_join_events_with_matching_receipt() {
     let mut idx = make_index();
     let ctx = ctx();
-    let mut ev = flow_event(
-        "ev1",
-        "ext-a",
-        Label::Confidential,
-        Label::Public,
-        FlowDecision::Declassified,
-    );
-    ev.receipt_ref = Some("r1".to_string());
-    idx.insert_flow_event(&ev, &ctx).unwrap();
-
+    // A declassified event is admitted only once its receipt is stored.
     idx.insert_declass_receipt(
         &declass_receipt(
             "r1",
@@ -1425,6 +1416,15 @@ fn enrichment_join_events_with_matching_receipt() {
         &ctx,
     )
     .unwrap();
+    let mut ev = flow_event(
+        "ev1",
+        "ext-a",
+        Label::Confidential,
+        Label::Public,
+        FlowDecision::Declassified,
+    );
+    ev.receipt_ref = Some("r1".to_string());
+    idx.insert_flow_event(&ev, &ctx).unwrap();
 
     let joined = idx.join_events_with_receipts("ext-a", &ctx).unwrap();
     assert_eq!(joined.len(), 1);
@@ -1462,6 +1462,18 @@ fn enrichment_join_events_without_receipt() {
 fn enrichment_join_events_multiple() {
     let mut idx = make_index();
     let ctx = ctx();
+    // A declassified event is admitted only once its receipt is stored.
+    idx.insert_declass_receipt(
+        &declass_receipt(
+            "r1",
+            "ext-a",
+            Label::Confidential,
+            Label::Public,
+            DeclassificationDecision::Allow,
+        ),
+        &ctx,
+    )
+    .unwrap();
     let mut ev1 = flow_event(
         "ev1",
         "ext-a",
@@ -1480,18 +1492,6 @@ fn enrichment_join_events_multiple() {
         FlowDecision::Allowed,
     );
     idx.insert_flow_event(&ev2, &ctx).unwrap();
-
-    idx.insert_declass_receipt(
-        &declass_receipt(
-            "r1",
-            "ext-a",
-            Label::Confidential,
-            Label::Public,
-            DeclassificationDecision::Allow,
-        ),
-        &ctx,
-    )
-    .unwrap();
 
     let joined = idx.join_events_with_receipts("ext-a", &ctx).unwrap();
     assert_eq!(joined.len(), 2);
@@ -1830,8 +1830,20 @@ fn enrichment_query_results_sorted() {
         Label::Confidential,
         FlowDecision::Declassified,
     );
-    // Declassified flow events require a receipt_ref.
+    // Declassified flow events require a receipt_ref naming a stored Allow
+    // receipt with the same labels.
     ev_m.receipt_ref = Some("receipt-m".to_string());
+    idx.insert_declass_receipt(
+        &declass_receipt(
+            "receipt-m",
+            "ext-a",
+            Label::Internal,
+            Label::Confidential,
+            DeclassificationDecision::Allow,
+        ),
+        &ctx,
+    )
+    .unwrap();
     idx.insert_flow_event(&ev_m, &ctx).unwrap();
 
     let results = idx.flow_events_by_extension("ext-a", &ctx).unwrap();

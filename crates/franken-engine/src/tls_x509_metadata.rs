@@ -797,15 +797,25 @@ mod tests {
 
     #[test]
     fn depth_limit_is_enforced() {
-        // Build a deeply nested SEQUENCE structure. The depth counter
-        // increments on every constructed-type entry; we trip it at
-        // MAX_DER_DEPTH = 16 by stacking 18 SEQUENCE wrappers.
-        let mut buf: Vec<u8> = vec![0x00];
-        for _ in 0..(MAX_DER_DEPTH as usize + 2) {
-            buf.insert(0, 0x30);
-            buf.insert(1, 0x02);
+        // The depth counter caps constructed-type entries at MAX_DER_DEPTH.
+        let mut reader = Reader::new(&[]);
+        for _ in 0..MAX_DER_DEPTH {
+            reader.enter().expect("entries up to the cap are allowed");
         }
-        let err = parse_x509_metadata(&buf).unwrap_err();
-        assert!(matches!(err, DerError::DepthExceeded { .. }));
+        assert!(matches!(
+            reader.enter(),
+            Err(DerError::DepthExceeded { depth, cap }) if depth == MAX_DER_DEPTH + 1 && cap == MAX_DER_DEPTH
+        ));
+
+        // parse_x509_metadata descends the fixed Certificate structure with a
+        // reader per level, so a hostile nest of 18 well-formed SEQUENCEs is
+        // refused at the first field that is not what X.509 places there,
+        // not by recursing into it.
+        let mut buf: Vec<u8> = vec![0x30, 0x00];
+        for _ in 0..(MAX_DER_DEPTH as usize + 2) {
+            let len = u8::try_from(buf.len()).expect("short-form length");
+            buf.splice(0..0, [0x30, len]);
+        }
+        assert!(parse_x509_metadata(&buf).is_err());
     }
 }

@@ -1247,10 +1247,55 @@ pub trait FrankensqliteBackend {
 /// Required basename for the isolated fleet-authority database.
 pub const FLEET_TRUST_STATE_DATABASE_FILENAME: &str = "fleet_trust_state.db";
 
-/// Exact SQL text FrankenSQLite persists in `sqlite_schema` for the generated
-/// fleet-authority model. Keeping this representation explicit lets the
-/// authority boundary reject hidden collation, affinity, or constraint drift
-/// after FrankenSQLite has canonicalized identifier quoting.
+#[cfg(feature = "sibling-persistence")]
+/// Token form of a CREATE TABLE statement for the canonical-shape check:
+/// the trailing `;` dropped, whitespace collapsed and kept out of `(`, `)`
+/// and `,`, and simple identifiers unquoted. sqlmodel's DDL (the table's
+/// creator) quotes every identifier and breaks lines; neither changes the
+/// table, while a different column, type, constraint or collation still
+/// differs.
+fn create_table_sql_tokens(statement: &str) -> String {
+    let mut spaced = String::with_capacity(statement.len() + 32);
+    for ch in statement.trim().trim_end_matches(';').chars() {
+        if matches!(ch, '(' | ')' | ',') {
+            spaced.push(' ');
+            spaced.push(ch);
+            spaced.push(' ');
+        } else {
+            spaced.push(ch);
+        }
+    }
+    spaced
+        .split_whitespace()
+        .map(|token| {
+            match token
+                .strip_prefix('"')
+                .and_then(|inner| inner.strip_suffix('"'))
+            {
+                Some(name)
+                    if name
+                        .chars()
+                        .next()
+                        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                        && name
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_') =>
+                {
+                    name
+                }
+                _ => token,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The generated fleet-authority table's shape, compared with what
+/// FrankenSQLite persists in `sqlite_schema` token by token
+/// ([`create_table_sql_tokens`]: FrankenSQLite keeps the creator's text,
+/// which sqlmodel quotes and breaks across lines). Keeping this
+/// representation explicit lets the authority boundary reject hidden
+/// collation, affinity, or constraint drift.
 #[cfg(feature = "sibling-persistence")]
 const FLEET_TRUST_STATE_CANONICAL_CREATE_SQL: &str = "CREATE TABLE IF NOT EXISTS fleet_trust_state (state_id BIGINT NOT NULL, schema_version TEXT NOT NULL, fleet_authority_id TEXT NOT NULL, generation_decimal TEXT NOT NULL, authority_epoch_decimal TEXT NOT NULL, snapshot_hash TEXT NOT NULL, prior_snapshot_hash TEXT NOT NULL, authority_head_hash TEXT NOT NULL, anchor_advance_permit_hex TEXT NOT NULL, snapshot_json TEXT NOT NULL, PRIMARY KEY (state_id))";
 
@@ -1610,15 +1655,8 @@ impl FleetTrustStateFrankensqliteBackend {
             .ok_or_else(|| "fleet trust-state CREATE TABLE row disappeared".to_string())?
             .get_named::<String>("create_sql")
             .map_err(|error| format!("invalid fleet trust-state CREATE TABLE row: {error}"))?;
-        let normalize_create_sql = |statement: &str| {
-            statement
-                .trim_end_matches(';')
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-        if normalize_create_sql(&actual_create_sql)
-            != normalize_create_sql(FLEET_TRUST_STATE_CANONICAL_CREATE_SQL)
+        if create_table_sql_tokens(&actual_create_sql)
+            != create_table_sql_tokens(FLEET_TRUST_STATE_CANONICAL_CREATE_SQL)
         {
             return Err(format!(
                 "fleet trust-state table has noncanonical CREATE TABLE SQL: {actual_create_sql}"
@@ -5301,6 +5339,32 @@ mod tests {
         assert!(
             fleet_tables.is_empty(),
             "rejected shared database must not be mutated by fleet schema bootstrap"
+        );
+    }
+
+    /// sqlmodel's DDL for the authority table (quoted identifiers, line
+    /// breaks) has the canonical tokens; a collation or a dropped column does
+    /// not (bd-9vouw.3: the comparison collapsed whitespace only, so the
+    /// generated table itself was refused as noncanonical).
+    #[test]
+    #[cfg(feature = "sibling-persistence")]
+    fn create_table_sql_tokens_ignore_quoting_and_layout_only() {
+        let canonical = create_table_sql_tokens(FLEET_TRUST_STATE_CANONICAL_CREATE_SQL);
+        let generated = fleet_trust_state_create_table_sql();
+        assert!(generated.contains("\"fleet_trust_state\""));
+        assert_eq!(create_table_sql_tokens(&generated), canonical);
+        assert_eq!(create_table_sql_tokens(&format!("{generated};")), canonical);
+
+        let collated = generated.replace(
+            "\"generation_decimal\" TEXT NOT NULL",
+            "\"generation_decimal\" TEXT COLLATE RTRIM NOT NULL",
+        );
+        assert_ne!(create_table_sql_tokens(&collated), canonical);
+        let dropped = generated.replace("\"snapshot_json\" TEXT NOT NULL,", "");
+        assert_ne!(create_table_sql_tokens(&dropped), canonical);
+        assert_ne!(
+            create_table_sql_tokens(&generated.replace("BIGINT", "INTEGER")),
+            canonical
         );
     }
 

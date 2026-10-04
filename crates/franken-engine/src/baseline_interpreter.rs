@@ -92,6 +92,7 @@ mod legacy_regexp;
 mod number_locale;
 mod object_integrity;
 mod package_resolution;
+pub(crate) use package_resolution::is_node_core_module_specifier;
 mod primitive_conversion;
 mod prototype_getters;
 mod reflect_invocation;
@@ -8728,6 +8729,9 @@ struct ModuleRuntimeRecord {
     /// Export names that came from `export * from` rather than this module's
     /// own export declarations (which always win).
     star_exports: BTreeMap<JsString, StarExportOrigin>,
+    /// The module's static flow label ceiling once it is lowered: every value
+    /// it can produce is at most this label (bd-j8f7q import contracts).
+    flow_label_ceiling: Option<Label>,
     pending_import_bindings: BTreeMap<JsString, Vec<Weak<RefCell<ScopeBindingState>>>>,
     cjs_module_object: Option<ObjectId>,
     /// The executable program that owns every closure created while this
@@ -37416,6 +37420,7 @@ impl InterpreterCore {
                 namespace_object,
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
+                flow_label_ceiling: None,
                 pending_import_bindings: BTreeMap::new(),
                 cjs_module_object: None,
                 compiled_module,
@@ -37620,8 +37625,21 @@ impl InterpreterCore {
         module: &Ir3Module,
         resolved: &str,
         is_cjs: bool,
+        import_bound: Option<&Label>,
     ) -> Result<Value, InterpreterError> {
         if let Some(record) = self.module_state.modules.get(resolved) {
+            match &record.flow_label_ceiling {
+                Some(ceiling) => Self::check_import_flow_bound(resolved, ceiling, import_bound)?,
+                // Still being lowered (a cycle reached it first): its bound is
+                // unknown, so a bounded importer cannot rely on it.
+                None if import_bound.is_some() => {
+                    return Err(InterpreterError::ModuleLoweringFailed {
+                        specifier: resolved.to_string(),
+                        error: "module flow label ceiling is not known yet (bd-j8f7q)".to_string(),
+                    });
+                }
+                None => {}
+            }
             let namespace = record.namespace_object;
             let async_promise = match &record.status {
                 ModuleRuntimeStatus::AsyncEvaluating => {
@@ -37695,6 +37713,19 @@ impl InterpreterCore {
                 error: error.to_string(),
             }
         })?;
+        let ceiling = crate::lowering_pipeline::lowered_unit_flow_label_ceiling(
+            &lowering_output.ir2,
+            lowering_ctx.host_io_exception_provenance,
+        );
+        if let Err(refusal) = Self::check_import_flow_bound(resolved, &ceiling, import_bound) {
+            if let Some(record) = self.module_state.modules.get_mut(resolved) {
+                record.status = ModuleRuntimeStatus::Failed(refusal.to_string());
+            }
+            return Err(refusal);
+        }
+        if let Some(record) = self.module_state.modules.get_mut(resolved) {
+            record.flow_label_ceiling = Some(ceiling);
+        }
         self.retain_module_program(resolved, &lowering_output.ir3)?;
         let eval_result = if is_cjs {
             self.evaluate_cjs_ir3(&lowering_output.ir3, resolved)
@@ -37755,7 +37786,42 @@ impl InterpreterCore {
             }
             _ => false,
         };
-        self.load_module_resolved(module, &resolved, is_cjs)
+        // bd-j8f7q: a unit lowered under the bounded-imports contract assumed
+        // this module (a local file or a package) yields at most
+        // IFC_BOUNDED_IMPORT_LABEL.
+        let import_bound = (crate::lowering_pipeline::is_bounded_import_specifier(specifier)
+            && Self::unit_declares_bounded_imports(module))
+        .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
+        self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref())
+    }
+
+    /// Whether `module` was lowered under the bounded-imports contract
+    /// (bd-j8f7q): it carries the contract marker.
+    fn unit_declares_bounded_imports(module: &Ir3Module) -> bool {
+        module.instructions.iter().any(|instruction| {
+            matches!(instruction, Ir3Instruction::HostCall { capability, .. }
+                if capability.0 == crate::lowering_pipeline::IFC_BOUNDED_IMPORTS_CONTRACT)
+        })
+    }
+
+    /// Refuse an import whose module can produce a label above the
+    /// importer's assumed bound (bd-j8f7q).
+    fn check_import_flow_bound(
+        resolved: &str,
+        ceiling: &Label,
+        import_bound: Option<&Label>,
+    ) -> Result<(), InterpreterError> {
+        match import_bound {
+            Some(bound) if !ceiling.can_flow_to(bound) => {
+                Err(InterpreterError::ModuleLoweringFailed {
+                    specifier: resolved.to_string(),
+                    error: format!(
+                        "module flow label ceiling {ceiling:?} exceeds the importer's bounded-import contract {bound:?} (bd-j8f7q)"
+                    ),
+                })
+            }
+            _ => Ok(()),
+        }
     }
 
     fn require_module(
@@ -37775,7 +37841,7 @@ impl InterpreterCore {
             Some(ext) if ext.eq_ignore_ascii_case("js") => !self.required_js_is_esm(&resolved),
             _ => true,
         };
-        let namespace = self.load_module_resolved(module, &resolved, is_cjs)?;
+        let namespace = self.load_module_resolved(module, &resolved, is_cjs, None)?;
         if !is_cjs {
             return Ok(namespace);
         }
@@ -84478,6 +84544,9 @@ impl InterpreterCore {
                 self.alloc_import_meta_object()
             }
             crate::lowering_pipeline::MODULE_EXPORT_STAR_HOSTCALL => self.module_export_star(args),
+            // bd-j8f7q: declares the unit's import contract; the contract is
+            // enforced at each import edge (load_module_resolved).
+            crate::lowering_pipeline::IFC_BOUNDED_IMPORTS_CONTRACT => Ok(Value::Undefined),
             "builtin:ApplyHostCall" => self.dispatch_apply_hostcall(args, module, None),
             capability if capability.starts_with(APPLY_HOSTCALL_TARGET_PREFIX) => self
                 .dispatch_apply_hostcall(
@@ -118125,6 +118194,7 @@ mod async_runtime_tests_current {
                     namespace_object: namespace,
                     exports: BTreeMap::new(),
                     star_exports: BTreeMap::new(),
+                    flow_label_ceiling: None,
                     pending_import_bindings: BTreeMap::new(),
                     cjs_module_object: None,
                     compiled_module: None,
@@ -155666,6 +155736,7 @@ mod tests {
                 namespace_object,
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
+                flow_label_ceiling: None,
                 pending_import_bindings: BTreeMap::new(),
                 cjs_module_object: Some(module_object),
                 compiled_module: None,

@@ -107804,8 +107804,6 @@ mod active_builtin_regressions {
             Value::Object(empty_descriptor_id),
         )
         .expect("test descriptor map write should succeed");
-        core.set_object_property(descriptors_id, "raw_descriptor".to_string(), Value::Int(7))
-            .expect("test descriptor map write should succeed");
 
         core.mutate_registers(|r| {
             r[0] = Value::Object(prototype_id);
@@ -107835,16 +107833,33 @@ mod active_builtin_regressions {
                 created.properties.get("missing_value"),
                 Some(&Value::Undefined)
             );
-            assert_eq!(
-                created.properties.get("raw_descriptor"),
-                Some(&Value::Undefined)
-            );
         }
 
         let inherited = core
             .prototype_chain_get(created_id, "inherited")
             .expect("prototype-chain lookup should execute");
         assert_eq!(inherited, Value::str("from-prototype"));
+
+        // A descriptor that is not an object is a TypeError (ES2020
+        // 19.1.2.3.1 ObjectDefineProperties -> ToPropertyDescriptor; Node:
+        // "Property description must be an object"), not an undefined value.
+        let raw_descriptors_id = core
+            .alloc_object_with_prototype(None)
+            .expect("test descriptor map allocation should succeed");
+        core.set_object_property(
+            raw_descriptors_id,
+            "raw_descriptor".to_string(),
+            Value::Int(7),
+        )
+        .expect("test descriptor map write should succeed");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(prototype_id);
+            r[1] = Value::Object(raw_descriptors_id);
+        });
+        assert!(matches!(
+            core.call_builtin_by_id(5, RegRange { start: 0, count: 2 }),
+            Err(InterpreterError::TypeError { .. })
+        ));
     }
 
     #[test]

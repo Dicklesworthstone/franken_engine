@@ -72,6 +72,9 @@ const NODE_CORE_MODULE_NAMES: &[&str] = &[
 /// always matches as well.
 const REQUIRE_EXPORT_CONDITIONS: &[&str] = &["node", "require"];
 
+/// Conditions an ES module `import` matches (bd-mgfhs); `default` as well.
+const IMPORT_EXPORT_CONDITIONS: &[&str] = &["node", "import"];
+
 /// Largest package.json the resolver reads.
 const MAX_PACKAGE_MANIFEST_BYTES: u64 = 1 << 20;
 
@@ -281,6 +284,7 @@ fn resolve_package_exports(
     package_dir: &Path,
     subpath: &str,
     exports: &PackageExports,
+    conditions: &[&str],
 ) -> Result<PathBuf, String> {
     let not_exported = || format!("does not export subpath `{subpath}`");
     let subpath_entries = match exports {
@@ -297,7 +301,7 @@ fn resolve_package_exports(
         None => return Err(not_exported()),
         Some(entries) => package_mapping_target(entries, subpath).ok_or_else(not_exported)?,
     };
-    match resolve_package_target(package_dir, target, pattern_match, false)? {
+    match resolve_package_target(package_dir, target, pattern_match, false, conditions)? {
         ExportsTargetResolution::Found(path) => Ok(path),
         ExportsTargetResolution::Package(_)
         | ExportsTargetResolution::Excluded
@@ -305,12 +309,14 @@ fn resolve_package_exports(
     }
 }
 
-/// Node's PACKAGE_TARGET_RESOLVE with the CommonJS conditions.
+/// Node's PACKAGE_TARGET_RESOLVE with the given conditions (CommonJS
+/// `require` or ES module `import`).
 fn resolve_package_target(
     package_dir: &Path,
     target: &PackageExports,
     pattern_match: Option<&str>,
     imports: bool,
+    conditions: &[&str],
 ) -> Result<ExportsTargetResolution, String> {
     match target {
         PackageExports::Target(target) => {
@@ -336,14 +342,18 @@ fn resolve_package_target(
         }
         PackageExports::Null => Ok(ExportsTargetResolution::Excluded),
         PackageExports::Invalid => Err("has an invalid package target".to_string()),
-        PackageExports::Map(conditions) => {
-            for (condition, value) in conditions {
-                if condition != "default"
-                    && !REQUIRE_EXPORT_CONDITIONS.contains(&condition.as_str())
-                {
+        PackageExports::Map(entries) => {
+            for (condition, value) in entries {
+                if condition != "default" && !conditions.contains(&condition.as_str()) {
                     continue;
                 }
-                match resolve_package_target(package_dir, value, pattern_match, imports)? {
+                match resolve_package_target(
+                    package_dir,
+                    value,
+                    pattern_match,
+                    imports,
+                    conditions,
+                )? {
                     ExportsTargetResolution::NoMatch => continue,
                     resolved => return Ok(resolved),
                 }
@@ -353,7 +363,13 @@ fn resolve_package_target(
         PackageExports::Alternatives(alternatives) => {
             let mut last_error = None;
             for alternative in alternatives {
-                match resolve_package_target(package_dir, alternative, pattern_match, imports) {
+                match resolve_package_target(
+                    package_dir,
+                    alternative,
+                    pattern_match,
+                    imports,
+                    conditions,
+                ) {
                     Ok(ExportsTargetResolution::NoMatch) => {}
                     Ok(ExportsTargetResolution::Excluded) => last_error = None,
                     Ok(resolved) => return Ok(resolved),
@@ -414,6 +430,7 @@ fn resolve_package_imports_target(
     package_dir: &Path,
     specifier: &str,
     imports: &PackageExports,
+    conditions: &[&str],
 ) -> Result<ExportsTargetResolution, String> {
     let undefined = || format!("package import `{specifier}` is not defined");
     if specifier == "#" || specifier.starts_with("#/") || specifier.ends_with('/') {
@@ -423,7 +440,7 @@ fn resolve_package_imports_target(
         return Err(undefined());
     };
     let (target, capture) = package_mapping_target(entries, specifier).ok_or_else(undefined)?;
-    match resolve_package_target(package_dir, target, capture, true)? {
+    match resolve_package_target(package_dir, target, capture, true, conditions)? {
         ExportsTargetResolution::Excluded | ExportsTargetResolution::NoMatch => Err(undefined()),
         resolved => Ok(resolved),
     }
@@ -459,6 +476,23 @@ impl InterpreterCore {
         &self,
         specifier: &str,
     ) -> Result<PathBuf, InterpreterError> {
+        self.resolve_bare_package_specifier(specifier, REQUIRE_EXPORT_CONDITIONS)
+    }
+
+    /// An ES module's bare specifier (bd-mgfhs): the same package lookup as
+    /// `require`, matching the `import` condition.
+    pub(super) fn resolve_bare_import_specifier(
+        &self,
+        specifier: &str,
+    ) -> Result<PathBuf, InterpreterError> {
+        self.resolve_bare_package_specifier(specifier, IMPORT_EXPORT_CONDITIONS)
+    }
+
+    fn resolve_bare_package_specifier(
+        &self,
+        specifier: &str,
+        conditions: &[&str],
+    ) -> Result<PathBuf, InterpreterError> {
         let failed = |reason| InterpreterError::ModuleResolutionFailed {
             specifier: specifier.to_string(),
             reason,
@@ -486,12 +520,12 @@ impl InterpreterCore {
             && let Some((scope, manifest)) = self.require_package_scope(specifier, &start, &root)?
             && let Some(imports) = manifest.imports.as_ref()
         {
-            let target = resolve_package_imports_target(&scope, specifier, imports)
+            let target = resolve_package_imports_target(&scope, specifier, imports, conditions)
                 .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason)))?;
             return match target {
                 ExportsTargetResolution::Found(path) if path.is_file() => Ok(path),
                 ExportsTargetResolution::Package(target) => {
-                    self.resolve_named_require_from(&target, &scope, &root)
+                    self.resolve_named_require_from(&target, &scope, &root, conditions)
                         .map_err(|error| {
                             // Keep the source-level alias in the outward diagnostic.
                             failed(ModuleResolutionFailureReason::Other(format!(
@@ -502,7 +536,7 @@ impl InterpreterCore {
                 _ => Err(failed(ModuleResolutionFailureReason::ModuleNotFound)),
             };
         }
-        self.resolve_named_require_from(specifier, &start, &root)
+        self.resolve_named_require_from(specifier, &start, &root, conditions)
     }
 
     /// External imports targets resolve from their owning package, not from a
@@ -513,6 +547,7 @@ impl InterpreterCore {
         specifier: &str,
         start: &Path,
         root: &Path,
+        conditions: &[&str],
     ) -> Result<PathBuf, InterpreterError> {
         let failed = |reason| InterpreterError::ModuleResolutionFailed {
             specifier: specifier.to_string(),
@@ -533,13 +568,13 @@ impl InterpreterCore {
             && manifest.name.as_ref().and_then(serde_json::Value::as_str) == Some(name)
             && let Some(exports) = manifest.exports.as_ref()
         {
-            let target = resolve_package_exports(&scope, &format!(".{subpath}"), exports).map_err(
-                |reason| {
-                    failed(ModuleResolutionFailureReason::Other(format!(
-                        "package `{name}` {reason}"
-                    )))
-                },
-            )?;
+            let target =
+                resolve_package_exports(&scope, &format!(".{subpath}"), exports, conditions)
+                    .map_err(|reason| {
+                        failed(ModuleResolutionFailureReason::Other(format!(
+                            "package `{name}` {reason}"
+                        )))
+                    })?;
             return if target.is_file() {
                 Ok(target)
             } else {
@@ -564,12 +599,17 @@ impl InterpreterCore {
                 .as_ref()
                 .and_then(|manifest| manifest.exports.as_ref())
             {
-                let target = resolve_package_exports(&package_dir, &format!(".{subpath}"), exports)
-                    .map_err(|reason| {
-                        failed(ModuleResolutionFailureReason::Other(format!(
-                            "package `{name}` {reason}"
-                        )))
-                    })?;
+                let target = resolve_package_exports(
+                    &package_dir,
+                    &format!(".{subpath}"),
+                    exports,
+                    conditions,
+                )
+                .map_err(|reason| {
+                    failed(ModuleResolutionFailureReason::Other(format!(
+                        "package `{name}` {reason}"
+                    )))
+                })?;
                 return if target.is_file() {
                     Ok(target)
                 } else {
@@ -666,7 +706,12 @@ mod tests {
     }
 
     fn resolve(json: &str, subpath: &str) -> Result<PathBuf, String> {
-        resolve_package_exports(Path::new("/pkg"), subpath, &exports(json))
+        resolve_package_exports(
+            Path::new("/pkg"),
+            subpath,
+            &exports(json),
+            REQUIRE_EXPORT_CONDITIONS,
+        )
     }
 
     #[test]
@@ -768,7 +813,12 @@ mod tests {
     }
 
     fn import_target(json: &str, specifier: &str) -> Result<ExportsTargetResolution, String> {
-        resolve_package_imports_target(Path::new("/pkg"), specifier, &exports(json))
+        resolve_package_imports_target(
+            Path::new("/pkg"),
+            specifier,
+            &exports(json),
+            REQUIRE_EXPORT_CONDITIONS,
+        )
     }
 
     #[test]

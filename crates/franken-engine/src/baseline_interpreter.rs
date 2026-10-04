@@ -37252,6 +37252,13 @@ impl InterpreterCore {
     }
 
     fn resolve_module_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
+        // bd-mgfhs: an ES module's bare specifier names a package, resolved
+        // like `require` but with the `import` condition.
+        if Self::is_bare_module_specifier(specifier) {
+            let candidate = self.resolve_bare_import_specifier(specifier)?;
+            let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
+            return Ok(canonical.display().to_string());
+        }
         let resolved = self.resolve_specifier_base(specifier)?;
         let candidate = self.resolve_module_candidate(&resolved).ok_or_else(|| {
             InterpreterError::ModuleResolutionFailed {
@@ -37261,6 +37268,15 @@ impl InterpreterCore {
         })?;
         let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
         Ok(canonical.display().to_string())
+    }
+
+    /// Not a relative (`./`, `../`) or absolute path: a package name, a
+    /// package import (`#x`) or a core module.
+    fn is_bare_module_specifier(specifier: &str) -> bool {
+        !(specifier.starts_with("./")
+            || specifier.starts_with("../")
+            || specifier.starts_with('/')
+            || Path::new(specifier).is_absolute())
     }
 
     fn resolve_require_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
@@ -37726,11 +37742,19 @@ impl InterpreterCore {
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
         let resolved = self.resolve_module_specifier(specifier)?;
-        let is_cjs = Path::new(&resolved)
+        let extension = Path::new(&resolved)
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("cjs"))
-            .unwrap_or(false);
+            .map(str::to_ascii_lowercase);
+        let is_cjs = match extension.as_deref() {
+            Some("cjs") => true,
+            // bd-mgfhs: a package's `.js` file is CommonJS unless its nearest
+            // package.json declares "type": "module" (Node's package format).
+            Some("js") if Self::is_bare_module_specifier(specifier) => {
+                !self.required_js_is_esm(&resolved)
+            }
+            _ => false,
+        };
         self.load_module_resolved(module, &resolved, is_cjs)
     }
 

@@ -73,6 +73,10 @@ const SCENARIOS: &[Scenario] = &[
         source: include_str!("red_team_scenarios/shell_command_injection_package_script.js"),
     },
     Scenario {
+        id: "smuggle_flow_via_unanalyzed_construct",
+        source: include_str!("red_team_scenarios/smuggle_flow_via_unanalyzed_construct.js"),
+    },
+    Scenario {
         id: "supply_chain_backdoor_execution",
         source: include_str!("red_team_scenarios/supply_chain_backdoor_execution.js"),
     },

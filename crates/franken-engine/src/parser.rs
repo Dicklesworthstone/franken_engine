@@ -19312,6 +19312,92 @@ mod tests {
     }
 
     #[test]
+    fn object_async_and_generator_methods_parse_bd_6vl81() {
+        let tree = parse_script(
+            "({ async m() { await 1; }, *g() { yield 1; }, async *h() { yield 2; }, \
+             async [k]() {}, async() {}, async: 1, async })",
+        );
+        let Expression::ObjectLiteral(properties) = first_expr(&tree) else {
+            panic!("expected object literal");
+        };
+        let flags: Vec<Option<(bool, bool)>> = properties
+            .iter()
+            .map(|property| match &property.value {
+                Expression::Function {
+                    is_async,
+                    is_generator,
+                    ..
+                } => Some((*is_async, *is_generator)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            flags,
+            vec![
+                Some((true, false)),
+                Some((false, true)),
+                Some((true, true)),
+                Some((true, false)),
+                // `async(){}` is an ordinary method named "async".
+                Some((false, false)),
+                // `async: 1` and shorthand `async` are data properties.
+                None,
+                None,
+            ]
+        );
+        assert!(properties[3].computed);
+        assert_eq!(
+            properties[4].key,
+            Expression::Identifier(canonicalize_identifier("async"))
+        );
+        assert!(
+            CanonicalEs2020Parser
+                .parse("({ async\nm() {} })", ParseGoal::Script)
+                .is_err(),
+            "a line terminator after `async` does not form an async method"
+        );
+    }
+
+    #[test]
+    fn class_async_and_generator_methods_parse_bd_6vl81() {
+        let tree = parse_script(
+            "class A { async m() { await 1; } *g() { yield 1; } static async *h() { yield 2; } \
+             async() {} get async() { return 1; } static async s() {} }",
+        );
+        let Statement::ClassDeclaration(class) = &tree.body[0] else {
+            panic!("expected class declaration");
+        };
+        let shapes: Vec<(String, bool, bool, bool, MethodKind)> = class
+            .body
+            .iter()
+            .map(|method| {
+                let Expression::Identifier(name) = &method.key else {
+                    panic!("expected identifier method key, got {:?}", method.key);
+                };
+                (
+                    name.clone(),
+                    method.is_static,
+                    method.is_async,
+                    method.is_generator,
+                    method.kind,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            vec![
+                ("m".to_string(), false, true, false, MethodKind::Method),
+                ("g".to_string(), false, false, true, MethodKind::Method),
+                ("h".to_string(), true, true, true, MethodKind::Method),
+                // A method and an accessor named "async" stay ordinary.
+                ("async".to_string(), false, false, false, MethodKind::Method),
+                ("async".to_string(), false, false, false, MethodKind::Get),
+                ("s".to_string(), true, true, false, MethodKind::Method),
+            ]
+        );
+    }
+
+    #[test]
     fn object_literal_shorthand_not_misparsed_as_method() {
         // Plain shorthand `{ x }` must still be a shorthand identifier property,
         // and `key: value` must be unaffected by the method branch.

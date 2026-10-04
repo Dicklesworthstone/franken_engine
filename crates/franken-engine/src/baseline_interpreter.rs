@@ -30517,7 +30517,10 @@ impl InterpreterCore {
         let Some((value, units)) =
             self.readable_normalize_push_value(&mut projected, value, projection_bytes)?
         else {
-            self.commit_readable_state(object_id, projected)?;
+            // Every byte went to an incomplete UTF-8 sequence. That is still
+            // progress: the stream asks `_read` for more, as Node does, or a
+            // character split across pushes would park the stream forever.
+            self.commit_readable_state_and_schedule(object_id, projected)?;
             return Ok(true);
         };
         let buffered_length = projected

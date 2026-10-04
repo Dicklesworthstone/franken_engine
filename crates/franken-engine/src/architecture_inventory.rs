@@ -566,10 +566,16 @@ mod tests {
             discover_repo_root_from(&nested).as_deref(),
             Some(root.as_path())
         );
-        // And a tree with no franken-engine crate marker yields no root.
+        // And a tree with no franken-engine crate marker yields no root of
+        // its own: discovery answers as it does for the temp dir itself (None
+        // normally; the enclosing checkout when the temp dir lives in one, as
+        // under rch).
         let bare = temp.path().join("unrelated");
         std::fs::create_dir_all(&bare).expect("bare dir");
-        assert_eq!(discover_repo_root_from(&bare), None);
+        assert_eq!(
+            discover_repo_root_from(&bare),
+            discover_repo_root_from(temp.path())
+        );
     }
 
     #[test]
@@ -578,9 +584,12 @@ mod tests {
         let root = temp.path().join("checkout");
         let crate_dir = root.join("crates/franken-engine");
         std::fs::create_dir_all(&crate_dir).expect("create crate dir");
-        // Only Cargo.toml, no src/lib.rs: not a complete marker, no match.
+        // Only Cargo.toml, no src/lib.rs: not a complete marker, so this tree
+        // is not a root (discovery answers as for the temp dir itself).
         std::fs::write(crate_dir.join("Cargo.toml"), "[package]\n").expect("Cargo.toml");
-        assert_eq!(discover_repo_root_from(&crate_dir), None);
+        let discovered = discover_repo_root_from(&crate_dir);
+        assert_ne!(discovered.as_deref(), Some(root.as_path()));
+        assert_eq!(discovered, discover_repo_root_from(temp.path()));
     }
 
     #[test]

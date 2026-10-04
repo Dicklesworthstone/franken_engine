@@ -100,6 +100,11 @@ fn synchronous_rejection_cannot_skip_pending_dependency() {
     bridge
         .register_module("app.mjs", false, &["dep.mjs".into()])
         .unwrap();
+    // A synchronous module with a pending async dependency waits for it.
+    assert_eq!(
+        bridge.evaluator().states()["app.mjs"].phase,
+        AsyncModulePhase::AwaitingDependencies
+    );
     let error = bridge
         .reject_synchronous_module("app.mjs", JsValue::Str("premature".into()), Label::Public)
         .unwrap_err();
@@ -108,8 +113,9 @@ fn synchronous_rejection_cannot_skip_pending_dependency() {
             .to_string()
             .contains("before async dependencies settle")
     );
+    // The refused rejection leaves the module where it was.
     assert_eq!(
         bridge.evaluator().states()["app.mjs"].phase,
-        AsyncModulePhase::Synchronous
+        AsyncModulePhase::AwaitingDependencies
     );
 }

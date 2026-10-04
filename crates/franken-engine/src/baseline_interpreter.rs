@@ -43835,25 +43835,30 @@ impl InterpreterCore {
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for (name, value) in source_exports {
-            let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
-                InterpreterError::ExportOutsideModule {
-                    name: name.to_string(),
-                }
-            })?;
-            match (record.star_exports.get(&name), record.exports.get(&name)) {
-                (Some(StarExportOrigin::Ambiguous), _) => {}
-                (Some(StarExportOrigin::Provided), Some(existing)) => {
-                    if !Self::same_value(existing, &value) {
-                        self.withdraw_ambiguous_star_export(&specifier, &name)?;
+            // Decide under a shared borrow of the module record, then act.
+            let (withdraw, register) = {
+                let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
+                    InterpreterError::ExportOutsideModule {
+                        name: name.to_string(),
                     }
-                }
-                // The module's own export of this name wins.
-                (None, Some(_)) => {}
-                (_, None) => {
-                    self.register_module_export_exact_labeled(name.clone(), value, label.clone())?;
-                    if let Some(record) = self.module_state.modules.get_mut(&specifier) {
-                        record.star_exports.insert(name, StarExportOrigin::Provided);
+                })?;
+                match (record.star_exports.get(&name), record.exports.get(&name)) {
+                    (Some(StarExportOrigin::Ambiguous), _) => (false, false),
+                    (Some(StarExportOrigin::Provided), Some(existing)) => {
+                        (!Self::same_value(existing, &value), false)
                     }
+                    // The module's own export of this name wins.
+                    (None, Some(_)) => (false, false),
+                    (_, None) => (false, true),
+                }
+            };
+            if withdraw {
+                self.withdraw_ambiguous_star_export(&specifier, &name)?;
+            }
+            if register {
+                self.register_module_export_exact_labeled(name.clone(), value, label.clone())?;
+                if let Some(record) = self.module_state.modules.get_mut(&specifier) {
+                    record.star_exports.insert(name, StarExportOrigin::Provided);
                 }
             }
         }

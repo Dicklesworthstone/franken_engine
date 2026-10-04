@@ -9871,6 +9871,67 @@ fn regex_literal_len_at(expr: &str, slash: usize) -> Option<usize> {
     leading_regexp_literal(&expr[slash..]).map(|(end, _, _)| end)
 }
 
+/// The first `{` of `text` outside parentheses, brackets and string or
+/// template literals.
+fn first_top_level_brace(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        if let Some(open) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => quote = Some(ch),
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            '{' if depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The offset of a class body's `{` in the text after `extends`. The heritage
+/// is a left-hand-side expression: braces inside parentheses
+/// (`extends (class {...})`, `extends mix({...})`) are not the body, and a
+/// class expression heritage (`extends class Base {...} {...}`) has its own
+/// body first.
+fn class_heritage_body_brace(after_extends: &str) -> Option<usize> {
+    let heritage = after_extends.trim_start();
+    let lead = after_extends.len() - heritage.len();
+    let inner_header = heritage
+        .strip_prefix("class")
+        .filter(|rest| rest.starts_with(|ch: char| ch.is_whitespace() || ch == '{'));
+    let Some(inner_header) = inner_header else {
+        return first_top_level_brace(after_extends);
+    };
+    let inner_start = lead + (heritage.len() - inner_header.len());
+    let header_brace = first_top_level_brace(inner_header)?;
+    let inner_body = match inner_header[..header_brace].find(" extends ") {
+        Some(extends) => {
+            let after = extends + " extends ".len();
+            after + class_heritage_body_brace(&inner_header[after..])?
+        }
+        None if inner_header.trim_start().starts_with("extends ") => {
+            let after = inner_header.len() - inner_header.trim_start().len() + "extends ".len();
+            after + class_heritage_body_brace(&inner_header[after..])?
+        }
+        None => header_brace,
+    };
+    let body_and_tail = &inner_header[inner_body..];
+    let (_, tail) = extract_balanced(body_and_tail, '{', '}')?;
+    let tail_start = inner_start + inner_body + (body_and_tail.len() - tail.len());
+    Some(tail_start + first_top_level_brace(tail)?)
+}
+
 /// Whether `before` ends with the `)` of an `if`/`while`/`for`/`with` head,
 /// after which a statement starts, so a `/` opens a regular expression
 /// (`if (ok) /}/.test(s)`), whereas after a call's `)` it divides
@@ -12854,7 +12915,7 @@ fn parse_class_parts(
 
     // Parse optional extends clause.
     let (super_class, rest) = if let Some(after_extends) = rest.strip_prefix("extends ") {
-        let brace = after_extends.find('{').ok_or_else(|| {
+        let brace = class_heritage_body_brace(after_extends).ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "class extends clause requires a braced body",
@@ -20337,6 +20398,32 @@ mod tests {
     fn parse_script_with_regex_brace_before_block_keeps_two_statements() {
         let tree = parse_script("var r = /{/;\nif (x) {\n  y;\n}");
         assert_eq!(tree.body.len(), 2);
+    }
+
+    #[test]
+    fn class_heritage_with_braces_keeps_the_class_body() {
+        for (source, methods) in [
+            (
+                "class Child extends class Base { read() { return 6; } } { total(v) { return this.read() + v; } }",
+                1,
+            ),
+            ("class D extends (class { r() { return 3; } }) {}", 0),
+            ("class E extends mix({ a: 1 }) { m() {} n() {} }", 2),
+            (
+                "class F extends class extends Object { r() {} } { s() {} }",
+                1,
+            ),
+        ] {
+            let tree = parse_script(source);
+            let Some(Statement::ClassDeclaration(class)) = tree.body.first() else {
+                panic!(
+                    "{source}: expected a class declaration, got {:?}",
+                    tree.body
+                );
+            };
+            assert!(class.super_class.is_some(), "{source}");
+            assert_eq!(class.body.len(), methods, "{source}");
+        }
     }
 
     #[test]

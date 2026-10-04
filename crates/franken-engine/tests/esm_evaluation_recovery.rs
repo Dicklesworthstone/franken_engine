@@ -209,7 +209,10 @@ fn depth_refusal_restores_all_touched_records() {
     tail.imports.clear();
     let result = graph.evaluate().unwrap();
     assert_eq!(result.evaluated_count, 512);
-    assert_eq!(graph.get_module("m512").unwrap().status, ModuleStatus::Linked);
+    assert_eq!(
+        graph.get_module("m512").unwrap().status,
+        ModuleStatus::Linked
+    );
 }
 
 #[test]

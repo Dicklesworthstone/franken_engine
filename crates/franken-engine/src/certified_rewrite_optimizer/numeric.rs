@@ -283,21 +283,48 @@ mod tests {
             ("9007199254740992 + 1", "9007199254740992"),
             ("1 / (1 / 0)", "0"),
         ] {
-            assert_eq!(rewrite(before, Rule::Constant).as_deref(), Some(after), "{before}");
+            assert_eq!(
+                rewrite(before, Rule::Constant).as_deref(),
+                Some(after),
+                "{before}"
+            );
             assert!(equivalent(before, after), "{before} -> {after}");
-            assert!(rewrite(after, Rule::Constant).is_none(), "not a fixed point: {after}");
+            assert!(
+                rewrite(after, Rule::Constant).is_none(),
+                "not a fixed point: {after}"
+            );
         }
     }
 
     #[test]
     fn identities_require_pure_number_operands() {
         for program in [
-            "x + 0", "0 + x", "x * 1", "1 * x", "x * 0", "0 * x",
-            "effect() * 0", "0 * effect()", "object.value * 0", "missing * 0",
-            "'5' + 0", "'5' * 1", "1n * 0", "NaN * 0", "Infinity * 0",
-            "1; effect() * 0", "(effect(), 1) * 0", "[1] * 1", "true + 0",
+            "x + 0",
+            "0 + x",
+            "x * 1",
+            "1 * x",
+            "x * 0",
+            "0 * x",
+            "effect() * 0",
+            "0 * effect()",
+            "object.value * 0",
+            "missing * 0",
+            "'5' + 0",
+            "'5' * 1",
+            "1n * 0",
+            "NaN * 0",
+            "Infinity * 0",
+            "1; effect() * 0",
+            "(effect(), 1) * 0",
+            "[1] * 1",
+            "true + 0",
         ] {
-            for rule in [Rule::Constant, Rule::AddZero, Rule::MultiplyOne, Rule::MultiplyZero] {
+            for rule in [
+                Rule::Constant,
+                Rule::AddZero,
+                Rule::MultiplyOne,
+                Rule::MultiplyZero,
+            ] {
                 assert!(rewrite(program, rule).is_none(), "{rule:?}: {program}");
             }
         }
@@ -309,10 +336,37 @@ mod tests {
     #[test]
     fn unsupported_or_invalid_syntax_never_becomes_a_rewrite() {
         for program in [
-            "", " ", "1++2", "1--2", "--1", "++1", "1**2", "1//2", "1/*x*/+2",
-            "1+", "+", ".", "1e+", "1e-", "1e", "01+1", "00.5+1", "0x10+1",
-            "0o10+1", "0b10+1", "1_000+1", "(1+2", "1+2)", "1+2;", "1 2",
-            "1.0.0", "1+2 trailing", "1\u{a0}+2", "1/0", "0/0", "1e308*1e308",
+            "",
+            " ",
+            "1++2",
+            "1--2",
+            "--1",
+            "++1",
+            "1**2",
+            "1//2",
+            "1/*x*/+2",
+            "1+",
+            "+",
+            ".",
+            "1e+",
+            "1e-",
+            "1e",
+            "01+1",
+            "00.5+1",
+            "0x10+1",
+            "0o10+1",
+            "0b10+1",
+            "1_000+1",
+            "(1+2",
+            "1+2)",
+            "1+2;",
+            "1 2",
+            "1.0.0",
+            "1+2 trailing",
+            "1\u{a0}+2",
+            "1/0",
+            "0/0",
+            "1e308*1e308",
         ] {
             assert!(rewrite(program, Rule::Constant).is_none(), "{program:?}");
         }
@@ -321,9 +375,15 @@ mod tests {
     #[test]
     fn equivalence_rejects_observably_different_or_unknown_values() {
         for (before, after) in [
-            ("5 / 2", "2"), ("-3 * 0", "0"), ("-0", "0"),
-            ("x * 0", "0"), ("effect() * 0", "0"), ("'1' + 0", "1"),
-            ("1 / 0", "Infinity"), ("0 / 0", "NaN"), ("1", "1; effect()"),
+            ("5 / 2", "2"),
+            ("-3 * 0", "0"),
+            ("-0", "0"),
+            ("x * 0", "0"),
+            ("effect() * 0", "0"),
+            ("'1' + 0", "1"),
+            ("1 / 0", "Infinity"),
+            ("0 / 0", "NaN"),
+            ("1", "1; effect()"),
         ] {
             assert!(!equivalent(before, after), "{before} -> {after}");
         }
@@ -333,7 +393,11 @@ mod tests {
 
     #[test]
     fn resource_limits_fail_closed() {
-        let deeply_nested = format!("{}1 + 1{}", "(".repeat(MAX_DEPTH + 1), ")".repeat(MAX_DEPTH + 1));
+        let deeply_nested = format!(
+            "{}1 + 1{}",
+            "(".repeat(MAX_DEPTH + 1),
+            ")".repeat(MAX_DEPTH + 1)
+        );
         let many_operations = format!("1{}", "+1".repeat(MAX_OPERATIONS + 1));
         let long_literal = "1".repeat(MAX_INPUT_BYTES + 1);
         for program in [&deeply_nested, &many_operations, &long_literal] {

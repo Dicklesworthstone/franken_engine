@@ -31,7 +31,11 @@ fn assert_output(source: &str, expected: &[&str]) {
         .expect("normalized source must parse as JavaScript");
     let module = lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "annotation-execution.ts"),
-        &LoweringContext::new("annotation-trace", "annotation-decision", "annotation-policy"),
+        &LoweringContext::new(
+            "annotation-trace",
+            "annotation-decision",
+            "annotation-policy",
+        ),
     )
     .expect("normalized program must lower")
     .ir3;

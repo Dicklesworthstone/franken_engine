@@ -213,7 +213,9 @@ fn required_certificate_failure_aborts_optimization() {
         OptimizationTier::Standard,
         "2 + 3".to_string(),
     );
-    let error = optimizer.optimize(request).expect_err("certificate cannot expire");
+    let error = optimizer
+        .optimize(request)
+        .expect_err("certificate cannot expire");
     match error {
         CertifiedOptimizerError::CertificationFailed {
             request_id,
@@ -239,7 +241,9 @@ fn optional_proofs_do_not_fabricate_certificates() {
         "2 + 3".to_string(),
     )
     .with_formal_proofs(false);
-    let result = optimizer.optimize(request).expect("explicitly optional proof");
+    let result = optimizer
+        .optimize(request)
+        .expect("explicitly optional proof");
     assert_eq!(result.optimized_program.as_deref(), Some("5"));
     assert!(result.all_steps_validated());
     assert!(!result.all_steps_certified());
@@ -264,16 +268,28 @@ fn evidence_binds_the_complete_validation_mode() {
     let hash_b = ContentHash::compute(b"artifact-b");
     for (mode_a, mode_b) in [
         (
-            ValidationMode::GoldenCorpusReplay { corpus_hash: hash_a, vector_count: 5 },
-            ValidationMode::GoldenCorpusReplay { corpus_hash: hash_b, vector_count: 5 },
+            ValidationMode::GoldenCorpusReplay {
+                corpus_hash: hash_a,
+                vector_count: 5,
+            },
+            ValidationMode::GoldenCorpusReplay {
+                corpus_hash: hash_b,
+                vector_count: 5,
+            },
         ),
         (
             ValidationMode::SymbolicEquivalence { proof_hash: hash_a },
             ValidationMode::SymbolicEquivalence { proof_hash: hash_b },
         ),
         (
-            ValidationMode::DifferentialTrace { workload_hash: hash_a, trace_pair_count: 5 },
-            ValidationMode::DifferentialTrace { workload_hash: hash_b, trace_pair_count: 5 },
+            ValidationMode::DifferentialTrace {
+                workload_hash: hash_a,
+                trace_pair_count: 5,
+            },
+            ValidationMode::DifferentialTrace {
+                workload_hash: hash_b,
+                trace_pair_count: 5,
+            },
         ),
     ] {
         let receipt_for = |mode: ValidationMode| {

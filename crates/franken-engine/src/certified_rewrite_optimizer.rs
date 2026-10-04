@@ -733,7 +733,8 @@ impl CertifiedRewriteOptimizer {
         if request.security_epoch != self.security_epoch {
             return Err(CertifiedOptimizerError::InvalidRequest {
                 request_id: request.request_id.clone(),
-                reason: "request security_epoch does not match optimizer security_epoch".to_string(),
+                reason: "request security_epoch does not match optimizer security_epoch"
+                    .to_string(),
             });
         }
 

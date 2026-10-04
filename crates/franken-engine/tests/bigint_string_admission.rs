@@ -42,7 +42,9 @@ fn assert_output(source: &str, expected: &[&str]) {
         .into_iter()
         .collect();
         let mut core = InterpreterCore::new(config, "bigint-string-admission");
-        let result = core.execute(&module).expect("native execution must succeed");
+        let result = core
+            .execute(&module)
+            .expect("native execution must succeed");
         let actual: Vec<&str> = result
             .console_output
             .iter()

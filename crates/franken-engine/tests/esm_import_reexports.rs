@@ -63,7 +63,9 @@ fn imported_local_exports_are_indirect_in_either_declaration_order() {
 #[test]
 fn raw_records_are_normalized_when_admitted_to_the_graph() {
     let mut alias = module("alias");
-    alias.imports.push(ImportEntry::new("source", "value", "local"));
+    alias
+        .imports
+        .push(ImportEntry::new("source", "value", "local"));
     alias.exports.push(ExportEntry::direct("local", "public"));
     let encoded = serde_json::to_string(&alias).unwrap();
     let decoded: EsmModule = serde_json::from_str(&encoded).unwrap();
@@ -110,7 +112,9 @@ fn imported_reexports_share_live_values_versions_and_dead_state() {
     let source_id = BindingId::new("source", "value");
     let alias_id = BindingId::new("alias", "public");
     assert_eq!(bindings.get_cell(&alias_id), bindings.get_cell(&source_id));
-    bindings.initialize_millionths(&source_id, 1_000_000).unwrap();
+    bindings
+        .initialize_millionths(&source_id, 1_000_000)
+        .unwrap();
     assert_eq!(
         bindings
             .read_through_import("consumer", "seen")
@@ -152,7 +156,9 @@ fn diamond_paths_to_the_same_imported_binding_are_not_ambiguous() {
     assert_eq!(binding.local_name, "storage");
     let mut bindings = build_live_bindings(&graph).unwrap();
     let source_id = BindingId::new("source", "value");
-    bindings.initialize_string(&source_id, "live".into()).unwrap();
+    bindings
+        .initialize_string(&source_id, "live".into())
+        .unwrap();
     assert_eq!(
         bindings
             .get_cell(&BindingId::new("barrel", "public"))

@@ -986,7 +986,9 @@ fn real_counterfactual_produces_a_detectable_divergence() {
     if !errored {
         // BestEffort records (rather than rejects) a witness mismatch.
         engine
-            .verify_deterministic_witness(&counterfactual.nondeterminism_trace.deterministic_witness)
+            .verify_deterministic_witness(
+                &counterfactual.nondeterminism_trace.deterministic_witness,
+            )
             .expect("best-effort witness verification records instead of failing");
     }
     assert!(

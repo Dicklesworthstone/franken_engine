@@ -222,7 +222,9 @@ fn generic_erasure_does_not_discard_hostcall_capability_intents() {
         "generic-policy",
     )
     .expect("generic calls and typed hostcalls must normalize together");
-    let output = prepared.normalization_output.expect("TypeScript lane must run");
+    let output = prepared
+        .normalization_output
+        .expect("TypeScript lane must run");
     assert_eq!(output.capability_intents.len(), 1);
     assert_eq!(output.capability_intents[0].symbol, "hostcall");
     assert_eq!(output.capability_intents[0].capability, "fs.read");

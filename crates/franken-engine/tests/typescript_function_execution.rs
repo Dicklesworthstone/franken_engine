@@ -56,14 +56,19 @@ fn assert_output_goal(source: &str, expected: &[&str], goal: ParseGoal) {
         .into_iter()
         .collect();
         let mut core = InterpreterCore::new(config, "function-execution");
-        let result = core.execute(&module).expect("native TS execution must succeed");
+        let result = core
+            .execute(&module)
+            .expect("native TS execution must succeed");
         let actual: Vec<&str> = result
             .console_output
             .iter()
             .map(|entry| entry.message.as_str())
             .collect();
         assert_eq!(actual, expected);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 }
 
@@ -214,13 +219,25 @@ fn exported_signatures_are_removed_but_implementation_exports_still_parse() {
         "export function read(value: number): number;\nexport function read(value: number) { return value; }",
         "exported-overload.ts", "t", "d", "p",
     ).expect("exported overload should normalize");
-    assert_eq!(prepared.prepared_source.matches("export function read").count(), 1);
+    assert_eq!(
+        prepared
+            .prepared_source
+            .matches("export function read")
+            .count(),
+        1
+    );
     assert!(prepared.prepared_source.starts_with("export{};"));
     assert!(prepared.prepared_source.contains("export function read"));
-    CanonicalEs2020Parser.parse_with_options(
-        ParserSource { label: prepared.source_label, text: prepared.prepared_source },
-        ParseGoal::Module, &ParserOptions::default(),
-    ).expect("remaining runtime export must parse as a JavaScript module");
+    CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: prepared.source_label,
+                text: prepared.prepared_source,
+            },
+            ParseGoal::Module,
+            &ParserOptions::default(),
+        )
+        .expect("remaining runtime export must parse as a JavaScript module");
 }
 
 #[test]
@@ -247,7 +264,11 @@ fn ambient_binding_kinds_create_no_undefined_slots_or_literal_values() {
         console.log(typeof absentString, typeof absentFlag);
         try { absentConst; } catch (error) { console.log(error.name); }
         "#,
-        &["undefined undefined undefined", "undefined undefined", "ReferenceError"],
+        &[
+            "undefined undefined undefined",
+            "undefined undefined",
+            "ReferenceError",
+        ],
     );
 }
 
@@ -291,8 +312,12 @@ fn an_ambient_only_exported_source_is_an_executable_empty_module() {
 fn invalid_ambient_initializers_are_preserved_for_diagnostics() {
     let prepared = prepare_source_entry_for_public_entrypoints(
         "declare const valid: number, invalid = effect();\nconsole.log('after');",
-        "invalid-ambient.ts", "t", "d", "p",
-    ).expect("unsupported initializer is retained for the parser");
+        "invalid-ambient.ts",
+        "t",
+        "d",
+        "p",
+    )
+    .expect("unsupported initializer is retained for the parser");
     assert!(prepared.prepared_source.contains("declare const valid"));
     assert!(prepared.prepared_source.contains("invalid = effect()"));
     assert!(prepared.prepared_source.contains("console.log('after')"));

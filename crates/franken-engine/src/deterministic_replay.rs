@@ -4851,7 +4851,10 @@ mod tests {
         for _ in 0..10_000 {
             trace.witness_deterministic(NondeterminismSource::PropertyResolution, b"k");
         }
-        assert!(trace.events.is_empty(), "folded decisions must not become events");
+        assert!(
+            trace.events.is_empty(),
+            "folded decisions must not become events"
+        );
         assert_eq!(trace.next_sequence, 0);
         assert_eq!(trace.deterministic_witness.event_count, 10_000);
         trace.finalise(1);

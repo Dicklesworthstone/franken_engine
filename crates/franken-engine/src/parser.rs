@@ -4256,7 +4256,7 @@ fn parse_statement_inner(
             span,
         }));
     }
-    if statement.starts_with("import ") || statement == "import" {
+    if starts_import_declaration(statement) {
         if goal == ParseGoal::Script {
             return Err(ParseError::new(
                 ParseErrorCode::InvalidGoal,
@@ -4268,7 +4268,7 @@ fn parse_statement_inner(
         return parse_import(statement, context.source_label, span).map(Statement::Import);
     }
 
-    if statement.starts_with("export ") || statement == "export" {
+    if starts_export_declaration(statement) {
         if goal == ParseGoal::Script {
             return Err(ParseError::new(
                 ParseErrorCode::InvalidGoal,
@@ -4402,13 +4402,59 @@ fn parse_statement_inner(
     }))
 }
 
+/// `import` begins a declaration when followed by whitespace, `{`, `*` or a
+/// quote. Minified code drops the space (`import{a}from'x'`,
+/// `import*as m from'x'`, `import'x'`); `import(...)` and `import.meta` are
+/// expressions even with a space before the `(` or `.`.
+fn starts_import_declaration(statement: &str) -> bool {
+    let Some(rest) = statement.strip_prefix("import") else {
+        return false;
+    };
+    let Some(next) = rest.chars().next() else {
+        return true;
+    };
+    if matches!(next, '{' | '*' | '"' | '\'') {
+        return true;
+    }
+    next.is_whitespace() && !rest.trim_start().starts_with(['(', '.'])
+}
+
+/// `export` begins a declaration when followed by whitespace, `{` or `*`
+/// (minified `export{a as b}`, `export*from'x'`).
+fn starts_export_declaration(statement: &str) -> bool {
+    let Some(rest) = statement.strip_prefix("export") else {
+        return false;
+    };
+    rest.chars()
+        .next()
+        .is_none_or(|next| next.is_whitespace() || matches!(next, '{' | '*'))
+}
+
+/// Split `<binding-clause> from <quoted-source>` at the `from` that
+/// introduces the source: the last `from` that does not continue an
+/// identifier, has a non-empty clause before it, and is followed by a quote.
+/// Minified code omits the spaces around it (`{a}from'x'`, `*as m from"x"`);
+/// `import from from 'x'` and `import{from}from'x'` keep their bindings.
+fn split_import_from(body: &str) -> Option<(&str, &str)> {
+    body.match_indices("from").rev().find_map(|(index, _)| {
+        let clause = &body[..index];
+        let source = body[index + "from".len()..].trim_start();
+        let keyword_starts = clause
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !is_identifier_continue(ch));
+        (keyword_starts && !clause.trim().is_empty() && source.starts_with(['"', '\'']))
+            .then_some((clause, source))
+    })
+}
+
 fn parse_import(
     statement: &str,
     source_label: &str,
     span: SourceSpan,
 ) -> ParseResult<ImportDeclaration> {
     let body = statement
-        .get("import ".len()..)
+        .strip_prefix("import")
         .map(str::trim)
         .unwrap_or("");
     if body.is_empty() {
@@ -4429,7 +4475,7 @@ fn parse_import(
         });
     }
 
-    let (binding_raw, source_raw) = body.split_once(" from ").ok_or_else(|| {
+    let (binding_raw, source_raw) = split_import_from(body).ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "import declaration must be `import <binding-clause> from <quoted-source>` or `import <quoted-source>`",
@@ -4667,7 +4713,7 @@ fn parse_export(
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<ExportDeclaration> {
     let body = statement
-        .get("export ".len()..)
+        .strip_prefix("export")
         .map(str::trim)
         .unwrap_or("");
     if body.is_empty() {
@@ -4679,7 +4725,14 @@ fn parse_export(
         ));
     }
 
-    let kind = if let Some(default_expr) = body.strip_prefix("default ") {
+    // `default` ends at the first non-identifier character: minified code
+    // writes `export default{...}` and `export default(...)`.
+    let default_expr = body.strip_prefix("default").filter(|rest| {
+        rest.chars()
+            .next()
+            .is_some_and(|next| !is_identifier_continue(next))
+    });
+    let kind = if let Some(default_expr) = default_expr {
         ExportKind::Default(parse_expression(default_expr.trim(), &span, context, 1)?)
     } else {
         ExportKind::NamedClause(parse_named_export_clause(
@@ -15698,6 +15751,125 @@ mod tests {
             },
             _ => panic!("expected export statement"),
         }
+    }
+
+    #[test]
+    fn minified_import_declarations_parse_bd_goh5q() {
+        let parse_import = |source: &str| {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            match tree.body.into_iter().next() {
+                Some(Statement::Import(import)) => import,
+                other => panic!("{source}: expected an import, got {other:?}"),
+            }
+        };
+
+        let named = parse_import("import{a,b as c}from'pkg'");
+        match &named.clause {
+            ImportClause::Named { specifiers } => {
+                let names: Vec<_> = specifiers
+                    .iter()
+                    .map(|s| (s.import_name.as_str(), s.local_name.as_str()))
+                    .collect();
+                assert_eq!(names, [("a", "a"), ("b", "c")]);
+            }
+            other => panic!("expected named import clause, got {other:?}"),
+        }
+        assert_eq!(named.source, "pkg");
+
+        assert!(matches!(
+            &parse_import("import d,{a}from\"pkg\"").clause,
+            ImportClause::DefaultAndNamed { default, specifiers }
+                if default == "d" && specifiers.len() == 1
+        ));
+        assert!(matches!(
+            &parse_import("import*as ns from'pkg'").clause,
+            ImportClause::Namespace { local } if local == "ns"
+        ));
+        assert!(matches!(
+            &parse_import("import d,*as ns from'pkg'").clause,
+            ImportClause::DefaultAndNamespace { default, namespace }
+                if default == "d" && namespace == "ns"
+        ));
+        assert!(matches!(
+            parse_import("import'pkg'").clause,
+            ImportClause::SideEffect
+        ));
+        // `from` as a binding name, and a source containing "from".
+        assert!(matches!(
+            &parse_import("import from from'./from.js'").clause,
+            ImportClause::Default { local } if local == "from"
+        ));
+        let from_named = parse_import("import{from}from'./from.js'");
+        assert_eq!(from_named.source, "./from.js");
+        assert!(matches!(
+            &from_named.clause,
+            ImportClause::Named { specifiers } if specifiers[0].local_name == "from"
+        ));
+    }
+
+    #[test]
+    fn minified_export_declarations_parse_bd_goh5q() {
+        let parse_export = |source: &str| {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            match tree.body.into_iter().next() {
+                Some(Statement::Export(export)) => export.kind,
+                other => panic!("{source}: expected an export, got {other:?}"),
+            }
+        };
+        match parse_export("export{}") {
+            ExportKind::NamedClause(clause) => {
+                assert_eq!(clause.canonical_head(), "{}");
+                assert!(clause.source().is_none());
+            }
+            other => panic!("expected named clause export, got {other:?}"),
+        }
+        match parse_export("export{a as b,c}from'pkg'") {
+            ExportKind::NamedClause(clause) => {
+                assert_eq!(clause.canonical_head(), "{a as b,c}");
+                assert_eq!(clause.source().and_then(JsString::as_str), Some("pkg"));
+            }
+            other => panic!("expected named clause export, got {other:?}"),
+        }
+        assert!(matches!(
+            parse_export("export default{x:1}"),
+            ExportKind::Default(_)
+        ));
+        assert!(matches!(
+            parse_export("export default(1)"),
+            ExportKind::Default(_)
+        ));
+    }
+
+    #[test]
+    fn import_and_export_prefixes_that_are_not_declarations_bd_goh5q() {
+        for source in [
+            "import('pkg')",
+            "import ('pkg')",
+            "import.meta",
+            "importance = 1",
+            "exports.value = 1",
+            "exporter = 1",
+        ] {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            assert!(
+                !matches!(
+                    tree.body.first(),
+                    Some(Statement::Import(_) | Statement::Export(_))
+                ),
+                "{source}"
+            );
+        }
+        // A script cannot hold a minified declaration either.
+        let error = CanonicalEs2020Parser
+            .parse("import{a}from'pkg'", ParseGoal::Script)
+            .expect_err("import declaration in a script");
+        assert_eq!(error.code, ParseErrorCode::InvalidGoal);
     }
 
     #[test]

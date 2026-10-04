@@ -653,10 +653,12 @@ fn enr_make_trace(trace_id: &str, num_decisions: usize) -> TraceRecord {
         start_tick: 1000,
     };
     let mut recorder = TraceRecorder::new_lab(config);
+    // Recorded at the first decision's tick: a decision may not consume
+    // nondeterminism observed after it (causal_replay's integrity check).
     recorder.record_nondeterminism(
         NondeterminismSource::Timestamp,
         vec![0, 0, 0, 0, 0, 0, 3, 232],
-        1001,
+        1000,
         None,
     );
     for i in 0..num_decisions {

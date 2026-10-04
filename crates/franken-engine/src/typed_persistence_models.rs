@@ -3196,7 +3196,7 @@ mod tests {
         let (sql, params) = ReplacementLineageEntry::select_by_slot_id("slot-alpha").build();
         assert_eq!(
             sql,
-            r#"SELECT * FROM replacement_lineage WHERE "slot_id" = $1 ORDER BY "sequence_id" ASC"#
+            r#"SELECT * FROM "replacement_lineage" WHERE "slot_id" = $1 ORDER BY "sequence_id" ASC"#
         );
         assert_eq!(params, vec![Value::Text("slot-alpha".to_string())]);
 
@@ -3204,7 +3204,7 @@ mod tests {
             IfcProvenanceEntry::select_by_label_flow("secret/model", "operator/audit").build();
         assert_eq!(
             sql,
-            r#"SELECT * FROM ifc_provenance WHERE "source_label" = $1 AND "target_label" = $2 ORDER BY "provenance_id" ASC"#
+            r#"SELECT * FROM "ifc_provenance" WHERE "source_label" = $1 AND "target_label" = $2 ORDER BY "provenance_id" ASC"#
         );
         assert_eq!(
             params,
@@ -3219,7 +3219,7 @@ mod tests {
             .build();
         assert_eq!(
             sql,
-            r#"SELECT * FROM specialization_index WHERE "status" = $1 ORDER BY "invalidation_timestamp_ms" DESC, "specialization_id" ASC LIMIT 50"#
+            r#"SELECT * FROM "specialization_index" WHERE "status" = $1 ORDER BY "invalidation_timestamp_ms" DESC, "specialization_id" ASC LIMIT 50"#
         );
         assert_eq!(params, vec![Value::Text("invalidated".to_string())]);
 
@@ -3228,7 +3228,7 @@ mod tests {
             .build();
         assert_eq!(
             sql,
-            r#"SELECT * FROM proof_evidence_index WHERE "bead_id" = $1 ORDER BY "source_revision" ASC, "artifact_path" ASC, "evidence_id" ASC LIMIT 25"#
+            r#"SELECT * FROM "proof_evidence_index" WHERE "bead_id" = $1 ORDER BY "source_revision" ASC, "artifact_path" ASC, "evidence_id" ASC LIMIT 25"#
         );
         assert_eq!(params, vec![Value::Text("bd-proof".to_string())]);
 
@@ -3238,7 +3238,7 @@ mod tests {
                 .build();
         assert_eq!(
             sql,
-            r#"SELECT * FROM shadow_evidence_journal WHERE "source_kind" = $1 ORDER BY "sequence_id" ASC, "journal_event_id" ASC LIMIT 10"#
+            r#"SELECT * FROM "shadow_evidence_journal" WHERE "source_kind" = $1 ORDER BY "sequence_id" ASC, "journal_event_id" ASC LIMIT 10"#
         );
         assert_eq!(
             params,

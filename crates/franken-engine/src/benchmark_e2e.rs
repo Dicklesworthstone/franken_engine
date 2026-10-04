@@ -17,7 +17,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Write};
+#[cfg(target_os = "linux")]
+use std::io::{Seek, SeekFrom};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsFd;
 #[cfg(unix)]

@@ -2160,6 +2160,7 @@ impl fmt::Debug for ValidatedLaunch {
     }
 }
 
+#[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
 fn validate_policy(policy: &ProcessSpawnPolicy) -> Result<(), ProcessSpawnError> {
     let root = canonical_directory(
         Path::new(&policy.jailed_cwd_root),
@@ -3053,6 +3054,7 @@ fn exit_from_status(status: ExitStatus) -> ProcessExit {
     }
 }
 
+#[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
 fn fresh_scope() -> String {
     static SCOPE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let sequence = SCOPE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -3073,6 +3075,7 @@ fn fresh_scope() -> String {
     scope
 }
 
+#[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
 fn hex_digit(value: u8) -> char {
     match value {
         0..=9 => char::from(b'0' + value),

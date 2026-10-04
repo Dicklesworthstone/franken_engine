@@ -41,6 +41,11 @@ macOS arm64 and Windows x86_64 MSVC, all built standalone
   - **`matchAll`:** charges one instruction per native exec.
 - **GetSubstitution is bounded.** A `replace` template such as `"$'"`
   repeated is checked against the string limit while it is built, not after.
+- **macOS builds again.** `frankenengine-extension-host` uses
+  `SOCK_CLOEXEC`/`SOCK_NONBLOCK`, which Apple platforms lack, so it now sets
+  both with `fcntl`/`FIONBIO` there. The `st_mode` and `RawMode` width
+  differences are handled, and Linux-only process-containment helpers no
+  longer trip dead-code lints.
 - **The lexical pre-scan's regex-literal detection stops at the line end.**
   Before, it re-scanned the rest of a long line for every `/`.
 

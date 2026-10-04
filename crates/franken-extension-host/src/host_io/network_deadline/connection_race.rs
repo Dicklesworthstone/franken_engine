@@ -219,12 +219,22 @@ impl Connector for SocketConnector {
         } else {
             AddressFamily::INET
         };
+        // Apple platforms have no SOCK_CLOEXEC/SOCK_NONBLOCK: set both on the
+        // fresh descriptor before it is used or shared.
+        #[cfg(not(target_vendor = "apple"))]
         let socket = socket_with(
             family,
             SocketType::STREAM,
             SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
             None,
         )?;
+        #[cfg(target_vendor = "apple")]
+        let socket = {
+            let socket = socket_with(family, SocketType::STREAM, SocketFlags::empty(), None)?;
+            rustix::io::fcntl_setfd(&socket, rustix::io::FdFlags::CLOEXEC)?;
+            rustix::io::ioctl_fionbio(&socket, true)?;
+            socket
+        };
         match connect(&socket, &address) {
             Ok(()) => {}
             Err(rustix::io::Errno::INPROGRESS | rustix::io::Errno::INTR) => {}

@@ -1215,7 +1215,9 @@ impl SandboxedHostIo {
         });
         FsMetadata {
             size: u64::try_from(stat.st_size).unwrap_or(0),
-            mode: stat.st_mode,
+            // `st_mode` is u16 on Apple platforms and u32 elsewhere.
+            #[allow(clippy::useless_conversion)]
+            mode: u32::from(stat.st_mode),
             modified_millis,
             is_file: file_type.is_file(),
             is_directory: file_type.is_dir(),
@@ -2224,7 +2226,14 @@ impl SandboxedHostIo {
                         raw,
                         "open for chmod",
                     )?;
-                    rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(mode))
+                    // `RawMode` is u16 on Apple platforms and u32 elsewhere.
+                    #[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
+                    let raw_mode =
+                        rustix::fs::RawMode::try_from(mode).map_err(|_| HostIoError::Fs {
+                            code: "EINVAL".to_string(),
+                            detail: format!("chmod mode out of range: {raw}"),
+                        })?;
+                    rustix::fs::fchmod(&file, rustix::fs::Mode::from_raw_mode(raw_mode))
                         .map_err(|err| Self::rustix_fs_error("chmod", raw, err))?;
                 }
                 #[cfg(not(unix))]

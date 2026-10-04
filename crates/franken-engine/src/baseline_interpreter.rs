@@ -25004,9 +25004,15 @@ impl InterpreterCore {
     /// compatibility mirrors, but they cannot forge these authoritative reads.
     fn writable_state_view_value(&self, object_id: ObjectId, key: &str) -> Option<Value> {
         if let Some(state) = self.writable_streams.get(&object_id) {
+            // A duplex closes with its readable half: an explicit destroy, or
+            // the shared close whose listeners run in the SettleToArray phase
+            // (Node reports destroyed and closed as true inside 'close').
             let terminal_close_observable = self.readable_from_streams.get(&object_id).map_or_else(
                 || state.destroy_requested || state.tick_phase == WritableTickPhase::Release,
-                |readable| readable.destroy_requested,
+                |readable| {
+                    readable.destroy_requested
+                        || readable.phase == ReadableFromPumpPhase::SettleToArray
+                },
             );
             return match key {
                 "writable" => Some(Value::Bool(
@@ -25029,10 +25035,13 @@ impl InterpreterCore {
         }
 
         let state = self.writable_terminal_states.get(&object_id)?;
-        let terminal_close_observable = self
-            .readable_from_streams
-            .get(&object_id)
-            .is_none_or(|readable| readable.destroy_requested);
+        let terminal_close_observable =
+            self.readable_from_streams
+                .get(&object_id)
+                .is_none_or(|readable| {
+                    readable.destroy_requested
+                        || readable.phase == ReadableFromPumpPhase::SettleToArray
+                });
         match key {
             "writable" => Some(Value::Bool(false)),
             "writableEnded" => Some(Value::Bool(state.end_requested)),

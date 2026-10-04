@@ -1,327 +1,120 @@
-use frankenengine_engine::ast::{
-    BindingPattern, Expression, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
-};
-use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
-use frankenengine_engine::lowering_pipeline::{
-    LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
-};
+//! Array rest destructuring (bd-wxce8): `const [a, ...rest] = ...` binds
+//! the remaining elements to a real array.
+//!
+//! These tests asserted an `ArraySlice` instruction in the lowered program.
+//! Since 99827e3fc (2026-09-14) array destructuring runs the iterator
+//! protocol and collects the rest element by element, which works for any
+//! iterable, so no slice is emitted. They now execute each program and check
+//! the bound values; expected strings are Node v22.2.0's output for the same
+//! programs. The lowering-determinism check is kept.
 
-fn span() -> SourceSpan {
-    SourceSpan::new(0, 1, 1, 1, 1, 2)
-}
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Module};
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
-/// Helper to create a module with a destructuring assignment statement
-fn create_destructuring_module(pattern: BindingPattern, init: Expression) -> Ir0Module {
-    let declarator = VariableDeclarator {
-        pattern,
-        initializer: Some(init),
-        span: span(),
-    };
-
-    let declaration = VariableDeclaration {
-        kind: VariableDeclarationKind::Const,
-        declarations: vec![declarator],
-        span: span(),
-    };
-
-    Ir0Module::from_syntax_tree(
-        SyntaxTree {
-            goal: ParseGoal::Script,
-            body: vec![Statement::VariableDeclaration(declaration)],
-            span: span(),
-        },
-        "test.js",
+fn lower(source: &str) -> Ir3Module {
+    let tree = CanonicalEs2020Parser
+        .parse_with_options(
+            ParserSource {
+                label: "rest.js".into(),
+                text: source.into(),
+            },
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("source parses");
+    lower_ir0_to_ir3(
+        &Ir0Module::from_syntax_tree(tree, "rest.js"),
+        &LoweringContext::new("rest-trace", "rest-decision", "rest-policy"),
     )
+    .expect("source lowers")
+    .ir3
 }
 
-/// Helper to lower a destructuring module through all IR levels and extract IR3 instructions
-fn lower_destructuring_to_ir3(
-    pattern: BindingPattern,
-    init: Expression,
-) -> Result<Vec<Ir3Instruction>, LoweringPipelineError> {
-    let ir0_module = create_destructuring_module(pattern, init);
-
-    let ir1_result = lower_ir0_to_ir1(&ir0_module)?;
-    let ir2_result = lower_ir1_to_ir2(&ir1_result.module)?;
-    let ir3_result = lower_ir2_to_ir3(&ir2_result.module)?;
-
-    Ok(ir3_result.module.instructions)
+/// The completion value of `source` on the deterministic configuration.
+fn eval(source: &str) -> String {
+    let module = lower(source);
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = [
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+    ]
+    .into_iter()
+    .collect();
+    let mut core = InterpreterCore::new(config, "rest");
+    match core.execute(&module).expect("program runs").value {
+        Value::Str(text) => text.to_string(),
+        other => format!("{other:?}"),
+    }
 }
 
+/// `const [a, b, ...rest]` collects the remaining elements.
 #[test]
-fn test_simple_rest_destructuring() {
-    // const [a, b, ...rest] = [1, 2, 3, 4, 5];
-    let pattern = BindingPattern::ArrayPattern(vec![
-        Some(BindingPattern::Identifier("a".to_string())),
-        Some(BindingPattern::Identifier("b".to_string())),
-        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
-            "rest".to_string(),
-        )))),
-    ]);
-
-    let init = Expression::ArrayLiteral(vec![
-        Some(Expression::NumericLiteral(1)),
-        Some(Expression::NumericLiteral(2)),
-        Some(Expression::NumericLiteral(3)),
-        Some(Expression::NumericLiteral(4)),
-        Some(Expression::NumericLiteral(5)),
-    ]);
-
-    let instructions =
-        lower_destructuring_to_ir3(pattern, init).expect("Simple rest should lower successfully");
-
-    // Should contain ArraySlice instruction for the rest operation
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. })),
-        "Should contain ArraySlice instruction for rest destructuring"
-    );
-
-    // Should also contain array creation and element assignments
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::NewArray { .. })),
-        "Should contain NewArray instruction for array creation"
-    );
-}
-
-#[test]
-fn test_empty_rest_destructuring() {
-    // const [a, b, ...rest] = [1, 2];  // rest should be empty array
-    let pattern = BindingPattern::ArrayPattern(vec![
-        Some(BindingPattern::Identifier("a".to_string())),
-        Some(BindingPattern::Identifier("b".to_string())),
-        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
-            "rest".to_string(),
-        )))),
-    ]);
-
-    let init = Expression::ArrayLiteral(vec![
-        Some(Expression::NumericLiteral(1)),
-        Some(Expression::NumericLiteral(2)),
-    ]);
-
-    let instructions =
-        lower_destructuring_to_ir3(pattern, init).expect("Empty rest should lower successfully");
-
-    // Should still contain ArraySlice instruction (will create empty array at runtime)
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. })),
-        "Should contain ArraySlice instruction even for empty rest"
-    );
-}
-
-#[test]
-fn test_source_shorter_than_pattern() {
-    // const [a, b, c, ...rest] = [1, 2];  // c = undefined, rest = []
-    let pattern = BindingPattern::ArrayPattern(vec![
-        Some(BindingPattern::Identifier("a".to_string())),
-        Some(BindingPattern::Identifier("b".to_string())),
-        Some(BindingPattern::Identifier("c".to_string())),
-        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
-            "rest".to_string(),
-        )))),
-    ]);
-
-    let init = Expression::ArrayLiteral(vec![
-        Some(Expression::NumericLiteral(1)),
-        Some(Expression::NumericLiteral(2)),
-    ]);
-
-    let instructions = lower_destructuring_to_ir3(pattern, init)
-        .expect("Source shorter than pattern should lower successfully");
-
-    // Should contain ArraySlice instruction for rest
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. })),
-        "Should contain ArraySlice instruction for rest"
-    );
-
-    // Should contain GetProperty instructions for accessing array elements
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::GetProperty { .. })),
-        "Should contain GetProperty instructions for element access"
-    );
-}
-
-#[test]
-fn test_rest_only_destructuring() {
-    // const [...all] = [1, 2, 3];  // all = [1, 2, 3]
-    let pattern = BindingPattern::ArrayPattern(vec![Some(BindingPattern::Rest(Box::new(
-        BindingPattern::Identifier("all".to_string()),
-    )))]);
-
-    let init = Expression::ArrayLiteral(vec![
-        Some(Expression::NumericLiteral(1)),
-        Some(Expression::NumericLiteral(2)),
-        Some(Expression::NumericLiteral(3)),
-    ]);
-
-    let instructions =
-        lower_destructuring_to_ir3(pattern, init).expect("Rest only should lower successfully");
-
-    // Should contain ArraySlice instruction starting from index 0
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. })),
-        "Should contain ArraySlice instruction for rest-only destructuring"
-    );
-
-    // Should contain LoadInt with value 0 for start index
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::LoadInt { value: 0, .. })),
-        "Should contain LoadInt instruction with start index 0"
-    );
-}
-
-#[test]
-fn test_nested_array_rest_destructuring() {
-    // const [a, [b, ...inner]] = [1, [2, 3, 4]];
-    let pattern = BindingPattern::ArrayPattern(vec![
-        Some(BindingPattern::Identifier("a".to_string())),
-        Some(BindingPattern::ArrayPattern(vec![
-            Some(BindingPattern::Identifier("b".to_string())),
-            Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
-                "inner".to_string(),
-            )))),
-        ])),
-    ]);
-
-    let init = Expression::ArrayLiteral(vec![
-        Some(Expression::NumericLiteral(1)),
-        Some(Expression::ArrayLiteral(vec![
-            Some(Expression::NumericLiteral(2)),
-            Some(Expression::NumericLiteral(3)),
-            Some(Expression::NumericLiteral(4)),
-        ])),
-    ]);
-
-    let instructions =
-        lower_destructuring_to_ir3(pattern, init).expect("Nested rest should lower successfully");
-
-    // Should contain ArraySlice instruction for the inner rest
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. })),
-        "Should contain ArraySlice instruction for nested rest destructuring"
-    );
-
-    // Should contain multiple GetProperty instructions for accessing nested elements
-    let get_property_count = instructions
-        .iter()
-        .filter(|instr| matches!(instr, Ir3Instruction::GetProperty { .. }))
-        .count();
-    assert!(
-        get_property_count >= 2,
-        "Should contain multiple GetProperty instructions for nested access"
-    );
-}
-
-#[test]
-fn test_rest_destructuring_deterministic_lowering() {
-    // Test that rest destructuring lowering is deterministic
-    let pattern = BindingPattern::ArrayPattern(vec![
-        Some(BindingPattern::Identifier("first".to_string())),
-        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
-            "remaining".to_string(),
-        )))),
-    ]);
-
-    let init = Expression::ArrayLiteral(vec![
-        Some(Expression::NumericLiteral(10)),
-        Some(Expression::NumericLiteral(20)),
-        Some(Expression::NumericLiteral(30)),
-    ]);
-
-    // Lower the same destructuring twice
-    let instructions1 = lower_destructuring_to_ir3(pattern.clone(), init.clone())
-        .expect("First lowering should succeed");
-    let instructions2 =
-        lower_destructuring_to_ir3(pattern, init).expect("Second lowering should succeed");
-    // Results should be identical (deterministic)
+fn rest_destructuring_simple_rest() {
     assert_eq!(
-        instructions1.len(),
-        instructions2.len(),
-        "Both lowering passes should produce the same number of instructions"
-    );
-
-    // Both should contain ArraySlice instructions
-    let slice_count1 = instructions1
-        .iter()
-        .filter(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. }))
-        .count();
-    let slice_count2 = instructions2
-        .iter()
-        .filter(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. }))
-        .count();
-    assert_eq!(
-        slice_count1, slice_count2,
-        "Both passes should emit the same number of ArraySlice instructions"
-    );
-
-    // Verify deterministic canonical encoding for equivalent modules.
-    let mut ir3_module1 = Ir3Module::new(ContentHash::compute(b"test"), "test.js");
-    ir3_module1.instructions = instructions1;
-
-    let mut ir3_module2 = Ir3Module::new(ContentHash::compute(b"test"), "test.js");
-    ir3_module2.instructions = instructions2;
-
-    assert_eq!(
-        ir3_module1.canonical_bytes(),
-        ir3_module2.canonical_bytes(),
-        "Equivalent rest-destructuring modules should encode deterministically"
+        eval("const [a, b, ...rest] = [1, 2, 3, 4, 5]; JSON.stringify([a, b, rest]);"),
+        "[1,2,[3,4,5]]"
     );
 }
 
+/// A rest with nothing left is an empty array.
 #[test]
-fn test_array_slice_instruction_properties() {
-    // const [head, ...tail] = [100, 200, 300, 400];
-    let pattern = BindingPattern::ArrayPattern(vec![
-        Some(BindingPattern::Identifier("head".to_string())),
-        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
-            "tail".to_string(),
-        )))),
-    ]);
-
-    let init = Expression::ArrayLiteral(vec![
-        Some(Expression::NumericLiteral(100)),
-        Some(Expression::NumericLiteral(200)),
-        Some(Expression::NumericLiteral(300)),
-        Some(Expression::NumericLiteral(400)),
-    ]);
-
-    let instructions = lower_destructuring_to_ir3(pattern, init)
-        .expect("Array slice properties should lower successfully");
-
-    // Find the ArraySlice instruction and verify its structure
-    let array_slice_instr = instructions
-        .iter()
-        .find(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. }));
-
-    assert!(
-        array_slice_instr.is_some(),
-        "Should contain exactly one ArraySlice instruction"
+fn rest_destructuring_empty_rest() {
+    assert_eq!(
+        eval("const [a, b, ...rest] = [1, 2]; JSON.stringify([a, b, rest, Array.isArray(rest)]);"),
+        "[1,2,[],true]"
     );
+}
 
-    // Verify that the start index is loaded as integer 1 (after first element)
-    assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::LoadInt { value: 1, .. })),
-        "Should load start index 1 for rest destructuring after first element"
+/// Missing elements are undefined and the rest is empty.
+#[test]
+fn rest_destructuring_source_shorter_than_pattern() {
+    assert_eq!(
+        eval(
+            "const [a, b, c, ...rest] = [1]; JSON.stringify([a, b === undefined, c === undefined, rest]);"
+        ),
+        "[1,true,true,[]]"
     );
+}
+
+/// A rest-only pattern copies every element.
+#[test]
+fn rest_destructuring_rest_only() {
+    assert_eq!(
+        eval("const [...rest] = [7, 8, 9]; JSON.stringify(rest);"),
+        "[7,8,9]"
+    );
+}
+
+/// Rest elements in a nested pattern and in the outer pattern.
+#[test]
+fn rest_destructuring_nested_rest() {
+    assert_eq!(
+        eval(
+            "const [a, [b, ...inner], ...outer] = [1, [2, 3, 4], 5, 6]; JSON.stringify([a, b, inner, outer]);"
+        ),
+        "[1,2,[3,4],[5,6]]"
+    );
+}
+
+/// The rest is collected through the iterator protocol, so any iterable works (a Set, a string).
+#[test]
+fn rest_destructuring_rest_from_any_iterable() {
+    assert_eq!(
+        eval(
+            "const [first, ...others] = new Set(['x', 'y', 'z']); const [c, ...chars] = 'hey'; JSON.stringify([first, others, c, chars]);"
+        ),
+        "[\"x\",[\"y\",\"z\"],\"h\",[\"e\",\"y\"]]"
+    );
+}
+
+/// Lowering the same program twice gives the same instructions.
+#[test]
+fn rest_destructuring_lowering_is_deterministic() {
+    let source = "const [a, b, ...rest] = [1, 2, 3, 4, 5]; rest.length;";
+    assert_eq!(lower(source).instructions, lower(source).instructions);
 }

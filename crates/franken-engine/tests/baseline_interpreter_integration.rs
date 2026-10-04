@@ -2513,7 +2513,17 @@ fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7
     // The dependency lowers `sequence` to function-table index 1. Install a
     // colliding importer function at that index: both the initial `.next()`
     // and the post-yield resume must remain bound to the retained dependency
-    // program for direct and method-style construction.
+    // program for direct and method-style construction. Generators resume
+    // through their `next` method (a generator object is not callable).
+    let next_call = |generator: u32, next: u32, dst: u32| Ir3Instruction::CallMethod {
+        receiver: generator,
+        callee: next,
+        args: RegRange {
+            start: 16,
+            count: 0,
+        },
+        dst,
+    };
     let mut module = test_module_with_pool(
         vec![
             Ir3Instruction::LoadStr {
@@ -2534,19 +2544,22 @@ fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7
                 dst: 3,
             },
             Ir3Instruction::LoadInt { dst: 4, value: 2 },
+            // Direct construction: g1 = sequence(2).
             Ir3Instruction::Call {
                 callee: 3,
                 args: RegRange { start: 4, count: 1 },
                 dst: 5,
             },
-            Ir3Instruction::Call {
-                callee: 5,
-                args: RegRange {
-                    start: 16,
-                    count: 0,
-                },
-                dst: 6,
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 3,
             },
+            Ir3Instruction::GetProperty {
+                obj: 5,
+                key: 0,
+                dst: 2,
+            },
+            next_call(5, 2, 6),
             Ir3Instruction::LoadStr {
                 dst: 7,
                 pool_index: 2,
@@ -2557,33 +2570,31 @@ fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7
                 dst: 8,
             },
             Ir3Instruction::LoadInt { dst: 4, value: 3 },
+            // Method-style construction: g2 = ns.sequence(3).
             Ir3Instruction::CallMethod {
                 receiver: 1,
                 callee: 3,
                 args: RegRange { start: 4, count: 1 },
                 dst: 9,
             },
-            Ir3Instruction::Call {
-                callee: 9,
-                args: RegRange {
-                    start: 16,
-                    count: 0,
-                },
-                dst: 10,
+            Ir3Instruction::GetProperty {
+                obj: 9,
+                key: 0,
+                dst: 2,
             },
+            next_call(9, 2, 10),
             Ir3Instruction::GetProperty {
                 obj: 10,
                 key: 7,
                 dst: 11,
             },
-            Ir3Instruction::Call {
-                callee: 5,
-                args: RegRange {
-                    start: 16,
-                    count: 0,
-                },
-                dst: 12,
+            // Resume g1 past its yield: the return value.
+            Ir3Instruction::GetProperty {
+                obj: 5,
+                key: 0,
+                dst: 2,
             },
+            next_call(5, 2, 12),
             Ir3Instruction::GetProperty {
                 obj: 12,
                 key: 7,
@@ -2609,12 +2620,13 @@ fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7
             "./dep.mjs".to_string(),
             "sequence".to_string(),
             "value".to_string(),
+            "next".to_string(),
         ],
     );
     module.function_table = vec![
         Ir3FunctionDesc {
             name: Some("main".to_string()),
-            entry: 18,
+            entry: 22,
             arity: 0,
             frame_size: 16,
             is_generator: false,
@@ -2622,7 +2634,7 @@ fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7
         },
         Ir3FunctionDesc {
             name: Some("wrong_importer_function".to_string()),
-            entry: 20,
+            entry: 24,
             arity: 1,
             frame_size: 16,
             is_generator: true,
@@ -2637,6 +2649,7 @@ fn imported_generators_resume_against_the_exporting_module_function_table_bd_fw7
     let result = QuickJsLane::with_config(config)
         .execute(&module, "module-import-generator-origin-trace")
         .expect("execute imported generator calls and resumptions");
+    // 42 (g1's yield) + 43 (g2's yield) + 43 (g1's return).
     assert_eq!(result.value, Value::Int(128));
 }
 

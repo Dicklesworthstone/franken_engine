@@ -3357,10 +3357,15 @@ abstract class Base { }"#;
         .expect("operation should succeed for valid inputs");
 
         assert!(!output.normalized_source.contains("implements Disposable"));
+        // Erased text becomes spaces (offset-preserving since 411448e01).
+        let compact: String = output
+            .normalized_source
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
         assert!(
-            output
-                .normalized_source
-                .contains("class Service { run() { return 1; } }")
+            compact.contains("classService{run(){return1;}}"),
+            "{compact}"
         );
     }
 

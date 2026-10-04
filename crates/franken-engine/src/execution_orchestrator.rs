@@ -1038,6 +1038,26 @@ impl AdaptiveRoutingDecision {
             _ => Some(self.selected_lane),
         }
     }
+
+    /// The lane reason a run reports, given the router's. A forced dispatch
+    /// makes the router say `PolicyDirective`, which is right for an explicit
+    /// override and for a lane the adaptive policy chose; a fallback is the
+    /// deterministic default lane taken because the policy could not choose.
+    fn reported_lane_reason(&self, routed: LaneReason) -> LaneReason {
+        match self.reason {
+            AdaptiveRoutingReason::WarmupFallback
+            | AdaptiveRoutingReason::SafeModeFallback
+            | AdaptiveRoutingReason::InvalidStateFallback
+            | AdaptiveRoutingReason::MissingEvidenceFallback
+            | AdaptiveRoutingReason::StaleEpochFallback
+            | AdaptiveRoutingReason::BudgetExhaustedFallback
+            | AdaptiveRoutingReason::UpdateFailureFallback => LaneReason::DefaultFallback,
+            AdaptiveRoutingReason::DisabledStaticPolicy
+            | AdaptiveRoutingReason::ExplicitLaneOverride
+            | AdaptiveRoutingReason::CapabilitySafetyConstraint
+            | AdaptiveRoutingReason::AdaptivePolicy => routed,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2834,7 +2854,7 @@ impl ExecutionOrchestrator {
             }
             self.ensure_not_cancelled()?;
             let lane = routed.lane;
-            let lane_reason = routed.reason;
+            let lane_reason = adaptive_routing_decision.reported_lane_reason(routed.reason);
             if lane != adaptive_routing_decision.selected_lane {
                 return Err(OrchestratorError::AdaptiveRoutingDecisionInvalid {
                     detail: format!(
@@ -6523,6 +6543,37 @@ mod tests {
         );
         assert!(static_result.adaptive_router_summary.is_none());
         assert_eq!(static_orchestrator.adaptive_router.rounds(), 0);
+    }
+
+    #[test]
+    fn adaptive_fallback_reports_the_default_lane_reason_not_a_policy_directive() {
+        // A fresh router is still warming up, so the bound decision falls
+        // back to the deterministic lane; nothing directed that lane.
+        let mut orchestrator = ExecutionOrchestrator::with_defaults();
+        let result = orchestrator
+            .execute(&simple_package())
+            .expect("default execution");
+        assert_eq!(
+            result.adaptive_routing_decision.reason,
+            AdaptiveRoutingReason::WarmupFallback
+        );
+        assert_eq!(result.lane, LaneChoice::QuickJs);
+        assert_eq!(result.lane_reason, LaneReason::DefaultFallback);
+
+        // An explicit lane override is a policy directive.
+        let mut forced = ExecutionOrchestrator::new_with_runtime_config(
+            OrchestratorConfig {
+                force_lane: Some(LaneChoice::QuickJs),
+                ..OrchestratorConfig::default()
+            },
+            RuntimeConfig::default(),
+        );
+        let forced_result = forced.execute(&simple_package()).expect("forced execution");
+        assert_eq!(
+            forced_result.adaptive_routing_decision.reason,
+            AdaptiveRoutingReason::ExplicitLaneOverride
+        );
+        assert_eq!(forced_result.lane_reason, LaneReason::PolicyDirective);
     }
 
     #[test]

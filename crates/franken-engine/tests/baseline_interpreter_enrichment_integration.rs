@@ -907,7 +907,7 @@ fn enrichment_construct_non_function_error() {
     let err = qjs_run(&m).unwrap_err();
     match err {
         InterpreterError::TypeError { expected, got } => {
-            assert_eq!(expected, "function");
+            assert_eq!(expected, "constructor function");
             assert_eq!(got, "number");
         }
         other => panic!("expected TypeError, got: {other:?}"),
@@ -925,7 +925,7 @@ fn enrichment_construct_on_undefined_type_error() {
     let err = qjs_run(&m).unwrap_err();
     match err {
         InterpreterError::TypeError { expected, got } => {
-            assert_eq!(expected, "function");
+            assert_eq!(expected, "constructor function");
             assert_eq!(got, "undefined");
         }
         other => panic!("expected TypeError, got: {other:?}"),
@@ -952,7 +952,7 @@ fn enrichment_construct_on_string_type_error() {
     let err = qjs_run(&m).unwrap_err();
     match err {
         InterpreterError::TypeError { expected, got } => {
-            assert_eq!(expected, "function");
+            assert_eq!(expected, "constructor function");
             assert_eq!(got, "string");
         }
         other => panic!("expected TypeError, got: {other:?}"),

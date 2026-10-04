@@ -576,8 +576,16 @@ fn analyze_statement(
                     // head; exact re-export source metadata is a loader key,
                     // not part of the exported-name namespace.
                     let canonical_head = clause.canonical_head();
+                    // `export * as ns from m` exports one name; `export * from m`
+                    // exports m's names, which are known only when m is linked
+                    // (bd-332pq).
+                    let canonical_head = canonical_head
+                        .strip_prefix("* as ")
+                        .unwrap_or(canonical_head);
                     let specifier_names = extract_export_specifier_names(canonical_head);
-                    if specifier_names.is_empty() {
+                    if canonical_head == "*" {
+                        // Nothing to check before linking.
+                    } else if specifier_names.is_empty() {
                         // Entire clause as single name (legacy or single-specifier).
                         if !state.export_names.insert(canonical_head.to_string()) {
                             state.push_error(
@@ -6049,6 +6057,46 @@ mod tests {
                 .iter()
                 .any(|e| e.kind == StaticErrorKind::DuplicateExport),
             "duplicate 'a' in separate named export clauses should be detected"
+        );
+    }
+
+    #[test]
+    fn star_exports_are_checked_by_name_bd_332pq() {
+        let star = |head: &str, source: &str, line: u64| {
+            Statement::Export(ExportDeclaration {
+                kind: ExportKind::NamedClause(crate::ast::NamedExportClause::new(
+                    head,
+                    Some(crate::js_string::JsString::from(source)),
+                )),
+                span: span(line),
+            })
+        };
+        // Two `export * from` statements name nothing before linking.
+        let tree = make_tree(
+            ParseGoal::Module,
+            vec![star("*", "./a.mjs", 1), star("*", "./b.mjs", 2)],
+        );
+        assert!(analyze(&tree).passed());
+
+        // `export * as ns` exports `ns`, which a second export collides with.
+        let tree = make_tree(
+            ParseGoal::Module,
+            vec![
+                star("* as ns", "./a.mjs", 1),
+                Statement::Export(ExportDeclaration {
+                    kind: ExportKind::NamedClause("{ ns }".into()),
+                    span: span(2),
+                }),
+            ],
+        );
+        let result = analyze(&tree);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.kind == StaticErrorKind::DuplicateExport),
+            "{:?}",
+            result.errors
         );
     }
 

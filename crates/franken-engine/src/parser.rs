@@ -8687,6 +8687,15 @@ fn parse_assignment_target_expression(
         )));
     }
     let target = parse_expression(source, span, context, recursion_depth)?;
+    // The specific diagnostic first: `config?.theme = value`.
+    if assignment_target_has_optional_chain(&target) {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "optional chaining cannot be used as an assignment target",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
     if !matches!(
         target,
         Expression::Identifier(_)

@@ -814,7 +814,8 @@ mod tests {
         let mut buf: Vec<u8> = vec![0x30, 0x00];
         for _ in 0..(MAX_DER_DEPTH as usize + 2) {
             let len = u8::try_from(buf.len()).expect("short-form length");
-            buf.splice(0..0, [0x30, len]);
+            buf.insert(0, len);
+            buf.insert(0, 0x30);
         }
         assert!(parse_x509_metadata(&buf).is_err());
     }

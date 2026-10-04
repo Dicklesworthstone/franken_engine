@@ -4278,6 +4278,26 @@ fn lower_object_assignment_pattern_to_ir1(
     Ok(())
 }
 
+/// Synthetic slot prefix for a parameter with an initializer (`b = 1`,
+/// `{ x } = {}`). A function's `length` counts the parameters before the
+/// first such slot (ES2020 ExpectedArgumentCount, bd-9vouw.134).
+const DEFAULTED_PARAM_SLOT_PREFIX: &str = "__param_default_";
+
+/// ExpectedArgumentCount: parameters before the first one with an
+/// initializer or the rest parameter.
+fn expected_argument_count(param_names: &[String], rest_param_index: Option<u32>) -> u32 {
+    let first_default = param_names
+        .iter()
+        .position(|name| name.starts_with(DEFAULTED_PARAM_SLOT_PREFIX))
+        .and_then(|index| u32::try_from(index).ok());
+    let arity = u32::try_from(param_names.len()).unwrap_or(u32::MAX);
+    first_default
+        .into_iter()
+        .chain(rest_param_index)
+        .min()
+        .unwrap_or(arity)
+}
+
 fn push_param_slot<'a>(
     index: usize,
     param: &'a crate::ast::FunctionParam,
@@ -4294,7 +4314,11 @@ fn push_param_slot<'a>(
     match param.name() {
         Some(name) => param_names.push(name.to_string()),
         None => {
-            let synthetic = format!("__param_{index}");
+            let synthetic = if matches!(param.pattern, BindingPattern::AssignmentPattern { .. }) {
+                format!("{DEFAULTED_PARAM_SLOT_PREFIX}{index}")
+            } else {
+                format!("__param_{index}")
+            };
             param_names.push(synthetic.clone());
             destructure_params.push((synthetic, &param.pattern));
         }
@@ -11934,6 +11958,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             }
         }
 
+        // bd-9vouw.134: a parameter with an initializer ends `length`.
+        let expected_length = expected_argument_count(param_names, fn_rest_param_index);
+        if expected_length != fn_rest_param_index.unwrap_or(arity) {
+            let function_index = u32::try_from(ir3.function_table.len()).unwrap_or(u32::MAX);
+            ir3.function_lengths.insert(function_index, expected_length);
+        }
         ir3.function_table.push(Ir3FunctionDesc {
             entry,
             arity,

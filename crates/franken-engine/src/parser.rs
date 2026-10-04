@@ -9855,6 +9855,7 @@ fn regex_literal_len_at(expr: &str, slash: usize) -> Option<usize> {
     // After a spread `...` an operand starts (`[.../a/g[Symbol.matchAll](s)]`);
     // a single `.` before `/` is a member access or `1./2`.
     if !before.ends_with("...")
+        && !closes_control_statement_head(before)
         && !merge_logical_lines_slash_starts_regex(
             before.chars().next_back(),
             &before[identifier_start..],
@@ -9868,6 +9869,39 @@ fn regex_literal_len_at(expr: &str, slash: usize) -> Option<usize> {
     // end itself; cutting the line out first rescanned the rest of a long
     // line for every slash on it (quadratic in a one-line bundle).
     leading_regexp_literal(&expr[slash..]).map(|(end, _, _)| end)
+}
+
+/// Whether `before` ends with the `)` of an `if`/`while`/`for`/`with` head,
+/// after which a statement starts, so a `/` opens a regular expression
+/// (`if (ok) /}/.test(s)`), whereas after a call's `)` it divides
+/// (`f(x) / 2`). A keyword used as a property name (`o.if(x) / 2`) is a
+/// call.
+fn closes_control_statement_head(before: &str) -> bool {
+    if !before.ends_with(')') {
+        return false;
+    }
+    let mut depth = 0usize;
+    for (index, byte) in before.bytes().enumerate().rev() {
+        match byte {
+            b')' => depth += 1,
+            b'(' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let head = before[..index].trim_end();
+                    let start = head
+                        .char_indices()
+                        .rev()
+                        .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '$'))
+                        .map_or(0, |(position, ch)| position + ch.len_utf8());
+                    let keyword = &head[start..];
+                    let is_property = head[..start].trim_end().ends_with('.');
+                    return !is_property && matches!(keyword, "if" | "while" | "for" | "with");
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Return the byte end and components of a regex literal at the start of `input`.
@@ -20303,6 +20337,35 @@ mod tests {
     fn parse_script_with_regex_brace_before_block_keeps_two_statements() {
         let tree = parse_script("var r = /{/;\nif (x) {\n  y;\n}");
         assert_eq!(tree.body.len(), 2);
+    }
+
+    #[test]
+    fn slash_after_a_control_statement_head_opens_a_regex() {
+        // After `if (...)` a statement starts, so `/}/` is a regex, and its
+        // `}` closes nothing.
+        let tree = parse_script("var r;\nif (true) /}/.test('}') && (r = 1);\nr;");
+        assert_eq!(tree.body.len(), 3);
+        let rendered = format!("{:?}", tree.body[1]);
+        assert!(rendered.contains("RegExpLiteral"), "{rendered}");
+        for source in [
+            "while (x) /a/.test(s);",
+            "for (;;) /a/.test(s);",
+            "if (a) /=/.test(s);",
+        ] {
+            let tree = parse_script(source);
+            assert!(
+                format!("{:?}", tree.body[0]).contains("RegExpLiteral"),
+                "{source}"
+            );
+        }
+        // After a call's `)` (also a keyword-named method) the slash divides.
+        for source in ["f(x) / 2 / 1;", "o.if(x) / 2 / 1;", "(a) / b / c;"] {
+            let tree = parse_script(source);
+            assert!(
+                !format!("{:?}", tree.body[0]).contains("RegExpLiteral"),
+                "{source}"
+            );
+        }
     }
 
     #[test]

@@ -176,11 +176,13 @@ fn normalize_strips_implements_clauses() {
     let source = "class Foo implements Bar, Baz { run() { return 1; } }";
     let output = normalize(source).unwrap();
     assert!(!output.normalized_source.contains("implements Bar"));
-    assert!(
-        output
-            .normalized_source
-            .contains("class Foo { run() { return 1; } }")
-    );
+    assert!(without_whitespace(&output.normalized_source).contains("classFoo{run(){return1;}}"));
+}
+
+/// Type erasure replaces erased text with spaces so byte offsets and lines
+/// survive (411448e01); compare normalized output without whitespace.
+fn without_whitespace(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
 
 // ===========================================================================
@@ -1800,14 +1802,9 @@ fn normalize_namespace_export_function_lowering_produces_function_and_binding() 
         "namespace Utils { export function add(a: number, b: number): number { return a + b; } }";
     let output = normalize(source).unwrap();
     assert!(output.normalized_source.contains("const Utils = (() => {"));
-    // After strip_type_annotations removes `: number`, the space before `{`
-    // is consumed, producing `add(a, b){` instead of `add(a, b) {`. This is a
-    // known formatting artifact of the current type-stripping pass.
-    assert!(
-        output
-            .normalized_source
-            .contains("function add(a, b){ return a + b; }")
-    );
+    // Erased annotations become spaces (offset-preserving), so compare the
+    // function without whitespace.
+    assert!(without_whitespace(&output.normalized_source).contains("functionadd(a,b){returna+b;}"));
     assert!(output.normalized_source.contains("ns.add = add;"));
     assert!(output.normalized_source.contains("return ns;"));
 }
@@ -1821,13 +1818,9 @@ namespace Utils {
 }
 "#;
     let output = normalize(source).unwrap();
-    // After strip_type_annotations removes `: number`, the space before `{`
-    // is consumed, producing `add(a, b){` instead of `add(a, b) {`.
-    assert!(
-        output
-            .normalized_source
-            .contains("function add(a, b){ return a + b; }")
-    );
+    // Erased annotations become spaces (offset-preserving), so compare the
+    // function without whitespace.
+    assert!(without_whitespace(&output.normalized_source).contains("functionadd(a,b){returna+b;}"));
     assert!(output.normalized_source.contains("ns.add = add;"));
     assert!(output.normalized_source.contains("ns.version = 1;"));
     assert!(output.normalized_source.contains("return ns;"));
@@ -2962,15 +2955,22 @@ fn enrichment_decision_abstract_class_lowering_changed_true() {
 
 #[test]
 fn enrichment_decision_implements_clause_changed_true() {
+    // Since 411448e01 type erasure removes the implements clause along with
+    // the other annotations, so the later implements step finds nothing left.
     let source = "class A implements B { go() { return 1; } }";
     let output = normalize(source).unwrap();
-    let decision = output
-        .witness
-        .decisions
-        .iter()
-        .find(|d| d.step == "implements_clause_normalization")
-        .unwrap();
-    assert!(decision.changed);
+    let changed = |step: &str| {
+        output
+            .witness
+            .decisions
+            .iter()
+            .find(|d| d.step == step)
+            .unwrap_or_else(|| panic!("missing decision {step}"))
+            .changed
+    };
+    assert!(changed("type_annotation_stripping"));
+    assert!(!changed("implements_clause_normalization"));
+    assert!(!output.normalized_source.contains("implements"));
 }
 
 #[test]

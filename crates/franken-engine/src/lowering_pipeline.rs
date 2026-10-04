@@ -1728,6 +1728,55 @@ fn lower_ir0_to_ir1_on_current_stack(
                     });
                     ir1.ops.push(Ir1Op::Pop);
                 }
+                // `export * from m` (bd-332pq): every export of m except
+                // `default` becomes an export of this module, resolved by the
+                // runtime against m's module record when the statement runs.
+                ExportKind::NamedClause(clause)
+                    if clause.canonical_head() == "*" && clause.source().is_some() =>
+                {
+                    ir1.ops.push(Ir1Op::ImportModule {
+                        specifier: clause.source().cloned().expect("guarded above"),
+                    });
+                    ir1.ops.push(Ir1Op::HostCall {
+                        capability: MODULE_EXPORT_STAR_HOSTCALL.to_string(),
+                        arg_count: 1,
+                    });
+                    ir1.ops.push(Ir1Op::Pop);
+                }
+                // `export * as ns from m`: ns is m's namespace object.
+                ExportKind::NamedClause(clause)
+                    if clause.canonical_head().starts_with("* as ")
+                        && clause.source().is_some() =>
+                {
+                    let exported_name = clause.canonical_head()["* as ".len()..].to_string();
+                    let namespace_binding_id = {
+                        let temp_name = make_internal_binding_name(
+                            "reexport_namespace",
+                            synthetic_export_index,
+                        );
+                        synthetic_export_index = synthetic_export_index.saturating_add(1);
+                        alloc_binding(
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                            root_scope_id,
+                            &temp_name,
+                            BindingKind::Const,
+                        )
+                        .map_err(LoweringPipelineError::SemanticViolation)?
+                    };
+                    ir1.ops.push(Ir1Op::ImportModule {
+                        specifier: clause.source().cloned().expect("guarded above"),
+                    });
+                    ir1.ops.push(Ir1Op::StoreBinding {
+                        binding_id: namespace_binding_id,
+                    });
+                    ir1.ops.push(Ir1Op::ExportBinding {
+                        name: exported_name,
+                        binding_id: namespace_binding_id,
+                    });
+                    ir1.ops.push(Ir1Op::Pop);
+                }
                 ExportKind::NamedClause(clause) => {
                     let specifiers = parse_named_export_clause_bindings(clause.canonical_head());
                     if let Some(source_specifier) = clause.source().cloned() {
@@ -31988,6 +32037,8 @@ const MAX_BATCH_LITERAL_ENTRIES: usize = 64;
 /// Sets an incrementally built object literal's prototype for its
 /// `__proto__: v` entry and returns the literal (Annex B.3.1).
 const OBJECT_LITERAL_PROTOTYPE_CAPABILITY: &str = "builtin:ObjectLiteralPrototype";
+/// `export * from m` (bd-332pq): one argument, m's namespace object.
+pub(crate) const MODULE_EXPORT_STAR_HOSTCALL: &str = "builtin:ModuleExportStar";
 
 /// Source-name slot of a spilled non-lexical function-body local's
 /// identity-qualified runtime name (lexical ones keep their source name, as

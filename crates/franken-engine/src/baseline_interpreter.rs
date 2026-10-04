@@ -8710,11 +8710,24 @@ enum ModuleRuntimeStatus {
     Failed(String),
 }
 
+/// How `export * from m` (bd-332pq) holds one of the module's export names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StarExportOrigin {
+    /// One star source provides the name.
+    Provided,
+    /// Star sources provide different values: ES2020 ResolveExport finds the
+    /// name ambiguous, so the module does not export it.
+    Ambiguous,
+}
+
 #[derive(Debug, Clone)]
 struct ModuleRuntimeRecord {
     status: ModuleRuntimeStatus,
     namespace_object: ObjectId,
     exports: BTreeMap<JsString, Value>,
+    /// Export names that came from `export * from` rather than this module's
+    /// own export declarations (which always win).
+    star_exports: BTreeMap<JsString, StarExportOrigin>,
     pending_import_bindings: BTreeMap<JsString, Vec<Weak<RefCell<ScopeBindingState>>>>,
     cjs_module_object: Option<ObjectId>,
     /// The executable program that owns every closure created while this
@@ -37374,6 +37387,7 @@ impl InterpreterCore {
                 status: ModuleRuntimeStatus::Evaluating,
                 namespace_object,
                 exports: BTreeMap::new(),
+                star_exports: BTreeMap::new(),
                 pending_import_bindings: BTreeMap::new(),
                 cjs_module_object: None,
                 compiled_module,
@@ -43704,12 +43718,15 @@ impl InterpreterCore {
             value,
         ) {
             Ok(()) => {
-                self.module_state
+                let record = self
+                    .module_state
                     .modules
                     .get_mut(&specifier)
-                    .expect("module export record existed after namespace update")
-                    .pending_import_bindings
-                    .remove(&name);
+                    .expect("module export record existed after namespace update");
+                record.pending_import_bindings.remove(&name);
+                // The module's own export of this name wins over any star
+                // re-export (module_export_star re-marks its own names).
+                record.star_exports.remove(&name);
                 Ok(())
             }
             Err(error) => {
@@ -43738,6 +43755,102 @@ impl InterpreterCore {
                 Err(error)
             }
         }
+    }
+
+    /// `export * from m` (bd-332pq): every export of `m` except `default`
+    /// becomes an export of the current module unless the module exports
+    /// that name itself. When two star sources provide one name with
+    /// different values the name is ambiguous (ES2020 ResolveExport) and the
+    /// module does not export it; the same value through two paths (a
+    /// diamond) is not ambiguous. Values are copied when the statement runs,
+    /// as named re-exports are.
+    fn module_export_star(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        if args.count != 1 {
+            return Err(InterpreterError::TypeError {
+                expected: "one module namespace for export *".to_string(),
+                got: format!("{} argument(s)", args.count),
+            });
+        }
+        let namespace = self.read_reg(args.start)?;
+        let label = self.get_register_label(args.start)?.clone();
+        let Value::Object(namespace_object) = namespace else {
+            return Err(InterpreterError::TypeError {
+                expected: "module namespace object".to_string(),
+                got: namespace.type_name().to_string(),
+            });
+        };
+        let Some(specifier) = self.current_module_specifier.clone() else {
+            return Err(InterpreterError::ExportOutsideModule {
+                name: "*".to_string(),
+            });
+        };
+        let source_exports: Vec<(JsString, Value)> = self
+            .module_state
+            .modules
+            .values()
+            .find(|record| record.namespace_object == namespace_object)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "export * source with a module record".to_string(),
+                got: "a namespace without module exports".to_string(),
+            })?
+            .exports
+            .iter()
+            .filter(|(name, _)| name.as_str() != Some("default"))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        for (name, value) in source_exports {
+            let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
+                InterpreterError::ExportOutsideModule {
+                    name: name.to_string(),
+                }
+            })?;
+            match (record.star_exports.get(&name), record.exports.get(&name)) {
+                (Some(StarExportOrigin::Ambiguous), _) => {}
+                (Some(StarExportOrigin::Provided), Some(existing)) => {
+                    if !Self::same_value(existing, &value) {
+                        self.withdraw_ambiguous_star_export(&specifier, &name)?;
+                    }
+                }
+                // The module's own export of this name wins.
+                (None, Some(_)) => {}
+                (_, None) => {
+                    self.register_module_export_exact_labeled(name.clone(), value, label.clone())?;
+                    if let Some(record) = self.module_state.modules.get_mut(&specifier) {
+                        record.star_exports.insert(name, StarExportOrigin::Provided);
+                    }
+                }
+            }
+        }
+        Ok(Value::Undefined)
+    }
+
+    /// Remove a star-provided export that a second star source contradicts.
+    fn withdraw_ambiguous_star_export(
+        &mut self,
+        specifier: &str,
+        name: &JsString,
+    ) -> Result<(), InterpreterError> {
+        let record = self
+            .module_state
+            .modules
+            .get_mut(specifier)
+            .ok_or_else(|| InterpreterError::ExportOutsideModule {
+                name: name.to_string(),
+            })?;
+        record
+            .star_exports
+            .insert(name.clone(), StarExportOrigin::Ambiguous);
+        let namespace_object = record.namespace_object;
+        let Some(previous) = record.exports.remove(name) else {
+            return Ok(());
+        };
+        let previous_bytes = Self::estimate_js_string_map_entry_bytes(name, &previous);
+        self.remove_object_runtime_property(
+            namespace_object,
+            &RuntimePropertyKey::String(name.clone()),
+        )?;
+        self.apply_memory_component_delta(previous_bytes, 0)
+            .map(|_| ())
     }
 
     fn cyclic_module_import_target(
@@ -84323,6 +84436,7 @@ impl InterpreterCore {
                 }
                 self.alloc_import_meta_object()
             }
+            crate::lowering_pipeline::MODULE_EXPORT_STAR_HOSTCALL => self.module_export_star(args),
             "builtin:ApplyHostCall" => self.dispatch_apply_hostcall(args, module, None),
             capability if capability.starts_with(APPLY_HOSTCALL_TARGET_PREFIX) => self
                 .dispatch_apply_hostcall(
@@ -117969,6 +118083,7 @@ mod async_runtime_tests_current {
                     status: ModuleRuntimeStatus::Evaluating,
                     namespace_object: namespace,
                     exports: BTreeMap::new(),
+                    star_exports: BTreeMap::new(),
                     pending_import_bindings: BTreeMap::new(),
                     cjs_module_object: None,
                     compiled_module: None,
@@ -155498,6 +155613,7 @@ mod tests {
                 status: ModuleRuntimeStatus::Evaluating,
                 namespace_object,
                 exports: BTreeMap::new(),
+                star_exports: BTreeMap::new(),
                 pending_import_bindings: BTreeMap::new(),
                 cjs_module_object: Some(module_object),
                 compiled_module: None,

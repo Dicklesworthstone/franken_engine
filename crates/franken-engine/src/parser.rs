@@ -4734,6 +4734,8 @@ fn parse_export(
     });
     let kind = if let Some(default_expr) = default_expr {
         ExportKind::Default(parse_expression(default_expr.trim(), &span, context, 1)?)
+    } else if let Some(star) = body.strip_prefix('*') {
+        ExportKind::NamedClause(parse_star_export_clause(star, context.source_label, &span)?)
     } else {
         ExportKind::NamedClause(parse_named_export_clause(
             body,
@@ -4742,6 +4744,57 @@ fn parse_export(
         )?)
     };
     Ok(ExportDeclaration { kind, span })
+}
+
+/// `export * from 'm'` and `export * as ns from 'm'` (bd-332pq), minified too
+/// (`export*from'm'`). `rest` follows the `*`. The declaration is carried as
+/// a named clause whose head is `*` or `* as ns` and whose source is `m`: the
+/// lowering re-exports every name of `m` except `default`, or binds `ns` to
+/// `m`'s namespace object.
+fn parse_star_export_clause(
+    rest: &str,
+    source_label: &str,
+    span: &SourceSpan,
+) -> ParseResult<NamedExportClause> {
+    let error = |message: &str| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            message,
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
+    let rest = rest.trim_start();
+    let (head, after_head) = match rest
+        .strip_prefix("as")
+        .filter(|tail| tail.starts_with(char::is_whitespace))
+    {
+        Some(tail) => {
+            let tail = tail.trim_start();
+            let alias_len = tail
+                .find(|ch: char| !is_identifier_continue(ch))
+                .unwrap_or(tail.len());
+            let alias = &tail[..alias_len];
+            if !alias.chars().next().is_some_and(is_identifier_start) {
+                return Err(error("`export * as` needs an export name"));
+            }
+            (format!("* as {alias}"), &tail[alias_len..])
+        }
+        None => ("*".to_string(), rest),
+    };
+    let source_raw = after_head
+        .trim_start()
+        .strip_prefix("from")
+        .map(str::trim_start)
+        .filter(|source| source.starts_with(['"', '\'']))
+        .ok_or_else(|| {
+            error(
+                "star export must be `export * from <quoted-source>` or `export * as <name> from <quoted-source>`",
+            )
+        })?;
+    let source =
+        parse_quoted_string(source_raw).ok_or_else(|| error("export source must be quoted"))?;
+    Ok(NamedExportClause::new(head, Some(source)))
 }
 
 fn parse_named_export_clause(
@@ -15842,6 +15895,44 @@ mod tests {
             parse_export("export default(1)"),
             ExportKind::Default(_)
         ));
+    }
+
+    #[test]
+    fn star_export_declarations_parse_bd_332pq() {
+        for (source, head) in [
+            ("export * from 'pkg'", "*"),
+            ("export*from'pkg'", "*"),
+            ("export * as ns from \"pkg\"", "* as ns"),
+            ("export*as ns from'pkg'", "* as ns"),
+            ("export * as from from 'pkg'", "* as from"),
+        ] {
+            let tree = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            let Some(Statement::Export(export)) = tree.body.first() else {
+                panic!("{source}: expected an export");
+            };
+            let ExportKind::NamedClause(clause) = &export.kind else {
+                panic!("{source}: expected a clause export");
+            };
+            assert_eq!(clause.canonical_head(), head, "{source}");
+            assert_eq!(
+                clause.source().and_then(JsString::as_str),
+                Some("pkg"),
+                "{source}"
+            );
+        }
+        for source in [
+            "export * 'pkg'",
+            "export * as from 'pkg'",
+            "export * as ns",
+            "export * from pkg",
+        ] {
+            let error = CanonicalEs2020Parser
+                .parse(source, ParseGoal::Module)
+                .expect_err(source);
+            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+        }
     }
 
     #[test]

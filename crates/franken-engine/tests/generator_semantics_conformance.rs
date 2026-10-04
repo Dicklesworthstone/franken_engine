@@ -43,9 +43,11 @@ fn lower_source_to_ir3(source: &str) -> Ir3Module {
 fn run_ir3(module: &Ir3Module) -> Value {
     use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
     let mut config = InterpreterConfig::quickjs_defaults();
+    // Builtin: the protocol checks read `Symbol.iterator`.
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
     ]);
     let mut core = InterpreterCore::new(config, "gen-test");
     core.execute(module)

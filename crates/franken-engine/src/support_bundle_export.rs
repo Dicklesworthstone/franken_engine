@@ -189,7 +189,6 @@ pub fn is_sensitive(input: &str) -> bool {
         "accesskey",
         "api_key",
         "apikey",
-        "auth",
         "bearer",
         "cookie",
         "credential",
@@ -206,6 +205,21 @@ pub fn is_sensitive(input: &str) -> bool {
     .iter()
     .any(|needle| {
         lowered.contains(needle) || normalized.contains(needle) || compact.contains(needle)
+    }) || mentions_auth_credential(&lowered)
+        || mentions_auth_credential(&compact)
+}
+
+/// `auth` marks a credential (`auth`, `basic_auth`, `oauth`, `authn`,
+/// `authorization`), but `authority` and `author` are ordinary words: a v2
+/// evidence entry's `key_provenance.authority_class` is audit metadata.
+fn mentions_auth_credential(text: &str) -> bool {
+    text.match_indices("auth").any(|(index, _)| {
+        let rest = &text[index..];
+        let ordinary_word = rest.starts_with("authorit")
+            || (rest.starts_with("author")
+                && !rest.starts_with("authoriz")
+                && !rest.starts_with("authoris"));
+        !ordinary_word
     })
 }
 
@@ -761,6 +775,33 @@ mod tests {
         assert!(is_sensitive("passwd"));
         assert!(is_sensitive("password"));
         assert!(!is_sensitive("panic_count"));
+    }
+
+    #[test]
+    fn is_sensitive_tells_auth_credentials_from_authority() {
+        for credential in [
+            "auth",
+            "basic_auth",
+            "x-auth-header",
+            "oauth_state",
+            "authn",
+            "Authorization",
+            "proxy-authorisation",
+            "authentication_header",
+        ] {
+            assert!(is_sensitive(credential), "{credential}");
+        }
+        for ordinary in [
+            "signed_envelope.key_provenance.authority_class",
+            "evidence authority",
+            "authoritative_source",
+            "author",
+            "co_author",
+        ] {
+            assert!(!is_sensitive(ordinary), "{ordinary}");
+        }
+        // A credential next to an ordinary word is still a credential.
+        assert!(is_sensitive("authority.auth_header"));
     }
 
     #[test]

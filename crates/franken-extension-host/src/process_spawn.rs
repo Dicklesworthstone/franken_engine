@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
 use std::os::fd::AsFd;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use std::os::fd::AsRawFd;

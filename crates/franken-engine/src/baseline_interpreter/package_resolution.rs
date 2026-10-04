@@ -68,6 +68,12 @@ const NODE_CORE_MODULE_NAMES: &[&str] = &[
     "zlib",
 ];
 
+/// A Node core module specifier (`fs`, `node:fs`): no package lookup, no
+/// runtime module object; its recognized call forms are lowered instead.
+pub(crate) fn is_node_core_module_specifier(specifier: &str) -> bool {
+    specifier.starts_with("node:") || NODE_CORE_MODULE_NAMES.contains(&specifier)
+}
+
 /// Conditions a CommonJS `require` matches in an `exports` map. `default`
 /// always matches as well.
 const REQUIRE_EXPORT_CONDITIONS: &[&str] = &["node", "require"];

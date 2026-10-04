@@ -599,12 +599,53 @@ pub fn lower_ir0_to_ir3(
     ir0: &Ir0Module,
     context: &LoweringContext,
 ) -> Result<LoweringPipelineOutput, LoweringPipelineError> {
+    match lower_ir0_to_ir3_unit(ir0, context, false) {
+        // bd-j8f7q: an opaque local import raises the unit's ceiling to
+        // TopSecret, so every value computed by imported code is refused at a
+        // console sink. Retry assuming each local import yields at most
+        // IFC_BOUNDED_IMPORT_LABEL; the interpreter checks that assumption
+        // against the imported module's own ceiling before running it. A unit
+        // without a local import is refused exactly as before.
+        Err(refusal @ LoweringPipelineError::UnauthorizedFlow { .. })
+            if ir0_has_local_static_import(ir0) =>
+        {
+            lower_ir0_to_ir3_unit(ir0, context, true).map_err(|_| refusal)
+        }
+        result => result,
+    }
+}
+
+/// Whether the unit statically imports or re-exports a module the bounded
+/// contract covers (a local file or a package).
+fn ir0_has_local_static_import(ir0: &Ir0Module) -> bool {
+    ir0.tree.body.iter().any(|statement| match statement {
+        Statement::Import(import) => import
+            .source
+            .as_str()
+            .is_some_and(is_bounded_import_specifier),
+        Statement::Export(export) => match &export.kind {
+            ExportKind::NamedClause(clause) => clause
+                .source()
+                .and_then(JsString::as_str)
+                .is_some_and(is_bounded_import_specifier),
+            ExportKind::Default(_) => false,
+        },
+        _ => false,
+    })
+}
+
+fn lower_ir0_to_ir3_unit(
+    ir0: &Ir0Module,
+    context: &LoweringContext,
+    bounded_imports: bool,
+) -> Result<LoweringPipelineOutput, LoweringPipelineError> {
     let mut events = Vec::<LoweringEvent>::new();
 
     let ir1_result = match lower_ir0_to_ir1_with_authenticated_runtime_bindings(
         ir0,
         context.ambient_authority_grant,
         context.authenticated_commonjs_runtime_bindings,
+        bounded_imports,
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir0_to_ir1_lowered"));
@@ -847,7 +888,7 @@ fn lower_ir0_to_ir1_with_ambient_grant(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
-    lower_ir0_to_ir1_with_authenticated_runtime_bindings(ir0, ambient_grant, false)
+    lower_ir0_to_ir1_with_authenticated_runtime_bindings(ir0, ambient_grant, false, false)
 }
 
 /// Native stack for IR0 -> IR1 lowering, which recurses over the syntax tree
@@ -865,6 +906,7 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
     authenticated_commonjs_runtime_bindings: bool,
+    bounded_imports: bool,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     crate::parser::run_with_provisioned_stack(
         "franken-engine-lower",
@@ -876,6 +918,7 @@ fn lower_ir0_to_ir1_with_authenticated_runtime_bindings(
                 ir0,
                 ambient_grant,
                 authenticated_commonjs_runtime_bindings,
+                bounded_imports,
             )
         },
     )
@@ -885,6 +928,7 @@ fn lower_ir0_to_ir1_on_current_stack(
     ir0: &Ir0Module,
     ambient_grant: AmbientAuthorityGrant,
     authenticated_commonjs_runtime_bindings: bool,
+    bounded_imports: bool,
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
@@ -2106,6 +2150,22 @@ fn lower_ir0_to_ir1_on_current_stack(
         kind: root_scope_kind,
         bindings,
     });
+    // bd-j8f7q: a bounded unit declares its import contract first, so the
+    // contract is part of the IR (and runs before any effect of the unit).
+    if bounded_imports {
+        ir1.ops.insert(0, Ir1Op::Pop);
+        ir1.ops.insert(
+            0,
+            Ir1Op::HostCall {
+                capability: IFC_BOUNDED_IMPORTS_CONTRACT.to_string(),
+                arg_count: 0,
+            },
+        );
+        for entry in &mut op_spans {
+            entry.op_start += 2;
+            entry.op_end += 2;
+        }
+    }
     // Diagnostic provenance only: excluded from canonical_value /
     // content_hash / serde, so attaching it never perturbs IR identity.
     ir1.op_spans = op_spans;
@@ -31395,9 +31455,15 @@ fn ir2_flow_label_ceiling(
     ops: &[Ir2Op],
     host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Label {
+    let bounded_imports = ops_assume_bounded_imports(ops);
     let mut ceiling = Label::Internal;
     for op in ops {
-        accumulate_ir1_flow_label_ceiling(&op.inner, host_io_exception_provenance, &mut ceiling);
+        accumulate_ir1_flow_label_ceiling(
+            &op.inner,
+            host_io_exception_provenance,
+            bounded_imports,
+            &mut ceiling,
+        );
     }
     ceiling
 }
@@ -31405,6 +31471,7 @@ fn ir2_flow_label_ceiling(
 fn accumulate_ir1_flow_label_ceiling(
     op: &Ir1Op,
     host_io_exception_provenance: HostIoExceptionProvenance,
+    bounded_imports: bool,
     ceiling: &mut Label,
 ) {
     if *ceiling == Label::TopSecret {
@@ -31413,12 +31480,26 @@ fn accumulate_ir1_flow_label_ceiling(
     let contribution = match op {
         Ir1Op::DeclareFunction { body_ops, .. } | Ir1Op::CreateFunction { body_ops, .. } => {
             for inner in body_ops {
-                accumulate_ir1_flow_label_ceiling(inner, host_io_exception_provenance, ceiling);
+                accumulate_ir1_flow_label_ceiling(
+                    inner,
+                    host_io_exception_provenance,
+                    bounded_imports,
+                    ceiling,
+                );
             }
             return;
         }
         // Only a legacy hostcall marker literal can carry a label above Public.
         Ir1Op::LoadLiteral { .. } => infer_data_label_for_op(op, &BTreeMap::new(), Label::Public),
+        // Loading a module runs code this IR does not contain, unless the unit
+        // is bounded (bd-j8f7q) and the module is a local file or a package,
+        // whose own ceiling the interpreter checks against the bound before
+        // running it.
+        Ir1Op::ImportModule { specifier }
+            if bounded_imports && specifier.as_str().is_some_and(is_bounded_import_specifier) =>
+        {
+            IFC_BOUNDED_IMPORT_LABEL
+        }
         Ir1Op::ImportModule { .. } => Label::TopSecret,
         Ir1Op::HostCall { capability, .. } => {
             hostcall_flow_label_ceiling(capability, host_io_exception_provenance)
@@ -32056,6 +32137,49 @@ const MAX_BATCH_LITERAL_ENTRIES: usize = 64;
 const OBJECT_LITERAL_PROTOTYPE_CAPABILITY: &str = "builtin:ObjectLiteralPrototype";
 /// `export * from m` (bd-332pq): one argument, m's namespace object.
 pub(crate) const MODULE_EXPORT_STAR_HOSTCALL: &str = "builtin:ModuleExportStar";
+
+/// bd-j8f7q: marks a lowering unit whose static flow check assumed that each
+/// local file or package it imports ([`is_bounded_import_specifier`]) yields
+/// values labelled at most [`IFC_BOUNDED_IMPORT_LABEL`]. The interpreter
+/// enforces the assumption at every such import edge before the imported
+/// module runs. Lowering adds the marker only when the unit is refused
+/// without it, so units that pass today are unchanged. At run time the
+/// marker itself is a no-op.
+pub(crate) const IFC_BOUNDED_IMPORTS_CONTRACT: &str = "builtin:IfcBoundedImportsContract";
+
+/// The highest label a bounded unit assumes for a local import.
+pub(crate) const IFC_BOUNDED_IMPORT_LABEL: Label = Label::Internal;
+
+/// A specifier naming a local file (`./x.mjs`, `../x.mjs`, `/abs/x.mjs`), as
+/// opposed to a package or builtin module name.
+pub(crate) fn is_local_module_specifier(specifier: &str) -> bool {
+    specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')
+}
+
+/// A specifier the bounded-imports contract covers (bd-j8f7q): a local file
+/// or a package (a bare name that is not a Node core module, bd-mgfhs). The
+/// interpreter loads, lowers and checks such a module before running it; a
+/// core module has no module code to check and stays opaque.
+pub(crate) fn is_bounded_import_specifier(specifier: &str) -> bool {
+    is_local_module_specifier(specifier)
+        || !crate::baseline_interpreter::is_node_core_module_specifier(specifier)
+}
+
+fn ops_assume_bounded_imports(ops: &[Ir2Op]) -> bool {
+    ops.iter().any(|op| {
+        matches!(&op.inner, Ir1Op::HostCall { capability, .. }
+            if capability == IFC_BOUNDED_IMPORTS_CONTRACT)
+    })
+}
+
+/// The flow label ceiling of a lowered unit, as its static check computed it
+/// (bd-j8f7q): every value the unit can produce is at most this label.
+pub(crate) fn lowered_unit_flow_label_ceiling(
+    ir2: &Ir2Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+) -> Label {
+    ir2_flow_label_ceiling(&ir2.ops, host_io_exception_provenance)
+}
 
 /// Source-name slot of a spilled non-lexical function-body local's
 /// identity-qualified runtime name (lexical ones keep their source name, as
@@ -38171,6 +38295,63 @@ mod tests {
             ),
             "FreshAggregate reads in try must stay fail-closed, got {result:?}"
         );
+    }
+
+    #[test]
+    fn bounded_imports_contract_only_when_a_local_import_needs_it_bd_j8f7q() {
+        fn lower_module(source: &str) -> Result<LoweringPipelineOutput, LoweringPipelineError> {
+            let tree = crate::parser_api_stability::parse_module(source)
+                .unwrap_or_else(|error| panic!("parse {source}: {error}"));
+            lower_ir0_to_ir3(
+                &Ir0Module::from_syntax_tree(tree, "bounded_imports_bd_j8f7q.mjs"),
+                &LoweringContext::new("trace-j8f7q", "decision-j8f7q", "policy-j8f7q"),
+            )
+        }
+        let has_contract = |output: &LoweringPipelineOutput| {
+            output.ir3.instructions.iter().any(|instruction| {
+                matches!(instruction, Ir3Instruction::HostCall { capability, .. }
+                    if capability.0 == IFC_BOUNDED_IMPORTS_CONTRACT)
+            })
+        };
+
+        // Printing an imported function's result is refused without the
+        // contract, so the unit is lowered with it, under an Internal ceiling.
+        let bounded = lower_module("import { f } from './lib.mjs';\nconsole.log(f());")
+            .expect("a local import may be bounded");
+        assert!(has_contract(&bounded));
+        assert_eq!(
+            lowered_unit_flow_label_ceiling(&bounded.ir2, HostIoExceptionProvenance::Unknown),
+            Label::Internal
+        );
+
+        // A unit that passes as it is gets no contract; its ceiling stays
+        // TopSecret, so no importer constraint is created.
+        let plain = lower_module("import { f } from './lib.mjs';\nf();")
+            .expect("calling without printing is allowed");
+        assert!(!has_contract(&plain));
+        assert_eq!(
+            lowered_unit_flow_label_ceiling(&plain.ir2, HostIoExceptionProvenance::Unknown),
+            Label::TopSecret
+        );
+
+        // A package import is bounded too (its code is checked at load);
+        // a Node core module has no module code to check and stays opaque.
+        let package = lower_module("import { f } from 'some-package';\nconsole.log(f());")
+            .expect("a package import may be bounded");
+        assert!(has_contract(&package));
+        let error = lower_module("import { f } from 'node:worker_threads';\nconsole.log(f());")
+            .expect_err("a core module import is not bounded");
+        assert!(matches!(
+            error,
+            LoweringPipelineError::UnauthorizedFlow { .. }
+        ));
+        assert!(is_bounded_import_specifier("./a.mjs"));
+        assert!(is_bounded_import_specifier("../a.mjs"));
+        assert!(is_bounded_import_specifier("/abs/a.mjs"));
+        assert!(is_bounded_import_specifier("pkg/sub"));
+        assert!(is_bounded_import_specifier("@scope/pkg"));
+        assert!(!is_bounded_import_specifier("node:fs"));
+        assert!(!is_bounded_import_specifier("fs"));
     }
 
     #[test]

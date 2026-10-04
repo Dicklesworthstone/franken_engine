@@ -4436,7 +4436,7 @@ fn starts_export_declaration(statement: &str) -> bool {
 /// Minified code omits the spaces around it (`{a}from'x'`, `*as m from"x"`);
 /// `import from from 'x'` and `import{from}from'x'` keep their bindings.
 fn split_import_from(body: &str) -> Option<(&str, &str)> {
-    body.match_indices("from").rev().find_map(|(index, _)| {
+    body.rmatch_indices("from").find_map(|(index, _)| {
         let clause = &body[..index];
         let source = body[index + "from".len()..].trim_start();
         let keyword_starts = clause

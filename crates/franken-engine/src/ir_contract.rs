@@ -2629,6 +2629,13 @@ pub struct Ir3Module {
     pub specialization: Option<SpecializationLinkage>,
     /// Aggregate capabilities required by hostcall instructions.
     pub required_capabilities: Vec<CapabilityTag>,
+    /// `length` (ES2020 ExpectedArgumentCount) of each function, by
+    /// function_table index, whose count is not its parameters before a rest
+    /// parameter: a parameter with an initializer ends the count
+    /// (`function f(a, b = 1, c) {}` has length 1). Serialized and hashed only
+    /// when present, so modules without such functions keep their IR3 bytes.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub function_lengths: std::collections::BTreeMap<u32, u32>,
 }
 
 impl Ir3Module {
@@ -2645,56 +2652,77 @@ impl Ir3Module {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+            function_lengths: std::collections::BTreeMap::new(),
         }
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        CanonicalValue::map_from_entries([
+        let function_lengths = (!self.function_lengths.is_empty()).then(|| {
             (
-                "constant_pool",
+                "function_lengths",
                 CanonicalValue::Array(
-                    self.constant_pool
+                    self.function_lengths
                         .iter()
-                        .map(canonical_js_string_value)
+                        .map(|(function, length)| {
+                            CanonicalValue::Array(vec![
+                                CanonicalValue::U64(u64::from(*function)),
+                                CanonicalValue::U64(u64::from(*length)),
+                            ])
+                        })
                         .collect(),
                 ),
-            ),
-            (
-                "function_table",
-                CanonicalValue::Array(
-                    self.function_table
-                        .iter()
-                        .map(Ir3FunctionDesc::canonical_value)
-                        .collect(),
+            )
+        });
+        CanonicalValue::map_from_entries(
+            [
+                (
+                    "constant_pool",
+                    CanonicalValue::Array(
+                        self.constant_pool
+                            .iter()
+                            .map(canonical_js_string_value)
+                            .collect(),
+                    ),
                 ),
-            ),
-            ("header", self.header.canonical_value()),
-            (
-                "instructions",
-                CanonicalValue::Array(
-                    self.instructions
-                        .iter()
-                        .map(Ir3Instruction::canonical_value)
-                        .collect(),
+                (
+                    "function_table",
+                    CanonicalValue::Array(
+                        self.function_table
+                            .iter()
+                            .map(Ir3FunctionDesc::canonical_value)
+                            .collect(),
+                    ),
                 ),
-            ),
-            (
-                "required_capabilities",
-                CanonicalValue::Array(
-                    self.required_capabilities
-                        .iter()
-                        .map(CapabilityTag::canonical_value)
-                        .collect(),
+                ("header", self.header.canonical_value()),
+                (
+                    "instructions",
+                    CanonicalValue::Array(
+                        self.instructions
+                            .iter()
+                            .map(Ir3Instruction::canonical_value)
+                            .collect(),
+                    ),
                 ),
-            ),
-            (
-                "specialization",
-                match &self.specialization {
-                    Some(spec) => spec.canonical_value(),
-                    None => CanonicalValue::Null,
-                },
-            ),
-        ])
+                (
+                    "required_capabilities",
+                    CanonicalValue::Array(
+                        self.required_capabilities
+                            .iter()
+                            .map(CapabilityTag::canonical_value)
+                            .collect(),
+                    ),
+                ),
+                (
+                    "specialization",
+                    match &self.specialization {
+                        Some(spec) => spec.canonical_value(),
+                        None => CanonicalValue::Null,
+                    },
+                ),
+            ]
+            .into_iter()
+            .chain(function_lengths),
+        )
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -3976,6 +4004,33 @@ mod tests {
         let ir3 = Ir3Module::new(source_hash, "test.js");
         assert_eq!(ir3.header.level, IrLevel::Ir3);
         assert!(ir3.specialization.is_none());
+    }
+
+    #[test]
+    fn ir3_function_lengths_are_hashed_only_when_present_bd_9vouw_134() {
+        let source_hash = ContentHash::compute(b"test");
+        let plain = Ir3Module::new(source_hash, "test.js");
+        let CanonicalValue::Map(entries) = plain.canonical_value() else {
+            panic!("module canonical value is a map");
+        };
+        assert!(!entries.contains_key("function_lengths"));
+
+        let mut with_lengths = plain.clone();
+        with_lengths.function_lengths.insert(1, 0);
+        let CanonicalValue::Map(entries) = with_lengths.canonical_value() else {
+            panic!("module canonical value is a map");
+        };
+        assert!(entries.contains_key("function_lengths"));
+        assert_ne!(plain.content_hash(), with_lengths.content_hash());
+
+        // Serialized only when present, and read back either way.
+        let json = serde_json::to_string(&plain).expect("serialize");
+        assert!(!json.contains("function_lengths"));
+        let restored: Ir3Module = serde_json::from_str(&json).expect("deserialize");
+        assert!(restored.function_lengths.is_empty());
+        let json = serde_json::to_string(&with_lengths).expect("serialize");
+        let restored: Ir3Module = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.function_lengths.get(&1), Some(&0));
     }
 
     #[test]

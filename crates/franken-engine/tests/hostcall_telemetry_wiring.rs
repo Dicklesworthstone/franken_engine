@@ -259,6 +259,7 @@ fn require_failure_emits_deterministic_module_load_record() {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+        function_lengths: Default::default(),
         };
 
         let mut core =
@@ -328,6 +329,7 @@ fn import_module_without_module_grant_denies_before_resolution() {
         function_table: Vec::new(),
         specialization: None,
         required_capabilities: Vec::new(),
+        function_lengths: Default::default(),
     };
 
     let mut config = interpreter_config(&[]);
@@ -368,6 +370,7 @@ fn direct_import_hostcall_alias_emits_module_load_record() {
         function_table: Vec::new(),
         specialization: None,
         required_capabilities: Vec::new(),
+        function_lengths: Default::default(),
     };
 
     let mut core = make_core_with_capabilities(
@@ -431,6 +434,7 @@ fn apply_hostcall_module_load_aliases_record_inner_and_outer_without_drops() {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+        function_lengths: Default::default(),
         };
 
         let mut config = interpreter_config(&[RuntimeCapability::ModuleLoad]);
@@ -517,6 +521,7 @@ fn nested_module_require_product_path_captures_every_dispatch() {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+        function_lengths: Default::default(),
         };
 
         // Both the outer ImportModule and the nested first-class

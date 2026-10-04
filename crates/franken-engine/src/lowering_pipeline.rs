@@ -11892,8 +11892,25 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     // Builtin/Console/Timer from `required_capabilities`) capability-denies a
     // builtin used ONLY inside a function body (bd-bg9l1.27.7, bd-bg9l1.27.10).
     for instruction in &ir3.instructions {
-        if let Ir3Instruction::HostCall { capability, .. } = instruction {
-            required_capabilities.insert(capability.0.clone());
+        match instruction {
+            Ir3Instruction::HostCall { capability, .. } => {
+                required_capabilities.insert(capability.0.clone());
+            }
+            // A timer global read as a value (`const st = setTimeout;
+            // st(fn, 5)`) is called through its first-class builtin value,
+            // which needs the timer capability as a direct call does.
+            // Lexical bindings named like a timer load via LoadScoped.
+            Ir3Instruction::LoadName {
+                name_pool_index, ..
+            } if ir3
+                .constant_pool
+                .get(*name_pool_index as usize)
+                .and_then(JsString::as_str)
+                .is_some_and(|name| timer_global_capability(name).is_some()) =>
+            {
+                required_capabilities.insert("timer".to_string());
+            }
+            _ => {}
         }
     }
 

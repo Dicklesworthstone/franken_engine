@@ -97,15 +97,7 @@ fn build_manifest(
     publisher_key: &VerificationKey,
 ) -> ExtensionManifest {
     let artifacts = vec![artifact("main.fir")];
-    let mut buf = Vec::new();
-    for art in &artifacts {
-        buf.extend_from_slice(art.path.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(art.content_hash.as_bytes());
-        buf.extend_from_slice(&art.size_bytes.to_le_bytes());
-    }
-    let artifacts_root_hash = ContentHash::compute(&buf);
-    ExtensionManifest {
+    let mut manifest = ExtensionManifest {
         scope: scope.to_string(),
         name: name.to_string(),
         version,
@@ -114,11 +106,15 @@ fn build_manifest(
         capabilities: vec![capability("net:outbound")],
         artifacts,
         build: build_descriptor(),
-        artifacts_root_hash,
+        artifacts_root_hash: ContentHash::compute(b""),
         description: format!("Test extension @{scope}/{name}"),
         license: Some("MIT".to_string()),
         dependencies: BTreeMap::new(),
-    }
+    };
+    // The root over the artifact entries, as the registry derives it
+    // (length-prefixed paths since bd-fn47f).
+    manifest.artifacts_root_hash = manifest.compute_artifacts_root();
+    manifest
 }
 
 fn sign_and_publish(

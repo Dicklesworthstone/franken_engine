@@ -752,6 +752,7 @@ mod tests {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+            function_lengths: Default::default(),
         }
     }
 

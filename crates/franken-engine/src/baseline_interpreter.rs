@@ -100091,8 +100091,14 @@ impl InterpreterCore {
         let desc = module.function_table.get(func_idx as usize)?;
         match key {
             "name" => Some(Value::str(desc.name.as_deref().unwrap_or(""))),
+            // ExpectedArgumentCount: parameters before a rest parameter or
+            // the first one with an initializer (bd-9vouw.134).
             "length" => Some(Value::Int(i64::from(
-                desc.rest_param_index.unwrap_or(desc.arity),
+                module
+                    .function_lengths
+                    .get(&func_idx)
+                    .copied()
+                    .unwrap_or_else(|| desc.rest_param_index.unwrap_or(desc.arity)),
             ))),
             _ => None,
         }
@@ -105476,6 +105482,7 @@ mod active_builtin_regressions {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+            function_lengths: Default::default(),
         }
     }
 
@@ -108574,6 +108581,7 @@ mod async_runtime_tests_current {
             function_table: functions,
             specialization: None,
             required_capabilities: Vec::new(),
+            function_lengths: Default::default(),
         }
     }
 
@@ -131808,6 +131816,7 @@ mod function_prototype_call_apply_tests_current {
             function_table: functions,
             specialization: None,
             required_capabilities: Vec::new(),
+            function_lengths: Default::default(),
         }
     }
 
@@ -136989,6 +136998,7 @@ mod event_loop_timer_microtask_tests {
             }],
             specialization: None,
             required_capabilities: Vec::new(),
+            function_lengths: Default::default(),
         }
     }
 
@@ -137254,6 +137264,7 @@ mod tests {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+            function_lengths: Default::default(),
         }
     }
 
@@ -157352,6 +157363,7 @@ mod string_intrinsic_table_parity_tests {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+            function_lengths: Default::default(),
         }
     }
 

@@ -54,6 +54,7 @@ fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
         function_table: Vec::new(),
         specialization: None,
         required_capabilities: Vec::new(),
+        function_lengths: Default::default(),
     }
 }
 

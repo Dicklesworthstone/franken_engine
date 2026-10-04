@@ -1359,7 +1359,7 @@ fn enrichment_migration_receipt_with_all_stores_touched() {
     let json = serde_json::to_string(&receipt).unwrap();
     let recovered: MigrationReceipt = serde_json::from_str(&json).unwrap();
     assert_eq!(receipt, recovered);
-    assert_eq!(recovered.stores_touched.len(), 8);
+    assert_eq!(recovered.stores_touched.len(), all_store_kinds().len());
 }
 
 #[test]

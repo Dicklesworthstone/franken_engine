@@ -2928,7 +2928,8 @@ mod tests {
         assert!(obj.contains_key("next_sequence"));
         assert!(obj.contains_key("capture_started_vts"));
         assert!(obj.contains_key("capture_ended_vts"));
-        assert_eq!(obj.len(), 5);
+        assert!(obj.contains_key("deterministic_witness"));
+        assert_eq!(obj.len(), 6);
     }
 
     #[test]

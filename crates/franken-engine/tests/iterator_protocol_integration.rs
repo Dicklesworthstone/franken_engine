@@ -1294,7 +1294,8 @@ fn multi_abrupt_trace_counts_all_abrupt_completions() {
 fn schema_version_is_stable() {
     assert_eq!(
         ITERATOR_PROTOCOL_SCHEMA_VERSION,
-        "franken-engine.iterator-protocol.v2"
+        // v3 since 0eb1ed033 (native destructuring step operations).
+        "franken-engine.iterator-protocol.v3"
     );
 }
 

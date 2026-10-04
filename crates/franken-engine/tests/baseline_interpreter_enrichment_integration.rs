@@ -495,7 +495,9 @@ fn enrichment_for_of_string_yields_chars() {
 
 #[test]
 fn enrichment_for_of_indexed_properties() {
-    // for..of on an object with numeric keys "0", "1" yields values in index order.
+    // An ordinary object with numeric keys "0", "1" has no Symbol.iterator,
+    // so for..of throws TypeError (ES2020 GetIterator; Node: "obj is not
+    // iterable"). It used to iterate the indexed keys like an array-like.
     let m = test_module_with_pool(
         vec![
             Ir3Instruction::NewObject { dst: 1 }, // 0
@@ -531,8 +533,12 @@ fn enrichment_for_of_indexed_properties() {
         ],
         vec!["0".to_string(), "1".to_string()],
     );
-    let result = qjs_run(&m).unwrap();
-    assert_eq!(result.value, Value::Int(100));
+    match qjs_run(&m).unwrap_err() {
+        InterpreterError::TypeError { expected, .. } => {
+            assert_eq!(expected, "callable Symbol.iterator method");
+        }
+        other => panic!("expected TypeError, got: {other:?}"),
+    }
 }
 
 #[test]
@@ -578,7 +584,8 @@ fn enrichment_for_of_no_indices_type_error() {
     let err = qjs_run(&m).unwrap_err();
     match err {
         InterpreterError::TypeError { expected, .. } => {
-            assert_eq!(expected, "iterable");
+            // GetIterator: an ordinary object has no callable @@iterator.
+            assert_eq!(expected, "callable Symbol.iterator method");
         }
         other => panic!("expected TypeError, got: {other:?}"),
     }

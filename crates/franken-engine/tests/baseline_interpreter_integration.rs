@@ -1695,26 +1695,37 @@ fn fixed_point_millionths_arithmetic() {
 
 #[test]
 fn get_property_on_non_object_type_error() {
-    // GetProperty on an Int register should TypeError.
-    let m = test_module_with_pool(
-        vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 5 },
-            Ir3Instruction::LoadStr {
-                dst: 2,
-                pool_index: 0,
-            },
-            Ir3Instruction::GetProperty {
-                obj: 1,
-                key: 2,
-                dst: 0,
-            },
-        ],
-        vec!["x".into()],
-    );
-    assert!(matches!(
-        qjs_run(&m).unwrap_err(),
-        InterpreterError::TypeError { .. }
-    ));
+    // A property read on a primitive goes through its wrapper prototype:
+    // `(5).x` is undefined. Only undefined and null receivers throw.
+    let read_x = |receiver: Ir3Instruction| {
+        test_module_with_pool(
+            vec![
+                receiver,
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 0,
+                },
+            ],
+            vec!["x".into()],
+        )
+    };
+    let number = qjs_run(&read_x(Ir3Instruction::LoadInt { dst: 1, value: 5 }))
+        .expect("a property read on a number");
+    assert_eq!(number.value, Value::Undefined);
+    for nullish in [
+        Ir3Instruction::LoadUndefined { dst: 1 },
+        Ir3Instruction::LoadNull { dst: 1 },
+    ] {
+        assert!(matches!(
+            qjs_run(&read_x(nullish)).unwrap_err(),
+            InterpreterError::TypeError { .. }
+        ));
+    }
 }
 
 #[test]

@@ -1279,9 +1279,9 @@ fn host_api_authorize_canonicalizes_process_alias() {
 fn host_api_authorize_canonicalizes_crypto_alias() {
     let surface = CapabilitySafeHostApiSurface::standard();
     let mut granted = BTreeSet::new();
-    granted.insert(RuntimeCapability::IdempotencyDerive);
+    granted.insert(RuntimeCapability::Builtin);
     let policy = CapabilityPolicyHook::new(granted);
-    let request = HostApiRequest::new("crypto", "random_bytes");
+    let request = HostApiRequest::new("crypto", "create_hash");
     let outcome = surface.authorize(&request, &context(), &policy).unwrap();
     assert_eq!(outcome.event.module_specifier, "node:crypto");
 }
@@ -1455,9 +1455,22 @@ fn host_api_all_standard_descriptors_require_at_least_one_capability() {
             "node:fs" => vec![("node:fs", "read_file"), ("node:fs", "write_file")],
             "node:net" => vec![("node:net", "connect")],
             "node:process" => vec![("node:process", "spawn")],
-            "node:crypto" => {
-                vec![("node:crypto", "random_bytes"), ("node:crypto", "sha256")]
-            }
+            "node:crypto" => [
+                "create_hash",
+                "create_hmac",
+                "timing_safe_equal",
+                "pbkdf2_sync",
+                "pbkdf2",
+                "scrypt_sync",
+                "create_cipheriv",
+                "create_decipheriv",
+                "get_hashes",
+                "get_ciphers",
+                "constants",
+            ]
+            .into_iter()
+            .map(|op| ("node:crypto", op))
+            .collect(),
             _ => continue,
         };
         for (m, op) in ops {
@@ -1474,38 +1487,60 @@ fn host_api_all_standard_descriptors_require_at_least_one_capability() {
     }
 }
 
-// ── Host API crypto sha256 authorization ─────────────────────────────────
+// ── Host API crypto authorization ────────────────────────────────────────
+//
+// Since bd-2z157 node:crypto exposes deterministic compute operations
+// (create_hash, create_hmac, ...) under the `builtin` capability; the old
+// `sha256` operation is gone and entropy-producing operations have no
+// descriptor.
 
 #[test]
-fn host_api_crypto_sha256_requires_idempotency_derive() {
+fn host_api_crypto_create_hash_requires_builtin() {
     let surface = CapabilitySafeHostApiSurface::standard();
-    let desc = surface.descriptor("node:crypto", "sha256").unwrap();
-    assert!(
-        desc.required_capabilities
-            .contains(&RuntimeCapability::IdempotencyDerive)
+    let desc = surface.descriptor("node:crypto", "create_hash").unwrap();
+    assert_eq!(
+        desc.required_capabilities,
+        BTreeSet::from([RuntimeCapability::Builtin])
     );
 }
 
 #[test]
-fn host_api_crypto_sha256_denied_without_capability() {
+fn host_api_crypto_create_hash_denied_without_capability() {
     let surface = CapabilitySafeHostApiSurface::standard();
     let policy = CapabilityPolicyHook::new(BTreeSet::new());
-    let request = HostApiRequest::new("node:crypto", "sha256");
+    let request = HostApiRequest::new("node:crypto", "create_hash");
     let err = surface
         .authorize(&request, &context(), &policy)
-        .expect_err("sha256 without idempotency_derive should deny");
+        .expect_err("create_hash without builtin should deny");
     assert_eq!(err.code, HostApiErrorCode::PolicyDenied);
 }
 
 #[test]
-fn host_api_crypto_sha256_allowed_with_capability() {
+fn host_api_crypto_create_hash_allowed_with_capability() {
     let surface = CapabilitySafeHostApiSurface::standard();
     let mut granted = BTreeSet::new();
-    granted.insert(RuntimeCapability::IdempotencyDerive);
+    granted.insert(RuntimeCapability::Builtin);
     let policy = CapabilityPolicyHook::new(granted);
-    let request = HostApiRequest::new("node:crypto", "sha256");
+    let request = HostApiRequest::new("node:crypto", "create_hash");
     let outcome = surface.authorize(&request, &context(), &policy).unwrap();
     assert_eq!(outcome.event.outcome, "allow");
+}
+
+#[test]
+fn host_api_crypto_entropy_operations_are_unsupported_even_with_all_capabilities() {
+    let surface = CapabilitySafeHostApiSurface::standard();
+    let policy = CapabilityPolicyHook::new(RuntimeCapability::ALL.iter().copied().collect());
+    for operation in ["random_bytes", "random_int"] {
+        let request = HostApiRequest::new("node:crypto", operation);
+        let err = surface
+            .authorize(&request, &context(), &policy)
+            .expect_err("entropy-producing operations stay fail-closed");
+        assert_eq!(
+            err.code,
+            HostApiErrorCode::UnsupportedOperation,
+            "{operation}"
+        );
+    }
 }
 
 // ── CapabilityPolicyHook serde roundtrip ─────────────────────────────────

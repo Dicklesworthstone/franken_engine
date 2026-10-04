@@ -2349,9 +2349,18 @@ fn frankenctl_run_report_reexecutes_javascript_and_detects_source_and_policy_div
         run_report["replay_input"]["source"].as_str(),
         Some("const answer = 40 + 2;\n")
     );
+    // The replay input names the executed IR3 hash in hex; the witness
+    // carries the same 32 bytes as a JSON array.
+    let executed_ir3_hash_hex: String = run_report["ir4_witness"]["executed_ir3_hash"]
+        .as_array()
+        .expect("witness IR3 hash is a byte array")
+        .iter()
+        .map(|byte| format!("{:02x}", byte.as_u64().expect("hash byte")))
+        .collect();
+    assert_eq!(executed_ir3_hash_hex.len(), 64);
     assert_eq!(
-        run_report["replay_input"]["ir3_hash"],
-        run_report["ir4_witness"]["executed_ir3_hash"]
+        run_report["replay_input"]["ir3_hash"].as_str(),
+        Some(executed_ir3_hash_hex.as_str())
     );
     assert!(run_report["replay_input"]["randomness_transcript"].is_object());
 
@@ -4580,13 +4589,17 @@ fn frankenctl_replay_trace_serde_roundtrip_preserves_all_source_kinds() {
     );
     assert!(deserialized.is_finalised());
 
-    // Verify the roundtripped trace replays successfully
+    // Verify the roundtripped trace replays successfully (a raw trace is
+    // replayed by explicit comparison, here against itself; a plain
+    // `replay run` re-executes a run report since bd-sxh8o.5).
     let report_path = temp_path("frankenctl_replay_serde_all_report", "json");
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "replay",
             "run",
             "--trace",
+            trace_path.to_str().unwrap(),
+            "--compare-trace",
             trace_path.to_str().unwrap(),
             "--mode",
             "best-effort",
@@ -4602,10 +4615,16 @@ fn frankenctl_replay_trace_serde_roundtrip_preserves_all_source_kinds() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json = parse_stdout_json(&output);
+    assert_eq!(json["replay_kind"].as_str(), Some("trace_compare"));
     assert_eq!(
         json["event_count"].as_u64(),
         Some(NondeterminismSource::ALL.len() as u64)
     );
+    assert_eq!(
+        json["replayed_events"].as_u64(),
+        Some(NondeterminismSource::ALL.len() as u64)
+    );
+    assert_eq!(json["divergence_count"].as_u64(), Some(0));
 
     let _ = fs::remove_file(trace_path);
     let _ = fs::remove_file(report_path);
@@ -4707,6 +4726,8 @@ fn frankenctl_replay_empty_trace_completes_immediately() {
             "run",
             "--trace",
             trace_path.to_str().unwrap(),
+            "--compare-trace",
+            trace_path.to_str().unwrap(),
             "--mode",
             "strict",
         ])
@@ -4719,6 +4740,7 @@ fn frankenctl_replay_empty_trace_completes_immediately() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json = parse_stdout_json(&output);
+    assert_eq!(json["replay_kind"].as_str(), Some("trace_compare"));
     assert_eq!(json["event_count"].as_u64(), Some(0));
     assert_eq!(json["divergence_count"].as_u64(), Some(0));
     assert_eq!(json["complete"].as_bool(), Some(true));
@@ -4746,6 +4768,8 @@ fn frankenctl_replay_unfinished_trace_fails_closed() {
             "replay",
             "run",
             "--trace",
+            trace_path.to_str().unwrap(),
+            "--compare-trace",
             trace_path.to_str().unwrap(),
             "--mode",
             "strict",

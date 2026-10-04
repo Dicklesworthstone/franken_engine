@@ -149052,6 +149052,7 @@ mod tests {
 
     #[test]
     fn generator_invocation_argument_label_survives_first_yield_bd_ur3tk_5() {
+        // The generator object resumes through its `next` method.
         let mut module = test_module_with_pool(
             vec![
                 Ir3Instruction::Call {
@@ -149059,8 +149060,18 @@ mod tests {
                     args: RegRange { start: 1, count: 1 },
                     dst: 2,
                 },
-                Ir3Instruction::Call {
-                    callee: 2,
+                Ir3Instruction::LoadStr {
+                    dst: 6,
+                    pool_index: 1,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 2,
+                    key: 6,
+                    dst: 7,
+                },
+                Ir3Instruction::CallMethod {
+                    receiver: 2,
+                    callee: 7,
                     args: RegRange { start: 8, count: 0 },
                     dst: 3,
                 },
@@ -149081,10 +149092,10 @@ mod tests {
                 },
                 Ir3Instruction::Return { value: 0 },
             ],
-            vec!["value".to_string()],
+            vec!["value".to_string(), "next".to_string()],
         );
         module.function_table.push(Ir3FunctionDesc {
-            entry: 5,
+            entry: 7,
             arity: 1,
             frame_size: 2,
             name: Some("labeled_generator".to_string()),

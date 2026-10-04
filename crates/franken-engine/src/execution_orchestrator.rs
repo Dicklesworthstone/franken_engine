@@ -3398,23 +3398,36 @@ impl ExecutionOrchestrator {
             &source_label
         };
         let ir0 = Ir0Module::from_syntax_tree(syntax_tree, ir0_source_label);
-        let host_io_exception_provenance =
-            self.host_io
-                .as_ref()
-                .map_or(HostIoExceptionProvenance::Unknown, |provider| {
-                    let provider_provenance = provider.filesystem_exception_provenance();
-                    let effect_source_provenance = host_effect_journal.map_or_else(
-                        || {
-                            self.host_io_recorder
-                                .as_ref()
-                                .map_or(HostIoExceptionProvenance::ProviderInternal, |recorder| {
-                                    recorder.filesystem_exception_provenance()
-                                })
-                        },
-                        InMemoryHostEffectJournal::filesystem_exception_provenance,
-                    );
-                    provider_provenance.combine(effect_source_provenance)
-                });
+        // bd-9vouw.115: with no provider, recorder or process-spawn attempt
+        // installed, nothing outside the engine can supply a hostcall's
+        // exceptional completion, so the failures are engine-owned
+        // (ProviderInternal). A recorder alone may replay recorded host state,
+        // and a process-spawn provider declares no provenance yet: both keep
+        // Unknown.
+        let no_host_effect_source = self.host_io.is_none()
+            && self.host_io_recorder.is_none()
+            && self.process_spawn_attempt.is_none();
+        let host_io_exception_provenance = self.host_io.as_ref().map_or(
+            if no_host_effect_source {
+                HostIoExceptionProvenance::ProviderInternal
+            } else {
+                HostIoExceptionProvenance::Unknown
+            },
+            |provider| {
+                let provider_provenance = provider.filesystem_exception_provenance();
+                let effect_source_provenance = host_effect_journal.map_or_else(
+                    || {
+                        self.host_io_recorder
+                            .as_ref()
+                            .map_or(HostIoExceptionProvenance::ProviderInternal, |recorder| {
+                                recorder.filesystem_exception_provenance()
+                            })
+                    },
+                    InMemoryHostEffectJournal::filesystem_exception_provenance,
+                );
+                provider_provenance.combine(effect_source_provenance)
+            },
+        );
         let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id)
             .with_ambient_authority_grant(self.ambient_authority_grant)
             .with_host_io_exception_provenance(host_io_exception_provenance);

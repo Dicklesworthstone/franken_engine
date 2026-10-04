@@ -2253,12 +2253,23 @@ fn compile_prepared_eval_source(
     // Untrusted extension execution
     // goes through `ExecutionOrchestrator`, which builds its own deny-all
     // `LoweringContext`, so this grant never widens the extension lowering path.
+    // bd-9vouw.115: this path installs no host-I/O, recorder or process-spawn
+    // provider. Host-I/O hostcalls without a provider return undefined, http
+    // and net are the in-engine loopback, and external egress is denied, so a
+    // hostcall's exceptional completion carries only engine-owned failure
+    // state, not provider or host state. Unknown provenance labelled every
+    // such completion TopSecret, which the whole-program ceiling handed to
+    // every callback parameter (`http.createServer(req => console.log(...))`
+    // was refused at lowering).
     let lowering_context = LoweringContext::new(
         prepared.trace_id.as_str(),
         prepared.decision_id.as_str(),
         prepared.policy_id.as_str(),
     )
-    .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape);
+    .with_ambient_authority_grant(AmbientAuthorityGrant::TrustedProcessShape)
+    .with_host_io_exception_provenance(
+        frankenengine_extension_host::host_io::HostIoExceptionProvenance::ProviderInternal,
+    );
     let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<eval>");
     let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_context)
         .map_err(map_lowering_error)

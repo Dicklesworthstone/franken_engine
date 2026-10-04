@@ -12,6 +12,28 @@
 //! match attempt runs under a step budget that depends only on the pattern
 //! and the input length, so a catastrophic pattern ends with
 //! [`BacktrackError::StepBudget`] instead of running without bound.
+//!
+//! Resource bounds (franken_engine#2), each failing with an error rather
+//! than a native stack overflow or an unbounded allocation:
+//!
+//! - Pattern size: a pattern longer than [`MAX_PATTERN_LEN`] bytes is "Regular
+//!   expression too large" before either parser (this module's or the
+//!   `regex` crate's) materializes it, so parse-time memory is bounded by a
+//!   constant factor of that cap whatever the guest string limits allow.
+//! - Parsing: group nesting (capturing, non-capturing and look-around) is at
+//!   most [`MAX_GROUP_NESTING`] deep. The parser, the compiler and the
+//!   pattern tree's drop all recurse once per nesting level, so this one
+//!   bound keeps all three on a small, fixed native stack. A deeper pattern
+//!   is a SyntaxError message ("Regular expression too deeply nested"),
+//!   both for literals (early error) and for `new RegExp`.
+//! - Work: one search takes at most [`STEP_BUDGET_BASE`] plus
+//!   [`STEP_BUDGET_PER_CHAR`] per input character steps, and a global
+//!   operation ([`CompiledRegExp::all_captures`]) shares ONE such budget
+//!   across all of its searches instead of granting it to every match.
+//! - Memory: a global operation charges the capture vectors it retains to a
+//!   [`RetentionBudget`] (the guest's remaining memory headroom, capped at
+//!   [`MAX_GLOBAL_MATCH_RETAINED_BYTES`]) and stops with
+//!   [`GlobalMatchError::Retention`] when the next match would exceed it.
 
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -32,11 +54,96 @@ const MAX_UNROLLED_REPEAT: u32 = 16;
 const HIGH_SURROGATES: (u32, u32) = (0xD800, 0xDBFF);
 const LOW_SURROGATES: (u32, u32) = (0xDC00, 0xDFFF);
 const SUPPLEMENTARY: (u32, u32) = (0x1_0000, 0x10_FFFF);
+/// Deepest group nesting the parser accepts (franken_engine#2). Real
+/// patterns nest a handful of levels; the `regex` crate's own default nest
+/// limit is 250, so every pattern the automaton route accepts below that
+/// depth still runs there, and only patterns neither route can take reach
+/// this bound.
+pub(super) const MAX_GROUP_NESTING: usize = 128;
+/// Longest pattern (in bytes) either RegExp route will parse: 1 MiB, the
+/// same as the script source limit, so no pattern a program could have
+/// written as a literal is refused.
+pub(super) const MAX_PATTERN_LEN: usize = 1 << 20;
+/// The SyntaxError message of a pattern over [`MAX_PATTERN_LEN`].
+pub(super) const PATTERN_TOO_LARGE: &str = "Regular expression too large";
+/// Absolute ceiling on the native bytes one global RegExp operation may
+/// retain before its results reach the guest heap, whatever the guest's own
+/// memory limit (512 MiB, the throughput profile's guest memory limit).
+pub(super) const MAX_GLOBAL_MATCH_RETAINED_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum BacktrackError {
     /// The search took more steps than its budget.
     StepBudget,
+}
+
+/// Native bytes a RegExp operation may still retain for results it has not
+/// handed to the guest heap yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RetentionBudget {
+    used: u64,
+    limit: u64,
+}
+
+impl RetentionBudget {
+    /// A budget of `headroom` bytes, never more than
+    /// [`MAX_GLOBAL_MATCH_RETAINED_BYTES`].
+    pub(super) fn new(headroom: u64) -> Self {
+        Self {
+            used: 0,
+            limit: headroom.min(MAX_GLOBAL_MATCH_RETAINED_BYTES),
+        }
+    }
+
+    /// Bytes charged so far.
+    #[cfg(test)]
+    pub(super) fn used(&self) -> u64 {
+        self.used
+    }
+
+    /// Charge `bytes`, or report the total that would exceed the limit.
+    pub(super) fn charge(&mut self, bytes: u64) -> Result<(), GlobalMatchError> {
+        let requested = self.used.saturating_add(bytes);
+        if requested > self.limit {
+            return Err(GlobalMatchError::Retention {
+                requested_bytes: requested,
+            });
+        }
+        self.used = requested;
+        Ok(())
+    }
+
+    /// Return `bytes` charged earlier (a retained value was shrunk).
+    pub(super) fn release(&mut self, bytes: u64) {
+        self.used = self.used.saturating_sub(bytes);
+    }
+
+    /// Native bytes a retained capture vector of `slots` spans holds.
+    pub(super) fn captures_bytes(slots: usize) -> u64 {
+        let header = std::mem::size_of::<Captures>();
+        let slot = std::mem::size_of::<Option<(usize, usize)>>();
+        u64::try_from(header.saturating_add(slots.saturating_mul(slot))).unwrap_or(u64::MAX)
+    }
+}
+
+/// Why a global RegExp operation stopped.
+#[derive(Debug)]
+pub(super) enum GlobalMatchError {
+    /// A search error (the shared step budget ran out).
+    Interpreter(InterpreterError),
+    /// Retaining the next result would exceed the [`RetentionBudget`].
+    Retention { requested_bytes: u64 },
+}
+
+/// Which capture spans [`CompiledRegExp::all_captures`] keeps per match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CaptureRetention {
+    /// Every group of every match (replace and split splice groups in).
+    AllGroups,
+    /// Only the whole-match span, except that the last match keeps every
+    /// group (String.prototype.match with `g` reads group 0 only, and the
+    /// legacy `RegExp.$n` statics read the last match).
+    WholeMatchExceptLast,
 }
 
 /// The characters of a haystack and their byte offsets, prepared once per
@@ -97,6 +204,9 @@ pub(super) type Captures = Vec<Option<(usize, usize)>>;
 impl BacktrackRegExp {
     /// Compile `pattern` with `flags`, or return the SyntaxError message.
     pub(super) fn new(pattern: &str, flags: &str) -> Result<Self, String> {
+        if pattern.len() > MAX_PATTERN_LEN {
+            return Err(PATTERN_TOO_LARGE.to_string());
+        }
         let unicode = flags.contains('u') || flags.contains('v');
         let mut parser = Parser::new(pattern, unicode);
         let root = parser.pattern()?;
@@ -126,6 +236,9 @@ impl BacktrackRegExp {
     /// still be too large to compile. The parser is lenient in some `u`-mode
     /// corners, so `None` does not prove validity.
     pub(super) fn syntax_error(pattern: &str, flags: &str) -> Option<String> {
+        if pattern.len() > MAX_PATTERN_LEN {
+            return Some(PATTERN_TOO_LARGE.to_string());
+        }
         let unicode = flags.contains('u') || flags.contains('v');
         Parser::new(pattern, unicode).pattern().err()
     }
@@ -152,15 +265,48 @@ impl BacktrackRegExp {
         start: usize,
         sticky: bool,
     ) -> Result<Option<Captures>, BacktrackError> {
-        let length = input.chars.len();
+        let mut steps_left = Self::step_budget(input);
+        self.exec_at_with_budget(input, start, sticky, &mut steps_left)
+    }
+
+    /// The step budget of one search over `input`.
+    fn step_budget(input: &PreparedInput) -> u64 {
+        STEP_BUDGET_BASE
+            .saturating_add(STEP_BUDGET_PER_CHAR.saturating_mul(input.chars.len() as u64))
+    }
+
+    /// [`Self::exec_at`] drawing on the caller's `steps_left`, so the
+    /// searches of one global operation share a single budget.
+    fn exec_at_with_budget(
+        &self,
+        input: &PreparedInput,
+        start: usize,
+        sticky: bool,
+        steps_left: &mut u64,
+    ) -> Result<Option<Captures>, BacktrackError> {
         let mut run = Run {
             regexp: self,
             chars: &input.chars,
             slots: vec![None; self.group_count * 2],
             registers: vec![0; self.registers],
-            steps_left: STEP_BUDGET_BASE
-                .saturating_add(STEP_BUDGET_PER_CHAR.saturating_mul(length as u64)),
+            steps_left: *steps_left,
         };
+        let result = run.search(input, start, sticky);
+        *steps_left = run.steps_left;
+        result
+    }
+}
+
+impl Run<'_> {
+    /// The search loop of [`BacktrackRegExp::exec_at`].
+    fn search(
+        &mut self,
+        input: &PreparedInput,
+        start: usize,
+        sticky: bool,
+    ) -> Result<Option<Captures>, BacktrackError> {
+        let run = self;
+        let length = input.chars.len();
         let mut at = start;
         while at <= length {
             run.slots.fill(None);
@@ -184,7 +330,9 @@ impl BacktrackRegExp {
         }
         Ok(None)
     }
+}
 
+impl BacktrackRegExp {
     fn canonicalize(&self, c: char) -> char {
         canonicalize(c, self.unicode)
     }
@@ -478,6 +626,14 @@ struct Parser {
     classes: Vec<CharClass>,
     /// Named backreferences, resolved once every name is known.
     pending_names: Vec<(usize, String)>,
+    /// Groups open around the cursor (bounded by [`MAX_GROUP_NESTING`]).
+    depth: usize,
+    /// Property-escape sets compiled so far, by escape text: a repeated
+    /// `\p{L}` reuses one compiled set (franken_engine#2).
+    property_sets: std::collections::HashMap<String, Regex>,
+    /// Property escapes parsed so far (bounded by
+    /// `regexp_syntax::MAX_PROPERTY_ESCAPES`).
+    property_escapes: usize,
 }
 
 impl Parser {
@@ -494,7 +650,24 @@ impl Parser {
             names: vec![None; group_total + 1],
             classes: Vec::new(),
             pending_names: Vec::new(),
+            depth: 0,
+            property_sets: std::collections::HashMap::new(),
+            property_escapes: 0,
         }
+    }
+
+    /// The disjunction inside a group, one nesting level deeper. Every
+    /// recursion of the parser goes through here, so [`MAX_GROUP_NESTING`]
+    /// bounds the parser's native stack (and the depth of the tree the
+    /// compiler and `Drop` later walk recursively).
+    fn nested_disjunction(&mut self) -> Result<Node, String> {
+        if self.depth >= MAX_GROUP_NESTING {
+            return Err("Regular expression too deeply nested".to_string());
+        }
+        self.depth += 1;
+        let body = self.disjunction();
+        self.depth -= 1;
+        body
     }
 
     fn peek(&self, offset: usize) -> Option<char> {
@@ -506,14 +679,25 @@ impl Parser {
         if self.index < self.chars.len() {
             return Err("Unmatched ')'".to_string());
         }
+        // One name lookup table and one tree walk for every named
+        // backreference: per-reference walks were quadratic in the pattern
+        // (franken_engine#2 follow-up).
         let pending = std::mem::take(&mut self.pending_names);
-        for (placeholder, name) in pending {
-            let group = self
+        if !pending.is_empty() {
+            let groups_by_name: std::collections::HashMap<&str, usize> = self
                 .names
                 .iter()
-                .position(|candidate| candidate.as_deref() == Some(name.as_str()))
-                .ok_or_else(|| "Invalid named capture referenced".to_string())?;
-            resolve_named_backref(&mut root, placeholder, group);
+                .enumerate()
+                .rev()
+                .filter_map(|(group, name)| name.as_deref().map(|name| (name, group)))
+                .collect();
+            let mut resolved = vec![0usize; pending.len()];
+            for (placeholder, name) in &pending {
+                resolved[*placeholder] = *groups_by_name
+                    .get(name.as_str())
+                    .ok_or_else(|| "Invalid named capture referenced".to_string())?;
+            }
+            resolve_named_backrefs(&mut root, &resolved);
         }
         Ok(root)
     }
@@ -695,7 +879,7 @@ impl Parser {
         };
         if let Some((ahead, negated, length)) = look {
             self.index += length;
-            let body = self.disjunction()?;
+            let body = self.nested_disjunction()?;
             self.close_group()?;
             // Annex B: look-ahead is quantifiable without `u`.
             let quantifiable = ahead && !self.unicode;
@@ -736,7 +920,7 @@ impl Parser {
                 Some(self.group_count)
             }
         };
-        let body = self.disjunction()?;
+        let body = self.nested_disjunction()?;
         self.close_group()?;
         Ok((
             Node::Group {
@@ -972,9 +1156,21 @@ impl Parser {
             .iter()
             .collect();
         self.index += close + 1;
-        let class = super::regexp_syntax::surrogate_property_class(&text).unwrap_or(text.as_str());
-        let set =
-            Regex::new(&format!("^[{class}]$")).map_err(|_| "Invalid property name".to_string())?;
+        self.property_escapes += 1;
+        if self.property_escapes > super::regexp_syntax::MAX_PROPERTY_ESCAPES {
+            return Err(super::regexp_syntax::TOO_MANY_PROPERTY_ESCAPES.to_string());
+        }
+        let set = match self.property_sets.get(&text) {
+            Some(set) => set.clone(),
+            None => {
+                let class =
+                    super::regexp_syntax::surrogate_property_class(&text).unwrap_or(text.as_str());
+                let set = Regex::new(&format!("^[{class}]$"))
+                    .map_err(|_| "Invalid property name".to_string())?;
+                self.property_sets.insert(text, set.clone());
+                set
+            }
+        };
         Ok(RangeSet {
             ranges: Vec::new(),
             properties: vec![set],
@@ -1237,15 +1433,19 @@ fn count_groups(chars: &[char]) -> (usize, bool) {
     (count, named)
 }
 
-fn resolve_named_backref(node: &mut Node, placeholder: usize, group: usize) {
+/// Replace every named-backreference placeholder (`usize::MAX - n`) with
+/// `resolved[n]`, in one walk (its depth is bounded by [`MAX_GROUP_NESTING`]).
+fn resolve_named_backrefs(node: &mut Node, resolved: &[usize]) {
     match node {
-        Node::BackRef(index) if *index == usize::MAX - placeholder => *index = group,
+        Node::BackRef(index) if *index > usize::MAX - resolved.len() => {
+            *index = resolved[usize::MAX - *index];
+        }
         Node::Group { body, .. } | Node::Look { body, .. } | Node::Repeat { body, .. } => {
-            resolve_named_backref(body, placeholder, group);
+            resolve_named_backrefs(body, resolved);
         }
         Node::Concat(nodes) | Node::Alt(nodes) => {
             for node in nodes {
-                resolve_named_backref(node, placeholder, group);
+                resolve_named_backrefs(node, resolved);
             }
         }
         _ => {}
@@ -1577,6 +1777,20 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
+    /// Draw `cost` extra steps for an instruction whose work grows with the
+    /// pattern or the input (a look-around saving every slot, a clear over a
+    /// slot range, a backreference comparing its capture), so one step stays
+    /// bounded work (franken_engine#2 follow-up).
+    fn charge(&mut self, cost: usize) -> Result<(), BacktrackError> {
+        let cost = u64::try_from(cost).unwrap_or(u64::MAX);
+        if self.steps_left < cost {
+            self.steps_left = 0;
+            return Err(BacktrackError::StepBudget);
+        }
+        self.steps_left -= cost;
+        Ok(())
+    }
+
     /// Run from `pc` at `position` until a `Match`; returns its position.
     /// On failure every slot and register change is undone.
     fn execute(
@@ -1643,6 +1857,7 @@ impl Run<'_> {
                     Some(position)
                 }
                 Inst::Clear { from, to } => {
+                    self.charge(to - from)?;
                     for (offset, value) in self.slots[*from..*to].iter_mut().enumerate() {
                         if let Some(old) = value.take() {
                             stack.push(Frame::Slot {
@@ -1713,6 +1928,15 @@ impl Run<'_> {
                     }
                 }
                 Inst::BackRef { group, backward } => {
+                    // Comparing the captured text costs its length.
+                    let captured = match (
+                        self.slots.get(group * 2).copied().flatten(),
+                        self.slots.get(group * 2 + 1).copied().flatten(),
+                    ) {
+                        (Some(from), Some(to)) => to.saturating_sub(from),
+                        _ => 0,
+                    };
+                    self.charge(captured)?;
                     self.backreference(*group, position, *backward)
                 }
                 Inst::Look {
@@ -1720,6 +1944,8 @@ impl Run<'_> {
                     body,
                     next,
                 } => {
+                    // Saving and diffing every slot costs the slot count.
+                    self.charge(self.slots.len())?;
                     let before = self.slots.clone();
                     let matched = self.execute(*body, position)?.is_some();
                     if matched == *negated {
@@ -1869,8 +2095,33 @@ impl CompiledRegExp {
     /// The matches of a global exec loop over `text` (ES2020 21.2.5.8 and
     /// 21.2.5.6 step 8): each search starts where the previous match ended,
     /// or one character further after an empty match (AdvanceStringIndex).
-    pub(super) fn all_captures(&self, text: &str) -> Result<Vec<Captures>, InterpreterError> {
-        let mut all = Vec::new();
+    ///
+    /// Bounded (franken_engine#2): the backtracking searches share one step
+    /// budget, and every retained capture vector is charged to `budget`
+    /// before it is kept, so a pattern with many groups over a long input
+    /// stops with [`GlobalMatchError::Retention`] instead of building an
+    /// unbounded match matrix. `retention` drops the groups a caller never
+    /// reads.
+    pub(super) fn all_captures(
+        &self,
+        text: &str,
+        retention: CaptureRetention,
+        budget: &mut RetentionBudget,
+    ) -> Result<Vec<Captures>, GlobalMatchError> {
+        let mut all: Vec<Captures> = Vec::new();
+        let mut keep = |all: &mut Vec<Captures>, spans: Captures| {
+            if retention == CaptureRetention::WholeMatchExceptLast
+                && let Some(previous) = all.last_mut()
+                && previous.len() > 1
+            {
+                budget.release(RetentionBudget::captures_bytes(previous.len()));
+                *previous = vec![previous[0]];
+                budget.charge(RetentionBudget::captures_bytes(1))?;
+            }
+            budget.charge(RetentionBudget::captures_bytes(spans.len()))?;
+            all.push(spans);
+            Ok::<(), GlobalMatchError>(())
+        };
         match self {
             Self::Automaton(regex) => {
                 let mut at = 0;
@@ -1890,14 +2141,17 @@ impl CompiledRegExp {
                     } else {
                         to
                     };
-                    all.push(spans);
+                    keep(&mut all, spans)?;
                 }
             }
             Self::Backtracking(regexp) => {
                 let input = PreparedInput::new(text);
+                let mut steps_left = BacktrackRegExp::step_budget(&input);
                 let mut at = 0;
                 while at <= input.char_len() {
-                    let Some(spans) = regexp.exec_at(&input, at, false).map_err(budget_error)?
+                    let Some(spans) = regexp
+                        .exec_at_with_budget(&input, at, false, &mut steps_left)
+                        .map_err(|error| GlobalMatchError::Interpreter(budget_error(error)))?
                     else {
                         break;
                     };
@@ -1906,7 +2160,7 @@ impl CompiledRegExp {
                     };
                     let end = input.char_index_at_byte(to);
                     at = if from == to { end + 1 } else { end };
-                    all.push(spans);
+                    keep(&mut all, spans)?;
                 }
             }
         }
@@ -1925,7 +2179,14 @@ fn budget_error(error: BacktrackError) -> InterpreterError {
 
 #[cfg(test)]
 mod tests {
-    use super::{BacktrackError, BacktrackRegExp, CompiledRegExp, PreparedInput};
+    use super::{
+        BacktrackError, BacktrackRegExp, CaptureRetention, CompiledRegExp, GlobalMatchError,
+        MAX_GLOBAL_MATCH_RETAINED_BYTES, MAX_GROUP_NESTING, PreparedInput, RetentionBudget,
+    };
+
+    fn unbounded() -> RetentionBudget {
+        RetentionBudget::new(u64::MAX)
+    }
 
     /// exec at 0 as (match index in bytes, captured strings).
     fn exec(pattern: &str, flags: &str, text: &str) -> Option<(usize, Vec<Option<String>>)> {
@@ -2175,7 +2436,7 @@ mod tests {
             CompiledRegExp::Backtracking(std::rc::Rc::new(BacktrackRegExp::new("b*", "").unwrap()));
         for engine in [automaton, backtracking] {
             let spans: Vec<_> = engine
-                .all_captures("abc")
+                .all_captures("abc", CaptureRetention::AllGroups, &mut unbounded())
                 .unwrap()
                 .into_iter()
                 .map(|captures| captures[0])
@@ -2185,7 +2446,7 @@ mod tests {
                 [Some((0, 0)), Some((1, 2)), Some((2, 2)), Some((3, 3))]
             );
             let emoji: Vec<_> = engine
-                .all_captures("😀")
+                .all_captures("😀", CaptureRetention::AllGroups, &mut unbounded())
                 .unwrap()
                 .into_iter()
                 .map(|captures| captures[0])
@@ -2202,5 +2463,213 @@ mod tests {
             Err(BacktrackError::StepBudget)
         );
         assert_eq!(regexp.is_match("aaab"), Ok(true));
+    }
+
+    // franken_engine#2: resource containment.
+
+    fn nested(depth: usize, open: &str) -> String {
+        format!("{}a{}", open.repeat(depth), ")".repeat(depth))
+    }
+
+    /// Group nesting at the bound still parses and matches; one level more
+    /// is a clean SyntaxError message, for every kind of group, and a
+    /// pathologically deep pattern (the issue's 200,000 levels) is rejected
+    /// without exhausting the native stack.
+    #[test]
+    fn group_nesting_is_bounded() {
+        for open in ["(", "(?:", "(?=", "(?<=", "(?!", "(?<!"] {
+            let at_limit = nested(MAX_GROUP_NESTING, open);
+            assert_eq!(BacktrackRegExp::syntax_error(&at_limit, ""), None, "{open}");
+            let too_deep = nested(MAX_GROUP_NESTING + 1, open);
+            assert_eq!(
+                BacktrackRegExp::syntax_error(&too_deep, "").as_deref(),
+                Some("Regular expression too deeply nested"),
+                "{open}"
+            );
+            assert!(BacktrackRegExp::new(&too_deep, "u").is_err(), "{open}");
+        }
+        assert_eq!(
+            exec(&nested(MAX_GROUP_NESTING, "(?:"), "", "xa"),
+            Some((1, groups(&[Some("a")])))
+        );
+        let at_limit = BacktrackRegExp::new(&nested(MAX_GROUP_NESTING, "("), "").unwrap();
+        assert_eq!(at_limit.group_names().len(), MAX_GROUP_NESTING + 1);
+        let pathological = nested(200_000, "(");
+        assert_eq!(
+            BacktrackRegExp::syntax_error(&pathological, "").as_deref(),
+            Some("Regular expression too deeply nested")
+        );
+        assert!(BacktrackRegExp::new(&pathological, "").is_err());
+        // Sibling groups are not nesting: many of them stay valid.
+        assert_eq!(
+            BacktrackRegExp::syntax_error(&"(a)".repeat(10_000), ""),
+            None
+        );
+    }
+
+    /// The issue's `'a'.repeat(N).match(/()()...()/g)` shape: every engine
+    /// stops at the retention budget with an error instead of building the
+    /// whole match matrix, and the budget it reports is the one exceeded.
+    #[test]
+    fn global_capture_retention_is_bounded() {
+        let pattern = "()".repeat(64);
+        let text = "a".repeat(100_000);
+        let backtracking = CompiledRegExp::Backtracking(std::rc::Rc::new(
+            BacktrackRegExp::new(&format!("(?=){pattern}"), "").unwrap(),
+        ));
+        let automaton = CompiledRegExp::Automaton(regex::Regex::new(&pattern).unwrap());
+        for engine in [automaton, backtracking] {
+            let limit = 1024 * 1024;
+            let mut budget = RetentionBudget::new(limit);
+            match engine.all_captures(&text, CaptureRetention::AllGroups, &mut budget) {
+                Err(GlobalMatchError::Retention { requested_bytes }) => {
+                    assert!(requested_bytes > limit);
+                    assert!(budget.used() <= limit);
+                }
+                other => panic!("expected a retention error, got {other:?}"),
+            }
+            // Keeping only the whole-match span fits many more matches in
+            // the same budget, and the last match keeps every group.
+            let mut budget = RetentionBudget::new(64 * 1024 * 1024);
+            let all = engine
+                .all_captures(&text, CaptureRetention::WholeMatchExceptLast, &mut budget)
+                .unwrap();
+            assert_eq!(all.len(), text.len() + 1);
+            assert!(
+                all[..all.len() - 1]
+                    .iter()
+                    .all(|captures| captures.len() == 1)
+            );
+            assert_eq!(all.last().map(Vec::len), Some(65));
+            assert_eq!(
+                budget.used(),
+                RetentionBudget::captures_bytes(1) * text.len() as u64
+                    + RetentionBudget::captures_bytes(65)
+            );
+        }
+    }
+
+    /// Ordinary global matches are unaffected and the cap never exceeds
+    /// its absolute ceiling.
+    #[test]
+    fn ordinary_global_matches_fit_the_budget() {
+        assert_eq!(
+            RetentionBudget::new(u64::MAX),
+            RetentionBudget::new(MAX_GLOBAL_MATCH_RETAINED_BYTES)
+        );
+        let engine = CompiledRegExp::Backtracking(std::rc::Rc::new(
+            BacktrackRegExp::new("(?<=a)(b)", "").unwrap(),
+        ));
+        let mut budget = RetentionBudget::new(4096);
+        let all = engine
+            .all_captures("abab", CaptureRetention::AllGroups, &mut budget)
+            .unwrap();
+        assert_eq!(
+            all,
+            vec![
+                vec![Some((1, 2)), Some((1, 2))],
+                vec![Some((3, 4)), Some((3, 4))]
+            ]
+        );
+    }
+
+    /// A global loop shares one step budget: a pattern that backtracks
+    /// moderately before each match runs out across the loop instead of
+    /// receiving a fresh budget for every match.
+    #[test]
+    fn global_searches_share_one_step_budget() {
+        // Before each `x` the alternation explores ~2^12 paths and fails;
+        // one search fits its own budget easily, 2,000 of them do not fit
+        // one shared budget.
+        let regexp = BacktrackRegExp::new("(?:a|a){12}(?!)|x", "").unwrap();
+        let text = ("a".repeat(12) + "x").repeat(2_000);
+        let input = PreparedInput::new(&text);
+        let mut at = 0;
+        let mut separate = 0;
+        while let Some(spans) = regexp.exec_at(&input, at, false).unwrap() {
+            separate += 1;
+            at = input.char_index_at_byte(spans[0].unwrap().1);
+        }
+        assert_eq!(separate, 2_000, "each search alone fits its budget");
+        let engine = CompiledRegExp::Backtracking(std::rc::Rc::new(regexp));
+        match engine.all_captures(&text, CaptureRetention::AllGroups, &mut unbounded()) {
+            Err(GlobalMatchError::Interpreter(error)) => {
+                assert!(format!("{error:?}").contains("step budget"), "{error:?}")
+            }
+            other => panic!("expected the shared step budget to run out, got {other:?}"),
+        }
+    }
+
+    /// Look-arounds save every slot, so each one costs the slot count: with
+    /// many groups an exponential pattern stops after a few hundred
+    /// look-arounds instead of copying megabytes per step.
+    #[test]
+    fn look_around_work_is_charged_per_slot() {
+        let pattern = format!("{}(?:(?=a)a|(?=a)a)*b", "()".repeat(30_000));
+        let regexp = BacktrackRegExp::new(&pattern, "").unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(
+            regexp.exec_at(&PreparedInput::new(&"a".repeat(30)), 0, true),
+            Err(BacktrackError::StepBudget)
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
+
+    /// Oversized patterns are refused before either parser runs.
+    #[test]
+    fn oversized_patterns_are_refused() {
+        let pattern = "a".repeat(super::MAX_PATTERN_LEN + 1);
+        assert_eq!(
+            BacktrackRegExp::syntax_error(&pattern, "").as_deref(),
+            Some(super::PATTERN_TOO_LARGE)
+        );
+        assert!(BacktrackRegExp::new(&pattern, "").is_err());
+        assert_eq!(
+            BacktrackRegExp::syntax_error(&"a".repeat(super::MAX_PATTERN_LEN), ""),
+            None
+        );
+    }
+
+    /// Named backreferences resolve in one walk: 200,000 of them parse
+    /// promptly (one walk per reference was quadratic).
+    #[test]
+    fn many_named_backreferences_parse_in_linear_time() {
+        let pattern = format!("(?<a>x){}", r"\k<a>".repeat(200_000));
+        let started = std::time::Instant::now();
+        assert_eq!(BacktrackRegExp::syntax_error(&pattern, "u"), None);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            exec(r"(?<a>x)\k<a>(?<b>y)\k<b>\k<a>", "", "xxyyx"),
+            Some((0, groups(&[Some("xxyyx"), Some("x"), Some("y")])))
+        );
+    }
+
+    /// Property escapes are bounded in number and compiled once per name.
+    #[test]
+    fn property_escapes_are_bounded_and_shared() {
+        use super::super::regexp_syntax::{
+            MAX_PROPERTY_ESCAPES, TOO_MANY_PROPERTY_ESCAPES, unicode_property_escape_error,
+        };
+        let at_limit = r"\p{L}".repeat(MAX_PROPERTY_ESCAPES);
+        assert_eq!(BacktrackRegExp::syntax_error(&at_limit, "u"), None);
+        let over = format!(r"{at_limit}\p{{L}}");
+        assert_eq!(
+            BacktrackRegExp::syntax_error(&over, "u").as_deref(),
+            Some(TOO_MANY_PROPERTY_ESCAPES)
+        );
+        assert_eq!(
+            unicode_property_escape_error(&over, "u"),
+            Some(TOO_MANY_PROPERTY_ESCAPES)
+        );
+        // Without `u`/`v`, `\p` is an identity escape and is not counted.
+        assert_eq!(unicode_property_escape_error(&over, ""), None);
+        assert_eq!(
+            exec(r"(?<=a)\p{Lu}\p{Lu}\P{Lu}", "u", "aBCd"),
+            Some((1, groups(&[Some("BCd")])))
+        );
     }
 }

@@ -1337,10 +1337,28 @@ const SCRIPT_VALUES: &[&str] = &[
 /// The SyntaxError message of the first invalid `\p{..}` or `\P{..}` in a u-
 /// or v-mode `pattern`, or `None` (also for patterns without either flag,
 /// where `\p` is an identity escape).
+/// Most Unicode property escapes (`\p{..}`/`\P{..}`) one pattern may hold
+/// (franken_engine#2). Each expands to a large code-point set in either
+/// RegExp route, so their number, not only the pattern length, bounds the
+/// memory a single pattern can claim.
+pub(super) const MAX_PROPERTY_ESCAPES: usize = 1024;
+
+/// The SyntaxError message of a pattern over [`MAX_PROPERTY_ESCAPES`].
+pub(super) const TOO_MANY_PROPERTY_ESCAPES: &str = "Too many Unicode property escapes";
+
+/// Upper bound on the property escapes in `pattern` (a `\p{`/`\P{` that is
+/// itself escaped is counted too, which only errs on the strict side).
+pub(super) fn property_escape_count(pattern: &str) -> usize {
+    pattern.matches("\\p{").count() + pattern.matches("\\P{").count()
+}
+
 pub(super) fn unicode_property_escape_error(pattern: &str, flags: &str) -> Option<&'static str> {
     let unicode_sets = flags.contains('v');
     if !unicode_sets && !flags.contains('u') {
         return None;
+    }
+    if property_escape_count(pattern) > MAX_PROPERTY_ESCAPES {
+        return Some(TOO_MANY_PROPERTY_ESCAPES);
     }
     let chars: Vec<char> = pattern.chars().collect();
     let mut index = 0;

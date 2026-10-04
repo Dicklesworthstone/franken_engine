@@ -2,6 +2,61 @@
 
 This is a synthesized, agent-facing changelog for the full history of `franken_engine`.
 
+## v0.2.0 — 2026-10-04
+
+First GitHub Release since `v0.1.0` (2026-05-29). It covers about 2,900
+commits on `main`. The `frankenctl` binary reports `0.2.0`, the version its
+runtime crates were staged at. The release ships the same three native
+archives as `v0.1.0`, each with a `.sha256` sidecar: Linux x86_64 GNU,
+macOS arm64 and Windows x86_64 MSVC, all built standalone
+(`--no-default-features`).
+
+### Release-blocker fixes (found by independent review against `v0.1.0`)
+
+- **Ordinary JavaScript literals are never rewritten by typed-hostcall
+  handling ([#1](https://github.com/Dicklesworthstone/franken_engine/issues/1)).**
+  - The classifier, stripper, capability-intent extractor and contract
+    validator for `hostcall<"cap">(args)` now consider only code. String,
+    template-text and regex literal contents and comments are ignored.
+    Typed calls inside `${...}` template substitutions still count.
+  - A `.js` file is routed through TypeScript normalization only for an
+    actual typed call, so `hostcall<"cap">` must be followed by `(`.
+- **RegExp resource containment
+  ([#2](https://github.com/Dicklesworthstone/franken_engine/issues/2)).**
+  These limits are documented in `baseline_interpreter/regexp_backtrack.rs`:
+  - **Group nesting:** at most 128 levels deep. Deeper patterns are a
+    SyntaxError.
+  - **Pattern size:** at most 1 MiB, rejected before either parser runs.
+  - **Unicode property escapes:** at most 1,024 per pattern, each compiled
+    once.
+  - **Named backreferences:** resolved in a single pass.
+  - **Step budget:** a global match, replace or split shares one budget, and
+    look-arounds, group clears and backreferences are charged by the work
+    they do.
+  - **Retained memory:** capture vectors kept across global
+    match/replace/split/replaceAll, and copied group text, are charged
+    against the guest's remaining memory headroom (capped at 512 MiB). They
+    fail with `MemoryBudgetExceeded` instead of growing without bound.
+  - **`String.prototype.match` with `g`:** keeps only the whole-match spans.
+  - **`matchAll`:** charges one instruction per native exec.
+- **GetSubstitution is bounded.** A `replace` template such as `"$'"`
+  repeated is checked against the string limit while it is built, not after.
+- **The lexical pre-scan's regex-literal detection stops at the line end.**
+  Before, it re-scanned the rest of a long line for every `/`.
+
+### Known pre-existing issues (red on `main` before these fixes, not regressions in shipped behaviour)
+
+- Five tests fail on the release base without these changes:
+  - `ts_normalization::tests::strips_implements_clause_from_class_headers`
+  - `type_erasure::expressions::tests::incomplete_expressions_and_effectful_signatures_are_not_erased`
+  - Two `lowering_pipeline` tests that still expect `await 42` in Script
+    goal to parse. The parser now correctly reports `AwaitOutsideAsync`.
+  - `typescript_generic_execution::generic_type_arguments_can_span_comments_and_lines`
+- `cargo clippy --all-targets -D warnings` reports lints in auxiliary
+  binaries and test targets, and one test target
+  (`owner_key_bundle_v2_integration`) does not compile. The shipped library
+  and `frankenctl` targets are clippy-clean.
+
 ## Post-Snapshot Update — Native IFC Label and Sealed-Sink Repairs (2026-09-04)
 
 The native IFC repairs were committed directly to `main`, preserving the newer

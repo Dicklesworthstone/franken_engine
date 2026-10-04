@@ -65,7 +65,10 @@ use ghash::{GHash, universal_hash};
 use hmac::{Hmac, Mac};
 use md5::Md5;
 use regex::RegexBuilder;
-use regexp_backtrack::{BacktrackRegExp, Captures, CompiledRegExp};
+use regexp_backtrack::{
+    BacktrackRegExp, CaptureRetention, Captures, CompiledRegExp, GlobalMatchError, MAX_PATTERN_LEN,
+    PATTERN_TOO_LARGE, RetentionBudget,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
@@ -1019,6 +1022,11 @@ pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<S
     }) && !(flags.contains('u') && flags.contains('v'));
     if !flags_valid {
         return Some(format!("Invalid regular expression flags '{flags}'"));
+    }
+    // Checked before any pass materializes the pattern (franken_engine#2);
+    // the message does not echo a pattern this large.
+    if pattern.len() > MAX_PATTERN_LEN {
+        return Some(format!("Invalid regular expression: {PATTERN_TOO_LARGE}"));
     }
     // Property names are exact in JavaScript; the `regex` crate would accept
     // loose spellings (`\p{greek}`), so they are checked here.
@@ -56743,7 +56751,9 @@ impl InterpreterCore {
             return Ok(pieces);
         }
         let mut last = 0usize;
-        let matches = regex.all_captures(input)?;
+        let mut budget = self.regexp_retention_budget();
+        let matches =
+            self.regexp_all_captures(&regex, input, CaptureRetention::AllGroups, &mut budget)?;
         if let Some(spans) = matches.last() {
             self.record_legacy_regexp_match(input, spans);
         }
@@ -56754,6 +56764,16 @@ impl InterpreterCore {
             if start == end && (start == 0 || start >= input.len() || start == last) {
                 continue;
             }
+            // Group pieces can overlap (`(?=(.*))`), so their text is
+            // charged too: it is not bounded by the input length.
+            let piece_bytes = spans[1..]
+                .iter()
+                .flatten()
+                .fold(start - last, |total, (from, to)| {
+                    total.saturating_add(to - from)
+                })
+                .saturating_add(spans.len().saturating_mul(std::mem::size_of::<Value>()));
+            self.regexp_charge_retained(&mut budget, piece_bytes)?;
             pieces.push(Value::str(&input[last..start]));
             for group in &spans[1..] {
                 pieces.push(
@@ -57391,6 +57411,23 @@ impl InterpreterCore {
     }
 
     fn regexp_builder(pattern: &str, flags: &str) -> Result<RegexBuilder, InterpreterError> {
+        // Both routes refuse an oversized pattern before translating or
+        // parsing it (franken_engine#2).
+        if pattern.len() > MAX_PATTERN_LEN {
+            return Err(InterpreterError::RangeError {
+                message: format!("Invalid regular expression: {PATTERN_TOO_LARGE}"),
+            });
+        }
+        if (flags.contains('u') || flags.contains('v'))
+            && regexp_syntax::property_escape_count(pattern) > regexp_syntax::MAX_PROPERTY_ESCAPES
+        {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "Invalid regular expression: {}",
+                    regexp_syntax::TOO_MANY_PROPERTY_ESCAPES
+                ),
+            });
+        }
         let mut case_insensitive = false;
         let mut multi_line = false;
         let mut dot_matches_new_line = false;
@@ -57432,6 +57469,50 @@ impl InterpreterCore {
                 expected: "valid RegExp pattern".to_string(),
                 got: message,
             })
+    }
+
+    /// The native-retention budget of one global RegExp operation: the
+    /// guest's remaining memory headroom (franken_engine#2). Results a global
+    /// match, replace or split holds natively before they reach the guest
+    /// heap are charged here, so a match matrix the guest could never hold
+    /// fails closed instead of being built first.
+    fn regexp_retention_budget(&self) -> RetentionBudget {
+        let used = self.total_memory_bytes_from_base(self.estimated_memory_bytes);
+        RetentionBudget::new(self.config.max_total_memory_bytes.saturating_sub(used))
+    }
+
+    fn regexp_global_match_error(&self, error: GlobalMatchError) -> InterpreterError {
+        match error {
+            GlobalMatchError::Interpreter(error) => error,
+            GlobalMatchError::Retention { requested_bytes } => self.memory_budget_error(
+                self.estimated_memory_bytes.saturating_add(requested_bytes),
+                self.heap_object_count_u32(),
+            ),
+        }
+    }
+
+    /// [`CompiledRegExp::all_captures`] charged to `budget`.
+    fn regexp_all_captures(
+        &self,
+        regex: &CompiledRegExp,
+        input: &str,
+        retention: CaptureRetention,
+        budget: &mut RetentionBudget,
+    ) -> Result<Vec<Captures>, InterpreterError> {
+        regex
+            .all_captures(input, retention, budget)
+            .map_err(|error| self.regexp_global_match_error(error))
+    }
+
+    /// Charge `bytes` of native result text to `budget`.
+    fn regexp_charge_retained(
+        &self,
+        budget: &mut RetentionBudget,
+        bytes: usize,
+    ) -> Result<(), InterpreterError> {
+        budget
+            .charge(u64::try_from(bytes).unwrap_or(u64::MAX))
+            .map_err(|error| self.regexp_global_match_error(error))
     }
 
     fn regexp_test_value(
@@ -57480,7 +57561,13 @@ impl InterpreterCore {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
             let result_id = self.alloc_array_with_prototype(None)?;
             let mut count = 0usize;
-            let matches = regex.all_captures(input)?;
+            let mut budget = self.regexp_retention_budget();
+            let matches = self.regexp_all_captures(
+                &regex,
+                input,
+                CaptureRetention::WholeMatchExceptLast,
+                &mut budget,
+            )?;
             if let Some(spans) = matches.last() {
                 self.record_legacy_regexp_match(input, spans);
             }
@@ -57599,6 +57686,11 @@ impl InterpreterCore {
         // Each iteration either ends or moves lastIndex forward, so the loop
         // is bounded by the input length; the bound is a backstop.
         for _ in 0..=input.len().saturating_add(1) {
+            // Every native exec here costs what the equivalent guest
+            // `while (re.exec(s))` iteration would: one instruction of the
+            // run's budget, so the eager loop cannot outlast it
+            // (franken_engine#2 follow-up).
+            self.charge_property_copy_work()?;
             let result = self.regexp_prototype_exec(Value::Object(clone), &subject)?;
             let Value::Object(result_id) = result else {
                 break;
@@ -57664,6 +57756,11 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let mut matches: Vec<(usize, usize, Vec<Option<String>>)> = Vec::new();
         let mut group_names: Vec<Option<String>> = Vec::new();
+        // Every match is held natively until the output is built, so the
+        // match list is charged to the guest's memory headroom
+        // (franken_engine#2).
+        let mut budget = self.regexp_retention_budget();
+        let match_entry_bytes = std::mem::size_of::<(usize, usize, Vec<Option<String>>)>();
         if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
             let regex = self.compile_regexp_pattern(&source, &flags)?;
             group_names = regex.group_names().into_iter().skip(1).collect();
@@ -57680,7 +57777,7 @@ impl InterpreterCore {
                 {
                     self.set_regexp_last_index(regexp_id, 0)?;
                 }
-                regex.all_captures(input)?
+                self.regexp_all_captures(&regex, input, CaptureRetention::AllGroups, &mut budget)?
             } else if flags.contains('y')
                 && let Some(regexp_id) = regexp_id
             {
@@ -57697,6 +57794,19 @@ impl InterpreterCore {
                 let Some((start, end)) = spans[0] else {
                     continue;
                 };
+                // Group text is copied out per match and can overlap
+                // (`(?=(.*))`), so it is charged to the same budget.
+                let group_bytes = spans[1..]
+                    .iter()
+                    .flatten()
+                    .fold(0usize, |total, (from, to)| total.saturating_add(to - from))
+                    .saturating_add(
+                        spans
+                            .len()
+                            .saturating_mul(std::mem::size_of::<Option<String>>()),
+                    )
+                    .saturating_add(match_entry_bytes);
+                self.regexp_charge_retained(&mut budget, group_bytes)?;
                 let groups = spans[1..]
                     .iter()
                     .map(|group| group.map(|(from, to)| input[from..to].to_string()))
@@ -57711,12 +57821,14 @@ impl InterpreterCore {
                 }
             } else if needle.is_empty() {
                 for (index, _) in input.char_indices() {
+                    self.regexp_charge_retained(&mut budget, match_entry_bytes)?;
                     matches.push((index, index, Vec::new()));
                 }
                 matches.push((input.len(), input.len(), Vec::new()));
             } else {
                 let mut position = 0;
                 while let Some(offset) = input[position..].find(needle.as_str()) {
+                    self.regexp_charge_retained(&mut budget, match_entry_bytes)?;
                     let start = position + offset;
                     matches.push((start, start + needle.len(), Vec::new()));
                     position = start + needle.len();
@@ -57772,7 +57884,23 @@ impl InterpreterCore {
                 )?;
                 self.value_to_string(&result)
             } else {
-                Self::get_substitution(matched, input, start, end, &groups, &group_names, &template)
+                // A template can expand far beyond its own length (`$'`
+                // repeated), so the expansion is bounded while it is built.
+                let budget = self.config.max_string_size.saturating_sub(output.len());
+                Self::get_substitution(
+                    matched,
+                    input,
+                    start,
+                    end,
+                    &groups,
+                    &group_names,
+                    &template,
+                    budget,
+                )
+                .map_err(|length| InterpreterError::StringLimitExceeded {
+                    length: output.len().saturating_add(length),
+                    max: self.config.max_string_size,
+                })?
             };
             output.push_str(&replacement);
             self.check_string_limit(output.len())?;
@@ -57788,6 +57916,11 @@ impl InterpreterCore {
     /// text, empty for an unknown or unmatched name; `$<` without a closing
     /// `>`, or with no named groups, stays literal). `names[i]` names
     /// `groups[i]`.
+    ///
+    /// The result never exceeds `max_len` bytes: each piece is checked before
+    /// it is appended, and `Err(length)` reports the length that would have
+    /// been reached (franken_engine#2 follow-up).
+    #[allow(clippy::too_many_arguments)]
     fn get_substitution(
         matched: &str,
         input: &str,
@@ -57796,7 +57929,8 @@ impl InterpreterCore {
         groups: &[Option<String>],
         names: &[Option<String>],
         template: &str,
-    ) -> String {
+        max_len: usize,
+    ) -> Result<String, usize> {
         let has_named_groups = names.iter().any(Option::is_some);
         let bytes = template.as_bytes();
         let group = |index: usize| {
@@ -57837,16 +57971,24 @@ impl InterpreterCore {
                     _ => None,
                 };
                 if let Some((text, width)) = expansion {
+                    let length = output.len().saturating_add(text.len());
+                    if length > max_len {
+                        return Err(length);
+                    }
                     output.push_str(&text);
                     index += width;
                     continue;
                 }
             }
             let ch = template[index..].chars().next().unwrap_or('\u{fffd}');
+            let length = output.len().saturating_add(ch.len_utf8());
+            if length > max_len {
+                return Err(length);
+            }
             output.push(ch);
             index += ch.len_utf8().max(1);
         }
-        output
+        Ok(output)
     }
 
     /// Coerce a `Number.prototype` receiver to an `f64`, mirroring the

@@ -2792,6 +2792,42 @@ fn quoted_byte_mask(s: &str) -> Vec<bool> {
         .collect()
 }
 
+/// Like [`quoted_byte_mask`], but the code of template substitutions
+/// (`${ ... }`) is not masked: only string, template-text and regex bytes are.
+fn literal_text_byte_mask(s: &str) -> Vec<bool> {
+    let mut quotes = QuoteState::default();
+    s.bytes()
+        .enumerate()
+        .map(|(index, b)| {
+            if quotes.active() {
+                let code = quotes.in_substitution_code();
+                quotes.advance(b);
+                !code
+            } else {
+                (b == b'/' && quotes.open_regex_at(s, index)) || quotes.open(b)
+            }
+        })
+        .collect()
+}
+
+/// `text` with the contents of its string, template-text and
+/// regular-expression literals replaced by spaces byte for byte (line breaks
+/// kept), while the code inside template substitutions stays: a scan for
+/// code syntax that may legitimately appear inside `${ ... }` (a typed
+/// hostcall in a template substitution) still sees it.
+pub(crate) fn blank_literal_text(text: &str) -> String {
+    let mask = literal_text_byte_mask(text);
+    let mut out = String::with_capacity(text.len());
+    for (index, ch) in text.char_indices() {
+        if mask[index] && ch != '\n' {
+            push_blanked(&mut out, ch);
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// `text` with its string, template and regular-expression literals
 /// (delimiters and template substitutions included) replaced by spaces byte
 /// for byte, line breaks kept, so a scan for code syntax (TypeScript
@@ -9722,12 +9758,10 @@ fn regex_literal_len_at(expr: &str, slash: usize) -> Option<usize> {
         return None;
     }
     // A regex literal never spans a line, so a `/` whose "literal" would
-    // (`i++ / 2` … `/`) divides.
-    let line = &expr[slash..];
-    let line = line
-        .find(is_ecmascript_line_terminator)
-        .map_or(line, |end| &line[..end]);
-    leading_regexp_literal(line).map(|(end, _, _)| end)
+    // (`i++ / 2` … `/`) divides. `leading_regexp_literal` stops at the line
+    // end itself; cutting the line out first rescanned the rest of a long
+    // line for every slash on it (quadratic in a one-line bundle).
+    leading_regexp_literal(&expr[slash..]).map(|(end, _, _)| end)
 }
 
 /// Return the byte end and components of a regex literal at the start of `input`.
@@ -9744,6 +9778,16 @@ fn leading_regexp_literal(input: &str) -> Option<(usize, String, String)> {
 
     while i < bytes.len() {
         let c = bytes[i];
+        // RegularExpressionNonTerminator excludes every line terminator, even
+        // escaped: LF, CR, and U+2028/U+2029 (E2 80 A8/A9).
+        if c == b'\n'
+            || c == b'\r'
+            || (c == 0xE2
+                && bytes.get(i + 1) == Some(&0x80)
+                && matches!(bytes.get(i + 2), Some(0xA8 | 0xA9)))
+        {
+            return None;
+        }
         if prev_escape {
             prev_escape = false;
             i += 1;

@@ -301,8 +301,102 @@ pub fn classify_source_language(source_label: Option<&str>, source: &str) -> Sou
 /// parameter, so the analyzer and the runtime agree on the hostcall edge
 /// regardless of the file extension (e.g. a `.js` package module that declares a
 /// `hostcall<"declassify.audit">(...)` obligation).
+///
+/// Only an actual typed call in code position counts: `hostcall<"cap">`
+/// followed by an argument list. The same characters inside a string,
+/// template or regular-expression literal or a comment are data, so a plain
+/// JavaScript file such as `const label = 'hostcall<"demo">';` stays
+/// JavaScript and its literal is never rewritten (franken_engine#1).
 fn source_uses_typed_hostcall_dsl(source: &str) -> bool {
-    source.contains("hostcall<\"")
+    let Some(code) = typed_hostcall_code_view(source) else {
+        return false;
+    };
+    typed_hostcall_sites(source, &code).iter().any(|site| {
+        code[site.end..]
+            .trim_start_matches(|ch: char| ch.is_whitespace())
+            .starts_with('(')
+    })
+}
+
+/// One `hostcall<"cap">` typed-hostcall form found in code position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypedHostcallSite {
+    /// Byte offset of the `<` that opens the generic parameter list.
+    params_start: usize,
+    /// Byte offset just past the closing `>`.
+    end: usize,
+    /// The capability text between the quotes, trimmed.
+    capability: String,
+}
+
+const TYPED_HOSTCALL_MARKER: &str = "hostcall<\"";
+
+/// `source` with comments and string/template-text/regex literal contents
+/// blanked to spaces byte for byte (offsets unchanged; template
+/// substitution code stays, so a typed call inside `${ ... }` still counts),
+/// or `None` when the raw text has no typed-hostcall marker at all (the
+/// common case, which skips the scan).
+fn typed_hostcall_code_view(source: &str) -> Option<String> {
+    if !source.contains(TYPED_HOSTCALL_MARKER) {
+        return None;
+    }
+    Some(crate::parser::blank_literal_text(
+        &crate::parser::strip_comments_to_whitespace(source),
+    ))
+}
+
+/// Every typed-hostcall form whose `hostcall<` and closing `>` are code (not
+/// literal or comment text) and whose parameter is a single plain string
+/// literal. `code` is [`typed_hostcall_code_view`] of `source`.
+fn typed_hostcall_sites(source: &str, code: &str) -> Vec<TypedHostcallSite> {
+    debug_assert_eq!(source.len(), code.len());
+    let mut sites = Vec::new();
+    for (start, _) in code.match_indices("hostcall<") {
+        if !has_token_boundary_before(code, start) {
+            continue;
+        }
+        let params_start = start + "hostcall".len();
+        let literal_start = params_start + 1;
+        let Some(literal) = source[literal_start..].strip_prefix('"') else {
+            continue;
+        };
+        // The capability grammar has no escapes or line breaks; anything else
+        // is not the DSL and is left exactly as written.
+        let Some(close) = literal.find(['"', '\\', '\n', '\r']) else {
+            continue;
+        };
+        if literal.as_bytes()[close] != b'"' {
+            continue;
+        }
+        let gt = literal_start + 1 + close + 1;
+        // The closing quote must end the literal (so `>` is back in code).
+        if code.as_bytes().get(gt) != Some(&b'>') {
+            continue;
+        }
+        sites.push(TypedHostcallSite {
+            params_start,
+            end: gt + 1,
+            capability: literal[..close].trim().to_string(),
+        });
+    }
+    sites
+}
+
+/// Whether `source` still has typed-hostcall marker text in code position.
+fn code_contains_typed_hostcall_marker(source: &str) -> bool {
+    typed_hostcall_code_view(source).is_some_and(|code| {
+        code.match_indices("hostcall<")
+            .any(|(start, _)| source[start + "hostcall<".len()..].starts_with('"'))
+    })
+}
+
+/// Whether `source` has an unannotated `hostcall(` call in code position.
+fn code_contains_unannotated_hostcall(source: &str) -> bool {
+    if !source.contains("hostcall(") {
+        return false;
+    }
+    crate::parser::blank_literal_text(&crate::parser::strip_comments_to_whitespace(source))
+        .contains("hostcall(")
 }
 
 pub fn prepare_source_entry_for_public_entrypoints(
@@ -1097,10 +1191,11 @@ fn validate_capability_contracts(
         declared_capabilities.insert(capability.to_string());
     }
 
-    let has_annotation_marker = normalization_output
-        .normalized_source
-        .contains("hostcall<\"");
-    let has_unannotated_hostcall = normalization_output.normalized_source.contains("hostcall(");
+    // Only code counts: literal or comment text that spells the DSL is data.
+    let has_annotation_marker =
+        code_contains_typed_hostcall_marker(&normalization_output.normalized_source);
+    let has_unannotated_hostcall =
+        code_contains_unannotated_hostcall(&normalization_output.normalized_source);
 
     if has_annotation_marker && declared_capabilities.is_empty() {
         return Err(
@@ -2634,41 +2729,34 @@ fn lower_simple_jsx(source: &str) -> String {
 
 /// Strips `hostcall<"cap">` → `hostcall` so the ES2020 parser sees a plain
 /// function call instead of comparison expressions around angle brackets.
+/// Only typed-hostcall forms in code position are rewritten; string, template
+/// and regex literal contents and comments are copied unchanged
+/// (franken_engine#1).
 fn strip_hostcall_type_params(source: &str) -> String {
-    let marker = "hostcall<\"";
+    let Some(code) = typed_hostcall_code_view(source) else {
+        return source.to_string();
+    };
     let mut output = String::with_capacity(source.len());
-    let mut remaining = source;
-
-    while let Some(start) = remaining.find(marker) {
-        output.push_str(&remaining[..start]);
-        output.push_str("hostcall");
-        let after_marker = &remaining[start + marker.len()..];
-        if let Some(close) = after_marker.find("\">") {
-            remaining = &after_marker[close + 2..];
-        } else {
-            // Malformed — keep original text
-            output.push_str(&remaining[start + "hostcall".len()..]);
-            remaining = "";
-        }
+    let mut copied = 0usize;
+    for site in typed_hostcall_sites(source, &code) {
+        output.push_str(&source[copied..site.params_start]);
+        copied = site.end;
     }
-    output.push_str(remaining);
+    output.push_str(&source[copied..]);
     output
 }
 
 fn extract_capability_intents(source: &str) -> Vec<CapabilityIntent> {
-    let mut intents = Vec::<CapabilityIntent>::new();
-
-    for token in source.split_whitespace() {
-        if let Some(rest) = token.strip_prefix("hostcall<\"")
-            && let Some(capability_end) = rest.find("\">")
-        {
-            let capability = rest[..capability_end].trim().to_string();
-            intents.push(CapabilityIntent {
-                symbol: "hostcall".to_string(),
-                capability,
-            });
-        }
-    }
+    let Some(code) = typed_hostcall_code_view(source) else {
+        return Vec::new();
+    };
+    let mut intents = typed_hostcall_sites(source, &code)
+        .into_iter()
+        .map(|site| CapabilityIntent {
+            symbol: "hostcall".to_string(),
+            capability: site.capability,
+        })
+        .collect::<Vec<_>>();
 
     intents.sort_by(|left, right| {
         left.symbol

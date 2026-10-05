@@ -83701,10 +83701,9 @@ impl InterpreterCore {
         expected: &str,
         got: &Value,
     ) -> InterpreterError {
-        let message = format!(
-            "The \"{arg_name}\" argument must be of type {expected}. Received type {}",
-            got.type_name()
-        );
+        let received = self.node_received_description(got);
+        let message =
+            format!("The \"{arg_name}\" argument must be of type {expected}. Received {received}");
         let thrown = match self.construct_node_invalid_arg_type_error(&message) {
             Ok(value) => value,
             Err(err) => return err,

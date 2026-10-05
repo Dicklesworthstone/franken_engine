@@ -230,22 +230,23 @@ fn importing_a_package_above_the_contract_is_refused() {
     );
 }
 
-/// Planted negative: the bound holds transitively. A barrel re-exporting a
-/// module above the contract is lowered under the contract itself (so its
-/// own ceiling passes the app's edge), and its edge to that module is
-/// refused before the module runs (Node prints 1).
+/// Planted negative: the bound holds transitively. The app prints an
+/// imported call's result, so it runs under the contract; a barrel
+/// re-exporting a module above the contract is lowered under the contract
+/// itself (so its own ceiling passes the app's edge), and its edge to that
+/// module is refused before the module runs (Node prints 1).
 #[test]
 fn a_barrel_over_a_module_above_the_contract_is_refused() {
     assert_refused(
         &[
             (
                 "a.mjs",
-                "import * as threads from 'node:worker_threads';\nexport const a = 1;\n",
+                "import * as threads from 'node:worker_threads';\nexport function f() { return 1; }\n",
             ),
             ("index.mjs", "export * from './a.mjs';\n"),
             (
                 "app.mjs",
-                "import { a } from './index.mjs';\nconsole.log(a);\n",
+                "import { f } from './index.mjs';\nconsole.log(f());\n",
             ),
         ],
         "bounded-import contract",

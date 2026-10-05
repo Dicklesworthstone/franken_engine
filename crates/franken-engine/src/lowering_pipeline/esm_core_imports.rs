@@ -216,31 +216,42 @@ impl Rewrite {
         match &import.clause {
             ImportClause::SideEffect => {}
             ImportClause::Default { local } | ImportClause::Namespace { local } => {
-                self.alias(import, local);
+                self.alias(import, module, local);
             }
             ImportClause::Named { specifiers } => self.named(import, module, specifiers),
             ImportClause::DefaultAndNamed {
                 default,
                 specifiers,
             } => {
-                self.alias(import, default);
+                self.alias(import, module, default);
                 self.named(import, module, specifiers);
             }
             ImportClause::DefaultAndNamespace { default, namespace } => {
-                self.alias(import, default);
-                self.alias(import, namespace);
+                self.alias(import, module, default);
+                self.alias(import, module, namespace);
             }
         }
     }
 
     /// `const <local> = require(<source>);` when the program names `local`.
-    fn alias(&mut self, import: &ImportDeclaration, local: &str) {
-        if self.referenced.contains(local) {
-            self.declarations.push(require_declaration(
-                import,
-                BindingPattern::Identifier(local.to_string()),
-            ));
+    /// A path module alias requires `node:path/posix`, which the path module
+    /// object (path_module.rs) always serves: the path facade confirms only
+    /// an alias used outside functions, and an imported `path` is usually
+    /// used inside them. On POSIX `path.posix` is `path` itself.
+    fn alias(&mut self, import: &ImportDeclaration, module: &str, local: &str) {
+        if !self.referenced.contains(local) {
+            return;
         }
+        let pattern = BindingPattern::Identifier(local.to_string());
+        self.declarations.push(if module == "path" {
+            declaration(
+                import,
+                pattern,
+                require_call(import, Expression::StringLiteral("node:path/posix".into())),
+            )
+        } else {
+            require_declaration(import, pattern)
+        });
     }
 
     fn named(&mut self, import: &ImportDeclaration, module: &str, specifiers: &[ImportSpecifier]) {
@@ -251,7 +262,7 @@ impl Rewrite {
                 continue;
             }
             if name == "default" {
-                self.alias(import, local);
+                self.alias(import, module, local);
             } else if is_global_export(module, name) {
                 if local != name {
                     self.declarations.push(declaration(
@@ -383,12 +394,17 @@ fn require_declaration(import: &ImportDeclaration, pattern: BindingPattern) -> S
     declaration(
         import,
         pattern,
-        Expression::Call {
-            callee: Box::new(Expression::Identifier("require".to_string())),
-            arguments: vec![Expression::StringLiteral(import.source.clone())],
-            span: Some(import.span),
-        },
+        require_call(import, Expression::StringLiteral(import.source.clone())),
     )
+}
+
+/// `require(<specifier>)` at the import's span.
+fn require_call(import: &ImportDeclaration, specifier: Expression) -> Expression {
+    Expression::Call {
+        callee: Box::new(Expression::Identifier("require".to_string())),
+        arguments: vec![specifier],
+        span: Some(import.span),
+    }
 }
 
 /// `const <pattern> = <initializer>;` at the import's span.

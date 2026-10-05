@@ -7853,8 +7853,12 @@ const MICROTASK_COMPACTION_INTERVAL: u32 = 1024;
 
 /// Most compiled RegExp patterns one interpreter keeps for reuse.
 const REGEXP_CACHE_ENTRIES: usize = 32;
-/// Longest pattern source the RegExp cache keeps compiled.
-const REGEXP_CACHE_MAX_PATTERN_BYTES: usize = 256;
+/// Longest pattern source the RegExp cache keeps compiled. The compiled
+/// limits below bound what the cache holds; this only keeps a lookup (a scan
+/// comparing sources) cheap. At 256 bytes, a module-level pattern like
+/// semver's (565 bytes) recompiled on every `test`, 18 times slower than a
+/// cached one (bd-9vouw.183).
+const REGEXP_CACHE_MAX_PATTERN_BYTES: usize = 16 * 1024;
 /// Compiled-program limit for a cached RegExp. A pattern that needs more
 /// compiles under the default limits and is not kept, so the cache holds at
 /// most about `REGEXP_CACHE_ENTRIES` times this plus the DFA limit below.

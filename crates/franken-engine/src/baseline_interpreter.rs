@@ -3545,6 +3545,13 @@ pub enum BuiltinFunctionKind {
     /// `__lookupGetter__` and `__lookupSetter__` (bd-9vouw.172), named by
     /// the specifier. Append only.
     ObjectLegacyAccessor,
+    /// `Array.fromAsync` resumption steps (ES2024 23.1.2.1, bd-9vouw.172),
+    /// registered as reactions on each awaited promise and bound (via
+    /// `bound_object`) to the holder that carries the call's state: the
+    /// fulfilled step continues with the awaited value, the rejected step
+    /// with the awaited reason. Append only.
+    ArrayFromAsyncFulfilled,
+    ArrayFromAsyncRejected,
 }
 
 impl BuiltinFunctionKind {
@@ -5392,7 +5399,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::PromiseThenFinally
             | BuiltinFunctionKind::PromiseCatchFinally
             | BuiltinFunctionKind::PromiseFinallyValueThunk
-            | BuiltinFunctionKind::PromiseFinallyThrower => "",
+            | BuiltinFunctionKind::PromiseFinallyThrower
+            | BuiltinFunctionKind::ArrayFromAsyncFulfilled
+            | BuiltinFunctionKind::ArrayFromAsyncRejected => "",
             BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
             BuiltinFunctionKind::ObjectPrototypeToLocaleString => "toLocaleString",
             BuiltinFunctionKind::BigIntToString => "toString",
@@ -5649,7 +5658,9 @@ impl BuiltinFunction {
             | K::AsyncGeneratorReturn
             | K::AsyncGeneratorThrow
             | K::PromiseThenFinally
-            | K::PromiseCatchFinally => Some(1),
+            | K::PromiseCatchFinally
+            | K::ArrayFromAsyncFulfilled
+            | K::ArrayFromAsyncRejected => Some(1),
             K::IteratorNext
             | K::IteratorSelf
             | K::AsyncGeneratorIteratorSelf
@@ -6339,7 +6350,7 @@ const SLOT0_STATIC_GLOBALS: [&str; 10] = [
     "Number",
     "Buffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 42] = [
+const SLOT0_STATIC_MEMBERS: [&str; 43] = [
     "keys",
     "hasOwn",
     "values",
@@ -6363,6 +6374,7 @@ const SLOT0_STATIC_MEMBERS: [&str; 42] = [
     "stringify",
     "isArray",
     "from",
+    "fromAsync",
     "of",
     "fromCharCode",
     "fromCodePoint",
@@ -41765,6 +41777,10 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::PromiseThenFinally | BuiltinFunctionKind::PromiseCatchFinally => {
                 self.promise_finally_step(module, builtin, args)
+            }
+            BuiltinFunctionKind::ArrayFromAsyncFulfilled
+            | BuiltinFunctionKind::ArrayFromAsyncRejected => {
+                self.array_from_async_step(module, builtin, args)
             }
             BuiltinFunctionKind::PromiseFinallyValueThunk => {
                 self.promise_finally_bound_property(builtin, "__value")
@@ -89572,71 +89588,7 @@ impl InterpreterCore {
                 }
             }
 
-            "builtin:ArrayFromAsync" => {
-                // Array.fromAsync(arrayLike[, mapFn[, thisArg]]) implementation (simplified)
-                if args.count < 2 {
-                    // Create empty array for missing argument
-                    let empty_array_id = self.alloc_array_with_prototype(None)?;
-                    self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
-                    return Ok(Value::Object(empty_array_id));
-                }
-
-                let array_like_val = self.read_reg(args.start + 1)?;
-
-                // Simplified implementation: treat as regular Array.from for now
-                match array_like_val {
-                    Value::Object(obj_id) => {
-                        // Try to get length property
-                        let length = if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            match obj.properties.get("length") {
-                                Some(Value::Int(len)) => *len as usize,
-                                Some(Value::Float(len)) => len.inner() as usize,
-                                _ => 0,
-                            }
-                        } else {
-                            0
-                        };
-
-                        // Create result array
-                        let result_array_id = self.alloc_array_with_prototype(None)?;
-
-                        // Copy elements without holding the source object borrow across writes.
-                        let copied_elements = if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            (0..length)
-                                .filter_map(|i| {
-                                    obj.properties
-                                        .get(&i.to_string())
-                                        .cloned()
-                                        .map(|element| (i, element))
-                                })
-                                .collect::<Vec<_>>()
-                        } else {
-                            Vec::new()
-                        };
-                        for (i, element) in copied_elements {
-                            self.set_object_property(result_array_id, i.to_string(), element)?;
-                        }
-
-                        self.set_object_property(
-                            result_array_id,
-                            "length".to_string(),
-                            Value::Int(length as i64),
-                        )?;
-
-                        Ok(Value::Object(result_array_id))
-                    }
-                    _ => {
-                        // Non-object, create empty array
-                        let empty_array_id = self.alloc_array_with_prototype(None)?;
-                        self.set_object_property(
-                            empty_array_id,
-                            "length".to_string(),
-                            Value::Int(0),
-                        )?;
-                        Ok(Value::Object(empty_array_id))
-                    }
-                }
-            }
+            "builtin:ArrayFromAsync" => self.array_from_async_builtin(module, args),
 
             "builtin:ObjectIs" => {
                 // Object.is(value1, value2) implementation
@@ -155051,6 +155003,9 @@ mod tests {
             Value::str("[object Array]")
         );
 
+        // ES2024 Array.fromAsync returns a promise of the array (here rejected:
+        // `undefined` has no iterator and is not array-like); the old stub
+        // returned the array itself (bd-9vouw.172).
         let array_from_async = core
             .dispatch_builtin_hostcall(
                 "builtin:ArrayFromAsync",
@@ -155060,7 +155015,7 @@ mod tests {
             .expect("Array.fromAsync should produce a value");
         assert_eq!(
             object_tag(&mut core, array_from_async),
-            Value::str("[object Array]")
+            Value::str("[object Promise]")
         );
     }
 

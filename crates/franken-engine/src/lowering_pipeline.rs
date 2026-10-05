@@ -27763,6 +27763,8 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         // (bd-tvpjk). `Array`/`String` globals have no eval-scope binding either.
         ("Array", "isArray") => Some("builtin:ArrayIsArray"),
         ("Array", "from") => Some("builtin:ArrayFrom"),
+        // ES2024 Array.fromAsync (bd-9vouw.172): a promise of the array.
+        ("Array", "fromAsync") => Some("builtin:ArrayFromAsync"),
         ("Array", "of") => Some("builtin:ArrayOf"),
         ("String", "fromCharCode") => Some("builtin:StringFromCharCode"),
         ("String", "fromCodePoint") => Some("builtin:StringFromCodePoint"),

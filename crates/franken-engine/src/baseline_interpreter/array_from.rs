@@ -1,4 +1,6 @@
-//! Array.from on the ordinary callback and property-read paths (bd-9vouw.42).
+//! Array.from on the ordinary callback and property-read paths (bd-9vouw.42),
+//! and Array.fromAsync as a promise-driven state machine over the same
+//! iterator and array-like reads (bd-9vouw.172).
 //!
 //! A mapper is guest code, not a second, restricted instruction interpreter.
 //! Its owner module, captures, exceptions, work budget and labels travel through
@@ -135,17 +137,7 @@ impl InterpreterCore {
         this_arg: &Value,
         iterable_only: bool,
     ) -> Result<Value, InterpreterError> {
-        let backing = match &source {
-            value if value.is_object_like() => {
-                self.iterator_carrier_backing_id(value, "Array.from source")?
-            }
-            Value::Str(_) => Some(self.ensure_builtin_prototype("String")?),
-            Value::Int(_) | Value::Float(_) => Some(self.ensure_builtin_prototype("Number")?),
-            Value::Bool(_) => Some(self.ensure_builtin_prototype("Boolean")?),
-            Value::BigInt(_) => Some(self.ensure_builtin_prototype("BigInt")?),
-            Value::Symbol(_) => Some(self.ensure_builtin_prototype("Symbol")?),
-            _ => None,
-        };
+        let backing = self.array_from_source_backing(&source)?;
         // GetMethod occurs once, before allocating the destination. Nullish
         // methods permit the array-like branch; a noncallable method or a
         // throwing getter is an error, never a reason to silently fall back.
@@ -214,6 +206,25 @@ impl InterpreterCore {
             Value::Int(count as i64),
         )?;
         Ok(Value::Object(target))
+    }
+
+    /// The object a source's property reads go to: an object-like value's
+    /// backing, or a primitive's prototype (ToObject is not observable here).
+    fn array_from_source_backing(
+        &mut self,
+        source: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        Ok(match source {
+            value if value.is_object_like() => {
+                self.iterator_carrier_backing_id(value, "Array.from source")?
+            }
+            Value::Str(_) => Some(self.ensure_builtin_prototype("String")?),
+            Value::Int(_) | Value::Float(_) => Some(self.ensure_builtin_prototype("Number")?),
+            Value::Bool(_) => Some(self.ensure_builtin_prototype("Boolean")?),
+            Value::BigInt(_) => Some(self.ensure_builtin_prototype("BigInt")?),
+            Value::Symbol(_) => Some(self.ensure_builtin_prototype("Symbol")?),
+            _ => None,
+        })
     }
 
     // This non-observable inspection only distinguishes a missing native
@@ -500,5 +511,807 @@ impl InterpreterCore {
         })();
         self.json_release_temporary(scratch);
         outcome
+    }
+}
+
+/// Where an `Array.fromAsync` call reads its values (ES2024 23.1.2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FromAsyncSource {
+    /// The iterator `items[Symbol.asyncIterator]()` returned.
+    AsyncIterator,
+    /// A sync iterator, through CreateAsyncFromSyncIterator.
+    SyncIterator,
+    /// Indexed reads up to the source's length.
+    ArrayLike,
+}
+
+const FROM_ASYNC_SOURCES: [FromAsyncSource; 3] = [
+    FromAsyncSource::AsyncIterator,
+    FromAsyncSource::SyncIterator,
+    FromAsyncSource::ArrayLike,
+];
+
+/// What the pending await of an `Array.fromAsync` call waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FromAsyncAwait {
+    /// The async iterator's `next()` result.
+    Next,
+    /// A sync step's value (%AsyncFromSyncIteratorPrototype%'s value
+    /// wrapper).
+    SyncValue,
+    /// The async-from-sync `next()` promise the value wrapper settled.
+    SyncStep,
+    /// The mapper's result for an iterator value.
+    Mapped,
+    /// AsyncIteratorClose's await of `return()`; the call then rejects with
+    /// the error that closed the iterator.
+    Close,
+    /// Array-like element `k`.
+    Element,
+    /// The mapper's result for an array-like element.
+    MappedElement,
+}
+
+const FROM_ASYNC_AWAITS: [FromAsyncAwait; 7] = [
+    FromAsyncAwait::Next,
+    FromAsyncAwait::SyncValue,
+    FromAsyncAwait::SyncStep,
+    FromAsyncAwait::Mapped,
+    FromAsyncAwait::Close,
+    FromAsyncAwait::Element,
+    FromAsyncAwait::MappedElement,
+];
+
+/// `Array.fromAsync` (ES2024 23.1.2.1, bd-9vouw.172). The spec runs the body
+/// as an async function. Here it is a state machine: the state lives in a
+/// holder object, and every Await registers the two resumption steps
+/// (`ArrayFromAsyncFulfilled` / `ArrayFromAsyncRejected`, bound to the
+/// holder) as reactions on the awaited promise. The microtask ticks match
+/// the spec's: one per awaited value, and two per sync-iterator step (the
+/// async-from-sync value wrapper, then the await of the step's promise).
+/// Like Array.from here, the result is always an Array, never `new this()`.
+impl InterpreterCore {
+    pub(super) fn array_from_async_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let items = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let mapper = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let this_arg = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
+        let label = self.join_arg_range_label(args)?;
+        let promise = self.create_promise()?;
+        // Everything before the first Await runs now, as in AsyncFunctionStart;
+        // a throw rejects the promise instead of escaping the call.
+        if let Err(error) =
+            self.array_from_async_start(module, promise, items, mapper, this_arg, &label)
+        {
+            let (reason, reason_label) = self.array_from_async_thrown(error, &label)?;
+            let reason = self.promise_value(&reason)?;
+            self.reject_promise(promise, reason, reason_label)?;
+        }
+        Ok(Value::Promise(promise.0))
+    }
+
+    fn array_from_async_start(
+        &mut self,
+        module: Option<&Ir3Module>,
+        promise: crate::promise_model::PromiseHandle,
+        items: Value,
+        mapper: Value,
+        this_arg: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        // IsCallable(mapfn) precedes GetMethod(items, @@asyncIterator).
+        if !matches!(mapper, Value::Undefined) && !mapper.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "function".to_string(),
+                got: mapper.type_name().to_string(),
+            });
+        }
+        if matches!(items, Value::Undefined | Value::Null) {
+            return Err(InterpreterError::TypeError {
+                expected: "object-coercible Array.fromAsync source".to_string(),
+                got: items.type_name().to_string(),
+            });
+        }
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed Array.fromAsync".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let async_method = self.array_from_async_get_method(
+            module,
+            &items,
+            &RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
+        )?;
+        let target = self.alloc_array_with_prototype(None)?;
+        let holder = self.alloc_object_with_properties(&[
+            ("__promise", Value::Promise(promise.0)),
+            ("__target", Value::Object(target)),
+            ("__mapper", mapper),
+            ("__this", this_arg),
+            ("__k", Value::Int(0)),
+        ])?;
+        // One pair of reaction callables serves every await of this call.
+        for (name, kind) in [
+            (
+                "__onFulfilled",
+                BuiltinFunctionKind::ArrayFromAsyncFulfilled,
+            ),
+            ("__onRejected", BuiltinFunctionKind::ArrayFromAsyncRejected),
+        ] {
+            let handler = self
+                .promise_reaction_handler_from_value(
+                    Value::BuiltinFunction(BuiltinFunction::bound_to(kind, holder)),
+                    "Array.fromAsync step",
+                )?
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "Array.fromAsync step is not a reaction handler".to_string(),
+                })?;
+            self.array_from_async_set(holder, name, Value::Int(i64::from(handler.0)))?;
+        }
+        if let Some(method) = async_method {
+            // GetIteratorFromMethod: the iterator must be an object; its
+            // `next` is read once.
+            let (iterator, _) = self.invoke_inline_method_call_with_argument_label(
+                Some(module),
+                method,
+                items,
+                Vec::new(),
+                Some(label.clone()),
+            )?;
+            if !iterator.is_object_like() {
+                return Err(InterpreterError::TypeError {
+                    expected: "object returned by @@asyncIterator".to_string(),
+                    got: iterator.type_name().to_string(),
+                });
+            }
+            let next = self.get_v(
+                module,
+                &iterator,
+                &RuntimePropertyKey::String(JsString::from("next")),
+            )?;
+            self.array_from_async_set_source(holder, FromAsyncSource::AsyncIterator)?;
+            self.array_from_async_set(holder, "__iterator", iterator)?;
+            self.array_from_async_set(holder, "__next", next)?;
+            return self.array_from_async_request_next(module, holder, label);
+        }
+        if let Some(iterator) = self.array_from_async_sync_iterator(module, &items, label)? {
+            self.array_from_async_set_source(holder, FromAsyncSource::SyncIterator)?;
+            self.array_from_async_set(holder, "__iterator", iterator)?;
+            return self.array_from_async_request_next(module, holder, label);
+        }
+        // Array-like: LengthOfArrayLike once, then each element in turn.
+        let length = match self.array_from_source_backing(&items)? {
+            Some(backing) => {
+                self.json_reviver_array_length(Some(module), backing, items.clone())?
+            }
+            None => 0,
+        };
+        if length > u64::from(u32::MAX) {
+            return Err(InterpreterError::RangeError {
+                message: "invalid Array.fromAsync array length".to_string(),
+            });
+        }
+        self.array_from_async_set_source(holder, FromAsyncSource::ArrayLike)?;
+        self.array_from_async_set(holder, "__iterator", items)?;
+        self.array_from_async_set(holder, "__length", Value::Int(length as i64))?;
+        self.array_from_async_next_element(module, holder, label)
+    }
+
+    /// GetMethod(V, P): undefined or null is no method; anything else must
+    /// be callable.
+    fn array_from_async_get_method(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<Value>, InterpreterError> {
+        match self.get_v(module, value, key)? {
+            Value::Undefined | Value::Null => Ok(None),
+            method if method.is_callable() => Ok(Some(method)),
+            other => Err(InterpreterError::TypeError {
+                expected: format!("callable property '{}' or undefined", key.diagnostic()),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// The sync iterator Array.from would iterate `items` with (its
+    /// @@iterator, a generator or native iterator, the native collection and
+    /// string fallbacks), or `None` for an array-like source.
+    fn array_from_async_sync_iterator(
+        &mut self,
+        module: &Ir3Module,
+        items: &Value,
+        label: &Label,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let backing = self.array_from_source_backing(items)?;
+        let method = match backing {
+            Some(object) => {
+                self.lookup_symbol_iterator_method(Some(module), object, items.clone())?
+            }
+            None => None,
+        };
+        if let Some(method) = method {
+            let (iterator, _) = self.invoke_inline_method_call_with_argument_label(
+                Some(module),
+                method,
+                items.clone(),
+                Vec::new(),
+                Some(label.clone()),
+            )?;
+            let init = self.prepare_custom_iterator_result(module, iterator)?;
+            return self
+                .init_iterator_from_state(items.clone(), init, IterationKind::ForOf)
+                .map(Some);
+        }
+        if matches!(items, Value::Iterator(_) | Value::Generator(_)) {
+            return self
+                .init_for_of_iterator(Some(module), items.clone())
+                .map(Some);
+        }
+        if let Some(object) = backing
+            && self.array_from_has_explicit_iterator(object)?
+        {
+            return Ok(None);
+        }
+        if let Value::Object(object) = items
+            && let Some(iterator) = self.array_from_collection_iterator(*object)?
+        {
+            return Ok(Some(iterator));
+        }
+        if matches!(items, Value::Str(_)) {
+            return self
+                .init_for_of_iterator(Some(module), items.clone())
+                .map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Resume after an await (the bound holder names the call; the settled
+    /// value or reason is the only argument). A completion that ends the
+    /// call rejects its promise here, so the reaction itself never throws.
+    pub(super) fn array_from_async_step(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let holder =
+            builtin
+                .bound_object
+                .map(ObjectId)
+                .ok_or_else(|| InterpreterError::InternalError {
+                    details: "Array.fromAsync step lost its state".to_string(),
+                })?;
+        let settled = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let label = self.join_arg_range_label(args)?;
+        self.json_charge_work()?;
+        let awaiting = match self.array_from_async_slot(holder, "__await")? {
+            Value::Int(code) => usize::try_from(code)
+                .ok()
+                .and_then(|code| FROM_ASYNC_AWAITS.get(code).copied()),
+            _ => None,
+        }
+        .ok_or_else(|| InterpreterError::InternalError {
+            details: "Array.fromAsync step without a pending await".to_string(),
+        })?;
+        let outcome = if builtin.kind == BuiltinFunctionKind::ArrayFromAsyncFulfilled {
+            self.array_from_async_resume(module, holder, awaiting, settled, &label)
+        } else {
+            self.array_from_async_resume_abrupt(module, holder, awaiting, settled, &label)
+        };
+        if let Err(error) = outcome {
+            let (reason, reason_label) = self.array_from_async_thrown(error, &label)?;
+            self.array_from_async_reject(holder, reason, reason_label)?;
+        }
+        Ok(Value::Undefined)
+    }
+
+    fn array_from_async_resume(
+        &mut self,
+        module: &Ir3Module,
+        holder: ObjectId,
+        awaiting: FromAsyncAwait,
+        settled: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        match awaiting {
+            FromAsyncAwait::Next => {
+                // IteratorComplete / IteratorValue of the awaited result.
+                if !settled.is_object_like() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "iterator result object".to_string(),
+                        got: settled.type_name().to_string(),
+                    });
+                }
+                let done = self
+                    .get_v(
+                        module,
+                        &settled,
+                        &RuntimePropertyKey::String(JsString::from("done")),
+                    )?
+                    .is_truthy();
+                if done {
+                    return self.array_from_async_finish(holder, label);
+                }
+                let value = self.get_v(
+                    module,
+                    &settled,
+                    &RuntimePropertyKey::String(JsString::from("value")),
+                )?;
+                self.array_from_async_add(module, holder, value, label)
+            }
+            FromAsyncAwait::SyncValue => {
+                // The value wrapper settled the step's promise; the loop's
+                // Await of that promise resumes one tick later.
+                self.array_from_async_set(holder, "__value", settled)?;
+                self.array_from_async_await(
+                    holder,
+                    Value::Undefined,
+                    FromAsyncAwait::SyncStep,
+                    label,
+                )
+            }
+            FromAsyncAwait::SyncStep => {
+                let value = self.array_from_async_slot(holder, "__value")?;
+                self.array_from_async_set(holder, "__value", Value::Undefined)?;
+                if self.array_from_async_slot(holder, "__done")?.is_truthy() {
+                    return self.array_from_async_finish(holder, label);
+                }
+                self.array_from_async_add(module, holder, value, label)
+            }
+            FromAsyncAwait::Mapped => {
+                if let Err(error) = self.array_from_async_store(holder, settled, label) {
+                    return self.array_from_async_close(module, holder, error, label);
+                }
+                self.array_from_async_request_next(module, holder, label)
+            }
+            FromAsyncAwait::Close => self.array_from_async_reject_closed(holder),
+            FromAsyncAwait::Element => {
+                let mapper = self.array_from_async_slot(holder, "__mapper")?;
+                if matches!(mapper, Value::Undefined) {
+                    self.array_from_async_store(holder, settled, label)?;
+                    return self.array_from_async_next_element(module, holder, label);
+                }
+                let this_arg = self.array_from_async_slot(holder, "__this")?;
+                let k = self.array_from_async_slot(holder, "__k")?;
+                let (mapped, _) = self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    mapper,
+                    this_arg,
+                    vec![settled, k],
+                    None,
+                )?;
+                self.array_from_async_await(holder, mapped, FromAsyncAwait::MappedElement, label)
+            }
+            FromAsyncAwait::MappedElement => {
+                self.array_from_async_store(holder, settled, label)?;
+                self.array_from_async_next_element(module, holder, label)
+            }
+        }
+    }
+
+    fn array_from_async_resume_abrupt(
+        &mut self,
+        module: &Ir3Module,
+        holder: ObjectId,
+        awaiting: FromAsyncAwait,
+        reason: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        match awaiting {
+            FromAsyncAwait::SyncValue => {
+                // ES2025 AsyncFromSyncIteratorContinuation: a rejected value
+                // closes the sync iterator unless the step was its last; the
+                // step's promise rejects, and the loop's Await sees it a
+                // tick later.
+                if !self.array_from_async_slot(holder, "__done")?.is_truthy() {
+                    let iterator = self.array_from_async_slot(holder, "__iterator")?;
+                    let closed = self.close_iterator(module, iterator, IteratorCloseReason::Throw);
+                    self.array_from_async_discard_close_error(closed)?;
+                }
+                let reason = self.promise_value(&reason)?;
+                let step = self.create_rejected_promise(reason, label.clone())?;
+                self.array_from_async_await(
+                    holder,
+                    Value::Promise(step.0),
+                    FromAsyncAwait::SyncStep,
+                    label,
+                )
+            }
+            // IfAbruptCloseAsyncIterator(mappedValue).
+            FromAsyncAwait::Mapped => {
+                let error = self.throw_guest_value(reason, label.clone())?;
+                self.array_from_async_close(module, holder, error, label)
+            }
+            FromAsyncAwait::Close => self.array_from_async_reject_closed(holder),
+            FromAsyncAwait::Next
+            | FromAsyncAwait::SyncStep
+            | FromAsyncAwait::Element
+            | FromAsyncAwait::MappedElement => {
+                self.array_from_async_reject(holder, reason, label.clone())
+            }
+        }
+    }
+
+    /// A value read from the iterator: map it (and await the result) or
+    /// store it, then take the next step. A mapper throw closes the iterator.
+    fn array_from_async_add(
+        &mut self,
+        module: &Ir3Module,
+        holder: ObjectId,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let mapper = self.array_from_async_slot(holder, "__mapper")?;
+        if matches!(mapper, Value::Undefined) {
+            if let Err(error) = self.array_from_async_store(holder, value, label) {
+                return self.array_from_async_close(module, holder, error, label);
+            }
+            return self.array_from_async_request_next(module, holder, label);
+        }
+        let this_arg = self.array_from_async_slot(holder, "__this")?;
+        let k = self.array_from_async_slot(holder, "__k")?;
+        match self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            mapper,
+            this_arg,
+            vec![value, k],
+            None,
+        ) {
+            Ok((mapped, _)) => {
+                self.array_from_async_await(holder, mapped, FromAsyncAwait::Mapped, label)
+            }
+            Err(error) => self.array_from_async_close(module, holder, error, label),
+        }
+    }
+
+    /// The next iterator step: Await(Call(next, iterator)) for an async
+    /// iterator; for a sync one, %AsyncFromSyncIteratorPrototype%.next takes
+    /// a sync step now and awaits its value.
+    fn array_from_async_request_next(
+        &mut self,
+        module: &Ir3Module,
+        holder: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let iterator = self.array_from_async_slot(holder, "__iterator")?;
+        match self.array_from_async_source(holder)? {
+            FromAsyncSource::AsyncIterator => {
+                let next = self.array_from_async_slot(holder, "__next")?;
+                let (result, _) = self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    next,
+                    iterator,
+                    Vec::new(),
+                    None,
+                )?;
+                self.array_from_async_await(holder, result, FromAsyncAwait::Next, label)
+            }
+            FromAsyncSource::SyncIterator => {
+                let step = self.advance_for_of_iterator(Some(module), iterator)?;
+                self.array_from_async_set(holder, "__done", Value::Bool(step.is_none()))?;
+                self.array_from_async_await(
+                    holder,
+                    step.unwrap_or(Value::Undefined),
+                    FromAsyncAwait::SyncValue,
+                    label,
+                )
+            }
+            FromAsyncSource::ArrayLike => Err(InterpreterError::InternalError {
+                details: "Array.fromAsync iterator step on an array-like source".to_string(),
+            }),
+        }
+    }
+
+    /// Await array-like element `k`, or finish once `k` reaches the length.
+    fn array_from_async_next_element(
+        &mut self,
+        module: &Ir3Module,
+        holder: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let k = self.array_from_async_index(holder, "__k")?;
+        if k >= self.array_from_async_index(holder, "__length")? {
+            return self.array_from_async_finish(holder, label);
+        }
+        let items = self.array_from_async_slot(holder, "__iterator")?;
+        let element = match self.array_from_source_backing(&items)? {
+            Some(backing) => self.iterator_protocol_property(
+                Some(module),
+                backing,
+                &RuntimePropertyKey::String(JsString::from(k.to_string())),
+                items,
+            )?,
+            None => Value::Undefined,
+        };
+        self.array_from_async_await(holder, element, FromAsyncAwait::Element, label)
+    }
+
+    /// Await(value): a native promise is awaited as it is; anything else
+    /// through a new promise resolved with it (PromiseResolve).
+    fn array_from_async_await(
+        &mut self,
+        holder: ObjectId,
+        value: Value,
+        awaiting: FromAsyncAwait,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let awaited = match value {
+            Value::Promise(handle) => crate::promise_model::PromiseHandle(handle),
+            other => {
+                let handle = self.create_promise()?;
+                self.resolve_promise_with_value(handle, other, label.clone())?;
+                handle
+            }
+        };
+        let code = FROM_ASYNC_AWAITS
+            .iter()
+            .position(|candidate| *candidate == awaiting)
+            .expect("every await state is listed");
+        self.array_from_async_set(holder, "__await", Value::Int(code as i64))?;
+        let on_fulfilled = self.array_from_async_index(holder, "__onFulfilled")?;
+        let on_rejected = self.array_from_async_index(holder, "__onRejected")?;
+        self.register_promise_then(
+            awaited,
+            Some(crate::closure_model::ClosureHandle(on_fulfilled as u32)),
+            Some(crate::closure_model::ClosureHandle(on_rejected as u32)),
+            label.clone(),
+        )?;
+        Ok(())
+    }
+
+    /// CreateDataPropertyOrThrow(A, k, value) with the label it was
+    /// computed under, then k + 1.
+    fn array_from_async_store(
+        &mut self,
+        holder: ObjectId,
+        value: Value,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let Value::Object(target) = self.array_from_async_slot(holder, "__target")? else {
+            return Err(InterpreterError::InternalError {
+                details: "Array.fromAsync lost its result array".to_string(),
+            });
+        };
+        let k = self.array_from_async_index(holder, "__k")?;
+        let key = k.to_string();
+        self.create_data_property_or_throw(target, key.clone(), value)?;
+        self.set_own_runtime_property_label(
+            target,
+            &RuntimePropertyKey::String(JsString::from(key)),
+            label,
+        )?;
+        self.array_from_async_set(holder, "__k", Value::Int(k as i64 + 1))
+    }
+
+    /// Set A.length to k and resolve the call's promise with A.
+    fn array_from_async_finish(
+        &mut self,
+        holder: ObjectId,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let target = self.array_from_async_slot(holder, "__target")?;
+        let Value::Object(target_id) = target else {
+            return Err(InterpreterError::InternalError {
+                details: "Array.fromAsync lost its result array".to_string(),
+            });
+        };
+        let k = self.array_from_async_slot(holder, "__k")?;
+        self.set_object_property(target_id, "length".to_string(), k)?;
+        let promise = self.array_from_async_promise(holder)?;
+        self.resolve_promise_with_value(promise, target, label.clone())
+    }
+
+    /// AsyncIteratorClose(iterator, throw completion): call `return()` and
+    /// await its result, then reject with the error that closed the
+    /// iterator. A missing, throwing or non-callable `return` rejects at
+    /// once (the throw completion wins). For a sync iterator the async-from-
+    /// sync `return()` runs the sync one now; its result's value is not
+    /// awaited, so the rejection comes one tick before the spec's.
+    fn array_from_async_close(
+        &mut self,
+        module: &Ir3Module,
+        holder: ObjectId,
+        error: InterpreterError,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let (reason, reason_label) = self.array_from_async_thrown(error, label)?;
+        let iterator = self.array_from_async_slot(holder, "__iterator")?;
+        if self.array_from_async_source(holder)? == FromAsyncSource::SyncIterator {
+            let closed = self.close_iterator(module, iterator, IteratorCloseReason::Throw);
+            self.array_from_async_discard_close_error(closed)?;
+            self.array_from_async_keep_close_reason(holder, reason, &reason_label)?;
+            return self.array_from_async_await(
+                holder,
+                Value::Undefined,
+                FromAsyncAwait::Close,
+                label,
+            );
+        }
+        let return_method = self.array_from_async_get_method(
+            module,
+            &iterator,
+            &RuntimePropertyKey::String(JsString::from("return")),
+        );
+        let inner = match return_method {
+            Ok(Some(method)) => self
+                .invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    method,
+                    iterator,
+                    Vec::new(),
+                    None,
+                )
+                .map(|(inner, _)| Some(inner)),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
+        match inner {
+            Ok(Some(inner)) => {
+                self.array_from_async_keep_close_reason(holder, reason, &reason_label)?;
+                self.array_from_async_await(holder, inner, FromAsyncAwait::Close, label)
+            }
+            Ok(None) => self.array_from_async_reject(holder, reason, reason_label),
+            Err(error) => {
+                self.array_from_async_discard_close_error(Err(error))?;
+                self.array_from_async_reject(holder, reason, reason_label)
+            }
+        }
+    }
+
+    /// The error that closed the iterator, kept with its label until the
+    /// close's await resumes.
+    fn array_from_async_keep_close_reason(
+        &mut self,
+        holder: ObjectId,
+        reason: Value,
+        reason_label: &Label,
+    ) -> Result<(), InterpreterError> {
+        self.array_from_async_set(holder, "__error", reason)?;
+        self.set_own_runtime_property_label(
+            holder,
+            &RuntimePropertyKey::String(JsString::from("__error")),
+            reason_label,
+        )
+    }
+
+    fn array_from_async_reject_closed(&mut self, holder: ObjectId) -> Result<(), InterpreterError> {
+        let reason = self.array_from_async_slot(holder, "__error")?;
+        let reason_label = self.runtime_property_label(
+            holder,
+            &RuntimePropertyKey::String(JsString::from("__error")),
+        );
+        self.array_from_async_reject(holder, reason, reason_label)
+    }
+
+    /// A throw completion wins over a failing `return()`: drop a guest
+    /// error the close raised; a host refusal (budget, containment) still
+    /// propagates.
+    fn array_from_async_discard_close_error(
+        &mut self,
+        closed: Result<(), InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        match closed {
+            Ok(()) => Ok(()),
+            Err(InterpreterError::UncaughtException { .. }) => {
+                self.take_pending_exception_slot();
+                Ok(())
+            }
+            Err(error) if Self::js_catchable_error_name(&error).is_some() => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The guest value of a throw completion: the thrown value of a guest
+    /// `throw`, or the error object of a catchable native error. A host
+    /// refusal (budget, cancellation, containment) is not a guest completion
+    /// and keeps propagating.
+    fn array_from_async_thrown(
+        &mut self,
+        error: InterpreterError,
+        label: &Label,
+    ) -> Result<(Value, Label), InterpreterError> {
+        match error {
+            InterpreterError::UncaughtException { value } => {
+                Ok(match self.take_pending_exception_slot() {
+                    Some((thrown, thrown_label)) => (thrown, thrown_label.join(label)),
+                    None => (Value::str(value), label.clone()),
+                })
+            }
+            error if Self::js_catchable_error_name(&error).is_some() => {
+                let thrown = self.native_error_to_thrown_value(&error)?;
+                Ok((thrown, label.clone()))
+            }
+            error => Err(error),
+        }
+    }
+
+    fn array_from_async_reject(
+        &mut self,
+        holder: ObjectId,
+        reason: Value,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let promise = self.array_from_async_promise(holder)?;
+        if self.promise_is_settled(promise) {
+            return Ok(());
+        }
+        let reason = self.promise_value(&reason)?;
+        self.reject_promise(promise, reason, label)
+    }
+
+    fn array_from_async_promise(
+        &self,
+        holder: ObjectId,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        match self.array_from_async_slot(holder, "__promise")? {
+            Value::Promise(handle) => Ok(crate::promise_model::PromiseHandle(handle)),
+            _ => Err(InterpreterError::InternalError {
+                details: "Array.fromAsync lost its promise".to_string(),
+            }),
+        }
+    }
+
+    fn array_from_async_source(
+        &self,
+        holder: ObjectId,
+    ) -> Result<FromAsyncSource, InterpreterError> {
+        let code = self.array_from_async_index(holder, "__source")?;
+        FROM_ASYNC_SOURCES
+            .get(code as usize)
+            .copied()
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: format!("Array.fromAsync source code {code}"),
+            })
+    }
+
+    fn array_from_async_set_source(
+        &mut self,
+        holder: ObjectId,
+        source: FromAsyncSource,
+    ) -> Result<(), InterpreterError> {
+        let code = FROM_ASYNC_SOURCES
+            .iter()
+            .position(|candidate| *candidate == source)
+            .expect("every source is listed");
+        self.array_from_async_set(holder, "__source", Value::Int(code as i64))
+    }
+
+    fn array_from_async_slot(
+        &self,
+        holder: ObjectId,
+        name: &str,
+    ) -> Result<Value, InterpreterError> {
+        self.heap
+            .get(holder.0 as usize)
+            .and_then(|state| state.properties.get(name).cloned())
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: format!("Array.fromAsync state lost its {name}"),
+            })
+    }
+
+    fn array_from_async_index(
+        &self,
+        holder: ObjectId,
+        name: &str,
+    ) -> Result<u64, InterpreterError> {
+        match self.array_from_async_slot(holder, name)? {
+            Value::Int(value) if value >= 0 => Ok(value as u64),
+            other => Err(InterpreterError::InternalError {
+                details: format!("Array.fromAsync {name} is {}", other.type_name()),
+            }),
+        }
+    }
+
+    fn array_from_async_set(
+        &mut self,
+        holder: ObjectId,
+        name: &str,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        self.set_object_property(holder, name.to_string(), value)
     }
 }

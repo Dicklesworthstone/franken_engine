@@ -628,6 +628,8 @@ macro_rules! scoped_walk {
     };
 }
 
+pub(super) use scoped_walk;
+
 impl Walk for UtilRewriter {
     scoped_walk!();
 

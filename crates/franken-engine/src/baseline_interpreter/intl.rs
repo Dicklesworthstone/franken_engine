@@ -27,6 +27,10 @@ use super::*;
 
 use date_locale::{DateComponents, Digits, FormatStyle, MonthStyle, TextWidth};
 
+/// The parts of a formatted relative time or list: each part's `type`, its
+/// text and, for a relative time's number, its `unit`.
+type FormattedParts = Vec<(&'static str, String, Option<&'static str>)>;
+
 /// Which caller's ToDateTimeOptions `required` / `defaults` apply (ECMA-402
 /// 11.1.2): the DateTimeFormat constructor (any, date) or
 /// Date.prototype.toLocaleDateString (date, date), toLocaleTimeString
@@ -1284,7 +1288,7 @@ impl InterpreterCore {
         value: f64,
         unit: &str,
         method: &str,
-    ) -> Result<Vec<(&'static str, String, Option<&'static str>)>, InterpreterError> {
+    ) -> Result<FormattedParts, InterpreterError> {
         if !value.is_finite() {
             return Err(InterpreterError::RangeError {
                 message: format!(
@@ -1401,7 +1405,7 @@ impl InterpreterCore {
         &self,
         resolved: ObjectId,
         items: &[String],
-    ) -> Result<Vec<(&'static str, String, Option<&'static str>)>, InterpreterError> {
+    ) -> Result<FormattedParts, InterpreterError> {
         let locale = self.intl_resolved_string(resolved, "locale");
         let list_type = self.intl_resolved_string(resolved, "type");
         let style = self.intl_resolved_string(resolved, "style");
@@ -1439,7 +1443,7 @@ impl InterpreterCore {
     fn intl_parts_result(
         &mut self,
         method: &str,
-        parts: Vec<(&'static str, String, Option<&'static str>)>,
+        parts: FormattedParts,
     ) -> Result<Value, InterpreterError> {
         if method == "format" {
             return Ok(Value::str(

@@ -101757,6 +101757,10 @@ impl InterpreterCore {
                 .map(|(name, _)| name.as_str());
             // A method `delete` removed from this prototype (bd-9vouw.93)
             // is looked up further along the chain.
+            // A prototype without the method passes the lookup on to its own
+            // [[Prototype]], as [[Get]] does: AbortSignal.prototype holds
+            // throwIfAborted, EventTarget.prototype addEventListener
+            // (bd-9vouw.170).
             if let Some(name) = name
                 && VIRTUAL_METHOD_PROTOTYPES.contains(&name)
                 && !(self.virtual_property_deletions
@@ -101764,8 +101768,9 @@ impl InterpreterCore {
                         id,
                         &RuntimePropertyKey::String(JsString::from(key)),
                     ))
+                && let Some(method) = Self::canonical_prototype_method(name, key)
             {
-                return Self::canonical_prototype_method(name, key);
+                return Some(method);
             }
             current = self.observable_prototype_of(id);
             depth += 1;
@@ -134732,9 +134737,11 @@ mod function_prototype_call_apply_tests_current {
                 "ambient or recursive authority leaked through {forbidden_name}"
             );
         }
-        // 7 realm objects, Date and Promise, 7 timers, 41 standard
-        // constructors, 13 global functions.
-        assert_eq!(globals.len(), 70);
+        // 7 realm objects, Date and Promise, 7 timers, 47 standard
+        // constructors (EventTarget, Event, CustomEvent, AbortController,
+        // AbortSignal and DOMException since bd-9vouw.170), 13 global
+        // functions.
+        assert_eq!(globals.len(), 76);
         assert_eq!(
             InterpreterCore::projected_generated_function_realm_registry_bytes(),
             InterpreterCore::estimate_generated_function_realm_globals_bytes(globals),

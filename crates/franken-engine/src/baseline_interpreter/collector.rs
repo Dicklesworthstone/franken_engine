@@ -1610,6 +1610,7 @@ impl InterpreterCore {
             config: _,
             hook: _,
             pruned_hostcall_dispatch: _,
+            codegen_caller_grants: _,
             preparing_execution: _,
             state_capture_tick: _,
             // A capture is a self-contained copy returned to the caller.

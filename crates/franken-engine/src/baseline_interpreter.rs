@@ -8968,6 +8968,13 @@ struct GeneratedFunctionArtifactHandle {
     artifact_id: ContentHash,
 }
 
+/// What a grant swap replaced, for its restore (bd-9vouw.189).
+struct ReplacedCodegenGrant {
+    previous: BTreeSet<RuntimeCapability>,
+    /// The swap entered generated code and pushed the caller's grant.
+    entered_generated_code: bool,
+}
+
 /// Fixed-size representation of the only authority set that generated code
 /// may retain across a closure or continuation boundary.
 ///
@@ -14057,6 +14064,10 @@ pub struct InterpreterCore {
     /// bd-fqlfw.9.4). `None` = live classification on every call; installed
     /// only by the E9 activation gate after receipt/epoch/replay approval.
     pruned_hostcall_dispatch: Option<PrunedHostcallDispatch>,
+    /// The grant each running generated-code activation replaced, outermost
+    /// first: the program's own grant comes back for a program closure that
+    /// generated code calls (bd-9vouw.189).
+    codegen_caller_grants: Vec<BTreeSet<RuntimeCapability>>,
     /// True only while `prepare_execution` runs engine-internal setup
     /// (module-namespace record, runtime globals). Containment hooks are
     /// suppressed during this window: no extension instruction has executed
@@ -15359,6 +15370,7 @@ impl InterpreterCore {
             config,
             hook: None,
             pruned_hostcall_dispatch: None,
+            codegen_caller_grants: Vec::new(),
             preparing_execution: false,
             state_capture_tick: None,
             state_capture_result: None,
@@ -38939,21 +38951,46 @@ impl InterpreterCore {
         Self::validate_contained_codegen_grant(&capabilities)
     }
 
+    /// The grant a call runs with. Authority follows code: generated code
+    /// (and every closure it creates) runs within its contained grant, and a
+    /// closure of the program itself runs with the program's grant even when
+    /// generated code calls it (bd-9vouw.189). An ejs template compiled with
+    /// `new Function` calls the template engine's own `escapeFn`, whose
+    /// `String(...)` was denied under the template's grant.
     fn replace_with_contained_codegen_grant(
         &mut self,
         grant: Option<ContainedCodegenGrant>,
-    ) -> Option<BTreeSet<RuntimeCapability>> {
-        grant.map(|grant| {
-            std::mem::replace(
-                &mut self.config.granted_capabilities,
-                grant.as_slice().iter().copied().collect(),
-            )
+    ) -> Option<ReplacedCodegenGrant> {
+        let next = match grant {
+            Some(grant) => {
+                self.codegen_caller_grants
+                    .push(self.config.granted_capabilities.clone());
+                let previous = std::mem::replace(
+                    &mut self.config.granted_capabilities,
+                    grant.as_slice().iter().copied().collect(),
+                );
+                return Some(ReplacedCodegenGrant {
+                    previous,
+                    entered_generated_code: true,
+                });
+            }
+            None => self.codegen_caller_grants.first()?.clone(),
+        };
+        if next == self.config.granted_capabilities {
+            return None;
+        }
+        Some(ReplacedCodegenGrant {
+            previous: std::mem::replace(&mut self.config.granted_capabilities, next),
+            entered_generated_code: false,
         })
     }
 
-    fn restore_replaced_codegen_grants(&mut self, previous: Option<BTreeSet<RuntimeCapability>>) {
-        if let Some(previous) = previous {
-            self.config.granted_capabilities = previous;
+    fn restore_replaced_codegen_grants(&mut self, replaced: Option<ReplacedCodegenGrant>) {
+        if let Some(replaced) = replaced {
+            self.config.granted_capabilities = replaced.previous;
+            if replaced.entered_generated_code {
+                self.codegen_caller_grants.pop();
+            }
         }
     }
 

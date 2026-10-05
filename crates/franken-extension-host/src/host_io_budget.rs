@@ -14,7 +14,11 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+
+#[path = "host_io_budget_drain.rs"]
+mod drain;
+pub use drain::HostIoDrainError;
 
 use crate::host_io::{
     HostIoCapability, HostIoControl, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
@@ -93,6 +97,9 @@ struct Balance {
 struct SharedBudget {
     limits: HostIoBudgetLimits,
     balance: Mutex<Balance>,
+    // Paired only with this scope's balance; descendants hold an ancestor
+    // permit until their synchronous provider dispatch returns or unwinds.
+    drained: Condvar,
     revoked: AtomicBool,
     // Root-to-parent order. Every descendant admission must hold a permit at
     // each ancestor, not just its own local semaphore.
@@ -131,6 +138,7 @@ impl HostIoWorkBudget {
                     request_bytes: limits.request_bytes,
                     in_flight: 0,
                 }),
+                drained: Condvar::new(),
                 revoked: AtomicBool::new(false),
                 ancestors: Arc::default(),
             }),
@@ -144,6 +152,7 @@ impl HostIoWorkBudget {
     /// Stop future admission and cooperatively cancel admitted network work at
     /// the native provider's existing checkpoints. This does not undo effects,
     /// interrupt a synchronous filesystem syscall, or certify quiescent close.
+    /// Use [`Self::revoke_and_drain`] to wait for admitted provider calls.
     pub fn revoke(&self) {
         self.shared.revoked.store(true, Ordering::Release);
     }
@@ -179,6 +188,7 @@ impl HostIoWorkBudget {
                     request_bytes: limits.request_bytes,
                     in_flight: 0,
                 }),
+                drained: Condvar::new(),
                 revoked: AtomicBool::new(false),
                 ancestors: ancestors.into(),
             }),
@@ -283,6 +293,13 @@ impl Drop for Admission {
             // Poison recovery releases capacity only. New admission remains
             // fail-closed and committed/delegated work is never refunded.
             balance.in_flight = balance.in_flight.saturating_sub(1);
+            let drained = balance.in_flight == 0;
+            drop(balance);
+            if drained {
+                // Notify every waiter, including a root waiting on descendant
+                // effects. The balance mutex closes the check/wait race.
+                scope.drained.notify_all();
+            }
         }
     }
 }

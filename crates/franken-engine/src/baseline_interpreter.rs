@@ -74436,11 +74436,17 @@ impl InterpreterCore {
         }
     }
 
-    /// Property subset used by the two isolated callback mini-interpreters.
-    /// Preserve their historical own-property-only behavior while keeping
-    /// dynamic string identity exact and honoring the legacy-hook boundary.
+    /// A property read in the reducer mini-interpreter, keeping dynamic
+    /// string identity exact and honoring the legacy-hook boundary.
+    ///
+    /// An object is read with the GetProperty instruction's [[Get]]
+    /// (bd-9vouw.175): an inherited member, a getter (called with the object
+    /// as its receiver) and a Proxy trap, not only an own data property, which
+    /// used to give `undefined` or the accessor itself. The stored property
+    /// label joins the enclosing HostCall's result label.
     fn simple_callback_get_property(
         &mut self,
+        module: Option<&Ir3Module>,
         object_value: Value,
         key_value: &Value,
     ) -> Result<Value, InterpreterError> {
@@ -74449,19 +74455,12 @@ impl InterpreterCore {
         self.preflight_legacy_property_key_for_hook(&key)?;
         match object_value {
             Value::Object(object_id) => {
-                if let Some(key) = key.as_str() {
-                    if let Some(value) = self.writable_state_view_value(object_id, key) {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.typed_array_indexed_get_property(object_id, key)? {
-                        return Ok(value);
-                    }
+                if key.as_str() == Some("__proto__") {
+                    return Ok(self
+                        .ordinary_get_prototype_of(object_id)?
+                        .map_or(Value::Null, Value::Object));
                 }
-                Ok(self
-                    .heap
-                    .get(object_id.0 as usize)
-                    .and_then(|object| object.own_runtime_property_value(&key))
-                    .unwrap_or(Value::Undefined))
+                self.iterator_protocol_property(module, object_id, &key, Value::Object(object_id))
             }
             Value::Iterator(iterator_handle) => Ok(key.as_str().map_or(Value::Undefined, |key| {
                 self.iterator_property_value(iterator_handle, key)
@@ -74494,39 +74493,6 @@ impl InterpreterCore {
                 got: other.type_name().to_string(),
             }),
         }
-    }
-
-    fn simple_callback_set_property(
-        &mut self,
-        object_value: Value,
-        key_value: &Value,
-        property_value: Value,
-    ) -> Result<(), InterpreterError> {
-        self.reject_private_name_in_simple_callback(key_value)?;
-        let key = self.executable_property_key_from_value(key_value);
-        self.preflight_legacy_property_key_for_hook(&key)?;
-        let object_id = match &object_value {
-            Value::Object(object_id) => *object_id,
-            Value::BuiltinFunction(builtin) => Self::builtin_function_property_object(builtin)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "object with writable properties".to_string(),
-                    got: object_value.type_name().to_string(),
-                })?,
-            _ => {
-                return Err(InterpreterError::TypeError {
-                    expected: "object".to_string(),
-                    got: object_value.type_name().to_string(),
-                });
-            }
-        };
-        if let Some(key) = key.as_str()
-            && self
-                .typed_array_indexed_set_property(object_id, key, &property_value)?
-                .is_some()
-        {
-            return Ok(());
-        }
-        self.set_object_runtime_property(object_id, key, property_value)
     }
 
     fn invoke_simple_reduce_callback(
@@ -74592,11 +74558,14 @@ impl InterpreterCore {
                 | Ir3Instruction::Mul { .. }
                 | Ir3Instruction::Div { .. }
                 | Ir3Instruction::GetProperty { .. }
-                | Ir3Instruction::SetProperty { .. }
                 | Ir3Instruction::LoadName { .. }
                 | Ir3Instruction::PutName { .. }
                 | Ir3Instruction::ResolveNameStatus { .. }
                 | Ir3Instruction::PutNameWithStatus { .. } => pending.push(ip + 1),
+                // A property write takes the ordinary path (bd-9vouw.175):
+                // [[Set]] calls setters and Proxy traps, refuses read-only and
+                // non-extensible targets per the write's strictness, and joins
+                // the object's mutation label. The mini-lane wrote raw data.
                 _ => return false,
             }
         }
@@ -74869,15 +74838,9 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let object_value = Self::read_local_register(&local_registers, obj)?;
                     let key_value = Self::read_local_register(&local_registers, key)?;
-                    let value = self.simple_callback_get_property(object_value, &key_value)?;
+                    let value =
+                        self.simple_callback_get_property(Some(module), object_value, &key_value)?;
                     Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::SetProperty { obj, key, val } => {
-                    let object_value = Self::read_local_register(&local_registers, obj)?;
-                    let key_value = Self::read_local_register(&local_registers, key)?;
-                    let property_value = Self::read_local_register(&local_registers, val)?;
-                    self.simple_callback_set_property(object_value, &key_value, property_value)?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -146588,18 +146551,24 @@ mod tests {
             JsString::from_code_units(&[0xD801]),
             JsString::from("\u{FFFD}"),
         ];
+        // The reducer mini-lane no longer writes properties (bd-9vouw.175);
+        // the keys are stored as SetProperty stores them.
         for (index, key) in keys.iter().enumerate() {
-            core.simple_callback_set_property(
-                Value::Object(object),
-                &Value::Str(key.clone()),
+            core.set_object_runtime_property(
+                object,
+                RuntimePropertyKey::String(key.clone()),
                 Value::Int(index as i64),
             )
-            .expect("callback property write should preserve the exact key");
+            .expect("property write should preserve the exact key");
         }
         for (index, key) in keys.iter().enumerate() {
             assert_eq!(
-                core.simple_callback_get_property(Value::Object(object), &Value::Str(key.clone()),)
-                    .expect("callback property read should preserve the exact key"),
+                core.simple_callback_get_property(
+                    None,
+                    Value::Object(object),
+                    &Value::Str(key.clone()),
+                )
+                .expect("callback property read should preserve the exact key"),
                 Value::Int(index as i64)
             );
         }
@@ -148401,7 +148370,7 @@ mod tests {
             .expect("Date realm global");
 
         let original = core
-            .simple_callback_get_property(date.clone(), &Value::str("now"))
+            .simple_callback_get_property(None, date.clone(), &Value::str("now"))
             .expect("read Date.now through callback helper");
         assert!(matches!(
             original,
@@ -148411,10 +148380,21 @@ mod tests {
             })
         ));
 
-        core.simple_callback_set_property(date.clone(), &Value::str("now"), Value::Int(17))
-            .expect("write Date.now through callback helper");
+        // The reducer mini-lane no longer writes properties (bd-9vouw.175);
+        // a write lands on Date's backing object as SetProperty's does.
+        let Value::BuiltinFunction(date_builtin) = &date else {
+            panic!("Date is a builtin function");
+        };
+        let backing = InterpreterCore::builtin_function_property_object(date_builtin)
+            .expect("Date has a backing object");
+        core.set_object_runtime_property(
+            backing,
+            RuntimePropertyKey::String(JsString::from("now")),
+            Value::Int(17),
+        )
+        .expect("write Date.now to its backing object");
         assert_eq!(
-            core.simple_callback_get_property(date, &Value::str("now"))
+            core.simple_callback_get_property(None, date, &Value::str("now"))
                 .expect("read replaced Date.now through callback helper"),
             Value::Int(17)
         );

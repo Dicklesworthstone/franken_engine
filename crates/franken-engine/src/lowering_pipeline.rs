@@ -13155,6 +13155,13 @@ fn lower_typeof_operand_suppressing_ambient(
     label_counter: &mut u32,
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<bool, LoweringPipelineError> {
+    if is_process_next_tick_read(argument, binding_lookup) {
+        ops.push(Ir1Op::HostCall {
+            capability: PROCESS_NEXT_TICK_VALUE_CAPABILITY.to_string(),
+            arg_count: 0,
+        });
+        return Ok(true);
+    }
     match argument {
         Expression::Identifier(name) if !has_source_lexical_binding(binding_lookup, name) => {
             // `typeof` is the one identifier-read form that tolerates a missing
@@ -17341,6 +17348,7 @@ fn lower_expression_to_ir1_inner(
             if let Expression::Identifier(object_name) = object.as_ref()
                 && !has_source_lexical_binding(binding_lookup, object_name)
                 && !crypto_constants_member_read(object, property, *computed, binding_lookup)
+                && !is_process_next_tick_read(expression, binding_lookup)
                 && !*computed
                 && let Expression::Identifier(prop_name) = property.as_ref()
                 && let Some(required_effect) =
@@ -17453,6 +17461,13 @@ fn lower_expression_to_ir1_inner(
             ) {
                 ops.push(Ir1Op::HostCall {
                     capability: capability.to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            if is_process_next_tick_read(expression, binding_lookup) {
+                ops.push(Ir1Op::HostCall {
+                    capability: PROCESS_NEXT_TICK_VALUE_CAPABILITY.to_string(),
                     arg_count: 0,
                 });
                 return Ok(());
@@ -27564,6 +27579,21 @@ fn process_builtin_call_capability(
         "exit" => Some("builtin:ProcessExit"),
         _ => None,
     }
+}
+
+/// `process.nextTick` read as a value (bd-9vouw.186): the engine's next-tick
+/// scheduler as a first-class function, the same hostcall the call shape
+/// lowers to. Libraries probe and keep it (`typeof process.nextTick ===
+/// 'function'`, `defer = process.nextTick`); a module holding such a read was
+/// refused whole as an `env.read`. It grants scheduling only.
+pub(crate) const PROCESS_NEXT_TICK_VALUE_CAPABILITY: &str =
+    "builtin:static-value:builtin:ProcessNextTick";
+
+fn is_process_next_tick_read(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    unshadowed_process_member(expression, binding_lookup) == Some("nextTick")
 }
 
 /// Whether an assignment target is the unshadowed `process.exitCode`

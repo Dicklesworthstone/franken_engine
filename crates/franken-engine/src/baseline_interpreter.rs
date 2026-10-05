@@ -5308,24 +5308,35 @@ impl BuiltinFunction {
             BuiltinFunctionKind::NumberToPrecision => "toPrecision",
             BuiltinFunctionKind::NumberToExponential => "toExponential",
             BuiltinFunctionKind::NumberToLocaleString => "toLocaleString",
-            BuiltinFunctionKind::IntlConstructor => {
-                ["NumberFormat", "DateTimeFormat", "Collator", "PluralRules"]
-                    .iter()
-                    .copied()
-                    .find(|name| self.module_specifier.0.as_deref() == Some(*name))
-                    .unwrap_or("IntlConstructor")
-            }
-            BuiltinFunctionKind::IntlMethod => ["format", "compare", "select", "resolvedOptions"]
-                .iter()
-                .copied()
-                .find(|name| {
-                    self.module_specifier
-                        .0
-                        .as_deref()
-                        .and_then(|specifier| specifier.split_once('.'))
-                        .is_some_and(|(_, method)| method == *name)
-                })
-                .unwrap_or("intlMethod"),
+            BuiltinFunctionKind::IntlConstructor => [
+                "NumberFormat",
+                "DateTimeFormat",
+                "Collator",
+                "PluralRules",
+                "RelativeTimeFormat",
+                "ListFormat",
+            ]
+            .iter()
+            .copied()
+            .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+            .unwrap_or("IntlConstructor"),
+            BuiltinFunctionKind::IntlMethod => [
+                "format",
+                "formatToParts",
+                "compare",
+                "select",
+                "resolvedOptions",
+            ]
+            .iter()
+            .copied()
+            .find(|name| {
+                self.module_specifier
+                    .0
+                    .as_deref()
+                    .and_then(|specifier| specifier.split_once('.'))
+                    .is_some_and(|(_, method)| method == *name)
+            })
+            .unwrap_or("intlMethod"),
             BuiltinFunctionKind::IntlGetCanonicalLocales => "getCanonicalLocales",
             BuiltinFunctionKind::RegExpPrototypeExec => "exec",
             BuiltinFunctionKind::DateUtc => "UTC",
@@ -5617,6 +5628,8 @@ impl BuiltinFunction {
                 Some("NumberFormat") => "Intl.NumberFormat.prototype",
                 Some("DateTimeFormat") => "Intl.DateTimeFormat.prototype",
                 Some("Collator") => "Intl.Collator.prototype",
+                Some("RelativeTimeFormat") => "Intl.RelativeTimeFormat.prototype",
+                Some("ListFormat") => "Intl.ListFormat.prototype",
                 _ => "Intl.PluralRules.prototype",
             },
             K::ConsoleLog

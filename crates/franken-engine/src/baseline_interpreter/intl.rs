@@ -4,7 +4,9 @@
 //! Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })`,
 //! `Intl.DateTimeFormat().resolvedOptions().timeZone`, luxon) threw a
 //! ReferenceError. This provides NumberFormat, DateTimeFormat, Collator and
-//! PluralRules over number_locale, date_locale and collation, and
+//! PluralRules over number_locale, date_locale and collation,
+//! RelativeTimeFormat and ListFormat over pattern tables generated from Node
+//! v22.2.0's ICU (en, de, ja, zh, ko; bd-9vouw.171), and
 //! getCanonicalLocales. A service object reads its options once, at
 //! construction, into the object `resolvedOptions()` copies; its `format` /
 //! `compare` / `select` are bound to it, so `values.map(nf.format)` works.
@@ -16,8 +18,8 @@
 //! instead of falling back, except a five-to-eight-letter language such as
 //! `generic`, which falls back to en-US as in Node); DateTimeFormat has
 //! formatToParts (the pieces `format` joins), NumberFormat does not; no
-//! formatRange, BigInt formatting, RelativeTimeFormat, ListFormat,
-//! DisplayNames, Locale or Segmenter. The methods are own properties of each
+//! formatRange, BigInt formatting, DisplayNames, Locale or Segmenter, and no
+//! supportedLocalesOf. The methods are own properties of each
 //! object, not prototype methods: `Intl.DateTimeFormat.prototype` is
 //! undefined and `instanceof Intl.NumberFormat` is false.
 
@@ -38,7 +40,23 @@ pub(super) enum DateOptionsFor {
 }
 
 /// The service constructors on `Intl`.
-const SERVICES: [&str; 4] = ["NumberFormat", "DateTimeFormat", "Collator", "PluralRules"];
+const SERVICES: [&str; 6] = [
+    "NumberFormat",
+    "DateTimeFormat",
+    "Collator",
+    "PluralRules",
+    "RelativeTimeFormat",
+    "ListFormat",
+];
+
+/// The languages RelativeTimeFormat and ListFormat have patterns for (and
+/// whose numbers number_locale formats).
+const PATTERN_LANGUAGES: [&str; 5] = ["en", "de", "ja", "zh", "ko"];
+
+/// RelativeTimeFormat units, singular (ECMA-402 SingularRelativeTimeUnit).
+const RELATIVE_TIME_UNITS: [&str; 8] = [
+    "second", "minute", "hour", "day", "week", "month", "quarter", "year",
+];
 
 /// NumberFormat options the formatter has no support for, with the value
 /// that leaves formatting unchanged (a present default is accepted).
@@ -130,6 +148,10 @@ impl InterpreterCore {
             )?,
             "Collator" => self.intl_collator_options(module, requested, &options)?,
             "PluralRules" => self.intl_plural_rules_options(module, requested, &options)?,
+            "RelativeTimeFormat" => {
+                self.intl_relative_time_format_options(module, requested, &options)?
+            }
+            "ListFormat" => self.intl_list_format_options(module, requested, &options)?,
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "an Intl service constructor".to_string(),
@@ -145,6 +167,7 @@ impl InterpreterCore {
             "NumberFormat" => &["format", "resolvedOptions"],
             "DateTimeFormat" => &["format", "formatToParts", "resolvedOptions"],
             "Collator" => &["compare", "resolvedOptions"],
+            "RelativeTimeFormat" | "ListFormat" => &["format", "formatToParts", "resolvedOptions"],
             _ => &["select", "resolvedOptions"],
         };
         for method in methods {
@@ -235,6 +258,24 @@ impl InterpreterCore {
                 number_locale::format_number_locale(number, Some(&locale), &options)
                     .map(Value::str)
                     .map_err(Self::intl_number_error)
+            }
+            // ECMA-402 17.3.3-4: ToNumber(value), ToString(unit), then the
+            // pattern for the unit, sign and plural category.
+            "format" | "formatToParts" if service == "RelativeTimeFormat" => {
+                let value = self.intl_to_number(module, arg(self, 0)?)?;
+                let unit = arg(self, 1)?;
+                let unit = self.intl_to_string(module, unit)?;
+                let parts = self.intl_relative_time_parts(resolved, value, &unit, method)?;
+                self.intl_parts_result(method, parts)
+            }
+            // ECMA-402 13.3.3-4: StringListFromIterable, then the patterns.
+            "format" | "formatToParts" if service == "ListFormat" => {
+                let items = match arg(self, 0)? {
+                    Value::Undefined => Vec::new(),
+                    _ => self.intl_string_list(module, args)?,
+                };
+                let parts = self.intl_list_parts(resolved, &items)?;
+                self.intl_parts_result(method, parts)
             }
             // format and formatToParts (ECMA-402 11.4.3, 11.4.4) lay out
             // the same pieces; formatToParts returns them as { type, value }.
@@ -1129,6 +1170,298 @@ impl InterpreterCore {
         ])
     }
 
+    /// `new Intl.RelativeTimeFormat(locales, options)` (ECMA-402 17.1.1):
+    /// localeMatcher, numberingSystem (Latin digits only), style, numeric.
+    fn intl_relative_time_format_options(
+        &mut self,
+        module: &Ir3Module,
+        requested: Option<String>,
+        options: &Value,
+    ) -> Result<Vec<(&'static str, Value)>, InterpreterError> {
+        const SERVICE: &str = "RelativeTimeFormat";
+        self.intl_string_option(
+            module,
+            options,
+            "localeMatcher",
+            &["lookup", "best fit"],
+            SERVICE,
+        )?;
+        let numbering_system = self.intl_option(module, options, "numberingSystem")?;
+        if !matches!(numbering_system, Value::Undefined) {
+            let system = self.intl_to_string(module, numbering_system)?;
+            if system != "latn" {
+                return Err(Self::intl_refusal(
+                    SERVICE,
+                    format!("numberingSystem {system:?}"),
+                ));
+            }
+        }
+        let style = self
+            .intl_string_option(
+                module,
+                options,
+                "style",
+                &["long", "short", "narrow"],
+                SERVICE,
+            )?
+            .unwrap_or_else(|| "long".to_string());
+        let numeric = self
+            .intl_string_option(module, options, "numeric", &["always", "auto"], SERVICE)?
+            .unwrap_or_else(|| "always".to_string());
+        let locale = Self::intl_pattern_locale(SERVICE, requested)?;
+        Ok(vec![
+            ("locale", Value::str(locale)),
+            ("style", Value::str(style)),
+            ("numeric", Value::str(numeric)),
+            ("numberingSystem", Value::str("latn")),
+        ])
+    }
+
+    /// `new Intl.ListFormat(locales, options)` (ECMA-402 13.1.1):
+    /// localeMatcher, type, style.
+    fn intl_list_format_options(
+        &mut self,
+        module: &Ir3Module,
+        requested: Option<String>,
+        options: &Value,
+    ) -> Result<Vec<(&'static str, Value)>, InterpreterError> {
+        const SERVICE: &str = "ListFormat";
+        self.intl_string_option(
+            module,
+            options,
+            "localeMatcher",
+            &["lookup", "best fit"],
+            SERVICE,
+        )?;
+        let list_type = self
+            .intl_string_option(
+                module,
+                options,
+                "type",
+                &["conjunction", "disjunction", "unit"],
+                SERVICE,
+            )?
+            .unwrap_or_else(|| "conjunction".to_string());
+        let style = self
+            .intl_string_option(
+                module,
+                options,
+                "style",
+                &["long", "short", "narrow"],
+                SERVICE,
+            )?
+            .unwrap_or_else(|| "long".to_string());
+        let locale = Self::intl_pattern_locale(SERVICE, requested)?;
+        Ok(vec![
+            ("locale", Value::str(locale)),
+            ("type", Value::str(list_type)),
+            ("style", Value::str(style)),
+        ])
+    }
+
+    /// The requested locale (default en-US) when the pattern tables cover
+    /// its language, else a typed refusal.
+    fn intl_pattern_locale(
+        service: &str,
+        requested: Option<String>,
+    ) -> Result<String, InterpreterError> {
+        let locale = requested.unwrap_or_else(|| "en-US".to_string());
+        if intl_pattern_language(&locale).is_none() {
+            return Err(Self::intl_refusal(
+                service,
+                format!("locale {locale:?} (pattern locales: en, de, ja, zh, ko)"),
+            ));
+        }
+        Ok(locale)
+    }
+
+    /// ECMA-402 17.5.2 PartitionRelativeTimePattern: a `numeric: "auto"`
+    /// phrase for the value if the locale has one, else the number between
+    /// the pattern's literals for the unit, sign and plural category.
+    fn intl_relative_time_parts(
+        &self,
+        resolved: ObjectId,
+        value: f64,
+        unit: &str,
+        method: &str,
+    ) -> Result<Vec<(&'static str, String, Option<&'static str>)>, InterpreterError> {
+        if !value.is_finite() {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "Value need to be finite number for Intl.RelativeTimeFormat.prototype.{method}()"
+                ),
+            });
+        }
+        let singular = unit.strip_suffix('s').unwrap_or(unit);
+        let Some(unit) = RELATIVE_TIME_UNITS
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == singular)
+        else {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "Invalid unit argument for Intl.RelativeTimeFormat.prototype.{method}() '{unit}'"
+                ),
+            });
+        };
+        let locale = self.intl_resolved_string(resolved, "locale");
+        let style = self.intl_resolved_string(resolved, "style");
+        let language = intl_pattern_language(&locale).unwrap_or("en");
+        let Some((_, _, _, patterns, auto)) =
+            RELATIVE_TIME_PATTERNS
+                .iter()
+                .find(|(lang, pattern_style, pattern_unit, _, _)| {
+                    *lang == language && *pattern_style == style && *pattern_unit == unit
+                })
+        else {
+            return Err(Self::intl_refusal(
+                "RelativeTimeFormat",
+                format!("{style} {unit} patterns for {locale:?}"),
+            ));
+        };
+        if self.intl_resolved_string(resolved, "numeric") == "auto"
+            && value.fract() == 0.0
+            && value.abs() <= 2.0
+        {
+            // ToString(-0) is "0", so -0 takes the 0 phrase too.
+            let key = value as i8;
+            if let Some((_, phrase)) = auto.iter().find(|(entry, _)| *entry == key) {
+                return Ok(vec![("literal", (*phrase).to_string(), None)]);
+            }
+        }
+        let past = value < 0.0 || (value == 0.0 && value.is_sign_negative());
+        let formatted = number_locale::format_number_locale(
+            value.abs(),
+            Some(&locale),
+            &number_locale::NumberLocaleOptions::default(),
+        )
+        .map_err(Self::intl_number_error)?;
+        // ResolvePlural sees the number as formatted (1.0001 is "1").
+        let one = formatted == "1" && intl_plural_category(&locale, false, 1.0) == "one";
+        let pattern = patterns[usize::from(past) * 2 + usize::from(!one)];
+        let (prefix, suffix) = pattern.split_once("{0}").unwrap_or((pattern, ""));
+        let (group, decimal) = if language == "de" {
+            ('.', ',')
+        } else {
+            (',', '.')
+        };
+        let mut parts = Vec::new();
+        if !prefix.is_empty() {
+            parts.push(("literal", prefix.to_string(), None));
+        }
+        parts.extend(
+            intl_number_parts(&formatted, group, decimal)
+                .into_iter()
+                .map(|(kind, text)| (kind, text, Some(unit))),
+        );
+        if !suffix.is_empty() {
+            parts.push(("literal", suffix.to_string(), None));
+        }
+        Ok(parts)
+    }
+
+    /// ECMA-402 13.5.3 StringListFromIterable over the first argument: a
+    /// non-string element is a TypeError.
+    fn intl_string_list(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<Vec<String>, InterpreterError> {
+        let list = self.iterable_to_array(
+            Some(module),
+            RegRange {
+                start: args.start,
+                count: 1,
+            },
+        )?;
+        let Value::Object(list) = list else {
+            return Err(InterpreterError::TypeError {
+                expected: "an iterable of strings".to_string(),
+                got: list.type_name().to_string(),
+            });
+        };
+        let mut items = Vec::new();
+        for value in self.array_like_values(list)? {
+            match value {
+                Value::Str(text) => items.push(text.to_string()),
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "an iterable of strings for Intl.ListFormat".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
+        }
+        Ok(items)
+    }
+
+    /// ECMA-402 13.5.2 CreatePartsFromList: the elements with the pair, or
+    /// the start, middle and end separators, between them.
+    fn intl_list_parts(
+        &self,
+        resolved: ObjectId,
+        items: &[String],
+    ) -> Result<Vec<(&'static str, String, Option<&'static str>)>, InterpreterError> {
+        let locale = self.intl_resolved_string(resolved, "locale");
+        let list_type = self.intl_resolved_string(resolved, "type");
+        let style = self.intl_resolved_string(resolved, "style");
+        let language = intl_pattern_language(&locale).unwrap_or("en");
+        let Some((_, _, _, [pair, start, middle, end])) =
+            LIST_PATTERNS
+                .iter()
+                .find(|(lang, pattern_type, pattern_style, _)| {
+                    *lang == language && *pattern_type == list_type && *pattern_style == style
+                })
+        else {
+            return Err(Self::intl_refusal(
+                "ListFormat",
+                format!("{list_type} {style} patterns for {locale:?}"),
+            ));
+        };
+        let mut parts = Vec::with_capacity(items.len().saturating_mul(2));
+        for (index, item) in items.iter().enumerate() {
+            if index > 0 {
+                let separator = match (items.len(), index) {
+                    (2, _) => pair,
+                    (_, 1) => start,
+                    (count, index) if index == count - 1 => end,
+                    _ => middle,
+                };
+                parts.push(("literal", (*separator).to_string(), None));
+            }
+            parts.push(("element", item.clone(), None));
+        }
+        Ok(parts)
+    }
+
+    /// `format` joins the parts; `formatToParts` returns them as
+    /// `{ type, value }` objects (with `unit` for a relative time's number).
+    fn intl_parts_result(
+        &mut self,
+        method: &str,
+        parts: Vec<(&'static str, String, Option<&'static str>)>,
+    ) -> Result<Value, InterpreterError> {
+        if method == "format" {
+            return Ok(Value::str(
+                parts
+                    .iter()
+                    .map(|(_, text, _)| text.as_str())
+                    .collect::<String>(),
+            ));
+        }
+        let mut list = Vec::with_capacity(parts.len());
+        for (kind, text, unit) in parts {
+            let mut properties = vec![("type", Value::str(kind)), ("value", Value::str(text))];
+            if let Some(unit) = unit {
+                properties.push(("unit", Value::str(unit)));
+            }
+            list.push(Value::Object(
+                self.alloc_object_with_properties(&properties)?,
+            ));
+        }
+        Ok(Value::Object(self.alloc_array_from_values(&list)?))
+    }
+
     fn intl_resolved_value(&self, resolved: ObjectId, key: &str) -> Option<Value> {
         self.heap
             .get(resolved.0 as usize)
@@ -1254,6 +1587,44 @@ fn canonicalize_locale_tag(tag: &str) -> Option<String> {
     Some(out)
 }
 
+/// The pattern-table language of `locale`, if the tables cover it.
+fn intl_pattern_language(locale: &str) -> Option<&'static str> {
+    let language = intl_plural_language(locale);
+    PATTERN_LANGUAGES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == language)
+}
+
+/// A formatted number as NumberFormat parts: integer digits, group
+/// separators, the decimal separator and fraction digits.
+fn intl_number_parts(formatted: &str, group: char, decimal: char) -> Vec<(&'static str, String)> {
+    let mut parts = Vec::new();
+    let mut digits = String::new();
+    let mut fraction = false;
+    for ch in formatted.chars() {
+        if ch == group || ch == decimal {
+            if !digits.is_empty() {
+                let kind = if fraction { "fraction" } else { "integer" };
+                parts.push((kind, std::mem::take(&mut digits)));
+            }
+            if ch == decimal {
+                fraction = true;
+                parts.push(("decimal", ch.to_string()));
+            } else {
+                parts.push(("group", ch.to_string()));
+            }
+        } else {
+            digits.push(ch);
+        }
+    }
+    if !digits.is_empty() {
+        let kind = if fraction { "fraction" } else { "integer" };
+        parts.push((kind, digits));
+    }
+    parts
+}
+
 fn intl_plural_language(locale: &str) -> String {
     locale
         .split('-')
@@ -1298,3 +1669,1760 @@ fn intl_plural_category(locale: &str, ordinal: bool, number: f64) -> &'static st
         _ => "other",
     }
 }
+
+/// Relative-time patterns by (language, style, unit): future one, future
+/// other, past one, past other (`{0}` is the formatted number), and the
+/// `numeric: "auto"` phrases by value. Generated from Node v22.2.0 (ICU 74)
+/// output, not transcribed (bd-9vouw.171).
+#[allow(clippy::type_complexity)]
+const RELATIVE_TIME_PATTERNS: &[(&str, &str, &str, [&str; 4], &[(i8, &str)])] = &[
+    (
+        "en",
+        "long",
+        "second",
+        [
+            "in {0} second",
+            "in {0} seconds",
+            "{0} second ago",
+            "{0} seconds ago",
+        ],
+        &[(0, "now")],
+    ),
+    (
+        "en",
+        "long",
+        "minute",
+        [
+            "in {0} minute",
+            "in {0} minutes",
+            "{0} minute ago",
+            "{0} minutes ago",
+        ],
+        &[(0, "this minute")],
+    ),
+    (
+        "en",
+        "long",
+        "hour",
+        [
+            "in {0} hour",
+            "in {0} hours",
+            "{0} hour ago",
+            "{0} hours ago",
+        ],
+        &[(0, "this hour")],
+    ),
+    (
+        "en",
+        "long",
+        "day",
+        ["in {0} day", "in {0} days", "{0} day ago", "{0} days ago"],
+        &[(-1, "yesterday"), (0, "today"), (1, "tomorrow")],
+    ),
+    (
+        "en",
+        "long",
+        "week",
+        [
+            "in {0} week",
+            "in {0} weeks",
+            "{0} week ago",
+            "{0} weeks ago",
+        ],
+        &[(-1, "last week"), (0, "this week"), (1, "next week")],
+    ),
+    (
+        "en",
+        "long",
+        "month",
+        [
+            "in {0} month",
+            "in {0} months",
+            "{0} month ago",
+            "{0} months ago",
+        ],
+        &[(-1, "last month"), (0, "this month"), (1, "next month")],
+    ),
+    (
+        "en",
+        "long",
+        "quarter",
+        [
+            "in {0} quarter",
+            "in {0} quarters",
+            "{0} quarter ago",
+            "{0} quarters ago",
+        ],
+        &[
+            (-1, "last quarter"),
+            (0, "this quarter"),
+            (1, "next quarter"),
+        ],
+    ),
+    (
+        "en",
+        "long",
+        "year",
+        [
+            "in {0} year",
+            "in {0} years",
+            "{0} year ago",
+            "{0} years ago",
+        ],
+        &[(-1, "last year"), (0, "this year"), (1, "next year")],
+    ),
+    (
+        "en",
+        "short",
+        "second",
+        ["in {0} sec.", "in {0} sec.", "{0} sec. ago", "{0} sec. ago"],
+        &[(0, "now")],
+    ),
+    (
+        "en",
+        "short",
+        "minute",
+        ["in {0} min.", "in {0} min.", "{0} min. ago", "{0} min. ago"],
+        &[(0, "this minute")],
+    ),
+    (
+        "en",
+        "short",
+        "hour",
+        ["in {0} hr.", "in {0} hr.", "{0} hr. ago", "{0} hr. ago"],
+        &[(0, "this hour")],
+    ),
+    (
+        "en",
+        "short",
+        "day",
+        ["in {0} day", "in {0} days", "{0} day ago", "{0} days ago"],
+        &[(-1, "yesterday"), (0, "today"), (1, "tomorrow")],
+    ),
+    (
+        "en",
+        "short",
+        "week",
+        ["in {0} wk.", "in {0} wk.", "{0} wk. ago", "{0} wk. ago"],
+        &[(-1, "last wk."), (0, "this wk."), (1, "next wk.")],
+    ),
+    (
+        "en",
+        "short",
+        "month",
+        ["in {0} mo.", "in {0} mo.", "{0} mo. ago", "{0} mo. ago"],
+        &[(-1, "last mo."), (0, "this mo."), (1, "next mo.")],
+    ),
+    (
+        "en",
+        "short",
+        "quarter",
+        [
+            "in {0} qtr.",
+            "in {0} qtrs.",
+            "{0} qtr. ago",
+            "{0} qtrs. ago",
+        ],
+        &[(-1, "last qtr."), (0, "this qtr."), (1, "next qtr.")],
+    ),
+    (
+        "en",
+        "short",
+        "year",
+        ["in {0} yr.", "in {0} yr.", "{0} yr. ago", "{0} yr. ago"],
+        &[(-1, "last yr."), (0, "this yr."), (1, "next yr.")],
+    ),
+    (
+        "en",
+        "narrow",
+        "second",
+        ["in {0}s", "in {0}s", "{0}s ago", "{0}s ago"],
+        &[(0, "now")],
+    ),
+    (
+        "en",
+        "narrow",
+        "minute",
+        ["in {0}m", "in {0}m", "{0}m ago", "{0}m ago"],
+        &[(0, "this minute")],
+    ),
+    (
+        "en",
+        "narrow",
+        "hour",
+        ["in {0}h", "in {0}h", "{0}h ago", "{0}h ago"],
+        &[(0, "this hour")],
+    ),
+    (
+        "en",
+        "narrow",
+        "day",
+        ["in {0}d", "in {0}d", "{0}d ago", "{0}d ago"],
+        &[(-1, "yesterday"), (0, "today"), (1, "tomorrow")],
+    ),
+    (
+        "en",
+        "narrow",
+        "week",
+        ["in {0}w", "in {0}w", "{0}w ago", "{0}w ago"],
+        &[(-1, "last wk."), (0, "this wk."), (1, "next wk.")],
+    ),
+    (
+        "en",
+        "narrow",
+        "month",
+        ["in {0}mo", "in {0}mo", "{0}mo ago", "{0}mo ago"],
+        &[(-1, "last mo."), (0, "this mo."), (1, "next mo.")],
+    ),
+    (
+        "en",
+        "narrow",
+        "quarter",
+        ["in {0}q", "in {0}q", "{0}q ago", "{0}q ago"],
+        &[(-1, "last qtr."), (0, "this qtr."), (1, "next qtr.")],
+    ),
+    (
+        "en",
+        "narrow",
+        "year",
+        ["in {0}y", "in {0}y", "{0}y ago", "{0}y ago"],
+        &[(-1, "last yr."), (0, "this yr."), (1, "next yr.")],
+    ),
+    (
+        "de",
+        "long",
+        "second",
+        [
+            "in {0} Sekunde",
+            "in {0} Sekunden",
+            "vor {0} Sekunde",
+            "vor {0} Sekunden",
+        ],
+        &[(0, "jetzt")],
+    ),
+    (
+        "de",
+        "long",
+        "minute",
+        [
+            "in {0} Minute",
+            "in {0} Minuten",
+            "vor {0} Minute",
+            "vor {0} Minuten",
+        ],
+        &[(0, "in dieser Minute")],
+    ),
+    (
+        "de",
+        "long",
+        "hour",
+        [
+            "in {0} Stunde",
+            "in {0} Stunden",
+            "vor {0} Stunde",
+            "vor {0} Stunden",
+        ],
+        &[(0, "in dieser Stunde")],
+    ),
+    (
+        "de",
+        "long",
+        "day",
+        ["in {0} Tag", "in {0} Tagen", "vor {0} Tag", "vor {0} Tagen"],
+        &[
+            (-2, "vorgestern"),
+            (-1, "gestern"),
+            (0, "heute"),
+            (1, "morgen"),
+            (2, "\u{fc}bermorgen"),
+        ],
+    ),
+    (
+        "de",
+        "long",
+        "week",
+        [
+            "in {0} Woche",
+            "in {0} Wochen",
+            "vor {0} Woche",
+            "vor {0} Wochen",
+        ],
+        &[
+            (-1, "letzte Woche"),
+            (0, "diese Woche"),
+            (1, "n\u{e4}chste Woche"),
+        ],
+    ),
+    (
+        "de",
+        "long",
+        "month",
+        [
+            "in {0} Monat",
+            "in {0} Monaten",
+            "vor {0} Monat",
+            "vor {0} Monaten",
+        ],
+        &[
+            (-1, "letzten Monat"),
+            (0, "diesen Monat"),
+            (1, "n\u{e4}chsten Monat"),
+        ],
+    ),
+    (
+        "de",
+        "long",
+        "quarter",
+        [
+            "in {0} Quartal",
+            "in {0} Quartalen",
+            "vor {0} Quartal",
+            "vor {0} Quartalen",
+        ],
+        &[
+            (-1, "letztes Quartal"),
+            (0, "dieses Quartal"),
+            (1, "n\u{e4}chstes Quartal"),
+        ],
+    ),
+    (
+        "de",
+        "long",
+        "year",
+        [
+            "in {0} Jahr",
+            "in {0} Jahren",
+            "vor {0} Jahr",
+            "vor {0} Jahren",
+        ],
+        &[
+            (-1, "letztes Jahr"),
+            (0, "dieses Jahr"),
+            (1, "n\u{e4}chstes Jahr"),
+        ],
+    ),
+    (
+        "de",
+        "short",
+        "second",
+        ["in {0} Sek.", "in {0} Sek.", "vor {0} Sek.", "vor {0} Sek."],
+        &[(0, "jetzt")],
+    ),
+    (
+        "de",
+        "short",
+        "minute",
+        ["in {0} Min.", "in {0} Min.", "vor {0} Min.", "vor {0} Min."],
+        &[(0, "in dieser Minute")],
+    ),
+    (
+        "de",
+        "short",
+        "hour",
+        ["in {0} Std.", "in {0} Std.", "vor {0} Std.", "vor {0} Std."],
+        &[(0, "in dieser Stunde")],
+    ),
+    (
+        "de",
+        "short",
+        "day",
+        ["in {0} Tag", "in {0} Tagen", "vor {0} Tag", "vor {0} Tagen"],
+        &[
+            (-2, "vorgestern"),
+            (-1, "gestern"),
+            (0, "heute"),
+            (1, "morgen"),
+            (2, "\u{fc}bermorgen"),
+        ],
+    ),
+    (
+        "de",
+        "short",
+        "week",
+        [
+            "in {0} Woche",
+            "in {0} Wochen",
+            "vor {0} Woche",
+            "vor {0} Wochen",
+        ],
+        &[
+            (-1, "letzte Woche"),
+            (0, "diese Woche"),
+            (1, "n\u{e4}chste Woche"),
+        ],
+    ),
+    (
+        "de",
+        "short",
+        "month",
+        [
+            "in {0} Monat",
+            "in {0} Monaten",
+            "vor {0} Monat",
+            "vor {0}\u{a0}Monaten",
+        ],
+        &[
+            (-1, "letzten Monat"),
+            (0, "diesen Monat"),
+            (1, "n\u{e4}chsten Monat"),
+        ],
+    ),
+    (
+        "de",
+        "short",
+        "quarter",
+        [
+            "in {0} Quart.",
+            "in {0} Quart.",
+            "vor {0} Quart.",
+            "vor {0} Quart.",
+        ],
+        &[
+            (-1, "letztes Quartal"),
+            (0, "dieses Quartal"),
+            (1, "n\u{e4}chstes Quartal"),
+        ],
+    ),
+    (
+        "de",
+        "short",
+        "year",
+        [
+            "in {0} Jahr",
+            "in {0} Jahren",
+            "vor {0} Jahr",
+            "vor {0} Jahren",
+        ],
+        &[
+            (-1, "letztes Jahr"),
+            (0, "dieses Jahr"),
+            (1, "n\u{e4}chstes Jahr"),
+        ],
+    ),
+    (
+        "de",
+        "narrow",
+        "second",
+        ["in {0} s", "in {0} s", "vor {0} s", "vor {0} s"],
+        &[(0, "jetzt")],
+    ),
+    (
+        "de",
+        "narrow",
+        "minute",
+        ["in {0} m", "in {0} m", "vor {0} m", "vor {0} m"],
+        &[(0, "in dieser Minute")],
+    ),
+    (
+        "de",
+        "narrow",
+        "hour",
+        ["in {0} Std.", "in {0} Std.", "vor {0} Std.", "vor {0} Std."],
+        &[(0, "in dieser Stunde")],
+    ),
+    (
+        "de",
+        "narrow",
+        "day",
+        ["in {0} Tag", "in {0} Tagen", "vor {0} Tag", "vor {0} Tagen"],
+        &[
+            (-2, "vorgestern"),
+            (-1, "gestern"),
+            (0, "heute"),
+            (1, "morgen"),
+            (2, "\u{fc}bermorgen"),
+        ],
+    ),
+    (
+        "de",
+        "narrow",
+        "week",
+        ["in {0} Wo.", "in {0} Wo.", "vor {0} Wo.", "vor {0} Wo."],
+        &[
+            (-1, "letzte Woche"),
+            (0, "diese Woche"),
+            (1, "n\u{e4}chste Woche"),
+        ],
+    ),
+    (
+        "de",
+        "narrow",
+        "month",
+        [
+            "in {0} Monat",
+            "in {0} Monaten",
+            "vor {0}\u{a0}Monat",
+            "vor {0} Monaten",
+        ],
+        &[
+            (-1, "letzten Monat"),
+            (0, "diesen Monat"),
+            (1, "n\u{e4}chsten Monat"),
+        ],
+    ),
+    (
+        "de",
+        "narrow",
+        "quarter",
+        ["in {0} Q", "in {0} Q", "vor {0} Q", "vor {0} Q"],
+        &[
+            (-1, "letztes Quartal"),
+            (0, "dieses Quartal"),
+            (1, "n\u{e4}chstes Quartal"),
+        ],
+    ),
+    (
+        "de",
+        "narrow",
+        "year",
+        [
+            "in {0} Jahr",
+            "in {0} Jahren",
+            "vor {0} Jahr",
+            "vor {0} Jahren",
+        ],
+        &[
+            (-1, "letztes Jahr"),
+            (0, "dieses Jahr"),
+            (1, "n\u{e4}chstes Jahr"),
+        ],
+    ),
+    (
+        "ja",
+        "long",
+        "second",
+        [
+            "{0} \u{79d2}\u{5f8c}",
+            "{0} \u{79d2}\u{5f8c}",
+            "{0} \u{79d2}\u{524d}",
+            "{0} \u{79d2}\u{524d}",
+        ],
+        &[(0, "\u{4eca}")],
+    ),
+    (
+        "ja",
+        "long",
+        "minute",
+        [
+            "{0} \u{5206}\u{5f8c}",
+            "{0} \u{5206}\u{5f8c}",
+            "{0} \u{5206}\u{524d}",
+            "{0} \u{5206}\u{524d}",
+        ],
+        &[(0, "1 \u{5206}\u{4ee5}\u{5185}")],
+    ),
+    (
+        "ja",
+        "long",
+        "hour",
+        [
+            "{0} \u{6642}\u{9593}\u{5f8c}",
+            "{0} \u{6642}\u{9593}\u{5f8c}",
+            "{0} \u{6642}\u{9593}\u{524d}",
+            "{0} \u{6642}\u{9593}\u{524d}",
+        ],
+        &[(0, "1 \u{6642}\u{9593}\u{4ee5}\u{5185}")],
+    ),
+    (
+        "ja",
+        "long",
+        "day",
+        [
+            "{0} \u{65e5}\u{5f8c}",
+            "{0} \u{65e5}\u{5f8c}",
+            "{0} \u{65e5}\u{524d}",
+            "{0} \u{65e5}\u{524d}",
+        ],
+        &[
+            (-2, "\u{4e00}\u{6628}\u{65e5}"),
+            (-1, "\u{6628}\u{65e5}"),
+            (0, "\u{4eca}\u{65e5}"),
+            (1, "\u{660e}\u{65e5}"),
+            (2, "\u{660e}\u{5f8c}\u{65e5}"),
+        ],
+    ),
+    (
+        "ja",
+        "long",
+        "week",
+        [
+            "{0} \u{9031}\u{9593}\u{5f8c}",
+            "{0} \u{9031}\u{9593}\u{5f8c}",
+            "{0} \u{9031}\u{9593}\u{524d}",
+            "{0} \u{9031}\u{9593}\u{524d}",
+        ],
+        &[
+            (-1, "\u{5148}\u{9031}"),
+            (0, "\u{4eca}\u{9031}"),
+            (1, "\u{6765}\u{9031}"),
+        ],
+    ),
+    (
+        "ja",
+        "long",
+        "month",
+        [
+            "{0} \u{304b}\u{6708}\u{5f8c}",
+            "{0} \u{304b}\u{6708}\u{5f8c}",
+            "{0} \u{304b}\u{6708}\u{524d}",
+            "{0} \u{304b}\u{6708}\u{524d}",
+        ],
+        &[
+            (-1, "\u{5148}\u{6708}"),
+            (0, "\u{4eca}\u{6708}"),
+            (1, "\u{6765}\u{6708}"),
+        ],
+    ),
+    (
+        "ja",
+        "long",
+        "quarter",
+        [
+            "{0} \u{56db}\u{534a}\u{671f}\u{5f8c}",
+            "{0} \u{56db}\u{534a}\u{671f}\u{5f8c}",
+            "{0} \u{56db}\u{534a}\u{671f}\u{524d}",
+            "{0} \u{56db}\u{534a}\u{671f}\u{524d}",
+        ],
+        &[
+            (-1, "\u{524d}\u{56db}\u{534a}\u{671f}"),
+            (0, "\u{4eca}\u{56db}\u{534a}\u{671f}"),
+            (1, "\u{7fcc}\u{56db}\u{534a}\u{671f}"),
+        ],
+    ),
+    (
+        "ja",
+        "long",
+        "year",
+        [
+            "{0} \u{5e74}\u{5f8c}",
+            "{0} \u{5e74}\u{5f8c}",
+            "{0} \u{5e74}\u{524d}",
+            "{0} \u{5e74}\u{524d}",
+        ],
+        &[
+            (-1, "\u{6628}\u{5e74}"),
+            (0, "\u{4eca}\u{5e74}"),
+            (1, "\u{6765}\u{5e74}"),
+        ],
+    ),
+    (
+        "ja",
+        "short",
+        "second",
+        [
+            "{0} \u{79d2}\u{5f8c}",
+            "{0} \u{79d2}\u{5f8c}",
+            "{0} \u{79d2}\u{524d}",
+            "{0} \u{79d2}\u{524d}",
+        ],
+        &[(0, "\u{4eca}")],
+    ),
+    (
+        "ja",
+        "short",
+        "minute",
+        [
+            "{0} \u{5206}\u{5f8c}",
+            "{0} \u{5206}\u{5f8c}",
+            "{0} \u{5206}\u{524d}",
+            "{0} \u{5206}\u{524d}",
+        ],
+        &[(0, "1 \u{5206}\u{4ee5}\u{5185}")],
+    ),
+    (
+        "ja",
+        "short",
+        "hour",
+        [
+            "{0} \u{6642}\u{9593}\u{5f8c}",
+            "{0} \u{6642}\u{9593}\u{5f8c}",
+            "{0} \u{6642}\u{9593}\u{524d}",
+            "{0} \u{6642}\u{9593}\u{524d}",
+        ],
+        &[(0, "1 \u{6642}\u{9593}\u{4ee5}\u{5185}")],
+    ),
+    (
+        "ja",
+        "short",
+        "day",
+        [
+            "{0} \u{65e5}\u{5f8c}",
+            "{0} \u{65e5}\u{5f8c}",
+            "{0} \u{65e5}\u{524d}",
+            "{0} \u{65e5}\u{524d}",
+        ],
+        &[
+            (-2, "\u{4e00}\u{6628}\u{65e5}"),
+            (-1, "\u{6628}\u{65e5}"),
+            (0, "\u{4eca}\u{65e5}"),
+            (1, "\u{660e}\u{65e5}"),
+            (2, "\u{660e}\u{5f8c}\u{65e5}"),
+        ],
+    ),
+    (
+        "ja",
+        "short",
+        "week",
+        [
+            "{0} \u{9031}\u{9593}\u{5f8c}",
+            "{0} \u{9031}\u{9593}\u{5f8c}",
+            "{0} \u{9031}\u{9593}\u{524d}",
+            "{0} \u{9031}\u{9593}\u{524d}",
+        ],
+        &[
+            (-1, "\u{5148}\u{9031}"),
+            (0, "\u{4eca}\u{9031}"),
+            (1, "\u{6765}\u{9031}"),
+        ],
+    ),
+    (
+        "ja",
+        "short",
+        "month",
+        [
+            "{0} \u{304b}\u{6708}\u{5f8c}",
+            "{0} \u{304b}\u{6708}\u{5f8c}",
+            "{0} \u{304b}\u{6708}\u{524d}",
+            "{0} \u{304b}\u{6708}\u{524d}",
+        ],
+        &[
+            (-1, "\u{5148}\u{6708}"),
+            (0, "\u{4eca}\u{6708}"),
+            (1, "\u{6765}\u{6708}"),
+        ],
+    ),
+    (
+        "ja",
+        "short",
+        "quarter",
+        [
+            "{0} \u{56db}\u{534a}\u{671f}\u{5f8c}",
+            "{0} \u{56db}\u{534a}\u{671f}\u{5f8c}",
+            "{0} \u{56db}\u{534a}\u{671f}\u{524d}",
+            "{0} \u{56db}\u{534a}\u{671f}\u{524d}",
+        ],
+        &[
+            (-1, "\u{524d}\u{56db}\u{534a}\u{671f}"),
+            (0, "\u{4eca}\u{56db}\u{534a}\u{671f}"),
+            (1, "\u{7fcc}\u{56db}\u{534a}\u{671f}"),
+        ],
+    ),
+    (
+        "ja",
+        "short",
+        "year",
+        [
+            "{0} \u{5e74}\u{5f8c}",
+            "{0} \u{5e74}\u{5f8c}",
+            "{0} \u{5e74}\u{524d}",
+            "{0} \u{5e74}\u{524d}",
+        ],
+        &[
+            (-1, "\u{6628}\u{5e74}"),
+            (0, "\u{4eca}\u{5e74}"),
+            (1, "\u{6765}\u{5e74}"),
+        ],
+    ),
+    (
+        "ja",
+        "narrow",
+        "second",
+        [
+            "{0}\u{79d2}\u{5f8c}",
+            "{0}\u{79d2}\u{5f8c}",
+            "{0}\u{79d2}\u{524d}",
+            "{0}\u{79d2}\u{524d}",
+        ],
+        &[(0, "\u{4eca}")],
+    ),
+    (
+        "ja",
+        "narrow",
+        "minute",
+        [
+            "{0}\u{5206}\u{5f8c}",
+            "{0}\u{5206}\u{5f8c}",
+            "{0}\u{5206}\u{524d}",
+            "{0}\u{5206}\u{524d}",
+        ],
+        &[(0, "1 \u{5206}\u{4ee5}\u{5185}")],
+    ),
+    (
+        "ja",
+        "narrow",
+        "hour",
+        [
+            "{0}\u{6642}\u{9593}\u{5f8c}",
+            "{0}\u{6642}\u{9593}\u{5f8c}",
+            "{0}\u{6642}\u{9593}\u{524d}",
+            "{0}\u{6642}\u{9593}\u{524d}",
+        ],
+        &[(0, "1 \u{6642}\u{9593}\u{4ee5}\u{5185}")],
+    ),
+    (
+        "ja",
+        "narrow",
+        "day",
+        [
+            "{0}\u{65e5}\u{5f8c}",
+            "{0}\u{65e5}\u{5f8c}",
+            "{0}\u{65e5}\u{524d}",
+            "{0}\u{65e5}\u{524d}",
+        ],
+        &[
+            (-2, "\u{4e00}\u{6628}\u{65e5}"),
+            (-1, "\u{6628}\u{65e5}"),
+            (0, "\u{4eca}\u{65e5}"),
+            (1, "\u{660e}\u{65e5}"),
+            (2, "\u{660e}\u{5f8c}\u{65e5}"),
+        ],
+    ),
+    (
+        "ja",
+        "narrow",
+        "week",
+        [
+            "{0}\u{9031}\u{9593}\u{5f8c}",
+            "{0}\u{9031}\u{9593}\u{5f8c}",
+            "{0}\u{9031}\u{9593}\u{524d}",
+            "{0}\u{9031}\u{9593}\u{524d}",
+        ],
+        &[
+            (-1, "\u{5148}\u{9031}"),
+            (0, "\u{4eca}\u{9031}"),
+            (1, "\u{6765}\u{9031}"),
+        ],
+    ),
+    (
+        "ja",
+        "narrow",
+        "month",
+        [
+            "{0}\u{304b}\u{6708}\u{5f8c}",
+            "{0}\u{304b}\u{6708}\u{5f8c}",
+            "{0}\u{304b}\u{6708}\u{524d}",
+            "{0}\u{304b}\u{6708}\u{524d}",
+        ],
+        &[
+            (-1, "\u{5148}\u{6708}"),
+            (0, "\u{4eca}\u{6708}"),
+            (1, "\u{6765}\u{6708}"),
+        ],
+    ),
+    (
+        "ja",
+        "narrow",
+        "quarter",
+        [
+            "{0}\u{56db}\u{534a}\u{671f}\u{5f8c}",
+            "{0}\u{56db}\u{534a}\u{671f}\u{5f8c}",
+            "{0}\u{56db}\u{534a}\u{671f}\u{524d}",
+            "{0}\u{56db}\u{534a}\u{671f}\u{524d}",
+        ],
+        &[
+            (-1, "\u{524d}\u{56db}\u{534a}\u{671f}"),
+            (0, "\u{4eca}\u{56db}\u{534a}\u{671f}"),
+            (1, "\u{7fcc}\u{56db}\u{534a}\u{671f}"),
+        ],
+    ),
+    (
+        "ja",
+        "narrow",
+        "year",
+        [
+            "{0}\u{5e74}\u{5f8c}",
+            "{0}\u{5e74}\u{5f8c}",
+            "{0}\u{5e74}\u{524d}",
+            "{0}\u{5e74}\u{524d}",
+        ],
+        &[
+            (-1, "\u{6628}\u{5e74}"),
+            (0, "\u{4eca}\u{5e74}"),
+            (1, "\u{6765}\u{5e74}"),
+        ],
+    ),
+    (
+        "zh",
+        "long",
+        "second",
+        [
+            "{0}\u{79d2}\u{949f}\u{540e}",
+            "{0}\u{79d2}\u{949f}\u{540e}",
+            "{0}\u{79d2}\u{949f}\u{524d}",
+            "{0}\u{79d2}\u{949f}\u{524d}",
+        ],
+        &[(0, "\u{73b0}\u{5728}")],
+    ),
+    (
+        "zh",
+        "long",
+        "minute",
+        [
+            "{0}\u{5206}\u{949f}\u{540e}",
+            "{0}\u{5206}\u{949f}\u{540e}",
+            "{0}\u{5206}\u{949f}\u{524d}",
+            "{0}\u{5206}\u{949f}\u{524d}",
+        ],
+        &[(0, "\u{6b64}\u{523b}")],
+    ),
+    (
+        "zh",
+        "long",
+        "hour",
+        [
+            "{0}\u{5c0f}\u{65f6}\u{540e}",
+            "{0}\u{5c0f}\u{65f6}\u{540e}",
+            "{0}\u{5c0f}\u{65f6}\u{524d}",
+            "{0}\u{5c0f}\u{65f6}\u{524d}",
+        ],
+        &[(0, "\u{8fd9}\u{4e00}\u{65f6}\u{95f4} / \u{6b64}\u{65f6}")],
+    ),
+    (
+        "zh",
+        "long",
+        "day",
+        [
+            "{0}\u{5929}\u{540e}",
+            "{0}\u{5929}\u{540e}",
+            "{0}\u{5929}\u{524d}",
+            "{0}\u{5929}\u{524d}",
+        ],
+        &[
+            (-2, "\u{524d}\u{5929}"),
+            (-1, "\u{6628}\u{5929}"),
+            (0, "\u{4eca}\u{5929}"),
+            (1, "\u{660e}\u{5929}"),
+            (2, "\u{540e}\u{5929}"),
+        ],
+    ),
+    (
+        "zh",
+        "long",
+        "week",
+        [
+            "{0}\u{5468}\u{540e}",
+            "{0}\u{5468}\u{540e}",
+            "{0}\u{5468}\u{524d}",
+            "{0}\u{5468}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{5468}"),
+            (0, "\u{672c}\u{5468}"),
+            (1, "\u{4e0b}\u{5468}"),
+        ],
+    ),
+    (
+        "zh",
+        "long",
+        "month",
+        [
+            "{0}\u{4e2a}\u{6708}\u{540e}",
+            "{0}\u{4e2a}\u{6708}\u{540e}",
+            "{0}\u{4e2a}\u{6708}\u{524d}",
+            "{0}\u{4e2a}\u{6708}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{4e2a}\u{6708}"),
+            (0, "\u{672c}\u{6708}"),
+            (1, "\u{4e0b}\u{4e2a}\u{6708}"),
+        ],
+    ),
+    (
+        "zh",
+        "long",
+        "quarter",
+        [
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{540e}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{540e}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{524d}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{5b63}\u{5ea6}"),
+            (0, "\u{672c}\u{5b63}\u{5ea6}"),
+            (1, "\u{4e0b}\u{5b63}\u{5ea6}"),
+        ],
+    ),
+    (
+        "zh",
+        "long",
+        "year",
+        [
+            "{0}\u{5e74}\u{540e}",
+            "{0}\u{5e74}\u{540e}",
+            "{0}\u{5e74}\u{524d}",
+            "{0}\u{5e74}\u{524d}",
+        ],
+        &[
+            (-1, "\u{53bb}\u{5e74}"),
+            (0, "\u{4eca}\u{5e74}"),
+            (1, "\u{660e}\u{5e74}"),
+        ],
+    ),
+    (
+        "zh",
+        "short",
+        "second",
+        [
+            "{0}\u{79d2}\u{540e}",
+            "{0}\u{79d2}\u{540e}",
+            "{0}\u{79d2}\u{524d}",
+            "{0}\u{79d2}\u{524d}",
+        ],
+        &[(0, "\u{73b0}\u{5728}")],
+    ),
+    (
+        "zh",
+        "short",
+        "minute",
+        [
+            "{0}\u{5206}\u{949f}\u{540e}",
+            "{0}\u{5206}\u{949f}\u{540e}",
+            "{0}\u{5206}\u{949f}\u{524d}",
+            "{0}\u{5206}\u{949f}\u{524d}",
+        ],
+        &[(0, "\u{6b64}\u{523b}")],
+    ),
+    (
+        "zh",
+        "short",
+        "hour",
+        [
+            "{0}\u{5c0f}\u{65f6}\u{540e}",
+            "{0}\u{5c0f}\u{65f6}\u{540e}",
+            "{0}\u{5c0f}\u{65f6}\u{524d}",
+            "{0}\u{5c0f}\u{65f6}\u{524d}",
+        ],
+        &[(0, "\u{8fd9}\u{4e00}\u{65f6}\u{95f4} / \u{6b64}\u{65f6}")],
+    ),
+    (
+        "zh",
+        "short",
+        "day",
+        [
+            "{0}\u{5929}\u{540e}",
+            "{0}\u{5929}\u{540e}",
+            "{0}\u{5929}\u{524d}",
+            "{0}\u{5929}\u{524d}",
+        ],
+        &[
+            (-2, "\u{524d}\u{5929}"),
+            (-1, "\u{6628}\u{5929}"),
+            (0, "\u{4eca}\u{5929}"),
+            (1, "\u{660e}\u{5929}"),
+            (2, "\u{540e}\u{5929}"),
+        ],
+    ),
+    (
+        "zh",
+        "short",
+        "week",
+        [
+            "{0}\u{5468}\u{540e}",
+            "{0}\u{5468}\u{540e}",
+            "{0}\u{5468}\u{524d}",
+            "{0}\u{5468}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{5468}"),
+            (0, "\u{672c}\u{5468}"),
+            (1, "\u{4e0b}\u{5468}"),
+        ],
+    ),
+    (
+        "zh",
+        "short",
+        "month",
+        [
+            "{0}\u{4e2a}\u{6708}\u{540e}",
+            "{0}\u{4e2a}\u{6708}\u{540e}",
+            "{0}\u{4e2a}\u{6708}\u{524d}",
+            "{0}\u{4e2a}\u{6708}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{4e2a}\u{6708}"),
+            (0, "\u{672c}\u{6708}"),
+            (1, "\u{4e0b}\u{4e2a}\u{6708}"),
+        ],
+    ),
+    (
+        "zh",
+        "short",
+        "quarter",
+        [
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{540e}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{540e}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{524d}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{5b63}\u{5ea6}"),
+            (0, "\u{672c}\u{5b63}\u{5ea6}"),
+            (1, "\u{4e0b}\u{5b63}\u{5ea6}"),
+        ],
+    ),
+    (
+        "zh",
+        "short",
+        "year",
+        [
+            "{0}\u{5e74}\u{540e}",
+            "{0}\u{5e74}\u{540e}",
+            "{0}\u{5e74}\u{524d}",
+            "{0}\u{5e74}\u{524d}",
+        ],
+        &[
+            (-1, "\u{53bb}\u{5e74}"),
+            (0, "\u{4eca}\u{5e74}"),
+            (1, "\u{660e}\u{5e74}"),
+        ],
+    ),
+    (
+        "zh",
+        "narrow",
+        "second",
+        [
+            "{0}\u{79d2}\u{540e}",
+            "{0}\u{79d2}\u{540e}",
+            "{0}\u{79d2}\u{524d}",
+            "{0}\u{79d2}\u{524d}",
+        ],
+        &[(0, "\u{73b0}\u{5728}")],
+    ),
+    (
+        "zh",
+        "narrow",
+        "minute",
+        [
+            "{0}\u{5206}\u{949f}\u{540e}",
+            "{0}\u{5206}\u{949f}\u{540e}",
+            "{0}\u{5206}\u{949f}\u{524d}",
+            "{0}\u{5206}\u{949f}\u{524d}",
+        ],
+        &[(0, "\u{6b64}\u{523b}")],
+    ),
+    (
+        "zh",
+        "narrow",
+        "hour",
+        [
+            "{0}\u{5c0f}\u{65f6}\u{540e}",
+            "{0}\u{5c0f}\u{65f6}\u{540e}",
+            "{0}\u{5c0f}\u{65f6}\u{524d}",
+            "{0}\u{5c0f}\u{65f6}\u{524d}",
+        ],
+        &[(0, "\u{8fd9}\u{4e00}\u{65f6}\u{95f4} / \u{6b64}\u{65f6}")],
+    ),
+    (
+        "zh",
+        "narrow",
+        "day",
+        [
+            "{0}\u{5929}\u{540e}",
+            "{0}\u{5929}\u{540e}",
+            "{0}\u{5929}\u{524d}",
+            "{0}\u{5929}\u{524d}",
+        ],
+        &[
+            (-2, "\u{524d}\u{5929}"),
+            (-1, "\u{6628}\u{5929}"),
+            (0, "\u{4eca}\u{5929}"),
+            (1, "\u{660e}\u{5929}"),
+            (2, "\u{540e}\u{5929}"),
+        ],
+    ),
+    (
+        "zh",
+        "narrow",
+        "week",
+        [
+            "{0}\u{5468}\u{540e}",
+            "{0}\u{5468}\u{540e}",
+            "{0}\u{5468}\u{524d}",
+            "{0}\u{5468}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{5468}"),
+            (0, "\u{672c}\u{5468}"),
+            (1, "\u{4e0b}\u{5468}"),
+        ],
+    ),
+    (
+        "zh",
+        "narrow",
+        "month",
+        [
+            "{0}\u{4e2a}\u{6708}\u{540e}",
+            "{0}\u{4e2a}\u{6708}\u{540e}",
+            "{0}\u{4e2a}\u{6708}\u{524d}",
+            "{0}\u{4e2a}\u{6708}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{4e2a}\u{6708}"),
+            (0, "\u{672c}\u{6708}"),
+            (1, "\u{4e0b}\u{4e2a}\u{6708}"),
+        ],
+    ),
+    (
+        "zh",
+        "narrow",
+        "quarter",
+        [
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{540e}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{540e}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{524d}",
+            "{0}\u{4e2a}\u{5b63}\u{5ea6}\u{524d}",
+        ],
+        &[
+            (-1, "\u{4e0a}\u{5b63}\u{5ea6}"),
+            (0, "\u{672c}\u{5b63}\u{5ea6}"),
+            (1, "\u{4e0b}\u{5b63}\u{5ea6}"),
+        ],
+    ),
+    (
+        "zh",
+        "narrow",
+        "year",
+        [
+            "{0}\u{5e74}\u{540e}",
+            "{0}\u{5e74}\u{540e}",
+            "{0}\u{5e74}\u{524d}",
+            "{0}\u{5e74}\u{524d}",
+        ],
+        &[
+            (-1, "\u{53bb}\u{5e74}"),
+            (0, "\u{4eca}\u{5e74}"),
+            (1, "\u{660e}\u{5e74}"),
+        ],
+    ),
+    (
+        "ko",
+        "long",
+        "second",
+        [
+            "{0}\u{cd08} \u{d6c4}",
+            "{0}\u{cd08} \u{d6c4}",
+            "{0}\u{cd08} \u{c804}",
+            "{0}\u{cd08} \u{c804}",
+        ],
+        &[(0, "\u{c9c0}\u{ae08}")],
+    ),
+    (
+        "ko",
+        "long",
+        "minute",
+        [
+            "{0}\u{bd84} \u{d6c4}",
+            "{0}\u{bd84} \u{d6c4}",
+            "{0}\u{bd84} \u{c804}",
+            "{0}\u{bd84} \u{c804}",
+        ],
+        &[(0, "\u{d604}\u{c7ac} \u{bd84}")],
+    ),
+    (
+        "ko",
+        "long",
+        "hour",
+        [
+            "{0}\u{c2dc}\u{ac04} \u{d6c4}",
+            "{0}\u{c2dc}\u{ac04} \u{d6c4}",
+            "{0}\u{c2dc}\u{ac04} \u{c804}",
+            "{0}\u{c2dc}\u{ac04} \u{c804}",
+        ],
+        &[(0, "\u{d604}\u{c7ac} \u{c2dc}\u{ac04}")],
+    ),
+    (
+        "ko",
+        "long",
+        "day",
+        [
+            "{0}\u{c77c} \u{d6c4}",
+            "{0}\u{c77c} \u{d6c4}",
+            "{0}\u{c77c} \u{c804}",
+            "{0}\u{c77c} \u{c804}",
+        ],
+        &[
+            (-2, "\u{adf8}\u{c800}\u{aed8}"),
+            (-1, "\u{c5b4}\u{c81c}"),
+            (0, "\u{c624}\u{b298}"),
+            (1, "\u{b0b4}\u{c77c}"),
+            (2, "\u{baa8}\u{b808}"),
+        ],
+    ),
+    (
+        "ko",
+        "long",
+        "week",
+        [
+            "{0}\u{c8fc} \u{d6c4}",
+            "{0}\u{c8fc} \u{d6c4}",
+            "{0}\u{c8fc} \u{c804}",
+            "{0}\u{c8fc} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c}\u{c8fc}"),
+            (0, "\u{c774}\u{bc88} \u{c8fc}"),
+            (1, "\u{b2e4}\u{c74c} \u{c8fc}"),
+        ],
+    ),
+    (
+        "ko",
+        "long",
+        "month",
+        [
+            "{0}\u{ac1c}\u{c6d4} \u{d6c4}",
+            "{0}\u{ac1c}\u{c6d4} \u{d6c4}",
+            "{0}\u{ac1c}\u{c6d4} \u{c804}",
+            "{0}\u{ac1c}\u{c6d4} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c}\u{b2ec}"),
+            (0, "\u{c774}\u{bc88} \u{b2ec}"),
+            (1, "\u{b2e4}\u{c74c} \u{b2ec}"),
+        ],
+    ),
+    (
+        "ko",
+        "long",
+        "quarter",
+        [
+            "{0}\u{bd84}\u{ae30} \u{d6c4}",
+            "{0}\u{bd84}\u{ae30} \u{d6c4}",
+            "{0}\u{bd84}\u{ae30} \u{c804}",
+            "{0}\u{bd84}\u{ae30} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c} \u{bd84}\u{ae30}"),
+            (0, "\u{c774}\u{bc88} \u{bd84}\u{ae30}"),
+            (1, "\u{b2e4}\u{c74c} \u{bd84}\u{ae30}"),
+        ],
+    ),
+    (
+        "ko",
+        "long",
+        "year",
+        [
+            "{0}\u{b144} \u{d6c4}",
+            "{0}\u{b144} \u{d6c4}",
+            "{0}\u{b144} \u{c804}",
+            "{0}\u{b144} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c791}\u{b144}"),
+            (0, "\u{c62c}\u{d574}"),
+            (1, "\u{b0b4}\u{b144}"),
+        ],
+    ),
+    (
+        "ko",
+        "short",
+        "second",
+        [
+            "{0}\u{cd08} \u{d6c4}",
+            "{0}\u{cd08} \u{d6c4}",
+            "{0}\u{cd08} \u{c804}",
+            "{0}\u{cd08} \u{c804}",
+        ],
+        &[(0, "\u{c9c0}\u{ae08}")],
+    ),
+    (
+        "ko",
+        "short",
+        "minute",
+        [
+            "{0}\u{bd84} \u{d6c4}",
+            "{0}\u{bd84} \u{d6c4}",
+            "{0}\u{bd84} \u{c804}",
+            "{0}\u{bd84} \u{c804}",
+        ],
+        &[(0, "\u{d604}\u{c7ac} \u{bd84}")],
+    ),
+    (
+        "ko",
+        "short",
+        "hour",
+        [
+            "{0}\u{c2dc}\u{ac04} \u{d6c4}",
+            "{0}\u{c2dc}\u{ac04} \u{d6c4}",
+            "{0}\u{c2dc}\u{ac04} \u{c804}",
+            "{0}\u{c2dc}\u{ac04} \u{c804}",
+        ],
+        &[(0, "\u{d604}\u{c7ac} \u{c2dc}\u{ac04}")],
+    ),
+    (
+        "ko",
+        "short",
+        "day",
+        [
+            "{0}\u{c77c} \u{d6c4}",
+            "{0}\u{c77c} \u{d6c4}",
+            "{0}\u{c77c} \u{c804}",
+            "{0}\u{c77c} \u{c804}",
+        ],
+        &[
+            (-2, "\u{adf8}\u{c800}\u{aed8}"),
+            (-1, "\u{c5b4}\u{c81c}"),
+            (0, "\u{c624}\u{b298}"),
+            (1, "\u{b0b4}\u{c77c}"),
+            (2, "\u{baa8}\u{b808}"),
+        ],
+    ),
+    (
+        "ko",
+        "short",
+        "week",
+        [
+            "{0}\u{c8fc} \u{d6c4}",
+            "{0}\u{c8fc} \u{d6c4}",
+            "{0}\u{c8fc} \u{c804}",
+            "{0}\u{c8fc} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c}\u{c8fc}"),
+            (0, "\u{c774}\u{bc88} \u{c8fc}"),
+            (1, "\u{b2e4}\u{c74c} \u{c8fc}"),
+        ],
+    ),
+    (
+        "ko",
+        "short",
+        "month",
+        [
+            "{0}\u{ac1c}\u{c6d4} \u{d6c4}",
+            "{0}\u{ac1c}\u{c6d4} \u{d6c4}",
+            "{0}\u{ac1c}\u{c6d4} \u{c804}",
+            "{0}\u{ac1c}\u{c6d4} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c}\u{b2ec}"),
+            (0, "\u{c774}\u{bc88} \u{b2ec}"),
+            (1, "\u{b2e4}\u{c74c} \u{b2ec}"),
+        ],
+    ),
+    (
+        "ko",
+        "short",
+        "quarter",
+        [
+            "{0}\u{bd84}\u{ae30} \u{d6c4}",
+            "{0}\u{bd84}\u{ae30} \u{d6c4}",
+            "{0}\u{bd84}\u{ae30} \u{c804}",
+            "{0}\u{bd84}\u{ae30} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c} \u{bd84}\u{ae30}"),
+            (0, "\u{c774}\u{bc88} \u{bd84}\u{ae30}"),
+            (1, "\u{b2e4}\u{c74c} \u{bd84}\u{ae30}"),
+        ],
+    ),
+    (
+        "ko",
+        "short",
+        "year",
+        [
+            "{0}\u{b144} \u{d6c4}",
+            "{0}\u{b144} \u{d6c4}",
+            "{0}\u{b144} \u{c804}",
+            "{0}\u{b144} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c791}\u{b144}"),
+            (0, "\u{c62c}\u{d574}"),
+            (1, "\u{b0b4}\u{b144}"),
+        ],
+    ),
+    (
+        "ko",
+        "narrow",
+        "second",
+        [
+            "{0}\u{cd08} \u{d6c4}",
+            "{0}\u{cd08} \u{d6c4}",
+            "{0}\u{cd08} \u{c804}",
+            "{0}\u{cd08} \u{c804}",
+        ],
+        &[(0, "\u{c9c0}\u{ae08}")],
+    ),
+    (
+        "ko",
+        "narrow",
+        "minute",
+        [
+            "{0}\u{bd84} \u{d6c4}",
+            "{0}\u{bd84} \u{d6c4}",
+            "{0}\u{bd84} \u{c804}",
+            "{0}\u{bd84} \u{c804}",
+        ],
+        &[(0, "\u{d604}\u{c7ac} \u{bd84}")],
+    ),
+    (
+        "ko",
+        "narrow",
+        "hour",
+        [
+            "{0}\u{c2dc}\u{ac04} \u{d6c4}",
+            "{0}\u{c2dc}\u{ac04} \u{d6c4}",
+            "{0}\u{c2dc}\u{ac04} \u{c804}",
+            "{0}\u{c2dc}\u{ac04} \u{c804}",
+        ],
+        &[(0, "\u{d604}\u{c7ac} \u{c2dc}\u{ac04}")],
+    ),
+    (
+        "ko",
+        "narrow",
+        "day",
+        [
+            "{0}\u{c77c} \u{d6c4}",
+            "{0}\u{c77c} \u{d6c4}",
+            "{0}\u{c77c} \u{c804}",
+            "{0}\u{c77c} \u{c804}",
+        ],
+        &[
+            (-2, "\u{adf8}\u{c800}\u{aed8}"),
+            (-1, "\u{c5b4}\u{c81c}"),
+            (0, "\u{c624}\u{b298}"),
+            (1, "\u{b0b4}\u{c77c}"),
+            (2, "\u{baa8}\u{b808}"),
+        ],
+    ),
+    (
+        "ko",
+        "narrow",
+        "week",
+        [
+            "{0}\u{c8fc} \u{d6c4}",
+            "{0}\u{c8fc} \u{d6c4}",
+            "{0}\u{c8fc} \u{c804}",
+            "{0}\u{c8fc} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c}\u{c8fc}"),
+            (0, "\u{c774}\u{bc88} \u{c8fc}"),
+            (1, "\u{b2e4}\u{c74c} \u{c8fc}"),
+        ],
+    ),
+    (
+        "ko",
+        "narrow",
+        "month",
+        [
+            "{0}\u{ac1c}\u{c6d4} \u{d6c4}",
+            "{0}\u{ac1c}\u{c6d4} \u{d6c4}",
+            "{0}\u{ac1c}\u{c6d4} \u{c804}",
+            "{0}\u{ac1c}\u{c6d4} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c}\u{b2ec}"),
+            (0, "\u{c774}\u{bc88} \u{b2ec}"),
+            (1, "\u{b2e4}\u{c74c} \u{b2ec}"),
+        ],
+    ),
+    (
+        "ko",
+        "narrow",
+        "quarter",
+        [
+            "{0}\u{bd84}\u{ae30} \u{d6c4}",
+            "{0}\u{bd84}\u{ae30} \u{d6c4}",
+            "{0}\u{bd84}\u{ae30} \u{c804}",
+            "{0}\u{bd84}\u{ae30} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c9c0}\u{b09c} \u{bd84}\u{ae30}"),
+            (0, "\u{c774}\u{bc88} \u{bd84}\u{ae30}"),
+            (1, "\u{b2e4}\u{c74c} \u{bd84}\u{ae30}"),
+        ],
+    ),
+    (
+        "ko",
+        "narrow",
+        "year",
+        [
+            "{0}\u{b144} \u{d6c4}",
+            "{0}\u{b144} \u{d6c4}",
+            "{0}\u{b144} \u{c804}",
+            "{0}\u{b144} \u{c804}",
+        ],
+        &[
+            (-1, "\u{c791}\u{b144}"),
+            (0, "\u{c62c}\u{d574}"),
+            (1, "\u{b0b4}\u{b144}"),
+        ],
+    ),
+];
+
+/// List separators by (language, type, style): between the two items of
+/// a pair, and after the first, each middle and the next-to-last item of a
+/// longer list. Generated from Node v22.2.0 (ICU 74) output (bd-9vouw.171).
+const LIST_PATTERNS: &[(&str, &str, &str, [&str; 4])] = &[
+    ("en", "conjunction", "long", [" and ", ", ", ", ", ", and "]),
+    ("en", "conjunction", "short", [" & ", ", ", ", ", ", & "]),
+    ("en", "conjunction", "narrow", [", ", ", ", ", ", ", "]),
+    ("en", "disjunction", "long", [" or ", ", ", ", ", ", or "]),
+    ("en", "disjunction", "short", [" or ", ", ", ", ", ", or "]),
+    ("en", "disjunction", "narrow", [" or ", ", ", ", ", ", or "]),
+    ("en", "unit", "long", [", ", ", ", ", ", ", "]),
+    ("en", "unit", "short", [", ", ", ", ", ", ", "]),
+    ("en", "unit", "narrow", [" ", " ", " ", " "]),
+    ("de", "conjunction", "long", [" und ", ", ", ", ", " und "]),
+    ("de", "conjunction", "short", [" und ", ", ", ", ", " und "]),
+    (
+        "de",
+        "conjunction",
+        "narrow",
+        [" und ", ", ", ", ", " und "],
+    ),
+    (
+        "de",
+        "disjunction",
+        "long",
+        [" oder ", ", ", ", ", " oder "],
+    ),
+    (
+        "de",
+        "disjunction",
+        "short",
+        [" oder ", ", ", ", ", " oder "],
+    ),
+    (
+        "de",
+        "disjunction",
+        "narrow",
+        [" oder ", ", ", ", ", " oder "],
+    ),
+    ("de", "unit", "long", [", ", ", ", ", ", " und "]),
+    ("de", "unit", "short", [", ", ", ", ", ", " und "]),
+    ("de", "unit", "narrow", [", ", ", ", ", ", " und "]),
+    (
+        "ja",
+        "conjunction",
+        "long",
+        ["\u{3001}", "\u{3001}", "\u{3001}", "\u{3001}"],
+    ),
+    (
+        "ja",
+        "conjunction",
+        "short",
+        ["\u{3001}", "\u{3001}", "\u{3001}", "\u{3001}"],
+    ),
+    (
+        "ja",
+        "conjunction",
+        "narrow",
+        ["\u{3001}", "\u{3001}", "\u{3001}", "\u{3001}"],
+    ),
+    (
+        "ja",
+        "disjunction",
+        "long",
+        [
+            "\u{307e}\u{305f}\u{306f}",
+            "\u{3001}",
+            "\u{3001}",
+            "\u{3001}\u{307e}\u{305f}\u{306f}",
+        ],
+    ),
+    (
+        "ja",
+        "disjunction",
+        "short",
+        [
+            "\u{307e}\u{305f}\u{306f}",
+            "\u{3001}",
+            "\u{3001}",
+            "\u{3001}\u{307e}\u{305f}\u{306f}",
+        ],
+    ),
+    (
+        "ja",
+        "disjunction",
+        "narrow",
+        [
+            "\u{307e}\u{305f}\u{306f}",
+            "\u{3001}",
+            "\u{3001}",
+            "\u{3001}\u{307e}\u{305f}\u{306f}",
+        ],
+    ),
+    ("ja", "unit", "long", [" ", " ", " ", " "]),
+    ("ja", "unit", "short", [" ", " ", " ", " "]),
+    ("ja", "unit", "narrow", ["", "", "", ""]),
+    (
+        "zh",
+        "conjunction",
+        "long",
+        ["\u{548c}", "\u{3001}", "\u{3001}", "\u{548c}"],
+    ),
+    (
+        "zh",
+        "conjunction",
+        "short",
+        ["\u{548c}", "\u{3001}", "\u{3001}", "\u{548c}"],
+    ),
+    (
+        "zh",
+        "conjunction",
+        "narrow",
+        ["\u{3001}", "\u{3001}", "\u{3001}", "\u{3001}"],
+    ),
+    (
+        "zh",
+        "disjunction",
+        "long",
+        ["\u{6216}", "\u{3001}", "\u{3001}", "\u{6216}"],
+    ),
+    (
+        "zh",
+        "disjunction",
+        "short",
+        ["\u{6216}", "\u{3001}", "\u{3001}", "\u{6216}"],
+    ),
+    (
+        "zh",
+        "disjunction",
+        "narrow",
+        ["\u{6216}", "\u{3001}", "\u{3001}", "\u{6216}"],
+    ),
+    ("zh", "unit", "long", ["", "", "", ""]),
+    ("zh", "unit", "short", ["", "", "", ""]),
+    ("zh", "unit", "narrow", ["", "", "", ""]),
+    (
+        "ko",
+        "conjunction",
+        "long",
+        [" \u{bc0f} ", ", ", ", ", " \u{bc0f} "],
+    ),
+    (
+        "ko",
+        "conjunction",
+        "short",
+        [" \u{bc0f} ", ", ", ", ", " \u{bc0f} "],
+    ),
+    (
+        "ko",
+        "conjunction",
+        "narrow",
+        [" \u{bc0f} ", ", ", ", ", " \u{bc0f} "],
+    ),
+    (
+        "ko",
+        "disjunction",
+        "long",
+        [" \u{b610}\u{b294} ", ", ", ", ", " \u{b610}\u{b294} "],
+    ),
+    (
+        "ko",
+        "disjunction",
+        "short",
+        [" \u{b610}\u{b294} ", ", ", ", ", " \u{b610}\u{b294} "],
+    ),
+    (
+        "ko",
+        "disjunction",
+        "narrow",
+        [" \u{b610}\u{b294} ", ", ", ", ", " \u{b610}\u{b294} "],
+    ),
+    ("ko", "unit", "long", [" ", " ", " ", " "]),
+    ("ko", "unit", "short", [" ", " ", " ", " "]),
+    ("ko", "unit", "narrow", [" ", " ", " ", " "]),
+];

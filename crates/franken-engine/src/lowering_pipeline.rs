@@ -8651,7 +8651,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 // which aliases the first top-level binding (bd-62un6).
                 let _ = pop_lowering_value(&mut value_stack)?;
                 // Declarations end in a Discard rather than a Pop; either one
-                // emptying the stack ends a statement (bd-9vouw.23).
+                // emptying the stack ends a statement (bd-9vouw.23). Inside
+                // an expression (class members), the temporaries above the
+                // remaining stack are dead (bd-9vouw.202).
                 if let Some(target) = statement_rewind_target(
                     &value_stack,
                     &iterator_anchors,
@@ -8659,6 +8661,16 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     pinned_register_high,
                     &live_status_registers,
                 ) {
+                    register_high_water = register_high_water.max(register_cursor);
+                    register_cursor = target;
+                } else if let Some(target) = expression_rewind_target(
+                    &value_stack,
+                    &iterator_anchors,
+                    statement_register_floor,
+                    pinned_register_high,
+                    &live_status_registers,
+                ) && target < register_cursor
+                {
                     register_high_water = register_high_water.max(register_cursor);
                     register_cursor = target;
                 }
@@ -9167,6 +9179,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     kind: *kind,
                 });
                 value_stack.push(obj);
+                if let Some(target) = expression_rewind_target(
+                    &value_stack,
+                    &iterator_anchors,
+                    statement_register_floor,
+                    pinned_register_high,
+                    &live_status_registers,
+                ) && target < register_cursor
+                {
+                    register_high_water = register_high_water.max(register_cursor);
+                    register_cursor = target;
+                }
             }
             Ir1Op::DefineMethod { key } => {
                 let func = pop_lowering_value(&mut value_stack)?;
@@ -9193,6 +9216,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     func,
                 });
                 value_stack.push(obj);
+                if let Some(target) = expression_rewind_target(
+                    &value_stack,
+                    &iterator_anchors,
+                    statement_register_floor,
+                    pinned_register_high,
+                    &live_status_registers,
+                ) && target < register_cursor
+                {
+                    register_high_water = register_high_water.max(register_cursor);
+                    register_cursor = target;
+                }
             }
             Ir1Op::DeleteProperty { key } => {
                 let (obj, key_reg) = match key {
@@ -10920,6 +10954,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     ) {
                         fn_register_high_water = fn_register_high_water.max(fn_reg);
                         fn_reg = target;
+                    } else if matches!(ir2_op.inner, Ir1Op::Discard)
+                        && let Some(target) = expression_rewind_target(
+                            &fn_value_stack,
+                            &fn_iterator_anchors,
+                            fn_statement_register_floor,
+                            fn_pinned_register_high,
+                            &fn_live_status_registers,
+                        )
+                        && target < fn_reg
+                    {
+                        // Inside an expression, the temporaries above the
+                        // remaining stack are dead (bd-9vouw.202).
+                        fn_register_high_water = fn_register_high_water.max(fn_reg);
+                        fn_reg = target;
                     }
                 }
                 Ir1Op::Nop => {
@@ -11110,6 +11158,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         kind: *kind,
                     });
                     fn_value_stack.push(obj);
+                    if let Some(target) = expression_rewind_target(
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    ) && target < fn_reg
+                    {
+                        fn_register_high_water = fn_register_high_water.max(fn_reg);
+                        fn_reg = target;
+                    }
                 }
                 Ir1Op::DefineMethod { key } => {
                     let func = pop_lowering_value(&mut fn_value_stack)?;
@@ -11136,6 +11195,17 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         func,
                     });
                     fn_value_stack.push(obj);
+                    if let Some(target) = expression_rewind_target(
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    ) && target < fn_reg
+                    {
+                        fn_register_high_water = fn_register_high_water.max(fn_reg);
+                        fn_reg = target;
+                    }
                 }
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
@@ -32801,6 +32871,36 @@ fn statement_rewind_target(
     Some(
         base.max(pinned_high)
             .max(live_status_register_ceiling(live)),
+    )
+}
+
+/// bd-9vouw.202: where the cursor may rewind after an op that consumed the
+/// values above the stack's highest live register inside an expression (a
+/// member definition leaving its target object, a Discard that did not end
+/// the statement). Registers above every live stack value hold dead
+/// temporaries: values that cross a label travel through bindings, which
+/// `pinned_high` protects, as do live slots and an enclosing loop body's
+/// floor. Only an emptied stack used to rewind, so an object or class
+/// literal whose expression kept an assignment target on the stack
+/// (`internals.Base = class { ... }`, joi's 70-method Base) took fresh
+/// registers for every member and overflowed the 256-register frame.
+fn expression_rewind_target(
+    value_stack: &[Reg],
+    anchors: &[IteratorAnchor],
+    floor: Reg,
+    pinned_high: Reg,
+    live: &BTreeSet<Reg>,
+) -> Option<Reg> {
+    let top = value_stack.iter().max()?;
+    let target = top
+        .saturating_add(1)
+        .max(floor)
+        .max(pinned_high)
+        .max(live_status_register_ceiling(live));
+    Some(
+        anchors
+            .last()
+            .map_or(target, |anchor| target.max(anchor.body_floor)),
     )
 }
 

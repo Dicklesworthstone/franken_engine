@@ -586,7 +586,7 @@ impl InterpreterCore {
         if let Err(error) =
             self.array_from_async_start(module, promise, items, mapper, this_arg, &label)
         {
-            let (reason, reason_label) = self.array_from_async_thrown(error, &label)?;
+            let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
             let reason = self.promise_value(&reason)?;
             self.reject_promise(promise, reason, reason_label)?;
         }
@@ -803,7 +803,7 @@ impl InterpreterCore {
             self.array_from_async_resume_abrupt(module, holder, awaiting, settled, &label)
         };
         if let Err(error) = outcome {
-            let (reason, reason_label) = self.array_from_async_thrown(error, &label)?;
+            let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
             self.array_from_async_reject(holder, reason, reason_label)?;
         }
         Ok(Value::Undefined)
@@ -1118,7 +1118,7 @@ impl InterpreterCore {
         error: InterpreterError,
         label: &Label,
     ) -> Result<(), InterpreterError> {
-        let (reason, reason_label) = self.array_from_async_thrown(error, label)?;
+        let (reason, reason_label) = self.thrown_completion_value(error, label)?;
         let iterator = self.array_from_async_slot(holder, "__iterator")?;
         if self.array_from_async_source(holder)? == FromAsyncSource::SyncIterator {
             let closed = self.close_iterator(module, iterator, IteratorCloseReason::Throw);
@@ -1209,7 +1209,7 @@ impl InterpreterCore {
     /// `throw`, or the error object of a catchable native error. A host
     /// refusal (budget, cancellation, containment) is not a guest completion
     /// and keeps propagating.
-    fn array_from_async_thrown(
+    pub(super) fn thrown_completion_value(
         &mut self,
         error: InterpreterError,
         label: &Label,

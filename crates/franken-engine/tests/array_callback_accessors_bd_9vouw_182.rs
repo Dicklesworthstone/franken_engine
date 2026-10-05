@@ -2,10 +2,11 @@
 
 //! bd-9vouw.182: the Array.prototype callback methods check IsCallable
 //! before the first element (an empty or all-holes array threw nothing), and
-//! the native element loops read an accessor element through its getter (the
-//! engine's internal accessor value leaked into callbacks: `map` gave NaN,
-//! `indexOf` -1). Expected lines are Node v22.2.0's output for the same
-//! programs, captured programmatically (Bun 1.4.2 prints the same).
+//! the native element loops and Object.values read an accessor through its
+//! getter (the engine's internal accessor value leaked: `map` gave NaN,
+//! `indexOf` -1, Object.values "[object Object]"). Expected lines are Node
+//! v22.2.0's output for the same programs, captured programmatically (Bun
+//! 1.4.2 prints the same).
 
 use frankenengine_engine::HybridRouter;
 
@@ -45,4 +46,11 @@ fn accessor_elements_read_through_their_getters() {
             "true 2"
         ]
     );
+}
+
+/// Object.values runs an accessor property's getter, as for a TypeScript-compiled re-export, and an accessor element's.
+#[test]
+fn object_values_reads_getters() {
+    let source = "const plain = { get a() { return 1; }, b: 2 };\nconst exportsLike = {};\nObject.defineProperty(exportsLike, 'helper', { enumerable: true, get() { return 'lazy'; } });\nconst arr = [0];\nObject.defineProperty(arr, '0', { enumerable: true, get() { return 'element'; } });\nconsole.log(Object.values(plain).join(), Object.values(exportsLike).join(), Object.values(arr).join());\n";
+    assert_eq!(console_output(source), ["1,2 lazy element"]);
 }

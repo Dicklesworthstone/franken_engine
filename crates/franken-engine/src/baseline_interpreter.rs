@@ -85523,7 +85523,17 @@ impl InterpreterCore {
                                 .map(|(_, value)| value.clone()),
                         );
                         self.join_pending_hostcall_stream_label(obj_id)?;
-                        let array_id = self.alloc_array_from_values(&values)?;
+                        // [[Get]] of each value: an accessor property's getter
+                        // runs (the accessor itself leaked, "[object Object]").
+                        let mut resolved = Vec::with_capacity(values.len());
+                        for value in values {
+                            resolved.push(self.resolve_accessor_get(
+                                module,
+                                value,
+                                Value::Object(obj_id),
+                            )?);
+                        }
+                        let array_id = self.alloc_array_from_values(&resolved)?;
                         Ok(Value::Object(array_id))
                     }
                     Value::Str(text) => {

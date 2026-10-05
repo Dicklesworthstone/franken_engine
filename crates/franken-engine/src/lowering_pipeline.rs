@@ -641,6 +641,26 @@ pub fn lower_ir0_to_ir3(
     }
 }
 
+/// Lower a module that an importer under the bounded-imports contract loads
+/// (bd-j8f7q). Its own imports of local files and packages are bounded from
+/// the start: the importer's assumption already depends on them staying at
+/// most [`IFC_BOUNDED_IMPORT_LABEL`], and the contract marker makes the
+/// interpreter check each of those edges when this module runs. Its ceiling
+/// then reflects the values its own code produces instead of an opaque
+/// TopSecret for every module it imports or re-exports (a barrel of
+/// `export * from` lines was refused). A module without such an import
+/// lowers as [`lower_ir0_to_ir3`] does.
+pub fn lower_bounded_import_ir0_to_ir3(
+    ir0: &Ir0Module,
+    context: &LoweringContext,
+) -> Result<LoweringPipelineOutput, LoweringPipelineError> {
+    if ir0_has_local_static_import(ir0) {
+        lower_ir0_to_ir3_unit(ir0, context, true)
+    } else {
+        lower_ir0_to_ir3(ir0, context)
+    }
+}
+
 /// Whether the unit statically imports or re-exports a module the bounded
 /// contract covers (a local file or a package).
 fn ir0_has_local_static_import(ir0: &Ir0Module) -> bool {

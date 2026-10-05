@@ -87,6 +87,7 @@ mod date_locale;
 mod event_target;
 mod inspect;
 mod intl;
+mod iterator_helpers;
 mod json_parse;
 mod json_stringify;
 mod legacy_regexp;
@@ -972,6 +973,15 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "AsyncFunction" => Some("AsyncFunction"),
         "AsyncGeneratorFunction" => Some("AsyncGeneratorFunction"),
         ITERATOR_PROTOTYPE => Some(ITERATOR_PROTOTYPE),
+        // ES2025 27.1.3.1: the `Iterator` constructor's prototype is
+        // %IteratorPrototype% (bd-9vouw.179).
+        "Iterator" => Some(ITERATOR_PROTOTYPE),
+        iterator_helpers::ITERATOR_HELPER_PROTOTYPE => {
+            Some(iterator_helpers::ITERATOR_HELPER_PROTOTYPE)
+        }
+        iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+            Some(iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE)
+        }
         ARRAY_ITERATOR_PROTOTYPE => Some(ARRAY_ITERATOR_PROTOTYPE),
         MAP_ITERATOR_PROTOTYPE => Some(MAP_ITERATOR_PROTOTYPE),
         SET_ITERATOR_PROTOTYPE => Some(SET_ITERATOR_PROTOTYPE),
@@ -3564,6 +3574,12 @@ pub enum BuiltinFunctionKind {
     /// the specifier, one of [`event_target::EVENT_TARGET_METHODS`]. Append
     /// only.
     EventTargetMethod,
+    /// ES2025 Iterator helpers (bd-9vouw.179): `Iterator.from`, the
+    /// %IteratorPrototype% methods and the `next` / `return` of
+    /// %IteratorHelperPrototype% and %WrapForValidIteratorPrototype%, named
+    /// by the specifier, one of [`iterator_helpers::ITERATOR_HELPER_METHODS`].
+    /// Append only.
+    IteratorHelperMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -5037,6 +5053,10 @@ impl BuiltinFunction {
                 .iter()
                 .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
                 .map_or("", |(_, _, name)| *name),
+            BuiltinFunctionKind::IteratorHelperMethod => iterator_helpers::ITERATOR_HELPER_METHODS
+                .iter()
+                .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
+                .map_or("", |(_, _, name)| *name),
             BuiltinFunctionKind::UrlStatic => {
                 if self.module_specifier.0.as_deref() == Some("parse") {
                     "parse"
@@ -5659,6 +5679,10 @@ impl BuiltinFunction {
                 .iter()
                 .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
                 .map(|(_, owner, _)| *owner)?,
+            K::IteratorHelperMethod => iterator_helpers::ITERATOR_HELPER_METHODS
+                .iter()
+                .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
+                .map(|(_, owner, _)| *owner)?,
             K::ObjectLegacyAccessor => "Object.prototype",
             K::SetMethod => "Set.prototype",
             K::SetTimeout
@@ -5774,7 +5798,7 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 47] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 48] = [
     "Object",
     "Array",
     "Number",
@@ -5839,6 +5863,9 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 47] = [
     "AbortController",
     "AbortSignal",
     "DOMException",
+    // ES2025 Iterator (bd-9vouw.179): abstract; its prototype is
+    // %IteratorPrototype%, which holds the helpers.
+    "Iterator",
 ];
 
 /// bd-9vouw.17: realm globals besides the standard constructors and global
@@ -43561,6 +43588,9 @@ impl InterpreterCore {
             BuiltinFunctionKind::EventTargetMethod => {
                 self.event_target_method(module, builtin, args, receiver)
             }
+            BuiltinFunctionKind::IteratorHelperMethod => {
+                self.iterator_helper_method(module, builtin, args, receiver)
+            }
             // URL.prototype.toString / toJSON: the receiver URL's href
             // (bd-9vouw.157).
             BuiltinFunctionKind::UrlMethod => {
@@ -52549,6 +52579,10 @@ impl InterpreterCore {
                                 expected: "constructor".to_string(),
                                 got: format!("{name} is not a constructor"),
                             });
+                        }
+                        // ES2025 27.1.3.1 step 1: NewTarget is Iterator itself.
+                        if standard_name == Some("Iterator") {
+                            return Err(self.abstract_iterator_construction_error());
                         }
                         let mut result = match standard_name {
                             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
@@ -98346,6 +98380,19 @@ impl InterpreterCore {
             });
         }
         let prototype = self.constructor_prototype_for_value(module, new_target)?;
+        // ES2025 27.1.3.1: abstract unless NewTarget is a subclass, whose
+        // instance is an ordinary object from NewTarget's prototype.
+        if standard_name == Some("Iterator") {
+            if matches!(new_target, Value::BuiltinFunction(target)
+                if target.kind == BuiltinFunctionKind::StandardConstructor
+                    && Self::standard_constructor_name(target).ok() == Some("Iterator"))
+            {
+                return Err(self.abstract_iterator_construction_error());
+            }
+            return Ok(Value::Object(
+                self.alloc_object_with_prototype(Some(prototype))?,
+            ));
+        }
         let mut result = match standard_name {
             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                 self.construct_event_target_family(module, name, args)?
@@ -99695,7 +99742,11 @@ impl InterpreterCore {
             ARRAY_ITERATOR_PROTOTYPE
             | MAP_ITERATOR_PROTOTYPE
             | SET_ITERATOR_PROTOTYPE
-            | GENERATOR_PROTOTYPE => Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?),
+            | GENERATOR_PROTOTYPE
+            | iterator_helpers::ITERATOR_HELPER_PROTOTYPE
+            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+                Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?)
+            }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
             // ES2020 22.2.6: the concrete typed array prototypes inherit the
@@ -99850,11 +99901,64 @@ impl InterpreterCore {
                 let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
                 let value = Value::BuiltinFunction(BuiltinFunction::generator_iterator_self());
                 self.set_object_runtime_property(prototype, key.clone(), value)?;
-                return self.set_own_property_attributes(
-                    prototype,
-                    &key,
-                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+                // ES2025 27.1.4: the Iterator helpers, `constructor` and
+                // @@toStringTag (data properties here; the specification's
+                // are accessors) (bd-9vouw.179).
+                let mut members = vec![(
+                    RuntimePropertyKey::String(JsString::from("constructor")),
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Iterator")),
+                )];
+                members.extend(
+                    iterator_helpers::ITERATOR_HELPER_METHODS
+                        .iter()
+                        .filter(|(_, owner, _)| *owner == "Iterator.prototype")
+                        .map(|(specifier, _, name)| {
+                            (
+                                RuntimePropertyKey::String(JsString::from(*name)),
+                                iterator_helpers::helper_method(specifier),
+                            )
+                        }),
                 );
+                members.push((
+                    RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+                    Value::str("Iterator"),
+                ));
+                for (key, value) in members {
+                    self.set_object_runtime_property(prototype, key.clone(), value)?;
+                    self.set_own_property_attributes(
+                        prototype,
+                        &key,
+                        NON_ENUMERABLE_DATA_ATTRIBUTES,
+                    )?;
+                }
+                return Ok(());
+            }
+            iterator_helpers::ITERATOR_HELPER_PROTOTYPE
+            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+                let members = iterator_helpers::ITERATOR_HELPER_METHODS
+                    .iter()
+                    .filter(|(_, owner, _)| *owner == canonical)
+                    .map(|(specifier, _, name)| {
+                        (
+                            RuntimePropertyKey::String(JsString::from(*name)),
+                            iterator_helpers::helper_method(specifier),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                for (key, value) in members {
+                    self.set_object_runtime_property(prototype, key.clone(), value)?;
+                    self.set_own_property_attributes(
+                        prototype,
+                        &key,
+                        NON_ENUMERABLE_DATA_ATTRIBUTES,
+                    )?;
+                }
+                // %WrapForValidIteratorPrototype% has no @@toStringTag.
+                if canonical == iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE {
+                    return Ok(());
+                }
+                ("Iterator Helper", Vec::new(), None)
             }
             ARRAY_ITERATOR_PROTOTYPE => (
                 "Array Iterator",
@@ -101252,6 +101356,7 @@ impl InterpreterCore {
                 | "AbortController"
                 | "AbortSignal"
                 | "DOMException"
+                | "Iterator"
                 | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
                 "Buffer" => 3,
@@ -101259,6 +101364,7 @@ impl InterpreterCore {
                 _ => 1,
             }),
             "poolSize" if name == "Buffer" => Value::Int(8192),
+            "from" if name == "Iterator" => iterator_helpers::helper_method("Iterator.from"),
             key if name == "AbortSignal" && Self::abort_signal_static(key).is_some() => {
                 Self::abort_signal_static(key).expect("guarded above")
             }
@@ -101378,6 +101484,10 @@ impl InterpreterCore {
                 expected: format!("new {name}(...)"),
                 got: format!("Constructor {name} requires 'new'"),
             }),
+            "Iterator" => Err(self.throw_js_error(
+                "TypeError",
+                "Constructor Iterator requires 'new'".to_string(),
+            )),
             name if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                 Err(InterpreterError::TypeError {
                     expected: format!("new {name}(...)"),
@@ -134783,11 +134893,11 @@ mod function_prototype_call_apply_tests_current {
                 "ambient or recursive authority leaked through {forbidden_name}"
             );
         }
-        // 7 realm objects, Date and Promise, 7 timers, 47 standard
+        // 7 realm objects, Date and Promise, 7 timers, 48 standard
         // constructors (EventTarget, Event, CustomEvent, AbortController,
-        // AbortSignal and DOMException since bd-9vouw.170), 13 global
-        // functions.
-        assert_eq!(globals.len(), 76);
+        // AbortSignal and DOMException since bd-9vouw.170, Iterator since
+        // bd-9vouw.179), 13 global functions.
+        assert_eq!(globals.len(), 77);
         assert_eq!(
             InterpreterCore::projected_generated_function_realm_registry_bytes(),
             InterpreterCore::estimate_generated_function_realm_globals_bytes(globals),

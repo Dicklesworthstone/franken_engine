@@ -31,6 +31,7 @@ pub mod flow_lattice;
 pub mod guardplane_adapter;
 pub mod hash_tiers;
 pub mod hindsight_boundary_capture;
+pub mod host_effect_budget;
 pub mod ifc_artifacts;
 pub mod ir_contract;
 pub mod js_string;

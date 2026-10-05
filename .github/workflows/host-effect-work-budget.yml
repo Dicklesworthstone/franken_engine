@@ -1,0 +1,60 @@
+name: Shared Host Effect Work Budget
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/franken-core/src/host_effect_budget.rs'
+      - 'crates/franken-core/src/host_effect_budget/**'
+      - 'crates/franken-core/src/execution_work_budget/**'
+      - 'crates/franken-core/src/execution_work_budget.rs'
+      - '.github/workflows/host-effect-work-budget.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal --component rustfmt
+      - name: Prepare actual core and extension-host sources
+        run: |
+          # Both crates are self-contained. Exclude unrelated workspace members
+          # whose absolute sibling-repository dependencies are absent on CI.
+          # No source, manifest dependency, or runtime type is stubbed out.
+          mkdir -p "$RUNNER_TEMP/effect-budget/crates"
+          cp -a crates/franken-core crates/franken-extension-host "$RUNNER_TEMP/effect-budget/crates/"
+          cp Cargo.lock "$RUNNER_TEMP/effect-budget/Cargo.lock"
+          printf '[workspace]\nmembers = ["crates/franken-core", "crates/franken-extension-host"]\nresolver = "2"\n' > "$RUNNER_TEMP/effect-budget/Cargo.toml"
+      - name: Compile and run native admission regressions
+        run: |
+          status=0
+          cargo +nightly test --manifest-path "$RUNNER_TEMP/effect-budget/Cargo.toml" -p frankenengine-core --lib host_effect_budget -- --nocapture > host-effect-budget-tests.log 2>&1 || status=$?
+          tail -n 120 host-effect-budget-tests.log
+          exit "$status"
+      - name: Inspect formatting of changed implementation
+        if: always()
+        run: |
+          rustfmt +nightly --edition 2024 crates/franken-core/src/host_effect_budget.rs
+          git diff -- crates/franken-core/src/host_effect_budget.rs crates/franken-core/src/host_effect_budget/ > host-effect-budget-format.patch
+      - name: Retain validation and formatted source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-host-effect-budget-validation
+          path: |
+            host-effect-budget-*.log
+            host-effect-budget-format.patch
+            crates/franken-core/src/host_effect_budget.rs
+            crates/franken-core/src/host_effect_budget/
+          retention-days: 7

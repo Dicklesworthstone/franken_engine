@@ -230,6 +230,16 @@ impl ResolvedBinding {
     }
 }
 
+/// bd-9vouw.146: an `Ir1Op::SetProperty` serialized before writes carried
+/// their strictness threw on a rejected write, as strict code does.
+fn member_write_default_strict() -> bool {
+    true
+}
+
+fn member_write_is_strict(strict: &bool) -> bool {
+    *strict
+}
+
 fn canonical_resolved_binding_array(bindings: &[ResolvedBinding]) -> CanonicalValue {
     let mut bindings = bindings.to_vec();
     bindings.sort_by(|left, right| {
@@ -513,8 +523,16 @@ pub enum Ir1Op {
     /// below it, while static keys are carried directly in the op. `strict` is
     /// the assignment's strictness: PutValue (ES2020 6.2.4.9) throws a
     /// TypeError for a write that [[Set]] rejects only in strict code
-    /// (bd-9vouw.146).
-    SetProperty { key: Ir1PropertyKey, strict: bool },
+    /// (bd-9vouw.146). A strict write serializes and hashes as the op did
+    /// before the flag existed, and an op without the flag reads as strict.
+    SetProperty {
+        key: Ir1PropertyKey,
+        #[serde(
+            default = "member_write_default_strict",
+            skip_serializing_if = "member_write_is_strict"
+        )]
+        strict: bool,
+    },
     /// Object accessor definition. Function value is on top-of-stack; dynamic
     /// keys sit below it, while static keys are carried directly in the op.
     DefineAccessor {
@@ -845,11 +863,16 @@ impl Ir1Op {
                 ("op", CanonicalValue::str("get_property")),
                 ("key", key.canonical_value()),
             ]),
-            Self::SetProperty { key, strict } => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("set_property")),
-                ("key", key.canonical_value()),
-                ("strict", CanonicalValue::Bool(*strict)),
-            ]),
+            Self::SetProperty { key, strict } => {
+                let mut entries = vec![
+                    ("op", CanonicalValue::str("set_property")),
+                    ("key", key.canonical_value()),
+                ];
+                if !*strict {
+                    entries.push(("sloppy", CanonicalValue::Bool(true)));
+                }
+                CanonicalValue::map_from_entries(entries)
+            }
             Self::DefineAccessor { key, kind } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("define_accessor")),
                 ("key", key.canonical_value()),
@@ -4257,13 +4280,30 @@ mod tests {
         };
         assert_ne!(strict.canonical_value(), sloppy.canonical_value());
         let json = serde_json::to_string(&sloppy).expect("serialize instruction");
-        let restored: Ir3Instruction = serde_json::from_str(&json).expect("deserialize instruction");
+        let restored: Ir3Instruction =
+            serde_json::from_str(&json).expect("deserialize instruction");
         assert_eq!(restored, sloppy);
         let ir1 = |strict| Ir1Op::SetProperty {
             key: Ir1PropertyKey::Dynamic,
             strict,
         };
         assert_ne!(ir1(true).canonical_value(), ir1(false).canonical_value());
+        // A strict write keeps the canonical form and JSON it had before the
+        // flag existed; an op serialized without the flag reads as strict.
+        assert_eq!(
+            ir1(true).canonical_value(),
+            CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("set_property")),
+                ("key", Ir1PropertyKey::Dynamic.canonical_value()),
+            ])
+        );
+        let strict_json = serde_json::to_string(&ir1(true)).expect("serialize ir1 op");
+        assert!(!strict_json.contains("strict"), "{strict_json}");
+        let legacy: Ir1Op = serde_json::from_str(&strict_json).expect("deserialize ir1 op");
+        assert_eq!(legacy, ir1(true));
+        let sloppy_json = serde_json::to_string(&ir1(false)).expect("serialize ir1 op");
+        let restored: Ir1Op = serde_json::from_str(&sloppy_json).expect("deserialize ir1 op");
+        assert_eq!(restored, ir1(false));
     }
 
     #[test]

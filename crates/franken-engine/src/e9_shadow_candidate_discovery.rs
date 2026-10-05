@@ -153,7 +153,10 @@ pub fn op_family_for_mnemonic(mnemonic: &str) -> OpFamily {
         "lt" | "lte" | "gt" | "gte" | "eq" | "strict_eq" | "not_eq" | "strict_not_eq"
         | "instance_of" | "in_op" => OpFamily::Comparison,
         "bit_and" | "bit_or" | "bit_xor" | "bit_not" | "shl" | "shr" | "ushr" => OpFamily::Bitwise,
-        "get_property" | "set_property" | "set_property_sloppy" | "define_accessor"
+        "get_property"
+        | "set_property"
+        | "set_property_sloppy"
+        | "define_accessor"
         | "delete_property" => OpFamily::PropertyAccess,
         "new_object" | "new_array" | "array_push" | "array_slice" | "spread_into_array"
         | "spread_into_object" | "template_literal" => OpFamily::HeapAlloc,

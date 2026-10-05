@@ -51565,9 +51565,11 @@ impl InterpreterCore {
                                 // A sloppy write that [[Set]] rejected left the
                                 // object as it was: restore the prior label.
                                 let owns_property = committed
-                                    && self.heap.get(label_owner.0 as usize).is_some_and(|object| {
-                                        object.contains_own_runtime_property(&property_key)
-                                    });
+                                    && self.heap.get(label_owner.0 as usize).is_some_and(
+                                        |object| {
+                                            object.contains_own_runtime_property(&property_key)
+                                        },
+                                    );
                                 if !owns_property {
                                     // Prototype accessors and successful traps
                                     // need not create an own data property.
@@ -100816,9 +100818,6 @@ impl InterpreterCore {
         })
     }
 
-    /// Whether `value` is a promise, generator, async generator or iterator
-    /// object, whose own properties live on a backing object (see
-    /// `function_own_property_key`).
     /// bd-9vouw.146: the TypeError of a strict-mode write to a read-only
     /// property (a function's `name` or `length`).
     fn read_only_property_error(key: &RuntimePropertyKey) -> InterpreterError {
@@ -100843,6 +100842,9 @@ impl InterpreterCore {
             .is_some_and(|object| object.contains_own_runtime_property(key)))
     }
 
+    /// Whether `value` is a promise, generator, async generator or iterator
+    /// object, whose own properties live on a backing object (see
+    /// `function_own_property_key`).
     fn has_exotic_backing_object(value: &Value) -> bool {
         matches!(
             value,

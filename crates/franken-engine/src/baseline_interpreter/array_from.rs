@@ -834,7 +834,7 @@ impl InterpreterCore {
                     )?
                     .is_truthy();
                 if done {
-                    return self.array_from_async_finish(holder, label);
+                    return self.array_from_async_finish(module, holder, label);
                 }
                 let value = self.get_v(
                     module,
@@ -848,6 +848,7 @@ impl InterpreterCore {
                 // Await of that promise resumes one tick later.
                 self.array_from_async_set(holder, "__value", settled)?;
                 self.array_from_async_await(
+                    module,
                     holder,
                     Value::Undefined,
                     FromAsyncAwait::SyncStep,
@@ -858,7 +859,7 @@ impl InterpreterCore {
                 let value = self.array_from_async_slot(holder, "__value")?;
                 self.array_from_async_set(holder, "__value", Value::Undefined)?;
                 if self.array_from_async_slot(holder, "__done")?.is_truthy() {
-                    return self.array_from_async_finish(holder, label);
+                    return self.array_from_async_finish(module, holder, label);
                 }
                 self.array_from_async_add(module, holder, value, label)
             }
@@ -884,7 +885,13 @@ impl InterpreterCore {
                     vec![settled, k],
                     None,
                 )?;
-                self.array_from_async_await(holder, mapped, FromAsyncAwait::MappedElement, label)
+                self.array_from_async_await(
+                    module,
+                    holder,
+                    mapped,
+                    FromAsyncAwait::MappedElement,
+                    label,
+                )
             }
             FromAsyncAwait::MappedElement => {
                 self.array_from_async_store(holder, settled, label)?;
@@ -915,6 +922,7 @@ impl InterpreterCore {
                 let reason = self.promise_value(&reason)?;
                 let step = self.create_rejected_promise(reason, label.clone())?;
                 self.array_from_async_await(
+                    module,
                     holder,
                     Value::Promise(step.0),
                     FromAsyncAwait::SyncStep,
@@ -962,7 +970,7 @@ impl InterpreterCore {
             None,
         ) {
             Ok((mapped, _)) => {
-                self.array_from_async_await(holder, mapped, FromAsyncAwait::Mapped, label)
+                self.array_from_async_await(module, holder, mapped, FromAsyncAwait::Mapped, label)
             }
             Err(error) => self.array_from_async_close(module, holder, error, label),
         }
@@ -988,12 +996,13 @@ impl InterpreterCore {
                     Vec::new(),
                     None,
                 )?;
-                self.array_from_async_await(holder, result, FromAsyncAwait::Next, label)
+                self.array_from_async_await(module, holder, result, FromAsyncAwait::Next, label)
             }
             FromAsyncSource::SyncIterator => {
                 let step = self.advance_for_of_iterator(Some(module), iterator)?;
                 self.array_from_async_set(holder, "__done", Value::Bool(step.is_none()))?;
                 self.array_from_async_await(
+                    module,
                     holder,
                     step.unwrap_or(Value::Undefined),
                     FromAsyncAwait::SyncValue,
@@ -1015,7 +1024,7 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let k = self.array_from_async_index(holder, "__k")?;
         if k >= self.array_from_async_index(holder, "__length")? {
-            return self.array_from_async_finish(holder, label);
+            return self.array_from_async_finish(module, holder, label);
         }
         let items = self.array_from_async_slot(holder, "__iterator")?;
         let element = match self.array_from_source_backing(&items)? {
@@ -1027,13 +1036,14 @@ impl InterpreterCore {
             )?,
             None => Value::Undefined,
         };
-        self.array_from_async_await(holder, element, FromAsyncAwait::Element, label)
+        self.array_from_async_await(module, holder, element, FromAsyncAwait::Element, label)
     }
 
     /// Await(value): a native promise is awaited as it is; anything else
     /// through a new promise resolved with it (PromiseResolve).
     fn array_from_async_await(
         &mut self,
+        module: &Ir3Module,
         holder: ObjectId,
         value: Value,
         awaiting: FromAsyncAwait,
@@ -1043,7 +1053,7 @@ impl InterpreterCore {
             Value::Promise(handle) => crate::promise_model::PromiseHandle(handle),
             other => {
                 let handle = self.create_promise()?;
-                self.resolve_promise_with_value(handle, other, label.clone())?;
+                self.resolve_promise_with_value(Some(module), handle, other, label.clone())?;
                 handle
             }
         };
@@ -1090,6 +1100,7 @@ impl InterpreterCore {
     /// Set A.length to k and resolve the call's promise with A.
     fn array_from_async_finish(
         &mut self,
+        module: &Ir3Module,
         holder: ObjectId,
         label: &Label,
     ) -> Result<(), InterpreterError> {
@@ -1102,7 +1113,7 @@ impl InterpreterCore {
         let k = self.array_from_async_slot(holder, "__k")?;
         self.set_object_property(target_id, "length".to_string(), k)?;
         let promise = self.array_from_async_promise(holder)?;
-        self.resolve_promise_with_value(promise, target, label.clone())
+        self.resolve_promise_with_value(Some(module), promise, target, label.clone())
     }
 
     /// AsyncIteratorClose(iterator, throw completion): call `return()` and
@@ -1125,6 +1136,7 @@ impl InterpreterCore {
             self.array_from_async_discard_close_error(closed)?;
             self.array_from_async_keep_close_reason(holder, reason, &reason_label)?;
             return self.array_from_async_await(
+                module,
                 holder,
                 Value::Undefined,
                 FromAsyncAwait::Close,
@@ -1152,7 +1164,7 @@ impl InterpreterCore {
         match inner {
             Ok(Some(inner)) => {
                 self.array_from_async_keep_close_reason(holder, reason, &reason_label)?;
-                self.array_from_async_await(holder, inner, FromAsyncAwait::Close, label)
+                self.array_from_async_await(module, holder, inner, FromAsyncAwait::Close, label)
             }
             Ok(None) => self.array_from_async_reject(holder, reason, reason_label),
             Err(error) => {

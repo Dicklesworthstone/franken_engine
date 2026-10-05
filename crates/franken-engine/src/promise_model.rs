@@ -223,11 +223,22 @@ pub struct PromiseRecord {
     pub creation_seq: u64,
     /// Whether an unhandled rejection has been observed.
     pub rejection_handled: bool,
+    /// Which resolving-function pair (ES2020 25.6.1.3 CreateResolvingFunctions)
+    /// may still settle this pending promise (bd-9vouw.174). A resolution that
+    /// leaves it pending (adopting a promise or a thenable) sets that pair's
+    /// `alreadyResolved` by moving to the next epoch; a thenable job's pair
+    /// carries the new one. Wraps after 65,536 chained adoptions.
+    #[serde(default, skip_serializing_if = "resolver_epoch_is_initial")]
+    pub resolver_epoch: u16,
     /// Completed fatal pass marker. During an exclusive terminal walk only,
     /// newly rejected, unprocessed records temporarily store a worklist link.
     #[doc(hidden)]
     #[serde(skip)]
     pub terminal_epoch: u64,
+}
+
+fn resolver_epoch_is_initial(epoch: &u16) -> bool {
+    *epoch == 0
 }
 
 impl PromiseRecord {
@@ -239,6 +250,7 @@ impl PromiseRecord {
             label: Label::Public,
             creation_seq,
             rejection_handled: false,
+            resolver_epoch: 0,
             terminal_epoch: 0,
         }
     }
@@ -1163,6 +1175,23 @@ impl PromiseStore {
         self.promises
             .record(handle.0 as usize)
             .ok_or(PromiseError::InvalidHandle { handle })
+    }
+
+    /// The epoch of the resolving-function pair that may still settle
+    /// `handle` (see [`PromiseRecord::resolver_epoch`]).
+    pub fn resolver_epoch(&self, handle: PromiseHandle) -> Result<u16, PromiseError> {
+        self.get(handle).map(|record| record.resolver_epoch)
+    }
+
+    /// Mark the current resolving-function pair of `handle` as already
+    /// resolved: its later calls are ignored (bd-9vouw.174).
+    pub fn retire_resolving_functions(
+        &mut self,
+        handle: PromiseHandle,
+    ) -> Result<(), PromiseError> {
+        self.update(handle, |record| {
+            record.resolver_epoch = record.resolver_epoch.wrapping_add(1);
+        })
     }
 
     /// Mutate a Promise record in place, keeping the store's resident-memory
@@ -3253,6 +3282,7 @@ mod tests {
                 label: label.clone(),
                 creation_seq: 0,
                 rejection_handled: false,
+                resolver_epoch: 0,
                 terminal_epoch: 0,
             })]
             .into(),

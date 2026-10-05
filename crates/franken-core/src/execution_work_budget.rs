@@ -28,7 +28,10 @@ use crate::ir_contract::Ir3Module;
 mod revocation;
 mod scheduling;
 pub use revocation::{MAX_WORK_POOL_DEPTH, WorkScopeRevocation};
-pub use scheduling::ExecutionAdmission;
+pub use scheduling::{
+    ExecutionAdmission, ExecutionTask, ExecutionTaskControl, ExecutionTaskJoinError,
+    ExecutionTaskStartError,
+};
 
 #[derive(Debug)]
 struct WorkPoolState {

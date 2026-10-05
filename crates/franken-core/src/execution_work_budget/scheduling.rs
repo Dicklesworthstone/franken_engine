@@ -9,6 +9,9 @@ use crate::baseline_interpreter::{
 use crate::checkpoint::CancellationToken;
 use crate::ir_contract::Ir3Module;
 
+mod task;
+pub use task::{ExecutionTask, ExecutionTaskControl, ExecutionTaskJoinError, ExecutionTaskStartError};
+
 impl ExecutionWorkPool {
     /// Reserve work when enqueueing a job, before a native VM is constructed.
     ///

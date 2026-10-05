@@ -28,7 +28,11 @@ fn run(root: &Path, lane: LaneChoice) -> Result<Vec<String>, String> {
         source: std::fs::read_to_string(&entry).expect("entry source"),
         source_file: Some(entry.display().to_string()),
         module_root: Some(root.display().to_string()),
-        capabilities: vec!["module_load".to_string(), "builtin".to_string()],
+        capabilities: vec![
+            "module_load".to_string(),
+            "builtin".to_string(),
+            "timer".to_string(),
+        ],
         version: "1.0.0".to_string(),
         metadata: Default::default(),
     };
@@ -191,6 +195,30 @@ fn path_module_object_in_commonjs() {
             "const { join, extname } = require('path');\nfunction nested() { const p = require('node:path'); return p.dirname('/q/r.txt'); }\nconst parse = require('path').parse;\nconst path = require('path');\nconsole.log(join('x', 'y'), extname('f.md'), nested(), parse('/home/u/f.txt').name, path.join('m', 'n'));\n",
         )],
         &["x/y .md /q f m/n"],
+    );
+}
+
+/// Named exports that are realm globals (URL, Buffer, atob, performance, the timers) read the globals, aliased or not.
+#[test]
+fn named_imports_of_realm_globals() {
+    assert_output(
+        &[(
+            "app.mjs",
+            "import { URL, fileURLToPath } from 'node:url';\nimport { Buffer as B, atob } from 'node:buffer';\nimport { performance } from 'node:perf_hooks';\nimport { setTimeout as later } from 'node:timers';\nconsole.log(new URL('https://a.b/c?d=1').searchParams.get('d'), fileURLToPath('file:///x'), B.from('hi').toString('hex'), atob('aGk='), typeof performance.now());\nlater(() => console.log('later'), 1);\n",
+        )],
+        &["1 /x 6869 hi number", "later"],
+    );
+}
+
+/// Named imports from modules whose facade lowers member calls on an alias (crypto, os, querystring, timers/promises, zlib); a local of the same name shadows the import.
+#[test]
+fn named_imports_of_member_modules() {
+    assert_output(
+        &[(
+            "app.mjs",
+            "import { createHash } from 'node:crypto';\nimport { EOL, platform } from 'node:os';\nimport { stringify } from 'node:querystring';\nimport { setTimeout as sleep } from 'node:timers/promises';\nimport { gzipSync, gunzipSync } from 'node:zlib';\nconsole.log(createHash('sha256').update('a').digest('hex').slice(0, 8), EOL === '\\n', typeof platform(), stringify({ a: 1 }), gunzipSync(gzipSync('z')).toString());\nfunction inner() { const createHash = () => 'shadowed'; return createHash(); }\nfor (const stringify of ['loop']) console.log(stringify);\nconsole.log(inner());\nawait sleep(1);\nconsole.log('slept');\n",
+        )],
+        &["ca978112 true string a=1 z", "loop", "shadowed", "slept"],
     );
 }
 

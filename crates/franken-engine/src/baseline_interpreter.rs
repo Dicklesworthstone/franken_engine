@@ -56271,6 +56271,9 @@ impl InterpreterCore {
             InterpreterError::StackOverflow { .. } => {
                 "Maximum call stack size exceeded".to_string()
             }
+            // The message already is the JavaScript text ("Invalid time
+            // value"); the Display prefix is for host diagnostics.
+            InterpreterError::RangeError { message } => message.clone(),
             _ => err.to_string(),
         };
         let prototype = self.ensure_builtin_prototype(name)?;

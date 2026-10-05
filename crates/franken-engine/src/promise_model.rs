@@ -24,6 +24,9 @@ use crate::closure_model::ClosureHandle;
 use crate::ifc_artifacts::Label;
 use crate::object_model::JsValue;
 
+#[path = "promise_model_restore.rs"]
+mod restore;
+
 #[cfg(test)]
 #[path = "promise_model_ifc_regressions.rs"]
 mod ifc_regressions;
@@ -1688,7 +1691,7 @@ impl Default for PromiseStore {
 ///
 /// Microtasks are always drained completely before any macrotask executes.
 /// Ordering is strictly insertion-order (FIFO).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MicrotaskQueue {
     /// The queue.
     tasks: MicrotaskSlots,
@@ -1971,7 +1974,7 @@ impl MicrotaskQueue {
 
 /// Deterministic macrotask queue with priority ordering by source type,
 /// then by scheduled time, then by registration order.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MacrotaskQueue {
     message_channel_tasks: MacrotaskLane,
     /// `setImmediate` tasks (bd-suwvw). Defaulted on deserialization so

@@ -150,11 +150,15 @@ fn behavior_vectors() -> Vec<JsConformanceVector> {
             r#"new Function("return Math.max(Math.min(100, 42), 7);")();"#,
             "42",
         ),
+        // A generated function is sloppy code: a plain call's `this` is its
+        // realm's global object, as Node v22.2.0 prints "object". Pinned as
+        // "undefined" before the generated realm had a global object
+        // (f1b49aa1b, bd-9vouw.133); that change did not run this suite.
         JsConformanceVector::value(
-            "fc-this-is-undefined",
+            "fc-sloppy-this-is-the-global-object",
             CATEGORY,
             r#"new Function("return typeof this;")();"#,
-            "undefined",
+            "object",
         ),
         // -- nested generated functions --------------------------------------
         // (a) inner functions defined INSIDE a generated body:

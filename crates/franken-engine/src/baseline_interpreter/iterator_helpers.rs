@@ -675,11 +675,17 @@ impl InterpreterCore {
                 got: value.type_name().to_string(),
             });
         }
-        let method = self.get_v(
-            module,
-            &value,
-            &RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
-        )?;
+        // A string iterates with String.prototype's @@iterator, which `get_v`
+        // does not reach on a primitive.
+        let method = if matches!(value, Value::Str(_)) {
+            Value::BuiltinFunction(BuiltinFunction::string_iterator())
+        } else {
+            self.get_v(
+                module,
+                &value,
+                &RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+            )?
+        };
         let iterator = if matches!(method, Value::Undefined | Value::Null) {
             value
         } else {
@@ -769,10 +775,7 @@ impl InterpreterCore {
                 }
             }
         }
-        loop {
-            let Some(value) = self.iterator_helper_step_value(module, &receiver, &next)? else {
-                break;
-            };
+        while let Some(value) = self.iterator_helper_step_value(module, &receiver, &next)? {
             if method == "toArray" {
                 items.push(value);
                 continue;

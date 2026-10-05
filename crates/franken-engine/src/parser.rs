@@ -2115,6 +2115,13 @@ struct ParseExecutionContext<'a> {
     yield_context: bool,
     /// Where a SuperCall `super(...)` would be (bd-9vouw.99).
     super_call: SuperCallContext,
+    /// A class static block's own code, where `await` is reserved
+    /// (ES2022 15.7.1); function and arrow bodies inside it are not.
+    static_block_await: bool,
+    /// A parameter list, where a generator's `yield` or an async
+    /// function's `await` expression is a SyntaxError (ES2020 14.4.1,
+    /// 14.7.1, 14.8.1).
+    formal_parameters: bool,
     /// Private-name scopes of the class bodies being parsed, innermost last
     /// (ES2022 15.7.1 AllPrivateIdentifiersValid).
     private_name_scopes: Vec<PrivateNameScope>,
@@ -3683,6 +3690,8 @@ fn parse_source(
         await_context: goal == ParseGoal::Module,
         yield_context: false,
         super_call: SuperCallContext::Forbidden,
+        static_block_await: false,
+        formal_parameters: false,
         private_name_scopes: Vec::new(),
     };
 
@@ -4375,7 +4384,10 @@ fn parse_statement_inner(
             let name = decode_identifier_escapes(label);
             let name = name.as_deref().unwrap_or(label);
             if (name == "yield" && (context.yield_context || context.strict_mode))
-                || (name == "await" && (context.await_context || goal == ParseGoal::Module))
+                || (name == "await"
+                    && (context.await_context
+                        || context.static_block_await
+                        || goal == ParseGoal::Module))
             {
                 return Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
@@ -5739,10 +5751,24 @@ fn parse_primary_expression(
                     Some(span.clone()),
                 ));
             }
+            if context.formal_parameters {
+                return Err(unsupported_expression_syntax_error(
+                    "an `await` expression cannot be in a parameter list",
+                    span,
+                    context,
+                ));
+            }
             let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
             return Ok(Expression::Await(Box::new(nested)));
         }
         if rest.starts_with('(') && context.await_context {
+            if context.formal_parameters {
+                return Err(unsupported_expression_syntax_error(
+                    "an `await` expression cannot be in a parameter list",
+                    span,
+                    context,
+                ));
+            }
             let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
             return Ok(Expression::Await(Box::new(nested)));
         }
@@ -5750,7 +5776,7 @@ fn parse_primary_expression(
 
     // Inside an async function or module `await` is an operator and needs
     // its operand: a bare `await` is a SyntaxError (ES2020 14.7.1, 15.2.1.1).
-    if expression == "await" && context.await_context {
+    if expression == "await" && (context.await_context || context.static_block_await) {
         return Err(unsupported_expression_syntax_error(
             "`await` is reserved here and needs an operand",
             span,
@@ -5794,6 +5820,13 @@ fn parse_primary_expression(
             || rest.starts_with(')')
             || rest.starts_with('}'))
     {
+        if context.formal_parameters {
+            return Err(unsupported_expression_syntax_error(
+                "a `yield` expression cannot be in a parameter list",
+                span,
+                context,
+            ));
+        }
         let rest = rest.trim_start();
         let (delegate, rest) = if let Some(after_star) = rest.strip_prefix('*') {
             (true, after_star.trim_start())
@@ -6167,6 +6200,17 @@ fn parse_arrow_params(
     if params_src.trim().is_empty() {
         return Ok(Vec::new());
     }
+    let saved_formal_parameters = std::mem::replace(&mut context.formal_parameters, true);
+    let params = parse_formal_parameter_list(params_src, span, context);
+    context.formal_parameters = saved_formal_parameters;
+    params
+}
+
+fn parse_formal_parameter_list(
+    params_src: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Vec<FunctionParam>> {
     // ES2020 14.1 FormalParameters: no elision (`(a,,b)`, `(,a)`), a rest
     // parameter last, and no trailing comma after it (`(...a,)`).
     fn malformed(
@@ -7829,7 +7873,7 @@ fn reject_reserved_identifier_reference(
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
     let reserved = is_unconditional_reserved_keyword(name)
-        || (context.await_context && name == "await")
+        || ((context.await_context || context.static_block_await) && name == "await")
         || (context.yield_context && name == "yield")
         || (context.strict_mode
             && matches!(
@@ -11166,11 +11210,23 @@ fn with_function_context<T>(
     context: &mut ParseExecutionContext<'_>,
     operation: impl FnOnce(&mut ParseExecutionContext<'_>) -> ParseResult<T>,
 ) -> ParseResult<T> {
-    let saved = (context.await_context, context.yield_context);
+    let saved = (
+        context.await_context,
+        context.yield_context,
+        context.static_block_await,
+        context.formal_parameters,
+    );
     context.await_context = is_async;
     context.yield_context = is_generator;
+    context.static_block_await = false;
+    context.formal_parameters = false;
     let result = operation(context);
-    (context.await_context, context.yield_context) = saved;
+    (
+        context.await_context,
+        context.yield_context,
+        context.static_block_await,
+        context.formal_parameters,
+    ) = saved;
     result
 }
 
@@ -11378,7 +11434,7 @@ fn reject_context_reserved_binding(
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
-    let reserved = (context.await_context && name == "await")
+    let reserved = ((context.await_context || context.static_block_await) && name == "await")
         || (context.yield_context && name == "yield")
         || (context.strict_mode
             && matches!(
@@ -13211,9 +13267,12 @@ fn parse_class_static_block(
     let saved_super_call =
         std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
     let parsed = with_function_context(false, false, context, |context| {
-        with_function_strict_mode(body_src, true, context, |context| {
+        let saved_static_block_await = std::mem::replace(&mut context.static_block_await, true);
+        let parsed = with_function_strict_mode(body_src, true, context, |context| {
             parse_body_statements(body_src, ParseGoal::Script, span, context)
-        })
+        });
+        context.static_block_await = saved_static_block_await;
+        parsed
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
@@ -19127,6 +19186,8 @@ mod tests {
             await_context: false,
             yield_context: false,
             super_call: SuperCallContext::Forbidden,
+            static_block_await: false,
+            formal_parameters: false,
             private_name_scopes: Vec::new(),
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)

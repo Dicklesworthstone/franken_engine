@@ -17,7 +17,7 @@ use super::*;
 /// (prototype owner, property key, getter name). A key starting with `@@`
 /// names a well-known symbol ([`TYPED_ARRAY_TO_STRING_TAG`]); those accessors
 /// are real own properties of the prototype, installed when it is created.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 22] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 38] = [
     ("Map", "size", "get size"),
     ("Set", "size", "get size"),
     ("ArrayBuffer", "byteLength", "get byteLength"),
@@ -45,6 +45,23 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 22] = [
     ("RegExp", "unicode", "get unicode"),
     ("RegExp", "unicodeSets", "get unicodeSets"),
     ("Symbol", "description", "get description"),
+    // DOM events and aborting (bd-9vouw.170).
+    ("Event", "type", "get type"),
+    ("Event", "bubbles", "get bubbles"),
+    ("Event", "cancelable", "get cancelable"),
+    ("Event", "composed", "get composed"),
+    ("Event", "defaultPrevented", "get defaultPrevented"),
+    ("Event", "eventPhase", "get eventPhase"),
+    ("Event", "target", "get target"),
+    ("Event", "currentTarget", "get currentTarget"),
+    ("Event", "srcElement", "get srcElement"),
+    ("Event", "timeStamp", "get timeStamp"),
+    ("Event", "returnValue", "get returnValue"),
+    ("Event", "cancelBubble", "get cancelBubble"),
+    ("CustomEvent", "detail", "get detail"),
+    ("AbortController", "signal", "get signal"),
+    ("AbortSignal", "aborted", "get aborted"),
+    ("AbortSignal", "reason", "get reason"),
 ];
 
 /// The key of %TypedArray%.prototype[@@toStringTag] in [`PROTOTYPE_GETTERS`].
@@ -224,6 +241,9 @@ impl InterpreterCore {
                 .and_then(|object| object.properties.get(COLLECTION_SIZE_SLOT).cloned())
                 .unwrap_or(Value::Int(0)));
         }
+        if let Some(value) = self.event_family_getter(owner, key, id) {
+            return Ok(value);
+        }
         self.prototype_getter_own_slot(module, id, key, receiver)
     }
 
@@ -260,6 +280,9 @@ impl InterpreterCore {
             "DataView" => object.data_view.is_some(),
             "TypedArray" => object.typed_array.is_some(),
             "RegExp" => self.inspect_internal_type(id).as_deref() == Some("RegExp"),
+            "Event" | "CustomEvent" | "AbortController" | "AbortSignal" => {
+                self.has_event_family_brand(id, owner)
+            }
             _ => false,
         }
     }

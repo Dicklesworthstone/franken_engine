@@ -84,6 +84,7 @@ mod builtin_function_lengths;
 mod collation;
 mod collector;
 mod date_locale;
+mod event_target;
 mod inspect;
 mod intl;
 mod json_parse;
@@ -959,6 +960,12 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "Buffer" => Some("Buffer"),
         "URL" => Some("URL"),
         "URLSearchParams" => Some("URLSearchParams"),
+        "EventTarget" => Some("EventTarget"),
+        "Event" => Some("Event"),
+        "CustomEvent" => Some("CustomEvent"),
+        "AbortController" => Some("AbortController"),
+        "AbortSignal" => Some("AbortSignal"),
+        "DOMException" => Some("DOMException"),
         // %GeneratorFunction%, %AsyncFunction%, %AsyncGeneratorFunction%:
         // not global bindings (FUNCTION_KIND_INTRINSICS).
         "GeneratorFunction" => Some("GeneratorFunction"),
@@ -3552,6 +3559,11 @@ pub enum BuiltinFunctionKind {
     /// with the awaited reason. Append only.
     ArrayFromAsyncFulfilled,
     ArrayFromAsyncRejected,
+    /// The methods of `EventTarget`, `Event`, `AbortController` and
+    /// `AbortSignal` and the `AbortSignal` statics (bd-9vouw.170), named by
+    /// the specifier, one of [`event_target::EVENT_TARGET_METHODS`]. Append
+    /// only.
+    EventTargetMethod,
 }
 
 impl BuiltinFunctionKind {
@@ -5021,6 +5033,10 @@ impl BuiltinFunction {
                     "toString"
                 }
             }
+            BuiltinFunctionKind::EventTargetMethod => event_target::EVENT_TARGET_METHODS
+                .iter()
+                .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
+                .map_or("", |(_, _, name)| *name),
             BuiltinFunctionKind::UrlStatic => {
                 if self.module_specifier.0.as_deref() == Some("parse") {
                     "parse"
@@ -5639,6 +5655,10 @@ impl BuiltinFunction {
             | K::ConsoleMethod => "console",
             K::UrlMethod => "URL.prototype",
             K::UrlStatic => "URL",
+            K::EventTargetMethod => event_target::EVENT_TARGET_METHODS
+                .iter()
+                .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
+                .map(|(_, owner, _)| *owner)?,
             K::ObjectLegacyAccessor => "Object.prototype",
             K::SetMethod => "Set.prototype",
             K::SetTimeout
@@ -5754,7 +5774,7 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 41] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 47] = [
     "Object",
     "Array",
     "Number",
@@ -5812,6 +5832,13 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 41] = [
     // same engine-owned objects as `new URL(...)`.
     "URL",
     "URLSearchParams",
+    // WHATWG DOM events and aborting (bd-9vouw.170): Node globals.
+    "EventTarget",
+    "Event",
+    "CustomEvent",
+    "AbortController",
+    "AbortSignal",
+    "DOMException",
 ];
 
 /// bd-9vouw.17: realm globals besides the standard constructors and global
@@ -5934,7 +5961,7 @@ const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 23] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 27] = [
     "Array",
     "String",
     "Number",
@@ -5958,6 +5985,10 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 23] = [
     "TextDecoder",
     "Buffer",
     "URL",
+    "EventTarget",
+    "Event",
+    "AbortController",
+    "AbortSignal",
 ];
 
 /// `console` methods besides log/error/warn/info (bd-9vouw.158), as Node
@@ -25115,7 +25146,9 @@ impl InterpreterCore {
                 object.array_buffer.is_some() && ARRAY_BUFFER_SLOT_KEYS.contains(&key)
             }
         });
-        !(writable_view || binary_slot)
+        // The internal slots of events, targets and signals (bd-9vouw.170).
+        let event_slot = event_target::EVENT_FAMILY_SLOT_KEYS.contains(&key);
+        !(writable_view || binary_slot || event_slot)
     }
 
     fn own_runtime_property_visible(&self, object_id: ObjectId, key: &JsString) -> bool {
@@ -43499,6 +43532,9 @@ impl InterpreterCore {
                 let method = builtin.display_name();
                 self.set_algebra_method(module, method, receiver.unwrap_or(Value::Undefined), args)
             }
+            BuiltinFunctionKind::EventTargetMethod => {
+                self.event_target_method(module, builtin, args, receiver)
+            }
             // URL.prototype.toString / toJSON: the receiver URL's href
             // (bd-9vouw.157).
             BuiltinFunctionKind::UrlMethod => {
@@ -52453,6 +52489,9 @@ impl InterpreterCore {
                             });
                         }
                         let mut result = match standard_name {
+                            Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
+                                self.construct_event_target_family(module, name, args)?
+                            }
                             Some(name @ ("Proxy" | "WeakRef" | "FinalizationRegistry")) => self
                                 .dispatch_builtin_hostcall(
                                     &format!("builtin:{name}"),
@@ -98139,7 +98178,12 @@ impl InterpreterCore {
             });
         }
         let prototype = self.constructor_prototype_for_value(module, new_target)?;
-        let mut result = self.dispatch_builtin_function(module, builtin, args, None, None)?;
+        let mut result = match standard_name {
+            Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
+                self.construct_event_target_family(module, name, args)?
+            }
+            _ => self.dispatch_builtin_function(module, builtin, args, None, None)?,
+        };
         if matches!(standard_name, Some("Number" | "String" | "Boolean"))
             && !result.is_object_like()
         {
@@ -99495,6 +99539,12 @@ impl InterpreterCore {
             }
             // Node: Buffer.prototype inherits from Uint8Array.prototype.
             "Buffer" => Some(self.ensure_builtin_prototype("Uint8Array")?),
+            // DOM (bd-9vouw.170): CustomEvent.prototype inherits from
+            // Event.prototype, AbortSignal's from EventTarget's, and
+            // DOMException's from Error.prototype.
+            "CustomEvent" => Some(self.ensure_builtin_prototype("Event")?),
+            "AbortSignal" => Some(self.ensure_builtin_prototype("EventTarget")?),
+            "DOMException" => Some(self.ensure_builtin_prototype("Error")?),
             _ => None,
         };
         let prototype = self.alloc_object_with_prototype(parent)?;
@@ -99537,6 +99587,12 @@ impl InterpreterCore {
                 | "AsyncGeneratorFunction"
                 | "URL"
                 | "URLSearchParams"
+                | "EventTarget"
+                | "Event"
+                | "CustomEvent"
+                | "AbortController"
+                | "AbortSignal"
+                | "DOMException"
         ) {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
             self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
@@ -100954,6 +101010,11 @@ impl InterpreterCore {
                 .map(|(_, key, _)| *key),
         );
         match name {
+            "Event" => keys.extend(
+                event_target::EVENT_PHASE_CONSTANTS
+                    .iter()
+                    .map(|(constant, _)| *constant),
+            ),
             "Number" => keys.extend([
                 "EPSILON",
                 "MAX_SAFE_INTEGER",
@@ -100995,6 +101056,10 @@ impl InterpreterCore {
                 | "WeakSet"
                 | "Symbol"
                 | "URLSearchParams"
+                | "EventTarget"
+                | "AbortController"
+                | "AbortSignal"
+                | "DOMException"
                 | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
                 "Buffer" => 3,
@@ -101002,6 +101067,13 @@ impl InterpreterCore {
                 _ => 1,
             }),
             "poolSize" if name == "Buffer" => Value::Int(8192),
+            key if name == "AbortSignal" && Self::abort_signal_static(key).is_some() => {
+                Self::abort_signal_static(key).expect("guarded above")
+            }
+            key if name == "Event" => event_target::EVENT_PHASE_CONSTANTS
+                .iter()
+                .find(|(constant, _)| *constant == key)
+                .map_or(Value::Undefined, |(_, value)| Value::Int(*value)),
             "canParse" | "parse" if name == "URL" => Value::BuiltinFunction(BuiltinFunction {
                 kind: BuiltinFunctionKind::UrlStatic,
                 module_specifier: BuiltinModuleSpecifier::from_nonempty(key),
@@ -101114,6 +101186,12 @@ impl InterpreterCore {
                 expected: format!("new {name}(...)"),
                 got: format!("Constructor {name} requires 'new'"),
             }),
+            name if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
+                Err(InterpreterError::TypeError {
+                    expected: format!("new {name}(...)"),
+                    got: format!("Class constructor {name} cannot be invoked without 'new'"),
+                })
+            }
             "Symbol" => self.dispatch_builtin_hostcall("builtin:Symbol", args, Some(module)),
             // `RegExp(p, f)` and `new R(p, f)` through a RegExp value: the same
             // hostcall `new RegExp(...)` and literals lower to.
@@ -101442,6 +101520,9 @@ impl InterpreterCore {
     fn canonical_prototype_method(name: &str, key: &str) -> Option<Value> {
         let defined = |value: Value| (!matches!(value, Value::Undefined)).then_some(value);
         match name {
+            "EventTarget" | "Event" | "AbortController" | "AbortSignal" => {
+                Self::event_target_prototype_method(name, key)
+            }
             // %Array.prototype% is itself an Array whose length is 0
             // (ES2020 22.1.3), bd-9vouw.122.
             "Array" if key == "length" => Some(Value::Int(0)),

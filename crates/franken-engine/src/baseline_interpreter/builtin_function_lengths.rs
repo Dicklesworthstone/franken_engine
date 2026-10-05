@@ -6,6 +6,11 @@
 //! (owner, key) for binary search.
 
 pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
+    ("AbortController.prototype", "abort", 0),
+    ("AbortSignal", "abort", 0),
+    ("AbortSignal", "any", 1),
+    ("AbortSignal", "timeout", 1),
+    ("AbortSignal.prototype", "throwIfAborted", 0),
     ("Array", "from", 1),
     ("Array", "fromAsync", 1),
     ("Array", "isArray", 1),
@@ -139,6 +144,13 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("Error", "captureStackTrace", 2),
     ("Error", "prepareStackTrace", 2),
     ("Error.prototype", "toString", 0),
+    ("Event.prototype", "composedPath", 0),
+    ("Event.prototype", "preventDefault", 0),
+    ("Event.prototype", "stopImmediatePropagation", 0),
+    ("Event.prototype", "stopPropagation", 0),
+    ("EventTarget.prototype", "addEventListener", 2),
+    ("EventTarget.prototype", "dispatchEvent", 1),
+    ("EventTarget.prototype", "removeEventListener", 2),
     ("FinalizationRegistry.prototype", "register", 2),
     ("FinalizationRegistry.prototype", "unregister", 1),
     ("Function.prototype", "apply", 2),

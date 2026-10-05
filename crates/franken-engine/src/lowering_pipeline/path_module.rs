@@ -107,18 +107,19 @@ const PATH_SOURCE: &str = r#"(function () {
     }
     return joined.length === 0 ? '.' : __franken_path_normalize(joined);
   }
-  // The HostCall names a bad argument by its position, so the argument is
-  // passed where it was, after paths that do not end the scan.
+  // The HostCall scans from the last argument and names a bad one by its
+  // position, so the argument goes where it was, after empty paths that do
+  // not end the scan.
   function invalidResolveArgument(index, value) {
     switch (index) {
       case 0: return __franken_path_resolve(value);
-      case 1: return __franken_path_resolve(value, '');
-      case 2: return __franken_path_resolve(value, '', '');
-      case 3: return __franken_path_resolve(value, '', '', '');
-      case 4: return __franken_path_resolve(value, '', '', '', '');
-      case 5: return __franken_path_resolve(value, '', '', '', '', '');
-      case 6: return __franken_path_resolve(value, '', '', '', '', '', '');
-      default: return __franken_path_resolve(value, '', '', '', '', '', '', '');
+      case 1: return __franken_path_resolve('', value);
+      case 2: return __franken_path_resolve('', '', value);
+      case 3: return __franken_path_resolve('', '', '', value);
+      case 4: return __franken_path_resolve('', '', '', '', value);
+      case 5: return __franken_path_resolve('', '', '', '', '', value);
+      case 6: return __franken_path_resolve('', '', '', '', '', '', value);
+      default: return __franken_path_resolve('', '', '', '', '', '', '', value);
     }
   }
   function resolve() {

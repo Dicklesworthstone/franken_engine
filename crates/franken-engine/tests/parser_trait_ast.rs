@@ -1594,21 +1594,37 @@ fn parser_tagged_meta_frontier_rejects_super_computed_member_expression() {
     assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 
+/// A SuperCall parses in a derived class's constructor; anywhere else,
+/// including a script's top level, it is a SyntaxError (ES2022 15.7.1,
+/// bd-9vouw.99; this test used to expect `super()` alone to parse).
 #[test]
 fn parser_tagged_meta_frontier_parses_super_call_expression_bd_ppfz7() {
     let parser = CanonicalEs2020Parser;
-    let source = "super()";
+    let source = "class B {} class C extends B { constructor() { super(); } }";
     let tree = parser
         .parse(source, ParseGoal::Script)
-        .expect("super call expression should parse for constructor lowering");
-    let Statement::Expression(statement) = &tree.body[0] else {
-        panic!("expected expression statement, got {:?}", tree.body[0]);
+        .expect("super call in a derived constructor should parse");
+    let Statement::ClassDeclaration(class) = &tree.body[1] else {
+        panic!("expected class declaration, got {:?}", tree.body[1]);
+    };
+    let Some(Statement::Expression(statement)) = class.body[0].body.body.first() else {
+        panic!("expected the constructor's expression statement");
     };
     assert!(matches!(
         &statement.expression,
         Expression::Call { callee, arguments, .. }
             if matches!(callee.as_ref(), Expression::Super) && arguments.is_empty()
     ));
+
+    let err = parser
+        .parse("super()", ParseGoal::Script)
+        .expect_err("a SuperCall outside a derived constructor is a SyntaxError");
+    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert!(
+        err.message.contains("'super' keyword unexpected here"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]

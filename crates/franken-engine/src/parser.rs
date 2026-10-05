@@ -2113,9 +2113,25 @@ struct ParseExecutionContext<'a> {
     /// Outside one, `yield` is an identifier in sloppy code and reserved in
     /// strict code (ES2020 12.1.1, 14.4.1).
     yield_context: bool,
+    /// Where a SuperCall `super(...)` would be (bd-9vouw.99).
+    super_call: SuperCallContext,
     /// Private-name scopes of the class bodies being parsed, innermost last
     /// (ES2022 15.7.1 AllPrivateIdentifiersValid).
     private_name_scopes: Vec<PrivateNameScope>,
+}
+
+/// Where a SuperCall (`super(...)`) may appear (ES2022 15.7.1: a method's,
+/// function's or script's body may not Contain SuperCall; only a derived
+/// class's constructor may, and arrows inside it share its context).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SuperCallContext {
+    /// Anywhere outside a derived class's constructor: a SyntaxError.
+    Forbidden,
+    /// A derived class's constructor body and the arrows inside it.
+    DerivedConstructor,
+    /// A field initializer or a static block, whose own early-error check
+    /// reports `super(...)` after parsing, with the element's message.
+    ClassElement,
 }
 
 /// The private names one class body declares and the `#x` references met
@@ -3666,6 +3682,7 @@ fn parse_source(
         super_property_allowed: false,
         await_context: goal == ParseGoal::Module,
         yield_context: false,
+        super_call: SuperCallContext::Forbidden,
         private_name_scopes: Vec::new(),
     };
 
@@ -8056,6 +8073,13 @@ fn try_parse_postfix(
                 Err(e) => return Some(Err(e)),
             };
         let callee = if callee_src == "super" && !optional {
+            if context.super_call == SuperCallContext::Forbidden {
+                return Some(Err(unsupported_expression_syntax_error(
+                    "'super' keyword unexpected here: super() is only valid in a derived class constructor",
+                    span,
+                    context,
+                )));
+            }
             Expression::Super
         } else if callee_src == "import" {
             // ImportCall (ES2020 12.3.10): exactly one specifier; Node v22
@@ -12836,6 +12860,7 @@ fn parse_function_expression_with_super(
     let goal = ParseGoal::Script;
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
+    let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
     let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, span, context)?;
@@ -12846,6 +12871,7 @@ fn parse_function_expression_with_super(
         })
     });
     context.super_property_allowed = saved_super_property_allowed;
+    context.super_call = saved_super_call;
     let (params, body_stmts) = parsed?;
 
     Ok(Expression::Function {
@@ -12951,7 +12977,7 @@ fn parse_class_parts(
         )
     })?;
 
-    let mut methods = parse_class_body(body_src, span, context)?;
+    let mut methods = parse_class_body(body_src, super_class.is_some(), span, context)?;
     // A derived class with instance fields or private methods but no
     // constructor gets the implicit `constructor(...args) { super(...args); }`
     // (ES2022 15.7.14 step 10.a) as real code: the instance elements
@@ -12966,8 +12992,12 @@ fn parse_class_parts(
                 && (method.kind == MethodKind::Field || method.private_name().is_some())
         })
     {
-        let mut implicit =
-            parse_class_body("constructor(...args) { super(...args); }", span, context)?;
+        let mut implicit = parse_class_body(
+            "constructor(...args) { super(...args); }",
+            true,
+            span,
+            context,
+        )?;
         methods.splice(0..0, implicit.drain(..));
     }
 
@@ -13012,15 +13042,18 @@ fn parse_class_expression(
 /// body opens a private-name scope: every `#x` referenced in it must be
 /// declared by it or by an enclosing class body (ES2022 15.7.1
 /// AllPrivateIdentifiersValid).
+/// `derived`: the class has an `extends` clause, so its constructor may call
+/// `super(...)`.
 fn parse_class_body(
     body: &str,
+    derived: bool,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Vec<MethodDefinition>> {
     context
         .private_name_scopes
         .push(PrivateNameScope::default());
-    let parsed = parse_class_body_members(body, span, context);
+    let parsed = parse_class_body_members(body, derived, span, context);
     let scope = context.private_name_scopes.pop().unwrap_or_default();
     let methods = parsed?;
     for name in scope.referenced {
@@ -13175,12 +13208,15 @@ fn parse_class_static_block(
     }
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = true;
+    let saved_super_call =
+        std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
     let parsed = with_function_context(false, false, context, |context| {
         with_function_strict_mode(body_src, true, context, |context| {
             parse_body_statements(body_src, ParseGoal::Script, span, context)
         })
     });
     context.super_property_allowed = saved_super_property_allowed;
+    context.super_call = saved_super_call;
     let body = parsed?;
     // ES2022 15.7.1 ClassStaticBlockBody early errors: no `return`, no
     // `break`/`continue` that leaves the block, and (as for a field
@@ -13296,6 +13332,7 @@ fn static_block_jump_error(body: &[Statement]) -> Option<&'static str> {
 /// The class elements of a class body (see [`parse_class_body`]).
 fn parse_class_body_members(
     body: &str,
+    derived: bool,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Vec<MethodDefinition>> {
@@ -13501,6 +13538,12 @@ fn parse_class_body_members(
         // `super.x` / `super.m()` are valid in their bodies.
         let saved_super_property_allowed = context.super_property_allowed;
         context.super_property_allowed = true;
+        let super_call = if derived && actual_kind == MethodKind::Constructor && !is_static {
+            SuperCallContext::DerivedConstructor
+        } else {
+            SuperCallContext::Forbidden
+        };
+        let saved_super_call = std::mem::replace(&mut context.super_call, super_call);
         let parsed = with_function_context(is_async, is_generator, context, |context| {
             with_function_strict_mode(body_src, true, context, |context| {
                 let params = parse_arrow_params(params_src, span, context)?;
@@ -13514,6 +13557,7 @@ fn parse_class_body_members(
             })
         });
         context.super_property_allowed = saved_super_property_allowed;
+        context.super_call = saved_super_call;
         let (params, body_stmts) = parsed?;
 
         methods.push(MethodDefinition {
@@ -13883,7 +13927,13 @@ fn parse_class_field(
             )?
         };
         let value = match initializer {
-            Some(source) if !source.is_empty() => Some(parse_expression(source, span, context, 1)?),
+            Some(source) if !source.is_empty() => {
+                let saved_super_call =
+                    std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
+                let value = parse_expression(source, span, context, 1);
+                context.super_call = saved_super_call;
+                Some(value?)
+            }
             Some(_) => return Err(malformed(context)),
             None => None,
         };
@@ -14144,7 +14194,8 @@ fn parse_function_declaration(
         )?;
     }
     let goal = ParseGoal::Script; // Function bodies use script goal.
-    let (params, body_stmts) = with_function_context(is_async, is_generator, context, |context| {
+    let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
+    let parsed = with_function_context(is_async, is_generator, context, |context| {
         with_function_strict_mode(body_src, false, context, |context| {
             let params = parse_arrow_params(params_src, &span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, &span, context)?;
@@ -14152,7 +14203,9 @@ fn parse_function_declaration(
             let body = parse_body_statements(body_src, goal, &span, context)?;
             Ok((params, body))
         })
-    })?;
+    });
+    context.super_call = saved_super_call;
+    let (params, body_stmts) = parsed?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {
         name,
@@ -19073,6 +19126,7 @@ mod tests {
             super_property_allowed: false,
             await_context: false,
             yield_context: false,
+            super_call: SuperCallContext::Forbidden,
             private_name_scopes: Vec::new(),
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)

@@ -40678,7 +40678,7 @@ impl InterpreterCore {
                 }
                 let last = len - 1;
                 let element = self
-                    .array_index_value(arr_id, last)?
+                    .array_index_get(Some(module), arr_id, last)?
                     .unwrap_or(Value::Undefined);
                 // Sample trust immediately before the destructive mutation.
                 let was_dense = self.array_cache_is_dense(arr_id);
@@ -40717,11 +40717,11 @@ impl InterpreterCore {
                 }
                 let was_dense = self.array_cache_is_dense(arr_id);
                 let first = self
-                    .array_index_value(arr_id, 0)?
+                    .array_index_get(Some(module), arr_id, 0)?
                     .unwrap_or(Value::Undefined);
                 for i in 1..len {
                     let moved = self
-                        .array_index_value(arr_id, i)?
+                        .array_index_get(Some(module), arr_id, i)?
                         .unwrap_or(Value::Undefined);
                     self.set_object_property(arr_id, (i - 1).to_string(), moved)?;
                 }
@@ -40762,7 +40762,7 @@ impl InterpreterCore {
                     // read before its destination overwrites a later source.
                     for i in (0..len).rev() {
                         let moved = self
-                            .array_index_value(arr_id, i)?
+                            .array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined);
                         self.set_object_property(arr_id, (i + arg_count).to_string(), moved)?;
                     }
@@ -40804,7 +40804,7 @@ impl InterpreterCore {
                     // A hole is skipped (HasProperty is false), so
                     // `[1, , 3].indexOf(undefined)` is -1; `includes` below
                     // reads holes as undefined.
-                    let Some(element) = self.array_index_value(arr_id, i)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, i)? else {
                         continue;
                     };
                     self.join_element_stored_label(arr_id, i as u64)?;
@@ -40837,7 +40837,7 @@ impl InterpreterCore {
                 let mut present = false;
                 for i in from..len {
                     let element = self
-                        .array_index_value(arr_id, i)?
+                        .array_index_get(Some(module), arr_id, i)?
                         .unwrap_or(Value::Undefined);
                     self.join_element_stored_label(arr_id, i as u64)?;
                     if Self::values_equal(&element, &search) || Self::both_nan(&element, &search) {
@@ -40863,10 +40863,10 @@ impl InterpreterCore {
                     for i in 0..(len / 2) {
                         let j = len - 1 - i;
                         let lo = self
-                            .array_index_value(arr_id, i)?
+                            .array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined);
                         let hi = self
-                            .array_index_value(arr_id, j)?
+                            .array_index_get(Some(module), arr_id, j)?
                             .unwrap_or(Value::Undefined);
                         self.set_object_property(arr_id, i.to_string(), hi)?;
                         self.set_object_property(arr_id, j.to_string(), lo)?;
@@ -40925,7 +40925,7 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 }
                 Ok(self
-                    .array_index_value(arr_id, idx as usize)?
+                    .array_index_get(Some(module), arr_id, idx as usize)?
                     .unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::ArrayFlat => {
@@ -41050,7 +41050,7 @@ impl InterpreterCore {
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.forEach")?;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     self.invoke_array_callback(
@@ -41071,7 +41071,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.map")?;
                 let result = self.array_species_result(module, arr_id, len)?;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let mapped =
@@ -41106,7 +41106,7 @@ impl InterpreterCore {
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let keep = self.with_gc_nested_request(vec![Value::Object(result)], |core| {
@@ -41142,7 +41142,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.find")?;
                 for index in 0..len {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     let hit = self.invoke_array_callback(
                         Some(module),
@@ -41165,7 +41165,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.findIndex")?;
                 for index in 0..len {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     let hit = self.invoke_array_callback(
                         Some(module),
@@ -41188,7 +41188,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.findLast")?;
                 for index in (0..len).rev() {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     let hit = self.invoke_array_callback(
                         Some(module),
@@ -41211,7 +41211,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.findLastIndex")?;
                 for index in (0..len).rev() {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     let hit = self.invoke_array_callback(
                         Some(module),
@@ -41236,7 +41236,7 @@ impl InterpreterCore {
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let mapped =
@@ -41313,7 +41313,7 @@ impl InterpreterCore {
                 for step in 0..count {
                     let offset = if backward { count - 1 - step } else { step };
                     let to = (target + offset).to_string();
-                    match self.array_index_value(arr_id, start + offset)? {
+                    match self.array_index_get(Some(module), arr_id, start + offset)? {
                         Some(value) => self.set_object_property(arr_id, to, value)?,
                         None => {
                             self.remove_object_property(arr_id, &to)?;
@@ -41329,7 +41329,7 @@ impl InterpreterCore {
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.some")?;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let result = self.invoke_array_callback(
@@ -41352,7 +41352,7 @@ impl InterpreterCore {
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.every")?;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let result = self.invoke_array_callback(
@@ -41400,7 +41400,7 @@ impl InterpreterCore {
                     let mut elements = self.element_buffer(len)?;
                     for index in 0..len {
                         elements.push(
-                            self.array_index_value(arr_id, index)?
+                            self.array_index_get(Some(module), arr_id, index)?
                                 .unwrap_or(Value::Undefined),
                         );
                     }
@@ -41443,7 +41443,7 @@ impl InterpreterCore {
                 let len = self.array_like_length(arr_id)?;
                 for i in 0..len {
                     let element = self
-                        .array_index_value(arr_id, i)?
+                        .array_index_get(Some(module), arr_id, i)?
                         .unwrap_or(Value::Undefined);
                     self.create_data_property_or_throw(result, out.to_string(), element)?;
                     out += 1;
@@ -41461,7 +41461,7 @@ impl InterpreterCore {
                         let arg_len = self.array_like_length(arg_id)?;
                         for i in 0..arg_len {
                             let element = self
-                                .array_index_value(arg_id, i)?
+                                .array_index_get(Some(module), arg_id, i)?
                                 .unwrap_or(Value::Undefined);
                             self.create_data_property_or_throw(result, out.to_string(), element)?;
                             out += 1;
@@ -41503,7 +41503,7 @@ impl InterpreterCore {
                 let mut index = start;
                 while index < end {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     self.create_data_property_or_throw(result, out.to_string(), element)?;
                     out += 1;
@@ -41551,7 +41551,7 @@ impl InterpreterCore {
                 let mut index = start;
                 while index >= 0 {
                     // Holes are skipped, as in indexOf.
-                    let element = self.array_index_value(arr_id, index as usize)?;
+                    let element = self.array_index_get(Some(module), arr_id, index as usize)?;
                     if element.is_some() {
                         self.join_element_stored_label(arr_id, index as u64)?;
                     }
@@ -41600,7 +41600,7 @@ impl InterpreterCore {
                 let mut elements: Vec<Value> = self.element_buffer(len)?;
                 for i in 0..len {
                     elements.push(
-                        self.array_index_value(arr_id, i)?
+                        self.array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined),
                     );
                 }
@@ -41646,7 +41646,7 @@ impl InterpreterCore {
                 let result = self.alloc_array_with_prototype(None)?;
                 for i in 0..len {
                     let element = self
-                        .array_index_value(arr_id, len - 1 - i)?
+                        .array_index_get(Some(module), arr_id, len - 1 - i)?
                         .unwrap_or(Value::Undefined);
                     self.set_object_property(result, i.to_string(), element)?;
                 }
@@ -41675,7 +41675,7 @@ impl InterpreterCore {
                 let mut elements = self.element_buffer(len)?;
                 for index in 0..len {
                     elements.push(
-                        self.array_index_value(arr_id, index)?
+                        self.array_index_get(Some(module), arr_id, index)?
                             .unwrap_or(Value::Undefined),
                     );
                 }
@@ -41747,7 +41747,7 @@ impl InterpreterCore {
                     let element = if i == actual {
                         value.clone()
                     } else {
-                        self.array_index_value(arr_id, i)?
+                        self.array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined)
                     };
                     self.set_object_property(result, i.to_string(), element)?;
@@ -41795,7 +41795,7 @@ impl InterpreterCore {
                 let mut elements: Vec<Value> = self.element_buffer(len)?;
                 for i in 0..len {
                     elements.push(
-                        self.array_index_value(arr_id, i)?
+                        self.array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined),
                     );
                 }
@@ -70827,7 +70827,7 @@ impl InterpreterCore {
         } else {
             let mut first_present = None;
             for element_index in 0..length {
-                if let Some(value) = self.array_index_value(array_id, element_index)? {
+                if let Some(value) = self.array_index_get(module, array_id, element_index)? {
                     first_present = Some((element_index, value));
                     break;
                 }
@@ -70843,7 +70843,7 @@ impl InterpreterCore {
         };
 
         for element_index in next_index..length {
-            let Some(current_value) = self.array_index_value(array_id, element_index)? else {
+            let Some(current_value) = self.array_index_get(module, array_id, element_index)? else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(
@@ -70883,7 +70883,7 @@ impl InterpreterCore {
         } else {
             let mut first_present = None;
             for element_index in (0..length).rev() {
-                if let Some(value) = self.array_index_value(array_id, element_index)? {
+                if let Some(value) = self.array_index_get(module, array_id, element_index)? {
                     first_present = Some((element_index, value));
                     break;
                 }
@@ -70899,7 +70899,7 @@ impl InterpreterCore {
         };
 
         for element_index in (0..next_index_exclusive).rev() {
-            let Some(current_value) = self.array_index_value(array_id, element_index)? else {
+            let Some(current_value) = self.array_index_get(module, array_id, element_index)? else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(
@@ -70972,6 +70972,23 @@ impl InterpreterCore {
             self.charge_native_hole_read()?;
         }
         Ok(value)
+    }
+
+    /// [[Get]] of an element a native Array.prototype loop visits: its
+    /// value, the result of its getter when it is an accessor (the
+    /// accessor itself leaked as the element), or `None` for a hole.
+    fn array_index_get(
+        &mut self,
+        module: Option<&Ir3Module>,
+        array_id: ObjectId,
+        element_index: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        match self.array_index_value(array_id, element_index)? {
+            Some(accessor @ Value::Accessor { .. }) => self
+                .resolve_accessor_get(module, accessor, Value::Object(array_id))
+                .map(Some),
+            element => Ok(element),
+        }
     }
 
     /// One hole visited by a native element loop (bd-9vouw.112).
@@ -71681,6 +71698,14 @@ impl InterpreterCore {
         let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let len = self.array_like_length(arr_id)?;
+        // IsCallable(callbackfn) before the first element, so an empty or
+        // all-holes array still throws.
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: format!("a callable callback for {method}"),
+                got: format!("{} is not a function", callback.type_name()),
+            });
+        }
         Ok((arr_id, callback, this_arg, len))
     }
 
@@ -71705,6 +71730,12 @@ impl InterpreterCore {
         };
         let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let length = self.array_like_length(arr_id)?;
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: format!("a callable callback for {method}"),
+                got: format!("{} is not a function", callback.type_name()),
+            });
+        }
         let has_initial = args.count > 1;
         let order: Vec<usize> = if reverse {
             (0..length).rev().collect()
@@ -71717,7 +71748,7 @@ impl InterpreterCore {
         } else {
             let mut seed = None;
             for idx in iter.by_ref() {
-                if let Some(value) = self.array_index_value(arr_id, idx)? {
+                if let Some(value) = self.array_index_get(Some(module), arr_id, idx)? {
                     seed = Some(value);
                     break;
                 }
@@ -71733,7 +71764,7 @@ impl InterpreterCore {
             }
         };
         for idx in iter {
-            let Some(current) = self.array_index_value(arr_id, idx)? else {
+            let Some(current) = self.array_index_get(Some(module), arr_id, idx)? else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(
@@ -86820,7 +86851,7 @@ impl InterpreterCore {
                     self.validate_array_callback_structure(args, "Array.prototype.forEach")?;
 
                 for index in 0..length {
-                    let Some(element) = self.array_index_value(array_id, index)? else {
+                    let Some(element) = self.array_index_get(module, array_id, index)? else {
                         continue;
                     };
                     self.invoke_array_callback(
@@ -87689,7 +87720,7 @@ impl InterpreterCore {
                     self.validate_array_callback_structure(args, "Array.prototype.some")?;
 
                 for index in 0..length {
-                    let Some(element) = self.array_index_value(array_id, index)? else {
+                    let Some(element) = self.array_index_get(module, array_id, index)? else {
                         continue;
                     };
 
@@ -88304,7 +88335,7 @@ impl InterpreterCore {
 
                 for index in 0..length {
                     let element = self
-                        .array_index_value(array_id, index)?
+                        .array_index_get(module, array_id, index)?
                         .unwrap_or(Value::Undefined);
                     let predicate_result = self.invoke_array_callback(
                         module,
@@ -88376,7 +88407,7 @@ impl InterpreterCore {
                 let mut result = String::new();
                 for i in 0..raw_len {
                     let segment = self
-                        .array_index_value(raw_id, i)?
+                        .array_index_get(module, raw_id, i)?
                         .unwrap_or(Value::Undefined);
                     result.push_str(&self.value_to_string(&segment));
                     // A substitution sits between consecutive raw segments only.
@@ -89280,7 +89311,7 @@ impl InterpreterCore {
 
                 for index in 0..length {
                     let element = self
-                        .array_index_value(array_id, index)?
+                        .array_index_get(module, array_id, index)?
                         .unwrap_or(Value::Undefined);
                     let predicate_result = self.invoke_array_callback(
                         module,
@@ -90966,7 +90997,7 @@ impl InterpreterCore {
 
                 // For each element, invoke callback and check for falsy result
                 for index in 0..array_length {
-                    let Some(element) = self.array_index_value(array_id, index)? else {
+                    let Some(element) = self.array_index_get(module, array_id, index)? else {
                         continue;
                     };
 
@@ -91101,7 +91132,7 @@ impl InterpreterCore {
 
                 // For each element, invoke callback and collect result
                 for index in 0..array_length {
-                    let Some(element) = self.array_index_value(array_id, index)? else {
+                    let Some(element) = self.array_index_get(module, array_id, index)? else {
                         continue;
                     };
 
@@ -92829,7 +92860,7 @@ impl InterpreterCore {
         let mut parts = Vec::with_capacity(len.min(4096));
         for index in 0..len {
             let element = self
-                .array_index_value(array_id, index)?
+                .array_index_get(Some(module), array_id, index)?
                 .unwrap_or(Value::Undefined);
             if let Err(error) = self.join_element_stored_label(array_id, index as u64) {
                 active.remove(&array_id.0);

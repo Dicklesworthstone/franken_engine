@@ -361,6 +361,14 @@ struct RunArgs {
     input: PathBuf,
     extension_id: String,
     parse_goal: ParseGoal,
+    /// `--goal commonjs`: run the entry as a CommonJS module, as Node runs a
+    /// `.js` entry outside a "type": "module" package (bd-rff5g): lexical
+    /// `require`, `module`, `exports`, `__filename` and `__dirname`, and
+    /// relative requires through the authenticated loader.
+    commonjs_entry: bool,
+    /// `--module-root <dir>`: the directory module loads may not leave
+    /// (default: the entry's directory).
+    module_root: Option<PathBuf>,
     out: Option<PathBuf>,
     explain: bool,
     explain_out: Option<PathBuf>,
@@ -1109,6 +1117,13 @@ struct RunReplayInput {
     /// Limit overrides used by the run (bd-9vouw.58); absent when unset.
     #[serde(flatten)]
     limits: ExecutionLimitOverrides,
+    /// `--goal commonjs` (bd-rff5g); absent for script and module runs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    commonjs_entry: bool,
+    /// `--module-root` (bd-rff5g); absent when unset. Files the run loaded
+    /// are read again on replay, not recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    module_root: Option<String>,
     ir3_hash: String,
     randomness_transcript: NondeterminismTrace,
     unsigned_execution_content: UnsignedExecutionContent,
@@ -2413,6 +2428,8 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut input: Option<PathBuf> = None;
     let mut extension_id: Option<String> = None;
     let mut goal = ParseGoal::Script;
+    let mut commonjs_entry = false;
+    let mut module_root: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut explain = false;
     let mut explain_out: Option<PathBuf> = None;
@@ -2430,7 +2447,18 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         match args[index].as_str() {
             "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
             "--extension-id" => extension_id = Some(next_arg(args, &mut index, "--extension-id")?),
-            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--goal" => {
+                let value = next_arg(args, &mut index, "--goal")?;
+                commonjs_entry = value == "commonjs";
+                goal = if commonjs_entry {
+                    ParseGoal::Script
+                } else {
+                    parse_goal(&value)?
+                };
+            }
+            "--module-root" => {
+                module_root = Some(PathBuf::from(next_arg(args, &mut index, "--module-root")?));
+            }
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
             "--instruction-budget" => {
                 instruction_budget = Some(parse_instruction_budget_flag(args, &mut index)?);
@@ -2508,6 +2536,8 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         input,
         extension_id,
         parse_goal: goal,
+        commonjs_entry,
+        module_root,
         out,
         explain,
         explain_out,
@@ -4577,12 +4607,16 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let e8_scan: Option<E8AnalyzedSubsetScan> = bound_contract
         .as_ref()
         .map(|_| scan_source(&source, &source_label, args.parse_goal));
-    let capabilities = run_cli_capabilities(args.parse_goal);
+    let capabilities = run_cli_capabilities(args.parse_goal, args.commonjs_entry);
+    let module_root = args
+        .module_root
+        .as_ref()
+        .map(|root| root.display().to_string());
     let package = ExtensionPackage {
         extension_id: args.extension_id.clone(),
         source,
         source_file: Some(source_label.clone()),
-        module_root: None,
+        module_root: module_root.clone(),
         capabilities,
         version: env!("CARGO_PKG_VERSION").to_string(),
         metadata: BTreeMap::new(),
@@ -4590,6 +4624,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let policy_id = OrchestratorConfig::default().policy_id;
     let mut orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
+        commonjs_entry: args.commonjs_entry,
         trace_id_prefix: "frankenctl-run".to_string(),
         parser_options: args.limits.parser_options(),
         ..OrchestratorConfig::default()
@@ -4701,7 +4736,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
                 &result,
                 &policy_id,
                 args.parse_goal,
-                run_cli_capability_set(args.parse_goal),
+                run_cli_capability_set(args.parse_goal, args.commonjs_entry),
             )?)
         }
         (Some(_), None) => {
@@ -4728,6 +4763,8 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         instruction_budget: args.instruction_budget,
         parser_max_token_count: args.parser_max_token_count,
         limits: args.limits,
+        commonjs_entry: args.commonjs_entry,
+        module_root,
         ir3_hash: result.ir4_witness.executed_ir3_hash.to_hex(),
         randomness_transcript: result.nondeterminism_trace.clone(),
         unsigned_execution_content,
@@ -7050,16 +7087,19 @@ fn emit_lowering_rejection(
 
 /// The typed capability profile a `frankenctl run` grants (the certifier's
 /// runtime-granted set; bd-fqlfw.8.3).
-fn run_cli_capability_set(parse_goal: ParseGoal) -> BTreeSet<RuntimeCapability> {
+fn run_cli_capability_set(
+    parse_goal: ParseGoal,
+    commonjs_entry: bool,
+) -> BTreeSet<RuntimeCapability> {
     let mut capabilities = CapabilityProfile::engine_core().capabilities().clone();
-    if parse_goal == ParseGoal::Module {
+    if parse_goal == ParseGoal::Module || commonjs_entry {
         capabilities.insert(RuntimeCapability::ModuleLoad);
     }
     capabilities
 }
 
-fn run_cli_capabilities(parse_goal: ParseGoal) -> Vec<String> {
-    run_cli_capability_set(parse_goal)
+fn run_cli_capabilities(parse_goal: ParseGoal, commonjs_entry: bool) -> Vec<String> {
+    run_cli_capability_set(parse_goal, commonjs_entry)
         .into_iter()
         .map(|capability| capability.to_string())
         .collect()
@@ -9314,12 +9354,12 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     }
 
     let parse_goal = parse_goal(&input.parse_goal)?;
-    let capabilities = run_cli_capabilities(parse_goal);
+    let capabilities = run_cli_capabilities(parse_goal, input.commonjs_entry);
     let package = ExtensionPackage {
         extension_id: input.extension_id.clone(),
         source: input.source.clone(),
         source_file: Some(input.source_label.clone()),
-        module_root: None,
+        module_root: input.module_root.clone(),
         capabilities,
         version: env!("CARGO_PKG_VERSION").to_string(),
         metadata: BTreeMap::new(),
@@ -9327,6 +9367,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     let source_hash = ContentHash::compute(input.source.as_bytes());
     let mut orchestrator_config = OrchestratorConfig {
         parse_goal,
+        commonjs_entry: input.commonjs_entry,
         trace_id_prefix: "frankenctl-run".to_string(),
         policy_id: input.policy_id.clone(),
         epoch: SecurityEpoch::from_raw(input.policy_epoch),
@@ -12685,12 +12726,18 @@ const EXECUTION_LIMITS_HELP: &str =
 fn run_usage() -> String {
     [
         "run usage:",
-        "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
+        "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module|commonjs]",
+        "      [--module-root <dir>] [--out <report.json>]",
         "      [--data-contract <contract.json>] [--purpose <purpose>] [--certificate-out <bundle-dir>]",
         "      [--explain [bundle.json]] [--explain-out <bundle.json>]",
         "      [--emit-trace <trace.json>] [--cell-close-budget-ms <n>]",
         "      [--instruction-budget <n>] [--parser-max-tokens <n>] [--max-heap-objects <n>]",
         "      [--max-heap-bytes <n>] [--max-console-entries <n>] [--max-source-bytes <n>]",
+        "",
+        "  --goal commonjs runs the entry as a CommonJS module, as Node runs a .js",
+        "  entry outside a \"type\": \"module\" package: require, module, exports,",
+        "  __filename and __dirname are defined and relative requires load files.",
+        "  Module loads stay inside --module-root (default: the entry's directory).",
         "",
         "  --instruction-budget overrides the interpreter instruction budget (default",
         "  100000, at most 10000000000). Exhaustion still fails closed; the value is",

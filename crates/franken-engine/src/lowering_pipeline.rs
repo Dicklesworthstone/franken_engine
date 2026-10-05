@@ -76,6 +76,7 @@ use crate::parser_gap_inventory::{
 };
 use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
+mod esm_core_imports;
 mod util_module;
 mod with_statement;
 
@@ -991,6 +992,19 @@ fn lower_ir0_to_ir1_on_current_stack(
                 tree,
             };
             &rewritten
+        }
+        None => ir0,
+    };
+    // An import of a core module with a `require` facade becomes that
+    // `require` (before the util rewrite, which builds `require('util')`).
+    let imports_rewritten;
+    let ir0 = match esm_core_imports::rewrite_core_module_imports(&ir0.tree) {
+        Some(tree) => {
+            imports_rewritten = Ir0Module {
+                header: ir0.header.clone(),
+                tree,
+            };
+            &imports_rewritten
         }
         None => ir0,
     };

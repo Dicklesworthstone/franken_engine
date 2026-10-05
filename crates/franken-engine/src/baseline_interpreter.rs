@@ -37119,6 +37119,20 @@ impl InterpreterCore {
             .saturating_add(binding_and_name_bytes)
     }
 
+    /// `require.main` (bd-rff5g): the entry's `module` object when the entry
+    /// runs as CommonJS (Node's `process.mainModule`), so `require.main ===
+    /// module` holds in the entry and nowhere else; otherwise undefined.
+    fn cjs_main_module(&self) -> Value {
+        if !self.config.commonjs_entry {
+            return Value::Undefined;
+        }
+        self.entry_module_specifier
+            .as_deref()
+            .and_then(|entry| self.module_state.modules.get(entry))
+            .and_then(|record| record.cjs_module_object)
+            .map_or(Value::Undefined, Value::Object)
+    }
+
     fn construct_require_builtin(
         &self,
         module_specifier: &str,
@@ -51100,6 +51114,10 @@ impl InterpreterCore {
                                     // `Promise.prototype` are the realm's
                                     // intrinsics (non-writable in ES2020).
                                     Value::Object(self.ensure_builtin_prototype(name)?)
+                                } else if builtin.kind == BuiltinFunctionKind::Require
+                                    && property_key.as_str() == Some("main")
+                                {
+                                    self.cjs_main_module()
                                 } else if let Some(property_object) =
                                     Self::builtin_function_property_object(&builtin)
                                 {
@@ -62894,6 +62912,11 @@ impl InterpreterCore {
                 let prototype = Self::materialized_global_prototype_name(builtin)
                     .expect("checked by the guard");
                 Value::Object(self.ensure_builtin_prototype(prototype)?)
+            }
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::Require && name == "main" =>
+            {
+                self.cjs_main_module()
             }
             Value::BuiltinFunction(builtin)
                 if Self::builtin_function_property_object(builtin).is_some() =>

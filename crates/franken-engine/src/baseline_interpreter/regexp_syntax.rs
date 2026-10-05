@@ -265,7 +265,7 @@ impl Translator {
             }
             // A high surrogate and a class of low ones are one character.
             if is_in(unit, HIGH_SURROGATES)
-                && let Some((first, last, length)) = self.low_surrogate_class()
+                && let Some((ranges, length)) = self.low_surrogate_class()
             {
                 self.index += length;
                 if !self.take_low_half_quantifier() {
@@ -273,7 +273,9 @@ impl Translator {
                     return;
                 }
                 self.out.push('[');
-                push_range(&mut self.out, combine(unit, first), combine(unit, last));
+                for (first, last) in ranges {
+                    push_range(&mut self.out, combine(unit, first), combine(unit, last));
+                }
                 self.out.push(']');
                 return;
             }
@@ -295,23 +297,34 @@ impl Translator {
         self.index += 2;
     }
 
-    /// A class of low surrogates at the cursor, `[\uDCxx]` or
-    /// `[\uDCxx-\uDCyy]`. Returns the range and the class length.
-    fn low_surrogate_class(&self) -> Option<(u32, u32, usize)> {
+    /// A class of low surrogates at the cursor: `[`, one or more `\uDCxx`
+    /// or `\uDCxx-\uDCyy` items, `]`. regexpu-core writes an astral set
+    /// without `u` this way (`\uD835[\uDC00-\uDC19\uDC34-\uDC4D]`), and
+    /// translating each half alone multiplied it into tens of thousands of
+    /// ranges that took about half a second to compile per use. Returns the
+    /// ranges and the class length.
+    fn low_surrogate_class(&self) -> Option<(Vec<(u32, u32)>, usize)> {
         if self.peek(0) != Some('[') {
             return None;
         }
-        let first = self.code_unit_escape_at(1)?;
-        if !is_in(first, LOW_SURROGATES) {
-            return None;
+        let low = |unit: &u32| is_in(*unit, LOW_SURROGATES);
+        let mut ranges = Vec::new();
+        let mut offset = 1;
+        while self.peek(offset) != Some(']') {
+            let first = self.code_unit_escape_at(offset).filter(low)?;
+            offset += 6;
+            let last = if self.peek(offset) == Some('-') {
+                let last = self
+                    .code_unit_escape_at(offset + 1)
+                    .filter(|unit| low(unit) && *unit >= first)?;
+                offset += 7;
+                last
+            } else {
+                first
+            };
+            ranges.push((first, last));
         }
-        if self.peek(7) == Some(']') {
-            return Some((first, first, 8));
-        }
-        let last = self
-            .code_unit_escape_at(8)
-            .filter(|_| self.peek(7) == Some('-'))?;
-        (is_in(last, LOW_SURROGATES) && self.peek(14) == Some(']')).then_some((first, last, 15))
+        (!ranges.is_empty()).then_some((ranges, offset + 1))
     }
 
     /// The idiom `[\uD800-\uDBFF][\uDC00-\uDFFF]` at the cursor.
@@ -1462,6 +1475,28 @@ mod tests {
 
     fn rust(pattern: &str) -> Regex {
         rust_with(pattern, "")
+    }
+
+    /// A high surrogate before a class of several low ranges (regexpu-core's
+    /// astral set without `u`) is one compact class of the characters it
+    /// encodes (bd-9vouw.183).
+    #[test]
+    fn high_surrogate_with_a_multi_range_low_class_is_one_astral_class() {
+        let pattern = r"^\uD835[\uDC00-\uDC19\uDC34-\uDC4D\uDC56]$";
+        let translated = js_pattern_to_rust(pattern, "");
+        assert!(translated.len() < 80, "{translated}");
+        let regex = rust(pattern);
+        for (text, expected) in [
+            ("\u{1D400}", true),
+            ("\u{1D419}", true),
+            ("\u{1D41A}", false),
+            ("\u{1D434}", true),
+            ("\u{1D456}", true),
+            ("\u{1D457}", false),
+            ("a", false),
+        ] {
+            assert_eq!(regex.is_match(text), expected, "{text:?}");
+        }
     }
 
     #[test]

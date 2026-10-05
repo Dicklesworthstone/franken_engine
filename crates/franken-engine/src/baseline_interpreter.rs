@@ -37796,11 +37796,16 @@ impl InterpreterCore {
         } else {
             lowering_ctx
         };
-        let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
-            InterpreterError::ModuleLoweringFailed {
-                specifier: resolved.to_string(),
-                error: error.to_string(),
-            }
+        // bd-j8f7q: a module a bounded importer loads bounds its own imports
+        // too, so the bound holds transitively and is checked at each edge.
+        let lowered = if import_bound.is_some() {
+            crate::lowering_pipeline::lower_bounded_import_ir0_to_ir3(&ir0, &lowering_ctx)
+        } else {
+            lower_ir0_to_ir3(&ir0, &lowering_ctx)
+        };
+        let lowering_output = lowered.map_err(|error| InterpreterError::ModuleLoweringFailed {
+            specifier: resolved.to_string(),
+            error: error.to_string(),
         })?;
         let ceiling = crate::lowering_pipeline::lowered_unit_flow_label_ceiling(
             &lowering_output.ir2,

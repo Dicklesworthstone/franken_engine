@@ -138,6 +138,7 @@ fn static_only_class_declaration_without_constructor_lowers_static_member() {
         op,
         Ir1Op::SetProperty {
             key: Ir1PropertyKey::Static(key),
+            ..
         } if key == "make"
     )));
 }

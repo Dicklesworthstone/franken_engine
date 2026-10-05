@@ -218,7 +218,8 @@ fn class_inheritance_lowers_prototype_chain_linkage() {
     assert!(!ops.iter().any(|op| matches!(
         op,
         Ir1Op::SetProperty {
-            key: Ir1PropertyKey::Static(name)
+            key: Ir1PropertyKey::Static(name),
+            ..
         } if name == "__proto__"
     )));
 }

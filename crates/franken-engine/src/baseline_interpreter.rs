@@ -12238,7 +12238,10 @@ impl CompactTier1Program {
             | Ir3Instruction::DeleteProperty { obj, key, dst } => {
                 requirement(&[*obj, *key, *dst], &[])
             }
-            Ir3Instruction::SetProperty { obj, key, val } => requirement(&[*obj, *key, *val], &[]),
+            Ir3Instruction::SetProperty { obj, key, val }
+            | Ir3Instruction::SetPropertySloppy { obj, key, val } => {
+                requirement(&[*obj, *key, *val], &[])
+            }
             Ir3Instruction::DefineAccessor { obj, key, func, .. }
             | Ir3Instruction::DefineMethod { obj, key, func } => {
                 requirement(&[*obj, *key, *func], &[])
@@ -43211,7 +43214,9 @@ impl InterpreterCore {
                     // CreateResolvingFunctions), not the static
                     // `Promise.resolve` constructor method (bd-iio0f).
                     return self.apply_promise_capability(
+                        Some(module),
                         crate::promise_model::PromiseHandle(handle_id),
+                        builtin.iterator_handle,
                         args,
                         true,
                     );
@@ -43231,7 +43236,7 @@ impl InterpreterCore {
                     }
                     let capability =
                         self.new_promise_capability(module, constructor, vec![value.clone()])?;
-                    self.apply_promise_capability(capability, args, true)?;
+                    self.apply_promise_capability(Some(module), capability, None, args, true)?;
                     return Ok(Value::Promise(capability.0));
                 }
                 self.dispatch_promise_hostcall("promise:resolve", args, Some(module))
@@ -43239,14 +43244,16 @@ impl InterpreterCore {
             BuiltinFunctionKind::PromiseReject => {
                 if let Some(handle_id) = builtin.bound_object {
                     return self.apply_promise_capability(
+                        Some(module),
                         crate::promise_model::PromiseHandle(handle_id),
+                        builtin.iterator_handle,
                         args,
                         false,
                     );
                 }
                 if let Some(constructor) = self.promise_static_subclass(receiver.as_ref())? {
                     let capability = self.new_promise_capability(module, constructor, Vec::new())?;
-                    self.apply_promise_capability(capability, args, false)?;
+                    self.apply_promise_capability(Some(module), capability, None, args, false)?;
                     return Ok(Value::Promise(capability.0));
                 }
                 self.dispatch_promise_hostcall("promise:reject", args, Some(module))
@@ -44182,7 +44189,7 @@ impl InterpreterCore {
             }
             if let Some(async_id) = async_function_id {
                 if let Err(error) =
-                    self.settle_async_function(async_id, Ok(effective_val), effective_label)
+                    self.settle_async_function(module, async_id, Ok(effective_val), effective_label)
                 {
                     self.terminally_reject_abandoned_async_functions(
                         &[async_id],
@@ -44224,6 +44231,7 @@ impl InterpreterCore {
 
     fn settle_async_function(
         &mut self,
+        module: Option<&Ir3Module>,
         async_id: u32,
         resolution: Result<Value, Value>,
         label: Label,
@@ -44239,20 +44247,10 @@ impl InterpreterCore {
         let promise_handle = crate::promise_model::PromiseHandle(result_promise);
 
         match resolution {
-            Ok(value) => {
-                if let Value::Promise(source) = value {
-                    // `return <promise>` from an async function must adopt the
-                    // promise's state (ES2020 25.7.4), not fulfill with it.
-                    self.resolve_promise_to_native(
-                        promise_handle,
-                        crate::promise_model::PromiseHandle(source),
-                        label,
-                    )?;
-                } else {
-                    let js_value = self.promise_value(&value)?;
-                    self.fulfill_promise(promise_handle, js_value, label)?;
-                }
-            }
+            // `return <promise or thenable>` from an async function adopts its
+            // state (ES2020 25.7.5.1 step 4.g calls the resolve function), not
+            // fulfills with it.
+            Ok(value) => self.resolve_promise_with_value(module, promise_handle, value, label)?,
             Err(error_value) => {
                 let js_reason = self.promise_value(&error_value)?;
                 self.reject_promise(promise_handle, js_reason, label)?;
@@ -44264,6 +44262,7 @@ impl InterpreterCore {
 
     fn complete_async_frame(
         &mut self,
+        module: Option<&Ir3Module>,
         mut frame: CallFrame,
         resolution: Result<Value, Value>,
         label: Label,
@@ -44293,7 +44292,7 @@ impl InterpreterCore {
                 previous_closure_bytes,
                 previous_call_stack_bytes,
             )
-            .and_then(|_| self.settle_async_function(async_id, resolution, label));
+            .and_then(|_| self.settle_async_function(module, async_id, resolution, label));
         match completion {
             Ok(()) => Ok(None),
             Err(error) => {
@@ -44305,6 +44304,7 @@ impl InterpreterCore {
 
     fn complete_current_async_frame(
         &mut self,
+        module: Option<&Ir3Module>,
         resolution: Result<Value, Value>,
         label: Label,
     ) -> Result<Option<LabeledReturn>, InterpreterError> {
@@ -44329,7 +44329,7 @@ impl InterpreterCore {
                 expected: "async function frame".to_string(),
                 got: "missing call frame".to_string(),
             })?;
-        self.complete_async_frame(frame, resolution, label)
+        self.complete_async_frame(module, frame, resolution, label)
     }
 
     fn reject_nearest_async_boundary(
@@ -44352,7 +44352,7 @@ impl InterpreterCore {
                 expected: "async function frame".to_string(),
                 got: "missing async boundary".to_string(),
             })?;
-        self.complete_async_frame(frame, Err(error_value), error_label)?;
+        self.complete_async_frame(None, frame, Err(error_value), error_label)?;
         Ok(true)
     }
 
@@ -51433,7 +51433,11 @@ impl InterpreterCore {
                         });
                     self.ip += 1;
                 }
-                Ir3Instruction::SetProperty { obj, key, val } => {
+                set_instruction @ (Ir3Instruction::SetProperty { obj, key, val }
+                | Ir3Instruction::SetPropertySloppy { obj, key, val }) => {
+                    // bd-9vouw.146: PutValue throws for a write that [[Set]]
+                    // rejects only in strict code (ES2020 6.2.4.9 step 6.d).
+                    let strict = matches!(set_instruction, Ir3Instruction::SetProperty { .. });
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
                     // ES2022 `o.#x = v` (PrivateSet). The value keeps its own
@@ -51544,7 +51548,7 @@ impl InterpreterCore {
                                         return Err(error);
                                     }
                                 };
-                                if !committed {
+                                if !committed && strict {
                                     self.set_own_runtime_property_label(
                                         label_owner,
                                         &property_key,
@@ -51555,10 +51559,14 @@ impl InterpreterCore {
                                         got: "falsy set trap result".to_string(),
                                     });
                                 }
-                                let owns_property =
-                                    self.heap.get(label_owner.0 as usize).is_some_and(|object| {
-                                        object.contains_own_runtime_property(&property_key)
-                                    });
+                                // A sloppy write that [[Set]] rejected left the
+                                // object as it was: restore the prior label.
+                                let owns_property = committed
+                                    && self.heap.get(label_owner.0 as usize).is_some_and(
+                                        |object| {
+                                            object.contains_own_runtime_property(&property_key)
+                                        },
+                                    );
                                 if !owns_property {
                                     // Prototype accessors and successful traps
                                     // need not create an own data property.
@@ -51593,7 +51601,12 @@ impl InterpreterCore {
                         // are non-writable too.
                         Value::BuiltinFunction(ref builtin)
                             if Self::builtin_function_property_object(builtin).is_none()
-                                && matches!(property_key.as_str(), Some("name" | "length")) => {}
+                                && matches!(property_key.as_str(), Some("name" | "length")) =>
+                        {
+                            if strict {
+                                return Err(Self::read_only_property_error(&property_key));
+                            }
+                        }
                         Value::BuiltinFunction(builtin) => {
                             let property_object =
                                 match Self::builtin_function_property_object(&builtin) {
@@ -51616,17 +51629,30 @@ impl InterpreterCore {
                                 &property_key,
                                 val,
                                 set_val,
+                                strict,
                             )?;
                         }
                         // bd-9vouw.17: a function's own `name` and `length`
-                        // are non-writable, so a sloppy-mode assignment is a
-                        // silent no-op (ES2020 9.2.4 / 9.2.8).
-                        Value::Function(_)
+                        // are non-writable (ES2020 9.2.4 / 9.2.8), so [[Set]]
+                        // rejects the write, unless the program redefined
+                        // them on the backing object (a `static name()`
+                        // method, Object.defineProperty).
+                        ref function @ (Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)
                         | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_)
-                            if matches!(property_key.as_str(), Some("name" | "length")) => {}
+                        | Value::AsyncGeneratorFunction(_))
+                            if matches!(property_key.as_str(), Some("name" | "length"))
+                                && !self.function_backing_has_own_property(
+                                    module,
+                                    function,
+                                    &property_key,
+                                )? =>
+                        {
+                            if strict {
+                                return Err(Self::read_only_property_error(&property_key));
+                            }
+                        }
                         // Other own properties (`F.x = 1`,
                         // `Test262Error.thrower = ...`) live on the function's
                         // backing object.
@@ -51649,6 +51675,7 @@ impl InterpreterCore {
                                 &property_key,
                                 val,
                                 set_val,
+                                strict,
                             )?;
                         }
                         // A promise, generator or async generator object keeps
@@ -51669,8 +51696,20 @@ impl InterpreterCore {
                                 &property_key,
                                 val,
                                 set_val,
+                                strict,
                             )?;
                         }
+                        // bd-9vouw.146: [[Set]] with a primitive base creates
+                        // no property (its receiver is not an object), so
+                        // sloppy code ignores the write. undefined and null
+                        // have no properties at all and throw in either mode.
+                        Value::Bool(_)
+                        | Value::Int(_)
+                        | Value::Float(_)
+                        | Value::BigInt(_)
+                        | Value::Str(_)
+                        | Value::Symbol(_)
+                            if !strict => {}
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -53426,6 +53465,18 @@ impl InterpreterCore {
                     // Convert the awaited value to a Promise if it's not already one
                     let promise_handle = match awaited_value {
                         Value::Promise(h) => crate::promise_model::PromiseHandle(h),
+                        // await an object: PromiseResolve adopts a thenable
+                        // through a PromiseResolveThenableJob (bd-9vouw.174).
+                        Value::Object(_) => {
+                            let handle = self.create_promise()?;
+                            self.resolve_promise_with_value(
+                                Some(module),
+                                handle,
+                                awaited_value,
+                                awaited_label.clone(),
+                            )?;
+                            handle
+                        }
                         _ => {
                             // await non-promise: create a resolved promise with the value
                             let js_val = self.promise_value(&awaited_value)?;
@@ -53467,9 +53518,11 @@ impl InterpreterCore {
                 Ir3Instruction::AsyncReturn { value_reg } => {
                     let return_value = self.read_reg(value_reg)?;
                     let return_label = self.get_register_label(value_reg)?.clone();
-                    if let Some(completion) =
-                        self.complete_current_async_frame(Ok(return_value), return_label)?
-                    {
+                    if let Some(completion) = self.complete_current_async_frame(
+                        Some(module),
+                        Ok(return_value),
+                        return_label,
+                    )? {
                         return Ok(DispatchOutcome::Complete(completion));
                     }
                     continue;
@@ -53477,9 +53530,11 @@ impl InterpreterCore {
                 Ir3Instruction::AsyncThrow { error_reg } => {
                     let error_value = self.read_reg(error_reg)?;
                     let error_label = self.get_register_label(error_reg)?.clone();
-                    if let Some(completion) =
-                        self.complete_current_async_frame(Err(error_value), error_label)?
-                    {
+                    if let Some(completion) = self.complete_current_async_frame(
+                        Some(module),
+                        Err(error_value),
+                        error_label,
+                    )? {
                         return Ok(DispatchOutcome::Complete(completion));
                     }
                     continue;
@@ -63814,10 +63869,21 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        let inputs = match self.collect_promise_combinator_inputs(module, args) {
+        let mut inputs = match self.collect_promise_combinator_inputs(module, args) {
             Ok(inputs) => inputs,
             Err(error) => return self.reject_promise_combinator_input(error),
         };
+        // Each element goes through PromiseResolve (ES2020 25.6.4.1.1 step
+        // 8.i, Promise.resolve): a thenable becomes a promise that adopts it
+        // (bd-9vouw.174). This runs before the rollback snapshot below: a
+        // `then` getter is guest code whose effects stay.
+        for input in &mut inputs {
+            if matches!(input, Value::Object(_)) {
+                let handle = self.create_promise()?;
+                let element = std::mem::replace(input, Value::Promise(handle.0));
+                self.resolve_promise_with_value(module, handle, element, Label::Public)?;
+            }
+        }
         for input in &inputs {
             if let Value::Promise(handle) = input {
                 // The combinator observes every input's rejection, as the
@@ -64579,7 +64645,7 @@ impl InterpreterCore {
                         // non-thenable fulfills synchronously here, so the
                         // observable result for ordinary values is unchanged.
                         let handle = self.create_promise()?;
-                        self.resolve_promise_with_value(handle, arg0, label.clone())?;
+                        self.resolve_promise_with_value(module, handle, arg0, label.clone())?;
                         Ok(Value::Promise(handle.0))
                     }
                 }
@@ -64920,6 +64986,27 @@ impl InterpreterCore {
         )
     }
 
+    /// The callable a Promise reaction or thenable-job handle names.
+    /// Synthetic handles at/above the base name a retained non-closure
+    /// callable (builtin, async/generator function object); everything
+    /// below is a real closure-table id.
+    fn promise_reaction_callee(
+        &self,
+        handler: crate::closure_model::ClosureHandle,
+    ) -> Result<Value, InterpreterError> {
+        if handler.0 >= PROMISE_REACTION_CALLABLE_BASE {
+            self.promise_reaction_callables
+                .get(&handler.0)
+                .cloned()
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "registered Promise reaction callable handler".to_string(),
+                    got: format!("unknown reaction callable #{}", handler.0),
+                })
+        } else {
+            Ok(Value::Closure(handler.0))
+        }
+    }
+
     fn execute_promise_reaction_handler(
         &mut self,
         module: Option<&Ir3Module>,
@@ -64932,20 +65019,7 @@ impl InterpreterCore {
             got: "missing module context".to_string(),
         })?;
         let argument = self.js_value_to_value(&argument);
-        // Synthetic handles at/above the base name a retained non-closure
-        // callable (builtin, async/generator function object); everything
-        // below is a real closure-table id.
-        let callee = if handler.0 >= PROMISE_REACTION_CALLABLE_BASE {
-            self.promise_reaction_callables
-                .get(&handler.0)
-                .cloned()
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "registered Promise reaction callable handler".to_string(),
-                    got: format!("unknown reaction callable #{}", handler.0),
-                })?
-        } else {
-            Value::Closure(handler.0)
-        };
+        let callee = self.promise_reaction_callee(handler)?;
         // Promise reactions are control-dependent on settlement as well as
         // value-dependent on the delivered argument. Run the whole isolated
         // callback under the queued task label so ignored arguments cannot
@@ -65001,9 +65075,15 @@ impl InterpreterCore {
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
         if target == source {
-            let reason = crate::object_model::JsValue::Str(
-                "Chaining cycle detected for promise".to_string(),
-            );
+            // ES2020 25.6.1.3.2 step 6: a TypeError object, as V8 reports it.
+            let prototype = self.ensure_builtin_prototype("TypeError")?;
+            let error_id = self.alloc_object_with_prototype(Some(prototype))?;
+            self.initialize_error_like_object(
+                error_id,
+                "TypeError",
+                "Chaining cycle detected for promise #<Promise>".to_string(),
+            )?;
+            let reason = self.promise_value(&Value::Object(error_id))?;
             return self.reject_promise(target, reason, label);
         }
         let source_state = self
@@ -65057,7 +65137,9 @@ impl InterpreterCore {
                     .register_native_adoption(source, target, label)
                     .expect("preflighted native promise adoption must remain valid");
                 self.settle_projected_promise_bytes(next_promise_bytes)?;
-                Ok(())
+                // `target` now follows `source`: the resolving functions that
+                // chose it are already resolved (bd-9vouw.174).
+                self.retire_promise_resolvers(target)
             }
         }
     }
@@ -65067,13 +65149,13 @@ impl InterpreterCore {
     /// adopt its eventual state by enqueuing a PromiseResolveThenableJob rather
     /// than fulfilling with the object itself; otherwise fulfill directly.
     ///
-    /// Thenable detection is limited to a `then` property that is a user
-    /// closure (`Value::Closure`) — the [`crate::promise_model::Microtask::ResolveThenable`]
-    /// job carries a `ClosureHandle`. A `then` that is a native builtin or a
-    /// non-callable is treated as a non-thenable and fulfilled directly, which
-    /// matches the observable result for every builtin the engine exposes.
+    /// `then` is read once with the full [[Get]] (bd-9vouw.174): a method a
+    /// class or prototype defines, a getter and a Proxy trap all count, and
+    /// any callable qualifies. A Get that throws rejects `promise` with the
+    /// thrown value (step 10).
     fn resolve_promise_with_value(
         &mut self,
+        module: Option<&Ir3Module>,
         promise: crate::promise_model::PromiseHandle,
         value: Value,
         label: crate::ifc_artifacts::Label,
@@ -65087,19 +65169,45 @@ impl InterpreterCore {
                 label,
             );
         }
-        if matches!(value, Value::Object(_)) {
-            let then = self.simple_callback_get_property(value.clone(), &Value::str("then"))?;
-            if let Value::Closure(then_id) = then {
-                return self.enqueue_resolve_thenable(
-                    promise,
-                    crate::closure_model::ClosureHandle(then_id),
-                    value,
-                    label,
-                );
+        let Value::Object(object) = value else {
+            let value = self.promise_value(&value)?;
+            return self.fulfill_promise(promise, value, label);
+        };
+        // The Get may run a getter or a trap; what it reads labels the
+        // resolution. The enclosing HostCall's pending result label is set
+        // aside so this read neither joins into nor clears it.
+        let saved_result_label = self.take_pending_hostcall_result_label();
+        let then = self.iterator_protocol_property(
+            module,
+            object,
+            &RuntimePropertyKey::String(JsString::from("then")),
+            Value::Object(object),
+        );
+        let observed = self.take_pending_hostcall_result_label();
+        if let Some(saved) = saved_result_label {
+            self.replace_pending_hostcall_result_label(Some(saved))?;
+        }
+        let label = match observed {
+            Some(observed) => label.join(&observed),
+            None => label,
+        };
+        let then = match then {
+            Ok(then) => then,
+            Err(error) => {
+                let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
+                let reason = self.promise_value(&reason)?;
+                return self.reject_promise(promise, reason, reason_label);
+            }
+        };
+        match self.promise_reaction_handler_from_value(then, "thenable then")? {
+            Some(handler) => {
+                self.enqueue_resolve_thenable(promise, handler, Value::Object(object), label)
+            }
+            None => {
+                let value = self.promise_value(&Value::Object(object))?;
+                self.fulfill_promise(promise, value, label)
             }
         }
-        let value = self.promise_value(&value)?;
-        self.fulfill_promise(promise, value, label)
     }
 
     /// Enqueue a PromiseResolveThenableJob (memory-preflighted, mirroring
@@ -65137,7 +65245,10 @@ impl InterpreterCore {
             .saturating_add(self.promise_in_flight_task_bytes);
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.event_loop.microtasks.enqueue(task);
-        self.settle_projected_promise_bytes(next_promise_bytes)
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
+        // The resolving functions that chose the thenable are already
+        // resolved; the job's own pair takes the next epoch (bd-9vouw.174).
+        self.retire_promise_resolvers(promise)
     }
 
     /// Build a single-use resolve/reject capability function bound to
@@ -65145,7 +65256,8 @@ impl InterpreterCore {
     /// in `bound_object`; the [`BuiltinFunctionKind::PromiseResolve`] /
     /// `PromiseReject` apply arms interpret a bound handle as a capability call
     /// rather than the static `Promise.resolve`/`Promise.reject` constructor
-    /// methods.
+    /// methods. `iterator_handle` (a per-kind slot) carries the pair's
+    /// resolver epoch (bd-9vouw.174).
     fn make_promise_capability(
         &self,
         kind: BuiltinFunctionKind,
@@ -65153,15 +65265,49 @@ impl InterpreterCore {
     ) -> Value {
         let mut builtin = BuiltinFunction::new_kind(kind);
         builtin.bound_object = Some(promise.0);
+        builtin.iterator_handle = Some(u32::from(self.promise_resolver_epoch(promise)));
         Value::BuiltinFunction(builtin)
     }
 
-    /// Apply a resolve/reject capability bound to `promise`. Settling is
-    /// once-only (ES `alreadyResolved`): a second call after the promise has
-    /// left the pending state is a silent no-op returning `undefined`.
-    fn apply_promise_capability(
+    fn promise_resolver_epoch(&self, promise: crate::promise_model::PromiseHandle) -> u16 {
+        self.promise_store.resolver_epoch(promise).unwrap_or(0)
+    }
+
+    /// Whether the resolving-function pair of `epoch` may still settle
+    /// `promise`: it is pending and the pair has not resolved it already
+    /// (ES2020 25.6.1.3 `alreadyResolved`).
+    fn promise_resolvers_live(
+        &self,
+        promise: crate::promise_model::PromiseHandle,
+        epoch: u16,
+    ) -> bool {
+        !self.promise_is_settled(promise) && self.promise_resolver_epoch(promise) == epoch
+    }
+
+    /// The pair of `promise`'s current resolving functions has resolved it to
+    /// a promise or thenable it now follows: their later calls do nothing.
+    fn retire_promise_resolvers(
         &mut self,
         promise: crate::promise_model::PromiseHandle,
+    ) -> Result<(), InterpreterError> {
+        self.promise_store
+            .retire_resolving_functions(promise)
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid promise handle".to_string(),
+                got: error.to_string(),
+            })
+    }
+
+    /// Apply a resolve/reject capability bound to `promise`. Settling is
+    /// once-only (ES `alreadyResolved`): a call after the promise has left the
+    /// pending state, or after this pair resolved it to a promise or thenable
+    /// it now follows, is a silent no-op returning `undefined`. `epoch` is the
+    /// pair's (None for an engine-internal application).
+    fn apply_promise_capability(
+        &mut self,
+        module: Option<&Ir3Module>,
+        promise: crate::promise_model::PromiseHandle,
+        epoch: Option<u32>,
         args: RegRange,
         is_resolve: bool,
     ) -> Result<Value, InterpreterError> {
@@ -65170,12 +65316,14 @@ impl InterpreterCore {
         } else {
             Value::Undefined
         };
-        if self.promise_is_settled(promise) {
+        if self.promise_is_settled(promise)
+            || epoch.is_some_and(|epoch| epoch != u32::from(self.promise_resolver_epoch(promise)))
+        {
             return Ok(Value::Undefined);
         }
         let label = crate::ifc_artifacts::Label::Public;
         if is_resolve {
-            self.resolve_promise_with_value(promise, argument, label)?;
+            self.resolve_promise_with_value(module, promise, argument, label)?;
         } else {
             let reason = self.promise_value(&argument)?;
             self.reject_promise(promise, reason, label)?;
@@ -65206,6 +65354,7 @@ impl InterpreterCore {
         }
         let executor_label = self.join_arg_range_label(args)?;
         let promise = self.create_promise()?;
+        let executor_epoch = self.promise_resolver_epoch(promise);
         let resolve = self.make_promise_capability(BuiltinFunctionKind::PromiseResolve, promise);
         let reject = self.make_promise_capability(BuiltinFunctionKind::PromiseReject, promise);
         if let Err(error) = self.invoke_inline_method_call_with_argument_label(
@@ -65239,8 +65388,9 @@ impl InterpreterCore {
                 _ => return Err(error),
             };
             // A resolving function already called by the executor wins: a
-            // later throw is inert (ES `alreadyResolved`).
-            if !self.promise_is_settled(promise) {
+            // later throw is inert (ES `alreadyResolved`), also when it
+            // resolved the promise to one it now follows.
+            if self.promise_resolvers_live(promise, executor_epoch) {
                 self.reject_promise(promise, reason, reason_label)?;
             }
         }
@@ -65417,28 +65567,18 @@ impl InterpreterCore {
                                     task_label.clone(),
                                 )
                             }) {
-                                Ok(result) => match result {
-                                    Value::Promise(source) => {
-                                        // A handler returned a native promise:
-                                        // the chain result adopts its state
-                                        // (ES2020 PromiseReactionJob + 25.6.3.2)
-                                        // rather than fulfilling with the
-                                        // promise object itself.
-                                        self.resolve_promise_to_native(
-                                            *result_promise,
-                                            crate::promise_model::PromiseHandle(source),
-                                            task_label.clone(),
-                                        )?;
-                                    }
-                                    other => {
-                                        let value = self.promise_value(&other)?;
-                                        self.fulfill_promise(
-                                            *result_promise,
-                                            value,
-                                            task_label.clone(),
-                                        )?;
-                                    }
-                                },
+                                // The chain result is resolved with the
+                                // handler's result (ES2020 PromiseReactionJob):
+                                // a native promise or a thenable is adopted,
+                                // never used as the fulfillment value.
+                                Ok(result) => {
+                                    self.resolve_promise_with_value(
+                                        module,
+                                        *result_promise,
+                                        result,
+                                        task_label.clone(),
+                                    )?;
+                                }
                                 Err(err) => {
                                     // Budgets, containment and `process.exit`
                                     // (bd-my9hk) are not JS exceptions: they end
@@ -65544,13 +65684,15 @@ impl InterpreterCore {
                         // schedules (and the settle it performs) are enqueued in
                         // program order, preserving nested-microtask ordering.
                         let thenable_value = self.js_value_to_value(thenable);
+                        let job_epoch = self.promise_resolver_epoch(*promise);
                         let resolve_fn = self
                             .make_promise_capability(BuiltinFunctionKind::PromiseResolve, *promise);
                         let reject_fn = self
                             .make_promise_capability(BuiltinFunctionKind::PromiseReject, *promise);
+                        let then_callee = self.promise_reaction_callee(*then_handler)?;
                         let invocation = self.invoke_inline_method_call_with_argument_label(
                             module,
-                            Value::Closure(then_handler.0),
+                            then_callee,
                             thenable_value,
                             vec![resolve_fn, reject_fn],
                             Some(task_label.clone()),
@@ -65560,13 +65702,14 @@ impl InterpreterCore {
                             // reject the promise with the thrown value — unless
                             // the thenable already settled it via its resolve
                             // capability, in which case the throw is inert (the
-                            // capability's once-guard has already fired). This
-                            // mirrors the PromiseReaction arm, which turns any
-                            // user-JS error raised inside a microtask into a
-                            // rejection rather than re-propagating.
-                            if !self.promise_is_settled(*promise) {
-                                let reason = Self::promise_rejection_from_error(&err);
-                                self.reject_promise(*promise, reason, task_label.clone())?;
+                            // capability's once-guard has already fired). As in
+                            // the PromiseReaction arm, a budget, containment or
+                            // exit error ends the run instead.
+                            let (reason, reason_label) =
+                                self.thrown_completion_value(err, task_label)?;
+                            if self.promise_resolvers_live(*promise, job_epoch) {
+                                let reason = self.promise_value(&reason)?;
+                                self.reject_promise(*promise, reason, reason_label)?;
                             }
                         }
                     }
@@ -74293,11 +74436,17 @@ impl InterpreterCore {
         }
     }
 
-    /// Property subset used by the two isolated callback mini-interpreters.
-    /// Preserve their historical own-property-only behavior while keeping
-    /// dynamic string identity exact and honoring the legacy-hook boundary.
+    /// A property read in the reducer mini-interpreter, keeping dynamic
+    /// string identity exact and honoring the legacy-hook boundary.
+    ///
+    /// An object is read with the GetProperty instruction's [[Get]]
+    /// (bd-9vouw.175): an inherited member, a getter (called with the object
+    /// as its receiver) and a Proxy trap, not only an own data property, which
+    /// used to give `undefined` or the accessor itself. The stored property
+    /// label joins the enclosing HostCall's result label.
     fn simple_callback_get_property(
         &mut self,
+        module: Option<&Ir3Module>,
         object_value: Value,
         key_value: &Value,
     ) -> Result<Value, InterpreterError> {
@@ -74306,19 +74455,12 @@ impl InterpreterCore {
         self.preflight_legacy_property_key_for_hook(&key)?;
         match object_value {
             Value::Object(object_id) => {
-                if let Some(key) = key.as_str() {
-                    if let Some(value) = self.writable_state_view_value(object_id, key) {
-                        return Ok(value);
-                    }
-                    if let Some(value) = self.typed_array_indexed_get_property(object_id, key)? {
-                        return Ok(value);
-                    }
+                if key.as_str() == Some("__proto__") {
+                    return Ok(self
+                        .ordinary_get_prototype_of(object_id)?
+                        .map_or(Value::Null, Value::Object));
                 }
-                Ok(self
-                    .heap
-                    .get(object_id.0 as usize)
-                    .and_then(|object| object.own_runtime_property_value(&key))
-                    .unwrap_or(Value::Undefined))
+                self.iterator_protocol_property(module, object_id, &key, Value::Object(object_id))
             }
             Value::Iterator(iterator_handle) => Ok(key.as_str().map_or(Value::Undefined, |key| {
                 self.iterator_property_value(iterator_handle, key)
@@ -74351,39 +74493,6 @@ impl InterpreterCore {
                 got: other.type_name().to_string(),
             }),
         }
-    }
-
-    fn simple_callback_set_property(
-        &mut self,
-        object_value: Value,
-        key_value: &Value,
-        property_value: Value,
-    ) -> Result<(), InterpreterError> {
-        self.reject_private_name_in_simple_callback(key_value)?;
-        let key = self.executable_property_key_from_value(key_value);
-        self.preflight_legacy_property_key_for_hook(&key)?;
-        let object_id = match &object_value {
-            Value::Object(object_id) => *object_id,
-            Value::BuiltinFunction(builtin) => Self::builtin_function_property_object(builtin)
-                .ok_or_else(|| InterpreterError::TypeError {
-                    expected: "object with writable properties".to_string(),
-                    got: object_value.type_name().to_string(),
-                })?,
-            _ => {
-                return Err(InterpreterError::TypeError {
-                    expected: "object".to_string(),
-                    got: object_value.type_name().to_string(),
-                });
-            }
-        };
-        if let Some(key) = key.as_str()
-            && self
-                .typed_array_indexed_set_property(object_id, key, &property_value)?
-                .is_some()
-        {
-            return Ok(());
-        }
-        self.set_object_runtime_property(object_id, key, property_value)
     }
 
     fn invoke_simple_reduce_callback(
@@ -74449,11 +74558,14 @@ impl InterpreterCore {
                 | Ir3Instruction::Mul { .. }
                 | Ir3Instruction::Div { .. }
                 | Ir3Instruction::GetProperty { .. }
-                | Ir3Instruction::SetProperty { .. }
                 | Ir3Instruction::LoadName { .. }
                 | Ir3Instruction::PutName { .. }
                 | Ir3Instruction::ResolveNameStatus { .. }
                 | Ir3Instruction::PutNameWithStatus { .. } => pending.push(ip + 1),
+                // A property write takes the ordinary path (bd-9vouw.175):
+                // [[Set]] calls setters and Proxy traps, refuses read-only and
+                // non-extensible targets per the write's strictness, and joins
+                // the object's mutation label. The mini-lane wrote raw data.
                 _ => return false,
             }
         }
@@ -74726,15 +74838,9 @@ impl InterpreterCore {
                 Ir3Instruction::GetProperty { obj, key, dst } => {
                     let object_value = Self::read_local_register(&local_registers, obj)?;
                     let key_value = Self::read_local_register(&local_registers, key)?;
-                    let value = self.simple_callback_get_property(object_value, &key_value)?;
+                    let value =
+                        self.simple_callback_get_property(Some(module), object_value, &key_value)?;
                     Self::write_local_register(&mut local_registers, dst, value)?;
-                    instruction_pointer += 1;
-                }
-                Ir3Instruction::SetProperty { obj, key, val } => {
-                    let object_value = Self::read_local_register(&local_registers, obj)?;
-                    let key_value = Self::read_local_register(&local_registers, key)?;
-                    let property_value = Self::read_local_register(&local_registers, val)?;
-                    self.simple_callback_set_property(object_value, &key_value, property_value)?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -77145,6 +77251,11 @@ impl InterpreterCore {
         definition_label: Label,
     ) -> Result<(), InterpreterError> {
         self.validate_executable_property_key(&key)?;
+        let replaced_read_only = self
+            .heap
+            .get(object_id.0 as usize)
+            .map(|object| object.own_property_attributes(&key))
+            .filter(|attributes| !attributes.writable && attributes.configurable);
         let closure_id = match function {
             // Generator and async-generator methods (`*m(){}`, `async *m(){}`)
             // get a [[HomeObject]] too: `super.x` in their bodies reads the
@@ -77180,13 +77291,36 @@ impl InterpreterCore {
         };
         let metadata_bytes = Self::estimate_closure_method_metadata_entry_bytes(&metadata);
         self.apply_memory_component_delta(0, metadata_bytes)?;
-        if let Err(error) = self.set_object_runtime_property(object_id, key, function) {
+        if let Err(error) = self.set_object_runtime_property(object_id, key.clone(), function) {
             self.estimated_memory_bytes =
                 self.estimated_memory_bytes.saturating_sub(metadata_bytes);
             return Err(error);
         }
         self.closure_method_metadata.insert(closure_id, metadata);
-        Ok(())
+        self.make_replaced_method_writable(object_id, &key, replaced_read_only)
+    }
+
+    /// ES2020 14.3.8 DefineMethod defines a writable, configurable property,
+    /// so a method that replaced a read-only one (`static name()` over a
+    /// class's own `name`, bd-9vouw.146) is writable; it keeps the replaced
+    /// property's enumerability.
+    fn make_replaced_method_writable(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        replaced_read_only: Option<PropertyAttributes>,
+    ) -> Result<(), InterpreterError> {
+        let Some(attributes) = replaced_read_only else {
+            return Ok(());
+        };
+        self.set_own_property_attributes(
+            object_id,
+            key,
+            PropertyAttributes {
+                writable: true,
+                ..attributes
+            },
+        )
     }
 
     fn dispatch_timer_hostcall(
@@ -100748,6 +100882,30 @@ impl InterpreterCore {
         })
     }
 
+    /// bd-9vouw.146: the TypeError of a strict-mode write to a read-only
+    /// property (a function's `name` or `length`).
+    fn read_only_property_error(key: &RuntimePropertyKey) -> InterpreterError {
+        InterpreterError::TypeError {
+            expected: "writable property".to_string(),
+            got: format!("read-only property {}", key.diagnostic()),
+        }
+    }
+
+    /// Whether a function's backing object holds an own `key` (the program
+    /// redefined it), without allocating a backing object. Runs no guest
+    /// code.
+    fn function_backing_has_own_property(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        Ok(self
+            .function_own_property_object(module, function)?
+            .and_then(|backing| self.heap.get(backing.0 as usize))
+            .is_some_and(|object| object.contains_own_runtime_property(key)))
+    }
+
     /// Whether `value` is a promise, generator, async generator or iterator
     /// object, whose own properties live on a backing object (see
     /// `function_own_property_key`).
@@ -101866,6 +102024,7 @@ impl InterpreterCore {
         property_key: &RuntimePropertyKey,
         val: u32,
         set_val: Value,
+        strict: bool,
     ) -> Result<(), InterpreterError> {
         self.run_pre_runtime_property_access_hook(module, property_object, property_key)?;
         let value_label = self.get_register_label(val)?.clone();
@@ -101899,6 +102058,10 @@ impl InterpreterCore {
         };
         if !committed {
             self.set_own_runtime_property_label(property_object, property_key, &previous_label)?;
+            // bd-9vouw.146: a sloppy write that [[Set]] rejects is ignored.
+            if !strict {
+                return Ok(());
+            }
             return Err(InterpreterError::TypeError {
                 expected: "successful builtin property write".to_string(),
                 got: "falsy set result".to_string(),
@@ -133351,7 +133514,11 @@ mod function_prototype_call_apply_tests_current {
         core.config.max_total_memory_bytes = core.estimated_memory_bytes();
 
         let error = core
-            .complete_current_async_frame(Ok(Value::str("x".repeat(16 * 1024))), Label::Secret)
+            .complete_current_async_frame(
+                None,
+                Ok(Value::str("x".repeat(16 * 1024))),
+                Label::Secret,
+            )
             .expect_err("Promise fulfillment must exceed the calibrated ceiling");
         assert!(matches!(
             error,
@@ -146384,18 +146551,24 @@ mod tests {
             JsString::from_code_units(&[0xD801]),
             JsString::from("\u{FFFD}"),
         ];
+        // The reducer mini-lane no longer writes properties (bd-9vouw.175);
+        // the keys are stored as SetProperty stores them.
         for (index, key) in keys.iter().enumerate() {
-            core.simple_callback_set_property(
-                Value::Object(object),
-                &Value::Str(key.clone()),
+            core.set_object_runtime_property(
+                object,
+                RuntimePropertyKey::String(key.clone()),
                 Value::Int(index as i64),
             )
-            .expect("callback property write should preserve the exact key");
+            .expect("property write should preserve the exact key");
         }
         for (index, key) in keys.iter().enumerate() {
             assert_eq!(
-                core.simple_callback_get_property(Value::Object(object), &Value::Str(key.clone()),)
-                    .expect("callback property read should preserve the exact key"),
+                core.simple_callback_get_property(
+                    None,
+                    Value::Object(object),
+                    &Value::Str(key.clone()),
+                )
+                .expect("callback property read should preserve the exact key"),
                 Value::Int(index as i64)
             );
         }
@@ -147467,7 +147640,7 @@ mod tests {
             .pop(&mut core.closures.cold_cells)
             .expect("async frame should exist");
         let outcome = core
-            .complete_async_frame(frame, Ok(Value::str("done")), Label::Public)
+            .complete_async_frame(None, frame, Ok(Value::str("done")), Label::Public)
             .expect("async completion should settle promise");
         assert_eq!(outcome, None);
         assert_eq!(core.ip, 321);
@@ -148197,7 +148370,7 @@ mod tests {
             .expect("Date realm global");
 
         let original = core
-            .simple_callback_get_property(date.clone(), &Value::str("now"))
+            .simple_callback_get_property(None, date.clone(), &Value::str("now"))
             .expect("read Date.now through callback helper");
         assert!(matches!(
             original,
@@ -148207,10 +148380,21 @@ mod tests {
             })
         ));
 
-        core.simple_callback_set_property(date.clone(), &Value::str("now"), Value::Int(17))
-            .expect("write Date.now through callback helper");
+        // The reducer mini-lane no longer writes properties (bd-9vouw.175);
+        // a write lands on Date's backing object as SetProperty's does.
+        let Value::BuiltinFunction(date_builtin) = &date else {
+            panic!("Date is a builtin function");
+        };
+        let backing = InterpreterCore::builtin_function_property_object(date_builtin)
+            .expect("Date has a backing object");
+        core.set_object_runtime_property(
+            backing,
+            RuntimePropertyKey::String(JsString::from("now")),
+            Value::Int(17),
+        )
+        .expect("write Date.now to its backing object");
         assert_eq!(
-            core.simple_callback_get_property(date, &Value::str("now"))
+            core.simple_callback_get_property(None, date, &Value::str("now"))
                 .expect("read replaced Date.now through callback helper"),
             Value::Int(17)
         );

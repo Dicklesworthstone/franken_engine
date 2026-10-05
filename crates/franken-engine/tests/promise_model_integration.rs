@@ -265,6 +265,7 @@ fn serde_promise_record() {
         label: Label::Public,
         creation_seq: 0,
         rejection_handled: false,
+        resolver_epoch: 0,
         terminal_epoch: 0,
     };
     let json = serde_json::to_string(&record).unwrap();

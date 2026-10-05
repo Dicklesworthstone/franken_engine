@@ -82,3 +82,57 @@ fn generators_and_plain_functions_keep_their_meaning() {
         );
     }
 }
+
+/// bd-9vouw.99 (rest): a class static block reserves `await` in its own code,
+/// arrow parameters included (ES2022 15.7.1), and a generator's or async
+/// function's parameter list may not contain a yield or await expression,
+/// an arrow's within them included (ES2020 14.4.1, 14.7.1, 14.8.1). Node
+/// v22.2.0 rejects each with a SyntaxError.
+#[test]
+fn static_block_await_and_parameter_expressions_are_syntax_errors() {
+    for source in [
+        "class C { static { await; } }",
+        "class C { static { (await => 0); } }",
+        "class C { static { var await; } }",
+        "class C { static { ({ await }); } }",
+        "class C { static { await: ; } }",
+        "function* g(a = yield) {}",
+        "function* g(a = yield 1) {}",
+        "async function f(a = await 1) {}",
+        "function* g() { (a = yield) => 0; }",
+        "async function f() { (a = await 1) => 0; }",
+    ] {
+        let result = eval(source);
+        assert!(
+            result.is_err(),
+            "`{source}` must be a SyntaxError, got {result:?}"
+        );
+    }
+}
+
+/// Functions and arrow bodies inside a static block, property keys, and
+/// parameters without those expressions keep their meaning (Node v22.2.0
+/// completion values).
+#[test]
+fn await_and_yield_stay_usable_where_node_allows_them() {
+    for (source, node) in [
+        (
+            "class C { static { function f() { var await = 4; return await; } C.v = f(); } } C.v",
+            "4",
+        ),
+        ("class C { static { C.v = { await: 5 }.await; } } C.v", "5"),
+        (
+            "class C { static { C.v = (() => typeof await)(); } } C.v",
+            "undefined",
+        ),
+        ("function* g(a = 1) { yield a; } g().next().value", "1"),
+        (
+            "function* g() { function h(a = typeof yield) { return a; } yield h(); } \
+             g().next().value",
+            "undefined",
+        ),
+        ("async function f(a = 2) { return a; } typeof f", "function"),
+    ] {
+        assert_eq!(eval(source).as_deref(), Ok(node), "{source}");
+    }
+}

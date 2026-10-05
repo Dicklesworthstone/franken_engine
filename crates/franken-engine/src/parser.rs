@@ -2115,6 +2115,13 @@ struct ParseExecutionContext<'a> {
     yield_context: bool,
     /// Where a SuperCall `super(...)` would be (bd-9vouw.99).
     super_call: SuperCallContext,
+    /// A class static block's own code, where `await` is reserved
+    /// (ES2022 15.7.1); function and arrow bodies inside it are not.
+    static_block_await: bool,
+    /// A parameter list, where a generator's `yield` or an async
+    /// function's `await` expression is a SyntaxError (ES2020 14.4.1,
+    /// 14.7.1, 14.8.1).
+    formal_parameters: bool,
     /// Private-name scopes of the class bodies being parsed, innermost last
     /// (ES2022 15.7.1 AllPrivateIdentifiersValid).
     private_name_scopes: Vec<PrivateNameScope>,
@@ -3683,6 +3690,8 @@ fn parse_source(
         await_context: goal == ParseGoal::Module,
         yield_context: false,
         super_call: SuperCallContext::Forbidden,
+        static_block_await: false,
+        formal_parameters: false,
         private_name_scopes: Vec::new(),
     };
 
@@ -4375,7 +4384,10 @@ fn parse_statement_inner(
             let name = decode_identifier_escapes(label);
             let name = name.as_deref().unwrap_or(label);
             if (name == "yield" && (context.yield_context || context.strict_mode))
-                || (name == "await" && (context.await_context || goal == ParseGoal::Module))
+                || (name == "await"
+                    && (context.await_context
+                        || context.static_block_await
+                        || goal == ParseGoal::Module))
             {
                 return Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
@@ -5739,10 +5751,24 @@ fn parse_primary_expression(
                     Some(span.clone()),
                 ));
             }
+            if context.formal_parameters {
+                return Err(unsupported_expression_syntax_error(
+                    "an `await` expression cannot be in a parameter list",
+                    span,
+                    context,
+                ));
+            }
             let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
             return Ok(Expression::Await(Box::new(nested)));
         }
         if rest.starts_with('(') && context.await_context {
+            if context.formal_parameters {
+                return Err(unsupported_expression_syntax_error(
+                    "an `await` expression cannot be in a parameter list",
+                    span,
+                    context,
+                ));
+            }
             let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
             return Ok(Expression::Await(Box::new(nested)));
         }
@@ -5750,7 +5776,7 @@ fn parse_primary_expression(
 
     // Inside an async function or module `await` is an operator and needs
     // its operand: a bare `await` is a SyntaxError (ES2020 14.7.1, 15.2.1.1).
-    if expression == "await" && context.await_context {
+    if expression == "await" && (context.await_context || context.static_block_await) {
         return Err(unsupported_expression_syntax_error(
             "`await` is reserved here and needs an operand",
             span,
@@ -5794,6 +5820,13 @@ fn parse_primary_expression(
             || rest.starts_with(')')
             || rest.starts_with('}'))
     {
+        if context.formal_parameters {
+            return Err(unsupported_expression_syntax_error(
+                "a `yield` expression cannot be in a parameter list",
+                span,
+                context,
+            ));
+        }
         let rest = rest.trim_start();
         let (delegate, rest) = if let Some(after_star) = rest.strip_prefix('*') {
             (true, after_star.trim_start())
@@ -6167,6 +6200,17 @@ fn parse_arrow_params(
     if params_src.trim().is_empty() {
         return Ok(Vec::new());
     }
+    let saved_formal_parameters = std::mem::replace(&mut context.formal_parameters, true);
+    let params = parse_formal_parameter_list(params_src, span, context);
+    context.formal_parameters = saved_formal_parameters;
+    params
+}
+
+fn parse_formal_parameter_list(
+    params_src: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Vec<FunctionParam>> {
     // ES2020 14.1 FormalParameters: no elision (`(a,,b)`, `(,a)`), a rest
     // parameter last, and no trailing comma after it (`(...a,)`).
     fn malformed(
@@ -7829,7 +7873,7 @@ fn reject_reserved_identifier_reference(
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
     let reserved = is_unconditional_reserved_keyword(name)
-        || (context.await_context && name == "await")
+        || ((context.await_context || context.static_block_await) && name == "await")
         || (context.yield_context && name == "yield")
         || (context.strict_mode
             && matches!(
@@ -9291,7 +9335,13 @@ fn numeric_separators_are_valid(literal: &str) -> bool {
     if !bytes.contains(&b'_') {
         return true;
     }
-    bytes.first().is_some_and(u8::is_ascii_digit)
+    // bd-9vouw.176: `.0_1e2` starts with its decimal point.
+    let leading_digit = match bytes {
+        [b'.', second, ..] => second.is_ascii_digit(),
+        [first, ..] => first.is_ascii_digit(),
+        [] => false,
+    };
+    leading_digit
         && bytes.iter().enumerate().all(|(index, &byte)| {
             byte != b'_'
                 || (index > 0
@@ -9935,11 +9985,26 @@ fn first_top_level_brace(text: &str) -> Option<usize> {
 /// The offset of a class body's `{` in the text after `extends`. The heritage
 /// is a left-hand-side expression: braces inside parentheses
 /// (`extends (class {...})`, `extends mix({...})`) are not the body, and a
-/// class expression heritage (`extends class Base {...} {...}`) has its own
-/// body first.
+/// class or function expression heritage (`extends class Base {...} {...}`,
+/// `extends function () {...} {...}`) has its own body first.
 fn class_heritage_body_brace(after_extends: &str) -> Option<usize> {
     let heritage = after_extends.trim_start();
     let lead = after_extends.len() - heritage.len();
+    // bd-9vouw.176: a function expression heritage's body comes before the
+    // class body (its parameters sit in parentheses).
+    let function_header = heritage
+        .strip_prefix("async")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .map_or(heritage, str::trim_start)
+        .strip_prefix("function")
+        .filter(|rest| rest.starts_with(|ch: char| ch.is_whitespace() || ch == '(' || ch == '*'));
+    if let Some(function_header) = function_header {
+        let function_start = lead + (heritage.len() - function_header.len());
+        let body = first_top_level_brace(function_header)?;
+        let (_, tail) = extract_balanced(&function_header[body..], '{', '}')?;
+        let tail_start = function_start + (function_header.len() - tail.len());
+        return Some(tail_start + first_top_level_brace(tail)?);
+    }
     let inner_header = heritage
         .strip_prefix("class")
         .filter(|rest| rest.starts_with(|ch: char| ch.is_whitespace() || ch == '{'));
@@ -11166,11 +11231,23 @@ fn with_function_context<T>(
     context: &mut ParseExecutionContext<'_>,
     operation: impl FnOnce(&mut ParseExecutionContext<'_>) -> ParseResult<T>,
 ) -> ParseResult<T> {
-    let saved = (context.await_context, context.yield_context);
+    let saved = (
+        context.await_context,
+        context.yield_context,
+        context.static_block_await,
+        context.formal_parameters,
+    );
     context.await_context = is_async;
     context.yield_context = is_generator;
+    context.static_block_await = false;
+    context.formal_parameters = false;
     let result = operation(context);
-    (context.await_context, context.yield_context) = saved;
+    (
+        context.await_context,
+        context.yield_context,
+        context.static_block_await,
+        context.formal_parameters,
+    ) = saved;
     result
 }
 
@@ -11378,7 +11455,7 @@ fn reject_context_reserved_binding(
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
-    let reserved = (context.await_context && name == "await")
+    let reserved = ((context.await_context || context.static_block_await) && name == "await")
         || (context.yield_context && name == "yield")
         || (context.strict_mode
             && matches!(
@@ -12794,12 +12871,35 @@ fn function_expression_is_whole(rest: &str) -> bool {
 /// parsing below; it was silently dropped, so the expression was the class
 /// itself. A malformed head counts as whole, so its specific error is kept.
 fn class_expression_is_whole(expression: &str) -> bool {
-    let Some(brace) = expression.find('{') else {
+    let Some(brace) = class_body_brace(expression) else {
         return true;
     };
     match extract_balanced(&expression[brace..], '{', '}') {
         Some((_, after_body)) => after_body.trim().is_empty(),
         None => true,
+    }
+}
+
+/// The offset of a `class ...` source's body `{`, found as
+/// `parse_class_parts` finds it: past the name and an `extends` heritage, so
+/// braces in the heritage (`class extends class {} {}`,
+/// `class extends (() => {}) {}`) are not taken for the body (bd-9vouw.176).
+fn class_body_brace(source: &str) -> Option<usize> {
+    let rest = source.strip_prefix("class")?;
+    let base = source.len() - rest.len();
+    let header_end = first_top_level_brace(rest)?;
+    let trimmed = rest.trim_start();
+    let extends = if trimmed.starts_with("extends ") {
+        Some(rest.len() - trimmed.len())
+    } else {
+        rest[..header_end].find(" extends ").map(|index| index + 1)
+    };
+    match extends {
+        Some(extends) => {
+            let after = extends + "extends ".len();
+            Some(base + after + class_heritage_body_brace(&rest[after..])?)
+        }
+        None => Some(base + header_end),
     }
 }
 
@@ -13211,9 +13311,12 @@ fn parse_class_static_block(
     let saved_super_call =
         std::mem::replace(&mut context.super_call, SuperCallContext::ClassElement);
     let parsed = with_function_context(false, false, context, |context| {
-        with_function_strict_mode(body_src, true, context, |context| {
+        let saved_static_block_await = std::mem::replace(&mut context.static_block_await, true);
+        let parsed = with_function_strict_mode(body_src, true, context, |context| {
             parse_body_statements(body_src, ParseGoal::Script, span, context)
-        })
+        });
+        context.static_block_await = saved_static_block_await;
+        parsed
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
@@ -18466,6 +18569,13 @@ mod tests {
     fn parse_f64_numeric_literal_with_separators() {
         assert_eq!(parse_f64_numeric_literal("1_000.5"), Some(1000.5));
         assert_eq!(parse_f64_numeric_literal("1.5_00"), Some(1.5));
+        // bd-9vouw.176: a literal may start with its decimal point (Node
+        // v22.2.0 values); `._1` is not a literal.
+        assert_eq!(parse_f64_numeric_literal(".0_1e2"), Some(1.0));
+        assert_eq!(parse_f64_numeric_literal(".1_01e2"), Some(10.1));
+        assert_eq!(parse_f64_numeric_literal(".00_01e2"), Some(0.01));
+        assert_eq!(parse_f64_numeric_literal(".5_5"), Some(0.55));
+        assert_eq!(parse_f64_numeric_literal("._1"), None);
     }
 
     #[test]
@@ -19127,6 +19237,8 @@ mod tests {
             await_context: false,
             yield_context: false,
             super_call: SuperCallContext::Forbidden,
+            static_block_await: false,
+            formal_parameters: false,
             private_name_scopes: Vec::new(),
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)

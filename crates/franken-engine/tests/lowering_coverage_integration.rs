@@ -2004,7 +2004,8 @@ fn lowering_computed_member_assignment() {
         matches!(
             op,
             Ir1Op::SetProperty {
-                key: Ir1PropertyKey::Dynamic
+                key: Ir1PropertyKey::Dynamic,
+                ..
             }
         )
     });
@@ -2098,7 +2099,8 @@ fn lowering_logical_compound_member_assignment_uses_short_circuit_ops() {
                 matches!(
                     op,
                     Ir1Op::SetProperty {
-                        key: Ir1PropertyKey::Dynamic
+                        key: Ir1PropertyKey::Dynamic,
+                        ..
                     }
                 )
             })
@@ -2107,7 +2109,8 @@ fn lowering_logical_compound_member_assignment_uses_short_circuit_ops() {
                 matches!(
                     op,
                     Ir1Op::SetProperty {
-                        key: Ir1PropertyKey::Static(key)
+                        key: Ir1PropertyKey::Static(key),
+                        ..
                     } if key == "prop"
                 )
             })

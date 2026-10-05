@@ -6407,6 +6407,8 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
                     crate::lowering_pipeline::object_receiver_static_member_capability(member)
                 }),
         )
+        // `process.nextTick` read as a value (bd-9vouw.186).
+        .chain(std::iter::once("builtin:ProcessNextTick"))
         .find(|candidate| *candidate == tag)
 }
 

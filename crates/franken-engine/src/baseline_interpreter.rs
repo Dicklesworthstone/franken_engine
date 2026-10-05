@@ -51577,10 +51577,7 @@ impl InterpreterCore {
                                         &property_key,
                                         &previous_label,
                                     )?;
-                                    return Err(InterpreterError::TypeError {
-                                        expected: "successful Proxy set trap".to_string(),
-                                        got: "falsy set trap result".to_string(),
-                                    });
+                                    return Err(self.rejected_strict_set_error(oid, &property_key));
                                 }
                                 // A sloppy write that [[Set]] rejected left the
                                 // object as it was: restore the prior label.
@@ -61011,6 +61008,33 @@ impl InterpreterCore {
             Some(Value::Bool(true))
         );
         Ok(Some((target, handler, revoked)))
+    }
+
+    /// The TypeError a strict-code write throws when [[Set]] returns false
+    /// (ES2020 6.2.4.9 step 6.d), naming why: a Proxy's falsy set trap, a
+    /// frozen object, a non-extensible object without the property, or a
+    /// read-only property. Since sloppy writes fail silently (bd-9vouw.146),
+    /// [[Set]] reports false instead of erring, and every strict failure read
+    /// as a Proxy trap's.
+    fn rejected_strict_set_error(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> InterpreterError {
+        let type_error = |expected: &str, got: &str| InterpreterError::TypeError {
+            expected: expected.to_string(),
+            got: got.to_string(),
+        };
+        if matches!(self.proxy_record(object_id), Ok(Some(_))) {
+            return type_error("successful Proxy set trap", "falsy set trap result");
+        }
+        match self.heap.get(object_id.0 as usize) {
+            Some(object) if object.is_frozen => type_error("mutable object", "frozen object"),
+            Some(object) if !object.extensible() && !object.contains_own_runtime_property(key) => {
+                type_error("existing property on non-extensible object", "new property")
+            }
+            _ => type_error("writable property", "read-only property"),
+        }
     }
 
     fn active_proxy_record(

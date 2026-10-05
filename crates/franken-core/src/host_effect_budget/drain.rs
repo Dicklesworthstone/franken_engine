@@ -47,8 +47,9 @@ impl std::error::Error for HostEffectDrainError {}
 impl HostEffectWorkPool {
     /// Permanently revoke this pool and wait for all its admitted provider calls
     /// to return or unwind. I/O and process bindings, including every clone,
-    /// share the same frontier. Admission that races with revocation either
-    /// fails before dispatch or holds a counted permit until it exits.
+    /// share the same frontier, including all descendant partitions. Draining
+    /// a child leaves parent and sibling authority intact. Admission that races
+    /// with revocation either fails or remains counted until its permits exit.
     ///
     /// A successful snapshot has `in_flight == 0`, and no subsequent ordinary
     /// request can enter through a binding to this pool. Timeout or poisoned
@@ -91,6 +92,9 @@ impl HostEffectWorkPool {
         loop {
             // Check under admission's mutex, including after every wakeup.
             // A notification alone is never evidence that work has finished.
+            if self.has_poisoned_accounting() {
+                return Err(HostEffectDrainError::AccountingPoisoned);
+            }
             if accounting.in_flight == 0 {
                 return Ok(HostEffectSnapshot {
                     remaining_operations: accounting.remaining,

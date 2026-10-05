@@ -91,7 +91,7 @@ impl ProcessSpawnControl for ProcessEffectControl {
     fn checkpoint(&self) -> Result<(), ProcessSpawnError> {
         if !self.refused.load(Ordering::Acquire)
             && (self.pool.is_revoked()
-                || self.pool.state.accounting.is_poisoned()
+                || self.pool.has_poisoned_accounting()
                 || self.scope.is_revoked()
                 || self.caller.checkpoint().is_err())
         {

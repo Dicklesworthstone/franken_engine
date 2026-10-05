@@ -25,8 +25,10 @@ use frankenengine_extension_host::host_io::{
 use crate::execution_work_budget::{ExecutionWorkPool, WorkScopeRevocation};
 
 mod drain;
+mod hierarchy;
 mod process;
 pub use drain::HostEffectDrainError;
+pub use hierarchy::MAX_HOST_EFFECT_POOL_DEPTH;
 pub use process::BudgetedProcessSpawn;
 
 #[cfg(test)]
@@ -39,8 +41,10 @@ pub struct HostEffectLimits {
     pub max_in_flight: usize,
 }
 
-/// Atomic accounting observation. Completed and failed effects are committed;
-/// `in_flight` is the number of provider calls currently holding admission.
+/// Atomic observation of this scope. Committed operations include irreversible
+/// child delegations as well as locally admitted calls; they are not a count of
+/// successful effects. `in_flight` includes descendant and provisional permits.
+/// A child spends its prepaid balance without charging ancestor credits again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostEffectSnapshot {
     pub remaining_operations: u64,
@@ -54,6 +58,8 @@ pub enum HostEffectBudgetError {
     Exhausted,
     ConcurrencyLimit,
     AccountingPoisoned,
+    HierarchyDepthExceeded,
+    ConcurrencyLimitBroadened,
 }
 
 impl HostEffectBudgetError {
@@ -63,6 +69,8 @@ impl HostEffectBudgetError {
             Self::Exhausted => "HOST_EFFECT_BUDGET_EXHAUSTED",
             Self::ConcurrencyLimit => "HOST_EFFECT_CONCURRENCY_LIMIT",
             Self::AccountingPoisoned => "HOST_EFFECT_ACCOUNTING_POISONED",
+            Self::HierarchyDepthExceeded => "HOST_EFFECT_HIERARCHY_DEPTH_EXCEEDED",
+            Self::ConcurrencyLimitBroadened => "HOST_EFFECT_CONCURRENCY_LIMIT_BROADENED",
         }
     }
 
@@ -87,18 +95,32 @@ struct Accounting {
     in_flight: usize,
 }
 
-#[derive(Debug)]
 struct PoolState {
     limits: HostEffectLimits,
     accounting: Mutex<Accounting>,
     idle: Condvar,
     revoked: AtomicBool,
+    // Immutable root-to-parent order. Children retain their ancestors, never
+    // the other way around, so owner drops cannot detach limits or revocation.
+    ancestors: Arc<[Arc<PoolState>]>,
 }
 
 /// One live allowance; cloning never creates new credits or concurrency slots.
-#[derive(Debug, Clone)]
+/// Partitions reserve isolated credits but share every ancestor's dispatch cap.
+#[derive(Clone)]
 pub struct HostEffectWorkPool {
     state: Arc<PoolState>,
+}
+
+impl fmt::Debug for HostEffectWorkPool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Do not recursively expand the shared ancestry DAG.
+        f.debug_struct("HostEffectWorkPool")
+            .field("limits", &self.state.limits)
+            .field("depth", &self.state.ancestors.len())
+            .field("revoked", &self.is_revoked())
+            .finish_non_exhaustive()
+    }
 }
 
 impl HostEffectWorkPool {
@@ -113,6 +135,7 @@ impl HostEffectWorkPool {
                 }),
                 idle: Condvar::new(),
                 revoked: AtomicBool::new(false),
+                ancestors: Arc::default(),
             }),
         }
     }
@@ -134,8 +157,8 @@ impl HostEffectWorkPool {
         })
     }
 
-    /// Permanently stop all providers bound to this pool. Active cooperative
-    /// native I/O observes this through the forwarded operation control.
+    /// Permanently stop this scope and its descendants, not parents or siblings.
+    /// Active cooperative native work observes the forwarded operation control.
     /// Revocation neither refunds credits nor proves drain/finalize completed.
     /// Use [`Self::revoke_and_drain`] to wait for admitted provider calls.
     pub fn revoke(&self) {
@@ -144,6 +167,31 @@ impl HostEffectWorkPool {
 
     pub fn is_revoked(&self) -> bool {
         self.state.revoked.load(Ordering::Acquire)
+            || self
+                .state
+                .ancestors
+                .iter()
+                .any(|scope| scope.revoked.load(Ordering::Acquire))
+    }
+
+    fn has_poisoned_accounting(&self) -> bool {
+        self.state.accounting.is_poisoned()
+            || self
+                .state
+                .ancestors
+                .iter()
+                .any(|scope| scope.accounting.is_poisoned())
+    }
+
+    fn check_active(&self) -> Result<(), HostEffectBudgetError> {
+        if self.is_revoked() {
+            Err(HostEffectBudgetError::Revoked)
+        } else if self.has_poisoned_accounting() {
+            Err(HostEffectBudgetError::AccountingPoisoned)
+        } else {
+            // Empty ancestor balances do not cancel prepaid descendant work.
+            Ok(())
+        }
     }
 
     /// Installable directly in the interpreter's existing host-I/O provider
@@ -163,52 +211,86 @@ impl HostEffectWorkPool {
     }
 
     fn admit(&self) -> Result<EffectPermit, HostEffectBudgetError> {
-        if self.is_revoked() {
-            return Err(HostEffectBudgetError::Revoked);
+        self.check_active()?;
+        // The state retains immutable ancestry. A prefix count is sufficient
+        // for unwind-safe rollback: no allocation is needed during admission.
+        let mut permit = EffectPermit {
+            state: Arc::clone(&self.state),
+            acquired_ancestors: 0,
+            leaf_acquired: false,
+        };
+        for scope in self.state.ancestors.iter() {
+            let mut accounting = scope
+                .accounting
+                .lock()
+                .map_err(|_| HostEffectBudgetError::AccountingPoisoned)?;
+            self.check_active()?;
+            if accounting.in_flight >= scope.limits.max_in_flight {
+                return Err(HostEffectBudgetError::ConcurrencyLimit);
+            }
+            accounting.in_flight += 1;
+            permit.acquired_ancestors += 1;
+            // Release each lock before acquiring the next. A failed admission
+            // releases its provisional ancestor permits through Drop.
         }
         let mut accounting = self
             .state
             .accounting
             .lock()
             .map_err(|_| HostEffectBudgetError::AccountingPoisoned)?;
-        if self.is_revoked() {
-            return Err(HostEffectBudgetError::Revoked);
-        }
+        self.check_active()?;
         if accounting.remaining == 0 {
             return Err(HostEffectBudgetError::Exhausted);
         }
         if accounting.in_flight >= self.state.limits.max_in_flight {
             return Err(HostEffectBudgetError::ConcurrencyLimit);
         }
+        // Ancestor credits were prepaid when this scope was partitioned.
+        // Charging them here again would deny legitimately reserved work.
         accounting.remaining -= 1;
         accounting.in_flight += 1;
-        Ok(EffectPermit {
-            state: Arc::clone(&self.state),
-        })
+        permit.leaf_acquired = true;
+        drop(accounting);
+        Ok(permit)
     }
 }
 
 struct EffectPermit {
     state: Arc<PoolState>,
+    acquired_ancestors: usize,
+    leaf_acquired: bool,
 }
 
-impl Drop for EffectPermit {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            self.state.revoked.store(true, Ordering::Release);
-        }
-        // Cleanup must not panic during unwinding. Poison remains visible to
-        // future admission; recovering here only releases the held slot.
-        let mut accounting = self
-            .state
+impl EffectPermit {
+    fn release(scope: &PoolState) {
+        // Recover only to release a permit; poison still denies admission and
+        // drain certification. Exactly one release follows each increment.
+        let mut accounting = scope
             .accounting
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         accounting.in_flight -= 1;
         if accounting.in_flight == 0 {
-            // The predicate and notification use the same mutex as admission
-            // and drain. Wake every closer, including on a provider unwind.
-            self.state.idle.notify_all();
+            scope.idle.notify_all();
+        }
+    }
+}
+
+impl Drop for EffectPermit {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            // Providers can be shared across siblings. Unlike explicit child
+            // revocation, an unwind quarantines the whole family rather than
+            // letting another tenant reuse potentially corrupted native state.
+            let root = self.state.ancestors.first().unwrap_or(&self.state);
+            root.revoked.store(true, Ordering::Release);
+        }
+        if self.leaf_acquired {
+            Self::release(&self.state);
+        }
+        // Root last: a successful root drain observes all descendant releases.
+        for scope in self.state.ancestors[..self.acquired_ancestors].iter().rev() {
+            Self::release(scope);
         }
     }
 }
@@ -250,7 +332,7 @@ impl HostIoControl for EffectControl {
     fn checkpoint(&self) -> Result<(), HostIoError> {
         if !self.refused.load(Ordering::Acquire)
             && (self.pool.is_revoked()
-                || self.pool.state.accounting.is_poisoned()
+                || self.pool.has_poisoned_accounting()
                 || self.scope.is_revoked()
                 || self.caller.checkpoint().is_err())
         {

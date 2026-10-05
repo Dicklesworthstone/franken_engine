@@ -6,7 +6,7 @@
 //! losing sockets synchronously. No worker, TLS handshake or guest payload can
 //! outlive this race. DNS and the eventual request retain the original deadline.
 
-use super::{NetworkDeadline, NetworkRevocation, REVOCATION_POLL_INTERVAL};
+use super::NetworkDeadline;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::net::{AddressFamily, SocketFlags, SocketType, connect, socket_with};
 use std::io;
@@ -24,7 +24,7 @@ pub(super) fn connect_addresses(
 ) -> io::Result<TcpStream> {
     deadline.remaining()?;
     let mut connector = SocketConnector {
-        revocation: deadline.revocation.clone(),
+        deadline: deadline.clone(),
     };
     let stream = race(addresses, deadline.end, &mut connector)?;
     // The surrounding DeadlineTcpStream applies read/write timeouts. Do not
@@ -196,16 +196,17 @@ fn race<C: Connector>(
 }
 
 struct SocketConnector {
-    revocation: Option<NetworkRevocation>,
+    // Keep both authority sources, not only the provider-wide kill switch.
+    // Dropping OperationControl here would leave an individual execution
+    // unable to interrupt a connect without revoking every sibling tenant.
+    deadline: NetworkDeadline,
 }
 
 impl Connector for SocketConnector {
     type Stream = TcpStream;
 
     fn check_active(&self) -> io::Result<()> {
-        self.revocation
-            .as_ref()
-            .map_or(Ok(()), NetworkRevocation::check)
+        self.deadline.remaining().map(|_| ())
     }
 
     fn now(&self) -> Instant {
@@ -251,12 +252,9 @@ impl Connector for SocketConnector {
     ) -> io::Result<Option<TcpStream>> {
         // One second is representable by poll on every supported Unix target.
         // Waking early never extends either the attempt or operation deadline.
-        self.check_active()?;
-        let limit = if self.revocation.is_some() {
-            REVOCATION_POLL_INTERVAL
-        } else {
-            Duration::from_secs(1)
-        };
+        // wait_slice checks the operation's sticky refusal latch and bounds
+        // polling even when there is no provider-wide revocation source.
+        let limit = self.deadline.wait_slice()?.min(Duration::from_secs(1));
         let timeout = timeout.min(limit);
         let timeout = Timespec {
             tv_sec: timeout.as_secs() as _,
@@ -626,5 +624,156 @@ mod tests {
             unused.accept().unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
+    }
+
+    #[derive(Debug)]
+    struct RefuseAfter(std::sync::atomic::AtomicUsize);
+
+    impl crate::host_io::HostIoControl for RefuseAfter {
+        fn checkpoint(&self) -> Result<(), crate::host_io::HostIoError> {
+            use std::sync::atomic::Ordering;
+            self.0
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1))
+                .map(|_| ())
+                .map_err(|_| crate::host_io::HostIoError::Denied {
+                    reason: "execution stopped".into(),
+                })
+        }
+    }
+
+    fn controlled_deadline(allowed_checks: usize) -> NetworkDeadline {
+        NetworkDeadline::new(Duration::from_secs(10))
+            .unwrap()
+            .with_control(crate::host_io::control::OperationControl::new(
+                std::sync::Arc::new(RefuseAfter(std::sync::atomic::AtomicUsize::new(
+                    allowed_checks,
+                ))),
+            ))
+    }
+
+    #[test]
+    fn execution_refusal_after_admission_prevents_the_first_socket() {
+        // The outer admission succeeds. The race must recheck the execution,
+        // not just the independently live provider, before opening a socket.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let revocation = super::super::NetworkRevocation::default();
+        let mut deadline = controlled_deadline(1);
+        deadline.revocation = Some(revocation.clone());
+        let error = connect_addresses(&[listener.local_addr().unwrap()], deadline).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "HOST_IO_EXECUTION_CANCELLED");
+        assert!(!revocation.is_revoked());
+        assert_eq!(listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn execution_refusal_after_poll_cannot_publish_a_ready_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let deadline = controlled_deadline(1);
+        let end = deadline.end;
+        let mut connector = SocketConnector { deadline };
+        let mut pending = vec![Pending { stream, end }];
+        let mut last_error = io::Error::from(io::ErrorKind::NotFound);
+        // The first checkpoint permits polling an already-writable socket.
+        // The next refuses it before the winner can escape to HTTP or TLS.
+        let error = connector
+            .wait(&mut pending, Duration::ZERO, &mut last_error)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(connector.deadline.end, end);
+        drop(pending);
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn execution_refusal_stays_local_and_sticky_across_race_checkpoints() {
+        let revocation = super::super::NetworkRevocation::default();
+        let mut refused = controlled_deadline(0);
+        refused.revocation = Some(revocation.clone());
+        let shared_refusal = refused.clone();
+        let mut sibling = controlled_deadline(20);
+        sibling.revocation = Some(revocation.clone());
+        for deadline in [refused, shared_refusal] {
+            let connector = SocketConnector { deadline };
+            assert_eq!(
+                connector.check_active().unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+        assert!(!revocation.is_revoked());
+        assert!(SocketConnector { deadline: sibling }.check_active().is_ok());
+        revocation.revoke();
+        let mut fresh = controlled_deadline(20);
+        fresh.revocation = Some(revocation);
+        assert_eq!(
+            SocketConnector { deadline: fresh }.check_active().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn control_only_native_poll_is_interruptible_without_a_provider_kill_switch() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, mpsc};
+
+        #[derive(Debug)]
+        struct AnnouncedControl {
+            cancelled: AtomicBool,
+            announced: AtomicBool,
+            entered: mpsc::Sender<()>,
+        }
+        impl crate::host_io::HostIoControl for AnnouncedControl {
+            fn checkpoint(&self) -> Result<(), crate::host_io::HostIoError> {
+                if !self.announced.swap(true, Ordering::AcqRel) {
+                    let _ = self.entered.send(());
+                }
+                if self.cancelled.load(Ordering::Acquire) {
+                    Err(crate::host_io::HostIoError::Denied { reason: "stop".into() })
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let (entered, wait_entered) = mpsc::channel();
+        let (done, wait_done) = mpsc::channel();
+        let control = Arc::new(AnnouncedControl {
+            cancelled: AtomicBool::new(false),
+            announced: AtomicBool::new(false),
+            entered,
+        });
+        let deadline = NetworkDeadline::new(Duration::from_secs(10))
+            .unwrap()
+            .with_control(crate::host_io::control::OperationControl::new(control.clone()));
+        assert!(deadline.revocation.is_none());
+        let worker = std::thread::spawn(move || {
+            let mut connector = SocketConnector { deadline };
+            let mut pending = Vec::new();
+            let mut last_error = io::Error::from(io::ErrorKind::NotFound);
+            // An empty native poll has no ready socket to wake it. Repeated
+            // short waits must retain the same execution and absolute budget.
+            loop {
+                if let Err(error) = connector.wait(
+                    &mut pending,
+                    Duration::from_secs(10),
+                    &mut last_error,
+                ) {
+                    let _ = done.send(error.kind());
+                    break;
+                }
+            }
+        });
+        let entered = wait_entered.recv_timeout(Duration::from_secs(2));
+        control.cancelled.store(true, Ordering::Release);
+        let result = wait_done.recv_timeout(Duration::from_secs(2));
+        // Join even on assertion failure: no detached test worker remains.
+        worker.join().unwrap();
+        entered.unwrap();
+        assert_eq!(result.unwrap(), io::ErrorKind::PermissionDenied);
     }
 }

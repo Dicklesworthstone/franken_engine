@@ -24,6 +24,9 @@ use frankenengine_extension_host::host_io::{
 
 use crate::execution_work_budget::{ExecutionWorkPool, WorkScopeRevocation};
 
+mod process;
+pub use process::BudgetedProcessSpawn;
+
 #[cfg(test)]
 mod tests;
 
@@ -186,6 +189,9 @@ struct EffectPermit {
 
 impl Drop for EffectPermit {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.state.revoked.store(true, Ordering::Release);
+        }
         // Cleanup must not panic during unwinding. Poison remains visible to
         // future admission; recovering here only releases the held slot.
         let mut accounting = self

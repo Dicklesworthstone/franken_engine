@@ -15,7 +15,7 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use frankenengine_extension_host::host_io::{
     HostIoCapability, HostIoControl, HostIoError, HostIoExceptionProvenance, HostIoOutcome,
@@ -24,7 +24,9 @@ use frankenengine_extension_host::host_io::{
 
 use crate::execution_work_budget::{ExecutionWorkPool, WorkScopeRevocation};
 
+mod drain;
 mod process;
+pub use drain::HostEffectDrainError;
 pub use process::BudgetedProcessSpawn;
 
 #[cfg(test)]
@@ -89,6 +91,7 @@ struct Accounting {
 struct PoolState {
     limits: HostEffectLimits,
     accounting: Mutex<Accounting>,
+    idle: Condvar,
     revoked: AtomicBool,
 }
 
@@ -108,6 +111,7 @@ impl HostEffectWorkPool {
                     remaining: limits.operations,
                     in_flight: 0,
                 }),
+                idle: Condvar::new(),
                 revoked: AtomicBool::new(false),
             }),
         }
@@ -133,6 +137,7 @@ impl HostEffectWorkPool {
     /// Permanently stop all providers bound to this pool. Active cooperative
     /// native I/O observes this through the forwarded operation control.
     /// Revocation neither refunds credits nor proves drain/finalize completed.
+    /// Use [`Self::revoke_and_drain`] to wait for admitted provider calls.
     pub fn revoke(&self) {
         self.state.revoked.store(true, Ordering::Release);
     }
@@ -200,6 +205,11 @@ impl Drop for EffectPermit {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         accounting.in_flight -= 1;
+        if accounting.in_flight == 0 {
+            // The predicate and notification use the same mutex as admission
+            // and drain. Wake every closer, including on a provider unwind.
+            self.state.idle.notify_all();
+        }
     }
 }
 
@@ -240,6 +250,7 @@ impl HostIoControl for EffectControl {
     fn checkpoint(&self) -> Result<(), HostIoError> {
         if !self.refused.load(Ordering::Acquire)
             && (self.pool.is_revoked()
+                || self.pool.state.accounting.is_poisoned()
                 || self.scope.is_revoked()
                 || self.caller.checkpoint().is_err())
         {

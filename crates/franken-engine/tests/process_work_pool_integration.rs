@@ -170,3 +170,64 @@ fn fresh_attempt_authority_cannot_refill_work_and_replay_does_not_debit_it_again
     assert_eq!(pool.snapshot().unwrap().committed_operations, 1);
     assert_eq!(pool.snapshot().unwrap().in_flight, 0);
 }
+
+#[test]
+fn supervised_drain_preserves_the_real_js_process_failure_journal() {
+    use std::time::{Duration, Instant};
+
+    let scratch = Scratch::new();
+    let executable = ["/usr/bin/sleep", "/bin/sleep"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .expect("native sleep fixture");
+    let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).expect("jail");
+    policy
+        .authorize_alias("budget-sleep", executable)
+        .expect("pin native executable");
+    policy.limits.max_runtime_millis = 10_000;
+    let native = Arc::new(NativeProcessSpawn::new(policy).expect("native provider"));
+    let pool = HostEffectWorkPool::new(HostEffectLimits {
+        operations: 2,
+        max_in_flight: 1,
+    });
+    let provider = Arc::new(pool.bind_process_spawn(native, &ExecutionWorkPool::new(1)));
+    let worker = std::thread::spawn(move || {
+        let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
+        orchestrator.set_process_spawn(
+            provider,
+            Arc::new(InMemoryHostEffectJournal::recording()),
+            authority(),
+        );
+        let mut package = package();
+        package.source = "const cp = require('child_process'); \
+                          cp.execFileSync('budget-sleep', ['5']);"
+            .into();
+        let failed = orchestrator.execute(&package).is_err();
+        (failed, orchestrator.last_failed_host_effect_journal().to_vec())
+    });
+
+    let admission_deadline = Instant::now() + Duration::from_secs(10);
+    while pool.snapshot().unwrap().in_flight == 0 {
+        assert!(!worker.is_finished(), "guest never held native dispatch admission");
+        assert!(Instant::now() < admission_deadline, "native dispatch did not start");
+        std::thread::yield_now();
+    }
+    // This deliberately covers the admitted-launch race as well as an already
+    // running process. Counting admission alone is NOT proof the OS child has
+    // started. The native provider must account for either cancellation path.
+    let drained = pool.revoke_and_drain(Duration::from_secs(5));
+    // Dispatch drain does not commit/finalize the outer journal. Join the
+    // orchestrator separately before inspecting its exact failed-effect prefix.
+    let (failed, journal) = worker.join().expect("orchestrator thread");
+    let snapshot = drained.expect("native process dispatch drained");
+    assert!(failed, "revocation must not publish guest execution success");
+    assert!(matches!(
+        journal.as_slice(),
+        [HostEffectJournalEntry::ProcessSpawn { outcome: Err(_), .. }]
+    ));
+    assert_eq!(snapshot.in_flight, 0);
+    assert_eq!(snapshot.committed_operations, 1);
+    assert_eq!(snapshot.remaining_operations, 1);
+    assert_eq!(pool.snapshot().unwrap(), snapshot);
+}

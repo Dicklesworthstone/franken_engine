@@ -12,7 +12,7 @@
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::ifc_artifacts::Label;
-use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
 use frankenengine_engine::lowering_pipeline::{
     LoweringContext, LoweringPipelineError, lower_ir0_to_ir3,
 };
@@ -324,11 +324,12 @@ fn nested_bodies_use_the_authenticated_host_io_provenance_bd_9vouw_1() {
 #[test]
 fn opaque_module_code_keeps_fail_high_top_secret_bd_9vouw_1() {
     // A loaded module runs code this IR does not contain, so the ceiling
-    // stays TopSecret and unsummarized call results keep failing high.
+    // stays TopSecret and unsummarized call results keep failing high. A Node
+    // core module is outside the bounded-imports contract (bd-j8f7q).
     let name = "unknown_module_callee";
     match lower_with_goal(
         name,
-        "import m from './helper.js'; console.log(m.compute());",
+        "import m from 'node:worker_threads'; console.log(m.compute());",
         ParseGoal::Module,
     ) {
         Err(LoweringPipelineError::UnauthorizedFlow {
@@ -341,6 +342,33 @@ fn opaque_module_code_keeps_fail_high_top_secret_bd_9vouw_1() {
         }
         other => panic!("{name}: expected UnauthorizedFlow TopSecret -> Internal, got {other:?}"),
     }
+}
+
+/// bd-j8f7q: a local module's results reach the sink only under the
+/// bounded-imports contract, which the lowered unit carries so the
+/// interpreter checks the module's ceiling before running it (the refusals
+/// are in tests/ifc_bounded_imports_bd_j8f7q.rs).
+#[test]
+fn local_module_results_lower_only_under_the_bounded_imports_contract() {
+    let source = "import m from './helper.js'; console.log(m.compute());";
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Module)
+        .expect("parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "local_module_callee.js".to_string());
+    let context = LoweringContext::new(
+        "trace-bd-9vouw-1",
+        "decision-bd-9vouw-1",
+        "policy-bd-9vouw-1",
+    );
+    let output = lower_ir0_to_ir3(&ir0, &context).expect("lowered under the contract");
+    assert!(
+        output.ir3.instructions.iter().any(|instruction| matches!(
+            instruction,
+            Ir3Instruction::HostCall { capability, .. }
+                if capability.0 == "builtin:IfcBoundedImportsContract"
+        )),
+        "the unit must carry the bounded-imports contract marker"
+    );
 }
 
 /// bd-9vouw.95: a WeakRef holds its target strongly, so a secret stored behind

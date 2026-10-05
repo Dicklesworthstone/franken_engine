@@ -6,9 +6,8 @@
 //! of one of those modules reached none of them: the import loaded nothing at
 //! run time, and its opaque result was TopSecret, so nothing it produced
 //! could be printed. When the module does not bind `require` itself, this
-//! rewrite turns each such import into the CommonJS declaration Node's
-//! interop gives it, first in the program, since imports run before the
-//! module body:
+//! rewrite turns each such import into what Node's interop gives it, first in
+//! the program, since imports run before the module body:
 //!
 //! ```text
 //! import path from 'node:path'          -> const path = require('node:path');
@@ -16,20 +15,33 @@
 //! import { join, sep as s } from 'path' -> const { join } = require('path');
 //!                                          const { sep: s } = require('path');
 //! import 'node:path'                    -> (nothing; a builtin has no side effect)
+//! import { URL } from 'node:url'        -> (nothing; `URL` reads the global)
+//! import { Buffer as B } from 'buffer'  -> const B = globalThis.Buffer;
+//! import { createHash } from 'crypto'   -> const %core_import_0 = require('crypto');
+//!                                          and each `createHash` the module
+//!                                          names becomes %core_import_0.createHash
 //! ```
 //!
-//! A binding the program never names is dropped, so an unused import does not
-//! keep a facade from recognizing the others. Forms the facades do not
-//! recognize keep failing closed, as the ambient-authority refusal of
-//! `require` in place of the opaque import.
+//! The last form is for the modules whose facade recognizes member calls on
+//! an alias but no destructured binding (crypto, os, querystring,
+//! timers/promises, zlib). A named export that is a realm global (Buffer,
+//! URL, performance, the timers) is that global. A binding the program never
+//! names is dropped, so an unused import does not keep a facade from
+//! recognizing the others. Forms the facades do not recognize keep failing
+//! closed, as the ambient-authority refusal of `require` in place of the
+//! opaque import.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::with_statement::{Outcome, Walk, lexical_names, var_names, walk_expression};
+use super::util_module::scoped_walk;
+use super::with_statement::{
+    FunctionBody, FunctionParts, Outcome, Walk, lexical_names, var_names, walk_expression,
+    walk_function, walk_statement, walk_switch_cases,
+};
 use crate::ast::{
-    BindingPattern, ExportKind, Expression, ImportClause, ImportDeclaration, ImportSpecifier,
-    ObjectPatternProperty, Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator,
+    BindingPattern, CatchClause, ExportKind, Expression, ImportClause, ImportDeclaration,
+    ImportSpecifier, ObjectPatternProperty, Statement, SwitchCase, SyntaxTree, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 
 /// Core modules whose `require` aliases lowering recognizes (and path's
@@ -50,17 +62,57 @@ const FACADE_MODULES: [&str; 12] = [
     "zlib",
 ];
 
-fn is_facade_import(statement: &Statement) -> bool {
-    matches!(statement, Statement::Import(import)
-    if import.source.as_str().is_some_and(|specifier| {
-        FACADE_MODULES.contains(&specifier.strip_prefix("node:").unwrap_or(specifier))
-    }))
+/// Named exports that are realm globals, by module.
+const GLOBAL_EXPORTS: [(&str, &[&str]); 4] = [
+    ("buffer", &["Buffer", "atob", "btoa"]),
+    ("perf_hooks", &["performance"]),
+    (
+        "timers",
+        &[
+            "setTimeout",
+            "clearTimeout",
+            "setInterval",
+            "clearInterval",
+            "setImmediate",
+            "clearImmediate",
+        ],
+    ),
+    ("url", &["URL", "URLSearchParams"]),
+];
+
+/// Modules whose facade lowers member calls on an alias but recognizes no
+/// destructured binding.
+const MEMBER_MODULES: [&str; 5] = ["crypto", "os", "querystring", "timers/promises", "zlib"];
+
+/// Aliases the member rewrite declares. No source text can spell a `%` name.
+const ALIAS_PREFIX: &str = "%core_import_";
+
+/// The module an import of a core module names, without `node:`, when the
+/// rewrite handles it.
+fn rewritten_module(statement: &Statement) -> Option<&str> {
+    let Statement::Import(import) = statement else {
+        return None;
+    };
+    let specifier = import.source.as_str()?;
+    let module = specifier.strip_prefix("node:").unwrap_or(specifier);
+    (FACADE_MODULES.contains(&module) || GLOBAL_EXPORTS.iter().any(|(name, _)| *name == module))
+        .then_some(module)
 }
 
-/// `tree` with its imports of facade modules rewritten to `require`
-/// declarations, or `None` when it has none or binds `require` itself.
+fn is_global_export(module: &str, name: &str) -> bool {
+    GLOBAL_EXPORTS
+        .iter()
+        .any(|(owner, names)| *owner == module && names.contains(&name))
+}
+
+/// `tree` with its imports of core modules rewritten, or `None` when it has
+/// none or binds `require` itself.
 pub(super) fn rewrite_core_module_imports(tree: &SyntaxTree) -> Option<SyntaxTree> {
-    if !tree.body.iter().any(is_facade_import) {
+    if !tree
+        .body
+        .iter()
+        .any(|statement| rewritten_module(statement).is_some())
+    {
         return None;
     }
     let mut root = BTreeSet::new();
@@ -80,17 +132,30 @@ pub(super) fn rewrite_core_module_imports(tree: &SyntaxTree) -> Option<SyntaxTre
     if root.contains("require") {
         return None;
     }
-    let referenced = referenced_names(&tree.body);
-    let mut body = Vec::with_capacity(tree.body.len());
+    let (referenced, exported) = referenced_names(&tree.body);
+    let mut rewrite = Rewrite {
+        referenced,
+        exported,
+        declarations: Vec::new(),
+        renames: BTreeMap::new(),
+        aliases: 0,
+    };
     let mut rest = Vec::with_capacity(tree.body.len());
     for statement in &tree.body {
-        match statement {
-            Statement::Import(import) if is_facade_import(statement) => {
-                body.extend(require_declarations(import, &referenced));
-            }
+        match (statement, rewritten_module(statement)) {
+            (Statement::Import(import), Some(module)) => rewrite.import(import, module),
             _ => rest.push(statement.clone()),
         }
     }
+    if !rewrite.renames.is_empty() {
+        let mut renamer = Renamer {
+            scopes: Vec::new(),
+            renames: &rewrite.renames,
+        };
+        // The walk visits every statement kind and never fails.
+        let _ = renamer.statements(&mut rest);
+    }
+    let mut body = rewrite.declarations;
     body.append(&mut rest);
     Some(SyntaxTree {
         goal: tree.goal,
@@ -99,9 +164,9 @@ pub(super) fn rewrite_core_module_imports(tree: &SyntaxTree) -> Option<SyntaxTre
     })
 }
 
-/// Every identifier the program's code names, in any scope, plus the words
+/// Every identifier the program's code names, in any scope; and the words
 /// of its local export clauses (`export { join }`).
-fn referenced_names(statements: &[Statement]) -> BTreeSet<String> {
+fn referenced_names(statements: &[Statement]) -> (BTreeSet<String>, BTreeSet<String>) {
     struct Names(BTreeSet<String>);
 
     impl Walk for Names {
@@ -117,12 +182,13 @@ fn referenced_names(statements: &[Statement]) -> BTreeSet<String> {
     let mut body = statements.to_vec();
     // The walk visits every statement kind and never fails.
     let _ = names.statements(&mut body);
+    let mut exported = BTreeSet::new();
     for statement in statements {
         if let Statement::Export(export) = statement
             && let ExportKind::NamedClause(clause) = &export.kind
             && clause.source().is_none()
         {
-            names.0.extend(
+            exported.extend(
                 clause
                     .canonical_head()
                     .split(|c: char| !(c == '$' || c == '_' || c.is_alphanumeric()))
@@ -131,77 +197,211 @@ fn referenced_names(statements: &[Statement]) -> BTreeSet<String> {
             );
         }
     }
-    names.0
+    let mut referenced = names.0;
+    referenced.extend(exported.iter().cloned());
+    (referenced, exported)
 }
 
-/// The `const` declarations an import of a facade module becomes.
-fn require_declarations(
-    import: &ImportDeclaration,
-    referenced: &BTreeSet<String>,
-) -> Vec<Statement> {
-    let alias = |local: &str| {
-        referenced
-            .contains(local)
-            .then(|| require_declaration(import, BindingPattern::Identifier(local.to_string())))
-    };
-    let named = |specifiers: &[ImportSpecifier]| {
-        specifiers
-            .iter()
-            .filter(|specifier| referenced.contains(&specifier.local_name))
-            .map(|specifier| {
-                if specifier.import_name == "default" {
-                    return require_declaration(
+struct Rewrite {
+    referenced: BTreeSet<String>,
+    exported: BTreeSet<String>,
+    declarations: Vec<Statement>,
+    /// A named import of a member module: local -> (alias, export name).
+    renames: BTreeMap<String, (String, String)>,
+    aliases: usize,
+}
+
+impl Rewrite {
+    fn import(&mut self, import: &ImportDeclaration, module: &str) {
+        match &import.clause {
+            ImportClause::SideEffect => {}
+            ImportClause::Default { local } | ImportClause::Namespace { local } => {
+                self.alias(import, local);
+            }
+            ImportClause::Named { specifiers } => self.named(import, module, specifiers),
+            ImportClause::DefaultAndNamed {
+                default,
+                specifiers,
+            } => {
+                self.alias(import, default);
+                self.named(import, module, specifiers);
+            }
+            ImportClause::DefaultAndNamespace { default, namespace } => {
+                self.alias(import, default);
+                self.alias(import, namespace);
+            }
+        }
+    }
+
+    /// `const <local> = require(<source>);` when the program names `local`.
+    fn alias(&mut self, import: &ImportDeclaration, local: &str) {
+        if self.referenced.contains(local) {
+            self.declarations.push(require_declaration(
+                import,
+                BindingPattern::Identifier(local.to_string()),
+            ));
+        }
+    }
+
+    fn named(&mut self, import: &ImportDeclaration, module: &str, specifiers: &[ImportSpecifier]) {
+        let mut member_alias = None;
+        for specifier in specifiers {
+            let (name, local) = (&specifier.import_name, &specifier.local_name);
+            if !self.referenced.contains(local) {
+                continue;
+            }
+            if name == "default" {
+                self.alias(import, local);
+            } else if is_global_export(module, name) {
+                if local != name {
+                    self.declarations.push(declaration(
                         import,
-                        BindingPattern::Identifier(specifier.local_name.clone()),
-                    );
+                        BindingPattern::Identifier(local.clone()),
+                        Expression::Member {
+                            object: Box::new(Expression::Identifier("globalThis".to_string())),
+                            property: Box::new(Expression::Identifier(name.clone())),
+                            computed: false,
+                            span: Some(import.span),
+                        },
+                    ));
                 }
-                let key = if is_identifier_name(&specifier.import_name) {
-                    Expression::Identifier(specifier.import_name.clone())
+            } else if MEMBER_MODULES.contains(&module)
+                && is_identifier_name(name)
+                && !self.exported.contains(local)
+            {
+                let alias = member_alias
+                    .get_or_insert_with(|| {
+                        let alias = format!("{ALIAS_PREFIX}{}", self.aliases);
+                        self.aliases += 1;
+                        self.declarations.push(require_declaration(
+                            import,
+                            BindingPattern::Identifier(alias.clone()),
+                        ));
+                        alias
+                    })
+                    .clone();
+                self.renames.insert(local.clone(), (alias, name.clone()));
+            } else {
+                let key = if is_identifier_name(name) {
+                    Expression::Identifier(name.clone())
                 } else {
-                    Expression::StringLiteral(specifier.import_name.as_str().into())
+                    Expression::StringLiteral(name.as_str().into())
                 };
-                require_declaration(
+                self.declarations.push(require_declaration(
                     import,
                     BindingPattern::ObjectPattern(vec![ObjectPatternProperty {
                         key,
-                        value: BindingPattern::Identifier(specifier.local_name.clone()),
+                        value: BindingPattern::Identifier(local.clone()),
                         computed: false,
-                        shorthand: specifier.import_name == specifier.local_name,
+                        shorthand: name == local,
                     }]),
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    match &import.clause {
-        ImportClause::SideEffect => Vec::new(),
-        ImportClause::Default { local } | ImportClause::Namespace { local } => {
-            alias(local).into_iter().collect()
+                ));
+            }
         }
-        ImportClause::Named { specifiers } => named(specifiers),
-        ImportClause::DefaultAndNamed {
-            default,
-            specifiers,
-        } => alias(default)
-            .into_iter()
-            .chain(named(specifiers))
-            .collect(),
-        ImportClause::DefaultAndNamespace { default, namespace } => {
-            alias(default).into_iter().chain(alias(namespace)).collect()
+    }
+}
+
+/// Replaces each unshadowed reference to a renamed import with the member
+/// read on its alias.
+struct Renamer<'a> {
+    /// Names declared in each enclosing scope below the program, innermost
+    /// last. The program's own scope cannot redeclare an import binding.
+    scopes: Vec<BTreeSet<String>>,
+    renames: &'a BTreeMap<String, (String, String)>,
+}
+
+impl Renamer<'_> {
+    fn scoped(
+        &mut self,
+        names: BTreeSet<String>,
+        walk: impl FnOnce(&mut Self) -> Outcome,
+    ) -> Outcome {
+        self.scopes.push(names);
+        let outcome = walk(self);
+        self.scopes.pop();
+        outcome
+    }
+}
+
+impl Walk for Renamer<'_> {
+    scoped_walk!();
+
+    /// A loop head's declaration scopes its names over the loop.
+    fn statement(&mut self, statement: &mut Statement) -> Outcome {
+        let names = |pattern: &BindingPattern| {
+            pattern
+                .binding_names()
+                .into_iter()
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        };
+        let head = match &*statement {
+            Statement::For(statement) => match statement.init.as_deref() {
+                Some(Statement::VariableDeclaration(declaration)) => declaration
+                    .declarations
+                    .iter()
+                    .flat_map(|declarator| names(&declarator.pattern))
+                    .collect(),
+                _ => BTreeSet::new(),
+            },
+            Statement::ForIn(statement) if statement.binding_kind.is_some() => {
+                names(&statement.binding)
+            }
+            Statement::ForOf(statement) if statement.binding_kind.is_some() => {
+                names(&statement.binding)
+            }
+            _ => BTreeSet::new(),
+        };
+        if head.is_empty() {
+            return walk_statement(self, statement);
         }
+        self.scoped(head, |walker| walk_statement(walker, statement))
+    }
+
+    fn expression(&mut self, expression: &mut Expression) -> Outcome {
+        if let Expression::Identifier(name) = expression
+            && let Some((alias, member)) = self.renames.get(name.as_str())
+            && !self
+                .scopes
+                .iter()
+                .any(|scope| scope.contains(name.as_str()))
+        {
+            *expression = Expression::Member {
+                object: Box::new(Expression::Identifier(alias.clone())),
+                property: Box::new(Expression::Identifier(member.clone())),
+                computed: false,
+                span: None,
+            };
+            return Ok(());
+        }
+        walk_expression(self, expression)
     }
 }
 
 /// `const <pattern> = require('<source>');` at the import's span.
 fn require_declaration(import: &ImportDeclaration, pattern: BindingPattern) -> Statement {
+    declaration(
+        import,
+        pattern,
+        Expression::Call {
+            callee: Box::new(Expression::Identifier("require".to_string())),
+            arguments: vec![Expression::StringLiteral(import.source.clone())],
+            span: Some(import.span),
+        },
+    )
+}
+
+/// `const <pattern> = <initializer>;` at the import's span.
+fn declaration(
+    import: &ImportDeclaration,
+    pattern: BindingPattern,
+    initializer: Expression,
+) -> Statement {
     Statement::VariableDeclaration(VariableDeclaration {
         kind: VariableDeclarationKind::Const,
         declarations: vec![VariableDeclarator {
             pattern,
-            initializer: Some(Expression::Call {
-                callee: Box::new(Expression::Identifier("require".to_string())),
-                arguments: vec![Expression::StringLiteral(import.source.clone())],
-                span: Some(import.span),
-            }),
+            initializer: Some(initializer),
             span: import.span,
         }],
         span: import.span,

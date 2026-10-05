@@ -41947,16 +41947,20 @@ impl InterpreterCore {
                     items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
                     k += 1;
                 }
-                let mut elements: Vec<Value> = self.element_buffer(len)?;
-                for i in 0..len {
+                // Steps 15-18: the skipped elements are never read (an accessor
+                // there must not run).
+                let mut elements: Vec<Value> =
+                    self.element_buffer(len - delete_count + items.len())?;
+                for i in (0..start).chain(start + delete_count..len) {
+                    if i == start + delete_count {
+                        elements.append(&mut items);
+                    }
                     elements.push(
                         self.array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined),
                     );
                 }
-                let _removed: Vec<Value> = elements
-                    .splice(start..start + delete_count, items)
-                    .collect();
+                elements.append(&mut items);
                 let new_len = elements.len();
                 let result = self.alloc_array_with_prototype(None)?;
                 for (i, element) in elements.into_iter().enumerate() {

@@ -6360,6 +6360,8 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
                 })
                 .map(|member| ("Object", member))
         })
+        // `process.nextTick` read as a value (bd-9vouw.186).
+        .or_else(|| (tag == "builtin:ProcessNextTick").then_some(("process", "nextTick")))
 }
 
 /// `Reflect` members installed on the first-class `Reflect` object; each is
@@ -64740,7 +64742,7 @@ impl InterpreterCore {
         match self.require_module(module, &specifier) {
             // Node names the request as written, not the resolved path.
             Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
-                Err(self.throw_module_not_found(&specifier.to_string(), &reason))
+                Err(self.throw_module_not_found(specifier.as_ref(), &reason))
             }
             result => result,
         }

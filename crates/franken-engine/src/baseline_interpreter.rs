@@ -61610,6 +61610,42 @@ impl InterpreterCore {
         )
     }
 
+    /// ES2020 9.4.2.4 ArraySetLength steps 16-17 for an array `length`
+    /// write: elements are deleted from the end and the deletion stops at
+    /// the first one that cannot be deleted (a non-configurable element), so
+    /// `length` stays one past it and the write reports failure (bd-9vouw.197).
+    /// `Some(kept length)` when such an element sits at or above the new
+    /// length, `None` otherwise (and for anything but an array's `length`).
+    fn array_length_kept_by_nonconfigurable(
+        &self,
+        array_id: ObjectId,
+        key: &RuntimePropertyKey,
+        value: &Value,
+    ) -> Result<Option<i64>, InterpreterError> {
+        let Some(object) = self.heap.get(array_id.0 as usize) else {
+            return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
+        };
+        if !object.is_array || key.as_str() != Some("length") {
+            return Ok(None);
+        }
+        let new_length = Self::normalize_array_length_assignment(value)?;
+        // Only an explicit attribute entry makes an element non-configurable
+        // (a frozen array never reaches here), so the scan is over that map,
+        // not over every element.
+        let blocking = object
+            .property_attributes
+            .iter()
+            .filter(|(_, attributes)| !attributes.configurable)
+            .filter_map(|(candidate, _)| {
+                let name = candidate.as_str()?;
+                let index = Self::canonical_array_index_key(name)?;
+                (i64::from(index) >= new_length && object.properties.get(name).is_some())
+                    .then_some(index)
+            })
+            .max();
+        Ok(blocking.map(|index| i64::from(index) + 1))
+    }
+
     fn proxy_aware_set_runtime_property(
         &mut self,
         module: Option<&Ir3Module>,
@@ -61738,6 +61774,16 @@ impl InterpreterCore {
             {
                 // OrdinarySetWithOwnDescriptor does not invoke or overwrite
                 // an accessor on a distinct receiver of a data-property write.
+                return Ok(false);
+            }
+            if let Some(kept_length) =
+                self.array_length_kept_by_nonconfigurable(receiver_id, key, &value)?
+            {
+                self.set_object_runtime_property(
+                    receiver_id,
+                    key.clone(),
+                    Value::Int(kept_length),
+                )?;
                 return Ok(false);
             }
             self.set_object_runtime_property(receiver_id, key.clone(), value)?;

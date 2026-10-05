@@ -14159,8 +14159,10 @@ fn skip_identifier_name(text: &str) -> &str {
             }
             continue;
         }
+        // ID_Continue, not `char::is_alphanumeric`: `℘` (U+2118, ID_Start by
+        // Other_ID_Start) is a letter of `#℘` (bd-9vouw.176).
         match rest.chars().next() {
-            Some(c) if c.is_alphanumeric() || matches!(c, '_' | '$' | '\u{200c}' | '\u{200d}') => {
+            Some(c) if c.is_alphanumeric() || is_identifier_continue(c) => {
                 rest = &rest[c.len_utf8()..];
             }
             _ => return rest,
@@ -14174,11 +14176,23 @@ fn split_class_members(body: &str) -> Vec<&str> {
     let mut start = 0;
     let mut brace_depth = 0usize;
     let mut paren_depth = 0usize;
+    // bd-9vouw.176: braces in a computed key (`[() => {}]() {}`) and in an
+    // identifier escape (`get #\u{6F}() {}`) do not end an element.
+    let mut bracket_depth = 0usize;
+    let mut in_identifier_escape = false;
     let mut quotes = QuoteState::default();
 
     for (i, ch) in body.char_indices() {
         if quotes.active() {
             quotes.advance_char(ch);
+            continue;
+        }
+        if in_identifier_escape {
+            in_identifier_escape = ch != '}';
+            continue;
+        }
+        if ch == '\\' && body[i + 1..].starts_with("u{") {
+            in_identifier_escape = true;
             continue;
         }
         if ch == '/' && quotes.open_regex_at(body, i) {
@@ -14190,12 +14204,14 @@ fn split_class_members(body: &str) -> Vec<&str> {
             }
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth = bracket_depth.saturating_add(1),
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
             '}' => {
                 if brace_depth > 0 {
                     brace_depth = brace_depth.saturating_sub(1);
                 }
-                if brace_depth == 0 && paren_depth == 0 {
+                if brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
                     let end = i + 1;
                     segments.push(&body[start..end]);
                     start = end;

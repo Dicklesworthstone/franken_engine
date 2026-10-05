@@ -9335,7 +9335,13 @@ fn numeric_separators_are_valid(literal: &str) -> bool {
     if !bytes.contains(&b'_') {
         return true;
     }
-    bytes.first().is_some_and(u8::is_ascii_digit)
+    // bd-9vouw.176: `.0_1e2` starts with its decimal point.
+    let leading_digit = match bytes {
+        [b'.', second, ..] => second.is_ascii_digit(),
+        [first, ..] => first.is_ascii_digit(),
+        [] => false,
+    };
+    leading_digit
         && bytes.iter().enumerate().all(|(index, &byte)| {
             byte != b'_'
                 || (index > 0
@@ -9979,11 +9985,26 @@ fn first_top_level_brace(text: &str) -> Option<usize> {
 /// The offset of a class body's `{` in the text after `extends`. The heritage
 /// is a left-hand-side expression: braces inside parentheses
 /// (`extends (class {...})`, `extends mix({...})`) are not the body, and a
-/// class expression heritage (`extends class Base {...} {...}`) has its own
-/// body first.
+/// class or function expression heritage (`extends class Base {...} {...}`,
+/// `extends function () {...} {...}`) has its own body first.
 fn class_heritage_body_brace(after_extends: &str) -> Option<usize> {
     let heritage = after_extends.trim_start();
     let lead = after_extends.len() - heritage.len();
+    // bd-9vouw.176: a function expression heritage's body comes before the
+    // class body (its parameters sit in parentheses).
+    let function_header = heritage
+        .strip_prefix("async")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .map_or(heritage, str::trim_start)
+        .strip_prefix("function")
+        .filter(|rest| rest.starts_with(|ch: char| ch.is_whitespace() || ch == '(' || ch == '*'));
+    if let Some(function_header) = function_header {
+        let function_start = lead + (heritage.len() - function_header.len());
+        let body = first_top_level_brace(function_header)?;
+        let (_, tail) = extract_balanced(&function_header[body..], '{', '}')?;
+        let tail_start = function_start + (function_header.len() - tail.len());
+        return Some(tail_start + first_top_level_brace(tail)?);
+    }
     let inner_header = heritage
         .strip_prefix("class")
         .filter(|rest| rest.starts_with(|ch: char| ch.is_whitespace() || ch == '{'));
@@ -12850,12 +12871,35 @@ fn function_expression_is_whole(rest: &str) -> bool {
 /// parsing below; it was silently dropped, so the expression was the class
 /// itself. A malformed head counts as whole, so its specific error is kept.
 fn class_expression_is_whole(expression: &str) -> bool {
-    let Some(brace) = expression.find('{') else {
+    let Some(brace) = class_body_brace(expression) else {
         return true;
     };
     match extract_balanced(&expression[brace..], '{', '}') {
         Some((_, after_body)) => after_body.trim().is_empty(),
         None => true,
+    }
+}
+
+/// The offset of a `class ...` source's body `{`, found as
+/// `parse_class_parts` finds it: past the name and an `extends` heritage, so
+/// braces in the heritage (`class extends class {} {}`,
+/// `class extends (() => {}) {}`) are not taken for the body (bd-9vouw.176).
+fn class_body_brace(source: &str) -> Option<usize> {
+    let rest = source.strip_prefix("class")?;
+    let base = source.len() - rest.len();
+    let header_end = first_top_level_brace(rest)?;
+    let trimmed = rest.trim_start();
+    let extends = if trimmed.starts_with("extends ") {
+        Some(rest.len() - trimmed.len())
+    } else {
+        rest[..header_end].find(" extends ").map(|index| index + 1)
+    };
+    match extends {
+        Some(extends) => {
+            let after = extends + "extends ".len();
+            Some(base + after + class_heritage_body_brace(&rest[after..])?)
+        }
+        None => Some(base + header_end),
     }
 }
 
@@ -18525,6 +18569,13 @@ mod tests {
     fn parse_f64_numeric_literal_with_separators() {
         assert_eq!(parse_f64_numeric_literal("1_000.5"), Some(1000.5));
         assert_eq!(parse_f64_numeric_literal("1.5_00"), Some(1.5));
+        // bd-9vouw.176: a literal may start with its decimal point (Node
+        // v22.2.0 values); `._1` is not a literal.
+        assert_eq!(parse_f64_numeric_literal(".0_1e2"), Some(1.0));
+        assert_eq!(parse_f64_numeric_literal(".1_01e2"), Some(10.1));
+        assert_eq!(parse_f64_numeric_literal(".00_01e2"), Some(0.01));
+        assert_eq!(parse_f64_numeric_literal(".5_5"), Some(0.55));
+        assert_eq!(parse_f64_numeric_literal("._1"), None);
     }
 
     #[test]

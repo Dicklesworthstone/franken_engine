@@ -27,9 +27,11 @@ use frankenengine_engine::module_async_evaluation::{
 };
 use frankenengine_engine::module_live_binding::LiveBindingMap;
 use frankenengine_engine::object_model::JsValue;
-use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParseResult};
+use frankenengine_engine::parser::{
+    CanonicalEs2020Parser, Es2020Parser, ParseErrorCode, ParseResult,
+};
 use frankenengine_engine::promise_model::PromiseHandle;
-use frankenengine_engine::static_semantics::{StaticErrorKind, analyze};
+use frankenengine_engine::static_semantics::analyze;
 
 fn parse(source: &str, goal: ParseGoal) -> ParseResult<SyntaxTree> {
     CanonicalEs2020Parser.parse(source, goal)
@@ -244,22 +246,16 @@ fn pending_tla_without_event_loop_work_fails_closed() {
     );
 }
 
+/// `await` outside an async function in a script is an early error, which
+/// the parser reports since a694fba6d (ES2020 await context rules); this test
+/// predates it and expected the static-semantics pass to report it instead.
 #[test]
 fn tla_rejected_in_script_context() {
     let source = "const data = await fetchData();";
-    let tree = parse(source, ParseGoal::Script).expect("parse should succeed even in script");
-
-    // Static semantics should reject await outside async function in scripts
-    let result = analyze(&tree);
-    assert!(
-        !result.passed(),
-        "Static semantics should reject TLA in script context"
-    );
-
-    // Check that we have the right error
-    let errors = &result.errors;
-    assert!(!errors.is_empty());
-    assert!(errors[0].message.contains("await"));
+    let error = parse(source, ParseGoal::Script)
+        .expect_err("await outside an async function is an early error in a script");
+    assert_eq!(error.code, ParseErrorCode::AwaitOutsideAsync, "{error:?}");
+    assert!(error.message.contains("await"), "{error:?}");
 }
 
 #[test]
@@ -451,20 +447,20 @@ fn tla_await_in_function_still_requires_async() {
             return await someOperation();
         }
     "#;
-    let tree = parse(source, ParseGoal::Module).expect("parse should succeed");
-
-    // Static semantics should reject await in non-async function,
-    // even though top-level await is allowed
-    let result = analyze(&tree);
-    assert!(
-        !result.passed(),
-        "Static semantics should reject await in non-async function"
-    );
-    assert_eq!(result.errors.len(), 1, "Should have exactly one error");
+    // The parser reports `await` in a non-async function as an early error
+    // even though top-level await is allowed (a694fba6d); the function body
+    // is on line 4.
+    let error = parse(source, ParseGoal::Module)
+        .expect_err("await in a non-async function is an early error");
+    assert_eq!(error.code, ParseErrorCode::AwaitOutsideAsync, "{error:?}");
     assert_eq!(
-        result.errors[0].kind,
-        StaticErrorKind::AwaitOutsideAsync,
-        "Error should be AwaitOutsideAsync"
+        error.span.as_ref().map(|span| span.start_line),
+        Some(4),
+        "{error:?}"
+    );
+    assert!(
+        parse("const topLevel = await fetchConfig();", ParseGoal::Module).is_ok(),
+        "top-level await alone parses in a module"
     );
 }
 

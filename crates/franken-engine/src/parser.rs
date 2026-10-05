@@ -2253,6 +2253,72 @@ fn append_normalized_separator(
     source_boundaries.push(following_source_offset);
 }
 
+/// A logical line holding only a one-line comment.
+fn is_comment_only_line(line: &LogicalLine) -> bool {
+    line.start_line == line.end_line && strip_comments_to_whitespace(&line.text).trim().is_empty()
+}
+
+/// Whether a line, after any leading comments, opens a call's arguments or
+/// a member index: `(` or `[`.
+fn line_starts_call_or_index(line: &str) -> bool {
+    let code = strip_comments_to_whitespace(line);
+    let code = code.trim_start();
+    code.starts_with('(') || code.starts_with('[')
+}
+
+/// Whether a logical line ends with something an argument list or index can
+/// follow: `)`, `]`, a literal or an identifier that is not a keyword ending
+/// a statement head (`return`, `break`, ...), outside import and export
+/// declarations.
+fn previous_line_ends_expression(text: &str) -> bool {
+    let code = strip_comments_to_whitespace(text);
+    let code = code.trim_end();
+    let is_identifier_char = |c: char| c == '_' || c == '$' || c.is_alphanumeric();
+    let Some(last) = code.chars().next_back() else {
+        return false;
+    };
+    if !(matches!(last, ')' | ']' | '\'' | '"' | '`') || is_identifier_char(last)) {
+        return false;
+    }
+    let word_start = code
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_identifier_char(*c))
+        .map_or(0, |(index, c)| index + c.len_utf8());
+    if matches!(
+        &code[word_start..],
+        "return"
+            | "throw"
+            | "break"
+            | "continue"
+            | "yield"
+            | "await"
+            | "typeof"
+            | "void"
+            | "delete"
+            | "new"
+            | "in"
+            | "of"
+            | "instanceof"
+            | "else"
+            | "do"
+            | "case"
+            | "default"
+            | "async"
+            | "let"
+            | "var"
+            | "const"
+    ) {
+        return false;
+    }
+    !split_statement_segments(code)
+        .last()
+        .is_some_and(|(_, _, clause)| {
+            let clause = strip_leading_labels(clause).trim_start();
+            starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export")
+        })
+}
+
 fn logical_line_from_buffer(
     text: &str,
     source_boundaries: &[usize],
@@ -3327,12 +3393,35 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                             && do_statement_awaits_while(&clause))
                 })
             });
+            // A line STARTING with `(` or `[` continues the expression the
+            // previous line ended: no semicolon is inserted before them
+            // (ES2020 11.9.1), so `x = f\n(arg)` is a call and webpack's
+            // `(function (modules) {...})\n/****/\n([modules])` passes its
+            // modules (bd-9vouw.190). Comment-only lines in between are
+            // dropped. A previous line ending with `;`, a `}` (a block or a
+            // declaration), a keyword that cannot end an expression, or an
+            // import/export declaration still ends there.
+            let paren_continues_previous = line_starts_call_or_index(trimmed_line) && {
+                let comment_lines = result
+                    .iter()
+                    .rev()
+                    .take_while(|line| is_comment_only_line(line))
+                    .count();
+                result.len() > comment_lines
+                    && previous_line_ends_expression(&result[result.len() - 1 - comment_lines].text)
+            };
+            if paren_continues_previous {
+                while result.last().is_some_and(is_comment_only_line) {
+                    result.pop();
+                }
+            }
             if dot_continues_previous
                 || operator_continues_previous
                 || block_clause_continues_previous
                 || brace_continues_header
                 || body_continues_header
                 || clause_continues_statement
+                || paren_continues_previous
             {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;
@@ -4094,7 +4183,13 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         || starts_with_keyword(seg_body, "do")
                         || starts_with_keyword(seg_body, "try")
                         || starts_with_keyword(seg_body, "switch")
-                        || starts_with_keyword(seg_body, "class")
+                        // A class declaration ends with its body, not with a
+                        // braced heritage (`class C extends class {} {}`,
+                        // `extends function () {} {}`, bd-9vouw.176).
+                        || (starts_with_keyword(seg_body, "class")
+                            && class_body_brace(seg_body).is_none_or(|body| {
+                                line.len() - seg_body.len() + body == outer_brace_open
+                            }))
                         || starts_with_export_block_statement(seg_body);
                     if starts_with_block {
                         let after = index.saturating_add(1);
@@ -14159,8 +14254,10 @@ fn skip_identifier_name(text: &str) -> &str {
             }
             continue;
         }
+        // ID_Continue, not `char::is_alphanumeric`: `℘` (U+2118, ID_Start by
+        // Other_ID_Start) is a letter of `#℘` (bd-9vouw.176).
         match rest.chars().next() {
-            Some(c) if c.is_alphanumeric() || matches!(c, '_' | '$' | '\u{200c}' | '\u{200d}') => {
+            Some(c) if c.is_alphanumeric() || is_identifier_continue(c) => {
                 rest = &rest[c.len_utf8()..];
             }
             _ => return rest,
@@ -14174,11 +14271,23 @@ fn split_class_members(body: &str) -> Vec<&str> {
     let mut start = 0;
     let mut brace_depth = 0usize;
     let mut paren_depth = 0usize;
+    // bd-9vouw.176: braces in a computed key (`[() => {}]() {}`) and in an
+    // identifier escape (`get #\u{6F}() {}`) do not end an element.
+    let mut bracket_depth = 0usize;
+    let mut in_identifier_escape = false;
     let mut quotes = QuoteState::default();
 
     for (i, ch) in body.char_indices() {
         if quotes.active() {
             quotes.advance_char(ch);
+            continue;
+        }
+        if in_identifier_escape {
+            in_identifier_escape = ch != '}';
+            continue;
+        }
+        if ch == '\\' && body[i + 1..].starts_with("u{") {
+            in_identifier_escape = true;
             continue;
         }
         if ch == '/' && quotes.open_regex_at(body, i) {
@@ -14190,12 +14299,14 @@ fn split_class_members(body: &str) -> Vec<&str> {
             }
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth = bracket_depth.saturating_add(1),
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
             '}' => {
                 if brace_depth > 0 {
                     brace_depth = brace_depth.saturating_sub(1);
                 }
-                if brace_depth == 0 && paren_depth == 0 {
+                if brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
                     let end = i + 1;
                     segments.push(&body[start..end]);
                     start = end;

@@ -205,3 +205,74 @@ fn module_root_bounds_relative_requires_bd_rff5g() {
     );
     assert_eq!(console_messages(&report), ["42"]);
 }
+
+/// A CommonJS module's wrapper bindings (`module`, `exports`, `require`,
+/// `__dirname`, `__filename`) are visible inside its nested functions, also
+/// when an exported function runs later from another module, and a nested
+/// `module` declaration or parameter still shadows them. They read undefined
+/// there, so every UMD wrapper (`typeof module === 'object' &&
+/// module.exports`) took its browser branch and a nested `require(...)` was
+/// "expected function, got undefined".
+#[test]
+fn nested_functions_see_the_commonjs_wrapper_bindings_bd_rff5g() {
+    let root = temp_dir("fe_run_cjs_nested");
+    fs::create_dir_all(root.join("lib")).expect("lib dir");
+    fs::write(
+        root.join("lib/c.js"),
+        r#"exports.zero = 0;
+"#,
+    )
+    .expect("lib/c.js");
+    fs::write(root.join("lib/umd.js"), r#"(function (root, factory) {
+  if (typeof module === 'object' && module.exports) { module.exports = factory(); }
+  else { root.Umd = factory(); }
+}(this, function () {
+  return { name: 'umd', who: function () { return typeof module + ',' + typeof exports + ',' + typeof require; } };
+}));
+"#).expect("lib/umd.js");
+    fs::write(
+        root.join("lib/later.js"),
+        r#"exports.check = function () { return module.exports === exports; };
+exports.load = function () { return require('./c').zero; };
+exports.shadow = function (module) { return module; };
+exports.inner = function () { var module = 'local'; return (function () { return module; })(); };
+"#,
+    )
+    .expect("lib/later.js");
+    fs::write(
+        root.join("app.js"),
+        r#"const umd = require('./lib/umd');
+const later = require('./lib/later');
+console.log(umd.name, umd.who());
+console.log(later.check(), later.load(), later.shadow('mine'), later.inner());
+const nested = () => (() => typeof require + ',' + typeof __dirname + ',' + typeof __filename)();
+console.log(nested(), (function () { return require.main === module; })());
+"#,
+    )
+    .expect("app.js");
+    let report = root.join("app.run.json");
+    let output = frankenctl(&[
+        "run",
+        "--input",
+        utf8(&root.join("app.js")),
+        "--extension-id",
+        "cjs-nested",
+        "--goal",
+        "commonjs",
+        "--out",
+        utf8(&report),
+    ]);
+    assert!(
+        output.status.success(),
+        "run failed: {}",
+        stderr_of(&output)
+    );
+    assert_eq!(
+        console_messages(&report),
+        [
+            "umd object,object,function",
+            "true 0 mine local",
+            "function,string,string true"
+        ]
+    );
+}

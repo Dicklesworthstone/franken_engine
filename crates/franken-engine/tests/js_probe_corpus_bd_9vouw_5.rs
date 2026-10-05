@@ -38,7 +38,6 @@ enum Expect {
 // Owning beads for the known failures (BRIDGE semantic leaves, plus the two
 // focused bugs filed from this corpus's first real run on 2026-09-23).
 const SLOPPY_MODE: &str = "bd-performance-conformance-bridge-tu32j.15.6";
-const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
 
 /// Case id -> expectation. Every corpus case must appear exactly once.
 /// Filled from the observed verdicts of the first run (2026-09-23): 20 match
@@ -50,7 +49,8 @@ const DESCRIPTORS: &str = "bd-performance-conformance-bridge-tu32j.14.4";
 /// caller (bd-9vouw.26), and 23 and 43 with Number.prototype.toPrecision and
 /// the arguments object (f2870e990, bd-9vouw.25), and 07, 09, 24, 34 and 45
 /// with Date methods, RegExp replace and the URI globals (861c1a92c /
-/// 247a2a99c, bd-9vouw.51-.53), 13 with BigInt arithmetic (bd-9vouw.54), 27
+/// 247a2a99c, bd-9vouw.51-.53), 16 once a sloppy write to a read-only
+/// property failed silently (bd-9vouw.146, 2026-10-05), 13 with BigInt arithmetic (bd-9vouw.54), 27
 /// once array literal elisions became holes, 32 with `Symbol.hasInstance`,
 /// 30 once `for await` ran the async iteration protocol, 12 with the
 /// DataView Float64/Int16/BigInt64 accessors (2026-09-28), 33 with ES2022
@@ -73,7 +73,7 @@ const LEDGER: &[(&str, Expect)] = &[
     ("13_bigint", Expect::Pass),
     ("14_labels_switch", Expect::Pass),
     ("15_try_finally", Expect::Pass),
-    ("16_defineProperty", Expect::KnownFailure(DESCRIPTORS)),
+    ("16_defineProperty", Expect::Pass),
     ("17_array_methods", Expect::Pass),
     ("18_string_methods", Expect::Pass),
     ("19_optional_nullish", Expect::Pass),

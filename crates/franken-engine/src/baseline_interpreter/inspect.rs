@@ -539,6 +539,45 @@ impl InterpreterCore {
         self.inspect_value(&mut state, value, 0)
     }
 
+    /// Node's `determineSpecificType` (lib/internal/errors.js), the
+    /// "Received ..." of an ERR_INVALID_ARG_TYPE message: `null` or
+    /// `undefined`, `function <name>`, `an instance of <constructor>`, else
+    /// `type <typeof> (<inspected>)` with an inspection longer than 28
+    /// characters cut to 25 and `...` (bd-9vouw.181).
+    pub(super) fn node_received_description(&mut self, value: &Value) -> String {
+        match value {
+            Value::Undefined => "undefined".to_string(),
+            Value::Null => "null".to_string(),
+            _ if value.is_callable() && !self.inspect_function_name(None, value).is_empty() => {
+                format!("function {}", self.inspect_function_name(None, value))
+            }
+            Value::Object(id) if !value.is_callable() => {
+                match self.inspect_constructor_name(None, *id) {
+                    Some(name) => format!("an instance of {name}"),
+                    None => self
+                        .inspect_with_depth(None, value, -1)
+                        .unwrap_or_else(|_| "an object".to_string()),
+                }
+            }
+            _ => {
+                let inspected = self
+                    .inspect_with_depth(None, value, INSPECT_DEPTH)
+                    .unwrap_or_default();
+                let inspected = if inspected.chars().count() > 28 {
+                    format!("{}...", inspected.chars().take(25).collect::<String>())
+                } else {
+                    inspected
+                };
+                let kind = if value.is_callable() {
+                    "function"
+                } else {
+                    value.type_name()
+                };
+                format!("type {kind} ({inspected})")
+            }
+        }
+    }
+
     /// `util.inspect(value, { depth })` for `require('util')`
     /// (bd-9vouw.109). args = (value, depth); `Infinity` has no limit.
     pub(super) fn util_inspect_builtin(
@@ -1068,12 +1107,10 @@ impl InterpreterCore {
                         .unwrap_or_default()
                         .to_string()
                 }
-                _ => match builtin.display_name() {
-                    "@@iterator" => "[Symbol.iterator]",
-                    "@@asyncIterator" => "[Symbol.asyncIterator]",
-                    name => name,
-                }
-                .to_string(),
+                // The built-in's `name` (bd-9vouw.177): symbol-keyed methods
+                // read `[Symbol.match]`, a promise's resolving functions are
+                // anonymous.
+                _ => builtin.spec_name().to_string(),
             },
             Value::Function(index) => module
                 .and_then(|module| Self::function_name_or_length(module, *index, "name"))

@@ -269,19 +269,31 @@ fn unsupported_or_first_class_events_once_shapes_stay_fail_closed() {
         );
     }
 
-    for source in [
-        "import { once } from 'node:events';\nconsole.log(typeof once);\n",
-        "import events from 'node:events';\nconst emitter = {};\nevents.once(emitter, 'x');\n",
-    ] {
+    // `import events from 'node:events'; events.once(emitter, 'x')` lowers
+    // as the supported CommonJS alias `events.once(...)` since bd-9vouw.181,
+    // so only the value use of a named import stays unsupported here.
+    for source in ["import { once } from 'node:events';\nconsole.log(typeof once);\n"] {
         let tree = frankenengine_engine::parser_api_stability::parse_module(source)
             .expect("parse unsupported ESM events shape");
         let ir0 = Ir0Module::from_syntax_tree(tree, "unsupported_events_once.mjs");
-        let ir1 = lower_ir0_to_ir1(&ir0).expect("unsupported ESM shape stays an explicit import");
-        assert!(ir1.module.ops.iter().any(|op| matches!(op,
-            Ir1Op::ImportModule { specifier } if specifier == "node:events"
-        )));
-        assert!(!ir1.module.ops.iter().any(|op| matches!(op,
-            Ir1Op::HostCall { capability, .. } if capability == "builtin:EventsOnce"
-        )));
+        // An import of a core module with a require facade lowers as that
+        // require (bd-9vouw.181), so an unsupported shape is refused at
+        // lowering by the ambient-authority refusal of `require`; a shape
+        // left as an explicit import fails when it loads. Neither becomes a
+        // forged EventsOnce HostCall.
+        match lower_ir0_to_ir1(&ir0) {
+            Err(error) => assert!(
+                error.to_string().contains("ambient authority violation"),
+                "unsupported ESM events shape must stay refused, got: {error}"
+            ),
+            Ok(ir1) => {
+                assert!(ir1.module.ops.iter().any(|op| matches!(op,
+                    Ir1Op::ImportModule { specifier } if specifier == "node:events"
+                )));
+                assert!(!ir1.module.ops.iter().any(|op| matches!(op,
+                    Ir1Op::HostCall { capability, .. } if capability == "builtin:EventsOnce"
+                )));
+            }
+        }
     }
 }

@@ -87,6 +87,7 @@ mod date_locale;
 mod event_target;
 mod inspect;
 mod intl;
+mod iterator_helpers;
 mod json_parse;
 mod json_stringify;
 mod legacy_regexp;
@@ -972,6 +973,15 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "AsyncFunction" => Some("AsyncFunction"),
         "AsyncGeneratorFunction" => Some("AsyncGeneratorFunction"),
         ITERATOR_PROTOTYPE => Some(ITERATOR_PROTOTYPE),
+        // ES2025 27.1.3.1: the `Iterator` constructor's prototype is
+        // %IteratorPrototype% (bd-9vouw.179).
+        "Iterator" => Some(ITERATOR_PROTOTYPE),
+        iterator_helpers::ITERATOR_HELPER_PROTOTYPE => {
+            Some(iterator_helpers::ITERATOR_HELPER_PROTOTYPE)
+        }
+        iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+            Some(iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE)
+        }
         ARRAY_ITERATOR_PROTOTYPE => Some(ARRAY_ITERATOR_PROTOTYPE),
         MAP_ITERATOR_PROTOTYPE => Some(MAP_ITERATOR_PROTOTYPE),
         SET_ITERATOR_PROTOTYPE => Some(SET_ITERATOR_PROTOTYPE),
@@ -3564,7 +3574,35 @@ pub enum BuiltinFunctionKind {
     /// the specifier, one of [`event_target::EVENT_TARGET_METHODS`]. Append
     /// only.
     EventTargetMethod,
+    /// ES2025 Iterator helpers (bd-9vouw.179): `Iterator.from`, the
+    /// %IteratorPrototype% methods and the `next` / `return` of
+    /// %IteratorHelperPrototype% and %WrapForValidIteratorPrototype%, named
+    /// by the specifier, one of [`iterator_helpers::ITERATOR_HELPER_METHODS`].
+    /// Append only.
+    IteratorHelperMethod,
+    /// Annex B `String.prototype.anchor`, `big`, `blink`, `bold`, `fixed`,
+    /// `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`
+    /// and `sup` (bd-9vouw.185), named by the specifier, one of
+    /// [`STRING_HTML_METHODS`]. Append only.
+    StringHtmlMethod,
 }
+
+/// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
+const STRING_HTML_METHODS: [(&str, &str, Option<&str>); 13] = [
+    ("anchor", "a", Some("name")),
+    ("big", "big", None),
+    ("blink", "blink", None),
+    ("bold", "b", None),
+    ("fixed", "tt", None),
+    ("fontcolor", "font", Some("color")),
+    ("fontsize", "font", Some("size")),
+    ("italics", "i", None),
+    ("link", "a", Some("href")),
+    ("small", "small", None),
+    ("strike", "strike", None),
+    ("sub", "sub", None),
+    ("sup", "sup", None),
+];
 
 impl BuiltinFunctionKind {
     /// Whether this first-class builtin implements ECMAScript `[[Construct]]`.
@@ -5037,6 +5075,14 @@ impl BuiltinFunction {
                 .iter()
                 .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
                 .map_or("", |(_, _, name)| *name),
+            BuiltinFunctionKind::IteratorHelperMethod => iterator_helpers::ITERATOR_HELPER_METHODS
+                .iter()
+                .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
+                .map_or("", |(_, _, name)| *name),
+            BuiltinFunctionKind::StringHtmlMethod => STRING_HTML_METHODS
+                .iter()
+                .find(|(name, _, _)| self.module_specifier.0.as_deref() == Some(*name))
+                .map_or("", |(name, _, _)| *name),
             BuiltinFunctionKind::UrlStatic => {
                 if self.module_specifier.0.as_deref() == Some("parse") {
                     "parse"
@@ -5659,6 +5705,11 @@ impl BuiltinFunction {
                 .iter()
                 .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
                 .map(|(_, owner, _)| *owner)?,
+            K::IteratorHelperMethod => iterator_helpers::ITERATOR_HELPER_METHODS
+                .iter()
+                .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
+                .map(|(_, owner, _)| *owner)?,
+            K::StringHtmlMethod => "String.prototype",
             K::ObjectLegacyAccessor => "Object.prototype",
             K::SetMethod => "Set.prototype",
             K::SetTimeout
@@ -5774,7 +5825,7 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 47] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 48] = [
     "Object",
     "Array",
     "Number",
@@ -5839,6 +5890,9 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 47] = [
     "AbortController",
     "AbortSignal",
     "DOMException",
+    // ES2025 Iterator (bd-9vouw.179): abstract; its prototype is
+    // %IteratorPrototype%, which holds the helpers.
+    "Iterator",
 ];
 
 /// bd-9vouw.17: realm globals besides the standard constructors and global
@@ -6353,6 +6407,8 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
                     crate::lowering_pipeline::object_receiver_static_member_capability(member)
                 }),
         )
+        // `process.nextTick` read as a value (bd-9vouw.186).
+        .chain(std::iter::once("builtin:ProcessNextTick"))
         .find(|candidate| *candidate == tag)
 }
 
@@ -7826,8 +7882,12 @@ const MICROTASK_COMPACTION_INTERVAL: u32 = 1024;
 
 /// Most compiled RegExp patterns one interpreter keeps for reuse.
 const REGEXP_CACHE_ENTRIES: usize = 32;
-/// Longest pattern source the RegExp cache keeps compiled.
-const REGEXP_CACHE_MAX_PATTERN_BYTES: usize = 256;
+/// Longest pattern source the RegExp cache keeps compiled. The compiled
+/// limits below bound what the cache holds; this only keeps a lookup (a scan
+/// comparing sources) cheap. At 256 bytes, a module-level pattern like
+/// semver's (565 bytes) recompiled on every `test`, 18 times slower than a
+/// cached one (bd-9vouw.183).
+const REGEXP_CACHE_MAX_PATTERN_BYTES: usize = 16 * 1024;
 /// Compiled-program limit for a cached RegExp. A pattern that needs more
 /// compiles under the default limits and is not kept, so the cache holds at
 /// most about `REGEXP_CACHE_ENTRIES` times this plus the DFA limit below.
@@ -8906,6 +8966,13 @@ struct GeneratedFunctionArtifact {
 struct GeneratedFunctionArtifactHandle {
     owner_program_id: ContentHash,
     artifact_id: ContentHash,
+}
+
+/// What a grant swap replaced, for its restore (bd-9vouw.189).
+struct ReplacedCodegenGrant {
+    previous: BTreeSet<RuntimeCapability>,
+    /// The swap entered generated code and pushed the caller's grant.
+    entered_generated_code: bool,
 }
 
 /// Fixed-size representation of the only authority set that generated code
@@ -13997,6 +14064,10 @@ pub struct InterpreterCore {
     /// bd-fqlfw.9.4). `None` = live classification on every call; installed
     /// only by the E9 activation gate after receipt/epoch/replay approval.
     pruned_hostcall_dispatch: Option<PrunedHostcallDispatch>,
+    /// The grant each running generated-code activation replaced, outermost
+    /// first: the program's own grant comes back for a program closure that
+    /// generated code calls (bd-9vouw.189).
+    codegen_caller_grants: Vec<BTreeSet<RuntimeCapability>>,
     /// True only while `prepare_execution` runs engine-internal setup
     /// (module-namespace record, runtime globals). Containment hooks are
     /// suppressed during this window: no extension instruction has executed
@@ -15299,6 +15370,7 @@ impl InterpreterCore {
             config,
             hook: None,
             pruned_hostcall_dispatch: None,
+            codegen_caller_grants: Vec::new(),
             preparing_execution: false,
             state_capture_tick: None,
             state_capture_result: None,
@@ -37119,6 +37191,20 @@ impl InterpreterCore {
             .saturating_add(binding_and_name_bytes)
     }
 
+    /// `require.main` (bd-rff5g): the entry's `module` object when the entry
+    /// runs as CommonJS (Node's `process.mainModule`), so `require.main ===
+    /// module` holds in the entry and nowhere else; otherwise undefined.
+    fn cjs_main_module(&self) -> Value {
+        if !self.config.commonjs_entry {
+            return Value::Undefined;
+        }
+        self.entry_module_specifier
+            .as_deref()
+            .and_then(|entry| self.module_state.modules.get(entry))
+            .and_then(|record| record.cjs_module_object)
+            .map_or(Value::Undefined, Value::Object)
+    }
+
     fn construct_require_builtin(
         &self,
         module_specifier: &str,
@@ -37782,11 +37868,16 @@ impl InterpreterCore {
         } else {
             lowering_ctx
         };
-        let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
-            InterpreterError::ModuleLoweringFailed {
-                specifier: resolved.to_string(),
-                error: error.to_string(),
-            }
+        // bd-j8f7q: a module a bounded importer loads bounds its own imports
+        // too, so the bound holds transitively and is checked at each edge.
+        let lowered = if import_bound.is_some() {
+            crate::lowering_pipeline::lower_bounded_import_ir0_to_ir3(&ir0, &lowering_ctx)
+        } else {
+            lower_ir0_to_ir3(&ir0, &lowering_ctx)
+        };
+        let lowering_output = lowered.map_err(|error| InterpreterError::ModuleLoweringFailed {
+            specifier: resolved.to_string(),
+            error: error.to_string(),
         })?;
         let ceiling = crate::lowering_pipeline::lowered_unit_flow_label_ceiling(
             &lowering_output.ir2,
@@ -38860,21 +38951,46 @@ impl InterpreterCore {
         Self::validate_contained_codegen_grant(&capabilities)
     }
 
+    /// The grant a call runs with. Authority follows code: generated code
+    /// (and every closure it creates) runs within its contained grant, and a
+    /// closure of the program itself runs with the program's grant even when
+    /// generated code calls it (bd-9vouw.189). An ejs template compiled with
+    /// `new Function` calls the template engine's own `escapeFn`, whose
+    /// `String(...)` was denied under the template's grant.
     fn replace_with_contained_codegen_grant(
         &mut self,
         grant: Option<ContainedCodegenGrant>,
-    ) -> Option<BTreeSet<RuntimeCapability>> {
-        grant.map(|grant| {
-            std::mem::replace(
-                &mut self.config.granted_capabilities,
-                grant.as_slice().iter().copied().collect(),
-            )
+    ) -> Option<ReplacedCodegenGrant> {
+        let next = match grant {
+            Some(grant) => {
+                self.codegen_caller_grants
+                    .push(self.config.granted_capabilities.clone());
+                let previous = std::mem::replace(
+                    &mut self.config.granted_capabilities,
+                    grant.as_slice().iter().copied().collect(),
+                );
+                return Some(ReplacedCodegenGrant {
+                    previous,
+                    entered_generated_code: true,
+                });
+            }
+            None => self.codegen_caller_grants.first()?.clone(),
+        };
+        if next == self.config.granted_capabilities {
+            return None;
+        }
+        Some(ReplacedCodegenGrant {
+            previous: std::mem::replace(&mut self.config.granted_capabilities, next),
+            entered_generated_code: false,
         })
     }
 
-    fn restore_replaced_codegen_grants(&mut self, previous: Option<BTreeSet<RuntimeCapability>>) {
-        if let Some(previous) = previous {
-            self.config.granted_capabilities = previous;
+    fn restore_replaced_codegen_grants(&mut self, replaced: Option<ReplacedCodegenGrant>) {
+        if let Some(replaced) = replaced {
+            self.config.granted_capabilities = replaced.previous;
+            if replaced.entered_generated_code {
+                self.codegen_caller_grants.pop();
+            }
         }
     }
 
@@ -40226,6 +40342,10 @@ impl InterpreterCore {
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_substr_impl(module, &value, args)
             }
+            BuiltinFunctionKind::StringHtmlMethod => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                self.string_html_method(module, builtin.display_name(), receiver, args)
+            }
             BuiltinFunctionKind::StringReplace => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 if let Some(result) = self.string_pattern_protocol_call(
@@ -40632,7 +40752,7 @@ impl InterpreterCore {
                 }
                 let last = len - 1;
                 let element = self
-                    .array_index_value(arr_id, last)?
+                    .array_index_get(Some(module), arr_id, last)?
                     .unwrap_or(Value::Undefined);
                 // Sample trust immediately before the destructive mutation.
                 let was_dense = self.array_cache_is_dense(arr_id);
@@ -40671,11 +40791,11 @@ impl InterpreterCore {
                 }
                 let was_dense = self.array_cache_is_dense(arr_id);
                 let first = self
-                    .array_index_value(arr_id, 0)?
+                    .array_index_get(Some(module), arr_id, 0)?
                     .unwrap_or(Value::Undefined);
                 for i in 1..len {
                     let moved = self
-                        .array_index_value(arr_id, i)?
+                        .array_index_get(Some(module), arr_id, i)?
                         .unwrap_or(Value::Undefined);
                     self.set_object_property(arr_id, (i - 1).to_string(), moved)?;
                 }
@@ -40716,7 +40836,7 @@ impl InterpreterCore {
                     // read before its destination overwrites a later source.
                     for i in (0..len).rev() {
                         let moved = self
-                            .array_index_value(arr_id, i)?
+                            .array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined);
                         self.set_object_property(arr_id, (i + arg_count).to_string(), moved)?;
                     }
@@ -40758,7 +40878,7 @@ impl InterpreterCore {
                     // A hole is skipped (HasProperty is false), so
                     // `[1, , 3].indexOf(undefined)` is -1; `includes` below
                     // reads holes as undefined.
-                    let Some(element) = self.array_index_value(arr_id, i)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, i)? else {
                         continue;
                     };
                     self.join_element_stored_label(arr_id, i as u64)?;
@@ -40791,7 +40911,7 @@ impl InterpreterCore {
                 let mut present = false;
                 for i in from..len {
                     let element = self
-                        .array_index_value(arr_id, i)?
+                        .array_index_get(Some(module), arr_id, i)?
                         .unwrap_or(Value::Undefined);
                     self.join_element_stored_label(arr_id, i as u64)?;
                     if Self::values_equal(&element, &search) || Self::both_nan(&element, &search) {
@@ -40817,10 +40937,10 @@ impl InterpreterCore {
                     for i in 0..(len / 2) {
                         let j = len - 1 - i;
                         let lo = self
-                            .array_index_value(arr_id, i)?
+                            .array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined);
                         let hi = self
-                            .array_index_value(arr_id, j)?
+                            .array_index_get(Some(module), arr_id, j)?
                             .unwrap_or(Value::Undefined);
                         self.set_object_property(arr_id, i.to_string(), hi)?;
                         self.set_object_property(arr_id, j.to_string(), lo)?;
@@ -40879,7 +40999,7 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 }
                 Ok(self
-                    .array_index_value(arr_id, idx as usize)?
+                    .array_index_get(Some(module), arr_id, idx as usize)?
                     .unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::ArrayFlat => {
@@ -41004,7 +41124,7 @@ impl InterpreterCore {
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.forEach")?;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     self.invoke_array_callback(
@@ -41025,7 +41145,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.map")?;
                 let result = self.array_species_result(module, arr_id, len)?;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let mapped =
@@ -41060,7 +41180,7 @@ impl InterpreterCore {
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let keep = self.with_gc_nested_request(vec![Value::Object(result)], |core| {
@@ -41096,7 +41216,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.find")?;
                 for index in 0..len {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     let hit = self.invoke_array_callback(
                         Some(module),
@@ -41119,7 +41239,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.findIndex")?;
                 for index in 0..len {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     let hit = self.invoke_array_callback(
                         Some(module),
@@ -41142,7 +41262,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.findLast")?;
                 for index in (0..len).rev() {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     let hit = self.invoke_array_callback(
                         Some(module),
@@ -41165,7 +41285,7 @@ impl InterpreterCore {
                     self.array_callback_receiver(receiver, args, "Array.prototype.findLastIndex")?;
                 for index in (0..len).rev() {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     let hit = self.invoke_array_callback(
                         Some(module),
@@ -41190,7 +41310,7 @@ impl InterpreterCore {
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let mapped =
@@ -41267,7 +41387,7 @@ impl InterpreterCore {
                 for step in 0..count {
                     let offset = if backward { count - 1 - step } else { step };
                     let to = (target + offset).to_string();
-                    match self.array_index_value(arr_id, start + offset)? {
+                    match self.array_index_get(Some(module), arr_id, start + offset)? {
                         Some(value) => self.set_object_property(arr_id, to, value)?,
                         None => {
                             self.remove_object_property(arr_id, &to)?;
@@ -41283,7 +41403,7 @@ impl InterpreterCore {
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.some")?;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let result = self.invoke_array_callback(
@@ -41306,7 +41426,7 @@ impl InterpreterCore {
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.every")?;
                 for index in 0..len {
-                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
                     };
                     let result = self.invoke_array_callback(
@@ -41354,7 +41474,7 @@ impl InterpreterCore {
                     let mut elements = self.element_buffer(len)?;
                     for index in 0..len {
                         elements.push(
-                            self.array_index_value(arr_id, index)?
+                            self.array_index_get(Some(module), arr_id, index)?
                                 .unwrap_or(Value::Undefined),
                         );
                     }
@@ -41397,7 +41517,7 @@ impl InterpreterCore {
                 let len = self.array_like_length(arr_id)?;
                 for i in 0..len {
                     let element = self
-                        .array_index_value(arr_id, i)?
+                        .array_index_get(Some(module), arr_id, i)?
                         .unwrap_or(Value::Undefined);
                     self.create_data_property_or_throw(result, out.to_string(), element)?;
                     out += 1;
@@ -41415,7 +41535,7 @@ impl InterpreterCore {
                         let arg_len = self.array_like_length(arg_id)?;
                         for i in 0..arg_len {
                             let element = self
-                                .array_index_value(arg_id, i)?
+                                .array_index_get(Some(module), arg_id, i)?
                                 .unwrap_or(Value::Undefined);
                             self.create_data_property_or_throw(result, out.to_string(), element)?;
                             out += 1;
@@ -41457,7 +41577,7 @@ impl InterpreterCore {
                 let mut index = start;
                 while index < end {
                     let element = self
-                        .array_index_value(arr_id, index)?
+                        .array_index_get(Some(module), arr_id, index)?
                         .unwrap_or(Value::Undefined);
                     self.create_data_property_or_throw(result, out.to_string(), element)?;
                     out += 1;
@@ -41505,7 +41625,7 @@ impl InterpreterCore {
                 let mut index = start;
                 while index >= 0 {
                     // Holes are skipped, as in indexOf.
-                    let element = self.array_index_value(arr_id, index as usize)?;
+                    let element = self.array_index_get(Some(module), arr_id, index as usize)?;
                     if element.is_some() {
                         self.join_element_stored_label(arr_id, index as u64)?;
                     }
@@ -41554,7 +41674,7 @@ impl InterpreterCore {
                 let mut elements: Vec<Value> = self.element_buffer(len)?;
                 for i in 0..len {
                     elements.push(
-                        self.array_index_value(arr_id, i)?
+                        self.array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined),
                     );
                 }
@@ -41600,7 +41720,7 @@ impl InterpreterCore {
                 let result = self.alloc_array_with_prototype(None)?;
                 for i in 0..len {
                     let element = self
-                        .array_index_value(arr_id, len - 1 - i)?
+                        .array_index_get(Some(module), arr_id, len - 1 - i)?
                         .unwrap_or(Value::Undefined);
                     self.set_object_property(result, i.to_string(), element)?;
                 }
@@ -41629,7 +41749,7 @@ impl InterpreterCore {
                 let mut elements = self.element_buffer(len)?;
                 for index in 0..len {
                     elements.push(
-                        self.array_index_value(arr_id, index)?
+                        self.array_index_get(Some(module), arr_id, index)?
                             .unwrap_or(Value::Undefined),
                     );
                 }
@@ -41701,7 +41821,7 @@ impl InterpreterCore {
                     let element = if i == actual {
                         value.clone()
                     } else {
-                        self.array_index_value(arr_id, i)?
+                        self.array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined)
                     };
                     self.set_object_property(result, i.to_string(), element)?;
@@ -41749,7 +41869,7 @@ impl InterpreterCore {
                 let mut elements: Vec<Value> = self.element_buffer(len)?;
                 for i in 0..len {
                     elements.push(
-                        self.array_index_value(arr_id, i)?
+                        self.array_index_get(Some(module), arr_id, i)?
                             .unwrap_or(Value::Undefined),
                     );
                 }
@@ -43541,6 +43661,9 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::EventTargetMethod => {
                 self.event_target_method(module, builtin, args, receiver)
+            }
+            BuiltinFunctionKind::IteratorHelperMethod => {
+                self.iterator_helper_method(module, builtin, args, receiver)
             }
             // URL.prototype.toString / toJSON: the receiver URL's href
             // (bd-9vouw.157).
@@ -51100,6 +51223,10 @@ impl InterpreterCore {
                                     // `Promise.prototype` are the realm's
                                     // intrinsics (non-writable in ES2020).
                                     Value::Object(self.ensure_builtin_prototype(name)?)
+                                } else if builtin.kind == BuiltinFunctionKind::Require
+                                    && property_key.as_str() == Some("main")
+                                {
+                                    self.cjs_main_module()
                                 } else if let Some(property_object) =
                                     Self::builtin_function_property_object(&builtin)
                                 {
@@ -51554,10 +51681,7 @@ impl InterpreterCore {
                                         &property_key,
                                         &previous_label,
                                     )?;
-                                    return Err(InterpreterError::TypeError {
-                                        expected: "successful Proxy set trap".to_string(),
-                                        got: "falsy set trap result".to_string(),
-                                    });
+                                    return Err(self.rejected_strict_set_error(oid, &property_key));
                                 }
                                 // A sloppy write that [[Set]] rejected left the
                                 // object as it was: restore the prior label.
@@ -52526,6 +52650,10 @@ impl InterpreterCore {
                                 expected: "constructor".to_string(),
                                 got: format!("{name} is not a constructor"),
                             });
+                        }
+                        // ES2025 27.1.3.1 step 1: NewTarget is Iterator itself.
+                        if standard_name == Some("Iterator") {
+                            return Err(self.abstract_iterator_construction_error());
                         }
                         let mut result = match standard_name {
                             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
@@ -57663,6 +57791,19 @@ impl InterpreterCore {
             "slice" => Value::BuiltinFunction(BuiltinFunction::string_slice()),
             "substring" => Value::BuiltinFunction(BuiltinFunction::string_substring()),
             "substr" => Value::BuiltinFunction(BuiltinFunction::string_substr()),
+            name if STRING_HTML_METHODS.iter().any(|(html, _, _)| *html == name) => {
+                Value::BuiltinFunction(BuiltinFunction {
+                    kind: BuiltinFunctionKind::StringHtmlMethod,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(
+                        STRING_HTML_METHODS
+                            .iter()
+                            .find(|(html, _, _)| *html == name)
+                            .map_or("anchor", |(html, _, _)| *html),
+                    ),
+                    iterator_handle: None,
+                    bound_object: None,
+                })
+            }
             "replace" => Value::BuiltinFunction(BuiltinFunction::string_replace()),
             "match" => Value::BuiltinFunction(BuiltinFunction::string_match()),
             "matchAll" => Value::BuiltinFunction(BuiltinFunction::new_kind(
@@ -60990,6 +61131,33 @@ impl InterpreterCore {
         Ok(Some((target, handler, revoked)))
     }
 
+    /// The TypeError a strict-code write throws when [[Set]] returns false
+    /// (ES2020 6.2.4.9 step 6.d), naming why: a Proxy's falsy set trap, a
+    /// frozen object, a non-extensible object without the property, or a
+    /// read-only property. Since sloppy writes fail silently (bd-9vouw.146),
+    /// [[Set]] reports false instead of erring, and every strict failure read
+    /// as a Proxy trap's.
+    fn rejected_strict_set_error(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> InterpreterError {
+        let type_error = |expected: &str, got: &str| InterpreterError::TypeError {
+            expected: expected.to_string(),
+            got: got.to_string(),
+        };
+        if matches!(self.proxy_record(object_id), Ok(Some(_))) {
+            return type_error("successful Proxy set trap", "falsy set trap result");
+        }
+        match self.heap.get(object_id.0 as usize) {
+            Some(object) if object.is_frozen => type_error("mutable object", "frozen object"),
+            Some(object) if !object.extensible() && !object.contains_own_runtime_property(key) => {
+                type_error("existing property on non-extensible object", "new property")
+            }
+            _ => type_error("writable property", "read-only property"),
+        }
+    }
+
     fn active_proxy_record(
         &self,
         object_id: ObjectId,
@@ -62902,6 +63070,11 @@ impl InterpreterCore {
                 Value::Object(self.ensure_builtin_prototype(prototype)?)
             }
             Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::Require && name == "main" =>
+            {
+                self.cjs_main_module()
+            }
+            Value::BuiltinFunction(builtin)
                 if Self::builtin_function_property_object(builtin).is_some() =>
             {
                 let property_object =
@@ -64564,7 +64737,39 @@ impl InterpreterCore {
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module:require apply hostcall missing module context".to_string(),
         })?;
-        self.require_module(module, &specifier)
+        match self.require_module(module, &specifier) {
+            // Node names the request as written, not the resolved path.
+            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
+                Err(self.throw_module_not_found(&specifier.to_string(), &reason))
+            }
+            result => result,
+        }
+    }
+
+    /// A `require` that does not resolve throws a catchable Error with code
+    /// `MODULE_NOT_FOUND`, as Node's does (bd-9vouw.188), so feature
+    /// detection falls back (`try { NodeBuffer = require('buffer').Buffer }
+    /// catch {}` in js-yaml, `freeModule.require('util')` in lodash) instead
+    /// of the run failing. The engine's reason follows the first line.
+    fn throw_module_not_found(
+        &mut self,
+        specifier: &str,
+        reason: &ModuleResolutionFailureReason,
+    ) -> InterpreterError {
+        let error = self.throw_js_error(
+            "Error",
+            format!("Cannot find module '{specifier}'\n{reason}"),
+        );
+        if let Some(Value::Object(error_id)) = self.pending_exception.clone()
+            && let Err(failure) = self.set_object_property(
+                error_id,
+                "code".to_string(),
+                Value::str("MODULE_NOT_FOUND"),
+            )
+        {
+            return failure;
+        }
+        error
     }
 
     /// Dispatch an ESM import and emit exactly one module-load telemetry record
@@ -70538,6 +70743,59 @@ impl InterpreterCore {
         }
     }
 
+    /// Annex B CreateHTML (B.2.2.2.1): `<tag attribute="value">S</tag>`, the
+    /// value's `"` written as `&quot;`. The receiver converts before the
+    /// value, each with ToString.
+    fn string_html_method(
+        &mut self,
+        module: &Ir3Module,
+        method: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let Some(&(_, tag, attribute)) = STRING_HTML_METHODS
+            .iter()
+            .find(|(name, _, _)| *name == method)
+        else {
+            return Err(InterpreterError::InternalError {
+                details: format!("unknown String HTML method {method}"),
+            });
+        };
+        if matches!(receiver, Value::Undefined | Value::Null) {
+            return Err(self.throw_js_error(
+                "TypeError",
+                format!(
+                    "String.prototype.{method} called on {}",
+                    if matches!(receiver, Value::Null) {
+                        "null"
+                    } else {
+                        "undefined"
+                    }
+                ),
+            ));
+        }
+        let text = self.conversion_to_string(Some(module), receiver)?;
+        let mut units: Vec<u16> = format!("<{tag}").encode_utf16().collect();
+        if let Some(attribute) = attribute {
+            let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let value = self.conversion_to_string(Some(module), value)?;
+            units.extend(format!(" {attribute}=\"").encode_utf16());
+            for unit in value.encode_utf16() {
+                if unit == u16::from(b'"') {
+                    units.extend("&quot;".encode_utf16());
+                } else {
+                    units.push(unit);
+                }
+            }
+            units.push(u16::from(b'"'));
+        }
+        units.push(u16::from(b'>'));
+        units.extend(text.encode_utf16());
+        units.extend(format!("</{tag}>").encode_utf16());
+        self.check_string_limit(units.len())?;
+        Ok(Value::Str(JsString::from_code_units(&units)))
+    }
+
     fn string_prototype_char_at_value(
         receiver: Value,
         index: Option<Value>,
@@ -70741,7 +70999,7 @@ impl InterpreterCore {
         } else {
             let mut first_present = None;
             for element_index in 0..length {
-                if let Some(value) = self.array_index_value(array_id, element_index)? {
+                if let Some(value) = self.array_index_get(module, array_id, element_index)? {
                     first_present = Some((element_index, value));
                     break;
                 }
@@ -70757,7 +71015,7 @@ impl InterpreterCore {
         };
 
         for element_index in next_index..length {
-            let Some(current_value) = self.array_index_value(array_id, element_index)? else {
+            let Some(current_value) = self.array_index_get(module, array_id, element_index)? else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(
@@ -70797,7 +71055,7 @@ impl InterpreterCore {
         } else {
             let mut first_present = None;
             for element_index in (0..length).rev() {
-                if let Some(value) = self.array_index_value(array_id, element_index)? {
+                if let Some(value) = self.array_index_get(module, array_id, element_index)? {
                     first_present = Some((element_index, value));
                     break;
                 }
@@ -70813,7 +71071,7 @@ impl InterpreterCore {
         };
 
         for element_index in (0..next_index_exclusive).rev() {
-            let Some(current_value) = self.array_index_value(array_id, element_index)? else {
+            let Some(current_value) = self.array_index_get(module, array_id, element_index)? else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(
@@ -70886,6 +71144,23 @@ impl InterpreterCore {
             self.charge_native_hole_read()?;
         }
         Ok(value)
+    }
+
+    /// [[Get]] of an element a native Array.prototype loop visits: its
+    /// value, the result of its getter when it is an accessor (the
+    /// accessor itself leaked as the element), or `None` for a hole.
+    fn array_index_get(
+        &mut self,
+        module: Option<&Ir3Module>,
+        array_id: ObjectId,
+        element_index: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        match self.array_index_value(array_id, element_index)? {
+            Some(accessor @ Value::Accessor { .. }) => self
+                .resolve_accessor_get(module, accessor, Value::Object(array_id))
+                .map(Some),
+            element => Ok(element),
+        }
     }
 
     /// One hole visited by a native element loop (bd-9vouw.112).
@@ -71595,6 +71870,14 @@ impl InterpreterCore {
         let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let len = self.array_like_length(arr_id)?;
+        // IsCallable(callbackfn) before the first element, so an empty or
+        // all-holes array still throws.
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: format!("a callable callback for {method}"),
+                got: format!("{} is not a function", callback.type_name()),
+            });
+        }
         Ok((arr_id, callback, this_arg, len))
     }
 
@@ -71619,6 +71902,12 @@ impl InterpreterCore {
         };
         let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let length = self.array_like_length(arr_id)?;
+        if !callback.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: format!("a callable callback for {method}"),
+                got: format!("{} is not a function", callback.type_name()),
+            });
+        }
         let has_initial = args.count > 1;
         let order: Vec<usize> = if reverse {
             (0..length).rev().collect()
@@ -71631,7 +71920,7 @@ impl InterpreterCore {
         } else {
             let mut seed = None;
             for idx in iter.by_ref() {
-                if let Some(value) = self.array_index_value(arr_id, idx)? {
+                if let Some(value) = self.array_index_get(Some(module), arr_id, idx)? {
                     seed = Some(value);
                     break;
                 }
@@ -71647,7 +71936,7 @@ impl InterpreterCore {
             }
         };
         for idx in iter {
-            let Some(current) = self.array_index_value(arr_id, idx)? else {
+            let Some(current) = self.array_index_get(Some(module), arr_id, idx)? else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(
@@ -83412,10 +83701,9 @@ impl InterpreterCore {
         expected: &str,
         got: &Value,
     ) -> InterpreterError {
-        let message = format!(
-            "The \"{arg_name}\" argument must be of type {expected}. Received type {}",
-            got.type_name()
-        );
+        let received = self.node_received_description(got);
+        let message =
+            format!("The \"{arg_name}\" argument must be of type {expected}. Received {received}");
         let thrown = match self.construct_node_invalid_arg_type_error(&message) {
             Ok(value) => value,
             Err(err) => return err,
@@ -85402,7 +85690,17 @@ impl InterpreterCore {
                                 .map(|(_, value)| value.clone()),
                         );
                         self.join_pending_hostcall_stream_label(obj_id)?;
-                        let array_id = self.alloc_array_from_values(&values)?;
+                        // [[Get]] of each value: an accessor property's getter
+                        // runs (the accessor itself leaked, "[object Object]").
+                        let mut resolved = Vec::with_capacity(values.len());
+                        for value in values {
+                            resolved.push(self.resolve_accessor_get(
+                                module,
+                                value,
+                                Value::Object(obj_id),
+                            )?);
+                        }
+                        let array_id = self.alloc_array_from_values(&resolved)?;
                         Ok(Value::Object(array_id))
                     }
                     Value::Str(text) => {
@@ -86734,7 +87032,7 @@ impl InterpreterCore {
                     self.validate_array_callback_structure(args, "Array.prototype.forEach")?;
 
                 for index in 0..length {
-                    let Some(element) = self.array_index_value(array_id, index)? else {
+                    let Some(element) = self.array_index_get(module, array_id, index)? else {
                         continue;
                     };
                     self.invoke_array_callback(
@@ -87603,7 +87901,7 @@ impl InterpreterCore {
                     self.validate_array_callback_structure(args, "Array.prototype.some")?;
 
                 for index in 0..length {
-                    let Some(element) = self.array_index_value(array_id, index)? else {
+                    let Some(element) = self.array_index_get(module, array_id, index)? else {
                         continue;
                     };
 
@@ -88218,7 +88516,7 @@ impl InterpreterCore {
 
                 for index in 0..length {
                     let element = self
-                        .array_index_value(array_id, index)?
+                        .array_index_get(module, array_id, index)?
                         .unwrap_or(Value::Undefined);
                     let predicate_result = self.invoke_array_callback(
                         module,
@@ -88290,7 +88588,7 @@ impl InterpreterCore {
                 let mut result = String::new();
                 for i in 0..raw_len {
                     let segment = self
-                        .array_index_value(raw_id, i)?
+                        .array_index_get(module, raw_id, i)?
                         .unwrap_or(Value::Undefined);
                     result.push_str(&self.value_to_string(&segment));
                     // A substitution sits between consecutive raw segments only.
@@ -89194,7 +89492,7 @@ impl InterpreterCore {
 
                 for index in 0..length {
                     let element = self
-                        .array_index_value(array_id, index)?
+                        .array_index_get(module, array_id, index)?
                         .unwrap_or(Value::Undefined);
                     let predicate_result = self.invoke_array_callback(
                         module,
@@ -90880,7 +91178,7 @@ impl InterpreterCore {
 
                 // For each element, invoke callback and check for falsy result
                 for index in 0..array_length {
-                    let Some(element) = self.array_index_value(array_id, index)? else {
+                    let Some(element) = self.array_index_get(module, array_id, index)? else {
                         continue;
                     };
 
@@ -91015,7 +91313,7 @@ impl InterpreterCore {
 
                 // For each element, invoke callback and collect result
                 for index in 0..array_length {
-                    let Some(element) = self.array_index_value(array_id, index)? else {
+                    let Some(element) = self.array_index_get(module, array_id, index)? else {
                         continue;
                     };
 
@@ -92743,7 +93041,7 @@ impl InterpreterCore {
         let mut parts = Vec::with_capacity(len.min(4096));
         for index in 0..len {
             let element = self
-                .array_index_value(array_id, index)?
+                .array_index_get(Some(module), array_id, index)?
                 .unwrap_or(Value::Undefined);
             if let Err(error) = self.join_element_stored_label(array_id, index as u64) {
                 active.remove(&array_id.0);
@@ -98318,6 +98616,19 @@ impl InterpreterCore {
             });
         }
         let prototype = self.constructor_prototype_for_value(module, new_target)?;
+        // ES2025 27.1.3.1: abstract unless NewTarget is a subclass, whose
+        // instance is an ordinary object from NewTarget's prototype.
+        if standard_name == Some("Iterator") {
+            if matches!(new_target, Value::BuiltinFunction(target)
+                if target.kind == BuiltinFunctionKind::StandardConstructor
+                    && Self::standard_constructor_name(target).ok() == Some("Iterator"))
+            {
+                return Err(self.abstract_iterator_construction_error());
+            }
+            return Ok(Value::Object(
+                self.alloc_object_with_prototype(Some(prototype))?,
+            ));
+        }
         let mut result = match standard_name {
             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                 self.construct_event_target_family(module, name, args)?
@@ -99667,7 +99978,11 @@ impl InterpreterCore {
             ARRAY_ITERATOR_PROTOTYPE
             | MAP_ITERATOR_PROTOTYPE
             | SET_ITERATOR_PROTOTYPE
-            | GENERATOR_PROTOTYPE => Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?),
+            | GENERATOR_PROTOTYPE
+            | iterator_helpers::ITERATOR_HELPER_PROTOTYPE
+            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+                Some(self.ensure_builtin_prototype(ITERATOR_PROTOTYPE)?)
+            }
             "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError" | "EvalError"
             | "URIError" | "AggregateError" => Some(self.ensure_builtin_prototype("Error")?),
             // ES2020 22.2.6: the concrete typed array prototypes inherit the
@@ -99822,11 +100137,64 @@ impl InterpreterCore {
                 let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
                 let value = Value::BuiltinFunction(BuiltinFunction::generator_iterator_self());
                 self.set_object_runtime_property(prototype, key.clone(), value)?;
-                return self.set_own_property_attributes(
-                    prototype,
-                    &key,
-                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+                // ES2025 27.1.4: the Iterator helpers, `constructor` and
+                // @@toStringTag (data properties here; the specification's
+                // are accessors) (bd-9vouw.179).
+                let mut members = vec![(
+                    RuntimePropertyKey::String(JsString::from("constructor")),
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Iterator")),
+                )];
+                members.extend(
+                    iterator_helpers::ITERATOR_HELPER_METHODS
+                        .iter()
+                        .filter(|(_, owner, _)| *owner == "Iterator.prototype")
+                        .map(|(specifier, _, name)| {
+                            (
+                                RuntimePropertyKey::String(JsString::from(*name)),
+                                iterator_helpers::helper_method(specifier),
+                            )
+                        }),
                 );
+                members.push((
+                    RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id()),
+                    Value::str("Iterator"),
+                ));
+                for (key, value) in members {
+                    self.set_object_runtime_property(prototype, key.clone(), value)?;
+                    self.set_own_property_attributes(
+                        prototype,
+                        &key,
+                        NON_ENUMERABLE_DATA_ATTRIBUTES,
+                    )?;
+                }
+                return Ok(());
+            }
+            iterator_helpers::ITERATOR_HELPER_PROTOTYPE
+            | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
+                let members = iterator_helpers::ITERATOR_HELPER_METHODS
+                    .iter()
+                    .filter(|(_, owner, _)| *owner == canonical)
+                    .map(|(specifier, _, name)| {
+                        (
+                            RuntimePropertyKey::String(JsString::from(*name)),
+                            iterator_helpers::helper_method(specifier),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                for (key, value) in members {
+                    self.set_object_runtime_property(prototype, key.clone(), value)?;
+                    self.set_own_property_attributes(
+                        prototype,
+                        &key,
+                        NON_ENUMERABLE_DATA_ATTRIBUTES,
+                    )?;
+                }
+                // %WrapForValidIteratorPrototype% has no @@toStringTag.
+                if canonical == iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE {
+                    return Ok(());
+                }
+                ("Iterator Helper", Vec::new(), None)
             }
             ARRAY_ITERATOR_PROTOTYPE => (
                 "Array Iterator",
@@ -101224,6 +101592,7 @@ impl InterpreterCore {
                 | "AbortController"
                 | "AbortSignal"
                 | "DOMException"
+                | "Iterator"
                 | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
                 "Buffer" => 3,
@@ -101231,6 +101600,7 @@ impl InterpreterCore {
                 _ => 1,
             }),
             "poolSize" if name == "Buffer" => Value::Int(8192),
+            "from" if name == "Iterator" => iterator_helpers::helper_method("Iterator.from"),
             key if name == "AbortSignal" && Self::abort_signal_static(key).is_some() => {
                 Self::abort_signal_static(key).expect("guarded above")
             }
@@ -101350,6 +101720,10 @@ impl InterpreterCore {
                 expected: format!("new {name}(...)"),
                 got: format!("Constructor {name} requires 'new'"),
             }),
+            "Iterator" => Err(self.throw_js_error(
+                "TypeError",
+                "Constructor Iterator requires 'new'".to_string(),
+            )),
             name if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                 Err(InterpreterError::TypeError {
                     expected: format!("new {name}(...)"),
@@ -101763,6 +102137,10 @@ impl InterpreterCore {
                 .map(|(name, _)| name.as_str());
             // A method `delete` removed from this prototype (bd-9vouw.93)
             // is looked up further along the chain.
+            // A prototype without the method passes the lookup on to its own
+            // [[Prototype]], as [[Get]] does: AbortSignal.prototype holds
+            // throwIfAborted, EventTarget.prototype addEventListener
+            // (bd-9vouw.170).
             if let Some(name) = name
                 && VIRTUAL_METHOD_PROTOTYPES.contains(&name)
                 && !(self.virtual_property_deletions
@@ -101770,8 +102148,9 @@ impl InterpreterCore {
                         id,
                         &RuntimePropertyKey::String(JsString::from(key)),
                     ))
+                && let Some(method) = Self::canonical_prototype_method(name, key)
             {
-                return Self::canonical_prototype_method(name, key);
+                return Some(method);
             }
             current = self.observable_prototype_of(id);
             depth += 1;
@@ -134750,9 +135129,11 @@ mod function_prototype_call_apply_tests_current {
                 "ambient or recursive authority leaked through {forbidden_name}"
             );
         }
-        // 7 realm objects, Date and Promise, 7 timers, 41 standard
-        // constructors, 13 global functions.
-        assert_eq!(globals.len(), 70);
+        // 7 realm objects, Date and Promise, 7 timers, 48 standard
+        // constructors (EventTarget, Event, CustomEvent, AbortController,
+        // AbortSignal and DOMException since bd-9vouw.170, Iterator since
+        // bd-9vouw.179), 13 global functions.
+        assert_eq!(globals.len(), 77);
         assert_eq!(
             InterpreterCore::projected_generated_function_realm_registry_bytes(),
             InterpreterCore::estimate_generated_function_realm_globals_bytes(globals),

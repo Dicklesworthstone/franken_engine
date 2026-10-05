@@ -4,7 +4,8 @@
 //! console sink when that module's own flow ceiling allows it. The importer is
 //! lowered assuming each local import yields at most Internal (only when it is
 //! refused without that assumption), and the interpreter checks the imported
-//! module's ceiling against the assumption before running it. Expected lines
+//! module's ceiling against the assumption before running it; a module loaded
+//! under the contract bounds its own imports the same way. Expected lines
 //! are Node v22.2.0's output for the same file trees; the refusals are the
 //! planted negatives.
 
@@ -127,14 +128,16 @@ fn transitively_imported_calls_print() {
     );
 }
 
-/// An importer that passes without the contract keeps working when the imported module's ceiling is TopSecret.
+/// An importer that passes without the contract keeps working when the
+/// imported module's ceiling is TopSecret: loaded without a bound, lib.mjs is
+/// lowered without the contract, so its own import of other.mjs is opaque.
 #[test]
 fn side_effect_only_import_of_an_opaque_module_still_runs() {
     assert_output(
         &[
             (
                 "lib.mjs",
-                "export function later() { return import('./other.mjs'); }\nexport function touch(list) { list.push('touched'); }\n",
+                "import { x } from './other.mjs';\nexport function touch(list) { list.push(x); }\n",
             ),
             ("other.mjs", "export const x = 1;\n"),
             (
@@ -146,18 +149,18 @@ fn side_effect_only_import_of_an_opaque_module_still_runs() {
     );
 }
 
-/// Planted negative: the imported module can produce a TopSecret value (its
-/// dynamic import runs code outside its IR), so the importer that prints its
-/// result is refused at the import edge, before the module runs.
+/// Planted negative: the imported module can produce a TopSecret value (it
+/// imports a Node core module the engine does not model, whose code is
+/// outside any IR), so the importer that prints its result is refused at the
+/// import edge, before the module runs.
 #[test]
 fn importing_a_module_above_the_contract_is_refused() {
     assert_refused(
         &[
             (
                 "lib.mjs",
-                "export function later() { return import('./other.mjs'); }\nexport function f() { return 1; }\nconsole.log('lib ran');\n",
+                "import * as threads from 'node:worker_threads';\nexport function f() { return 1; }\nconsole.log('lib ran');\n",
             ),
-            ("other.mjs", "export const x = 1;\n"),
             (
                 "app.mjs",
                 "import { f } from './lib.mjs';\nconsole.log(f());\n",
@@ -219,10 +222,32 @@ fn importing_a_package_above_the_contract_is_refused() {
             ),
             (
                 "node_modules/leaky/index.mjs",
-                "export function later() { return import('./other.mjs'); }\nexport function f() { return 1; }\n",
+                "import * as threads from 'node:worker_threads';\nexport function f() { return 1; }\n",
             ),
-            ("node_modules/leaky/other.mjs", "export const x = 1;\n"),
             ("app.mjs", "import { f } from 'leaky';\nconsole.log(f());\n"),
+        ],
+        "bounded-import contract",
+    );
+}
+
+/// Planted negative: the bound holds transitively. The app prints an
+/// imported call's result, so it runs under the contract; a barrel
+/// re-exporting a module above the contract is lowered under the contract
+/// itself (so its own ceiling passes the app's edge), and its edge to that
+/// module is refused before the module runs (Node prints 1).
+#[test]
+fn a_barrel_over_a_module_above_the_contract_is_refused() {
+    assert_refused(
+        &[
+            (
+                "a.mjs",
+                "import * as threads from 'node:worker_threads';\nexport function f() { return 1; }\n",
+            ),
+            ("index.mjs", "export * from './a.mjs';\n"),
+            (
+                "app.mjs",
+                "import { f } from './index.mjs';\nconsole.log(f());\n",
+            ),
         ],
         "bounded-import contract",
     );

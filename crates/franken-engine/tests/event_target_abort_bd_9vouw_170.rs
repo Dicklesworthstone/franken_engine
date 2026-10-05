@@ -42,6 +42,8 @@ fn console_lines(source: &str, v8_profile: bool, stress_interval: Option<u64>) -
         RuntimeCapability::HeapAllocate,
         RuntimeCapability::Builtin,
         RuntimeCapability::Console,
+        // AbortSignal.timeout schedules on the timer queue.
+        RuntimeCapability::Timer,
     ]);
     let mut core = InterpreterCore::new(config, "events");
     core.set_gc_stress_interval(stress_interval);
@@ -113,12 +115,15 @@ fn capture_flag_and_stop_immediate() {
 }
 
 /// preventDefault only acts on a cancelable event and not from a passive
-/// listener; dispatchEvent reports it.
+/// listener; dispatchEvent reports it. The passive line is the DOM spec's and
+/// Bun 1.4.2's ("true false"): Node v22.2.0 lets a passive listener cancel
+/// ("false true"), as V8 12.4's Array.fromAsync departs from ES2024 in the
+/// bd-9vouw.172 test.
 #[test]
 fn prevent_default() {
     assert_lines(
         "const et = new EventTarget();\net.addEventListener('c', (e) => e.preventDefault());\nconst c1 = new Event('c', { cancelable: true });\nconst c2 = new Event('c');\nconsole.log(et.dispatchEvent(c1), c1.defaultPrevented, et.dispatchEvent(c2), c2.defaultPrevented);\nconst et2 = new EventTarget();\net2.addEventListener('p', (e) => e.preventDefault(), { passive: true });\nconst p = new Event('p', { cancelable: true });\nconsole.log(et2.dispatchEvent(p), p.defaultPrevented);\nconsole.log(new Event('r', { cancelable: true }).returnValue);\n",
-        &["false true true false", "false true", "true"],
+        &["false true true false", "true false", "true"],
     );
 }
 

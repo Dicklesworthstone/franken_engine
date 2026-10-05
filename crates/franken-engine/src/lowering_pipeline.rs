@@ -76,6 +76,8 @@ use crate::parser_gap_inventory::{
 };
 use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
+mod esm_core_imports;
+mod path_module;
 mod util_module;
 mod with_statement;
 
@@ -114,6 +116,25 @@ fn typeof_dynamic_name_sentinel(name: &str) -> String {
 
 fn capture_origin_sentinel(name: &str) -> String {
     format!("{CAPTURE_ORIGIN_SENTINEL_PREFIX}{name}")
+}
+
+/// The binding id of a CommonJS wrapper binding (`module`, `exports`,
+/// `require`, `__filename`, `__dirname`) declared at a CommonJS unit's root.
+/// It carries the lexical prefix, so nested function bodies inherit it; the
+/// NUL-led remainder can never be a source identifier.
+fn commonjs_wrapper_sentinel(name: &str) -> String {
+    format!("{LEXICAL_BINDING_SENTINEL_PREFIX}\0commonjs-wrapper\0{name}")
+}
+
+/// Whether `name`, as seen from a function body whose enclosing lookup is
+/// `outer_lookup`, is the CommonJS wrapper binding itself rather than a
+/// source binding of the same name (bd-rff5g). The loader writes the wrapper
+/// bindings into the module's runtime scope frame, not into a capture cell,
+/// so a nested function reads them by name through its captured scope chain.
+fn is_commonjs_wrapper_reference(outer_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
+    outer_lookup
+        .get(&commonjs_wrapper_sentinel(name))
+        .is_some_and(|wrapper| outer_lookup.get(&capture_origin_sentinel(name)) == Some(wrapper))
 }
 
 fn capture_cell_name(name: &str, origin_id: BindingId) -> String {
@@ -622,6 +643,26 @@ pub fn lower_ir0_to_ir3(
     }
 }
 
+/// Lower a module that an importer under the bounded-imports contract loads
+/// (bd-j8f7q). Its own imports of local files and packages are bounded from
+/// the start: the importer's assumption already depends on them staying at
+/// most [`IFC_BOUNDED_IMPORT_LABEL`], and the contract marker makes the
+/// interpreter check each of those edges when this module runs. Its ceiling
+/// then reflects the values its own code produces instead of an opaque
+/// TopSecret for every module it imports or re-exports (a barrel of
+/// `export * from` lines was refused). A module without such an import
+/// lowers as [`lower_ir0_to_ir3`] does.
+pub fn lower_bounded_import_ir0_to_ir3(
+    ir0: &Ir0Module,
+    context: &LoweringContext,
+) -> Result<LoweringPipelineOutput, LoweringPipelineError> {
+    if ir0_has_local_static_import(ir0) {
+        lower_ir0_to_ir3_unit(ir0, context, true)
+    } else {
+        lower_ir0_to_ir3(ir0, context)
+    }
+}
+
 /// Whether the unit statically imports or re-exports a module the bounded
 /// contract covers (a local file or a package).
 fn ir0_has_local_static_import(ir0: &Ir0Module) -> bool {
@@ -955,6 +996,32 @@ fn lower_ir0_to_ir1_on_current_stack(
         }
         None => ir0,
     };
+    // An import of a core module with a `require` facade becomes that
+    // `require` (before the util rewrite, which builds `require('util')`).
+    let imports_rewritten;
+    let ir0 = match esm_core_imports::rewrite_core_module_imports(&ir0.tree) {
+        Some(tree) => {
+            imports_rewritten = Ir0Module {
+                header: ir0.header.clone(),
+                tree,
+            };
+            &imports_rewritten
+        }
+        None => ir0,
+    };
+    // A free `require('path')` the path facade cannot claim builds the
+    // engine's path module.
+    let path_rewritten;
+    let ir0 = match path_module::rewrite_path_requires(&ir0.tree)? {
+        Some(tree) => {
+            path_rewritten = Ir0Module {
+                header: ir0.header.clone(),
+                tree,
+            };
+            &path_rewritten
+        }
+        None => ir0,
+    };
     // A free `require('util')` builds the engine's util module.
     let util_rewritten;
     let ir0 = match util_module::rewrite_util_requires(&ir0.tree)? {
@@ -1020,6 +1087,7 @@ fn lower_ir0_to_ir1_on_current_stack(
                 kind: BindingKind::Parameter,
             });
             declared_root_bindings.insert(name.to_string());
+            binding_lookup.insert(commonjs_wrapper_sentinel(name), binding_id);
         }
     }
     let source_root_bindings =
@@ -12653,6 +12721,7 @@ fn collect_free_vars(
         if pre_lower_names.contains(name.as_str())
             || is_internal_lowering_binding(name)
             || !has_source_lexical_binding(outer_lookup, name)
+            || is_commonjs_wrapper_reference(outer_lookup, name)
         {
             continue;
         }
@@ -12685,7 +12754,10 @@ fn append_parameter_prologue_captures(
     outer_scope: ScopeId,
 ) {
     for (name, body_id) in &state.references {
-        if excluded_name == Some(name.as_str()) || !has_source_lexical_binding(outer_lookup, name) {
+        if excluded_name == Some(name.as_str())
+            || !has_source_lexical_binding(outer_lookup, name)
+            || is_commonjs_wrapper_reference(outer_lookup, name)
+        {
             continue;
         }
         append_free_var_capture(
@@ -12876,8 +12948,32 @@ fn rewrite_unresolved_function_body_loads(
         }
     }
 
+    // bd-rff5g: a CommonJS wrapper binding read in a nested body is loaded by
+    // name through the closure's captured scope chain, where the loader wrote
+    // it (see `is_commonjs_wrapper_reference`); it is never captured.
+    let mut commonjs_wrapper_loads: Vec<(String, BindingId)> = body_lookup
+        .iter()
+        .filter(|(name, binding_id)| {
+            !is_internal_lowering_binding(name)
+                && !pre_lower_names.contains(name.as_str())
+                && !locally_defined_ids.contains(binding_id)
+                && is_commonjs_wrapper_reference(outer_lookup, name)
+        })
+        .map(|(name, binding_id)| (name.clone(), *binding_id))
+        .collect();
+    for (name, binding_id) in &parameter_prologue.references {
+        if !locally_defined_ids.contains(binding_id)
+            && is_commonjs_wrapper_reference(outer_lookup, name)
+            && !commonjs_wrapper_loads
+                .iter()
+                .any(|(_, id)| id == binding_id)
+        {
+            commonjs_wrapper_loads.push((name.clone(), *binding_id));
+        }
+    }
+
     if unresolved_by_id.is_empty() {
-        return Vec::new();
+        return commonjs_wrapper_loads;
     }
 
     // A bare reference to a runtime-injected global (Function/console/process/
@@ -12891,7 +12987,7 @@ fn rewrite_unresolved_function_body_loads(
     // `arguments` (bd-9vouw.25) resolves the same way: a non-arrow function
     // that reads it declares it on entry, and an arrow reads its enclosing
     // function's through the captured scope chain.
-    let runtime_global_loads: Vec<(String, BindingId)> = unresolved_by_id
+    let mut runtime_global_loads: Vec<(String, BindingId)> = unresolved_by_id
         .iter()
         .filter(|(_, name)| {
             PREDECLARED_RUNTIME_GLOBALS.contains(&name.as_str()) || name.as_str() == "arguments"
@@ -12936,6 +13032,7 @@ fn rewrite_unresolved_function_body_loads(
         rewritten.push(body_ops[index].clone());
     }
     *body_ops = rewritten;
+    runtime_global_loads.extend(commonjs_wrapper_loads);
     runtime_global_loads
 }
 
@@ -13058,6 +13155,13 @@ fn lower_typeof_operand_suppressing_ambient(
     label_counter: &mut u32,
     span_table: &mut Vec<Ir1OpSpanEntry>,
 ) -> Result<bool, LoweringPipelineError> {
+    if is_process_next_tick_read(argument, binding_lookup) {
+        ops.push(Ir1Op::HostCall {
+            capability: PROCESS_NEXT_TICK_VALUE_CAPABILITY.to_string(),
+            arg_count: 0,
+        });
+        return Ok(true);
+    }
     match argument {
         Expression::Identifier(name) if !has_source_lexical_binding(binding_lookup, name) => {
             // `typeof` is the one identifier-read form that tolerates a missing
@@ -15593,6 +15697,7 @@ fn lower_expression_to_ir1_inner(
             if let Expression::Identifier(name) = callee.as_ref()
                 && let Some(capability) = with_statement::intrinsic_capability(name)
                     .or_else(|| util_module::intrinsic_capability(name))
+                    .or_else(|| path_module::intrinsic_capability(name))
             {
                 for argument in arguments {
                     lower_expression_to_ir1(
@@ -17243,6 +17348,7 @@ fn lower_expression_to_ir1_inner(
             if let Expression::Identifier(object_name) = object.as_ref()
                 && !has_source_lexical_binding(binding_lookup, object_name)
                 && !crypto_constants_member_read(object, property, *computed, binding_lookup)
+                && !is_process_next_tick_read(expression, binding_lookup)
                 && !*computed
                 && let Expression::Identifier(prop_name) = property.as_ref()
                 && let Some(required_effect) =
@@ -17355,6 +17461,13 @@ fn lower_expression_to_ir1_inner(
             ) {
                 ops.push(Ir1Op::HostCall {
                     capability: capability.to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            if is_process_next_tick_read(expression, binding_lookup) {
+                ops.push(Ir1Op::HostCall {
+                    capability: PROCESS_NEXT_TICK_VALUE_CAPABILITY.to_string(),
                     arg_count: 0,
                 });
                 return Ok(());
@@ -24529,10 +24642,12 @@ fn module_alias_has_predeclaration_hazard(
     // as `const bytes = Buffer.from(...); const hash = crypto.createHash(...)`.
     // Direct prefix uses and all rejected/escaped uses remain fail-closed below.
     let arbitrary_call_can_observe_hoisted_alias = !surface.is_authenticated_object();
-    // The util module (`util_module.rs`) is engine-owned code that names no
-    // program binding, so building it cannot observe the alias.
+    // The util and path modules (`util_module.rs`, `path_module.rs`) are
+    // engine-owned code that names no program binding, so building them
+    // cannot observe the alias.
     let statement_prefix_has_hazard = body[..statement_index].iter().any(|statement| {
         !util_module::is_module_declaration(statement)
+            && !path_module::is_module_declaration(statement)
             && (module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
                 || module_alias_statement_has_rejected_use(statement, alias, surface)
                 || (arbitrary_call_can_observe_hoisted_alias
@@ -27464,6 +27579,21 @@ fn process_builtin_call_capability(
         "exit" => Some("builtin:ProcessExit"),
         _ => None,
     }
+}
+
+/// `process.nextTick` read as a value (bd-9vouw.186): the engine's next-tick
+/// scheduler as a first-class function, the same hostcall the call shape
+/// lowers to. Libraries probe and keep it (`typeof process.nextTick ===
+/// 'function'`, `defer = process.nextTick`); a module holding such a read was
+/// refused whole as an `env.read`. It grants scheduling only.
+pub(crate) const PROCESS_NEXT_TICK_VALUE_CAPABILITY: &str =
+    "builtin:static-value:builtin:ProcessNextTick";
+
+fn is_process_next_tick_read(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    unshadowed_process_member(expression, binding_lookup) == Some("nextTick")
 }
 
 /// Whether an assignment target is the unshadowed `process.exitCode`

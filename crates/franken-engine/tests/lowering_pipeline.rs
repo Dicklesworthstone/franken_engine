@@ -2367,12 +2367,15 @@ fn enrichment_property_set_lowering() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_setprop.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let has_set = output
-        .ir3
-        .instructions
-        .iter()
-        .any(|i| matches!(i, Ir3Instruction::SetProperty { .. }));
-    assert!(has_set, "property assignment should produce SetProperty");
+    // A script is sloppy code: its write is a SetPropertySloppy, which
+    // fails silently where a strict SetProperty throws (bd-9vouw.146).
+    let has_set = output.ir3.instructions.iter().any(|i| {
+        matches!(
+            i,
+            Ir3Instruction::SetProperty { .. } | Ir3Instruction::SetPropertySloppy { .. }
+        )
+    });
+    assert!(has_set, "property assignment should produce a property set");
 }
 
 // --- 101. Chained member access ---

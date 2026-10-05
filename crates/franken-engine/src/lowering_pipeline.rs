@@ -116,6 +116,25 @@ fn capture_origin_sentinel(name: &str) -> String {
     format!("{CAPTURE_ORIGIN_SENTINEL_PREFIX}{name}")
 }
 
+/// The binding id of a CommonJS wrapper binding (`module`, `exports`,
+/// `require`, `__filename`, `__dirname`) declared at a CommonJS unit's root.
+/// It carries the lexical prefix, so nested function bodies inherit it; the
+/// NUL-led remainder can never be a source identifier.
+fn commonjs_wrapper_sentinel(name: &str) -> String {
+    format!("{LEXICAL_BINDING_SENTINEL_PREFIX}\0commonjs-wrapper\0{name}")
+}
+
+/// Whether `name`, as seen from a function body whose enclosing lookup is
+/// `outer_lookup`, is the CommonJS wrapper binding itself rather than a
+/// source binding of the same name (bd-rff5g). The loader writes the wrapper
+/// bindings into the module's runtime scope frame, not into a capture cell,
+/// so a nested function reads them by name through its captured scope chain.
+fn is_commonjs_wrapper_reference(outer_lookup: &BTreeMap<String, BindingId>, name: &str) -> bool {
+    outer_lookup
+        .get(&commonjs_wrapper_sentinel(name))
+        .is_some_and(|wrapper| outer_lookup.get(&capture_origin_sentinel(name)) == Some(wrapper))
+}
+
 fn capture_cell_name(name: &str, origin_id: BindingId) -> String {
     format!("{CAPTURE_CELL_NAME_PREFIX}{origin_id}\0{name}")
 }
@@ -1020,6 +1039,7 @@ fn lower_ir0_to_ir1_on_current_stack(
                 kind: BindingKind::Parameter,
             });
             declared_root_bindings.insert(name.to_string());
+            binding_lookup.insert(commonjs_wrapper_sentinel(name), binding_id);
         }
     }
     let source_root_bindings =
@@ -12653,6 +12673,7 @@ fn collect_free_vars(
         if pre_lower_names.contains(name.as_str())
             || is_internal_lowering_binding(name)
             || !has_source_lexical_binding(outer_lookup, name)
+            || is_commonjs_wrapper_reference(outer_lookup, name)
         {
             continue;
         }
@@ -12685,7 +12706,10 @@ fn append_parameter_prologue_captures(
     outer_scope: ScopeId,
 ) {
     for (name, body_id) in &state.references {
-        if excluded_name == Some(name.as_str()) || !has_source_lexical_binding(outer_lookup, name) {
+        if excluded_name == Some(name.as_str())
+            || !has_source_lexical_binding(outer_lookup, name)
+            || is_commonjs_wrapper_reference(outer_lookup, name)
+        {
             continue;
         }
         append_free_var_capture(
@@ -12876,8 +12900,32 @@ fn rewrite_unresolved_function_body_loads(
         }
     }
 
+    // bd-rff5g: a CommonJS wrapper binding read in a nested body is loaded by
+    // name through the closure's captured scope chain, where the loader wrote
+    // it (see `is_commonjs_wrapper_reference`); it is never captured.
+    let mut commonjs_wrapper_loads: Vec<(String, BindingId)> = body_lookup
+        .iter()
+        .filter(|(name, binding_id)| {
+            !is_internal_lowering_binding(name)
+                && !pre_lower_names.contains(name.as_str())
+                && !locally_defined_ids.contains(binding_id)
+                && is_commonjs_wrapper_reference(outer_lookup, name)
+        })
+        .map(|(name, binding_id)| (name.clone(), *binding_id))
+        .collect();
+    for (name, binding_id) in &parameter_prologue.references {
+        if !locally_defined_ids.contains(binding_id)
+            && is_commonjs_wrapper_reference(outer_lookup, name)
+            && !commonjs_wrapper_loads
+                .iter()
+                .any(|(_, id)| id == binding_id)
+        {
+            commonjs_wrapper_loads.push((name.clone(), *binding_id));
+        }
+    }
+
     if unresolved_by_id.is_empty() {
-        return Vec::new();
+        return commonjs_wrapper_loads;
     }
 
     // A bare reference to a runtime-injected global (Function/console/process/
@@ -12891,7 +12939,7 @@ fn rewrite_unresolved_function_body_loads(
     // `arguments` (bd-9vouw.25) resolves the same way: a non-arrow function
     // that reads it declares it on entry, and an arrow reads its enclosing
     // function's through the captured scope chain.
-    let runtime_global_loads: Vec<(String, BindingId)> = unresolved_by_id
+    let mut runtime_global_loads: Vec<(String, BindingId)> = unresolved_by_id
         .iter()
         .filter(|(_, name)| {
             PREDECLARED_RUNTIME_GLOBALS.contains(&name.as_str()) || name.as_str() == "arguments"
@@ -12936,6 +12984,7 @@ fn rewrite_unresolved_function_body_loads(
         rewritten.push(body_ops[index].clone());
     }
     *body_ops = rewritten;
+    runtime_global_loads.extend(commonjs_wrapper_loads);
     runtime_global_loads
 }
 

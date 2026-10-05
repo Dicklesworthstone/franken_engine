@@ -147,17 +147,26 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("Function.prototype", "toString", 0),
     ("Intl", "Collator", 0),
     ("Intl", "DateTimeFormat", 0),
+    ("Intl", "ListFormat", 0),
     ("Intl", "NumberFormat", 0),
     ("Intl", "PluralRules", 0),
+    ("Intl", "RelativeTimeFormat", 0),
     ("Intl", "getCanonicalLocales", 1),
     ("Intl.Collator.prototype", "compare", 2),
     ("Intl.Collator.prototype", "resolvedOptions", 0),
     ("Intl.DateTimeFormat.prototype", "format", 1),
+    ("Intl.DateTimeFormat.prototype", "formatToParts", 1),
     ("Intl.DateTimeFormat.prototype", "resolvedOptions", 0),
+    ("Intl.ListFormat.prototype", "format", 1),
+    ("Intl.ListFormat.prototype", "formatToParts", 1),
+    ("Intl.ListFormat.prototype", "resolvedOptions", 0),
     ("Intl.NumberFormat.prototype", "format", 1),
     ("Intl.NumberFormat.prototype", "resolvedOptions", 0),
     ("Intl.PluralRules.prototype", "resolvedOptions", 0),
     ("Intl.PluralRules.prototype", "select", 1),
+    ("Intl.RelativeTimeFormat.prototype", "format", 2),
+    ("Intl.RelativeTimeFormat.prototype", "formatToParts", 2),
+    ("Intl.RelativeTimeFormat.prototype", "resolvedOptions", 0),
     ("JSON", "isRawJSON", 1),
     ("JSON", "parse", 2),
     ("JSON", "rawJSON", 1),
@@ -249,10 +258,6 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("Object.prototype", "hasOwnProperty", 1),
     ("Object.prototype", "isPrototypeOf", 1),
     ("Object.prototype", "propertyIsEnumerable", 1),
-    ("Object.prototype", "__defineGetter__", 2),
-    ("Object.prototype", "__defineSetter__", 2),
-    ("Object.prototype", "__lookupGetter__", 1),
-    ("Object.prototype", "__lookupSetter__", 1),
     ("Object.prototype", "toLocaleString", 0),
     ("Object.prototype", "toString", 0),
     ("Object.prototype", "valueOf", 0),
@@ -514,4 +519,32 @@ pub(super) fn builtin_function_length(owner: &str, key: &str) -> Option<u8> {
         })
         .ok()
         .map(|index| BUILTIN_FUNCTION_LENGTHS[index].2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lookups binary-search the table, so it must stay sorted by (owner,
+    /// key) without duplicates: a second, misplaced copy of the four Annex B
+    /// `Object.prototype.__*__` entries had broken the order.
+    #[test]
+    fn table_is_sorted_and_unique() {
+        for pair in BUILTIN_FUNCTION_LENGTHS.windows(2) {
+            assert!(
+                (pair[0].0, pair[0].1) < (pair[1].0, pair[1].1),
+                "{:?} must sort before {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert_eq!(
+            builtin_function_length("Object.prototype", "__lookupSetter__"),
+            Some(1)
+        );
+        assert_eq!(
+            builtin_function_length("Intl.RelativeTimeFormat.prototype", "format"),
+            Some(2)
+        );
+    }
 }

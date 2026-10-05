@@ -3580,7 +3580,29 @@ pub enum BuiltinFunctionKind {
     /// by the specifier, one of [`iterator_helpers::ITERATOR_HELPER_METHODS`].
     /// Append only.
     IteratorHelperMethod,
+    /// Annex B `String.prototype.anchor`, `big`, `blink`, `bold`, `fixed`,
+    /// `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`
+    /// and `sup` (bd-9vouw.185), named by the specifier, one of
+    /// [`STRING_HTML_METHODS`]. Append only.
+    StringHtmlMethod,
 }
+
+/// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
+const STRING_HTML_METHODS: [(&str, &str, Option<&str>); 13] = [
+    ("anchor", "a", Some("name")),
+    ("big", "big", None),
+    ("blink", "blink", None),
+    ("bold", "b", None),
+    ("fixed", "tt", None),
+    ("fontcolor", "font", Some("color")),
+    ("fontsize", "font", Some("size")),
+    ("italics", "i", None),
+    ("link", "a", Some("href")),
+    ("small", "small", None),
+    ("strike", "strike", None),
+    ("sub", "sub", None),
+    ("sup", "sup", None),
+];
 
 impl BuiltinFunctionKind {
     /// Whether this first-class builtin implements ECMAScript `[[Construct]]`.
@@ -5057,6 +5079,10 @@ impl BuiltinFunction {
                 .iter()
                 .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
                 .map_or("", |(_, _, name)| *name),
+            BuiltinFunctionKind::StringHtmlMethod => STRING_HTML_METHODS
+                .iter()
+                .find(|(name, _, _)| self.module_specifier.0.as_deref() == Some(*name))
+                .map_or("", |(name, _, _)| *name),
             BuiltinFunctionKind::UrlStatic => {
                 if self.module_specifier.0.as_deref() == Some("parse") {
                     "parse"
@@ -5683,6 +5709,7 @@ impl BuiltinFunction {
                 .iter()
                 .find(|(specifier, _, _)| self.module_specifier.0.as_deref() == Some(*specifier))
                 .map(|(_, owner, _)| *owner)?,
+            K::StringHtmlMethod => "String.prototype",
             K::ObjectLegacyAccessor => "Object.prototype",
             K::SetMethod => "Set.prototype",
             K::SetTimeout
@@ -40276,6 +40303,10 @@ impl InterpreterCore {
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
                 self.string_substr_impl(module, &value, args)
             }
+            BuiltinFunctionKind::StringHtmlMethod => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                self.string_html_method(module, builtin.display_name(), receiver, args)
+            }
             BuiltinFunctionKind::StringReplace => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 if let Some(result) = self.string_pattern_protocol_call(
@@ -57721,6 +57752,19 @@ impl InterpreterCore {
             "slice" => Value::BuiltinFunction(BuiltinFunction::string_slice()),
             "substring" => Value::BuiltinFunction(BuiltinFunction::string_substring()),
             "substr" => Value::BuiltinFunction(BuiltinFunction::string_substr()),
+            name if STRING_HTML_METHODS.iter().any(|(html, _, _)| *html == name) => {
+                Value::BuiltinFunction(BuiltinFunction {
+                    kind: BuiltinFunctionKind::StringHtmlMethod,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(
+                        STRING_HTML_METHODS
+                            .iter()
+                            .find(|(html, _, _)| *html == name)
+                            .map_or("anchor", |(html, _, _)| *html),
+                    ),
+                    iterator_handle: None,
+                    bound_object: None,
+                })
+            }
             "replace" => Value::BuiltinFunction(BuiltinFunction::string_replace()),
             "match" => Value::BuiltinFunction(BuiltinFunction::string_match()),
             "matchAll" => Value::BuiltinFunction(BuiltinFunction::new_kind(
@@ -70626,6 +70670,59 @@ impl InterpreterCore {
             Value::Str(s) => Ok(s.clone()),
             _ => Ok(JsString::from(Self::value_to_primitive_string(value))),
         }
+    }
+
+    /// Annex B CreateHTML (B.2.2.2.1): `<tag attribute="value">S</tag>`, the
+    /// value's `"` written as `&quot;`. The receiver converts before the
+    /// value, each with ToString.
+    fn string_html_method(
+        &mut self,
+        module: &Ir3Module,
+        method: &str,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let Some(&(_, tag, attribute)) = STRING_HTML_METHODS
+            .iter()
+            .find(|(name, _, _)| *name == method)
+        else {
+            return Err(InterpreterError::InternalError {
+                details: format!("unknown String HTML method {method}"),
+            });
+        };
+        if matches!(receiver, Value::Undefined | Value::Null) {
+            return Err(self.throw_js_error(
+                "TypeError",
+                format!(
+                    "String.prototype.{method} called on {}",
+                    if matches!(receiver, Value::Null) {
+                        "null"
+                    } else {
+                        "undefined"
+                    }
+                ),
+            ));
+        }
+        let text = self.conversion_to_string(Some(module), receiver)?;
+        let mut units: Vec<u16> = format!("<{tag}").encode_utf16().collect();
+        if let Some(attribute) = attribute {
+            let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let value = self.conversion_to_string(Some(module), value)?;
+            units.extend(format!(" {attribute}=\"").encode_utf16());
+            for unit in value.encode_utf16() {
+                if unit == u16::from(b'"') {
+                    units.extend("&quot;".encode_utf16());
+                } else {
+                    units.push(unit);
+                }
+            }
+            units.push(u16::from(b'"'));
+        }
+        units.push(u16::from(b'>'));
+        units.extend(text.encode_utf16());
+        units.extend(format!("</{tag}>").encode_utf16());
+        self.check_string_limit(units.len())?;
+        Ok(Value::Str(JsString::from_code_units(&units)))
     }
 
     fn string_prototype_char_at_value(

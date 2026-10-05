@@ -48,6 +48,8 @@ pub enum HostIoBudgetError {
     RequestBytesExhausted,
     TooManyInFlight,
     RequestSizeOverflow,
+    HierarchyDepthExceeded,
+    ConcurrencyLimitBroadened,
 }
 
 impl HostIoBudgetError {
@@ -60,6 +62,8 @@ impl HostIoBudgetError {
             Self::RequestBytesExhausted => "HOST_IO_REQUEST_BYTES_EXHAUSTED",
             Self::TooManyInFlight => "HOST_IO_CONCURRENCY_EXHAUSTED",
             Self::RequestSizeOverflow => "HOST_IO_REQUEST_SIZE_OVERFLOW",
+            Self::HierarchyDepthExceeded => "HOST_IO_BUDGET_DEPTH_EXCEEDED",
+            Self::ConcurrencyLimitBroadened => "HOST_IO_CONCURRENCY_LIMIT_BROADENED",
         }
     }
 
@@ -90,13 +94,31 @@ struct SharedBudget {
     limits: HostIoBudgetLimits,
     balance: Mutex<Balance>,
     revoked: AtomicBool,
+    // Root-to-parent order. Every descendant admission must hold a permit at
+    // each ancestor, not just its own local semaphore.
+    ancestors: Arc<[Arc<SharedBudget>]>,
 }
+
+/// Bound retained ancestry, checkpoint polling and permit acquisition work.
+pub const MAX_HOST_IO_BUDGET_DEPTH: usize = 64;
 
 /// Clones share one balance, one concurrency limit and one irreversible revoke
 /// signal. Creating a new budget is a trusted host operation, not a guest API.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HostIoWorkBudget {
     shared: Arc<SharedBudget>,
+}
+
+impl fmt::Debug for HostIoWorkBudget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The ancestry is a shared DAG. Recursively formatting it would expand
+        // common prefixes exponentially, even with a bounded nesting depth.
+        f.debug_struct("HostIoWorkBudget")
+            .field("limits", &self.shared.limits)
+            .field("depth", &self.shared.ancestors.len())
+            .field("revoked", &self.is_revoked())
+            .finish_non_exhaustive()
+    }
 }
 
 impl HostIoWorkBudget {
@@ -110,6 +132,7 @@ impl HostIoWorkBudget {
                     in_flight: 0,
                 }),
                 revoked: AtomicBool::new(false),
+                ancestors: Arc::default(),
             }),
         }
     }
@@ -127,8 +150,58 @@ impl HostIoWorkBudget {
 
     pub fn is_revoked(&self) -> bool {
         self.shared.revoked.load(Ordering::Acquire)
+            || self.shared.ancestors.iter().any(|scope| scope.revoked.load(Ordering::Acquire))
     }
 
+    /// Permanently delegate work credits to a tenant or cell. Siblings cannot
+    /// spend the child's balance. Unused or revoked children never refund their
+    /// parent. A child's concurrency limit attenuates the parent limit; all
+    /// descendant effects also occupy an ancestor permit while in flight.
+    /// Revocation flows downward only, including after an ancestor owner drops.
+    /// This is trusted host setup, not a mechanism for guest-created budgets.
+    pub fn partition(&self, limits: HostIoBudgetLimits) -> Result<Self, HostIoBudgetError> {
+        self.check_active()?;
+        if self.shared.ancestors.len() >= MAX_HOST_IO_BUDGET_DEPTH {
+            return Err(HostIoBudgetError::HierarchyDepthExceeded);
+        }
+        if limits.max_in_flight > self.shared.limits.max_in_flight {
+            return Err(HostIoBudgetError::ConcurrencyLimitBroadened);
+        }
+        // Allocate the child before the irreversible debit. Construction does
+        // not publish the child or invoke a provider.
+        let mut ancestors = self.shared.ancestors.to_vec();
+        ancestors.push(Arc::clone(&self.shared));
+        let child = Self {
+            shared: Arc::new(SharedBudget {
+                limits,
+                balance: Mutex::new(Balance {
+                    requests: limits.requests,
+                    request_bytes: limits.request_bytes,
+                    in_flight: 0,
+                }),
+                revoked: AtomicBool::new(false),
+                ancestors: ancestors.into(),
+            }),
+        };
+        let mut balance = self.shared.balance.lock().map_err(|_| HostIoBudgetError::Poisoned)?;
+        self.check_active()?;
+        if limits.requests > balance.requests {
+            return Err(HostIoBudgetError::RequestsExhausted);
+        }
+        if limits.request_bytes > balance.request_bytes {
+            return Err(HostIoBudgetError::RequestBytesExhausted);
+        }
+        balance.requests -= limits.requests;
+        balance.request_bytes -= limits.request_bytes;
+        drop(balance);
+        // A racing revocation may consume delegated credits but cannot publish
+        // usable authority. As with ordinary admission, there is no refund.
+        child.check_active()?;
+        Ok(child)
+    }
+
+    /// Uncommitted credits, after both live admission and child delegation.
+    /// in_flight includes effects running through descendant scopes.
     pub fn snapshot(&self) -> Result<HostIoBudgetSnapshot, HostIoBudgetError> {
         let balance = self
             .shared
@@ -146,7 +219,9 @@ impl HostIoWorkBudget {
     fn check_active(&self) -> Result<(), HostIoBudgetError> {
         if self.is_revoked() {
             Err(HostIoBudgetError::Revoked)
-        } else if self.shared.balance.is_poisoned() {
+        } else if self.shared.balance.is_poisoned()
+            || self.shared.ancestors.iter().any(|scope| scope.balance.is_poisoned())
+        {
             Err(HostIoBudgetError::Poisoned)
         } else {
             // Exhausting admission does NOT revoke an already-admitted call.
@@ -157,52 +232,58 @@ impl HostIoWorkBudget {
     fn admit(&self, request: &HostIoRequest) -> Result<Admission, HostIoBudgetError> {
         self.check_active()?;
         let bytes = request_bytes(request)?;
-        let mut balance = self
-            .shared
-            .balance
-            .lock()
-            .map_err(|_| HostIoBudgetError::Poisoned)?;
-        self.check_active()?;
-        if balance.in_flight >= self.shared.limits.max_in_flight {
-            return Err(HostIoBudgetError::TooManyInFlight);
+        // Preallocate before acquiring any permit so allocation failure cannot
+        // leave an untracked in-flight increment. Depth is bounded at setup.
+        let mut admission = Admission {
+            budget: self.clone(),
+            scopes: Vec::with_capacity(self.shared.ancestors.len() + 1),
+        };
+        for scope in self.shared.ancestors.iter().chain(std::iter::once(&self.shared)) {
+            let mut balance = scope.balance.lock().map_err(|_| HostIoBudgetError::Poisoned)?;
+            self.check_active()?;
+            if balance.in_flight >= scope.limits.max_in_flight {
+                return Err(HostIoBudgetError::TooManyInFlight);
+            }
+            balance.in_flight += 1;
+            admission.scopes.push(Arc::clone(scope));
+            // Never hold two scope locks at once, and never hold one across
+            // provider dispatch. Partial acquisition rolls back through Drop.
         }
+        let mut balance = self.shared.balance.lock().map_err(|_| HostIoBudgetError::Poisoned)?;
+        self.check_active()?;
         if balance.requests == 0 {
             return Err(HostIoBudgetError::RequestsExhausted);
         }
         if bytes > balance.request_bytes {
             return Err(HostIoBudgetError::RequestBytesExhausted);
         }
-        // All dimensions are validated under one lock. A refused request never
-        // partially consumes a different dimension, and clones cannot overspend.
+        // Work was delegated before child construction, so charge only this
+        // leaf. Charging ancestors again would double-spend prepaid credits.
+        // All work dimensions are validated atomically under the leaf lock.
         balance.requests -= 1;
         balance.request_bytes -= bytes;
-        balance.in_flight += 1;
-        Ok(Admission {
-            budget: self.clone(),
-        })
+        drop(balance);
+        Ok(admission)
     }
 }
 
 struct Admission {
     budget: HostIoWorkBudget,
+    scopes: Vec<Arc<SharedBudget>>,
 }
 
 impl Drop for Admission {
     fn drop(&mut self) {
-        // A caught provider panic must not allow reuse of potentially corrupted
-        // provider state through another clone of this workload's membrane.
         if std::thread::panicking() {
             self.budget.revoke();
         }
-        let mut balance = self
-            .budget
-            .shared
-            .balance
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Poison recovery here releases capacity only; new admission continues
-        // to reject the poisoned balance. Committed work is never refunded.
-        balance.in_flight = balance.in_flight.saturating_sub(1);
+        for scope in self.scopes.iter().rev() {
+            let mut balance = scope.balance.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Poison recovery releases capacity only. New admission remains
+            // fail-closed and committed/delegated work is never refunded.
+            balance.in_flight = balance.in_flight.saturating_sub(1);
+        }
     }
 }
 
@@ -339,3 +420,7 @@ impl SandboxedHostIo {
 #[cfg(test)]
 #[path = "host_io_budget_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "host_io_budget_hierarchy_tests.rs"]
+mod hierarchy_tests;

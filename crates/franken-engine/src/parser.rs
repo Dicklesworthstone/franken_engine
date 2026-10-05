@@ -2253,6 +2253,72 @@ fn append_normalized_separator(
     source_boundaries.push(following_source_offset);
 }
 
+/// A logical line holding only a one-line comment.
+fn is_comment_only_line(line: &LogicalLine) -> bool {
+    line.start_line == line.end_line && strip_comments_to_whitespace(&line.text).trim().is_empty()
+}
+
+/// Whether a line, after any leading comments, opens a call's arguments or
+/// a member index: `(` or `[`.
+fn line_starts_call_or_index(line: &str) -> bool {
+    let code = strip_comments_to_whitespace(line);
+    let code = code.trim_start();
+    code.starts_with('(') || code.starts_with('[')
+}
+
+/// Whether a logical line ends with something an argument list or index can
+/// follow: `)`, `]`, a literal or an identifier that is not a keyword ending
+/// a statement head (`return`, `break`, ...), outside import and export
+/// declarations.
+fn previous_line_ends_expression(text: &str) -> bool {
+    let code = strip_comments_to_whitespace(text);
+    let code = code.trim_end();
+    let is_identifier_char = |c: char| c == '_' || c == '$' || c.is_alphanumeric();
+    let Some(last) = code.chars().next_back() else {
+        return false;
+    };
+    if !(matches!(last, ')' | ']' | '\'' | '"' | '`') || is_identifier_char(last)) {
+        return false;
+    }
+    let word_start = code
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_identifier_char(*c))
+        .map_or(0, |(index, c)| index + c.len_utf8());
+    if matches!(
+        &code[word_start..],
+        "return"
+            | "throw"
+            | "break"
+            | "continue"
+            | "yield"
+            | "await"
+            | "typeof"
+            | "void"
+            | "delete"
+            | "new"
+            | "in"
+            | "of"
+            | "instanceof"
+            | "else"
+            | "do"
+            | "case"
+            | "default"
+            | "async"
+            | "let"
+            | "var"
+            | "const"
+    ) {
+        return false;
+    }
+    !split_statement_segments(code)
+        .last()
+        .is_some_and(|(_, _, clause)| {
+            let clause = strip_leading_labels(clause).trim_start();
+            starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export")
+        })
+}
+
 fn logical_line_from_buffer(
     text: &str,
     source_boundaries: &[usize],
@@ -3327,12 +3393,35 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                             && do_statement_awaits_while(&clause))
                 })
             });
+            // A line STARTING with `(` or `[` continues the expression the
+            // previous line ended: no semicolon is inserted before them
+            // (ES2020 11.9.1), so `x = f\n(arg)` is a call and webpack's
+            // `(function (modules) {...})\n/****/\n([modules])` passes its
+            // modules (bd-9vouw.190). Comment-only lines in between are
+            // dropped. A previous line ending with `;`, a `}` (a block or a
+            // declaration), a keyword that cannot end an expression, or an
+            // import/export declaration still ends there.
+            let paren_continues_previous = line_starts_call_or_index(trimmed_line) && {
+                let comment_lines = result
+                    .iter()
+                    .rev()
+                    .take_while(|line| is_comment_only_line(line))
+                    .count();
+                result.len() > comment_lines
+                    && previous_line_ends_expression(&result[result.len() - 1 - comment_lines].text)
+            };
+            if paren_continues_previous {
+                while result.last().is_some_and(is_comment_only_line) {
+                    result.pop();
+                }
+            }
             if dot_continues_previous
                 || operator_continues_previous
                 || block_clause_continues_previous
                 || brace_continues_header
                 || body_continues_header
                 || clause_continues_statement
+                || paren_continues_previous
             {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;

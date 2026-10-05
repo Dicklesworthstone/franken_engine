@@ -1068,12 +1068,10 @@ impl InterpreterCore {
                         .unwrap_or_default()
                         .to_string()
                 }
-                _ => match builtin.display_name() {
-                    "@@iterator" => "[Symbol.iterator]",
-                    "@@asyncIterator" => "[Symbol.asyncIterator]",
-                    name => name,
-                }
-                .to_string(),
+                // The built-in's `name` (bd-9vouw.177): symbol-keyed methods
+                // read `[Symbol.match]`, a promise's resolving functions are
+                // anonymous.
+                _ => builtin.spec_name().to_string(),
             },
             Value::Function(index) => module
                 .and_then(|module| Self::function_name_or_length(module, *index, "name"))

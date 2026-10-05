@@ -32,13 +32,15 @@ use crate::ast::{
     VariableDeclarator,
 };
 
-/// Core modules whose `require` aliases lowering recognizes. Loading one
-/// needs no authority; members with effects carry their own capabilities.
-const FACADE_MODULES: [&str; 11] = [
+/// Core modules whose `require` aliases lowering recognizes (and path's
+/// module object, `path_module.rs`). Loading one needs no authority;
+/// members with effects carry their own capabilities.
+const FACADE_MODULES: [&str; 12] = [
     "crypto",
     "events",
     "os",
     "path",
+    "path/posix",
     "querystring",
     "timers",
     "timers/promises",

@@ -77,6 +77,7 @@ use crate::parser_gap_inventory::{
 use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
 mod esm_core_imports;
+mod path_module;
 mod util_module;
 mod with_statement;
 
@@ -1005,6 +1006,19 @@ fn lower_ir0_to_ir1_on_current_stack(
                 tree,
             };
             &imports_rewritten
+        }
+        None => ir0,
+    };
+    // A free `require('path')` the path facade cannot claim builds the
+    // engine's path module.
+    let path_rewritten;
+    let ir0 = match path_module::rewrite_path_requires(&ir0.tree)? {
+        Some(tree) => {
+            path_rewritten = Ir0Module {
+                header: ir0.header.clone(),
+                tree,
+            };
+            &path_rewritten
         }
         None => ir0,
     };
@@ -15676,6 +15690,7 @@ fn lower_expression_to_ir1_inner(
             if let Expression::Identifier(name) = callee.as_ref()
                 && let Some(capability) = with_statement::intrinsic_capability(name)
                     .or_else(|| util_module::intrinsic_capability(name))
+                    .or_else(|| path_module::intrinsic_capability(name))
             {
                 for argument in arguments {
                     lower_expression_to_ir1(
@@ -24612,10 +24627,12 @@ fn module_alias_has_predeclaration_hazard(
     // as `const bytes = Buffer.from(...); const hash = crypto.createHash(...)`.
     // Direct prefix uses and all rejected/escaped uses remain fail-closed below.
     let arbitrary_call_can_observe_hoisted_alias = !surface.is_authenticated_object();
-    // The util module (`util_module.rs`) is engine-owned code that names no
-    // program binding, so building it cannot observe the alias.
+    // The util and path modules (`util_module.rs`, `path_module.rs`) are
+    // engine-owned code that names no program binding, so building them
+    // cannot observe the alias.
     let statement_prefix_has_hazard = body[..statement_index].iter().any(|statement| {
         !util_module::is_module_declaration(statement)
+            && !path_module::is_module_declaration(statement)
             && (module_alias_statement_contains_unshadowed_usage(statement, alias, surface)
                 || module_alias_statement_has_rejected_use(statement, alias, surface)
                 || (arbitrary_call_can_observe_hoisted_alias

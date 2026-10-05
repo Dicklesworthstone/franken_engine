@@ -2,10 +2,12 @@
 
 //! bd-9vouw.181: ES module imports of Node core modules whose `require`
 //! aliases lowering recognizes (path, os, url, querystring, util, zlib,
-//! crypto, timers, events). Before, such an import loaded nothing at run time
-//! and its opaque result was TopSecret, so no program that printed anything
-//! derived from it ran. Expected lines are Node v22.2.0's output for the same
-//! file trees, captured programmatically; the refusals are planted negatives.
+//! crypto, timers, events), and the path module object for the `require`
+//! forms the path facade does not recognize. Before, such an import loaded
+//! nothing at run time and its opaque result was TopSecret, so no program
+//! that printed anything derived from it ran. Expected lines are Node
+//! v22.2.0's output for the same file trees, captured programmatically; the
+//! refusals are planted negatives.
 
 use std::path::Path;
 
@@ -16,8 +18,11 @@ use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig,
 };
 
+/// Runs `app.mjs` as an ES module, or `app.cjs` as Node runs a CommonJS
+/// entry.
 fn run(root: &Path, lane: LaneChoice) -> Result<Vec<String>, String> {
-    let entry = root.join("app.mjs");
+    let commonjs = root.join("app.cjs").is_file();
+    let entry = root.join(if commonjs { "app.cjs" } else { "app.mjs" });
     let package = ExtensionPackage {
         extension_id: "esm-core-imports".to_string(),
         source: std::fs::read_to_string(&entry).expect("entry source"),
@@ -29,7 +34,12 @@ fn run(root: &Path, lane: LaneChoice) -> Result<Vec<String>, String> {
     };
     ExecutionOrchestrator::new(OrchestratorConfig {
         force_lane: Some(lane),
-        parse_goal: ParseGoal::Module,
+        parse_goal: if commonjs {
+            ParseGoal::Script
+        } else {
+            ParseGoal::Module
+        },
+        commonjs_entry: commonjs,
         ..OrchestratorConfig::default()
     })
     .execute(&package)
@@ -156,19 +166,47 @@ fn imported_module_uses_a_core_module() {
     );
 }
 
+/// Named path imports (the path module object): Node's join, resolve and argument errors.
+#[test]
+fn path_named_imports() {
+    assert_output(
+        &[(
+            "app.mjs",
+            "import { join, dirname, basename, resolve, relative, sep, posix } from 'node:path';\nconsole.log(join('a', 'b', '../c'), dirname('/x/y/z.js'), basename('/x/y.js', '.js'), resolve('/a', 'b', '../c'), relative('/a/b', '/a/c/d'), sep, posix.join('p', 'q'));\ntry { join('a', 1); } catch (error) { console.log(error.code, error.message); }\ntry { resolve('a', 1, 'b'); } catch (error) { console.log(error.code, error.message); }\n",
+        )],
+        &[
+            "a/c /x/y y /a/c ../c/d / p/q",
+            "ERR_INVALID_ARG_TYPE The \"path\" argument must be of type string. Received type number (1)",
+            "ERR_INVALID_ARG_TYPE The \"paths[1]\" argument must be of type string. Received type number (1)",
+        ],
+    );
+}
+
+/// CommonJS: a destructured require, a require inside a function and an inline read of a function get the path module object; the facade's alias still works.
+#[test]
+fn path_module_object_in_commonjs() {
+    assert_output(
+        &[(
+            "app.cjs",
+            "const { join, extname } = require('path');\nfunction nested() { const p = require('node:path'); return p.dirname('/q/r.txt'); }\nconst parse = require('path').parse;\nconst path = require('path');\nconsole.log(join('x', 'y'), extname('f.md'), nested(), parse('/home/u/f.txt').name, path.join('m', 'n'));\n",
+        )],
+        &["x/y .md /q f m/n"],
+    );
+}
+
 /// Planted negative: the rewrite never routes an import through a `require` the program declares, so the import stays opaque and its result is refused at the console (Node prints a/b).
 #[test]
 fn a_program_with_its_own_require_keeps_the_import_opaque() {
     assert_refused(
         &[(
             "app.mjs",
-            "import path from 'node:path';\nconst require = (specifier) => specifier;\nconsole.log(path.join('a', 'b'), require('x'));\n",
+            "import path from 'node:path';\nfunction require(specifier) { return specifier; }\nconsole.log(path.join('a', 'b'));\n",
         )],
         "unauthorized flow",
     );
 }
 
-/// Planted negative: a use the path facade does not recognize (the module object escapes into a call) is still refused, now as the ambient-authority refusal of the rewritten require (Node prints a/b).
+/// Known gap, pinned fail-closed: a program-level alias stays the path facade's, and a use it does not recognize (the alias escapes into a call) is refused as the ambient-authority refusal of the rewritten require (Node prints a/b).
 #[test]
 fn an_unrecognized_use_keeps_failing_closed() {
     assert_refused(

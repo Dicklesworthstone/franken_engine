@@ -234,14 +234,16 @@ fn a_program_with_its_own_require_keeps_the_import_opaque() {
     );
 }
 
-/// Known gap, pinned fail-closed: a program-level alias stays the path facade's, and a use it does not recognize (the alias escapes into a call) is refused as the ambient-authority refusal of the rewritten require (Node prints a/b).
+/// An imported path alias passed as a value (the path module object since
+/// the gate19 follow-up; before, a known gap refused as the ambient-authority
+/// refusal of the rewritten require). Node prints a/b.
 #[test]
-fn an_unrecognized_use_keeps_failing_closed() {
-    assert_refused(
+fn an_imported_path_alias_passed_as_a_value_works() {
+    assert_output(
         &[(
             "app.mjs",
             "import path from 'node:path';\nconst use = (p) => p.join('a', 'b');\nconsole.log(use(path));\n",
         )],
-        "ambient authority",
+        &["a/b"],
     );
 }

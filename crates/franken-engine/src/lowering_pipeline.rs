@@ -13162,6 +13162,13 @@ fn lower_typeof_operand_suppressing_ambient(
         });
         return Ok(true);
     }
+    if is_eval_value_read(argument, binding_lookup) {
+        ops.push(Ir1Op::HostCall {
+            capability: EVAL_VALUE_CAPABILITY.to_string(),
+            arg_count: 0,
+        });
+        return Ok(true);
+    }
     match argument {
         Expression::Identifier(name) if !has_source_lexical_binding(binding_lookup, name) => {
             // `typeof` is the one identifier-read form that tolerates a missing
@@ -14457,6 +14464,13 @@ fn lower_expression_to_ir1_inner(
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
+            if is_eval_value_read(expression, binding_lookup) {
+                ops.push(Ir1Op::HostCall {
+                    capability: EVAL_VALUE_CAPABILITY.to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
             // Check for ambient authority violation on direct identifier access
             if !has_source_lexical_binding(binding_lookup, name)
                 && let Some(required_effect) = required_effect_for_ambient_authority(name, None)
@@ -15691,6 +15705,19 @@ fn lower_expression_to_ir1_inner(
                     })?,
                 });
                 return Ok(());
+            }
+            // A direct `eval(src)` keeps its ambient check: only a read of
+            // `eval` as a value lowers to the inert function (bd-9vouw.191).
+            if is_eval_value_read(callee, binding_lookup)
+                && let Err(caller_profile) =
+                    check_ambient_authority_allowed(EffectKind::Eval, root_scope_id, binding_lookup)
+            {
+                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                    required_effect: EffectKind::Eval,
+                    caller_profile,
+                    accessor: "eval".to_string(),
+                    span: *span,
+                });
             }
             // The `with` and util rewrites' intrinsics (`%WithBase(...)`,
             // `%UtilInspect(...)`, ...): a HostCall on the evaluated arguments.
@@ -27594,6 +27621,22 @@ fn is_process_next_tick_read(
     binding_lookup: &BTreeMap<String, BindingId>,
 ) -> bool {
     unshadowed_process_member(expression, binding_lookup) == Some("nextTick")
+}
+
+/// `eval` read as a value (bd-9vouw.191): an inert function named `eval`
+/// whose every call throws EvalError, so a module that only keeps the
+/// intrinsic (get-intrinsic's `'%eval%': eval`, under qs, call-bind and
+/// side-channel) lowers instead of being refused whole as `runtime.eval`. A
+/// direct `eval(src)` keeps its ambient check; no source text is compiled
+/// through either form.
+pub(crate) const EVAL_VALUE_CAPABILITY: &str = "builtin:static-value:builtin:Eval";
+
+fn is_eval_value_read(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    matches!(expression, Expression::Identifier(name)
+        if name == "eval" && !has_source_lexical_binding(binding_lookup, name))
 }
 
 /// Whether an assignment target is the unshadowed `process.exitCode`

@@ -2425,6 +2425,15 @@ fn merge_logical_lines_requires_continuation(
     ) {
         return true;
     }
+    // Operator keywords that cannot end an expression: babel's istanbul
+    // output writes `var d = new\n/*istanbul ignore start*/\n_base[...]()`
+    // (jsdiff), which ended at `new` and read `new` as a variable. After a
+    // `.` the word is a property name (`opts.new`), which can.
+    if !trailing_identifier_follows_dot
+        && matches!(trailing_identifier, "new" | "in" | "instanceof" | "extends")
+    {
+        return true;
+    }
     // A declaration keyword with no binding yet cannot end a statement
     // (`var // note\n  a = 1`, moment.js). After a `.` the word is a property
     // name (`cfg.const`), which can.
@@ -2545,7 +2554,8 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 ']' if regex_in_char_class => regex_in_char_class = false,
                 '/' if !regex_in_char_class => {
                     in_regex_literal = false;
-                    last_significant = Some('/');
+                    // The literal is an operand: a following `/` divides.
+                    last_significant = Some(')');
                     trailing_identifier.clear();
                 }
                 _ => {}
@@ -3093,13 +3103,21 @@ fn do_statement_awaits_while(statement: &str) -> bool {
 }
 
 /// The clause after the last top-level `else` of `statement` (`if (a) x();
-/// else if (b) do y();` gives `if (b) do y();`), or `None`.
+/// else if (b) do y();` gives `if (b) do y();`), or `None`. The keyword is a
+/// whole token, also without surrounding spaces: minified code writes
+/// `if(k)a();else do{..}while(c)` (preact), whose do statement's `while`
+/// was split off as a statement of its own.
 fn text_after_last_top_level_else(statement: &str) -> Option<&str> {
     let mut rest = statement;
     let mut last = None;
-    while let Some(at) = find_top_level_keyword(rest, " else ") {
-        rest = &rest[at + " else ".len()..];
-        last = Some(rest);
+    while let Some(at) = find_top_level_keyword(rest, "else") {
+        let after = at + "else".len();
+        let token = !rest[..at].ends_with(|ch: char| is_identifier_continue(ch) || ch == '.')
+            && !rest[after..].starts_with(is_identifier_continue);
+        rest = &rest[after..];
+        if token {
+            last = Some(rest);
+        }
     }
     last.map(str::trim_start)
 }
@@ -3141,9 +3159,13 @@ fn unbraced_body_of_header_chain(statement: &str) -> &str {
 /// not a header.
 fn statement_header_takes_unbraced_body(statement: &str) -> bool {
     let tail = text_after_last_top_level_terminator(statement).trim();
-    // Only a `while` tail can be a do statement's condition.
+    // Only a `while` tail can be a do statement's condition, also when the
+    // do statement is the last else clause's body: `if (a) x(); else do {
+    // y() } while (c)` then a new line was read as `while (c)` heading that
+    // line, which then never ran.
+    let is_do = |text: &str| starts_with_keyword(unbraced_body_of_header_chain(text), "do");
     let in_do_statement = tail.contains("while")
-        && starts_with_keyword(unbraced_body_of_header_chain(statement), "do");
+        && (is_do(statement) || text_after_last_top_level_else(statement).is_some_and(is_do));
     header_chain_takes_unbraced_body(tail, in_do_statement)
 }
 
@@ -3524,7 +3546,10 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     }
                     '/' if !regex_in_char_class => {
                         in_regex_literal = false;
-                        last_significant = Some('/');
+                        // The literal is an operand: a line ending with it
+                        // is complete (`var re = /x/\nvar b`, json5's
+                        // unicode.js) and a following `/` divides.
+                        last_significant = Some(')');
                         trailing_identifier.clear();
                     }
                     _ => {}
@@ -20769,6 +20794,30 @@ mod tests {
         let lines = merge_logical_lines("var d = a\n  - b;");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "var d = a - b;");
+    }
+
+    #[test]
+    fn merge_logical_lines_ends_a_line_at_a_closing_regex_literal() {
+        // bd-9vouw.194: the closing `/` ends an operand; a trailing division
+        // `/` still continues.
+        let lines = merge_logical_lines("var a = /x/\nvar b = /[^#/:?]+/\nvar e = 6 /\n  3");
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["var a = /x/", "var b = /[^#/:?]+/", "var e = 6 / 3"]
+        );
+    }
+
+    #[test]
+    fn merge_logical_lines_continues_after_operator_keywords() {
+        // bd-9vouw.195: `new`, `in`, `instanceof` and `extends` cannot end an
+        // expression; as property names (`o.new`) they can.
+        let lines = merge_logical_lines("var d = new\nB()\nvar t = k in\nd\nvar n = o.new\nf()");
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["var d = new B()", "var t = k in d", "var n = o.new", "f()"]
+        );
     }
 
     #[test]

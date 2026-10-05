@@ -276,3 +276,137 @@ console.log(nested(), (function () { return require.main === module; })());
         ]
     );
 }
+
+/// Writes `files` (path relative to a fresh root, source) and runs `app.js`
+/// as the CommonJS entry; the run must succeed.
+fn run_tree(name: &str, files: &[(&str, &str)]) -> Vec<String> {
+    let root = temp_dir(name);
+    for (path, source) in files {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().expect("file parent")).expect("parent dir");
+        fs::write(&path, source).expect("write tree file");
+    }
+    let report = root.join("app.run.json");
+    let output = frankenctl(&[
+        "run",
+        "--input",
+        utf8(&root.join("app.js")),
+        "--extension-id",
+        name,
+        "--goal",
+        "commonjs",
+        "--out",
+        utf8(&report),
+    ]);
+    assert!(
+        output.status.success(),
+        "run failed: {}",
+        stderr_of(&output)
+    );
+    console_messages(&report)
+}
+
+/// A function of one module, called while another module evaluates, reads
+/// the wrapper bindings of its own module (bd-9vouw.180). Every scope push
+/// had declared the evaluating module's `module` and `exports` on top of the
+/// function's captured chain, so a babel helper's lazy
+/// `module.exports = _typeof = ...` replaced the CALLER's exports (date-fns:
+/// "Super expression must either be null or a function") and zod's
+/// `(0, exports.makeIssue)(...)` read the caller's `exports`.
+#[test]
+fn wrapper_bindings_stay_with_the_module_that_defines_the_function_bd_9vouw_180() {
+    let lines = run_tree(
+        "fe_run_cjs_owner_bindings",
+        &[
+            (
+                "lib/helper.js",
+                r#"var prefix = 'p:'
+function readOwn() { return prefix + exports.own }
+function setExports() { module.exports = setExports; module.exports.tag = 'helper'; return prefix + module.exports.tag }
+exports.own = 'helper-own'
+exports.readOwn = readOwn
+exports.setExports = setExports
+"#,
+            ),
+            (
+                "lib/typeof.js",
+                r#"function _typeof(o) {
+  return module.exports = _typeof = function (o) { return typeof o }, module.exports.__esModule = true, module.exports['default'] = module.exports, _typeof(o)
+}
+module.exports = _typeof, module.exports.__esModule = true, module.exports['default'] = module.exports
+"#,
+            ),
+            (
+                "lib/user.js",
+                r#"var t = require('./typeof')
+exports.kind = t(1)
+exports.mark = 'user'
+"#,
+            ),
+            (
+                "app.js",
+                r#"exports.own = 'app-own'
+const h = require('./lib/helper')
+console.log(h.readOwn(), h.setExports(), typeof module.exports, module.exports.own)
+const u = require('./lib/user')
+console.log(u.kind, u.mark, Object.keys(u).join())
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        [
+            "p:helper-own p:helper object app-own",
+            "number user kind,mark"
+        ]
+    );
+}
+
+/// `module.exports` may be an accessor (ansi-styles 4, under chalk 4:
+/// `Object.defineProperty(module, 'exports', { get: assembleStyles })`); the
+/// loader runs the getter in a module context, on every require, as Node
+/// does (bd-9vouw.192). It was "expected module-backed
+/// Function.prototype.call/apply dispatch, got missing module context".
+#[test]
+fn a_module_exports_getter_runs_on_require_bd_9vouw_192() {
+    let lines = run_tree(
+        "fe_run_cjs_exports_getter",
+        &[
+            (
+                "lib/getter.js",
+                r#"'use strict'
+function make() { return { x: [1, 2].map(function (v) { return v * 2 }).join() } }
+Object.defineProperty(module, 'exports', { enumerable: true, get: make })
+"#,
+            ),
+            (
+                "app.js",
+                r#"console.log(require('./lib/getter').x, require('./lib/getter') !== require('./lib/getter'))
+"#,
+            ),
+        ],
+    );
+    assert_eq!(lines, ["2,4 true"]);
+}
+
+/// `require('buffer')` is Node's buffer module over the engine's `Buffer`,
+/// `atob` and `btoa` (bd-9vouw.193): safe-buffer, under jws and
+/// jsonwebtoken, reads `require('buffer').Buffer`. It was "Cannot find module
+/// 'buffer'". The limits are Node v22.2.0's.
+#[test]
+fn require_buffer_is_the_buffer_module_bd_9vouw_193() {
+    let lines = run_tree(
+        "fe_run_cjs_buffer_module",
+        &[(
+            "app.js",
+            r#"const b = require('buffer')
+console.log(b.Buffer === Buffer, typeof b.atob, b.btoa('hi'), b.kMaxLength, b.constants.MAX_STRING_LENGTH, require('buffer') === b, require('node:buffer') === b, b.Buffer.from('hi').toString('hex'))
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        ["true function aGk= 9007199254740991 536870888 true true 6869"]
+    );
+}

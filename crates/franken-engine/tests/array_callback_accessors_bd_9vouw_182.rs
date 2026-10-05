@@ -54,3 +54,15 @@ fn object_values_reads_getters() {
     let source = "const plain = { get a() { return 1; }, b: 2 };\nconst exportsLike = {};\nObject.defineProperty(exportsLike, 'helper', { enumerable: true, get() { return 'lazy'; } });\nconst arr = [0];\nObject.defineProperty(arr, '0', { enumerable: true, get() { return 'element'; } });\nconsole.log(Object.values(plain).join(), Object.values(exportsLike).join(), Object.values(arr).join());\n";
     assert_eq!(console_output(source), ["1,2 lazy element"]);
 }
+
+/// toSpliced never reads the elements it skips: an accessor there does not
+/// run (Test262 toSpliced/discarded-element-not-read, which turned red once
+/// accessor elements were read through their getters).
+#[test]
+fn to_spliced_skips_discarded_elements() {
+    let source = "var arrayLike = { 0: 'a', 1: 'b', get 2() { throw new Error('read 2'); }, 3: 'c', length: 4 };\nconsole.log(Array.prototype.toSpliced.call(arrayLike, 2, 1).join(), Array.prototype.toSpliced.call(arrayLike, 2, 1, 'x', 'y').join());\nconst reads = [];\nconst arr = [1, 2, 3, 4];\nObject.defineProperty(arr, '1', { get() { reads.push(1); return 2; } });\nconsole.log(arr.toSpliced(1, 2).join(), reads.length, arr.toSpliced(0, 0, 0).join(), reads.length, arr.toSpliced(3).join(), reads.length);\n";
+    assert_eq!(
+        console_output(source),
+        ["a,b,c a,b,x,y,c", "1,4 0 0,1,2,3,4 1 1,2,3 2"]
+    );
+}

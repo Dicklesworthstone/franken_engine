@@ -1232,16 +1232,32 @@ fn hostcall_module_require_rejects_bare_specifier() {
     let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
+    // bd-9vouw.188: the failed require throws Node's catchable
+    // MODULE_NOT_FOUND Error (uncaught here), the reason in its message.
     let err = lane.execute(&m, "integ").unwrap_err();
+    assert_module_not_found(
+        &err,
+        "dep",
+        &ModuleResolutionFailureReason::BareSpecifiersNotSupported,
+    );
+}
+
+/// A failed `require` throws `Error: Cannot find module '<specifier>'` with
+/// the engine's resolution reason on the next line (bd-9vouw.188).
+fn assert_module_not_found(
+    err: &InterpreterError,
+    specifier: &str,
+    reason: &ModuleResolutionFailureReason,
+) {
     match err {
-        InterpreterError::ModuleResolutionFailed { specifier, reason } => {
-            assert_eq!(specifier, "dep");
-            assert_eq!(
-                reason,
-                ModuleResolutionFailureReason::BareSpecifiersNotSupported
+        InterpreterError::UncaughtException { value } => {
+            assert!(
+                value.contains(&format!("Cannot find module '{specifier}'"))
+                    && value.contains(&reason.to_string()),
+                "{value}"
             );
         }
-        other => panic!("expected ModuleResolutionFailed, got {other:?}"),
+        other => panic!("expected the MODULE_NOT_FOUND Error, got {other:?}"),
     }
 }
 
@@ -1271,13 +1287,11 @@ fn hostcall_module_require_rejects_missing_file() {
     config.granted_capabilities = capabilities_with([RuntimeCapability::ModuleLoad]);
     let lane = QuickJsLane::with_config(config);
     let err = lane.execute(&module, "integ").unwrap_err();
-    match err {
-        InterpreterError::ModuleResolutionFailed { specifier, reason } => {
-            assert!(specifier.ends_with("missing.cjs"));
-            assert_eq!(reason, ModuleResolutionFailureReason::ModuleNotFound);
-        }
-        other => panic!("expected ModuleResolutionFailed, got {other:?}"),
-    }
+    assert_module_not_found(
+        &err,
+        "./missing.cjs",
+        &ModuleResolutionFailureReason::ModuleNotFound,
+    );
 }
 
 #[test]
@@ -6427,13 +6441,11 @@ module.exports = value;",
             "module-require-nested-parent-explicit-index-slash-rejects-file-trace",
         )
         .expect_err("trailing slash requires a directory, not an extensionless file neighbor");
-    assert!(matches!(
-        err,
-        InterpreterError::ModuleResolutionFailed {
-            ref specifier,
-            reason: ModuleResolutionFailureReason::ModuleNotFound
-        } if specifier == "../pkg/index/"
-    ));
+    assert_module_not_found(
+        &err,
+        "../pkg/index/",
+        &ModuleResolutionFailureReason::ModuleNotFound,
+    );
 }
 
 #[test]

@@ -64700,7 +64700,39 @@ impl InterpreterCore {
         let module = module.ok_or_else(|| InterpreterError::InternalError {
             details: "module:require apply hostcall missing module context".to_string(),
         })?;
-        self.require_module(module, &specifier)
+        match self.require_module(module, &specifier) {
+            // Node names the request as written, not the resolved path.
+            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
+                Err(self.throw_module_not_found(&specifier.to_string(), &reason))
+            }
+            result => result,
+        }
+    }
+
+    /// A `require` that does not resolve throws a catchable Error with code
+    /// `MODULE_NOT_FOUND`, as Node's does (bd-9vouw.188), so feature
+    /// detection falls back (`try { NodeBuffer = require('buffer').Buffer }
+    /// catch {}` in js-yaml, `freeModule.require('util')` in lodash) instead
+    /// of the run failing. The engine's reason follows the first line.
+    fn throw_module_not_found(
+        &mut self,
+        specifier: &str,
+        reason: &ModuleResolutionFailureReason,
+    ) -> InterpreterError {
+        let error = self.throw_js_error(
+            "Error",
+            format!("Cannot find module '{specifier}'\n{reason}"),
+        );
+        if let Some(Value::Object(error_id)) = self.pending_exception.clone()
+            && let Err(failure) = self.set_object_property(
+                error_id,
+                "code".to_string(),
+                Value::str("MODULE_NOT_FOUND"),
+            )
+        {
+            return failure;
+        }
+        error
     }
 
     /// Dispatch an ESM import and emit exactly one module-load telemetry record

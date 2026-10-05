@@ -6362,6 +6362,8 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
         })
         // `process.nextTick` read as a value (bd-9vouw.186).
         .or_else(|| (tag == "builtin:ProcessNextTick").then_some(("process", "nextTick")))
+        // `eval` read as a value (bd-9vouw.191).
+        .or_else(|| (tag == "builtin:Eval").then_some(("globalThis", "eval")))
 }
 
 /// `Reflect` members installed on the first-class `Reflect` object; each is
@@ -6411,6 +6413,8 @@ fn canonical_static_hostcall_tag(tag: &str) -> Option<&'static str> {
         )
         // `process.nextTick` read as a value (bd-9vouw.186).
         .chain(std::iter::once("builtin:ProcessNextTick"))
+        // `eval` read as a value (bd-9vouw.191).
+        .chain(std::iter::once("builtin:Eval"))
         .find(|candidate| *candidate == tag)
 }
 
@@ -91592,6 +91596,18 @@ impl InterpreterCore {
                 let value = self.read_reg(args.start)?;
                 self.process_exit_code = Self::process_exit_code_from_value(&value)?;
                 Ok(value)
+            }
+
+            "builtin:Eval" => {
+                // The inert `eval` value (bd-9vouw.191): kept and compared as
+                // a function, never a compiler. Every call (indirect eval,
+                // `(0, eval)(src)`, a stored copy) fails closed with a
+                // catchable EvalError; direct `eval(src)` is refused at
+                // lowering without the runtime.eval effect.
+                Err(self.throw_js_error(
+                    "EvalError",
+                    "code generation from strings is not permitted: eval requires the runtime.eval effect".to_string(),
+                ))
             }
 
             "builtin:ProcessNextTick" => {

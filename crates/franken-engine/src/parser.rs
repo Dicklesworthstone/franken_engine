@@ -4094,7 +4094,13 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         || starts_with_keyword(seg_body, "do")
                         || starts_with_keyword(seg_body, "try")
                         || starts_with_keyword(seg_body, "switch")
-                        || starts_with_keyword(seg_body, "class")
+                        // A class declaration ends with its body, not with a
+                        // braced heritage (`class C extends class {} {}`,
+                        // `extends function () {} {}`, bd-9vouw.176).
+                        || (starts_with_keyword(seg_body, "class")
+                            && class_body_brace(seg_body).is_none_or(|body| {
+                                line.len() - seg_body.len() + body == outer_brace_open
+                            }))
                         || starts_with_export_block_statement(seg_body);
                     if starts_with_block {
                         let after = index.saturating_add(1);

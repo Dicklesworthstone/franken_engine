@@ -62,7 +62,9 @@ fn authority() -> ProcessSpawnAttemptAuthority {
         .expect("clock")
         .as_millis();
     ProcessSpawnAttemptAuthority::expiring_at_unix_ms(
-        u64::try_from(now).expect("timestamp").saturating_add(60_000),
+        u64::try_from(now)
+            .expect("timestamp")
+            .saturating_add(60_000),
     )
 }
 
@@ -96,7 +98,9 @@ fn exhausted_process_budget_is_a_journaled_failure_on_the_real_js_execution_path
         Arc::new(InMemoryHostEffectJournal::recording()),
         authority(),
     );
-    orchestrator.execute(&package()).expect_err("no native work credit");
+    orchestrator
+        .execute(&package())
+        .expect_err("no native work credit");
     assert!(matches!(
         orchestrator.last_failed_host_effect_journal(),
         [HostEffectJournalEntry::ProcessSpawn {
@@ -136,7 +140,9 @@ fn fresh_attempt_authority_cannot_refill_work_and_replay_does_not_debit_it_again
         Arc::new(InMemoryHostEffectJournal::recording()),
         authority(),
     );
-    second.execute(&package()).expect_err("shared live pool is spent");
+    second
+        .execute(&package())
+        .expect_err("shared live pool is spent");
     assert!(matches!(
         second.last_failed_host_effect_journal(),
         [HostEffectJournalEntry::ProcessSpawn {
@@ -153,7 +159,9 @@ fn fresh_attempt_authority_cannot_refill_work_and_replay_does_not_debit_it_again
     let mut replay = ExecutionOrchestrator::new(OrchestratorConfig::default());
     replay.set_process_spawn(
         provider,
-        Arc::new(InMemoryHostEffectJournal::replaying(recorded.host_effect_journal.clone())),
+        Arc::new(InMemoryHostEffectJournal::replaying(
+            recorded.host_effect_journal.clone(),
+        )),
         authority(),
     );
     let replayed = replay.execute(&package()).expect("exact recorded replay");

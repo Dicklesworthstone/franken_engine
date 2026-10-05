@@ -8,7 +8,8 @@
 use super::{ExecutionWorkPool, HostEffectBudgetError, HostEffectWorkPool, WorkScopeRevocation};
 use frankenengine_extension_host::process_spawn::{
     ProcessSpawnCapability, ProcessSpawnControl, ProcessSpawnError, ProcessSpawnOutcome,
-    ProcessSpawnProvider, ProcessSpawnRequest, ProcessSpawnResponse, UnrestrictedProcessSpawnControl,
+    ProcessSpawnProvider, ProcessSpawnRequest, ProcessSpawnResponse,
+    UnrestrictedProcessSpawnControl,
 };
 use std::fmt;
 use std::sync::Arc;
@@ -54,7 +55,10 @@ impl fmt::Debug for BudgetedProcessSpawn {
         // A custom provider/control may retain launch arguments or secrets.
         f.debug_struct("BudgetedProcessSpawn")
             .field("limits", &self.pool.limits())
-            .field("revoked", &(self.pool.is_revoked() || self.scope.is_revoked()))
+            .field(
+                "revoked",
+                &(self.pool.is_revoked() || self.scope.is_revoked()),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -78,7 +82,8 @@ struct ProcessEffectControl {
 
 impl fmt::Debug for ProcessEffectControl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProcessEffectControl").finish_non_exhaustive()
+        f.debug_struct("ProcessEffectControl")
+            .finish_non_exhaustive()
     }
 }
 
@@ -156,7 +161,9 @@ impl ProcessSpawnProvider for BudgetedProcessSpawn {
         // Revocation racing with admission spends the credit but cannot refund
         // or bypass it. No accounting mutex is held across native work.
         control.checkpoint()?;
-        let outcome = self.provider.perform_controlled(request, granted, control.clone());
+        let outcome = self
+            .provider
+            .perform_controlled(request, granted, control.clone());
         match &outcome {
             // A completed spawn has created a resource. Never hide that handle
             // behind a late denial, or call unjournaled cleanup here: the engine

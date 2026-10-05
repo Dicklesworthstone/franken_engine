@@ -15,6 +15,8 @@ use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+#[path = "host_io_budget.rs"]
+pub mod budget;
 mod control;
 #[cfg(all(test, unix))]
 mod fd_admission_tests;

@@ -5947,6 +5947,10 @@ const GENERATED_REALM_OBJECT_GLOBALS: [&str; 7] = [
 /// (bd-9vouw.47). Not a builtin name, so no prototype lookup ever matches it.
 const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 
+/// Seed-tracked slot (in `builtin_prototypes`) of the `require('buffer')`
+/// module object (bd-9vouw.193), so every require returns the same object.
+const BUFFER_MODULE_KEY: &str = "<module buffer>";
+
 /// The names Array.prototype[@@unscopables] blocks in a `with` body, as Node
 /// v22 lists them (ES2020 22.1.3.32 plus later additions).
 /// %Array.prototype%'s own string keys in Node v22's order (bd-9vouw.122).
@@ -37261,6 +37265,18 @@ impl InterpreterCore {
             let Some(context) = self.active_cjs_context.as_ref() else {
                 return Ok(());
             };
+            // Only the evaluating module's own code gets its bindings, and
+            // only where its chain does not hold them already. A function of
+            // another module called while this one evaluates keeps the
+            // bindings of its own module from its captured chain: a babel
+            // helper's `module.exports = _typeof = ...` replaced the caller's
+            // exports (date-fns), and zod's `(0, exports.makeIssue)(...)`
+            // read the caller's `exports` (bd-9vouw.180).
+            if self.current_module_specifier.as_deref() != Some(context.module_specifier.as_str())
+                || self.scope_chain.resolve("module").is_some()
+            {
+                return Ok(());
+            }
             (
                 context.module_object,
                 context.exports_object,
@@ -37764,8 +37780,20 @@ impl InterpreterCore {
         Ok(context)
     }
 
-    fn finalize_cjs_exports(&mut self, context: &CjsModuleContext) -> Result<(), InterpreterError> {
-        let export_value = self.prototype_chain_get(context.module_object, "exports")?;
+    /// `module` runs a `module.exports` getter (ansi-styles 4 defines one:
+    /// `Object.defineProperty(module, 'exports', { get: assembleStyles })`),
+    /// which had no module to call it in (bd-9vouw.192).
+    fn finalize_cjs_exports(
+        &mut self,
+        module: Option<&Ir3Module>,
+        context: &CjsModuleContext,
+    ) -> Result<(), InterpreterError> {
+        let export_value = self.prototype_chain_get_with_receiver(
+            module,
+            context.module_object,
+            "exports",
+            Value::Object(context.module_object),
+        )?;
         self.register_module_export("default", export_value.clone())?;
         if let Value::Object(object_id) = export_value {
             let properties = self
@@ -37996,6 +38024,44 @@ impl InterpreterCore {
         }
     }
 
+    /// `require('buffer')` (bd-9vouw.193): Node's buffer module over the
+    /// engine's own `Buffer`, `atob` and `btoa` values and Node v22's limits.
+    /// safe-buffer (under jws, jsonwebtoken and many more) reads
+    /// `require('buffer').Buffer` and returns the module itself; the require
+    /// was "Cannot find module 'buffer'". Not provided: `SlowBuffer`, `Blob`,
+    /// `File`, `transcode`, `isUtf8`, `isAscii`, `resolveObjectURL`.
+    fn buffer_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(BUFFER_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let constants = self.alloc_object_with_properties(&[
+            ("MAX_LENGTH", Value::Int(MAX_SAFE_INTEGER)),
+            ("MAX_STRING_LENGTH", Value::Int(536_870_888)),
+        ])?;
+        let object = self.alloc_object_with_properties(&[
+            (
+                "Buffer",
+                Value::BuiltinFunction(BuiltinFunction::standard_constructor("Buffer")),
+            ),
+            (
+                "atob",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:Atob")),
+            ),
+            (
+                "btoa",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:Btoa")),
+            ),
+            ("kMaxLength", Value::Int(MAX_SAFE_INTEGER)),
+            ("kStringMaxLength", Value::Int(536_870_888)),
+            ("constants", Value::Object(constants)),
+            ("INSPECT_MAX_BYTES", Value::Int(50)),
+        ])?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(BUFFER_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     fn require_module(
         &mut self,
         module: &Ir3Module,
@@ -38003,6 +38069,9 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let specifier = Self::utf8_module_specifier(specifier)?;
         self.run_pre_import_hook(module, specifier)?;
+        if matches!(specifier, "buffer" | "node:buffer") {
+            return self.buffer_core_module();
+        }
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)
             .extension()
@@ -38020,7 +38089,13 @@ impl InterpreterCore {
         if let Some(record) = self.module_state.modules.get(&resolved)
             && let Some(module_object) = record.cjs_module_object
         {
-            let export_value = self.prototype_chain_get(module_object, "exports")?;
+            // A `module.exports` getter runs on every require, as in Node.
+            let export_value = self.prototype_chain_get_with_receiver(
+                Some(module),
+                module_object,
+                "exports",
+                Value::Object(module_object),
+            )?;
             return Ok(export_value);
         }
         let Value::Object(namespace_object) = namespace else {
@@ -43887,7 +43962,7 @@ impl InterpreterCore {
             self.gc_restore_safe_depth(previous);
         }
         let finalize_outcome = if eval_outcome.is_ok() {
-            self.finalize_cjs_exports(&cjs_context)
+            self.finalize_cjs_exports(Some(module), &cjs_context)
         } else {
             Ok(())
         };
@@ -156404,11 +156479,14 @@ mod tests {
             },
         );
         core.current_module_specifier = Some(specifier.clone());
-        core.finalize_cjs_exports(&CjsModuleContext {
-            module_object,
-            exports_object,
-            module_specifier: specifier.clone(),
-        })
+        core.finalize_cjs_exports(
+            None,
+            &CjsModuleContext {
+                module_object,
+                exports_object,
+                module_specifier: specifier.clone(),
+            },
+        )
         .unwrap();
 
         let record = core.module_state.modules.get(&specifier).unwrap();

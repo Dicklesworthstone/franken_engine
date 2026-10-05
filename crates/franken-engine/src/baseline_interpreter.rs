@@ -33482,12 +33482,15 @@ impl InterpreterCore {
             return self.overflow_argument(reg).map(|(_, label)| label);
         }
         let actual_reg = self.register_base + reg as usize;
-        self.register_labels
-            .get(actual_reg)
-            .ok_or(InterpreterError::RegisterOutOfBounds {
+        // The error is built only on the out-of-bounds path: this runs on
+        // every register read.
+        match self.register_labels.get(actual_reg) {
+            Some(label) => Ok(label),
+            None => Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
                 max: self.config.max_registers,
-            })
+            }),
+        }
     }
 
     /// Set the IFC label for a register.
@@ -33603,6 +33606,17 @@ impl InterpreterCore {
     }
 
     fn stream_state_label_ref(&self, object_id: ObjectId) -> Option<&Label> {
+        // Most programs own no stream, server or socket: skip the chain walk
+        // that every property access would otherwise pay.
+        if self.readable_from_streams.is_empty()
+            && self.readable_terminal_states.is_empty()
+            && self.writable_streams.is_empty()
+            && self.writable_terminal_states.is_empty()
+            && self.loopback_servers.is_empty()
+            && self.loopback_sockets.is_empty()
+        {
+            return None;
+        }
         let mut label: Option<&Label> = None;
         let mut current = Some(object_id);
         let mut depth = 0u32;
@@ -58881,10 +58895,9 @@ impl InterpreterCore {
                 }
             }
             let (property_value, next_prototype) = {
-                let object = self
-                    .heap
-                    .get(id.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+                let Some(object) = self.heap.get(id.0 as usize) else {
+                    return Err(InterpreterError::ObjectNotFound { id: id.0 });
+                };
                 (
                     object.own_runtime_property_value(key),
                     self.observable_prototype_link(object, id),
@@ -58916,10 +58929,9 @@ impl InterpreterCore {
             RuntimePropertyKey::Symbol(symbol)
                 if *symbol == WellKnownSymbol::Iterator.id()
         ) {
-            let root = self
-                .heap
-                .get(object_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            let Some(root) = self.heap.get(object_id.0 as usize) else {
+                return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+            };
             let (root_is_array, root_is_typed_array) = (root.is_array, root.typed_array.is_some());
             // A deleted %Array.prototype%[@@iterator] (bd-9vouw.93) leaves
             // arrays without one, like every prototype's virtual method below.
@@ -60835,10 +60847,10 @@ impl InterpreterCore {
         &self,
         object_id: ObjectId,
     ) -> Result<Option<(ObjectId, ObjectId, bool)>, InterpreterError> {
-        let object = self
-            .heap
-            .get(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        // Every property access asks; build the error only when it fails.
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+        };
         if object.brand() != Some(PROXY_TYPE_TAG) {
             return Ok(None);
         }
@@ -61310,10 +61322,9 @@ impl InterpreterCore {
                         owner_depth,
                     );
                 }
-                let object = self
-                    .heap
-                    .get(owner.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: owner.0 })?;
+                let Some(object) = self.heap.get(owner.0 as usize) else {
+                    return Err(InterpreterError::ObjectNotFound { id: owner.0 });
+                };
                 if let Some(property) = object.own_runtime_property_value(key) {
                     if matches!(&property, Value::Accessor { .. }) {
                         return self.resolve_accessor_set(module, property, receiver, value);
@@ -61343,10 +61354,9 @@ impl InterpreterCore {
             let Some(receiver_id) = self.proxy_set_receiver_object(&receiver)? else {
                 return Ok(false);
             };
-            let receiver_object = self
-                .heap
-                .get(receiver_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: receiver_id.0 })?;
+            let Some(receiver_object) = self.heap.get(receiver_id.0 as usize) else {
+                return Err(InterpreterError::ObjectNotFound { id: receiver_id.0 });
+            };
             if receiver_object.is_frozen
                 || (!receiver_object.extensible()
                     && !receiver_object.contains_own_runtime_property(key))
@@ -67219,28 +67229,25 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<Option<Value>, InterpreterError> {
+        // Only a typed array has integer-indexed elements; look at the
+        // object before parsing the key, which every property read reaches.
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return match Self::typed_array_integer_index_key(key) {
+                Some(_) => Err(InterpreterError::ObjectNotFound { id: object_id.0 }),
+                None => Ok(None),
+            };
+        };
+        let Some(view) = object.typed_array.clone() else {
+            return Ok(None);
+        };
         let Some(index) = Self::typed_array_integer_index_key(key) else {
             // Any other canonical numeric string ("1.1", "-0", "Infinity")
             // names no element and is not looked up on the prototype
             // (ES2020 9.4.5.2 and 9.4.5.4, integer-indexed [[HasProperty]]
             // and [[Get]]); "01" is an ordinary key.
-            if Self::canonical_numeric_index_string(key)
-                && self
-                    .heap
-                    .get(object_id.0 as usize)
-                    .is_some_and(|object| object.typed_array.is_some())
-            {
+            if Self::canonical_numeric_index_string(key) {
                 return Ok(Some(Value::Undefined));
             }
-            return Ok(None);
-        };
-        let Some(view) = self
-            .heap
-            .get(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .typed_array
-            .clone()
-        else {
             return Ok(None);
         };
         if index >= view.length {
@@ -97322,10 +97329,9 @@ impl InterpreterCore {
         label: &Label,
     ) -> Result<(), InterpreterError> {
         let heap_index = object_id.0 as usize;
-        let current = self
-            .heap
-            .get(heap_index)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let Some(current) = self.heap.get(heap_index) else {
+            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+        };
         let previous_bytes =
             Self::estimate_execution_seed_ordered_label_map_bytes(&current.property_labels);
         if matches!(label, Label::Public) {
@@ -97493,13 +97499,10 @@ impl InterpreterCore {
             };
             return self.set_symbol_property(object_id, symbol, property);
         };
-        let has_exact_only_properties = self
-            .heap
-            .get(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .properties
-            .exact_len()
-            != self.heap[object_id.0 as usize].properties.len();
+        let Some(object) = self.heap.get(object_id.0 as usize) else {
+            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+        };
+        let has_exact_only_properties = object.properties.exact_len() != object.properties.len();
         if let Some(key) = key.as_str()
             && !has_exact_only_properties
         {
@@ -97720,20 +97723,12 @@ impl InterpreterCore {
             }
         })?;
         let heap_index = object_id.0 as usize;
-        let has_exact_only_properties = self
-            .heap
-            .get(heap_index)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .properties
-            .exact_len()
-            != self.heap[heap_index].properties.len();
-        if has_exact_only_properties {
+        let Some(object) = self.heap.get(heap_index) else {
+            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+        };
+        if object.properties.exact_len() != object.properties.len() {
             return self.set_object_projected_property(object_id, JsString::from(key), value);
         }
-        let object = self
-            .heap
-            .get(heap_index)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         if !object.extensible() && !object.properties.contains_key(&key) {
             return Err(InterpreterError::TypeError {
                 expected: "existing property on non-extensible object".to_string(),

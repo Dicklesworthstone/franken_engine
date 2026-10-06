@@ -40135,8 +40135,17 @@ impl InterpreterCore {
                 Ok(js_number_to_value(Self::parse_date_string(&text)))
             }
             BuiltinFunctionKind::RegExpPrototypeExec => {
-                let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                self.regexp_prototype_exec(receiver.unwrap_or(Value::Undefined), &input)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                // ES2020 21.2.5.2.1: after the receiver check, ToString(string)
+                // runs an object argument's @@toPrimitive, toString or valueOf
+                // (bd-9vouw.213: is-regex tells a RegExp by an exec that must
+                // throw from its argument's toString).
+                let input = if self.regexp_source_flags_from_value(&receiver).is_some() {
+                    Value::str(self.builtin_arg_text(Some(module), args, 0)?)
+                } else {
+                    Value::Undefined
+                };
+                self.regexp_prototype_exec(receiver, &input)
             }
             BuiltinFunctionKind::RegExpSymbolMethod => self.regexp_symbol_method_call(
                 module,
@@ -43615,7 +43624,12 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::RegExpTest => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                // ES2020 21.2.5.13 step 3: ToString(S) (bd-9vouw.213).
+                let input = if self.regexp_source_flags_from_value(&receiver).is_some() {
+                    Value::str(self.builtin_arg_text(Some(module), args, 0)?)
+                } else {
+                    self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined)
+                };
                 self.regexp_test_value(&receiver, &input)
             }
             BuiltinFunctionKind::BigIntToString => {
@@ -58344,9 +58358,19 @@ impl InterpreterCore {
             .collect();
         self.set_object_property(regexp_id, "flags".to_string(), Value::str(canonical))?;
         self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
-        // `lastIndex` is an own non-enumerable property; `source` and `flags`
-        // stand in for prototype accessors.
-        self.hide_internal_slots(regexp_id, &["source", "flags", "lastIndex"])?;
+        // `source` and `flags` stand in for prototype accessors. `lastIndex`
+        // is an own writable, non-enumerable, non-configurable data property
+        // (ES2020 21.2.3.2.2 RegExpAlloc); is-regex reads its descriptor.
+        self.hide_internal_slots(regexp_id, &["source", "flags"])?;
+        self.set_own_property_attributes(
+            regexp_id,
+            &RuntimePropertyKey::String(JsString::from("lastIndex")),
+            PropertyAttributes {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+            },
+        )?;
         Ok(regexp_id)
     }
 
@@ -90074,6 +90098,13 @@ impl InterpreterCore {
             // Removed duplicate ArrayPrototypeLastIndexOf - implementation at line ~10742 is identical
             "builtin:RegExpPrototypeTest" => {
                 let this_val = self.read_reg(args.start)?;
+                // ES2020 21.2.5.13 step 3: ToString(S), a missing argument
+                // being undefined ("undefined"), runs an object argument's
+                // conversion methods (bd-9vouw.213).
+                if self.regexp_source_flags_from_value(&this_val).is_some() {
+                    let input = Value::str(self.builtin_arg_text(module, args, 1)?);
+                    return self.regexp_test_value(&this_val, &input);
+                }
                 if args.count < 2 {
                     return Ok(Value::Bool(false));
                 }

@@ -124,3 +124,20 @@ fn object_from_entries_iterates_its_argument() {
          TypeError | TypeError"
     );
 }
+
+/// bd-9vouw.108: a property read or write on null or undefined throws a
+/// TypeError with Node's (V8's) message, "Cannot read properties of null
+/// (reading 'x')" / "Cannot set properties of null (setting 'k')", which
+/// programs log and tests match. It was the host diagnostic "type error:
+/// expected object, got null". A strict write to a primitive keeps its
+/// TypeError. Expected value is Node v22.2.0's for the same source (Bun
+/// prints JavaScriptCore's wording). Not covered: V8's special wording for
+/// `undefined[Symbol.iterator]` ("is not iterable"), "x is not a function".
+#[test]
+fn property_access_on_null_or_undefined_has_nodes_message_bd_9vouw_108() {
+    let source = "function m(f) { try { f(); return 'no throw'; } catch (e) { return e.constructor.name + ': ' + e.message; } }\n[m(() => null.x), m(() => { var u; return u.y; }), m(() => { var o = null; o.k = 1; }), m(() => undefined[Symbol('k')]), m(() => null[0]), m(() => { var u; u.f(); }), m(() => { 'use strict'; var s = 'str'; s.p = 1; }).split(':')[0]].join(' | ');";
+    assert_eq!(
+        eval(source),
+        "TypeError: Cannot read properties of null (reading 'x') | TypeError: Cannot read properties of undefined (reading 'y') | TypeError: Cannot set properties of null (setting 'k') | TypeError: Cannot read properties of undefined (reading 'Symbol(k)') | TypeError: Cannot read properties of null (reading '0') | TypeError: Cannot read properties of undefined (reading 'f') | TypeError"
+    );
+}

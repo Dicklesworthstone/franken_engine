@@ -51746,7 +51746,11 @@ impl InterpreterCore {
                             other => {
                                 return Err(InterpreterError::TypeError {
                                     expected: "object".to_string(),
-                                    got: other.type_name().to_string(),
+                                    got: self.nullish_access_subject(
+                                        &other,
+                                        &property_key,
+                                        "reading",
+                                    ),
                                 });
                             }
                         }
@@ -52167,7 +52171,11 @@ impl InterpreterCore {
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
-                                got: obj_val.type_name().to_string(),
+                                got: self.nullish_access_subject(
+                                    &obj_val,
+                                    &property_key,
+                                    "setting",
+                                ),
                             });
                         }
                     }
@@ -56839,6 +56847,19 @@ impl InterpreterCore {
             // The message already is the JavaScript text ("Invalid time
             // value"); the Display prefix is for host diagnostics.
             InterpreterError::RangeError { message } => message.clone(),
+            // A property access on null or undefined (bd-9vouw.108):
+            // "Cannot read properties of null (reading 'x')", as Node.
+            InterpreterError::TypeError { expected, got }
+                if expected == "object"
+                    && (got.starts_with("null (") || got.starts_with("undefined (")) =>
+            {
+                let action = if got.contains(" (setting '") {
+                    "set"
+                } else {
+                    "read"
+                };
+                format!("Cannot {action} properties of {got}")
+            }
             _ => err.to_string(),
         };
         let prototype = self.ensure_builtin_prototype(name)?;
@@ -67411,6 +67432,27 @@ impl InterpreterCore {
         well_known_symbol_description(id)
             .map(JsString::from)
             .or_else(|| self.symbol_state.description(id).cloned())
+    }
+
+    /// The `got` of the TypeError for a property access on `value`: for
+    /// `null` and `undefined` it carries the access as V8 words it,
+    /// `null (reading 'x')` / `undefined (setting 'x')`, which
+    /// `native_error_to_thrown_value` turns into Node's message (bd-9vouw.108);
+    /// any other value is its type name.
+    fn nullish_access_subject(
+        &self,
+        value: &Value,
+        key: &RuntimePropertyKey,
+        verb: &str,
+    ) -> String {
+        if !matches!(value, Value::Null | Value::Undefined) {
+            return value.type_name().to_string();
+        }
+        let key = match key {
+            RuntimePropertyKey::String(text) => text.to_string(),
+            RuntimePropertyKey::Symbol(id) => self.symbol_display_string(*id),
+        };
+        format!("{} ({verb} '{key}')", value.type_name())
     }
 
     fn symbol_display_string(&self, id: SymbolId) -> String {

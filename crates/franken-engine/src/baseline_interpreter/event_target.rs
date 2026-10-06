@@ -98,9 +98,12 @@ const SIGNAL_ABORTED_SLOT: &str = "__signalAborted";
 const SIGNAL_REASON_SLOT: &str = "__signalReason";
 const SIGNAL_ALGORITHMS_SLOT: &str = "__signalAbortAlgorithms";
 const SIGNAL_DEPENDENTS_SLOT: &str = "__signalDependents";
+// Present only on composed signals (including any([])); absence denotes a
+// root signal. Flattened source order is retained, not a chain of composites.
+const SIGNAL_SOURCES_SLOT: &str = "__signalSources";
 
 /// The internal slots above: never own keys guest code lists.
-pub(super) const EVENT_FAMILY_SLOT_KEYS: [&str; 20] = [
+pub(super) const EVENT_FAMILY_SLOT_KEYS: [&str; 21] = [
     LISTENERS_SLOT,
     EVENT_TYPE_SLOT,
     EVENT_BUBBLES_SLOT,
@@ -121,6 +124,7 @@ pub(super) const EVENT_FAMILY_SLOT_KEYS: [&str; 20] = [
     SIGNAL_REASON_SLOT,
     SIGNAL_ALGORITHMS_SLOT,
     SIGNAL_DEPENDENTS_SLOT,
+    SIGNAL_SOURCES_SLOT,
 ];
 
 /// Legacy DOMException codes (WebIDL 3.14.1); any other name has code 0.
@@ -607,11 +611,32 @@ impl InterpreterCore {
                 to_abort.push(dependent);
             }
         }
-        let empty = self.alloc_array_from_values(&[])?;
-        self.set_event_slot(signal, SIGNAL_DEPENDENTS_SLOT, Value::Object(empty))?;
-        self.signal_run_abort_steps(module, signal)?;
-        for dependent in to_abort {
-            self.signal_run_abort_steps(module, dependent)?;
+        // Every composed descendant is registered directly on its root by
+        // AbortSignal.any. All reasons above are published before guest code
+        // runs, so reentrant aborts cannot replace the winning reason.
+        // Keep the dependency array rooted through dispatch: callbacks may
+        // allocate or collect, and `to_abort` itself only holds native IDs.
+        let mut first_error = None;
+        let mut outcome = Ok(());
+        for target in std::iter::once(signal).chain(to_abort) {
+            let step = self
+                .signal_run_abort_steps(module, target)
+                .map(|()| (Value::Undefined, Label::Public));
+            // Preserve the existing guest-exception/host-refusal distinction.
+            // A guest listener may not skip another signal's abort algorithms;
+            // an execution-budget or capability refusal still stops dispatch.
+            if let Err(error) = self.event_listener_outcome(step, &mut first_error) {
+                outcome = Err(error);
+                break;
+            }
+        }
+        // The internal array helpers treat an undefined list as empty. Clear
+        // without allocating after callbacks, including on a host refusal.
+        let cleanup = self.set_event_slot(signal, SIGNAL_DEPENDENTS_SLOT, Value::Undefined);
+        outcome?;
+        cleanup?;
+        if let Some((thrown, label)) = first_error {
+            return Err(self.throw_guest_value(thrown, label)?);
         }
         Ok(())
     }
@@ -643,8 +668,11 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// `AbortSignal.any(signals)`: aborted at once with the first aborted
-    /// source's reason, else a dependent of each source.
+    /// `AbortSignal.any(signals)`: abort at once with the first aborted
+    /// input's reason, otherwise subscribe directly to the inputs' root
+    /// sources (DOM's create-a-dependent-abort-signal algorithm). Registering
+    /// only on intermediate composites loses nested cancellation and changes
+    /// event order. A set deduplicates roots without sorting their order.
     fn abort_signal_any(
         &mut self,
         module: &Ir3Module,
@@ -685,8 +713,26 @@ impl InterpreterCore {
                 return Ok(Value::Object(result));
             }
         }
+        let mut roots = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
         for source in sources {
-            self.event_array_push(source, SIGNAL_DEPENDENTS_SLOT, Value::Object(result))?;
+            let candidates = if self.has_event_slot(source, SIGNAL_SOURCES_SLOT) {
+                self.event_array_objects(source, SIGNAL_SOURCES_SLOT)?
+            } else {
+                vec![source]
+            };
+            for root in candidates {
+                if seen.insert(root.0) {
+                    roots.push(root);
+                }
+            }
+        }
+        let root_values: Vec<Value> = roots.iter().copied().map(Value::Object).collect();
+        let root_list = self.alloc_array_from_values(&root_values)?;
+        self.set_event_slot(result, SIGNAL_SOURCES_SLOT, Value::Object(root_list))?;
+        self.hide_internal_slots(result, &[SIGNAL_SOURCES_SLOT])?;
+        for root in roots {
+            self.event_array_push(root, SIGNAL_DEPENDENTS_SLOT, Value::Object(result))?;
         }
         Ok(Value::Object(result))
     }

@@ -6416,7 +6416,7 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
         // `require('events').once` (bd-9vouw.210).
         .or_else(|| (tag == "builtin:EventsOnce").then_some(("events", "once")))
         // The legacy members of `require('url')` (bd-9vouw.224).
-        .or_else(|| match tag {
+        .or(match tag {
             "builtin:UrlFileUrlToPath" => Some(("url", "fileURLToPath")),
             "builtin:UrlFormat" => Some(("url", "format")),
             "builtin:UrlParse" => Some(("url", "parse")),

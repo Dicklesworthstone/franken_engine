@@ -84867,6 +84867,17 @@ impl InterpreterCore {
                 let link = match parent {
                     Value::Object(parent_id) => Some(Some(parent_id)),
                     Value::Null => Some(None),
+                    // Step 6.g.ii: a superclass whose `prototype` is neither an
+                    // object nor null is a TypeError (bd-9vouw.205).
+                    _ if matches!(prototype, Value::Object(_)) => {
+                        let received = self.node_received_description(&parent);
+                        return Err(self.throw_js_error(
+                            "TypeError",
+                            format!(
+                                "Class extends value does not have valid prototype property {received}"
+                            ),
+                        ));
+                    }
                     _ => None,
                 };
                 if let (Value::Object(prototype_id), Some(link)) = (prototype, link) {
@@ -100153,6 +100164,16 @@ impl InterpreterCore {
         // by its canonical name, as the lowering records `extends Map`
         // itself, so construction takes the same built-in-parent path
         // instead of failing with "expected constructor function".
+        // ES2020 14.6.13 step 6.g.i: a superclass other than null must be a
+        // constructor; an arrow, a generator, an async function or a method
+        // is not (bd-9vouw.205). A builtin parent arrives as its name.
+        if !matches!(parent, Value::Null | Value::Str(_)) && !self.is_constructible_value(&parent) {
+            let received = self.node_received_description(&parent);
+            return Err(self.throw_js_error(
+                "TypeError",
+                format!("Class extends value {received} is not a constructor or null"),
+            ));
+        }
         let parent = match &parent {
             Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::StandardConstructor =>

@@ -696,3 +696,38 @@ console.log(locals.v(), locals.l(), locals.p(1), locals.c(), locals.after(), Obj
         ]
     );
 }
+
+/// `require('url')` (bd-9vouw.224) is Node's url module: the realm's `URL`
+/// and `URLSearchParams`, and `fileURLToPath`, `parse` and `format` as values
+/// over the url facade's HostCalls. joi's `@sideway/address` reads
+/// `require('url').URL`; the require found no module. Here the alias also
+/// has calls the facade recognizes, which used to make it skip the require.
+#[test]
+fn require_url_is_the_url_module_bd_9vouw_224() {
+    let lines = run_tree(
+        "fe_run_cjs_url_module",
+        &[(
+            "app.js",
+            r#"const url = require('url');
+const U = require('node:url');
+console.log(typeof url, url === U, url.URL === URL, url.URLSearchParams === URLSearchParams, typeof url.fileURLToPath, url.fileURLToPath.name);
+const Url = require('url');
+const settings = { URL: Url.URL || URL };
+console.log(new settings.URL('https://e.org/a/../b?x=1').href, new url.URLSearchParams('a=1&b=2').get('b'));
+const parsed = url.parse('http://u@h.com:8080/p/a?x=1#f');
+console.log(url.fileURLToPath('file:///a/b%20c.txt'), parsed.port, parsed.pathname, url.format({ protocol: 'https', hostname: 'e.org', pathname: '/x' }));
+const f = url.fileURLToPath;
+console.log(f('file:///tmp/z'), typeof url.parse, typeof url.format);
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        [
+            "object true true true function fileURLToPath",
+            "https://e.org/b?x=1 2",
+            "/a/b c.txt 8080 /p/a https://e.org/x",
+            "/tmp/z function function"
+        ]
+    );
+}

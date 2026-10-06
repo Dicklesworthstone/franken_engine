@@ -5084,8 +5084,12 @@ fn lower_statement_to_ir1_with_flow(
                                     .contains_key(&https_module_alias_sentinel(alias)))
                             || (is_require_path_module_initializer(init, binding_lookup)
                                 && binding_lookup.contains_key(&path_module_alias_sentinel(alias)))
+                            // Under the CommonJS wrapper `require('url')` runs
+                            // and returns the engine's url module
+                            // (bd-9vouw.224), as for os below.
                             || (is_require_url_module_initializer(init, binding_lookup)
-                                && binding_lookup.contains_key(&url_module_alias_sentinel(alias)))
+                                && binding_lookup.contains_key(&url_module_alias_sentinel(alias))
+                                && !require_is_commonjs_wrapper(binding_lookup))
                             || (is_require_querystring_module_initializer(init, binding_lookup)
                                 && binding_lookup
                                     .contains_key(&querystring_module_alias_sentinel(alias)))

@@ -5968,6 +5968,9 @@ const BUFFER_MODULE_KEY: &str = "<module buffer>";
 /// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
 const OS_MODULE_KEY: &str = "<module os>";
 
+/// Seed-tracked slot of the `require('url')` module object (bd-9vouw.224).
+const URL_MODULE_KEY: &str = "<module url>";
+
 /// Seed-tracked slot marking that `require('events')`'s statics are on the
 /// EventEmitter constructor's backing object (bd-9vouw.210); it holds that
 /// backing object.
@@ -6412,6 +6415,13 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
         .or_else(|| (tag == "builtin:Eval").then_some(("globalThis", "eval")))
         // `require('events').once` (bd-9vouw.210).
         .or_else(|| (tag == "builtin:EventsOnce").then_some(("events", "once")))
+        // The legacy members of `require('url')` (bd-9vouw.224).
+        .or_else(|| match tag {
+            "builtin:UrlFileUrlToPath" => Some(("url", "fileURLToPath")),
+            "builtin:UrlFormat" => Some(("url", "format")),
+            "builtin:UrlParse" => Some(("url", "parse")),
+            _ => None,
+        })
         // The members of `require('os')` (bd-9vouw.204).
         .or_else(|| {
             crate::lowering_pipeline::OS_METHOD_NAMES
@@ -38118,6 +38128,48 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// `require('url')` (bd-9vouw.224): Node's url module with the realm's
+    /// `URL` and `URLSearchParams` and the legacy `fileURLToPath`, `format`
+    /// and `parse` over the url facade's own HostCalls. The facade lowers only
+    /// the call shapes it recognizes on a confirmed alias; joi's
+    /// `@sideway/address` reads `require('url').URL`, so the require reached
+    /// the runtime and found no module. Not provided: `pathToFileURL` (it
+    /// resolves against the working directory), `resolve`, `resolveObject`,
+    /// `domainToASCII`, `domainToUnicode`, `urlToHttpOptions`, `Url`.
+    fn url_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(URL_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let object = self.alloc_object_with_properties(&[
+            (
+                "URL",
+                Value::BuiltinFunction(BuiltinFunction::standard_constructor("URL")),
+            ),
+            (
+                "URLSearchParams",
+                Value::BuiltinFunction(BuiltinFunction::standard_constructor("URLSearchParams")),
+            ),
+            (
+                "fileURLToPath",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall(
+                    "builtin:UrlFileUrlToPath",
+                )),
+            ),
+            (
+                "format",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:UrlFormat")),
+            ),
+            (
+                "parse",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:UrlParse")),
+            ),
+        ])?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(URL_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('os')` (bd-9vouw.204): Node's os module over the os facade's
     /// own HostCalls (fixed, engine-contained values; no host reads), with
     /// `constants`, `EOL` and `devNull` as the facade reads them. The facade
@@ -38222,6 +38274,9 @@ impl InterpreterCore {
         }
         if matches!(specifier, "events" | "node:events") {
             return self.events_core_module(module);
+        }
+        if matches!(specifier, "url" | "node:url") {
+            return self.url_core_module();
         }
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)

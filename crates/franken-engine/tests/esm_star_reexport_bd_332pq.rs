@@ -212,3 +212,28 @@ fn named_import_and_export_lists_take_a_trailing_comma_bd_9vouw_218() {
         &["1 2 1 A 1 2 f"],
     );
 }
+
+/// bd-9vouw.222: an importer sees the value the exporting module's own
+/// evaluation left in an exported binding, not the one it had where the
+/// export clause stands: TypeScript namespaces (`export var util;
+/// (function (util) { ... })(util || (util = {}));`, zod 3's ESM build), later
+/// assignments, loops, destructuring and `??=`, through named imports and
+/// the namespace object. They were undefined. Writes after the module has
+/// evaluated are still not visible (full live bindings: BRIDGE-17.1).
+/// Expected line is Node v22.2.0's output.
+#[test]
+fn exports_carry_the_values_the_module_assigned_bd_9vouw_222() {
+    assert_output(
+        &[
+            (
+                "lib/ns.mjs",
+                "export var u;\n(function (u) { u.a = 1; })(u || (u = {}));\nexport var w;\nw = { b: 2 };\nexport var y;\nfor (y = 0; y < 3; y++);\nexport var z;\n[z] = [7];\nexport var q;\n({ q } = { q: 8 });\nexport var r;\nr ??= 9;\nlet hidden = 'h0';\nhidden = 'h1';\nexport { hidden as renamed };\n",
+            ),
+            (
+                "app.mjs",
+                "import { u, w, y, z, q, r, renamed } from './lib/ns.mjs';\nimport * as all from './lib/ns.mjs';\nconsole.log(typeof u, u.a, w.b, y, z, q, r, renamed, all.w.b, all.renamed);\n",
+            ),
+        ],
+        &["object 1 2 3 7 8 9 h1 2 h1"],
+    );
+}

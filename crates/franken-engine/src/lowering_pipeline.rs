@@ -1430,6 +1430,9 @@ fn lower_ir0_to_ir1_on_current_stack(
         binding_lookup.insert(stream_promises_pipeline_binding_sentinel(&local), 0);
     }
     let mut synthetic_export_index = 0u32;
+    // bd-9vouw.222: each `export { local as name }`, published again when the
+    // module body ends.
+    let mut local_exports: Vec<(String, BindingId)> = Vec::new();
     let mut synthetic_import_index = 0u32;
     let mut label_counter = 0u32;
     // bd-fqlfw.1.5: expression-span side-table for the module-level op
@@ -2006,10 +2009,11 @@ fn lower_ir0_to_ir1_on_current_stack(
                                 })?;
                             ir1.ops.push(Ir1Op::LoadBinding { binding_id });
                             ir1.ops.push(Ir1Op::ExportBinding {
-                                name: exported_name,
+                                name: exported_name.clone(),
                                 binding_id,
                             });
                             ir1.ops.push(Ir1Op::Pop);
+                            local_exports.push((exported_name, binding_id));
                         }
                     }
                 }
@@ -2243,6 +2247,24 @@ fn lower_ir0_to_ir1_on_current_stack(
                 )?;
             }
         }
+    }
+
+    // bd-9vouw.222: an export is a binding, not the value it had where the
+    // export clause stands. Exports are still published there (a cyclic
+    // importer may read them during this module's evaluation), and again
+    // with their final values when the body ends, so an importer sees what
+    // the module's own evaluation assigned: `export var util;
+    // (function (util) { ... })(util || (util = {}));` (TypeScript
+    // namespaces, zod 3's ESM build) exported undefined. Writes after the
+    // module has evaluated (an exported function changing an exported
+    // `let`) are not published (full live bindings: BRIDGE-17.1).
+    for (exported_name, binding_id) in local_exports {
+        ir1.ops.push(Ir1Op::LoadBinding { binding_id });
+        ir1.ops.push(Ir1Op::ExportBinding {
+            name: exported_name,
+            binding_id,
+        });
+        ir1.ops.push(Ir1Op::Pop);
     }
 
     ir1.ops.push(Ir1Op::Return);

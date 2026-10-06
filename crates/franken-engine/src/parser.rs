@@ -2589,8 +2589,11 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                     escaped = false;
                     trailing_identifier.clear();
                 }
+                // A division operator: a `/` after it opens a regex.
                 _ => {
                     out.push(ch);
+                    last_significant = Some('/');
+                    trailing_identifier.clear();
                 }
             },
             '\'' | '"' | '`' => {
@@ -3575,7 +3578,13 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                         escaped = false;
                         trailing_identifier.clear();
                     }
-                    _ => {}
+                    // A division operator: a line ending with it continues
+                    // (prettier's `m =\n  (a - b) /\n  (c - d);`), which
+                    // read `(a - b) /` as a whole statement (bd-9vouw.206).
+                    _ => {
+                        last_significant = Some('/');
+                        trailing_identifier.clear();
+                    }
                 },
                 '\'' | '"' | '`' => {
                     quotes.open_char(ch);
@@ -20806,6 +20815,14 @@ mod tests {
             texts,
             ["var a = /x/", "var b = /[^#/:?]+/", "var e = 6 / 3"]
         );
+    }
+
+    #[test]
+    fn merge_logical_lines_continues_after_a_trailing_division() {
+        // bd-9vouw.206: a division `/` at a line end continues the line.
+        let lines = merge_logical_lines("var m =\n  (a * 2) /\n  (b + 1);\nf()");
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(texts, ["var m = (a * 2) / (b + 1);", "f()"]);
     }
 
     #[test]

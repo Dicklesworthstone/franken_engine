@@ -191,3 +191,24 @@ fn minified_star_exports() {
         &["1 2 f"],
     );
 }
+
+/// bd-9vouw.218: a named import or export list may end with one comma, as
+/// prettier lays out every multi-line list (`import {\n  a,\n  b,\n} from`);
+/// the parser read the trailing comma as an empty entry, so date-fns 4 and
+/// superjson did not parse. Expected line is Node v22.2.0's output.
+#[test]
+fn named_import_and_export_lists_take_a_trailing_comma_bd_9vouw_218() {
+    assert_output(
+        &[
+            (
+                "lib/c.mjs",
+                "const x = 1, y = 2;\nexport {\n  x,\n  y as why,\n};\nexport { a as aa, } from './a.mjs';\n",
+            ),
+            (
+                "app.mjs",
+                "import {\n  x,\n  why,\n  aa,\n} from './lib/c.mjs';\nimport A, { a, } from './lib/a.mjs';\nimport { b, f, } from './lib/b.mjs';\nconsole.log(x, why, aa, A, a, b, f());\n",
+            ),
+        ],
+        &["1 2 1 A 1 2 f"],
+    );
+}

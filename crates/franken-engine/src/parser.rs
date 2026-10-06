@@ -4764,6 +4764,18 @@ fn parse_import_binding_clause(
     ))
 }
 
+/// A named import or export list (the text between the braces) without its
+/// one permitted trailing comma (ES2020 15.2.2 NamedImports, 15.2.3
+/// ExportClause): prettier ends every multi-line list with one (`import {\n
+/// a,\n b,\n} from`), which read as an empty entry (date-fns 4, superjson,
+/// bd-9vouw.218). A list that is only a comma keeps it and stays an error.
+fn without_trailing_specifier_comma(list: &str) -> &str {
+    match list.trim_end().strip_suffix(',') {
+        Some(rest) if !rest.trim().is_empty() => rest,
+        _ => list,
+    }
+}
+
 fn parse_namespace_import_binding(clause: &str) -> Option<String> {
     let rest = clause.strip_prefix('*')?.trim_start();
     let rest = rest.strip_prefix("as")?.trim_start();
@@ -4788,7 +4800,7 @@ fn is_named_import_clause(clause: &str) -> bool {
         return true;
     }
 
-    for specifier in inner.split(',') {
+    for specifier in without_trailing_specifier_comma(inner).split(',') {
         let specifier = specifier.trim();
         if specifier.is_empty() {
             return false;
@@ -4843,7 +4855,7 @@ fn parse_named_import_specifiers(
     let mut specifiers = Vec::with_capacity(4);
     let mut seen_local = BTreeSet::new();
 
-    for specifier in inner.split(',') {
+    for specifier in without_trailing_specifier_comma(inner).split(',') {
         let specifier = specifier.trim();
         if specifier.is_empty() {
             return Err(ParseError::new(
@@ -5018,7 +5030,12 @@ fn parse_named_export_clause(
     let specifiers = &inner_and_trailing[..close_index];
     validate_named_export_specifiers(specifiers, source_label, span)?;
 
-    let canonical_head = canonicalize_whitespace(&clause[..close_index + 2]);
+    let without_comma = without_trailing_specifier_comma(specifiers);
+    let canonical_head = if without_comma.len() == specifiers.len() {
+        canonicalize_whitespace(&clause[..close_index + 2])
+    } else {
+        canonicalize_whitespace(&format!("{{{without_comma}}}"))
+    };
     let trailing = inner_and_trailing[close_index + 1..].trim();
     let source = if !trailing.is_empty() {
         let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
@@ -5055,7 +5072,7 @@ fn validate_named_export_specifiers(
         return Ok(());
     }
 
-    for specifier in specifiers.split(',') {
+    for specifier in without_trailing_specifier_comma(specifiers).split(',') {
         let specifier = specifier.trim();
         if specifier.is_empty() {
             return Err(ParseError::new(
@@ -20884,6 +20901,36 @@ mod tests {
             texts,
             ["var d = new B()", "var t = k in d", "var n = o.new", "f()"]
         );
+    }
+
+    #[test]
+    fn named_import_and_export_lists_take_one_trailing_comma() {
+        // bd-9vouw.218: one trailing comma is allowed; an empty list item is
+        // not (Node: SyntaxError for each `bad` source).
+        for source in [
+            "import { a, } from './a.mjs';",
+            "import d, { a as b, } from './a.mjs';",
+            "import {\n  a,\n  b as c,\n} from './b.mjs';",
+            "const x = 1; export { x, };",
+            "export { a, } from './a.mjs';",
+        ] {
+            CanonicalEs2020Parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "import { , } from './a.mjs';",
+            "import { a,, } from './a.mjs';",
+            "const x = 1; export { , };",
+            "const x = 1; export { x,, };",
+        ] {
+            assert!(
+                CanonicalEs2020Parser
+                    .parse(source, ParseGoal::Module)
+                    .is_err(),
+                "{source}"
+            );
+        }
     }
 
     #[test]

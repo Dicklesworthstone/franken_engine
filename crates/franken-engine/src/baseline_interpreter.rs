@@ -5968,6 +5968,31 @@ const BUFFER_MODULE_KEY: &str = "<module buffer>";
 /// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
 const OS_MODULE_KEY: &str = "<module os>";
 
+/// Seed-tracked slot marking that `require('events')`'s statics are on the
+/// EventEmitter constructor's backing object (bd-9vouw.210); it holds that
+/// backing object.
+const EVENTS_MODULE_KEY: &str = "<module events>";
+
+/// EventEmitter.prototype's methods, own enumerable properties in Node v22's
+/// order (bd-9vouw.210).
+const EVENT_EMITTER_PROTOTYPE_METHODS: [&str; 15] = [
+    "setMaxListeners",
+    "getMaxListeners",
+    "emit",
+    "addListener",
+    "on",
+    "prependListener",
+    "once",
+    "prependOnceListener",
+    "removeListener",
+    "off",
+    "removeAllListeners",
+    "listeners",
+    "rawListeners",
+    "listenerCount",
+    "eventNames",
+];
+
 /// The names Array.prototype[@@unscopables] blocks in a `with` body, as Node
 /// v22 lists them (ES2020 22.1.3.32 plus later additions).
 /// %Array.prototype%'s own string keys in Node v22's order (bd-9vouw.122).
@@ -6385,6 +6410,8 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
         .or_else(|| (tag == "builtin:ProcessNextTick").then_some(("process", "nextTick")))
         // `eval` read as a value (bd-9vouw.191).
         .or_else(|| (tag == "builtin:Eval").then_some(("globalThis", "eval")))
+        // `require('events').once` (bd-9vouw.210).
+        .or_else(|| (tag == "builtin:EventsOnce").then_some(("events", "once")))
         // The members of `require('os')` (bd-9vouw.204).
         .or_else(|| {
             crate::lowering_pipeline::OS_METHOD_NAMES
@@ -38117,6 +38144,51 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// `require('events')` (bd-9vouw.210): as in Node, the EventEmitter
+    /// constructor itself, whose own properties hold `EventEmitter` (itself),
+    /// `once`, `defaultMaxListeners` and `errorMonitor`. The events facade
+    /// lowers only the shapes it recognizes; xml2js's `events =
+    /// require('events')`, extended over CoffeeScript-style (statics copied by
+    /// for-in, `ctor.prototype = parent.prototype`), reached the runtime and
+    /// found no module. Not provided: `on`, `getEventListeners`,
+    /// `setMaxListeners`, `listenerCount`, `captureRejections`.
+    fn events_core_module(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
+        let constructor = Value::BuiltinFunction(BuiltinFunction::new_kind(
+            BuiltinFunctionKind::EventEmitterConstructor,
+        ));
+        if self.builtin_prototypes.contains_key(EVENTS_MODULE_KEY) {
+            return Ok(constructor);
+        }
+        self.ensure_builtin_prototype("EventEmitter")?;
+        let backing = self
+            .ensure_function_own_property_object(module, &constructor)?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "EventEmitter constructor with property storage".to_string(),
+                got: "none".to_string(),
+            })?;
+        let error_monitor =
+            self.allocate_private_symbol(Some(JsString::from("events.errorMonitor")))?;
+        for (key, value) in [
+            (
+                "once",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:EventsOnce")),
+            ),
+            ("EventEmitter", constructor.clone()),
+            ("defaultMaxListeners", Value::Int(10)),
+            ("errorMonitor", Value::Symbol(error_monitor)),
+        ] {
+            self.set_object_runtime_property(
+                backing,
+                RuntimePropertyKey::String(JsString::from(key)),
+                value,
+            )?;
+        }
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(EVENTS_MODULE_KEY.to_string(), backing);
+        });
+        Ok(constructor)
+    }
+
     /// `os.constants`: `{ signals, errno, priority }` (real POSIX numbers; see
     /// the NODE_OS_* tables).
     fn os_constants_object(&mut self) -> Result<Value, InterpreterError> {
@@ -38143,6 +38215,9 @@ impl InterpreterCore {
         }
         if matches!(specifier, "os" | "node:os") {
             return self.os_core_module();
+        }
+        if matches!(specifier, "events" | "node:events") {
+            return self.events_core_module(module);
         }
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)
@@ -100459,6 +100534,33 @@ impl InterpreterCore {
                     configurable: true,
                 },
             )?;
+        }
+        // Node's EventEmitter.prototype holds its methods as own enumerable
+        // properties and its `constructor` (bd-9vouw.210). Instances found
+        // them only through their EventEmitter brand, so an object that
+        // inherits from the prototype without running the constructor
+        // (`ctor.prototype = EE.prototype; new ctor()`, Object.create, a
+        // mixin copying the prototype's members) had none. The methods
+        // accept any object receiver.
+        if canonical == "EventEmitter" {
+            for name in EVENT_EMITTER_PROTOTYPE_METHODS {
+                if let Some(method) = Self::collection_prototype_method("EventEmitter", name) {
+                    self.set_object_runtime_property(
+                        prototype,
+                        RuntimePropertyKey::String(JsString::from(name)),
+                        Value::BuiltinFunction(method),
+                    )?;
+                }
+            }
+            let key = RuntimePropertyKey::String(JsString::from("constructor"));
+            self.set_object_runtime_property(
+                prototype,
+                key.clone(),
+                Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::EventEmitterConstructor,
+                )),
+            )?;
+            self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
         }
         self.install_iteration_prototype_members(canonical, prototype)?;
         // %GeneratorFunction.prototype%.prototype is %GeneratorPrototype%

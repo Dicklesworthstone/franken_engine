@@ -4965,10 +4965,14 @@ fn lower_statement_to_ir1_with_flow(
                     // operations are recognized at the member call/read sites
                     // (`builtin:Querystring*` / `builtin:Os*` hostcalls and
                     // string constants). Unused aliases stay ambient-refused.
+                    // Under the CommonJS wrapper an events require runs
+                    // instead: the loader's events module (bd-9vouw.210) is
+                    // the constructor with its statics.
                     if let BindingPattern::Identifier(alias) = &d.pattern
                         && (is_require_event_emitter_member_initializer(init, binding_lookup)
                             || is_require_events_module_initializer(init, binding_lookup))
                         && binding_lookup.contains_key(&event_emitter_binding_sentinel(alias))
+                        && !require_is_commonjs_wrapper(binding_lookup)
                     {
                         ops.push(Ir1Op::HostCall {
                             capability: "builtin:EventEmitterConstructorRef".to_string(),
@@ -5057,7 +5061,8 @@ fn lower_statement_to_ir1_with_flow(
                             // elide their ambient-denied require initializer.
                             || (is_require_events_module_initializer(init, binding_lookup)
                                 && binding_lookup
-                                    .contains_key(&events_module_alias_sentinel(alias)))
+                                    .contains_key(&events_module_alias_sentinel(alias))
+                                && !require_is_commonjs_wrapper(binding_lookup))
                             // bd-7qwej: confirmed `net` module aliases are
                             // lowering-only; supported member calls/new sites
                             // carry the finite builtin capability directly.

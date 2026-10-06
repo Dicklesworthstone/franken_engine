@@ -564,6 +564,46 @@ console.log(check(), typeof Object.getPrototypeOf(Era), e.base, e.era, e.hi(), e
     assert_eq!(lines, ["true function 1 2 hi true"]);
 }
 
+/// `require('events')` (bd-9vouw.210) is the EventEmitter constructor with
+/// its statics (`EventEmitter`, `once`, `defaultMaxListeners`,
+/// `errorMonitor`), and EventEmitter.prototype holds the methods, so xml2js's
+/// CoffeeScript `extend(Parser, events)` (statics copied by for-in,
+/// `ctor.prototype = parent.prototype`, the constructor never run) and
+/// `Object.create(EventEmitter.prototype)` emit and listen. The require found
+/// no module (or, where the events facade claimed the alias, bound it to
+/// undefined).
+#[test]
+fn require_events_is_the_event_emitter_constructor_bd_9vouw_210() {
+    let lines = run_tree(
+        "fe_run_cjs_events_module",
+        &[(
+            "app.js",
+            r#"const events = require('events');
+const EE = require('node:events');
+console.log(typeof events, events === EE, events.EventEmitter === events, typeof events.once, events.defaultMaxListeners, typeof events.errorMonitor);
+var extend = function (child, parent) { for (var key in parent) { if ({}.hasOwnProperty.call(parent, key)) child[key] = parent[key]; } function ctor() { this.constructor = child; } ctor.prototype = parent.prototype; child.prototype = new ctor(); child.__super__ = parent.prototype; return child; };
+var Parser = (function (superClass) { extend(Parser, superClass); function Parser() { this.n = 0; } Parser.prototype.feed = function (x) { this.emit('item', x); }; return Parser; })(events);
+var p = new Parser(); var got = [];
+p.on('item', function (x) { got.push(x); });
+p.feed(1); p.feed(2);
+console.log(got.join(), p instanceof events, typeof Parser.once, Parser.defaultMaxListeners, p.listenerCount('item'), Object.keys(events.prototype).includes('emit'), events.prototype.constructor === events);
+const o = Object.create(events.prototype); let hit = 0; o.once('x', () => hit++); o.emit('x'); o.emit('x');
+events.once(p, 'done').then(([v]) => console.log('once', v)); p.emit('done', 7);
+console.log(hit, o.eventNames().length);
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        [
+            "function true true function 10 symbol",
+            "1,2 true function 10 1 true true",
+            "1 0",
+            "once 7"
+        ]
+    );
+}
+
 /// A nested function that assigns `exports` (or `module`, `require`) reads
 /// and writes the module's binding (bd-9vouw.211). The assignment made the
 /// name a fresh function-local, undefined until written, so the UMD header

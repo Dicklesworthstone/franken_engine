@@ -1,7 +1,10 @@
 //! Native composed-signal cancellation, not the JavaScript events facade.
 //! Shared cases have Node reference outputs. NATIVE_* cases retain the
-//! engine's documented synchronous listener-error policy (Node reports those
-//! errors asynchronously). Every case runs on both profiles with GC stress.
+//! engine's synchronous listener-error and registration-snapshot contracts.
+//! Node v22 reports listener errors asynchronously and differs when a callback
+//! is removed and re-registered or appended during dispatch. Those native-only
+//! cases are deliberately not counted as Node-reference parity checks.
+//! Every successful case runs on both profiles with GC stress.
 
 #![forbid(unsafe_code)]
 
@@ -337,4 +340,130 @@ fn host_budget_refusal_is_not_downgraded_to_a_guest_listener_error() {
             .expect_err("a nonterminating listener must exhaust the host budget");
         assert!(matches!(error, InterpreterError::BudgetExhausted { .. }));
     }
+}
+
+const NATIVE_LISTENER_REPLACEMENT: &str = r#"
+const first = new AbortController();
+const second = new AbortController();
+const target = new EventTarget();
+let calls = 0;
+const callback = () => calls++;
+target.addEventListener('work', callback, { signal: first.signal });
+target.removeEventListener('work', callback);
+target.addEventListener('work', callback, { signal: second.signal });
+first.abort();
+target.dispatchEvent(new Event('work'));
+console.log(calls);
+second.abort();
+target.dispatchEvent(new Event('work'));
+console.log(calls);
+"#;
+
+#[test]
+fn replacing_a_signal_bound_listener_cannot_be_canceled_by_the_old_source() {
+    check(NATIVE_LISTENER_REPLACEMENT, &["1", "1"]);
+}
+
+const NATIVE_ONCE_REENTRANCY: &str = r#"
+const controller = new AbortController();
+const target = new EventTarget();
+const log = [];
+target.addEventListener('work', () => {
+  log.push('once');
+  target.addEventListener('work', () => {
+    log.push('replacement');
+    controller.abort();
+  }, { signal: controller.signal });
+  target.dispatchEvent(new Event('work'));
+}, { once: true, signal: controller.signal });
+controller.signal.addEventListener('abort', () => {
+  log.push('abort');
+  target.dispatchEvent(new Event('work'));
+});
+target.dispatchEvent(new Event('work'));
+target.dispatchEvent(new Event('work'));
+console.log(log.join(','));
+"#;
+
+#[test]
+fn once_unlinking_retains_the_callback_and_new_registration_during_reentrancy() {
+    check(NATIVE_ONCE_REENTRANCY, &["once,replacement,abort"]);
+}
+
+const NATIVE_REMOVE_DURING_DISPATCH: &str = r#"
+const first = new AbortController();
+const second = new AbortController();
+const target = new EventTarget();
+const log = [];
+const callback = () => log.push('replacement');
+target.addEventListener('work', () => {
+  log.push('first');
+  target.removeEventListener('work', callback);
+  target.addEventListener('work', callback, { signal: second.signal });
+}, { once: true });
+target.addEventListener('work', callback, { signal: first.signal });
+target.dispatchEvent(new Event('work'));
+console.log(log.join(','));
+first.abort();
+target.dispatchEvent(new Event('work'));
+console.log(log.join(','));
+second.abort();
+target.dispatchEvent(new Event('work'));
+console.log(log.join(','));
+"#;
+
+#[test]
+fn unlinking_a_dispatch_snapshot_does_not_remove_its_replacement() {
+    check(NATIVE_REMOVE_DURING_DISPATCH, &["first", "first,replacement", "first,replacement"]);
+}
+
+const SHARED_LISTENER_LIFETIME: &str = r#"
+const shared = new AbortController();
+let onceCalls = 0;
+let removedCalls = 0;
+const targets = [];
+for (let i = 0; i < 64; i++) {
+  const target = new EventTarget();
+  const removed = () => removedCalls++;
+  target.addEventListener('work', removed, { signal: shared.signal });
+  target.removeEventListener('work', removed);
+  target.addEventListener('work', () => onceCalls++, { once: true, signal: shared.signal });
+  target.dispatchEvent(new Event('work'));
+  targets.push(target);
+}
+let pendingCalls = 0;
+const pending = new EventTarget();
+pending.addEventListener('work', () => pendingCalls++, { signal: shared.signal });
+pending.dispatchEvent(new Event('work'));
+shared.abort();
+for (const target of targets) target.dispatchEvent(new Event('work'));
+pending.dispatchEvent(new Event('work'));
+console.log(onceCalls, removedCalls, pendingCalls);
+"#;
+
+#[test]
+fn completing_many_listeners_preserves_live_peers_until_shared_cancellation() {
+    check(SHARED_LISTENER_LIFETIME, &["64 0 1"]);
+}
+
+const ONCE_AND_MANUAL_REMOVAL: &str = r#"
+const signal = new AbortController();
+const target = new EventTarget();
+let once = 0;
+let persistent = 0;
+const callback = () => persistent++;
+target.addEventListener('work', () => once++, { once: true, signal: signal.signal });
+target.addEventListener('work', callback, { signal: signal.signal });
+target.dispatchEvent(new Event('work'));
+target.dispatchEvent(new Event('work'));
+console.log(once, persistent);
+target.removeEventListener('work', callback);
+signal.abort();
+target.dispatchEvent(new Event('work'));
+console.log(once, persistent);
+"#;
+
+#[test]
+fn signal_owned_one_shot_and_explicitly_removed_callbacks_stay_completed() {
+    check(ONCE_AND_MANUAL_REMOVAL, &["1 2", "1 2"]);
 }

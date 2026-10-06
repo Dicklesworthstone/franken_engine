@@ -722,13 +722,17 @@ impl InterpreterCore {
         module: &Ir3Module,
         signal: ObjectId,
     ) -> Result<(), InterpreterError> {
-        for record in self.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)? {
+        // No guest code runs while these records are removed. Detach the
+        // snapshot first so removing N listeners does not repeatedly rebuild
+        // this signal's abort list. The target lists retain live records until
+        // removal; dispatch/collection only resume after the drain completes.
+        let records = self.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)?;
+        self.set_event_slot(signal, SIGNAL_ALGORITHMS_SLOT, Value::Undefined)?;
+        for record in records {
             if let Value::Object(target) = self.event_slot(record, "target") {
                 self.event_target_remove_record(target, record)?;
             }
         }
-        let empty = self.alloc_array_from_values(&[])?;
-        self.set_event_slot(signal, SIGNAL_ALGORITHMS_SLOT, Value::Object(empty))?;
         let event = self.alloc_event("Event", "abort", [false, false, false], Value::Null)?;
         self.event_target_dispatch(module, &Value::Object(signal), &Value::Object(event))?;
         Ok(())
@@ -867,9 +871,23 @@ impl InterpreterCore {
             ("removed", Value::Bool(false)),
             ("target", Value::Object(target)),
         ])?;
-        self.event_array_push(target, LISTENERS_SLOT, Value::Object(record))?;
         if let Some(signal) = signal {
-            self.event_array_push(signal, SIGNAL_ALGORITHMS_SLOT, Value::Object(record))?;
+            // Object IDs are never reused. A weak backlink permits cleanup
+            // without retaining an otherwise unreachable cancellation source.
+            self.set_event_slot(record, "signal", Value::Int(i64::from(signal.0)))?;
+        }
+        let previous_list = self.event_slot(target, LISTENERS_SLOT);
+        self.event_array_push(target, LISTENERS_SLOT, Value::Object(record))?;
+        if let Some(signal) = signal
+            && let Err(error) =
+                self.event_array_push(signal, SIGNAL_ALGORITHMS_SLOT, Value::Object(record))
+        {
+            // A refusal while adding cancellation must not leave an active,
+            // uncancellable listener on the target. Restoring the old list
+            // needs no replacement array or guest callback.
+            self.set_event_slot(record, "removed", Value::Bool(true))?;
+            self.set_event_slot(target, LISTENERS_SLOT, previous_list)?;
+            return Err(error);
         }
         Ok(())
     }
@@ -910,21 +928,28 @@ impl InterpreterCore {
     }
 
     /// Mark the record removed (a dispatch in progress skips it) and drop it
-    /// from the target's list.
+    /// from both owning lists. Explicit removal and once-delivery share this
+    /// path: neither may leave a completed callback rooted by a long-lived
+    /// signal. Keep its callback intact for an in-flight dispatch snapshot.
     fn event_target_remove_record(
         &mut self,
         target: ObjectId,
         record: ObjectId,
     ) -> Result<(), InterpreterError> {
         self.set_event_slot(record, "removed", Value::Bool(true))?;
-        let remaining: Vec<Value> = self
-            .event_array_objects(target, LISTENERS_SLOT)?
-            .into_iter()
-            .filter(|entry| *entry != record)
-            .map(Value::Object)
-            .collect();
-        let list = self.alloc_array_from_values(&remaining)?;
-        self.set_event_slot(target, LISTENERS_SLOT, Value::Object(list))
+        self.event_array_remove(target, LISTENERS_SLOT, record)?;
+        if let Value::Int(signal) = self.event_slot(record, "signal")
+            && let Ok(signal) = u32::try_from(signal)
+        {
+            let signal = ObjectId(signal);
+            if self.has_event_slot(signal, SIGNAL_ABORTED_SLOT) {
+                self.event_array_remove(signal, SIGNAL_ALGORITHMS_SLOT, record)?;
+            }
+        }
+        if self.has_event_slot(record, "signal") {
+            self.set_event_slot(record, "signal", Value::Undefined)?;
+        }
+        Ok(())
     }
 
     /// dispatchEvent(event) (DOM 2.9) on a single target: the matching
@@ -1199,6 +1224,30 @@ impl InterpreterCore {
         let list = self.alloc_array_from_values(&values)?;
         self.set_event_slot(id, slot, Value::Object(list))
     }
+
+    /// Remove an internal record without touching any other registration.
+    /// A missing entry is a no-op; empty lists need no heap allocation. Nonempty
+    /// replacements preserve the old array for dispatch snapshots.
+    fn event_array_remove(
+        &mut self,
+        id: ObjectId,
+        slot: &str,
+        record: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let mut entries = self.event_array_objects(id, slot)?;
+        let before = entries.len();
+        entries.retain(|entry| *entry != record);
+        if entries.len() == before {
+            return Ok(());
+        }
+        let replacement = if entries.is_empty() {
+            Value::Undefined
+        } else {
+            let values: Vec<Value> = entries.into_iter().map(Value::Object).collect();
+            Value::Object(self.alloc_array_from_values(&values)?)
+        };
+        self.set_event_slot(id, slot, replacement)
+    }
 }
 
 #[cfg(test)]
@@ -1386,5 +1435,168 @@ mod abort_graph_tests {
         assert_eq!(core.signal_source_objects(dependent).unwrap(), vec![original]);
         let nested = any(&mut core, &module, &[dependent]);
         assert_eq!(core.signal_source_objects(nested).unwrap(), vec![original]);
+    }
+
+    fn listen(
+        core: &mut InterpreterCore,
+        module: &Ir3Module,
+        target: ObjectId,
+        signal: ObjectId,
+        callback: Value,
+        flags: [bool; 2],
+    ) -> ObjectId {
+        let options = core
+            .alloc_object_with_properties(&[
+                ("signal", Value::Object(signal)),
+                ("capture", Value::Bool(flags[0])),
+                ("once", Value::Bool(flags[1])),
+            ])
+            .expect("listener options");
+        core.event_target_add_listener(
+            module, target, Value::str("work"), callback.clone(), Value::Object(options),
+        )
+        .expect("signal-bound listener");
+        core.event_target_find_record(target, "work", &callback, flags[0])
+            .expect("listener lookup")
+            .expect("registered listener")
+    }
+
+    fn listener_object(core: &mut InterpreterCore) -> Value {
+        // EventListener objects are valid even without a handleEvent method.
+        // Public-path fixtures below exercise actual guest callback invocation.
+        Value::Object(core.alloc_object_with_prototype(None).expect("listener object"))
+    }
+
+    #[test]
+    fn explicit_listener_removal_unlinks_only_its_abort_algorithm() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        let target = core.alloc_event_target("EventTarget").unwrap();
+        let callback = listener_object(&mut core);
+        let other_callback = listener_object(&mut core);
+        let record = listen(&mut core, &module, target, signal, callback, [false, false]);
+        let peer = listen(&mut core, &module, target, signal, other_callback, [false, false]);
+        assert_eq!(core.event_slot(record, "signal"), Value::Int(i64::from(signal.0)));
+        core.event_target_remove_record(target, record).unwrap();
+        assert_eq!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap(), vec![peer]);
+        assert_eq!(core.event_array_objects(target, LISTENERS_SLOT).unwrap(), vec![peer]);
+        assert_eq!(core.event_slot(record, "signal"), Value::Undefined);
+        let list = core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT);
+        core.event_target_remove_record(target, record).unwrap();
+        assert_eq!(core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT), list, "idempotent unlink");
+        core.abort_signal(&module, signal, Value::Undefined).unwrap();
+        assert!(core.event_slot(peer, "removed").is_truthy());
+        assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn once_delivery_releases_abort_algorithm_but_retains_its_callback_snapshot() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        let target = core.alloc_event_target("EventTarget").unwrap();
+        let callback = listener_object(&mut core);
+        let record = listen(&mut core, &module, target, signal, callback.clone(), [false, true]);
+        let event = core.alloc_event("Event", "work", [false; 3], Value::Null).unwrap();
+        core.event_target_dispatch(&module, &Value::Object(target), &Value::Object(event)).unwrap();
+        assert!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap().is_empty());
+        assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
+        assert_eq!(core.event_slot(record, "callback"), callback, "snapshot must retain its callback");
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn completed_listeners_do_not_accumulate_on_a_long_lived_signal() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        let target = core.alloc_event_target("EventTarget").unwrap();
+        let callback = listener_object(&mut core);
+        for attempt in 0..128 {
+            let record = listen(&mut core, &module, target, signal, callback.clone(), [false, false]);
+            core.event_target_remove_record(target, record).unwrap();
+            assert!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap().is_empty(),
+                "completed registration {attempt} was retained");
+        }
+        assert!(!core.event_slot(signal, SIGNAL_ABORTED_SLOT).is_truthy());
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn listener_reregistration_belongs_to_the_new_signal_only() {
+        let (mut core, module) = runtime();
+        let first = core.alloc_abort_signal().unwrap();
+        let second = core.alloc_abort_signal().unwrap();
+        let target = core.alloc_event_target("EventTarget").unwrap();
+        let callback = listener_object(&mut core);
+        let old = listen(&mut core, &module, target, first, callback.clone(), [false, false]);
+        core.event_target_remove_record(target, old).unwrap();
+        let new = listen(&mut core, &module, target, second, callback, [false, false]);
+        core.abort_signal(&module, first, Value::Undefined).unwrap();
+        assert_eq!(core.event_array_objects(target, LISTENERS_SLOT).unwrap(), vec![new]);
+        assert_eq!(core.event_array_objects(second, SIGNAL_ALGORITHMS_SLOT).unwrap(), vec![new]);
+        core.abort_signal(&module, second, Value::Undefined).unwrap();
+        assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
+    }
+
+    #[test]
+    fn capture_registrations_and_duplicate_requests_keep_distinct_ownership() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        let target = core.alloc_event_target("EventTarget").unwrap();
+        let callback = listener_object(&mut core);
+        let bubbling = listen(&mut core, &module, target, signal, callback.clone(), [false, false]);
+        let capture = listen(&mut core, &module, target, signal, callback.clone(), [true, false]);
+        assert_eq!(listen(&mut core, &module, target, signal, callback, [false, false]), bubbling);
+        assert_eq!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap(), vec![bubbling, capture]);
+        core.event_target_remove_record(target, bubbling).unwrap();
+        assert_eq!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap(), vec![capture]);
+        core.abort_signal(&module, signal, Value::Undefined).unwrap();
+        assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
+    }
+
+    #[test]
+    fn abort_drain_removes_every_listener_without_rebuilding_the_signal_list() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        let mut targets = Vec::new();
+        for _ in 0..24 {
+            let target = core.alloc_event_target("EventTarget").unwrap();
+            let callback = listener_object(&mut core);
+            listen(&mut core, &module, target, signal, callback, [false, false]);
+            targets.push(target);
+        }
+        core.abort_signal(&module, signal, Value::Undefined).unwrap();
+        assert_eq!(core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT), Value::Undefined);
+        for target in targets {
+            assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
+        }
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn cancellation_registration_refusal_restores_the_original_target_list() {
+        let (mut core, module) = runtime();
+        let signal = core.alloc_abort_signal().unwrap();
+        let target = core.alloc_event_target("EventTarget").unwrap();
+        let existing = listener_object(&mut core);
+        let peer = listen(&mut core, &module, target, signal, existing, [false, false]);
+        let callback = listener_object(&mut core);
+        let options = core.alloc_object_with_properties(&[("signal", Value::Object(signal))]).unwrap();
+        let target_list = core.event_slot(target, LISTENERS_SLOT);
+        let signal_list = core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT);
+        // Permit the listener record and replacement target list, but refuse
+        // the third allocation: its cancellation registration's new array.
+        let before = core.heap.live_len();
+        core.config.max_heap_objects = u32::try_from(before + 2).unwrap();
+        core.event_target_add_listener(
+            &module, target, Value::str("work"), callback, Value::Object(options),
+        )
+        .expect_err("cancellation registration must fail at the object limit");
+        assert_eq!(core.heap.live_len(), before + 2, "reach the cancellation allocation");
+        assert_eq!(core.event_slot(target, LISTENERS_SLOT), target_list);
+        assert_eq!(core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT), signal_list);
+        assert_eq!(core.event_array_objects(target, LISTENERS_SLOT).unwrap(), vec![peer]);
+        assert!(!core.event_slot(peer, "removed").is_truthy());
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
     }
 }

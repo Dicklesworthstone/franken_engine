@@ -731,3 +731,52 @@ console.log(f('file:///tmp/z'), typeof url.parse, typeof url.format);
         ]
     );
 }
+
+/// The URL setters (bd-9vouw.225) update the URL: `hostname`, `port`,
+/// `username`, `password`, `protocol`, `host`, `search` (which also refreshes
+/// `searchParams`) and `href` (which throws ERR_INVALID_URL for a bad URL),
+/// and a value a setter cannot apply is ignored. Only `pathname` and `hash`
+/// were handled; any other assignment made an own property that shadowed the
+/// getter while `href` kept the old value (normalize-url left `www.` in
+/// place). Expected lines are Node v22.2.0's output; Bun 1.4.2 agrees.
+#[test]
+fn url_setters_update_the_url_bd_9vouw_225() {
+    let lines = run_tree(
+        "fe_run_cjs_url_setters",
+        &[(
+            "app.js",
+            r#"const u = new URL('http://user:pw@www.example.com:8080/a/b?x=1&y=2#h');
+u.hostname = 'example.org';
+console.log(u.href, u.host, Object.keys(u).length);
+u.port = '81'; u.username = 'me'; u.password = ''; u.protocol = 'https';
+console.log(u.href, u.origin);
+u.port = '443'; u.host = 'other.net:9000';
+console.log(u.href, u.port);
+u.search = '?q=a b&r=2';
+console.log(u.href, u.searchParams.get('q'), [...u.searchParams.keys()].join(','));
+u.searchParams.append('s', '3');
+console.log(u.search);
+u.href = 'http://z.io/p?k=v#f';
+console.log(u.hostname, u.pathname, u.searchParams.get('k'), u.hash);
+u.protocol = 'nope:/'; u.port = 'abc'; u.hostname = '';
+console.log(u.href);
+try { u.href = 'not a url'; } catch (e) { console.log(e instanceof TypeError, e.code); }
+console.log(u.href);
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        [
+            "http://user:pw@example.org:8080/a/b?x=1&y=2#h example.org:8080 0",
+            "https://me@example.org:81/a/b?x=1&y=2#h https://example.org:81",
+            "https://me@other.net:9000/a/b?x=1&y=2#h 9000",
+            "https://me@other.net:9000/a/b?q=a%20b&r=2#h a b q,r",
+            "?q=a+b&r=2&s=3",
+            "z.io /p v #f",
+            "http://z.io/p?k=v#f",
+            "true ERR_INVALID_URL",
+            "http://z.io/p?k=v#f"
+        ]
+    );
+}

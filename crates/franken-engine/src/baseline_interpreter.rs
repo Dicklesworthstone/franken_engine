@@ -79182,7 +79182,24 @@ impl InterpreterCore {
         value: &Value,
         mutation_label: &Label,
     ) -> Result<bool, InterpreterError> {
-        if !matches!(key, "pathname" | "hash") || !self.url_objects.contains_key(&object_id) {
+        // bd-9vouw.225: every URL Standard setter. Only `pathname` and `hash`
+        // were handled; any other assignment made an own data property that
+        // shadowed the getter while `href` kept the old value (normalize-url's
+        // `urlObject.hostname = ...` to strip `www.`).
+        if !matches!(
+            key,
+            "href"
+                | "protocol"
+                | "username"
+                | "password"
+                | "host"
+                | "hostname"
+                | "port"
+                | "pathname"
+                | "search"
+                | "hash"
+        ) || !self.url_objects.contains_key(&object_id)
+        {
             return Ok(false);
         }
         let current = self
@@ -79192,10 +79209,17 @@ impl InterpreterCore {
         let clone_bytes = Self::estimate_url_state_bytes(current);
         let value_bound = self.url_value_to_string_upper_bound(value);
         let href_bytes = Self::estimate_string_bytes(&current.href);
+        // `href` and `search` also rebuild the linked searchParams list.
+        let params_rebuild_bound = if matches!(key, "href" | "search") {
+            value_bound.saturating_mul(3)
+        } else {
+            0
+        };
         let aggregate_peak = clone_bytes
             .saturating_add(value_bound)
-            .saturating_add(Self::url_parse_working_upper_bound(href_bytes, 0))
+            .saturating_add(Self::url_parse_working_upper_bound(href_bytes, value_bound))
             .saturating_add(value_bound.saturating_mul(3))
+            .saturating_add(params_rebuild_bound)
             .saturating_add(Self::estimate_label_bytes(mutation_label).saturating_mul(2));
         self.check_temporary_memory_budget(aggregate_peak)?;
         let mut projected = current.clone();
@@ -79204,20 +79228,78 @@ impl InterpreterCore {
                 details: format!("authenticated URL state failed to reparse: {error}"),
             })?;
         let text = self.value_to_string(value);
+        // The setters other than `href` ignore a value they cannot apply, as
+        // the standard's basic URL parser with a state override does.
         match key {
             "pathname" => parsed.set_path(&text),
             "hash" if text.is_empty() => parsed.set_fragment(None),
             "hash" => parsed.set_fragment(Some(text.strip_prefix('#').unwrap_or(&text))),
+            "href" => parsed = self.parse_whatwg_url(&text, None)?,
+            "protocol" => {
+                let _ = url::quirks::set_protocol(&mut parsed, &text);
+            }
+            "username" => {
+                let _ = url::quirks::set_username(&mut parsed, &text);
+            }
+            "password" => {
+                let _ = url::quirks::set_password(&mut parsed, &text);
+            }
+            "host" => {
+                let _ = url::quirks::set_host(&mut parsed, &text);
+            }
+            "hostname" => {
+                let _ = url::quirks::set_hostname(&mut parsed, &text);
+            }
+            "port" => {
+                let _ = url::quirks::set_port(&mut parsed, &text);
+            }
+            "search" => url::quirks::set_search(&mut parsed, &text),
             _ => unreachable!("URL setter key was validated"),
         }
+        let rebuilt_pairs = matches!(key, "href" | "search").then(|| Self::url_pairs(&parsed));
         projected.href = parsed.into();
         drop(text);
         projected.lifecycle_label = projected.lifecycle_label.join(mutation_label);
-        let previous_bytes = Self::estimate_url_state_bytes(current);
+        let previous_bytes = clone_bytes;
         let next_bytes = Self::estimate_url_state_bytes(&projected);
-        self.check_temporary_memory_budget(next_bytes)?;
-        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        // The URL's searchParams object reflects the new query.
+        let params_update = match rebuilt_pairs {
+            Some(pairs) => {
+                let params_id = projected.search_params;
+                let params = self.url_search_params.get(&params_id).ok_or_else(|| {
+                    InterpreterError::InternalError {
+                        details: "URL lost its linked URLSearchParams".to_string(),
+                    }
+                })?;
+                let mut next_params = params.clone();
+                next_params.pairs = pairs;
+                next_params.lifecycle_label = next_params.lifecycle_label.join(mutation_label);
+                Some((
+                    params_id,
+                    Self::estimate_url_search_params_state_bytes(params),
+                    next_params,
+                ))
+            }
+            None => None,
+        };
+        let (params_previous_bytes, params_next_bytes) = params_update
+            .as_ref()
+            .map(|(_, previous, next)| {
+                (
+                    *previous,
+                    Self::estimate_url_search_params_state_bytes(next),
+                )
+            })
+            .unwrap_or((0, 0));
+        self.check_temporary_memory_budget(next_bytes.saturating_add(params_next_bytes))?;
+        self.apply_memory_component_delta(
+            previous_bytes.saturating_add(params_previous_bytes),
+            next_bytes.saturating_add(params_next_bytes),
+        )?;
         self.url_objects.insert(object_id, projected);
+        if let Some((params_id, _, next_params)) = params_update {
+            self.url_search_params.insert(params_id, next_params);
+        }
         Ok(true)
     }
 

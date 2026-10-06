@@ -5415,6 +5415,21 @@ fn parse_contextual_static_property_key(
                 )
             });
     }
+    // A NumericLiteral key names ToString of its value, as an object
+    // literal's does: `get 0b10() {}` defines "2", `static 1E+9 = v`
+    // "1000000000", `.1() {}` "0.1", `{ 0x10: a } = o` reads "16"
+    // (bd-9vouw.228). Lowering canonicalizes the literal node.
+    if source.starts_with(|ch: char| ch.is_ascii_digit() || ch == '.') {
+        if let Some(value) = parse_bigint_numeric_literal(source) {
+            return Ok(Expression::BigIntLiteral(value));
+        }
+        if let Some(value) = parse_i64_numeric_literal(source) {
+            return Ok(Expression::NumericLiteral(value));
+        }
+        if let Some(value) = parse_f64_numeric_literal(source) {
+            return Ok(Expression::FloatLiteral(value.to_bits()));
+        }
+    }
     // `\u` escapes in an IdentifierName key denote the same property name as
     // the characters they spell (`{ \u0061: 1 }.a`, ES2020 11.6).
     Ok(Expression::Identifier(canonicalize_identifier(source)))

@@ -488,3 +488,38 @@ console.log(JSON.stringify(o.EOL), typeof os.platform, os.platform.name, require
         ["\"\\n\" function platform true true number /dev/null string 23"]
     );
 }
+
+/// `require.resolve` (bd-9vouw.199) returns the filename `require` would load,
+/// relative to the module that holds the `require`, the request itself for a
+/// core module, and throws a catchable MODULE_NOT_FOUND Error for a miss. It
+/// was undefined ("expected function, got undefined").
+#[test]
+fn require_resolve_names_the_module_require_would_load_bd_9vouw_199() {
+    let lines = run_tree(
+        "fe_run_cjs_require_resolve",
+        &[
+            (
+                "lib/x.js",
+                r#"exports.here = () => require.resolve('./y');
+"#,
+            ),
+            (
+                "lib/y.js",
+                r#"exports.y = 1;
+"#,
+            ),
+            (
+                "app.js",
+                r#"const x = require('./lib/x');
+const short = (p) => p.slice(__dirname.length);
+let missing; try { require.resolve('./nope'); } catch (e) { missing = e.code; }
+console.log(typeof require.resolve, short(require.resolve('./lib/x')), short(x.here()), require.resolve('fs'), require.resolve('node:path'), missing);
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        ["function /lib/x.js /lib/y.js fs node:path MODULE_NOT_FOUND"]
+    );
+}

@@ -3585,6 +3585,9 @@ pub enum BuiltinFunctionKind {
     /// and `sup` (bd-9vouw.185), named by the specifier, one of
     /// [`STRING_HTML_METHODS`]. Append only.
     StringHtmlMethod,
+    /// `require.resolve` of the module named by the specifier (bd-9vouw.199).
+    /// Append only.
+    RequireResolve,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -3764,6 +3767,16 @@ impl BuiltinFunction {
 
     fn generator_iterator_self() -> Self {
         Self::new_kind(BuiltinFunctionKind::GeneratorIteratorSelf)
+    }
+
+    /// `require.resolve` of the module a `require` belongs to (bd-9vouw.199).
+    fn require_resolve(require: &BuiltinFunction) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::RequireResolve,
+            module_specifier: require.module_specifier.clone(),
+            iterator_handle: None,
+            bound_object: None,
+        }
     }
 
     fn require(module_specifier: impl AsRef<str>) -> Self {
@@ -4998,6 +5011,7 @@ impl BuiltinFunction {
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
+            BuiltinFunctionKind::RequireResolve => "resolve",
             BuiltinFunctionKind::FunctionConstructor => "Function",
             BuiltinFunctionKind::GeneratedFunction => "anonymous",
             BuiltinFunctionKind::IteratorNext
@@ -40289,6 +40303,22 @@ impl InterpreterCore {
                 }
                 result
             }
+            BuiltinFunctionKind::RequireResolve => {
+                check_hostcall_capability_gate(self, "module_load", self.ip as u32)?;
+                let args_label = self.join_arg_range_label(args)?;
+                let previous_module_specifier = self.current_module_specifier.clone();
+                if !builtin.module_specifier.is_empty() {
+                    self.current_module_specifier = Some(builtin.module_specifier.to_string());
+                }
+                let result = self.require_resolve(args);
+                self.current_module_specifier = previous_module_specifier;
+                if result.is_ok() {
+                    let result_label = hostcall_result_contract("module_load")
+                        .result_label(&args_label, None);
+                    self.replace_pending_hostcall_result_label(Some(result_label))?;
+                }
+                result
+            }
             BuiltinFunctionKind::FunctionConstructor => {
                 self.construct_generated_function(module, args)
             }
@@ -51401,6 +51431,12 @@ impl InterpreterCore {
                                     && property_key.as_str() == Some("main")
                                 {
                                     self.cjs_main_module()
+                                } else if builtin.kind == BuiltinFunctionKind::Require
+                                    && property_key.as_str() == Some("resolve")
+                                {
+                                    Value::BuiltinFunction(BuiltinFunction::require_resolve(
+                                        &builtin,
+                                    ))
                                 } else if let Some(property_object) =
                                     Self::builtin_function_property_object(&builtin)
                                 {
@@ -63295,6 +63331,11 @@ impl InterpreterCore {
                 self.cjs_main_module()
             }
             Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::Require && name == "resolve" =>
+            {
+                Value::BuiltinFunction(BuiltinFunction::require_resolve(builtin))
+            }
+            Value::BuiltinFunction(builtin)
                 if Self::builtin_function_property_object(builtin).is_some() =>
             {
                 let property_object =
@@ -64934,6 +64975,36 @@ impl InterpreterCore {
         let timestamp_ns = self.instructions_executed;
         self.record_hostcall_telemetry("module:require", args, timestamp_ns, args_hash, &outcome);
         outcome
+    }
+
+    /// `require.resolve(request)` (bd-9vouw.199): the filename `require` would
+    /// load (within the module root), the request itself for a core module
+    /// (as Node returns 'fs' and 'node:fs'), or a catchable MODULE_NOT_FOUND
+    /// Error (bd-9vouw.188). Packages probe optional dependencies with it
+    /// (`try { require.resolve('x') } catch {}`); it was undefined. The
+    /// `options` argument and `require.resolve.paths` are not supported.
+    fn require_resolve(&mut self, args: RegRange) -> Result<Value, InterpreterError> {
+        let request = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        let Value::Str(request) = request else {
+            return Err(InterpreterError::RequireSpecifierNotString {
+                got: request.type_name().to_string(),
+            });
+        };
+        let specifier = Self::utf8_module_specifier(&request)?;
+        if is_node_core_module_specifier(specifier) {
+            return Ok(Value::Str(request));
+        }
+        match self.resolve_require_specifier(specifier) {
+            Ok(resolved) => Ok(Value::str(resolved)),
+            Err(InterpreterError::ModuleResolutionFailed { reason, .. }) => {
+                Err(self.throw_module_not_found(request.as_ref(), &reason))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn dispatch_require_hostcall_inner(

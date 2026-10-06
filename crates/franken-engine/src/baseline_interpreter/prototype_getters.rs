@@ -208,7 +208,37 @@ impl InterpreterCore {
         let Value::Object(id) = receiver else {
             return Err(incompatible());
         };
-        if self.proxy_record(id)?.is_some() || !self.has_prototype_getter_brand(id, owner) {
+        let unbranded =
+            self.proxy_record(id)?.is_some() || !self.has_prototype_getter_brand(id, owner);
+        // ES2020 21.2.5.4: `flags` is generic. Any object answers through
+        // its boolean flag properties, read in this order; the
+        // regexp.prototype.flags polyfill (under deep-equal) feature-tests
+        // the native getter on a plain object and checks the order
+        // (bd-9vouw.208).
+        if owner == "RegExp" && key == "flags" && unbranded {
+            let mut flags = String::new();
+            for (letter, name) in [
+                ('d', "hasIndices"),
+                ('g', "global"),
+                ('i', "ignoreCase"),
+                ('m', "multiline"),
+                ('s', "dotAll"),
+                ('u', "unicode"),
+                ('v', "unicodeSets"),
+                ('y', "sticky"),
+            ] {
+                let value = self.get_v(
+                    module,
+                    &Value::Object(id),
+                    &RuntimePropertyKey::String(JsString::from(name)),
+                )?;
+                if value.is_truthy() {
+                    flags.push(letter);
+                }
+            }
+            return Ok(Value::str(flags));
+        }
+        if unbranded {
             return Err(incompatible());
         }
         // A RegExp keeps `source` and `flags`; each boolean flag getter

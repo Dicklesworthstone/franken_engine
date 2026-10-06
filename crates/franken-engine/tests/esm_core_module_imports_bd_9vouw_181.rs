@@ -247,3 +247,51 @@ fn an_imported_path_alias_passed_as_a_value_works() {
         &["a/b"],
     );
 }
+
+/// bd-9vouw.221: `export { ... } from` and `export * as ns from` a core
+/// module the rewrite handles lower like the import of each name and a local
+/// export, so an importer of the re-exporting module runs (vfile's
+/// `lib/minpath.js` is the first file). Before, the re-export loaded the
+/// module at run time and made the re-exporting module TopSecret, refused at
+/// the importer's bounded-import contract. Node prints these two lines.
+#[test]
+fn reexports_of_core_modules_bd_9vouw_221() {
+    assert_output(
+        &[
+            (
+                "minpath.mjs",
+                "export {default as minpath} from 'node:path'\n",
+            ),
+            (
+                "re.mjs",
+                "export { join, sep as separator, default } from 'node:path';\nexport * as posix from 'path';\nexport { format } from 'node:util';\nexport { URL as Url } from 'node:url';\n",
+            ),
+            (
+                "app.mjs",
+                "import { minpath } from './minpath.mjs';\nimport p, { join, separator, posix, format, Url } from './re.mjs';\nconsole.log(minpath.join('x', 'y'), join('a', 'b'), separator, p.basename('/q/r.txt'), posix.extname('s.md'));\nconsole.log(format('%s-%d', 'n', 4), new Url('https://e.org/p?q=1').pathname, Url === URL);\n",
+            ),
+        ],
+        &["x/y a/b / r.txt .md", "n-4 /p true"],
+    );
+}
+
+/// Planted negative for bd-9vouw.221: a re-export of a core module no facade
+/// serves stays opaque, so the importer that prints a result of the
+/// re-exporting module is still refused at its bounded-import contract
+/// (Node prints 1).
+#[test]
+fn a_reexport_of_an_unmodeled_core_module_stays_refused_bd_9vouw_221() {
+    assert_refused(
+        &[
+            (
+                "lib.mjs",
+                "export { Worker } from 'node:worker_threads';\nexport function f() { return 1; }\n",
+            ),
+            (
+                "app.mjs",
+                "import { f } from './lib.mjs';\nconsole.log(f());\n",
+            ),
+        ],
+        "bounded-import contract",
+    );
+}

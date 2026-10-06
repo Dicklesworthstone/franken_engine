@@ -20,7 +20,17 @@
 //! import { createHash } from 'crypto'   -> const %core_import_0 = require('crypto');
 //!                                          and each `createHash` the module
 //!                                          names becomes %core_import_0.createHash
+//! export { default as p } from 'path'   -> const %core_reexport_0 = require('node:path/posix');
+//!                                          export { %core_reexport_0 as p };
+//! export * as ns from 'node:path'       -> const %core_reexport_1 = require('node:path/posix');
+//!                                          export { %core_reexport_1 as ns };
 //! ```
+//!
+//! A re-export (bd-9vouw.221) is the import of each name under a hidden
+//! local, exported by a local clause, so it lowers like `import { name as
+//! hidden } from '<module>'; export { hidden as exported };`. Left as it
+//! was, it loaded the module at run time, which no facade serves, and made
+//! the whole module TopSecret.
 //!
 //! The last form is for the modules whose facade recognizes member calls on
 //! an alias but no destructured binding (crypto, os, querystring,
@@ -39,9 +49,9 @@ use super::with_statement::{
     walk_function, walk_statement, walk_switch_cases,
 };
 use crate::ast::{
-    BindingPattern, CatchClause, ExportKind, Expression, ImportClause, ImportDeclaration,
-    ImportSpecifier, ObjectPatternProperty, Statement, SwitchCase, SyntaxTree, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, CatchClause, ExportDeclaration, ExportKind, Expression, ImportClause,
+    ImportDeclaration, ImportSpecifier, NamedExportClause, ObjectPatternProperty, Statement,
+    SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 
 /// Core modules whose `require` aliases lowering recognizes (and path's
@@ -87,16 +97,43 @@ const MEMBER_MODULES: [&str; 5] = ["crypto", "os", "querystring", "timers/promis
 /// Aliases the member rewrite declares. No source text can spell a `%` name.
 const ALIAS_PREFIX: &str = "%core_import_";
 
-/// The module an import of a core module names, without `node:`, when the
+/// The hidden locals a re-export declares.
+const REEXPORT_PREFIX: &str = "%core_reexport_";
+
+/// The module a core module specifier names, without `node:`, when the
 /// rewrite handles it.
+fn handled_module(specifier: &str) -> Option<&str> {
+    let module = specifier.strip_prefix("node:").unwrap_or(specifier);
+    (FACADE_MODULES.contains(&module) || GLOBAL_EXPORTS.iter().any(|(name, _)| *name == module))
+        .then_some(module)
+}
+
+/// The module an import of a core module names, when the rewrite handles it.
 fn rewritten_module(statement: &Statement) -> Option<&str> {
     let Statement::Import(import) = statement else {
         return None;
     };
-    let specifier = import.source.as_str()?;
-    let module = specifier.strip_prefix("node:").unwrap_or(specifier);
-    (FACADE_MODULES.contains(&module) || GLOBAL_EXPORTS.iter().any(|(name, _)| *name == module))
-        .then_some(module)
+    handled_module(import.source.as_str()?)
+}
+
+/// `export { ... } from '<module>'` or `export * as ns from '<module>'` of a
+/// core module the rewrite handles, with that module. `export * from` is
+/// left as it is.
+fn reexported_module(
+    statement: &Statement,
+) -> Option<(&ExportDeclaration, &NamedExportClause, &str)> {
+    let Statement::Export(export) = statement else {
+        return None;
+    };
+    let ExportKind::NamedClause(clause) = &export.kind else {
+        return None;
+    };
+    let head = clause.canonical_head();
+    if !(head.starts_with('{') || head.starts_with("* as ")) {
+        return None;
+    }
+    let module = handled_module(clause.source()?.as_str()?)?;
+    Some((export, clause, module))
 }
 
 fn is_global_export(module: &str, name: &str) -> bool {
@@ -108,11 +145,9 @@ fn is_global_export(module: &str, name: &str) -> bool {
 /// `tree` with its imports of core modules rewritten, or `None` when it has
 /// none or binds `require` itself.
 pub(super) fn rewrite_core_module_imports(tree: &SyntaxTree) -> Option<SyntaxTree> {
-    if !tree
-        .body
-        .iter()
-        .any(|statement| rewritten_module(statement).is_some())
-    {
+    if !tree.body.iter().any(|statement| {
+        rewritten_module(statement).is_some() || reexported_module(statement).is_some()
+    }) {
         return None;
     }
     let mut root = BTreeSet::new();
@@ -139,12 +174,17 @@ pub(super) fn rewrite_core_module_imports(tree: &SyntaxTree) -> Option<SyntaxTre
         declarations: Vec::new(),
         renames: BTreeMap::new(),
         aliases: 0,
+        reexports: 0,
     };
     let mut rest = Vec::with_capacity(tree.body.len());
     for statement in &tree.body {
-        match (statement, rewritten_module(statement)) {
-            (Statement::Import(import), Some(module)) => rewrite.import(import, module),
-            _ => rest.push(statement.clone()),
+        if let (Statement::Import(import), Some(module)) = (statement, rewritten_module(statement))
+        {
+            rewrite.import(import, module);
+        } else if let Some((export, clause, module)) = reexported_module(statement) {
+            rest.push(rewrite.reexport(export, clause, module));
+        } else {
+            rest.push(statement.clone());
         }
     }
     if !rewrite.renames.is_empty() {
@@ -209,9 +249,63 @@ struct Rewrite {
     /// A named import of a member module: local -> (alias, export name).
     renames: BTreeMap<String, (String, String)>,
     aliases: usize,
+    reexports: usize,
 }
 
 impl Rewrite {
+    /// The import of a re-export's names under hidden locals, and the local
+    /// clause that exports them in its place.
+    fn reexport(
+        &mut self,
+        export: &ExportDeclaration,
+        clause: &NamedExportClause,
+        module: &str,
+    ) -> Statement {
+        let Some(source) = clause.source().cloned() else {
+            return Statement::Export(export.clone());
+        };
+        let head = clause.canonical_head();
+        let names = match head.strip_prefix("* as ") {
+            Some(exported) => vec![("*".to_string(), exported.trim().to_string())],
+            None => super::parse_named_export_clause_bindings(head),
+        };
+        let mut specifiers = Vec::new();
+        let mut namespace = None;
+        let mut exports = Vec::with_capacity(names.len());
+        for (name, exported) in names {
+            let local = format!("{REEXPORT_PREFIX}{}", self.reexports);
+            self.reexports += 1;
+            self.referenced.insert(local.clone());
+            self.exported.insert(local.clone());
+            exports.push(format!("{local} as {exported}"));
+            if name == "*" {
+                namespace = Some(local);
+            } else {
+                specifiers.push(ImportSpecifier {
+                    import_name: name,
+                    local_name: local,
+                });
+            }
+        }
+        let import = ImportDeclaration {
+            clause: match namespace {
+                Some(local) => ImportClause::Namespace { local },
+                None => ImportClause::Named { specifiers },
+            },
+            binding: None,
+            source,
+            span: export.span,
+        };
+        self.import(&import, module);
+        Statement::Export(ExportDeclaration {
+            kind: ExportKind::NamedClause(NamedExportClause::new(
+                format!("{{ {} }}", exports.join(", ")),
+                None,
+            )),
+            span: export.span,
+        })
+    }
+
     fn import(&mut self, import: &ImportDeclaration, module: &str) {
         match &import.clause {
             ImportClause::SideEffect => {}

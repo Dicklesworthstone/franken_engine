@@ -7,6 +7,7 @@
   var inspect = util.inspect;
   var isRegExp = util.types.isRegExp;
   var isNativeError = util.types.isNativeError;
+  var isPromise = util.types.isPromise;
   var apply = Reflect.apply;
   var regexpExec = RegExp.prototype.exec;
   var mapEntries = Map.prototype.entries;
@@ -58,11 +59,15 @@
       return this.name + ' [' + this.code + ']: ' + this.message;
     }
   }
-  function failure(actual, expected, message, operator) {
+  function failure(actual, expected, message, operator, preserveIdentity) {
     if (isNativeError(message)) { throw message; }
-    throw new AssertionError({
+    var error = new AssertionError({
       actual: actual, expected: expected, message: message, operator: operator
     });
+    // Exception-matcher failures expose the caught value and matcher, unlike
+    // equality assertions' diagnostic snapshots of two native Error objects.
+    if (preserveIdentity) { error.actual = actual; error.expected = expected; }
+    throw error;
   }
   function fail(message) {
     // Preserve the legacy overload without pretending to emit Node warnings.
@@ -254,6 +259,127 @@
     failure(value, null, 'ifError got unwanted exception: ' +
       (isNativeError(value) ? (value.message || value.name) : inspect(value)), 'ifError');
   }
+  function captureException(block) {
+    if (typeof block !== 'function') { throw invalidType('fn'); }
+    try { apply(block, undefined, []); return { threw: false }; }
+    catch (value) { return { threw: true, value: value }; }
+  }
+  function errorMatches(actual, expected, objectAllowed) {
+    if (isRegExp(expected)) { return regexMatches(expected, String(actual)); }
+    if (typeof expected === 'function') {
+      if (expected.prototype !== undefined && actual instanceof expected) { return true; }
+      // A mismatched Error constructor is not a validator to be executed.
+      if (expected === Error || expected.prototype !== undefined &&
+          Object.prototype.isPrototypeOf.call(Error.prototype, expected.prototype)) {
+        return false;
+      }
+      return apply(expected, {}, [actual]) === true;
+    }
+    if (!objectAllowed || expected === null || typeof expected !== 'object') {
+      throw invalidType('expected');
+    }
+    if (actual === null || typeof actual !== 'object' && typeof actual !== 'function') {
+      return false;
+    }
+    var keys = Object.keys(expected);
+    if (isNativeError(expected)) {
+      if (keys.indexOf('name') === -1) { keys.push('name'); }
+      if (keys.indexOf('message') === -1) { keys.push('message'); }
+    }
+    if (keys.length === 0) {
+      var invalid = new TypeError('The error matcher may not be an empty object');
+      invalid.code = 'ERR_INVALID_ARG_VALUE';
+      throw invalid;
+    }
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i];
+      if (!(key in actual)) { return false; }
+      var value = actual[key];
+      var match = expected[key];
+      if (typeof value === 'string' && isRegExp(match)) {
+        if (!regexMatches(match, value)) { return false; }
+      } else if (!strictDeep(value, match)) { return false; }
+    }
+    return true;
+  }
+  function expectedException(captured, expected, message, operator) {
+    if (typeof expected === 'string') {
+      if (message !== undefined) { throw invalidType('error'); }
+      if (captured.threw &&
+          (captured.value === expected ||
+           captured.value !== null && typeof captured.value === 'object' &&
+           captured.value.message === expected)) {
+        var ambiguous = new TypeError('The error/message argument is ambiguous');
+        ambiguous.code = 'ERR_AMBIGUOUS_ARGUMENT';
+        throw ambiguous;
+      }
+      message = expected;
+      expected = undefined;
+    } else if (expected !== undefined && expected !== null &&
+               typeof expected !== 'function' && typeof expected !== 'object') {
+      throw invalidType('error');
+    }
+    if (!captured.threw) {
+      var description = operator === 'rejects' ? 'rejection' : 'exception';
+      var name = expected && expected.name ? ' (' + expected.name + ')' : '';
+      failure(undefined, expected, 'Missing expected ' + description + name +
+        (message ? ': ' + message : '.'), operator);
+    }
+    if (expected === undefined || expected === null) { return; }
+    if (!errorMatches(captured.value, expected, true)) {
+      failure(captured.value, expected, message, operator, true);
+    }
+  }
+  function unwantedException(captured, expected, message, operator) {
+    if (!captured.threw) { return; }
+    if (typeof expected === 'string') {
+      message = expected;
+      expected = undefined;
+    }
+    if (expected && !errorMatches(captured.value, expected, false)) {
+      // A rejection of the wrong type is still a real failure, not success.
+      // Preserve the original thrown value, including undefined/null/false.
+      throw captured.value;
+    }
+    var description = operator === 'doesNotReject' ? 'rejection' : 'exception';
+    failure(captured.value, expected,
+      'Got unwanted ' + description + (message ? ': ' + message : '.') +
+      '\nActual message: "' +
+      (captured.value && captured.value.message !== undefined
+        ? captured.value.message : String(captured.value)) + '"', operator);
+  }
+  function throws(block, expected, message) {
+    expectedException(captureException(block), expected, message, 'throws');
+  }
+  function doesNotThrow(block, expected, message) {
+    unwantedException(captureException(block), expected, message, 'doesNotThrow');
+  }
+  function promiseInput(block) {
+    var called = typeof block === 'function';
+    // Invocation is outside capturePromise's catch. A synchronous throw by an
+    // asyncFn is not a matching Promise rejection and must remain a rejection
+    // of the assertion itself, without invoking the user's error matcher.
+    var value = called ? apply(block, undefined, []) : block;
+    if (isPromise(value) ||
+        value !== null && typeof value === 'object' &&
+        typeof value.then === 'function' && typeof value.catch === 'function') {
+      return value;
+    }
+    if (!called) { throw invalidType('promiseFn'); }
+    var invalid = new TypeError('The promiseFn function must return a Promise');
+    invalid.code = 'ERR_INVALID_RETURN_VALUE';
+    throw invalid;
+  }
+  async function capturePromise(promise) {
+    try { await promise; return { threw: false }; }
+    catch (value) { return { threw: true, value: value }; }
+  }
+  async function rejects(block, expected, message) {
+    expectedException(await capturePromise(promiseInput(block)), expected, message, 'rejects');
+  }
+  async function doesNotReject(block, expected, message) {
+    unwantedException(await capturePromise(promiseInput(block)), expected, message, 'doesNotReject');
+  }
   function strict() { return apply(ok, undefined, arguments); }
 
   ok.AssertionError = AssertionError;
@@ -270,6 +396,10 @@
   ok.match = match;
   ok.doesNotMatch = doesNotMatch;
   ok.ifError = ifError;
+  ok.throws = throws;
+  ok.doesNotThrow = doesNotThrow;
+  ok.rejects = rejects;
+  ok.doesNotReject = doesNotReject;
   Object.assign(strict, ok);
   strict.equal = strictEqual;
   strict.notEqual = notStrictEqual;

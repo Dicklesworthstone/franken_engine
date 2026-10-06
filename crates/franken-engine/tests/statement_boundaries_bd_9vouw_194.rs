@@ -120,3 +120,15 @@ fn a_line_ending_with_function_or_class_continues_bd_9vouw_212() {
     let source = "var first = _default(1, 2, 3)()\nfunction\n/*istanbul ignore start*/\n_default\n/*istanbul ignore end*/\n(start, minLine, maxLine) {\n  return function iterator() { return start + minLine + maxLine }\n}\nvar g = function\nnamed\n(a) { return a + 5 }\nasync function\nnamedA\n(a) { return a + 7 }\nclass\nK\n{ m() { return 9 } }\nvar o = { function: 3, class: 4 }\nvar p = o.function\nvar q = o.class\nvar async = 5\nasync\nfunction h() { return 6 }\nconsole.log(first, g(1), new K().m(), p, q, async, h())\nnamedA(1).then(function (v) { console.log('async', v) })\n";
     assert_eq!(run(source), ["6 6 9 3 4 5 6", "async 8"]);
 }
+
+/// bd-9vouw.219: a for-in/of head's `in` / `of` is a whole word, with or
+/// without spaces: minifiers write `for(const[k,v]of m)`, `for(const{a}of
+/// xs)`, `for(const c of"abc")`, `for(const k in{...})` (ts-pattern), which
+/// read as C-style headers ("for statement header must have three
+/// semicolon-separated parts"). A loop variable spelled `index` or `of` and
+/// an `in` test of a C-style loop keep their meaning.
+#[test]
+fn minified_for_in_of_heads_parse_bd_9vouw_219() {
+    let source = "var out=[];for(const[n,r]of[[1,2],[3,4]])out.push(n+r);for(const{a,b}of[{a:1,b:2}])out.push(a*b);\nlet s=0;for(let[a]of[[5]])s+=a;for(var{b}of[{b:6}])s+=b;out.push(s);var t=[];for(t[0]of[7,8]);out.push(t[0]);\nfor(const x of\"ab\")out.push(x);for(const y of`cd`)out.push(y);for(const k in{p:1,q:2})out.push(k);\nfor(let index=0;index<2;index++)out.push('i'+index);var o={z:1},c=0;for(;'z'in o&&c<1;c++)out.push('in');for(let of of[9])out.push(of);\nconsole.log(out.join());\n";
+    assert_eq!(run(source), ["3,7,2,11,8,a,b,c,d,p,q,i0,i1,in,9"]);
+}

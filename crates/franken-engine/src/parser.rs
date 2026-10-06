@@ -12210,17 +12210,12 @@ fn try_parse_for_in_of(
     goal: ParseGoal,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Option<Statement>> {
-    // Try to split on ` in ` or ` of ` at top level.
-    let (keyword, split_pos) = match find_top_level_keyword(header, " in ") {
-        Some(pos) => ("in", pos),
-        None => match find_top_level_keyword(header, " of ") {
-            Some(pos) => ("of", pos),
-            None => return Ok(None),
-        },
+    let Some((keyword, split_pos)) = find_for_in_of_keyword(header) else {
+        return Ok(None);
     };
 
     let lhs = header[..split_pos].trim();
-    let rhs = header[split_pos + keyword.len() + 2..].trim();
+    let rhs = header[split_pos + keyword.len()..].trim();
 
     // Parse binding: optionally `let x`, `const x`, `var x`, or bare `x`.
     let (binding_kind, binding_src) = if let Some(after) = lhs
@@ -12384,9 +12379,11 @@ fn for_in_of_statement(
 /// loops shadow each other correctly. A labeled `continue` that targets the
 /// `for await` itself is not supported by this rewrite.
 fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
-    let split = find_top_level_keyword(header, " of ")?;
+    let ("of", split) = find_for_in_of_keyword(header)? else {
+        return None;
+    };
     let lhs = header[..split].trim();
-    let iterable = header[split + " of ".len()..].trim();
+    let iterable = header[split + "of".len()..].trim();
     if lhs.is_empty() || iterable.is_empty() {
         return None;
     }
@@ -12423,6 +12420,47 @@ fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
          finally {{ if (!__franken_fa_fin) {{ let __franken_fa_ret = __franken_fa_it.return; \
          if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }}"
     ))
+}
+
+/// The `in` or `of` of a for-in/of head: a whole word at the top level
+/// (bd-9vouw.219). It was found as ` in ` / ` of ` with spaces around it, so
+/// minified heads (`for(const[k,v]of m)`, `for(const{a}of xs)`,
+/// `for(const c of"abc")`, ts-pattern, terser output) were read as C-style
+/// headers. A word with nothing but a declaration keyword before it is the
+/// bound name (`for (const of of xs)`).
+fn find_for_in_of_keyword(header: &str) -> Option<(&'static str, usize)> {
+    let bytes = header.as_bytes();
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
+    let mut depth = 0i32;
+    let mut quotes = QuoteState::default();
+    for (i, &b) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(b);
+            continue;
+        }
+        if (b == b'/' && quotes.open_regex_at(header, i)) || quotes.open(b) {
+            continue;
+        }
+        match b {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            _ => {}
+        }
+        if depth != 0 || i > 0 && (is_word(bytes[i - 1]) || bytes[i - 1] == b'.') {
+            continue;
+        }
+        for keyword in ["in", "of"] {
+            if bytes[i..].starts_with(keyword.as_bytes())
+                && bytes.get(i + 2).is_none_or(|next| !is_word(*next))
+            {
+                let lhs = header[..i].trim();
+                if !lhs.is_empty() && !matches!(lhs, "let" | "const" | "var") {
+                    return Some((keyword, i));
+                }
+            }
+        }
+    }
+    None
 }
 
 fn find_top_level_keyword(src: &str, keyword: &str) -> Option<usize> {

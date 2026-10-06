@@ -101434,16 +101434,27 @@ impl InterpreterCore {
             .function_prototypes
             .iter()
             .find(|(_, object)| **object == backing)?;
-        let ids = self.prototype_owner_ids(module);
-        (0u8..=4).find_map(|kind| {
-            (ids.own_property[usize::from(kind)] == *owner).then_some(match kind {
-                0 => Value::Function(*id),
-                1 => Value::Closure(*id),
-                2 => Value::GeneratorFunction(*id),
-                3 => Value::AsyncFunction(*id),
-                _ => Value::AsyncGeneratorFunction(*id),
+        let value_of_kind = |ids: PrototypeOwnerIds| {
+            (0u8..=4).find_map(|kind| {
+                (ids.own_property[usize::from(kind)] == *owner).then_some(match kind {
+                    0 => Value::Function(*id),
+                    1 => Value::Closure(*id),
+                    2 => Value::GeneratorFunction(*id),
+                    3 => Value::AsyncFunction(*id),
+                    _ => Value::AsyncGeneratorFunction(*id),
+                })
             })
-        })
+        };
+        if let Some(value) = value_of_kind(self.prototype_owner_ids(module)) {
+            return Some(value);
+        }
+        // A closure of another module (a parent class from another file that
+        // babel's `_inherits` set as a constructor's [[Prototype]]): its owner
+        // ids are its own module's. Closure ids are global, so the owner
+        // module is the closure's recorded origin (bd-9vouw.209).
+        let origin = self.closure_module_origins.get(id)?;
+        let owner_module = self.retained_closure_module(*id, origin).ok()?;
+        value_of_kind(self.prototype_owner_ids(&owner_module))
     }
 
     /// Existing own-property backing object for a user function, if any.

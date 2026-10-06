@@ -523,3 +523,43 @@ console.log(typeof require.resolve, short(require.resolve('./lib/x')), short(x.h
         ["function /lib/x.js /lib/y.js fs node:path MODULE_NOT_FOUND"]
     );
 }
+
+/// A function's [[Prototype]] may be a function of another module (babel's
+/// `_inherits` does `Object.setPrototypeOf(Child, Parent)` and its
+/// `_createSuper` reads it back to construct the parent; date-fns 2.30).
+/// Object.getPrototypeOf returned the parent's internal backing object
+/// instead of the parent ("expected constructor, got object" from
+/// Reflect.construct) (bd-9vouw.209).
+#[test]
+fn a_function_prototype_may_be_a_function_of_another_module_bd_9vouw_209() {
+    let lines = run_tree(
+        "fe_run_cjs_foreign_function_prototype",
+        &[
+            (
+                "lib/parser.js",
+                r#"function Parser() { this.base = 1; }
+Parser.prototype.hi = function () { return 'hi'; };
+exports.Parser = Parser;
+"#,
+            ),
+            (
+                "lib/era.js",
+                r#"var P = require('./parser').Parser;
+function Era() { var Super = Object.getPrototypeOf(Era); var r = Reflect.construct(Super, [], Era); r.era = 2; return r; }
+Object.setPrototypeOf(Era, P);
+Era.prototype = Object.create(P.prototype, { constructor: { value: Era, writable: true, configurable: true } });
+exports.Era = Era;
+exports.check = function () { return Object.getPrototypeOf(Era) === P; };
+"#,
+            ),
+            (
+                "app.js",
+                r#"const { Era, check } = require('./lib/era');
+const e = new Era();
+console.log(check(), typeof Object.getPrototypeOf(Era), e.base, e.era, e.hi(), e instanceof Era);
+"#,
+            ),
+        ],
+    );
+    assert_eq!(lines, ["true function 1 2 hi true"]);
+}

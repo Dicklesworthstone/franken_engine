@@ -224,8 +224,25 @@
     }
     return count === candidates.length;
   }
+  // Compare the visible range, not a view's entire backing store. Construct
+  // byte views only after checking lengths; indexed reads stay on the native
+  // typed-array path and use ordinary interpreter memory/work accounting.
+  function equalByteRanges(bufferA, offsetA, lengthA, bufferB, offsetB, lengthB) {
+    if (lengthA !== lengthB) {
+      return false;
+    }
+    var bytesA = new Uint8Array(bufferA, offsetA, lengthA);
+    var bytesB = new Uint8Array(bufferB, offsetB, lengthB);
+    for (var i = 0; i < lengthA; i++) {
+      if (bytesA[i] !== bytesB[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
   function equalObject(a, b, tag, seen) {
-    if (tag === 'Date' && !Object.is(a.getTime(), b.getTime())) {
+    // Node 22 does not equate distinct invalid dates (NaN time values).
+    if (tag === 'Date' && a.getTime() !== b.getTime()) {
       return false;
     }
     if (tag === 'RegExp' &&
@@ -235,7 +252,24 @@
     if (tag.indexOf('Boxed') === 0 && !Object.is(a.valueOf(), b.valueOf())) {
       return false;
     }
-    if (tag === 'Error' && (a.message !== b.message || a.name !== b.name)) {
+    if (tag === 'Error') {
+      if (a.message !== b.message || a.name !== b.name) {
+        return false;
+      }
+      var causeA = Object.prototype.hasOwnProperty.call(a, 'cause');
+      var causeB = Object.prototype.hasOwnProperty.call(b, 'cause');
+      if (causeA !== causeB || (causeA && !deepEqual(a.cause, b.cause, seen)) ||
+          !deepEqual(a.errors, b.errors, seen)) {
+        return false;
+      }
+    }
+    if (tag === 'ArrayBuffer' &&
+        !equalByteRanges(a, 0, a.byteLength, b, 0, b.byteLength)) {
+      return false;
+    }
+    if (tag === 'DataView' &&
+        !equalByteRanges(a.buffer, a.byteOffset, a.byteLength,
+          b.buffer, b.byteOffset, b.byteLength)) {
       return false;
     }
     if (Array.isArray(a) && a.length !== b.length) {
@@ -271,6 +305,11 @@
     }
     var tag = typeTag(a);
     if (tag !== typeTag(b)) {
+      return false;
+    }
+    // Weak collections have no structurally observable entry set. Only
+    // the identical object, already handled by Object.is, can be equal.
+    if (tag === 'WeakMap' || tag === 'WeakSet') {
       return false;
     }
     for (var i = 0; i < seen.length; i++) {

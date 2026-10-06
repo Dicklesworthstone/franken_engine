@@ -110,7 +110,7 @@ const UTIL_REQUIRE_SEARCH: Search = Search {
 /// The standard globals UTIL_SOURCE reads by name. A program that declares
 /// one at its top level would capture the module's reference, so the
 /// module reads those through `globalThis` instead.
-const MODULE_GLOBALS: [&str; 13] = [
+const MODULE_GLOBALS: [&str; 14] = [
     "Array",
     "Error",
     "JSON",
@@ -124,6 +124,7 @@ const MODULE_GLOBALS: [&str; 13] = [
     "TextDecoder",
     "TextEncoder",
     "TypeError",
+    "Uint8Array",
 ];
 
 /// `const %util_module = <module>;`, which the rewrite puts first in the

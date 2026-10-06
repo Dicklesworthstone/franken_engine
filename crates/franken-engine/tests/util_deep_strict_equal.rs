@@ -181,3 +181,134 @@ console.log(eq(a, b), Map, Set);
 fn guest_map_and_set_bindings_do_not_capture_module_intrinsics() {
     assert_output(GLOBAL_HYGIENE, "true guest-map guest-set");
 }
+
+const ARRAY_BUFFERS: &str = r#"
+const eq = require('util').isDeepStrictEqual;
+const a = new Uint8Array([1, 2, 3]).buffer;
+const b = new Uint8Array([1, 2, 3]).buffer;
+const c = new Uint8Array([1, 9, 3]).buffer;
+console.log(eq(a, b), eq(b, a), eq(a, c), eq(c, a));
+console.log(eq(new ArrayBuffer(1), new ArrayBuffer(2)), eq(new ArrayBuffer(0), new ArrayBuffer(0)));
+a.metadata = {revision: 1}; b.metadata = {revision: 2};
+console.log(eq(a, b), eq(b, a));
+console.log(eq(a, Object.create(ArrayBuffer.prototype)));
+"#;
+
+#[test]
+fn array_buffers_compare_payload_length_bytes_and_custom_properties() {
+    assert_output(
+        ARRAY_BUFFERS,
+        "true true false false\nfalse true\nfalse false\nfalse",
+    );
+}
+
+const DATA_VIEWS: &str = r#"
+const eq = require('util').isDeepStrictEqual;
+const a = new Uint8Array([9, 1, 2, 8]);
+const b = new Uint8Array([1, 2, 7, 6]);
+const x = new DataView(a.buffer, 1, 2);
+const y = new DataView(b.buffer, 0, 2);
+console.log(eq(x, y), eq(y, x));
+a[0] = 100; a[3] = 200;
+console.log(eq(x, y));
+a[2] = 3;
+console.log(eq(x, y), eq(y, x));
+console.log(eq(new DataView(a.buffer, 0, 1), new DataView(a.buffer, 0, 2)));
+console.log(eq(new DataView(a.buffer, 0, 0), new DataView(b.buffer, 3, 0)));
+"#;
+
+#[test]
+fn data_views_compare_only_the_visible_byte_range() {
+    assert_output(DATA_VIEWS, "true true\ntrue\nfalse false\nfalse\ntrue");
+}
+
+const TYPED_ARRAY_VALUES: &str = r#"
+const eq = require('util').isDeepStrictEqual;
+console.log(eq(new Float64Array([NaN, 1]), new Float64Array([NaN, 1])));
+console.log(eq(new Float64Array([-0]), new Float64Array([0])));
+console.log(eq(new Uint8Array([1]), new Uint16Array([1])));
+const a = new Uint8Array([9, 1, 2, 8]);
+const b = new Uint8Array([1, 2]);
+console.log(eq(a.subarray(1, 3), b), eq(b, a.subarray(1, 3)));
+console.log(eq(new Int16Array([1, -2]), new Int16Array([1, -3])));
+"#;
+
+#[test]
+fn typed_arrays_preserve_element_brand_nan_signed_zero_and_slice_semantics() {
+    assert_output(TYPED_ARRAY_VALUES, "true\nfalse\nfalse\ntrue true\nfalse");
+}
+
+const ERROR_STATE: &str = r#"
+const eq = require('util').isDeepStrictEqual;
+function errorWith(name, value) {
+  const error = new Error('failure');
+  Object.defineProperty(error, name, {value: value, writable: true, configurable: true});
+  return error;
+}
+const a = errorWith('cause', {code: 1});
+const b = errorWith('cause', {code: 1});
+const c = errorWith('cause', {code: 2});
+console.log(eq(a, b), eq(a, c), eq(c, a));
+console.log(eq(errorWith('cause', undefined), new Error('failure')));
+console.log(eq(errorWith('errors', [new Error('one')]), errorWith('errors', [new Error('two')])));
+console.log(eq(errorWith('errors', [new Error('one')]), errorWith('errors', [new Error('one')])));
+"#;
+
+#[test]
+fn error_causes_and_error_lists_compare_even_when_not_enumerable() {
+    assert_output(ERROR_STATE, "true false false\nfalse\nfalse\ntrue");
+}
+
+const OPAQUE_AND_DATE_STATE: &str = r#"
+const eq = require('util').isDeepStrictEqual;
+const key = {};
+const a = new WeakMap([[key, 1]]);
+const b = new WeakMap([[key, 1]]);
+console.log(eq(a, b), eq(b, a), eq(a, a));
+const x = new WeakSet([key]);
+const y = new WeakSet([key]);
+console.log(eq(x, y), eq(y, x), eq(x, x));
+console.log(eq(new Date(7), new Date(7)), eq(new Date(NaN), new Date(NaN)));
+const first = /value/g; first.lastIndex = 1;
+const second = /value/g; second.lastIndex = 2;
+console.log(eq(first, second));
+"#;
+
+#[test]
+fn weak_collections_are_identity_only_and_native_date_state_is_compared() {
+    assert_output(
+        OPAQUE_AND_DATE_STATE,
+        "false false true\nfalse false true\ntrue false\nfalse",
+    );
+}
+
+const BYTE_VIEW_HYGIENE: &str = r#"
+const eq = require('util').isDeepStrictEqual;
+const Uint8Array = 'guest-byte-view';
+const a = new globalThis.Uint8Array([1, 2]).buffer;
+const b = new globalThis.Uint8Array([1, 3]).buffer;
+console.log(eq(a, b), Uint8Array);
+"#;
+
+#[test]
+fn guest_byte_view_bindings_do_not_capture_the_comparison_constructor() {
+    assert_output(BYTE_VIEW_HYGIENE, "false guest-byte-view");
+}
+
+// The Node 22.16.0 comparator overflows on this self-referential cause.
+// This is a termination/correctness invariant, NOT a Node-parity golden.
+const CYCLIC_ERROR_CAUSES: &str = r#"
+const eq = require('util').isDeepStrictEqual;
+const a = new Error('cycle');
+const b = new Error('cycle');
+Object.defineProperty(a, 'cause', {value: a});
+Object.defineProperty(b, 'cause', {value: b});
+console.log(eq(a, b), eq(b, a));
+b.message = 'different';
+console.log(eq(a, b), eq(b, a));
+"#;
+
+#[test]
+fn cyclic_error_causes_terminate_without_hiding_different_messages() {
+    assert_output(CYCLIC_ERROR_CAUSES, "true true\nfalse false");
+}

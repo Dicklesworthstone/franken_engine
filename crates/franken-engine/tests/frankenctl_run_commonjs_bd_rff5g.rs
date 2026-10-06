@@ -410,3 +410,57 @@ console.log(b.Buffer === Buffer, typeof b.atob, b.btoa('hi'), b.kMaxLength, b.co
         ["true function aGk= 9007199254740991 536870888 true true 6869"]
     );
 }
+
+/// A class may extend a class or constructor function of another module
+/// (bd-9vouw.203): `super()` and an implicit constructor construct the parent
+/// in its own module with new.target, as Reflect.construct does. The parent's
+/// function index was looked up in the child module's table, which ran
+/// whatever function had that index: "super() in a base constructor", a
+/// silently missing base initialization (implicit constructor), "function#5
+/// not found (table size 2)" (p-queue extends eventemitter3).
+#[test]
+fn classes_extend_parents_of_other_modules_bd_9vouw_203() {
+    let lines = run_tree(
+        "fe_run_cjs_foreign_parent",
+        &[
+            (
+                "lib/fnbase.js",
+                r#"function Base(x) { this.x = x; }
+Base.prototype.hi = function () { return 'hi' + this.x; };
+module.exports = Base;
+"#,
+            ),
+            (
+                "lib/clsbase.js",
+                r#"class Root { constructor(v) { this.root = v; } }
+class Mid extends Root { constructor(v) { super(v * 10); this.mid = v; } who() { return 'mid'; } }
+module.exports = { Root, Mid };
+"#,
+            ),
+            (
+                "app.js",
+                r#"const Base = require('./lib/fnbase');
+const { Mid } = require('./lib/clsbase');
+class A extends Base { constructor() { super(1); this.y = 2; } }
+class B extends Base {}
+class C extends Mid { field = 'f'; constructor() { super(3); this.c = this.root + this.mid; } }
+class D extends Mid {}
+const a = new A(), b = new B(7), c = new C(), d = new D(4);
+console.log(a.x, a.y, a.hi(), a instanceof Base, a instanceof A);
+console.log(b.x, b.hi(), b instanceof B);
+console.log(c.root, c.mid, c.c, c.field, c.who(), c instanceof Mid);
+console.log(d.root, d.mid, d.who(), Object.getPrototypeOf(D) === Mid);
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        [
+            "1 2 hi1 true true",
+            "7 hi7 true",
+            "30 3 33 f mid true",
+            "40 4 mid true"
+        ]
+    );
+}

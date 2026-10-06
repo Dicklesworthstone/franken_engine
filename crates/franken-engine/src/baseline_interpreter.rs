@@ -46730,12 +46730,43 @@ impl InterpreterCore {
             }
             _ => None,
         };
+        // A parent of another module (`class C extends require('./base')`, a
+        // constructor function from a package) is constructed in its own
+        // module, with new.target, as Reflect.construct does: its function
+        // index means nothing in this module's table, where it ran whatever
+        // function had that index ("super() in a base constructor", a
+        // silently missing base initialization, "function#5 not found")
+        // (bd-9vouw.203).
+        let (builtin_parent_object, foreign_parent_label) = match builtin_parent_object {
+            Some(result) => (Some(result), None),
+            None if matches!(active_callee, Value::Closure(_))
+                && self
+                    .foreign_closure_module(&active_callee, module)?
+                    .is_some() =>
+            {
+                let call_labels = self.clone_isolated_call_labels_from_registers(None, args)?;
+                let arguments = self.call_arguments(args)?;
+                let (result, label) = self.invoke_inline_construct_with_labels(
+                    Some(module),
+                    active_callee.clone(),
+                    arguments,
+                    Some(call_labels),
+                    Some((new_target_value.clone(), new_target_label.clone())),
+                )?;
+                (Some(result), Some(label))
+            }
+            None => (None, None),
+        };
         if let Some(result) = builtin_parent_object {
             let args_label = self.join_arg_range_label(args)?;
             let result_label =
                 self.join_owned_label_with_temporary_budget(args_label, &new_target_label)?;
             let result_label =
                 self.join_owned_label_with_temporary_budget(result_label, &active_callee_label)?;
+            let result_label = match &foreign_parent_label {
+                Some(label) => self.join_owned_label_with_temporary_budget(result_label, label)?,
+                None => result_label,
+            };
             if initialize_derived_this_on_return {
                 let frame =
                     self.call_stack

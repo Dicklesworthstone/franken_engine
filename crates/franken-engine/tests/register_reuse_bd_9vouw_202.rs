@@ -105,3 +105,86 @@ fn large_member_assigned_classes_and_object_literals_run() {
         assert_eq!(lines, ["149 149 299 448"], "{lane:?}");
     }
 }
+
+/// `count` declarations `var e{i} = "s{i}";`, one per line.
+fn string_vars(count: usize) -> String {
+    (0..count)
+        .map(|i| format!("  var e{i} = \"s{i}\";\n"))
+        .collect()
+}
+
+/// The lowered frame sizes of every function of `source` (script goal).
+fn frame_sizes(source: &str) -> Vec<u32> {
+    let tree = CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("source parses");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "register_reuse.js");
+    let context = LoweringContext::new("trace-regs", "decision-regs", "policy-regs");
+    let output = lower_ir0_to_ir3(&ir0, &context).expect("source lowers");
+    output
+        .ir3
+        .function_table
+        .iter()
+        .map(|function| function.frame_size)
+        .collect()
+}
+
+/// bd-9vouw.214: function locals written before they are read take a
+/// register only from their first reference to their last, but nothing
+/// bounded how many were live at once. Rollup inlines an entity table as
+/// thousands of `var Aacute = "..."` in its factory function and reads every
+/// one again in `var entities = { Aacute: Aacute, ... }`; commonmark 0.31
+/// (joi and mathjs too, still failing after bd-9vouw.202) failed at load with
+/// "register 256 out of bounds (max 256)". The locals past the frame's
+/// budget now take the spill route, so frames stay within 256 registers.
+#[test]
+fn simultaneously_live_short_lived_locals_fit_the_frame_bd_9vouw_214() {
+    let entries = |count: usize| {
+        (0..count)
+            .map(|i| format!("e{i}: e{i}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let table = format!(
+        "function entities() {{\n{}  return {{ {} }};\n}}\nconsole.log(Object.keys(entities()).length);\n",
+        string_vars(2200),
+        entries(2200)
+    );
+    let sizes = frame_sizes(&table);
+    assert!(
+        sizes.iter().all(|size| *size <= 256),
+        "frame sizes {sizes:?}"
+    );
+
+    let pushes = (0..300)
+        .map(|i| format!("  out.push(e{i});\n"))
+        .collect::<String>();
+    let source = format!(
+        "function entities() {{\n{decls}  return {{ {entries} }};\n}}\nfunction pushes() {{\n{decls}  var out = [];\n{pushes}  return out;\n}}\nvar o = entities();\nvar a = pushes();\nconsole.log(Object.keys(o).length, o.e299, a.length, a[150]);\n",
+        decls = string_vars(300),
+        entries = entries(300)
+    );
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let package = ExtensionPackage {
+            extension_id: "register-reuse".to_string(),
+            source: source.clone(),
+            source_file: None,
+            module_root: None,
+            capabilities: vec!["builtin".to_string()],
+            version: "1.0.0".to_string(),
+            metadata: Default::default(),
+        };
+        let lines: Vec<String> = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Script,
+            ..OrchestratorConfig::default()
+        })
+        .execute(&package)
+        .unwrap_or_else(|error| panic!("{lane:?}: {error}"))
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect();
+        assert_eq!(lines, ["300 s299 300 s150"], "{lane:?}");
+    }
+}

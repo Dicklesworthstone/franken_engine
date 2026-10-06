@@ -10347,7 +10347,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 _ => None,
             })
             .collect::<BTreeSet<_>>();
-        let fn_short_lived_locals = short_lived_local_release_points(
+        let mut fn_short_lived_locals = short_lived_local_release_points(
             body_ops,
             &register_local_ids
                 .iter()
@@ -10358,6 +10358,28 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 .copied()
                 .collect(),
         );
+        let register_local_ids = register_local_ids
+            .into_iter()
+            .filter(|binding_id| !fn_short_lived_locals.contains_key(binding_id))
+            .collect::<BTreeSet<_>>();
+        // bd-9vouw.214: a short-lived local still holds a register from its
+        // first reference to its release point. Thousands of `var e = "..."`
+        // a later literal reads again (rollup's inlined entity table in
+        // commonmark) were all live at once and ran the frame out of
+        // registers. Those past the frame's local budget, which the pinned
+        // locals' up-front registers share, take the spill route.
+        let overlapping_short_lived_spills = short_lived_overlap_spills(
+            body_ops,
+            &fn_short_lived_locals,
+            (2 * MAX_REGISTER_RESIDENT_FUNCTION_LOCALS).saturating_sub(
+                register_local_ids
+                    .len()
+                    .min(MAX_REGISTER_RESIDENT_FUNCTION_LOCALS),
+            ),
+        );
+        for binding_id in &overlapping_short_lived_spills {
+            fn_short_lived_locals.remove(binding_id);
+        }
         let mut fn_local_releases = BTreeMap::<usize, Vec<BindingId>>::new();
         for (binding_id, last_use) in &fn_short_lived_locals {
             fn_local_releases
@@ -10365,29 +10387,31 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 .or_default()
                 .push(*binding_id);
         }
-        let register_local_ids = register_local_ids
-            .into_iter()
-            .filter(|binding_id| !fn_short_lived_locals.contains_key(binding_id))
-            .collect::<BTreeSet<_>>();
+        let spilled_local_name = |binding_id: &BindingId| {
+            let source_name = local_lexical_binding_by_id
+                .get(binding_id)
+                .map_or(SPILLED_FUNCTION_LOCAL_NAME, |binding| binding.name.as_str());
+            (
+                *binding_id,
+                runtime_lexical_binding_name(*binding_id, source_name),
+            )
+        };
         let spills_locals = register_local_ids.len() > MAX_REGISTER_RESIDENT_FUNCTION_LOCALS;
-        let spilled_local_names = if spills_locals {
+        let mut spilled_local_names = if spills_locals {
             register_local_ids
                 .iter()
                 .filter(|binding_id| !per_iteration_binding_ids.contains(binding_id))
                 .skip(MAX_REGISTER_RESIDENT_FUNCTION_LOCALS)
-                .map(|binding_id| {
-                    let source_name = local_lexical_binding_by_id
-                        .get(binding_id)
-                        .map_or(SPILLED_FUNCTION_LOCAL_NAME, |binding| binding.name.as_str());
-                    (
-                        *binding_id,
-                        runtime_lexical_binding_name(*binding_id, source_name),
-                    )
-                })
+                .map(spilled_local_name)
                 .collect::<BTreeMap<_, _>>()
         } else {
             BTreeMap::new()
         };
+        spilled_local_names.extend(
+            overlapping_short_lived_spills
+                .iter()
+                .map(spilled_local_name),
+        );
         runtime_local_binding_ids.extend(spilled_local_names.keys().copied());
         let runtime_local_id_to_name = runtime_local_binding_ids
             .iter()
@@ -32754,6 +32778,54 @@ fn short_lived_local_release_points(
             }
         })
         .collect()
+}
+
+/// bd-9vouw.214: the short-lived locals (`releases`: release point of each)
+/// that must take the spill route so that at most `capacity` of them hold a
+/// register at once. A local holds its register from its first reference
+/// through its release point. Scanning first references in order, a local
+/// that would exceed the capacity evicts the live one released last
+/// (possibly itself), which spills the fewest locals an interval schedule
+/// allows.
+fn short_lived_overlap_spills(
+    body_ops: &[Ir1Op],
+    releases: &BTreeMap<BindingId, usize>,
+    capacity: usize,
+) -> BTreeSet<BindingId> {
+    if releases.len() <= capacity {
+        return BTreeSet::new();
+    }
+    let mut first_reference = BTreeMap::<BindingId, usize>::new();
+    for (index, op) in body_ops.iter().enumerate() {
+        if let Ir1Op::LoadBinding { binding_id }
+        | Ir1Op::StoreBinding { binding_id }
+        | Ir1Op::InitializeBinding { binding_id } = op
+            && releases.contains_key(binding_id)
+        {
+            first_reference.entry(*binding_id).or_insert(index);
+        }
+    }
+    let mut ranges = first_reference
+        .into_iter()
+        .map(|(binding_id, first)| (first, releases[&binding_id], binding_id))
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+    let mut live = BTreeSet::<(usize, BindingId)>::new();
+    let mut spilled = BTreeSet::new();
+    for (first, release, binding_id) in ranges {
+        while let Some(&(live_release, live_id)) = live.first()
+            && live_release < first
+        {
+            live.remove(&(live_release, live_id));
+        }
+        live.insert((release, binding_id));
+        if live.len() > capacity
+            && let Some(latest) = live.pop_last()
+        {
+            spilled.insert(latest.1);
+        }
+    }
+    spilled
 }
 
 /// bd-9vouw.23: register of a register-resident function local, allocated at

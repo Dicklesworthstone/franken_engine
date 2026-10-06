@@ -1459,6 +1459,15 @@ impl Walk for Rewriter<'_> {
                 };
                 Ok(())
             }
+            // An ImportCall's `import` names no binding, so the object
+            // cannot supply it; only the specifier is rewritten.
+            Expression::Call {
+                callee, arguments, ..
+            } if matches!(callee.as_ref(), Expression::Identifier(name) if name == "import") => {
+                arguments
+                    .iter_mut()
+                    .try_for_each(|argument| self.expression(argument))
+            }
             Expression::Call {
                 callee,
                 arguments,

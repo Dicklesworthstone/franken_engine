@@ -122,7 +122,11 @@ impl HostcallType {
             Self::Promise
         } else if matches!(
             tag,
-            "module:require" | "module:import" | "module.import" | "module_load"
+            "module:require"
+                | "module:import"
+                | "module.import"
+                | "module_load"
+                | crate::capability::DYNAMIC_IMPORT_CAPABILITY
         ) {
             Self::ModuleLoad
         } else if tag.starts_with("number:") || tag.starts_with("builtin:") {

@@ -1066,7 +1066,11 @@ pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<S
 /// can fragment policy and replay records.
 pub(crate) fn capability_gate_key(tag: &str) -> &str {
     match tag {
-        "module:require" | "module:import" | "module.import" | "module_load" => "module_load",
+        "module:require"
+        | "module:import"
+        | "module.import"
+        | "module_load"
+        | crate::capability::DYNAMIC_IMPORT_CAPABILITY => "module_load",
         "builtin:CryptoRandomBytes"
         | "builtin:CryptoRandomUUID"
         | "builtin:CryptoRandomInt"
@@ -37960,6 +37964,18 @@ impl InterpreterCore {
                 specifier: resolved.to_string(),
                 error: error.to_string(),
             })?;
+        // An empty file (or one holding only comments) is a module with no
+        // code and no exports, which Node loads; lowering refuses an empty
+        // body, so it lowers as one empty block.
+        let mut syntax_tree = syntax_tree;
+        if syntax_tree.body.is_empty() {
+            syntax_tree
+                .body
+                .push(crate::ast::Statement::Block(crate::ast::BlockStatement {
+                    body: Vec::new(),
+                    span: syntax_tree.span,
+                }));
+        }
         let ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
         let lowering_ctx =
             LoweringContext::new(&self.trace_id, "module-import", "baseline_interpreter");
@@ -38007,6 +38023,9 @@ impl InterpreterCore {
                     } else {
                         ModuleRuntimeStatus::Evaluated
                     };
+                }
+                if !async_evaluating {
+                    self.sort_module_namespace_keys(resolved);
                 }
                 if async_evaluating {
                     let promise = self
@@ -44167,8 +44186,10 @@ impl InterpreterCore {
                     ModuleRuntimeStatus::Failed(reason) => Some(reason.clone()),
                     _ => None,
                 });
+        let thrown = self.take_nested_module_throw(&result);
         self.restore_module_execution(snapshot, true);
         self.active_cjs_context = previous_cjs_context;
+        self.rearm_nested_module_throw(thrown)?;
         result?;
         if let Some(reason) = async_settlement_failure {
             return Err(InterpreterError::ModuleEvaluationFailed {
@@ -44236,9 +44257,72 @@ impl InterpreterCore {
         } else {
             Ok(())
         };
+        let outcome = eval_outcome.and(finalize_outcome).and(loaded_outcome);
+        let thrown = self.take_nested_module_throw(&outcome);
         self.restore_module_execution(snapshot, true);
         self.active_cjs_context = previous_cjs_context;
-        eval_outcome.and(finalize_outcome).and(loaded_outcome)
+        self.rearm_nested_module_throw(thrown)?;
+        outcome
+    }
+
+    /// A module namespace lists its exports in code-unit order of their names
+    /// (ES2020 9.4.6.11 [[OwnPropertyKeys]]); they register while the module
+    /// evaluates, so the namespace is put in that order once it has finished.
+    fn sort_module_namespace_keys(&mut self, specifier: &str) {
+        let Some(namespace) = self
+            .module_state
+            .modules
+            .get(specifier)
+            .map(|record| record.namespace_object)
+        else {
+            return;
+        };
+        self.mutate_heap(|heap| {
+            let Some(object) = heap.get_mut(namespace.0 as usize) else {
+                return;
+            };
+            let mut entries: Vec<(Vec<u16>, JsString, Value)> = object
+                .properties
+                .exact_entries()
+                .into_iter()
+                .map(|(key, value)| (key.code_units_vec(), key, value.clone()))
+                .collect();
+            if entries.is_sorted_by(|a, b| a.0 <= b.0) {
+                return;
+            }
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            object.properties.clear();
+            for (_, key, value) in entries {
+                object.properties.insert_exact(key, value);
+            }
+        });
+    }
+
+    /// The value a nested module evaluation threw, taken from its pending-
+    /// exception slot before the importer's execution is restored, which
+    /// would discard it.
+    fn take_nested_module_throw<T>(
+        &mut self,
+        outcome: &Result<T, InterpreterError>,
+    ) -> Option<(Value, Label)> {
+        if matches!(outcome, Err(InterpreterError::UncaughtException { .. })) {
+            self.take_pending_exception_slot()
+        } else {
+            None
+        }
+    }
+
+    /// Re-arm a nested module's thrown value as the importer's pending
+    /// exception, so `try { require(m) } catch (e)` and an ImportCall's
+    /// rejection receive the value itself rather than its description.
+    fn rearm_nested_module_throw(
+        &mut self,
+        thrown: Option<(Value, Label)>,
+    ) -> Result<(), InterpreterError> {
+        match thrown {
+            Some(slot) => self.replace_pending_abrupt_slots(Some(slot), None),
+            None => Ok(()),
+        }
     }
 
     fn run_nested_module_execution(&mut self, module: &Ir3Module) -> Result<(), InterpreterError> {
@@ -45636,15 +45720,16 @@ impl InterpreterCore {
             })?;
         match outcome {
             Ok(_) => {
+                // Static importers ignore the fulfillment value; an `import()`
+                // of the module follows this promise to its namespace.
+                self.sort_module_namespace_keys(specifier);
+                let mut namespace = crate::object_model::JsValue::Undefined;
                 if let Some(record) = self.module_state.modules.get_mut(specifier) {
                     record.status = ModuleRuntimeStatus::Evaluated;
                     record.async_execution = None;
+                    namespace = Self::value_to_js_value(&Value::Object(record.namespace_object));
                 }
-                self.fulfill_promise(
-                    evaluation_promise,
-                    crate::object_model::JsValue::Undefined,
-                    label,
-                )
+                self.fulfill_promise(evaluation_promise, namespace, label)
             }
             Err(error) => {
                 let reason = Self::promise_rejection_from_error(&error);
@@ -65307,7 +65392,11 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         let args_hash = self.hostcall_arguments_hash(args);
-        let outcome = self.dispatch_import_hostcall_inner(args, module);
+        let outcome = if capability == crate::capability::DYNAMIC_IMPORT_CAPABILITY {
+            self.dynamic_import(args, module)
+        } else {
+            self.dispatch_import_hostcall_inner(args, module)
+        };
         // See `dispatch_require_hostcall`: nested module evaluation records
         // inner completions first, so the outer record takes its timestamp at
         // completion as well.
@@ -65338,6 +65427,143 @@ impl InterpreterCore {
             details: "module import hostcall missing module context".to_string(),
         })?;
         self.import_module(module, &specifier)
+    }
+
+    /// `import(specifier)` (ES2020 12.3.10.1 with HostImportModuleDynamically
+    /// and FinishDynamicImport, 15.2.1.17-18): a new promise fulfilled with
+    /// the module's namespace object, or rejected with what ToString of the
+    /// specifier, resolution or evaluation threw. A guest-catchable failure
+    /// never throws at the call site; engine faults, resource limits and
+    /// lowering refusals end the run, as they do for a static import.
+    ///
+    /// The module resolves against the module containing the call and loads
+    /// through the static import's loader, cache and pre-import hook before
+    /// the call returns; only the promise settles later, through its reaction
+    /// jobs. (Node's loader is asynchronous, so there the imported module's
+    /// top-level code runs after the importer's current job instead.)
+    fn dynamic_import(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::InternalError {
+            details: "module:dynamic_import hostcall missing module context".to_string(),
+        })?;
+        let specifier_label = self.join_arg_range_label(args)?;
+        self.pending_async_module_import = None;
+        let outcome = self.dynamic_import_namespace(module, args);
+        let async_evaluation = self.pending_async_module_import.take();
+        let promise = self.create_promise()?;
+        match outcome {
+            Ok(namespace) => {
+                let label = hostcall_result_contract(crate::capability::DYNAMIC_IMPORT_CAPABILITY)
+                    .result_label(&specifier_label, None);
+                // A module still suspended at a top-level await fulfills its
+                // evaluation promise with its namespace (or rejects it), so
+                // following that promise settles this one when it finishes.
+                let value = match async_evaluation {
+                    Some((_, evaluation_promise)) => Value::Promise(evaluation_promise.0),
+                    None => namespace,
+                };
+                self.resolve_promise_with_value(Some(module), promise, value, label)?;
+            }
+            Err(error) => {
+                let (reason, label) = self.dynamic_import_rejection(error, &specifier_label)?;
+                self.reject_promise(promise, reason, label)?;
+            }
+        }
+        Ok(Value::Promise(promise.0))
+    }
+
+    /// Load the module an ImportCall names and return its namespace. The
+    /// format is Node's: `.mjs` is an ES module, `.cjs` (and `.json`)
+    /// CommonJS, and any other file follows its package.json `"type"` or its
+    /// syntax, so a CommonJS module's namespace holds `default:
+    /// module.exports` beside its own properties.
+    fn dynamic_import_namespace(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let specifier = self.builtin_search_js_string(module, args, 0)?;
+        let specifier = Self::utf8_module_specifier(&specifier)?;
+        self.run_pre_import_hook(module, specifier)?;
+        // bd-j8f7q: a unit lowered under the bounded-imports contract assumed
+        // every ImportCall yields at most IFC_BOUNDED_IMPORT_LABEL, whatever
+        // its specifier, so the module is checked against the bound before it
+        // runs; a core module has no code to check and is not loaded.
+        let import_bound = Self::unit_declares_bounded_imports(module)
+            .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
+        if import_bound.is_some()
+            && !crate::lowering_pipeline::is_bounded_import_specifier(specifier)
+        {
+            return Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(
+                    "a core module is opaque to the bounded-imports contract".to_string(),
+                ),
+            });
+        }
+        let resolved = self.resolve_module_specifier(specifier)?;
+        let extension = Path::new(&resolved)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        let is_cjs = match extension.as_deref() {
+            Some("mjs") => false,
+            Some("cjs" | "json") => true,
+            _ => !self.required_js_is_esm(&resolved),
+        };
+        self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref())
+    }
+
+    /// The rejection reason of a failed ImportCall: the value a guest throw
+    /// left in the pending-exception slot, a JS error for a catchable native
+    /// fault, or an `Error` for a module that cannot be found (code
+    /// `ERR_MODULE_NOT_FOUND`, as Node's loader reports), read or evaluated.
+    /// Any other failure is not the guest's to catch and is returned as is.
+    fn dynamic_import_rejection(
+        &mut self,
+        error: InterpreterError,
+        specifier_label: &Label,
+    ) -> Result<(crate::object_model::JsValue, Label), InterpreterError> {
+        let thrown = match error {
+            InterpreterError::UncaughtException { .. } => {
+                return match self.take_pending_exception_slot() {
+                    Some((thrown, thrown_label)) => Ok((
+                        self.promise_value(&thrown)?,
+                        thrown_label.join(specifier_label),
+                    )),
+                    None => Ok((
+                        Self::promise_rejection_from_error(&error),
+                        specifier_label.clone(),
+                    )),
+                };
+            }
+            InterpreterError::ModuleResolutionFailed { specifier, reason } => {
+                let failure = self.throw_module_not_found(&specifier, &reason);
+                let Some((thrown, _)) = self.take_pending_exception_slot() else {
+                    return Err(failure);
+                };
+                if let Value::Object(error_id) = &thrown {
+                    self.set_object_property(
+                        *error_id,
+                        "code".to_string(),
+                        Value::str("ERR_MODULE_NOT_FOUND"),
+                    )?;
+                }
+                thrown
+            }
+            native @ (InterpreterError::ModuleReadFailed { .. }
+            | InterpreterError::ModuleEvaluationFailed { .. }) => {
+                self.native_error_to_thrown_value(&native)?
+            }
+            native if Self::js_catchable_error_name(&native).is_some() => {
+                self.native_error_to_thrown_value(&native)?
+            }
+            other => return Err(other),
+        };
+        Ok((self.promise_value(&thrown)?, specifier_label.clone()))
     }
 
     fn dispatch_promise_hostcall_inner(

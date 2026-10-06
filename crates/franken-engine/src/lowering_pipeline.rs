@@ -700,7 +700,7 @@ pub fn lower_ir0_to_ir3(
         // against the imported module's own ceiling before running it. A unit
         // without a local import is refused exactly as before.
         Err(refusal @ LoweringPipelineError::UnauthorizedFlow { .. })
-            if ir0_has_local_static_import(ir0) =>
+            if ir0_has_bounded_import(ir0) =>
         {
             lower_ir0_to_ir3_unit(ir0, context, true).map_err(|_| refusal)
         }
@@ -721,11 +721,42 @@ pub fn lower_bounded_import_ir0_to_ir3(
     ir0: &Ir0Module,
     context: &LoweringContext,
 ) -> Result<LoweringPipelineOutput, LoweringPipelineError> {
-    if ir0_has_local_static_import(ir0) {
+    if ir0_has_bounded_import(ir0) {
         lower_ir0_to_ir3_unit(ir0, context, true)
     } else {
         lower_ir0_to_ir3(ir0, context)
     }
+}
+
+/// Whether the unit imports a module the bounded contract covers: statically
+/// (a local file or a package it imports or re-exports) or through an
+/// ImportCall, whose loader enforces the bound on whatever module the
+/// specifier names at run time.
+fn ir0_has_bounded_import(ir0: &Ir0Module) -> bool {
+    ir0_has_local_static_import(ir0) || ir0_has_import_call(ir0)
+}
+
+/// Whether any code of the unit, at any depth, is an ImportCall
+/// (`import(specifier)`).
+fn ir0_has_import_call(ir0: &Ir0Module) -> bool {
+    struct ImportCalls(bool);
+
+    impl with_statement::Walk for ImportCalls {
+        fn expression(&mut self, expression: &mut Expression) -> with_statement::Outcome {
+            if let Expression::Call { callee, .. } = expression
+                && matches!(callee.as_ref(), Expression::Identifier(name) if name == "import")
+            {
+                self.0 = true;
+            }
+            with_statement::walk_expression(self, expression)
+        }
+    }
+
+    let mut calls = ImportCalls(false);
+    let mut body = ir0.tree.body.clone();
+    // The walk visits every statement kind and never fails.
+    let _ = with_statement::Walk::statements(&mut calls, &mut body);
+    calls.0
 }
 
 /// Whether the unit statically imports or re-exports a module the bounded
@@ -15918,6 +15949,35 @@ fn lower_expression_to_ir1_inner(
                     )?;
                 }
                 ops.push(Ir1Op::ConstructSuper {
+                    arg_count: u32::try_from(arguments.len()).map_err(|_| {
+                        LoweringPipelineError::TooManyArguments {
+                            count: arguments.len(),
+                            max: u32::MAX as usize,
+                        }
+                    })?,
+                });
+                return Ok(());
+            }
+            // ImportCall (ES2020 12.3.10): `import(specifier)` evaluates its
+            // arguments in order and returns a promise for the module
+            // namespace. `import` is a reserved word the parser admits only
+            // as this callee, so it never names a binding. The load runs
+            // under the static import's `module_load` authority.
+            if matches!(callee.as_ref(), Expression::Identifier(name) if name == "import") {
+                for argument in arguments {
+                    lower_expression_to_ir1(
+                        argument,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: crate::capability::DYNAMIC_IMPORT_CAPABILITY.to_string(),
                     arg_count: u32::try_from(arguments.len()).map_err(|_| {
                         LoweringPipelineError::TooManyArguments {
                             count: arguments.len(),
@@ -32005,6 +32065,13 @@ fn accumulate_ir1_flow_label_ceiling(
             IFC_BOUNDED_IMPORT_LABEL
         }
         Ir1Op::ImportModule { .. } => Label::TopSecret,
+        // An ImportCall's namespace is bounded like a static import's: in a
+        // bounded unit the interpreter checks whichever module it loads.
+        Ir1Op::HostCall { capability, .. }
+            if bounded_imports && capability == crate::capability::DYNAMIC_IMPORT_CAPABILITY =>
+        {
+            IFC_BOUNDED_IMPORT_LABEL
+        }
         Ir1Op::HostCall { capability, .. } => {
             hostcall_flow_label_ceiling(capability, host_io_exception_provenance)
         }
@@ -32025,7 +32092,11 @@ fn hostcall_flow_label_ceiling(
     // Loading a module executes code this IR does not contain.
     if matches!(
         capability,
-        "module:require" | "module:import" | "module.import" | "module_load"
+        "module:require"
+            | "module:import"
+            | "module.import"
+            | "module_load"
+            | crate::capability::DYNAMIC_IMPORT_CAPABILITY
     ) {
         return Label::TopSecret;
     }

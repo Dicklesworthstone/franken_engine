@@ -286,6 +286,11 @@ pub fn is_language_operation_tag(tag: &str) -> bool {
 /// any other way.
 pub const GENERATOR_PROLOGUE_CAPABILITY: &str = "generator:prologue";
 
+/// HostCall tag of an ImportCall, `import(specifier)` (ES2020 12.3.10). It
+/// loads a module under the same `module_load` authority as a static import
+/// and returns a promise for its namespace instead of the namespace itself.
+pub const DYNAMIC_IMPORT_CAPABILITY: &str = "module:dynamic_import";
+
 /// Resolve one exact HostCall tag to its authority, IFC result contract, and
 /// production dispatcher. Unknown tags return `None`, which makes both the
 /// capability gate and provenance analysis fail high.
@@ -333,7 +338,7 @@ pub fn hostcall_registry_row(tag: &str) -> Option<HostcallRegistryRow<'_>> {
             result_contract_for_authority(RuntimeCapability::ModuleLoad),
             HostcallDispatchBinding::ModuleRequire,
         ),
-        "module:import" | "module.import" | "module_load" => (
+        "module:import" | "module.import" | "module_load" | DYNAMIC_IMPORT_CAPABILITY => (
             Some(RuntimeCapability::ModuleLoad),
             result_contract_for_authority(RuntimeCapability::ModuleLoad),
             HostcallDispatchBinding::ModuleImport,
@@ -2374,6 +2379,12 @@ mod tests {
                 Some(RuntimeCapability::ModuleLoad),
                 HostcallResultContract::SourceFloor(Label::Internal),
                 HostcallDispatchBinding::ModuleRequire,
+            ),
+            (
+                DYNAMIC_IMPORT_CAPABILITY,
+                Some(RuntimeCapability::ModuleLoad),
+                HostcallResultContract::SourceFloor(Label::Internal),
+                HostcallDispatchBinding::ModuleImport,
             ),
             (
                 "promise:then",

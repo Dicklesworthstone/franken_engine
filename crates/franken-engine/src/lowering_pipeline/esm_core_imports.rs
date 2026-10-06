@@ -75,26 +75,15 @@ const FACADE_MODULES: [&str; 14] = [
 ];
 
 /// Named exports that are realm globals, by module.
-const GLOBAL_EXPORTS: [(&str, &[&str]); 4] = [
+const GLOBAL_EXPORTS: [(&str, &[&str]); 3] = [
     ("buffer", &["Buffer", "atob", "btoa"]),
     ("perf_hooks", &["performance"]),
-    (
-        "timers",
-        &[
-            "setTimeout",
-            "clearTimeout",
-            "setInterval",
-            "clearInterval",
-            "setImmediate",
-            "clearImmediate",
-        ],
-    ),
     ("url", &["URL", "URLSearchParams"]),
 ];
 
 /// Modules whose facade lowers member calls on an alias but recognizes no
 /// destructured binding.
-const MEMBER_MODULES: [&str; 5] = ["crypto", "os", "querystring", "timers/promises", "zlib"];
+const MEMBER_MODULES: [&str; 4] = ["crypto", "os", "querystring", "zlib"];
 
 /// Aliases the member rewrite declares. No source text can spell a `%` name.
 const ALIAS_PREFIX: &str = "%core_import_";

@@ -15,10 +15,10 @@
 //! corpus at
 //! `franken_node/crates/franken-node/tests/fixtures/compat_corpus/timers/`.
 //!
-//! Fail-closed contracts kept: a bare/unused `require('timers')` or
-//! `require('timers/promises')` still hits the ambient-authority denial, and
-//! a user binding shadowing a timer global is never reinterpreted as the
-//! builtin.
+//! Literal timer modules are now first-class values, including unused loads.
+//! Loading them schedules nothing; invoking a function still needs Timer
+//! authority. A user binding shadowing a timer global is never reinterpreted
+//! as the builtin.
 //!
 //! franken-core mirror: none. Core has no timer machinery at all (no
 //! `builtin:SetTimeout` dispatch and no bare-global timer call lowering), so
@@ -436,12 +436,10 @@ fn timers_module_clear_timeout_cancels() {
 }
 
 #[test]
-fn unused_timers_require_stays_ambient_refused() {
-    // Fail-closed: a bare/unused alias keeps the ambient-authority denial.
-    let err = eval_err("const timers = require('timers'); console.log('x');");
-    assert!(
-        err.contains("ambient authority violation"),
-        "unused require('timers') must stay ambient-refused, got: {err}"
+fn unused_timers_require_materializes_without_scheduling() {
+    assert_eq!(
+        eval_console("const timers = require('timers'); console.log('x');"),
+        "x"
     );
 }
 
@@ -511,11 +509,10 @@ fn timers_promises_set_interval_yields_value() {
 }
 
 #[test]
-fn unused_timers_promises_require_stays_ambient_refused() {
-    let err = eval_err("const tp = require('timers/promises'); console.log('x');");
-    assert!(
-        err.contains("ambient authority violation"),
-        "unused require('timers/promises') must stay ambient-refused, got: {err}"
+fn unused_timers_promises_require_materializes_without_scheduling() {
+    assert_eq!(
+        eval_console("const tp = require('timers/promises'); console.log('x');"),
+        "x"
     );
 }
 

@@ -61,12 +61,14 @@ const TYPE_TAG_INTRINSIC: &str = "%UtilTypeTag";
 const MODULE_BINDING: &str = "%util_module";
 const EVENTS_MODULE_BINDING: &str = "%events_module";
 const ASSERT_MODULE_BINDING: &str = "%assert_module";
+const TIMERS_MODULE_BINDING: &str = "%timers_module";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PureModule {
     Util,
     Events,
     Assert,
+    Timers,
 }
 
 impl PureModule {
@@ -75,6 +77,7 @@ impl PureModule {
             Self::Util => MODULE_BINDING,
             Self::Events => EVENTS_MODULE_BINDING,
             Self::Assert => ASSERT_MODULE_BINDING,
+            Self::Timers => TIMERS_MODULE_BINDING,
         }
     }
 }
@@ -94,6 +97,9 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         TYPE_TAG_INTRINSIC => Some(UTIL_TYPE_TAG_CAPABILITY),
         "%EventsConstructorRef" => Some("builtin:EventEmitterConstructorRef"),
         "%EventsOnce" => Some("builtin:EventsOnce"),
+        "%TimersPromisesSetTimeout" => Some("builtin:TimersPromisesSetTimeout"),
+        "%TimersPromisesSetImmediate" => Some("builtin:TimersPromisesSetImmediate"),
+        "%TimersPromisesSetInterval" => Some("builtin:TimersPromisesSetInterval"),
         _ => fs_module::intrinsic_capability(name),
     }
 }
@@ -103,6 +109,13 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
 const UTIL_SOURCE: &str = include_str!("util_module.js");
 const EVENTS_SOURCE: &str = include_str!("events_module.js");
 const ASSERT_SOURCE: &str = include_str!("assert_module.js");
+const TIMERS_SOURCE: &str = include_str!("timers_module.js");
+
+const TIMERS_PLACEHOLDERS: [(&str, &str); 3] = [
+    ("__franken_timers_timeout", "%TimersPromisesSetTimeout"),
+    ("__franken_timers_immediate", "%TimersPromisesSetImmediate"),
+    ("__franken_timers_interval", "%TimersPromisesSetInterval"),
+];
 
 // A private dependency, not an ambient HostCall or a public util property.
 const ASSERT_PLACEHOLDERS: [(&str, &str); 1] =
@@ -138,6 +151,10 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Assert, None))
     } else if *specifier == "assert/strict" || *specifier == "node:assert/strict" {
         Some((PureModule::Assert, Some("strict")))
+    } else if *specifier == "timers" || *specifier == "node:timers" {
+        Some((PureModule::Timers, None))
+    } else if *specifier == "timers/promises" || *specifier == "node:timers/promises" {
+        Some((PureModule::Timers, Some("promises")))
     } else {
         None
     }
@@ -172,6 +189,16 @@ const MODULE_GLOBALS: [&str; 14] = [
     "Uint8Array",
 ];
 
+const TIMERS_GLOBALS: [&str; 7] = [
+    "Object",
+    "setTimeout",
+    "clearTimeout",
+    "setImmediate",
+    "clearImmediate",
+    "setInterval",
+    "clearInterval",
+];
+
 const EVENTS_GLOBALS: [&str; 7] = [
     "Array", "Error", "Object", "Promise", "RangeError", "Symbol", "TypeError",
 ];
@@ -195,7 +222,8 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                 [VariableDeclarator {
                     pattern: BindingPattern::Identifier(name),
                     ..
-                }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING || name == ASSERT_MODULE_BINDING
+                }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING
+                    || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
             )
     )
 }
@@ -265,6 +293,7 @@ fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelin
         PureModule::Util => ("franken:util", UTIL_SOURCE),
         PureModule::Events => ("franken:events", EVENTS_SOURCE),
         PureModule::Assert => ("franken:assert", ASSERT_SOURCE),
+        PureModule::Timers => ("franken:timers", TIMERS_SOURCE),
     };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
         detail: "the engine's pure builtin module source failed to parse",
@@ -296,6 +325,7 @@ fn module_source(
         PureModule::Util => &MODULE_GLOBALS,
         PureModule::Events => &EVENTS_GLOBALS,
         PureModule::Assert => &ASSERT_GLOBALS,
+        PureModule::Timers => &TIMERS_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
         through_global_object: globals
@@ -319,6 +349,7 @@ impl Walk for ModuleRenamer {
                 .iter()
                 .chain(EVENTS_PLACEHOLDERS.iter())
                 .chain(ASSERT_PLACEHOLDERS.iter())
+                .chain(TIMERS_PLACEHOLDERS.iter())
                 .find(|(placeholder, _)| placeholder == name)
             {
                 *name = (*intrinsic).to_string();
@@ -724,5 +755,66 @@ mod assert_tests {
             [MODULE_BINDING, TYPE_TAG_INTRINSIC, "globalThis", "arguments"]
                 .into_iter().map(str::to_string).collect()
         );
+    }
+}
+
+#[cfg(test)]
+mod timers_tests {
+    use super::*;
+
+    fn parse(source: &str) -> SyntaxTree {
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource { label: "timers-rewrite.js".into(), text: source.into() },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("source parses")
+    }
+
+    #[test]
+    fn timer_aliases_share_one_private_module_and_do_not_schedule_at_load() {
+        let tree = parse("require('timers'); require('node:timers/promises'); require('timers/promises');");
+        let rewritten = rewrite_util_requires(&tree).expect("rewrite").expect("timer module");
+        assert_eq!(rewritten.body.len(), tree.body.len() + 1);
+        assert!(is_module_declaration(&rewritten.body[0]));
+        assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+    }
+
+    #[test]
+    fn timer_requires_preserve_source_bindings_and_nonliteral_loading() {
+        for source in [
+            "function f(require) { return require('timers'); }",
+            "{ let require = f; require('timers/promises'); }",
+            "for (let require of values) require('node:timers');",
+            "with (scope) require('timers');",
+            "const name = 'timers'; require(name);",
+            "require('timers/unknown');",
+        ] {
+            assert!(rewrite_util_requires(&parse(source)).expect("rewrite").is_none(), "{source}");
+        }
+        assert_eq!(intrinsic_capability("__franken_timers_timeout"), None);
+        for (_, intrinsic) in TIMERS_PLACEHOLDERS {
+            let capability = format!("builtin:{}", &intrinsic[1..]);
+            assert_eq!(intrinsic_capability(intrinsic), Some(capability.as_str()));
+        }
+    }
+
+    #[test]
+    fn timer_source_protects_every_realm_global_it_reads() {
+        let free = super::tests::free_names(
+            &mut parse_module_source(PureModule::Timers).expect("timer source parses"),
+        );
+        let mut expected: BTreeSet<String> = TIMERS_GLOBALS.iter().map(|name| name.to_string()).collect();
+        expected.extend(TIMERS_PLACEHOLDERS.iter().map(|(name, _)| name.to_string()));
+        expected.insert("arguments".to_string());
+        assert_eq!(free, expected);
+        let names = TIMERS_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let protected = super::tests::free_names(
+            &mut module_source(&names, PureModule::Timers).expect("protected source"),
+        );
+        let mut expected: BTreeSet<String> = TIMERS_PLACEHOLDERS.iter().map(|(_, name)| name.to_string()).collect();
+        expected.extend(["globalThis", "arguments"].map(str::to_string));
+        assert_eq!(protected, expected);
     }
 }

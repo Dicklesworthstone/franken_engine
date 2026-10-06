@@ -2506,6 +2506,9 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
     let mut escaped = false;
     let mut last_significant: Option<char> = None;
     let mut trailing_identifier = String::new();
+    // A space or line break ends the identifier being read (`else return
+    // /re/`: the regex follows `return`, not `elsereturn`).
+    let mut trailing_identifier_closed = false;
 
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -2583,6 +2586,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 }
                 Some('*') => {
                     in_block_comment = true;
+                    trailing_identifier_closed = true;
                     push_blanked(&mut out, '/');
                     chars.next();
                     push_blanked(&mut out, '*');
@@ -2620,15 +2624,20 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             }
             ch if ch.is_ascii_whitespace() || is_ecmascript_line_terminator(ch) => {
                 out.push(ch);
+                trailing_identifier_closed = true;
             }
             ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
                 out.push(ch);
+                if trailing_identifier_closed {
+                    trailing_identifier.clear();
+                    trailing_identifier_closed = false;
+                }
                 trailing_identifier.push(ch);
                 last_significant = Some(ch);
             }
             ch if ch.is_ascii_digit() => {
                 out.push(ch);
-                if !trailing_identifier.is_empty() {
+                if !trailing_identifier.is_empty() && !trailing_identifier_closed {
                     trailing_identifier.push(ch);
                 } else {
                     trailing_identifier.clear();
@@ -3334,6 +3343,9 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut last_significant: Option<char> = None;
     let mut trailing_identifier = String::new();
     let mut trailing_identifier_follows_dot = false;
+    // A space or line break ends the identifier being read: the next word is
+    // a new one (`k in`, `async function`), not a continuation (`kin`).
+    let mut trailing_identifier_closed = false;
 
     for (line_idx, physical_line) in physical_lines.iter().copied().enumerate() {
         let line_no = (line_idx as u64).saturating_add(1);
@@ -3533,6 +3545,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             }
         }
 
+        trailing_identifier_closed = true;
         let mut chars = line.chars().peekable();
         while let Some(ch) = chars.next() {
             if in_block_comment {
@@ -3579,6 +3592,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     Some('*') => {
                         chars.next();
                         in_block_comment = true;
+                        trailing_identifier_closed = true;
                     }
                     next_char
                         if merge_logical_lines_slash_starts_regex(
@@ -3641,8 +3655,12 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
-                ch if ch.is_ascii_whitespace() => {}
+                ch if ch.is_ascii_whitespace() => trailing_identifier_closed = true,
                 ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
+                    if trailing_identifier_closed {
+                        trailing_identifier.clear();
+                        trailing_identifier_closed = false;
+                    }
                     if trailing_identifier.is_empty() {
                         trailing_identifier_follows_dot = last_significant == Some('.');
                     }
@@ -3650,7 +3668,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     last_significant = Some(ch);
                 }
                 ch if ch.is_ascii_digit() => {
-                    if !trailing_identifier.is_empty() {
+                    if !trailing_identifier.is_empty() && !trailing_identifier_closed {
                         trailing_identifier.push(ch);
                     } else {
                         trailing_identifier.clear();

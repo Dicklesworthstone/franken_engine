@@ -73,6 +73,17 @@ fn a_line_ending_with_an_operator_keyword_continues_bd_9vouw_195() {
     assert_eq!(run(source), ["1 true 2 true"]);
 }
 
+/// bd-9vouw.195 follow-up: the line scanners read a word after a space as a
+/// word of its own. They appended it to the word before (`k in` was `kin`,
+/// `else return` was `elsereturn`), so `var t = k in` ended its line (the
+/// .195 unit test failed in finalgate21/22) and the regex after
+/// `else return` was read as a division.
+#[test]
+fn a_keyword_after_a_space_is_read_alone_bd_9vouw_195() {
+    let source = "function f(s) { if (!s) return 0; else return /b+/.test(s) ? 2 : 1 }\nfunction g() { return new\nDate(0).getTime() }\nvar k = 'v', o = { v: 1 }\nvar t = k in\n  o\nconsole.log(f(''), f('abb'), f('a'), g(), t)\n";
+    assert_eq!(run(source), ["0 2 1 0 true"]);
+}
+
 #[test]
 fn a_do_statement_in_an_else_clause_keeps_its_condition_bd_9vouw_196() {
     // The last if statement's `while` on the next line is a loop of its own.

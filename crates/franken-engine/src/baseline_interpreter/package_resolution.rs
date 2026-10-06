@@ -223,8 +223,7 @@ fn read_package_manifest_file(path: &Path) -> Result<PackageManifest, String> {
             path.display()
         ));
     }
-    serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid {}: {error}", path.display()))
+    serde_json::from_slice(&bytes).map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
 /// Split a bare specifier into its package name (`name` or `@scope/name`)
@@ -518,7 +517,10 @@ impl InterpreterCore {
             reason: ModuleResolutionFailureReason::Other(reason),
         };
         let canonical = path.canonicalize().map_err(|error| {
-            failed(format!("failed to canonicalize {}: {error}", path.display()))
+            failed(format!(
+                "failed to canonicalize {}: {error}",
+                path.display()
+            ))
         })?;
         self.canonicalize_module_candidate(specifier, &canonical)?;
         read_package_manifest_file(&canonical)
@@ -895,7 +897,8 @@ mod tests {
             "module.exports = 5;",
         );
         let mut core = package_test_core(root.path());
-        core.current_module_specifier = Some(root.path().join("app/entry.mjs").display().to_string());
+        core.current_module_specifier =
+            Some(root.path().join("app/entry.mjs").display().to_string());
         assert_package_path(
             core.resolve_bare_require_specifier("legacy/missing.js"),
             &root.path().join("node_modules/legacy/missing.js"),

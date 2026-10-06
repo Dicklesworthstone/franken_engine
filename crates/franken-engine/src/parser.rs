@@ -14379,6 +14379,21 @@ fn parse_class_field(
 /// declares a field rather than a method: a method's key is followed by its
 /// parameter list, a field's by `=`, `;`, or nothing at all.
 fn class_member_is_field(member: &str) -> bool {
+    // ASI (bd-9vouw.230): a key followed by a line break and then anything
+    // but `(` (a method's parameters) or `=` (an initializer) ends a field
+    // declaration, since the next token cannot continue the element:
+    // `x <LF> m() {}` and `#y <LF> m() {}` are a field and a method. A private
+    // key arrives already removed, so `member` starts at that line break.
+    let ends_at_line_break = |after_key: &str| {
+        after_key
+            .trim_start_matches([' ', '\t'])
+            .starts_with(['\n', '\r', '\u{2028}', '\u{2029}'])
+            && !after_key.trim_start().is_empty()
+            && !after_key.trim_start().starts_with(['(', '='])
+    };
+    if ends_at_line_break(member) {
+        return true;
+    }
     let member = member.trim_start();
     let after_key = match member.chars().next() {
         Some(quote @ ('\'' | '"')) => member[1..]
@@ -14388,6 +14403,13 @@ fn class_member_is_field(member: &str) -> bool {
         // braces are not a method body.
         _ => skip_identifier_name(member),
     };
+    // `get`, `set` and `static` continue across a line break (`get <LF> x()
+    // {}` is a getter); `async` does not (no LineTerminator after it).
+    let key = &member[..member.len() - after_key.len()];
+    if !matches!(key, "get" | "set" | "static") && !key.is_empty() && ends_at_line_break(after_key)
+    {
+        return true;
+    }
     // Look past a computed key: in `get [x = 1]() {}` or `[k = 'm']() {}` the
     // `=` belongs to the key expression, not to a field initializer.
     let mut bracket_depth = 0usize;

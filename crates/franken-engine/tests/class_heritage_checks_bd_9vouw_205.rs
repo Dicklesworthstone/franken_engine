@@ -72,3 +72,24 @@ fn numeric_literal_class_and_pattern_keys_are_canonical_bd_9vouw_228() {
         ["b e h d n o s", "x get 2 false", "m f i big 16", "A B C"]
     );
 }
+
+/// bd-9vouw.230: a class field with neither initializer nor semicolon ends at
+/// a line break when the next token cannot continue it (ASI): a public or
+/// private field before a method, two private fields, a static private
+/// field, a private method and a getter after them, and a field named
+/// `async`. `get` still continues across the line break (a getter), as do an
+/// initializer and a parameter list on the next line. The public field
+/// swallowed the method silently and the private ones failed to parse.
+/// Node v22.2.0 prints this line; Bun 1.4.2 agrees.
+#[test]
+fn class_fields_end_at_a_line_break_before_the_next_element_bd_9vouw_230() {
+    let source = "class A {\n  x\n  m() { return 42; }\n}\nclass B {\n  #x\n  #y\n  static #s\n  m() { return [this.#x, this.#y, B.#s].length; }\n  #p() { return 3; }\n  get g() { return this.#p(); }\n  static s() { return 's'; }\n}\nclass D {\n  async\n  m() { return 'm'; }\n  get\n  h() { return 'h'; }\n  x\n  = 7\n  y\n  (a) { return a; }\n}\nconst a = new A(), b = new B(), d = new D();\nconsole.log(a.m(), 'x' in a, b.m(), b.g, B.s(), 'async' in d, d.m(), d.h, d.x, d.y(9));\n";
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(lines, ["42 true 3 3 s true m h 7 9"]);
+}

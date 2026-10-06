@@ -283,6 +283,19 @@ fn is_builtin_require_callee(binding_lookup: &BTreeMap<String, BindingId>, name:
     }
 }
 
+/// Whether `require` here is the authenticated CommonJS wrapper binding
+/// (bd-rff5g), whose call reaches the runtime loader, rather than the ambient
+/// name a script would refuse.
+fn require_is_commonjs_wrapper(binding_lookup: &BTreeMap<String, BindingId>) -> bool {
+    let Some(&injected) = binding_lookup.get(CANONICAL_COMMONJS_REQUIRE_SENTINEL) else {
+        return false;
+    };
+    match binding_lookup.get("require") {
+        Some(&visible) => visible == injected,
+        None => binding_lookup.get(&capture_origin_sentinel("require")) == Some(&injected),
+    }
+}
+
 fn is_internal_lowering_binding(name: &str) -> bool {
     name.starts_with('<') || name.starts_with("@@franken_internal_") || name.starts_with('\0')
 }
@@ -5009,8 +5022,14 @@ fn lower_statement_to_ir1_with_flow(
                             || (is_require_querystring_module_initializer(init, binding_lookup)
                                 && binding_lookup
                                     .contains_key(&querystring_module_alias_sentinel(alias)))
+                            // Under the CommonJS wrapper `require('os')` runs:
+                            // the loader returns the engine's os module
+                            // (bd-9vouw.204), so `typeof os` and
+                            // `Object.keys(os)` see it, while the recognized
+                            // members still lower to their hostcalls.
                             || (is_require_os_module_initializer(init, binding_lookup)
-                                && binding_lookup.contains_key(&os_module_alias_sentinel(alias)))
+                                && binding_lookup.contains_key(&os_module_alias_sentinel(alias))
+                                && !require_is_commonjs_wrapper(binding_lookup))
                             || (is_require_zlib_module_initializer(init, binding_lookup)
                                 && binding_lookup
                                     .contains_key(&zlib_module_alias_sentinel(alias)))

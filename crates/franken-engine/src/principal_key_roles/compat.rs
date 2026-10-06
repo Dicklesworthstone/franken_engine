@@ -295,6 +295,14 @@ impl OwnerKeyBundle {
         )
     }
 
+    /// Canonical bytes the owner signature covers, as
+    /// [`OwnerKeyBundleV2`](super::OwnerKeyBundleV2) exposes them through
+    /// `SignaturePreimage::preimage_bytes`.
+    #[must_use]
+    pub fn preimage_bytes(&self) -> Vec<u8> {
+        self.signature_preimage_bytes()
+    }
+
     /// Build the signature preimage for this bundle.
     fn signature_preimage_bytes(&self) -> Vec<u8> {
         let mut fields = BTreeMap::new();

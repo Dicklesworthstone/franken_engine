@@ -22,26 +22,27 @@
 //! engine's builtins, so labels and authority work as for user code.
 //!
 //! A `require` the program declares in an enclosing scope (a parameter, a
-//! local function) is its own and is called as written. The filesystem facade
-//! shares these hooks through `fs_module`; other unsupported specifiers and
-//! `require` as a value keep the ambient-authority refusal.
+//! local function) is its own and is called as written. The same pure-module
+//! lowering hook also materializes `events` over the native EventEmitter
+//! constructor and EventsOnce hostcall (bd-305gi). No filesystem/module-load
+//! authority is introduced. The filesystem facade shares these hooks through
+//! `fs_module`; its methods retain their native fs:read/fs:write checks.
+//! Other specifiers and `require` as a value keep their existing authority checks.
 
 use std::collections::BTreeSet;
 
-// Both facades share the existing engine-owned syntax and intrinsic hooks.
-// Filesystem methods carry no authority themselves: their native HostCalls
-// still require the caller's FsRead/FsWrite capability at invocation.
+// Filesystem methods retain the caller's FsRead/FsWrite checks at invocation.
 #[path = "fs_module.rs"]
 mod fs_module;
 
 use super::LoweringPipelineError;
 use super::with_statement::{
-    FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_expression,
-    walk_function, walk_switch_cases,
+    FunctionBody, FunctionParts, Outcome, Search, Walk, lexical_names, var_names, walk_class,
+    walk_expression, walk_function, walk_statement, walk_switch_cases,
 };
 use crate::ast::{
-    BindingPattern, CatchClause, Expression, ParseGoal, SourceSpan, Statement, SwitchCase,
-    SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    BindingPattern, CatchClause, Expression, MethodDefinition, ParseGoal, SourceSpan, Statement,
+    SwitchCase, SyntaxTree, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
 };
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 
@@ -58,6 +59,22 @@ const TYPE_TAG_INTRINSIC: &str = "%UtilTypeTag";
 
 /// The program binding that caches the module object.
 const MODULE_BINDING: &str = "%util_module";
+const EVENTS_MODULE_BINDING: &str = "%events_module";
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PureModule {
+    Util,
+    Events,
+}
+
+impl PureModule {
+    fn binding(self) -> &'static str {
+        match self {
+            Self::Util => MODULE_BINDING,
+            Self::Events => EVENTS_MODULE_BINDING,
+        }
+    }
+}
 
 /// UTIL_SOURCE spells the intrinsics with these names, which the parser
 /// accepts, and the rewrite renames them to their `%` forms.
@@ -72,6 +89,8 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         INSPECT_INTRINSIC => Some(UTIL_INSPECT_CAPABILITY),
         FORMAT_INTRINSIC => Some(UTIL_FORMAT_CAPABILITY),
         TYPE_TAG_INTRINSIC => Some(UTIL_TYPE_TAG_CAPABILITY),
+        "%EventsConstructorRef" => Some("builtin:EventEmitterConstructorRef"),
+        "%EventsOnce" => Some("builtin:EventsOnce"),
         _ => fs_module::intrinsic_capability(name),
     }
 }
@@ -79,11 +98,16 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
 /// The module object, built once per program.
 // Keep the executable source in one place for native lowering and differential tests.
 const UTIL_SOURCE: &str = include_str!("util_module.js");
+const EVENTS_SOURCE: &str = include_str!("events_module.js");
 
-/// For `require(specifier)` with a util specifier, whatever `require`
-/// names: `Some(None)` for the module (`util`, `node:util`), `Some(Some(m))`
-/// for a subpath that is the module's member `m` (`util/types`).
-fn util_require_member(expression: &Expression) -> Option<Option<&'static str>> {
+const EVENTS_PLACEHOLDERS: [(&str, &str); 2] = [
+    ("__franken_events_constructor", "%EventsConstructorRef"),
+    ("__franken_events_once", "%EventsOnce"),
+];
+
+/// Recognize a literal pure-builtin request before resolving the `require`
+/// binding. The optional member selects util's `types` submodule.
+fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option<&'static str>)> {
     let Expression::Call {
         callee, arguments, ..
     } = expression
@@ -97,21 +121,23 @@ fn util_require_member(expression: &Expression) -> Option<Option<&'static str>> 
         return None;
     };
     if *specifier == "util" || *specifier == "node:util" {
-        Some(None)
+        Some((PureModule::Util, None))
     } else if *specifier == "util/types" || *specifier == "node:util/types" {
-        Some(Some("types"))
+        Some((PureModule::Util, Some("types")))
+    } else if *specifier == "events" || *specifier == "node:events" {
+        Some((PureModule::Events, None))
     } else {
         None
     }
 }
 
-fn is_util_require_call(expression: &Expression) -> bool {
-    util_require_member(expression).is_some()
+fn is_builtin_require_call(expression: &Expression) -> bool {
+    builtin_require_member(expression).is_some()
 }
 
-const UTIL_REQUIRE_SEARCH: Search = Search {
+const BUILTIN_REQUIRE_SEARCH: Search = Search {
     statement: |_| false,
-    expression: is_util_require_call,
+    expression: is_builtin_require_call,
 };
 
 /// The standard globals UTIL_SOURCE reads by name. A program that declares
@@ -134,6 +160,10 @@ const MODULE_GLOBALS: [&str; 14] = [
     "Uint8Array",
 ];
 
+const EVENTS_GLOBALS: [&str; 7] = [
+    "Array", "Error", "Object", "Promise", "RangeError", "Symbol", "TypeError",
+];
+
 /// `const %util_module = <module>;`, which the rewrite puts first in the
 /// program. Its initializer runs only engine-owned code.
 pub(super) fn is_module_declaration(statement: &Statement) -> bool {
@@ -148,13 +178,14 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                 [VariableDeclarator {
                     pattern: BindingPattern::Identifier(name),
                     ..
-                }] if name == MODULE_BINDING
+                }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING
             )
     )
 }
 
-/// `tree` with every free `require('util')` rewritten to the module, or
-/// `None` when it has none.
+/// Materialize the requested pure builtin modules through the existing
+/// lowering hook. Each is initialized once per program; shadowed `require`
+/// calls and nonliteral specifiers are not rewritten.
 pub(super) fn rewrite_util_requires(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
@@ -163,50 +194,63 @@ pub(super) fn rewrite_util_requires(
     if !tree
         .body
         .iter()
-        .any(|statement| UTIL_REQUIRE_SEARCH.in_statement(statement))
+        .any(|statement| BUILTIN_REQUIRE_SEARCH.in_statement(statement))
     {
         return Ok(fs_rewritten);
     }
     let mut root = BTreeSet::new();
     var_names(&tree.body, &mut root);
     lexical_names(&tree.body, &mut root);
+    for statement in &tree.body {
+        if let Statement::Import(import) = statement {
+            root.extend(
+                import.clause.binding_names().into_iter().map(str::to_string),
+            );
+        }
+    }
     let mut rewritten = tree.clone();
-    let mut rewriter = UtilRewriter {
+    let mut rewriter = BuiltinRewriter {
         scopes: vec![root.clone()],
-        replaced: 0,
+        modules: BTreeSet::new(),
     };
     rewriter.statements(&mut rewritten.body)?;
-    if rewriter.replaced == 0 {
+    if rewriter.modules.is_empty() {
         return Ok(fs_rewritten);
     }
     let span = rewritten.body.first().map_or_else(
         || SourceSpan::new(0, 0, 1, 1, 1, 1),
         |statement| *statement.span(),
     );
-    rewritten.body.insert(
-        0,
-        Statement::VariableDeclaration(VariableDeclaration {
+    let mut declarations = Vec::new();
+    for module in rewriter.modules {
+        declarations.push(Statement::VariableDeclaration(VariableDeclaration {
             kind: VariableDeclarationKind::Const,
             declarations: vec![VariableDeclarator {
-                pattern: BindingPattern::Identifier(MODULE_BINDING.to_string()),
-                initializer: Some(module_source(&root)?),
+                pattern: BindingPattern::Identifier(module.binding().to_string()),
+                initializer: Some(module_source(&root, module)?),
                 span,
             }],
             span,
-        }),
-    );
+        }));
+    }
+    declarations.append(&mut rewritten.body);
+    rewritten.body = declarations;
     Ok(Some(rewritten))
 }
 
-fn parse_module_source() -> Result<Expression, LoweringPipelineError> {
+fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelineError> {
+    let (label, source) = match module {
+        PureModule::Util => ("franken:util", UTIL_SOURCE),
+        PureModule::Events => ("franken:events", EVENTS_SOURCE),
+    };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
-        detail: "the engine's util module source failed to parse",
+        detail: "the engine's pure builtin module source failed to parse",
     };
     let tree = CanonicalEs2020Parser
         .parse_with_options(
             ParserSource {
-                label: "franken:util".into(),
-                text: UTIL_SOURCE.into(),
+                label: label.into(),
+                text: source.into(),
             },
             ParseGoal::Script,
             &ParserOptions::default(),
@@ -220,10 +264,17 @@ fn parse_module_source() -> Result<Expression, LoweringPipelineError> {
 
 /// UTIL_SOURCE parsed, with its intrinsics renamed and the globals the
 /// program declares (`program_names`) read through `globalThis`.
-fn module_source(program_names: &BTreeSet<String>) -> Result<Expression, LoweringPipelineError> {
-    let mut expression = parse_module_source()?;
+fn module_source(
+    program_names: &BTreeSet<String>,
+    module: PureModule,
+) -> Result<Expression, LoweringPipelineError> {
+    let mut expression = parse_module_source(module)?;
+    let globals: &[&str] = match module {
+        PureModule::Util => &MODULE_GLOBALS,
+        PureModule::Events => &EVENTS_GLOBALS,
+    };
     let mut renamer = ModuleRenamer {
-        through_global_object: MODULE_GLOBALS
+        through_global_object: globals
             .iter()
             .filter(|name| program_names.contains(**name))
             .map(|name| (*name).to_string())
@@ -242,6 +293,7 @@ impl Walk for ModuleRenamer {
         if let Expression::Identifier(name) = expression {
             if let Some((_, intrinsic)) = PLACEHOLDERS
                 .iter()
+                .chain(EVENTS_PLACEHOLDERS.iter())
                 .find(|(placeholder, _)| placeholder == name)
             {
                 *name = (*intrinsic).to_string();
@@ -260,13 +312,13 @@ impl Walk for ModuleRenamer {
     }
 }
 
-struct UtilRewriter {
+struct BuiltinRewriter {
     /// Names declared in each enclosing scope, innermost last.
     scopes: Vec<BTreeSet<String>>,
-    replaced: usize,
+    modules: BTreeSet<PureModule>,
 }
 
-impl UtilRewriter {
+impl BuiltinRewriter {
     fn scoped(
         &mut self,
         names: BTreeSet<String>,
@@ -278,12 +330,12 @@ impl UtilRewriter {
         outcome
     }
 
-    /// `util_require_member` when `require` is the global one.
-    fn util_require(&self, expression: &Expression) -> Option<Option<&'static str>> {
+    /// Recognize builtin requests only when `require` is the free name.
+    fn builtin_require(&self, expression: &Expression) -> Option<(PureModule, Option<&'static str>)> {
         if self.scopes.iter().any(|scope| scope.contains("require")) {
             return None;
         }
-        util_require_member(expression)
+        builtin_require_member(expression)
     }
 }
 
@@ -334,12 +386,50 @@ macro_rules! scoped_walk {
 
 pub(super) use scoped_walk;
 
-impl Walk for UtilRewriter {
+impl Walk for BuiltinRewriter {
     scoped_walk!();
 
+    fn statement(&mut self, statement: &mut Statement) -> Outcome {
+        let mut names = BTreeSet::new();
+        match statement {
+            Statement::For(for_statement) => {
+                if let Some(initializer) = &for_statement.init {
+                    let initializer: &Statement = initializer;
+                    lexical_names(std::slice::from_ref(initializer), &mut names);
+                }
+            }
+            Statement::ForIn(for_statement) => {
+                names.extend(
+                    for_statement.binding.binding_names().into_iter().map(str::to_string),
+                );
+            }
+            Statement::ForOf(for_statement) => {
+                names.extend(
+                    for_statement.binding.binding_names().into_iter().map(str::to_string),
+                );
+            }
+            // A dynamic object environment can supply its own require.
+            Statement::With(_) => {
+                names.insert("require".to_string());
+            }
+            _ => {}
+        }
+        self.scoped(names, |walker| walk_statement(walker, statement))
+    }
+
+    fn class(
+        &mut self,
+        name: Option<&str>,
+        super_class: Option<&mut Expression>,
+        body: &mut [MethodDefinition],
+    ) -> Outcome {
+        let names = name.map(str::to_string).into_iter().collect();
+        self.scoped(names, |walker| walk_class(walker, super_class, body))
+    }
+
     fn expression(&mut self, expression: &mut Expression) -> Outcome {
-        if let Some(member) = self.util_require(expression) {
-            let module = Expression::Identifier(MODULE_BINDING.to_string());
+        if let Some((kind, member)) = self.builtin_require(expression) {
+            let module = Expression::Identifier(kind.binding().to_string());
             *expression = match member {
                 None => module,
                 Some(member) => Expression::Member {
@@ -349,7 +439,7 @@ impl Walk for UtilRewriter {
                     span: None,
                 },
             };
-            self.replaced += 1;
+            self.modules.insert(kind);
             return Ok(());
         }
         walk_expression(self, expression)
@@ -398,7 +488,7 @@ mod tests {
         }
     }
 
-    fn free_names(expression: &mut Expression) -> BTreeSet<String> {
+    pub(super) fn free_names(expression: &mut Expression) -> BTreeSet<String> {
         let mut walker = FreeNames {
             scopes: Vec::new(),
             free: BTreeSet::new(),
@@ -415,7 +505,7 @@ mod tests {
             MODULE_GLOBALS.iter().map(|name| name.to_string()).collect();
         expected.extend(PLACEHOLDERS.iter().map(|(name, _)| name.to_string()));
         expected.insert("arguments".to_string());
-        let free = free_names(&mut parse_module_source().expect("parses"));
+        let free = free_names(&mut parse_module_source(PureModule::Util).expect("parses"));
         assert_eq!(free, expected);
     }
 
@@ -426,12 +516,109 @@ mod tests {
         let names = ["TextEncoder".to_string(), "unrelated".to_string()]
             .into_iter()
             .collect();
-        let free = free_names(&mut module_source(&names).expect("builds"));
+        let free = free_names(&mut module_source(&names, PureModule::Util).expect("builds"));
         assert!(!free.contains("TextEncoder"), "{free:?}");
         assert!(
             free.contains("TextDecoder") && free.contains("globalThis"),
             "{free:?}"
         );
         assert!(free.contains("%UtilInspect"), "{free:?}");
+    }
+}
+
+#[cfg(test)]
+mod events_tests {
+    use super::*;
+
+    fn parse(source: &str, goal: ParseGoal) -> SyntaxTree {
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "events-rewrite.js".into(),
+                    text: source.into(),
+                },
+                goal,
+                &ParserOptions::default(),
+            )
+            .expect("test source parses")
+    }
+
+    #[test]
+    fn only_literal_unshadowed_builtin_calls_are_materialized() {
+        for source in [
+            "function f(require) { return require('events'); }",
+            "{ const require = f; require('events'); }",
+            "try { throw f; } catch (require) { require('events'); }",
+            "for (let require = f; test; update) require('events');",
+            "for (const require of values) require('events');",
+            "for (const require in values) require('events');",
+            "const C = class require { method() { return require('events'); } };",
+            "with (scope) { require('events'); }",
+            "const name = 'events'; require(name);",
+            "require('events/unknown');",
+            "const value = require; value('events');",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            assert!(
+                rewrite_util_requires(&tree).expect(source).is_none(),
+                "{source}"
+            );
+        }
+        let tree = parse(
+            "import require from 'other'; require('events');",
+            ParseGoal::Module,
+        );
+        assert!(rewrite_util_requires(&tree).expect("import binding").is_none());
+    }
+
+    #[test]
+    fn mixed_modules_have_one_private_declaration_each_and_rewrite_is_idempotent() {
+        let tree = parse(
+            "const E = require('events'); const other = require('node:events'); \
+             function nested() { return require('events'); } \
+             const util = require('util'); const types = require('util/types');",
+            ParseGoal::Script,
+        );
+        let rewritten = rewrite_util_requires(&tree)
+            .expect("rewrites")
+            .expect("modules used");
+        assert_eq!(rewritten.body.len(), tree.body.len() + 2);
+        assert_eq!(
+            rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+            2
+        );
+        assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+    }
+
+    #[test]
+    fn event_intrinsics_are_builtin_capabilities_not_filesystem_authority() {
+        for (_, intrinsic) in EVENTS_PLACEHOLDERS {
+            assert!(
+                intrinsic_capability(intrinsic)
+                    .expect("intrinsic")
+                    .starts_with("builtin:")
+            );
+        }
+        assert_eq!(intrinsic_capability("__franken_events_once"), None);
+        assert_eq!(intrinsic_capability("require"), None);
+    }
+
+    #[test]
+    fn events_source_parses_with_every_used_global_shadowed() {
+        let mut expected: BTreeSet<String> =
+            EVENTS_GLOBALS.iter().map(|name| name.to_string()).collect();
+        expected.extend(EVENTS_PLACEHOLDERS.iter().map(|(name, _)| name.to_string()));
+        let free = super::tests::free_names(
+            &mut parse_module_source(PureModule::Events).expect("events source parses"),
+        );
+        assert_eq!(free, expected, "all ambient names must be declared");
+        let globals = EVENTS_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let protected = super::tests::free_names(
+            &mut module_source(&globals, PureModule::Events).expect("protected module source"),
+        );
+        let mut expected: BTreeSet<String> =
+            EVENTS_PLACEHOLDERS.iter().map(|(_, name)| name.to_string()).collect();
+        expected.insert("globalThis".to_string());
+        assert_eq!(protected, expected);
     }
 }

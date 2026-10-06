@@ -52001,6 +52001,37 @@ impl InterpreterCore {
                                 return Err(Self::read_only_property_error(&property_key));
                             }
                         }
+                        // bd-9vouw.216: `F.__proto__ = P` runs Object.prototype's
+                        // `__proto__` setter (ES2020 B.2.2.1.2): an object, a
+                        // function or null becomes F's [[Prototype]] (`F.s`
+                        // then inherits P's statics), anything else is
+                        // ignored, and a cycle is a TypeError. It stored an
+                        // own property named `__proto__`.
+                        ref function @ (Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_))
+                            if property_key.as_str() == Some("__proto__")
+                                && !self.function_backing_has_own_property(
+                                    module,
+                                    function,
+                                    &property_key,
+                                )? =>
+                        {
+                            if (set_val.is_object_like() || matches!(set_val, Value::Null))
+                                && !self.set_function_value_prototype(
+                                    Some(module),
+                                    function,
+                                    &set_val,
+                                )?
+                            {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "acyclic __proto__ value".to_string(),
+                                    got: "a prototype chain that reaches the function".to_string(),
+                                });
+                            }
+                        }
                         // Other own properties (`F.x = 1`,
                         // `Test262Error.thrower = ...`) live on the function's
                         // backing object.

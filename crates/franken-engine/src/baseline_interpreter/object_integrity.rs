@@ -514,7 +514,7 @@ impl InterpreterCore {
     /// `D`'s own-property lookups inherit `B`'s statics. A builtin parent
     /// (`Error`) has no backing object to link to; the change is accepted but
     /// only `Function.prototype` remains observable, a documented gap.
-    fn set_function_value_prototype(
+    pub(super) fn set_function_value_prototype(
         &mut self,
         module: Option<&Ir3Module>,
         function: &Value,

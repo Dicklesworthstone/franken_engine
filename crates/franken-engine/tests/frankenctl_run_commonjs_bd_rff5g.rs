@@ -464,3 +464,27 @@ console.log(d.root, d.mid, d.who(), Object.getPrototypeOf(D) === Mid);
         ]
     );
 }
+
+/// `require('os')` is Node's os module over the os facade's HostCalls
+/// (bd-9vouw.204), whatever form the program uses: hjson's `var os =
+/// require('os')` read `os.EOL || '\\n'` inside an object literal, which the
+/// facade does not lower, so the require reached the runtime and found no
+/// module. `os.platform()` returns the engine's fixed value, so only its type
+/// is compared with Node's.
+#[test]
+fn require_os_is_the_os_module_bd_9vouw_204() {
+    let lines = run_tree(
+        "fe_run_cjs_os_module",
+        &[(
+            "app.js",
+            r#"var os = require('os');
+var o = { EOL: os.EOL || 'x' };
+console.log(JSON.stringify(o.EOL), typeof os.platform, os.platform.name, require('os') === os, require('node:os') === os, typeof os.constants.signals.SIGINT, os.devNull, typeof os.platform(), Object.keys(os).length);
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        ["\"\\n\" function platform true true number /dev/null string 23"]
+    );
+}

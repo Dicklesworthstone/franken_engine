@@ -5951,6 +5951,9 @@ const TOP_LEVEL_THIS_KEY: &str = "<top-level this>";
 /// module object (bd-9vouw.193), so every require returns the same object.
 const BUFFER_MODULE_KEY: &str = "<module buffer>";
 
+/// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
+const OS_MODULE_KEY: &str = "<module os>";
+
 /// The names Array.prototype[@@unscopables] blocks in a `with` body, as Node
 /// v22 lists them (ES2020 22.1.3.32 plus later additions).
 /// %Array.prototype%'s own string keys in Node v22's order (bd-9vouw.122).
@@ -6368,6 +6371,14 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
         .or_else(|| (tag == "builtin:ProcessNextTick").then_some(("process", "nextTick")))
         // `eval` read as a value (bd-9vouw.191).
         .or_else(|| (tag == "builtin:Eval").then_some(("globalThis", "eval")))
+        // The members of `require('os')` (bd-9vouw.204).
+        .or_else(|| {
+            crate::lowering_pipeline::OS_METHOD_NAMES
+                .iter()
+                .copied()
+                .find(|name| crate::lowering_pipeline::os_method_capability(name) == Some(tag))
+                .map(|name| ("os", name))
+        })
 }
 
 /// `Reflect` members installed on the first-class `Reflect` object; each is
@@ -38062,6 +38073,50 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// `require('os')` (bd-9vouw.204): Node's os module over the os facade's
+    /// own HostCalls (fixed, engine-contained values; no host reads), with
+    /// `constants`, `EOL` and `devNull` as the facade reads them. The facade
+    /// claims a program-level alias only where it can lower every use: hjson's
+    /// `var os = require('os')` read `os.EOL || '\n'` inside an object
+    /// literal, so the require reached the runtime and found no module.
+    fn os_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(OS_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let constants = self.os_constants_object()?;
+        let mut members = Vec::with_capacity(crate::lowering_pipeline::OS_METHOD_NAMES.len() + 3);
+        for name in crate::lowering_pipeline::OS_METHOD_NAMES {
+            let tag = crate::lowering_pipeline::os_method_capability(name)
+                .expect("OS_METHOD_NAMES names are all in the facade table");
+            members.push((
+                name,
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+            ));
+        }
+        members.push(("constants", constants));
+        members.push(("EOL", Value::str("\n")));
+        members.push(("devNull", Value::str("/dev/null")));
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(OS_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
+    /// `os.constants`: `{ signals, errno, priority }` (real POSIX numbers; see
+    /// the NODE_OS_* tables).
+    fn os_constants_object(&mut self) -> Result<Value, InterpreterError> {
+        let signals = self.alloc_os_constant_group(NODE_OS_SIGNALS)?;
+        let errno = self.alloc_os_constant_group(NODE_OS_ERRNO)?;
+        let priority = self.alloc_os_constant_group(NODE_OS_PRIORITY)?;
+        let object_id = self.alloc_object_with_properties(&[
+            ("signals", signals),
+            ("errno", errno),
+            ("priority", priority),
+        ])?;
+        Ok(Value::Object(object_id))
+    }
+
     fn require_module(
         &mut self,
         module: &Ir3Module,
@@ -38071,6 +38126,9 @@ impl InterpreterCore {
         self.run_pre_import_hook(module, specifier)?;
         if matches!(specifier, "buffer" | "node:buffer") {
             return self.buffer_core_module();
+        }
+        if matches!(specifier, "os" | "node:os") {
+            return self.os_core_module();
         }
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)
@@ -86663,19 +86721,8 @@ impl InterpreterCore {
                 self.os_validate_int32(&priority, "priority", -20, 19)?;
                 Ok(Value::Undefined)
             }
-            "builtin:OsConstants" => {
-                // `os.constants` — the nested { signals, errno, priority }
-                // object (real POSIX numbers; see the NODE_OS_* tables).
-                let signals = self.alloc_os_constant_group(NODE_OS_SIGNALS)?;
-                let errno = self.alloc_os_constant_group(NODE_OS_ERRNO)?;
-                let priority = self.alloc_os_constant_group(NODE_OS_PRIORITY)?;
-                let object_id = self.alloc_object_with_properties(&[
-                    ("signals", signals),
-                    ("errno", errno),
-                    ("priority", priority),
-                ])?;
-                Ok(Value::Object(object_id))
-            }
+            // `os.constants` — the nested { signals, errno, priority } object.
+            "builtin:OsConstants" => self.os_constants_object(),
 
             // Math methods
             "builtin:MathAbs" => {

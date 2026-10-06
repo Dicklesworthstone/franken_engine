@@ -26241,7 +26241,7 @@ fn is_require_os_module_initializer(
 /// of these are pure-compute in this engine: the interpreter dispatch returns
 /// FIXED engine-contained values (documented at the dispatch arms) — the
 /// engine has no ambient authority, so nothing here reads the real host.
-fn os_method_capability(method: &str) -> Option<&'static str> {
+pub(crate) fn os_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "platform" => Some("builtin:OsPlatform"),
         "arch" => Some("builtin:OsArch"),
@@ -26266,6 +26266,32 @@ fn os_method_capability(method: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// The `os` methods in Node v22's key order, each with an
+/// [`os_method_capability`]: the members of the runtime `require('os')`
+/// module object (bd-9vouw.204) and the names of their builtins.
+pub(crate) const OS_METHOD_NAMES: [&str; 20] = [
+    "arch",
+    "availableParallelism",
+    "cpus",
+    "endianness",
+    "freemem",
+    "getPriority",
+    "homedir",
+    "hostname",
+    "loadavg",
+    "networkInterfaces",
+    "platform",
+    "release",
+    "setPriority",
+    "tmpdir",
+    "totalmem",
+    "type",
+    "userInfo",
+    "uptime",
+    "version",
+    "machine",
+];
 
 /// bd-qmy52: what a recognized `os` property READ lowers to.
 enum OsMemberReadLowering {

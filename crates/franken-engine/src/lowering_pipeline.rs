@@ -28845,31 +28845,84 @@ fn invalidate_nonprimitive_flow_shapes(values: &mut [FlowValue]) {
     }
 }
 
-fn invalidate_nonprimitive_binding_flow_shapes(
-    binding_shapes: &mut BTreeMap<BindingId, FlowValueShape>,
-) {
-    for shape in binding_shapes.values_mut() {
-        if !matches!(
-            *shape,
-            FlowValueShape::Primitive
-                | FlowValueShape::Callable
-                | FlowValueShape::ArrayIsArrayFunction
-                | FlowValueShape::FunctionConstructor
-                | FlowValueShape::EventEmitterObject
-                // Named `buf` must still be BufferObject after `fs.readSync`
-                // / `fs.closeSync` so the later `buf.toString` hostcall
-                // authenticates (bd-zco6t).
-                | FlowValueShape::BufferObject
-                // bd-dign3: named bindings holding engine-vouched closed
-                // data keep their proof across unrelated invalidation for
-                // the synthetic-receiver and later-read paths, exactly as
-                // BufferObject does.
-                | FlowValueShape::ClosedResult
-                | FlowValueShape::ConstantsObject
-        ) {
-            *shape = FlowValueShape::Unknown;
+/// Whether the nonprimitive sweep resets a binding holding `shape` to
+/// `Unknown` (an `Unknown` shape stays as it is).
+fn nonprimitive_binding_sweep_resets(shape: FlowValueShape) -> bool {
+    !matches!(
+        shape,
+        FlowValueShape::Unknown
+            | FlowValueShape::Primitive
+            | FlowValueShape::Callable
+            | FlowValueShape::ArrayIsArrayFunction
+            | FlowValueShape::FunctionConstructor
+            | FlowValueShape::EventEmitterObject
+            // Named `buf` must still be BufferObject after `fs.readSync`
+            // / `fs.closeSync` so the later `buf.toString` hostcall
+            // authenticates (bd-zco6t).
+            | FlowValueShape::BufferObject
+            // bd-dign3: named bindings holding engine-vouched closed
+            // data keep their proof across unrelated invalidation for
+            // the synthetic-receiver and later-read paths, exactly as
+            // BufferObject does.
+            | FlowValueShape::ClosedResult
+            | FlowValueShape::ConstantsObject
+    )
+}
+
+/// Heap-backed retained proofs (see [`invalidate_heap_backed_flow_shapes`]).
+fn is_heap_backed_flow_shape(shape: FlowValueShape) -> bool {
+    matches!(
+        shape,
+        FlowValueShape::BufferObject
+            | FlowValueShape::ClosedResult
+            | FlowValueShape::FreshAggregate
+            | FlowValueShape::ConstantsObject
+    )
+}
+
+/// The flow shapes of a unit's bindings (bd-9vouw.227). The two sweeps below
+/// run at every call, property write, coercion and merge; each visits only
+/// the bindings whose shape it changes, kept apart as shapes are stored,
+/// instead of every binding of the unit (simulation was quadratic: bindings
+/// x calls). Every write goes through `insert`, so the sets stay exact.
+#[derive(Default)]
+struct BindingFlowShapes {
+    shapes: BTreeMap<BindingId, FlowValueShape>,
+    /// Bindings whose shape the nonprimitive sweep resets.
+    nonprimitive: BTreeSet<BindingId>,
+    /// Bindings whose shape is heap-backed.
+    heap_backed: BTreeSet<BindingId>,
+}
+
+impl BindingFlowShapes {
+    fn get(&self, binding_id: &BindingId) -> Option<&FlowValueShape> {
+        self.shapes.get(binding_id)
+    }
+
+    fn insert(&mut self, binding_id: BindingId, shape: FlowValueShape) {
+        self.shapes.insert(binding_id, shape);
+        if nonprimitive_binding_sweep_resets(shape) {
+            self.nonprimitive.insert(binding_id);
+        } else {
+            self.nonprimitive.remove(&binding_id);
+        }
+        if is_heap_backed_flow_shape(shape) {
+            self.heap_backed.insert(binding_id);
+        } else {
+            self.heap_backed.remove(&binding_id);
         }
     }
+
+    fn reset_to_unknown(&mut self, bindings: BTreeSet<BindingId>) {
+        for binding_id in bindings {
+            self.insert(binding_id, FlowValueShape::Unknown);
+        }
+    }
+}
+
+fn invalidate_nonprimitive_binding_flow_shapes(binding_shapes: &mut BindingFlowShapes) {
+    let reset = std::mem::take(&mut binding_shapes.nonprimitive);
+    binding_shapes.reset_to_unknown(reset);
 }
 
 /// Heap-backed retained proofs (`BufferObject`, `ClosedResult`,
@@ -28895,20 +28948,9 @@ fn invalidate_heap_backed_flow_shapes(values: &mut [FlowValue]) {
     }
 }
 
-fn invalidate_heap_backed_binding_flow_shapes(
-    binding_shapes: &mut BTreeMap<BindingId, FlowValueShape>,
-) {
-    for shape in binding_shapes.values_mut() {
-        if matches!(
-            *shape,
-            FlowValueShape::BufferObject
-                | FlowValueShape::ClosedResult
-                | FlowValueShape::FreshAggregate
-                | FlowValueShape::ConstantsObject
-        ) {
-            *shape = FlowValueShape::Unknown;
-        }
-    }
+fn invalidate_heap_backed_binding_flow_shapes(binding_shapes: &mut BindingFlowShapes) {
+    let reset = std::mem::take(&mut binding_shapes.heap_backed);
+    binding_shapes.reset_to_unknown(reset);
 }
 
 // ---------------------------------------------------------------------------
@@ -29049,7 +29091,7 @@ fn stream_callback_carrier_for_function(
     free_vars: &[String],
     free_var_ids: &[BindingId],
     binding_labels: &BTreeMap<BindingId, Label>,
-    binding_flow_shapes: &BTreeMap<BindingId, FlowValueShape>,
+    binding_flow_shapes: &BindingFlowShapes,
 ) -> StreamFlowInfo {
     let aggregate_captures = free_vars
         .iter()
@@ -30293,7 +30335,7 @@ fn simulate_ir2_flow_labels(
     let mut active_catch_regions = Vec::<u32>::new();
     let mut iterator_cleanup_labels = BTreeMap::<u32, usize>::new();
     let mut binding_crypto_origins = BTreeMap::<BindingId, Option<usize>>::new();
-    let mut binding_flow_shapes = BTreeMap::<BindingId, FlowValueShape>::new();
+    let mut binding_flow_shapes = BindingFlowShapes::default();
     let mut crypto_flow_states = BTreeMap::<usize, CryptoFlowObjectState>::new();
     // bd-pafik: authenticated stream callback-error states (keyed by the
     // constructing hostcall's op index), static pipeline rejection summaries
@@ -48902,5 +48944,93 @@ mod tests {
                 panic!("lower_ir0_to_ir3 failed: {err:?}");
             }
         }
+    }
+
+    /// bd-9vouw.227: the tracked sweeps of BindingFlowShapes reset exactly
+    /// the bindings the full sweeps reset, over a deterministic mixed
+    /// sequence of stores and sweeps. The reference is a plain map swept the
+    /// way invalidate_{nonprimitive,heap_backed}_binding_flow_shapes swept
+    /// every binding before (their match lists, copied).
+    #[test]
+    fn binding_flow_shape_sweeps_match_full_sweeps_bd_9vouw_227() {
+        const SHAPES: [FlowValueShape; 18] = [
+            FlowValueShape::Unknown,
+            FlowValueShape::Primitive,
+            FlowValueShape::Callable,
+            FlowValueShape::CallableContainer,
+            FlowValueShape::ArrayIsArrayFunction,
+            FlowValueShape::FunctionConstructor,
+            FlowValueShape::EventEmitterConstructor,
+            FlowValueShape::EventEmitterObject,
+            FlowValueShape::EventEmitterFluentMethod,
+            FlowValueShape::EventEmitterEmitMethod,
+            FlowValueShape::OwnKeyArray,
+            FlowValueShape::OwnKeyJoinMethod,
+            FlowValueShape::FreshAggregate,
+            FlowValueShape::ClosedResult,
+            FlowValueShape::BufferObject,
+            FlowValueShape::ConstantsObject,
+            FlowValueShape::Primitive,
+            FlowValueShape::FreshAggregate,
+        ];
+        let mut tracked = BindingFlowShapes::default();
+        let mut reference = BTreeMap::<BindingId, FlowValueShape>::new();
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut nonprimitive_sweeps, mut heap_sweeps, mut resets) = (0, 0, 0);
+        for _ in 0..20_000 {
+            match next() % 10 {
+                0 => {
+                    nonprimitive_sweeps += 1;
+                    invalidate_nonprimitive_binding_flow_shapes(&mut tracked);
+                    for shape in reference.values_mut() {
+                        if !matches!(
+                            *shape,
+                            FlowValueShape::Primitive
+                                | FlowValueShape::Callable
+                                | FlowValueShape::ArrayIsArrayFunction
+                                | FlowValueShape::FunctionConstructor
+                                | FlowValueShape::EventEmitterObject
+                                | FlowValueShape::BufferObject
+                                | FlowValueShape::ClosedResult
+                                | FlowValueShape::ConstantsObject
+                        ) {
+                            resets += usize::from(*shape != FlowValueShape::Unknown);
+                            *shape = FlowValueShape::Unknown;
+                        }
+                    }
+                }
+                1 => {
+                    heap_sweeps += 1;
+                    invalidate_heap_backed_binding_flow_shapes(&mut tracked);
+                    for shape in reference.values_mut() {
+                        if matches!(
+                            *shape,
+                            FlowValueShape::BufferObject
+                                | FlowValueShape::ClosedResult
+                                | FlowValueShape::FreshAggregate
+                                | FlowValueShape::ConstantsObject
+                        ) {
+                            resets += 1;
+                            *shape = FlowValueShape::Unknown;
+                        }
+                    }
+                }
+                _ => {
+                    let binding_id = u32::try_from(next() % 64).expect("small id");
+                    let shape = SHAPES[usize::try_from(next() % 18).expect("small index")];
+                    tracked.insert(binding_id, shape);
+                    reference.insert(binding_id, shape);
+                }
+            }
+            assert_eq!(tracked.shapes, reference);
+        }
+        // The sequence exercised both sweeps and resets real shapes.
+        assert!(nonprimitive_sweeps > 100 && heap_sweeps > 100 && resets > 1_000);
     }
 }

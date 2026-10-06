@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound;
 use std::path::Path;
 
 use bumpalo::collections::Vec as ArenaVec;
@@ -116,6 +117,43 @@ fn typeof_dynamic_name_sentinel(name: &str) -> String {
 
 fn capture_origin_sentinel(name: &str) -> String {
     format!("{CAPTURE_ORIGIN_SENTINEL_PREFIX}{name}")
+}
+
+/// The entries of `lookup` whose keys start with `prefix`. Keys order by
+/// their bytes, so they are one contiguous range: reading it costs its own
+/// length, not the whole lookup's, which every function body would otherwise
+/// pay once per sentinel family (bd-9vouw.223).
+fn prefixed_entries<'a>(
+    lookup: &'a BTreeMap<String, BindingId>,
+    prefix: &'a str,
+) -> impl Iterator<Item = (&'a String, &'a BindingId)> + 'a {
+    lookup
+        .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+        .take_while(move |(key, _)| key.starts_with(prefix))
+}
+
+/// The entries of `lookup` whose keys do not start with NUL (the sentinel
+/// families), in key order.
+fn non_sentinel_entries(
+    lookup: &BTreeMap<String, BindingId>,
+) -> impl Iterator<Item = (&String, &BindingId)> {
+    lookup
+        .range::<str, _>((Bound::Unbounded, Bound::Excluded("\0")))
+        .chain(lookup.range::<str, _>((Bound::Included("\u{1}"), Bound::Unbounded)))
+}
+
+/// Copy every outer key under one of `prefixes` into a function body's
+/// lookup (with id 0, as the module-alias provenance sentinels carry).
+fn seed_prefixed_sentinels(
+    body_lookup: &mut BTreeMap<String, BindingId>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+    prefixes: &[&str],
+) {
+    for prefix in prefixes {
+        for (key, _) in prefixed_entries(outer_lookup, prefix) {
+            body_lookup.insert(key.clone(), 0);
+        }
+    }
 }
 
 /// The binding id of a CommonJS wrapper binding (`module`, `exports`,
@@ -3054,11 +3092,14 @@ fn prepare_function_body_bindings(
     }
 
     let pre_lower_names = body_lookup.keys().cloned().collect::<BTreeSet<_>>();
-    for (key, binding_id) in outer_lookup {
-        if key.starts_with(LEXICAL_BINDING_SENTINEL_PREFIX)
-            || key.starts_with(CAPTURE_ORIGIN_SENTINEL_PREFIX)
-        {
-            body_lookup.entry(key.clone()).or_insert(*binding_id);
+    for prefix in [
+        LEXICAL_BINDING_SENTINEL_PREFIX,
+        CAPTURE_ORIGIN_SENTINEL_PREFIX,
+    ] {
+        for (key, binding_id) in prefixed_entries(outer_lookup, prefix) {
+            if !body_lookup.contains_key(key) {
+                body_lookup.insert(key.clone(), *binding_id);
+            }
         }
     }
 
@@ -12885,7 +12926,9 @@ fn collect_free_vars(
 ) -> (Vec<String>, Vec<BindingId>) {
     let mut names = Vec::new();
     let mut ids = Vec::new();
-    for (name, id) in body_lookup.iter() {
+    // NUL-prefixed keys are internal (the inherited sentinels among them,
+    // one or more per enclosing binding), so they are not read at all.
+    for (name, id) in non_sentinel_entries(body_lookup) {
         if pre_lower_names.contains(name.as_str())
             || is_internal_lowering_binding(name)
             || !has_source_lexical_binding(outer_lookup, name)
@@ -21247,11 +21290,7 @@ fn seed_url_module_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0urlmod\0") || key.starts_with("\0urlnamed\0") {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(body_lookup, outer_lookup, &["\0urlmod\0", "\0urlnamed\0"]);
 }
 
 fn suppress_url_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
@@ -22993,11 +23032,11 @@ fn seed_timers_module_alias_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0timersmod\0") || key.starts_with("\0timerspmod\0") {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(
+        body_lookup,
+        outer_lookup,
+        &["\0timersmod\0", "\0timerspmod\0"],
+    );
 }
 
 /// bd-fdqd4: retain authenticated zlib provenance in nested callbacks while
@@ -23006,11 +23045,7 @@ fn seed_zlib_module_alias_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0zlibmod\0") {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(body_lookup, outer_lookup, &["\0zlibmod\0"]);
     // Crypto shares the same immutable lowering-only alias lifetime: every
     // function-like scope that carries zlib provenance must also carry crypto
     // provenance, with the same lexical-shadow suppression below.
@@ -23039,11 +23074,11 @@ fn seed_crypto_module_alias_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0cryptomod\0") || key.starts_with("\0cryptoobj\0") {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(
+        body_lookup,
+        outer_lookup,
+        &["\0cryptomod\0", "\0cryptoobj\0"],
+    );
 }
 
 fn suppress_crypto_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
@@ -23073,11 +23108,7 @@ fn seed_cluster_module_alias_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0clustermod\0") {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(body_lookup, outer_lookup, &["\0clustermod\0"]);
 }
 
 fn suppress_cluster_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {
@@ -23100,11 +23131,7 @@ fn seed_child_process_module_alias_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0child-process-mod\0") {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(body_lookup, outer_lookup, &["\0child-process-mod\0"]);
 }
 
 fn suppress_child_process_module_sentinel(
@@ -23131,15 +23158,16 @@ fn seed_fs_module_alias_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0fsmod\0")
-            || key.starts_with("\0fsnamed\0")
-            || key.starts_with("\0fsprommod\0")
-            || key.starts_with("\0fspromnamed\0")
-        {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(
+        body_lookup,
+        outer_lookup,
+        &[
+            "\0fsmod\0",
+            "\0fsnamed\0",
+            "\0fsprommod\0",
+            "\0fspromnamed\0",
+        ],
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -23190,15 +23218,11 @@ fn seed_net_module_alias_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0netmod\0")
-            || key.starts_with("\0httpmod\0")
-            || key.starts_with("\0httpsmod\0")
-            || key.starts_with("\0httpnamed\0")
-        {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(
+        body_lookup,
+        outer_lookup,
+        &["\0netmod\0", "\0httpmod\0", "\0httpsmod\0", "\0httpnamed\0"],
+    );
 }
 
 fn is_require_net_module_initializer(
@@ -24961,11 +24985,7 @@ fn seed_tls_module_alias_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0tlsmod\0") {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(body_lookup, outer_lookup, &["\0tlsmod\0"]);
 }
 
 fn is_require_tls_module_initializer(
@@ -25761,18 +25781,19 @@ fn seed_stream_module_sentinels(
     body_lookup: &mut BTreeMap<String, BindingId>,
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0stream-readable\0")
-            || key.starts_with("\0stream-writable\0")
-            || key.starts_with("\0stream-passthrough\0")
-            || key.starts_with("\0stream-transform\0")
-            || key.starts_with("\0stream-pipeline\0")
-            || key.starts_with("\0stream-promises\0")
-            || key.starts_with("\0stream-promises-pipeline\0")
-        {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(
+        body_lookup,
+        outer_lookup,
+        &[
+            "\0stream-readable\0",
+            "\0stream-writable\0",
+            "\0stream-passthrough\0",
+            "\0stream-transform\0",
+            "\0stream-pipeline\0",
+            "\0stream-promises\0",
+            "\0stream-promises-pipeline\0",
+        ],
+    );
 }
 
 fn stream_constructor_capability(
@@ -26254,14 +26275,11 @@ fn seed_events_module_sentinels(
     outer_lookup: &BTreeMap<String, BindingId>,
 ) {
     seed_url_module_sentinels(body_lookup, outer_lookup);
-    for key in outer_lookup.keys() {
-        if key.starts_with("\0eventemitter\0")
-            || key.starts_with("\0eventsonce\0")
-            || key.starts_with("\0eventsmod\0")
-        {
-            body_lookup.insert(key.clone(), 0);
-        }
-    }
+    seed_prefixed_sentinels(
+        body_lookup,
+        outer_lookup,
+        &["\0eventemitter\0", "\0eventsonce\0", "\0eventsmod\0"],
+    );
 }
 
 fn suppress_events_module_sentinel(binding_lookup: &mut BTreeMap<String, BindingId>, name: &str) {

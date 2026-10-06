@@ -196,7 +196,13 @@ fn read_package_manifest(dir: &Path) -> Result<Option<PackageManifest>, String> 
     if !path.is_file() {
         return Ok(None);
     }
-    let file = fs::File::open(&path)
+    read_package_manifest_file(&path).map(Some)
+}
+
+/// Read the already-selected manifest, without rebuilding its lexical path.
+/// The runtime resolver passes a containment-checked canonical path here.
+fn read_package_manifest_file(path: &Path) -> Result<PackageManifest, String> {
+    let file = fs::File::open(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let mut bytes = Vec::new();
     file.take(MAX_PACKAGE_MANIFEST_BYTES.saturating_add(1))
@@ -209,7 +215,6 @@ fn read_package_manifest(dir: &Path) -> Result<Option<PackageManifest>, String> 
         ));
     }
     serde_json::from_slice(&bytes)
-        .map(Some)
         .map_err(|error| format!("invalid {}: {error}", path.display()))
 }
 
@@ -462,6 +467,33 @@ pub(super) fn with_appended_extension(path: &Path, extension: &str) -> PathBuf {
 }
 
 impl InterpreterCore {
+    /// Package metadata is executable resolution input, not an exemption from
+    /// module-root containment. Check it before reading any JSON bytes, and
+    /// open the checked canonical path rather than following the original
+    /// manifest symlink again. This does not provide descriptor-relative
+    /// protection against concurrent replacement of canonical ancestors.
+    fn read_contained_package_manifest(
+        &self,
+        specifier: &str,
+        directory: &Path,
+    ) -> Result<Option<PackageManifest>, InterpreterError> {
+        let path = directory.join("package.json");
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let failed = |reason| InterpreterError::ModuleResolutionFailed {
+            specifier: specifier.to_string(),
+            reason: ModuleResolutionFailureReason::Other(reason),
+        };
+        let canonical = path.canonicalize().map_err(|error| {
+            failed(format!("failed to canonicalize {}: {error}", path.display()))
+        })?;
+        self.canonicalize_module_candidate(specifier, &canonical)?;
+        read_package_manifest_file(&canonical)
+            .map(Some)
+            .map_err(failed)
+    }
+
     /// The module root, canonicalized: the boundary every resolved module and
     /// every `node_modules` lookup must stay inside.
     pub(super) fn canonical_module_root_path(&self) -> Option<PathBuf> {
@@ -599,8 +631,7 @@ impl InterpreterCore {
                 continue;
             }
             let package_dir = modules_dir.join(name);
-            let manifest = read_package_manifest(&package_dir)
-                .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason)))?;
+            let manifest = self.read_contained_package_manifest(specifier, &package_dir)?;
             if let Some(exports) = manifest
                 .as_ref()
                 .and_then(|manifest| manifest.exports.as_ref())
@@ -648,21 +679,12 @@ impl InterpreterCore {
             {
                 break;
             }
-            let path = directory.join("package.json");
-            if !path.is_file() {
+            let Some(manifest) = self.read_contained_package_manifest(specifier, directory)? else {
                 continue;
-            }
-            // Do not read a manifest symlink outside the host's module root.
-            self.canonicalize_module_candidate(specifier, &path)?;
-            let manifest = read_package_manifest(directory).map_err(|reason| {
-                InterpreterError::ModuleResolutionFailed {
-                    specifier: specifier.to_string(),
-                    reason: ModuleResolutionFailureReason::Other(reason),
-                }
-            })?;
+            };
             // A manifest with no name/exports still closes the scope; never
             // search an outer package just because this one cannot resolve X.
-            return Ok(manifest.map(|manifest| (directory.to_path_buf(), manifest)));
+            return Ok(Some((directory.to_path_buf(), manifest)));
         }
         Ok(None)
     }
@@ -706,6 +728,133 @@ impl InterpreterCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn package_test_core(root: &Path) -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.module_root = Some(root.display().to_string());
+        config.canonical_module_root = Some(root.canonicalize().expect("canonical test root"));
+        InterpreterCore::new(config, "package-resolution-test")
+    }
+
+    fn write_package_fixture(root: &Path, relative: &str, content: &str) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
+        fs::write(path, content).expect("fixture file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_manifest_symlink_escape_is_rejected_before_json_parsing() {
+        let root = tempfile::tempdir().expect("module root");
+        let outside = tempfile::tempdir().expect("outside root");
+        write_package_fixture(
+            root.path(),
+            "node_modules/escape/entry.cjs",
+            "module.exports = 1;",
+        );
+        write_package_fixture(
+            outside.path(),
+            "manifest.json",
+            "not JSON: must not be parsed",
+        );
+        let outside_manifest = outside.path().join("manifest.json");
+        std::os::unix::fs::symlink(
+            &outside_manifest,
+            root.path().join("node_modules/escape/package.json"),
+        )
+        .expect("manifest symlink");
+        let core = package_test_core(root.path());
+        let expected = core
+            .canonicalize_module_candidate("escape", &outside_manifest)
+            .expect_err("outside manifest must fail containment")
+            .to_string();
+        for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+            let actual = core
+                .resolve_bare_package_specifier("escape", conditions)
+                .expect_err("must reject the manifest before parsing it");
+            assert_eq!(actual.to_string(), expected);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_modules_directory_symlink_cannot_supply_outside_metadata() {
+        let root = tempfile::tempdir().expect("module root");
+        let outside = tempfile::tempdir().expect("outside root");
+        write_package_fixture(outside.path(), "escape/package.json", "not JSON");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("node_modules"))
+            .expect("node_modules symlink");
+        let core = package_test_core(root.path());
+        let expected = core
+            .canonicalize_module_candidate("escape", &outside.path().join("escape/package.json"))
+            .expect_err("outside metadata must fail containment")
+            .to_string();
+        assert_eq!(
+            core.resolve_bare_require_specifier("escape")
+                .expect_err("outside node_modules manifest")
+                .to_string(),
+            expected
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn in_root_manifest_symlink_keeps_targets_relative_to_the_package() {
+        let root = tempfile::tempdir().expect("module root");
+        write_package_fixture(
+            root.path(),
+            "manifests/shared.json",
+            r#"{"exports":"./entry.cjs"}"#,
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/linked/entry.cjs",
+            "module.exports = 42;",
+        );
+        std::os::unix::fs::symlink(
+            root.path().join("manifests/shared.json"),
+            root.path().join("node_modules/linked/package.json"),
+        )
+        .expect("contained manifest symlink");
+        let core = package_test_core(root.path());
+        for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+            assert_eq!(
+                core.resolve_bare_package_specifier("linked", conditions)
+                    .expect("contained manifest must remain usable")
+                    .canonicalize()
+                    .expect("resolved module"),
+                root.path()
+                    .join("node_modules/linked/entry.cjs")
+                    .canonicalize()
+                    .expect("expected module")
+            );
+        }
+    }
+
+    #[test]
+    fn package_manifest_reader_preserves_size_and_parse_errors() {
+        let root = tempfile::tempdir().expect("module root");
+        write_package_fixture(root.path(), "bad/package.json", "{");
+        write_package_fixture(
+            root.path(),
+            "large/package.json",
+            &" ".repeat(MAX_PACKAGE_MANIFEST_BYTES as usize + 1),
+        );
+        let core = package_test_core(root.path());
+        let bad = core
+            .read_contained_package_manifest("bad", &root.path().join("bad"))
+            .expect_err("malformed JSON must not be treated as a missing manifest");
+        assert!(bad.to_string().contains("invalid"));
+        let large = core
+            .read_contained_package_manifest("large", &root.path().join("large"))
+            .expect_err("oversized metadata must not be treated as missing");
+        assert!(large.to_string().contains("exceeds"));
+        assert!(
+            core.read_contained_package_manifest("absent", &root.path().join("absent"))
+                .expect("a missing manifest remains optional")
+                .is_none()
+        );
+    }
 
     fn exports(json: &str) -> PackageExports {
         serde_json::from_str(json).expect("exports JSON")

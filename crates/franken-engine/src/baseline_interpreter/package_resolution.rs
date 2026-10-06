@@ -81,6 +81,15 @@ const REQUIRE_EXPORT_CONDITIONS: &[&str] = &["node", "require"];
 /// Conditions an ES module `import` matches (bd-mgfhs); `default` as well.
 const IMPORT_EXPORT_CONDITIONS: &[&str] = &["node", "import"];
 
+/// PACKAGE_RESOLVE selects one package and exact subpaths. The legacy
+/// CommonJS search may probe extensions/directories and keep walking upward.
+/// Private imports use PACKAGE_RESOLVE even when their caller is `require`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PackageLookupMode {
+    CommonJs,
+    PackageUrl,
+}
+
 /// Largest package.json the resolver reads.
 const MAX_PACKAGE_MANIFEST_BYTES: u64 = 1 << 20;
 
@@ -397,6 +406,22 @@ fn resolve_package_target(
 /// joining; the caller still enforces canonical module-root containment.
 fn package_relative_target(package_dir: &Path, relative: &str) -> Result<PathBuf, String> {
     let invalid = || format!("has an invalid or escaping package target `./{relative}`");
+    let decoded = decode_package_url_path(relative).map_err(|_| invalid())?;
+    if decoded.split('/').any(|segment| {
+        segment.is_empty()
+            || matches!(segment, "." | "..")
+            || segment.eq_ignore_ascii_case("node_modules")
+    }) {
+        return Err(invalid());
+    }
+    Ok(package_dir.join(decoded))
+}
+
+/// URL decoding shared by export targets and unexported ESM subpaths. The
+/// latter are not restricted to an exports map's package-relative segments;
+/// final canonical module-root containment is still required by the loader.
+fn decode_package_url_path(relative: &str) -> Result<String, String> {
+    let invalid = || format!("has an invalid package URL path `{relative}`");
     let pathname = relative.split(['?', '#']).next().unwrap_or(relative);
     let bytes = pathname.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -424,17 +449,10 @@ fn package_relative_target(package_dir: &Path, relative: &str) -> Result<PathBuf
         }
     }
     let decoded = String::from_utf8(decoded).map_err(|_| invalid())?;
-    if decoded.contains('\\')
-        || decoded.as_bytes().contains(&0)
-        || decoded.split('/').any(|segment| {
-            segment.is_empty()
-                || matches!(segment, "." | "..")
-                || segment.eq_ignore_ascii_case("node_modules")
-        })
-    {
+    if decoded.contains('\\') || decoded.as_bytes().contains(&0) {
         return Err(invalid());
     }
-    Ok(package_dir.join(decoded))
+    Ok(decoded)
 }
 
 fn resolve_package_imports_target(
@@ -464,6 +482,20 @@ pub(super) fn with_appended_extension(path: &Path, extension: &str) -> PathBuf {
     appended.push(".");
     appended.push(extension);
     PathBuf::from(appended)
+}
+
+/// Probe legacy package entry points using metadata already read by the
+/// caller. In particular, ESM must not reopen an unchecked package manifest.
+fn resolve_manifest_main(directory: &Path, manifest: &PackageManifest) -> Option<PathBuf> {
+    let main = directory.join(manifest.main()?);
+    if main.is_file() {
+        return Some(main);
+    }
+    ["js", "json"]
+        .into_iter()
+        .map(|extension| with_appended_extension(&main, extension))
+        .chain(["index.js", "index.json"].map(|index| main.join(index)))
+        .find(|candidate| candidate.is_file())
 }
 
 impl InterpreterCore {
@@ -517,8 +549,8 @@ impl InterpreterCore {
         self.resolve_bare_package_specifier(specifier, REQUIRE_EXPORT_CONDITIONS)
     }
 
-    /// An ES module's bare specifier (bd-mgfhs): the same package lookup as
-    /// `require`, matching the `import` condition.
+    /// An ES module's bare specifier (bd-mgfhs): match `import` conditions,
+    /// select the nearest package, and resolve unexported subpaths exactly.
     pub(super) fn resolve_bare_import_specifier(
         &self,
         specifier: &str,
@@ -563,18 +595,36 @@ impl InterpreterCore {
             return match target {
                 ExportsTargetResolution::Found(path) if path.is_file() => Ok(path),
                 ExportsTargetResolution::Package(target) => {
-                    self.resolve_named_require_from(&target, &scope, &root, conditions)
-                        .map_err(|error| {
-                            // Keep the source-level alias in the outward diagnostic.
-                            failed(ModuleResolutionFailureReason::Other(format!(
-                                "package import `{specifier}` targeting `{target}`: {error}"
-                            )))
-                        })
+                    self.resolve_named_require_from(
+                        &target,
+                        &scope,
+                        &root,
+                        conditions,
+                        PackageLookupMode::PackageUrl,
+                    )
+                    .map_err(|error| {
+                        // Keep the source-level alias in the outward diagnostic.
+                        failed(ModuleResolutionFailureReason::Other(format!(
+                            "package import `{specifier}` targeting `{target}`: {error}"
+                        )))
+                    })
                 }
                 _ => Err(failed(ModuleResolutionFailureReason::ModuleNotFound)),
             };
         }
-        self.resolve_named_require_from(specifier, &start, &root, conditions)
+        let mode = if conditions.contains(&"import") {
+            // ESM private imports never fall through to node_modules/#name.
+            // CommonJS retains that historical fallback without an imports map.
+            if specifier.starts_with('#') {
+                return Err(failed(ModuleResolutionFailureReason::Other(format!(
+                    "package import `{specifier}` is not defined"
+                ))));
+            }
+            PackageLookupMode::PackageUrl
+        } else {
+            PackageLookupMode::CommonJs
+        };
+        self.resolve_named_require_from(specifier, &start, &root, conditions, mode)
     }
 
     /// External imports targets resolve from their owning package, not from a
@@ -586,6 +636,7 @@ impl InterpreterCore {
         start: &Path,
         root: &Path,
         conditions: &[&str],
+        mode: PackageLookupMode,
     ) -> Result<PathBuf, InterpreterError> {
         let failed = |reason| InterpreterError::ModuleResolutionFailed {
             specifier: specifier.to_string(),
@@ -631,6 +682,9 @@ impl InterpreterCore {
                 continue;
             }
             let package_dir = modules_dir.join(name);
+            if mode == PackageLookupMode::PackageUrl && !package_dir.is_dir() {
+                continue;
+            }
             let manifest = self.read_contained_package_manifest(specifier, &package_dir)?;
             if let Some(exports) = manifest
                 .as_ref()
@@ -652,6 +706,30 @@ impl InterpreterCore {
                 } else {
                     Err(failed(ModuleResolutionFailureReason::ModuleNotFound))
                 };
+            }
+            if mode == PackageLookupMode::PackageUrl {
+                let found = if subpath.is_empty() {
+                    manifest
+                        .as_ref()
+                        .and_then(|manifest| resolve_manifest_main(&package_dir, manifest))
+                        .or_else(|| {
+                            ["index.js", "index.json"]
+                                .map(|index| package_dir.join(index))
+                                .into_iter()
+                                .find(|candidate| candidate.is_file())
+                        })
+                } else {
+                    let decoded = decode_package_url_path(&subpath[1..])
+                        .map_err(|reason| failed(ModuleResolutionFailureReason::Other(reason)))?;
+                    // Prefixing './' also keeps a doubled slash in a package
+                    // subpath from becoming an absolute filesystem path.
+                    Some(package_dir.join(format!("./{decoded}")))
+                };
+                // The selected package owns the result even if its requested
+                // file is absent. Never substitute another installed version.
+                return found
+                    .filter(|candidate| candidate.is_file())
+                    .ok_or_else(|| failed(ModuleResolutionFailureReason::ModuleNotFound));
             }
             if let Some(found) = self
                 .resolve_require_candidate(&modules_dir.join(specifier), specifier.ends_with('/'))
@@ -695,15 +773,7 @@ impl InterpreterCore {
     /// `main`, so the caller falls back to the directory's own index.
     pub(super) fn resolve_package_main(directory: &Path) -> Option<PathBuf> {
         let manifest = read_package_manifest(directory).ok().flatten()?;
-        let main = directory.join(manifest.main()?);
-        if main.is_file() {
-            return Some(main);
-        }
-        ["js", "json"]
-            .into_iter()
-            .map(|extension| with_appended_extension(&main, extension))
-            .chain(["index.js", "index.json"].map(|index| main.join(index)))
-            .find(|candidate| candidate.is_file())
+        resolve_manifest_main(directory, &manifest)
     }
 
     /// Node loads a required `.json` file as a module whose `exports` is the
@@ -740,6 +810,253 @@ mod tests {
         let path = root.join(relative);
         fs::create_dir_all(path.parent().expect("fixture parent")).expect("fixture directory");
         fs::write(path, content).expect("fixture file");
+    }
+
+    fn assert_package_path(actual: Result<PathBuf, InterpreterError>, expected: &Path) {
+        assert_eq!(
+            actual
+                .expect("resolved package")
+                .canonicalize()
+                .expect("resolved path"),
+            expected.canonicalize().expect("expected path")
+        );
+    }
+
+    #[test]
+    fn esm_private_imports_do_not_fall_back_to_installed_hash_packages() {
+        for manifest in [None, Some("{}"), Some(r#"{"imports":null}"#)] {
+            let root = tempfile::tempdir().expect("module root");
+            if let Some(manifest) = manifest {
+                write_package_fixture(root.path(), "package.json", manifest);
+            }
+            write_package_fixture(
+                root.path(),
+                "node_modules/#hidden/index.js",
+                "module.exports = 8;",
+            );
+            let core = package_test_core(root.path());
+            assert_package_path(
+                core.resolve_bare_require_specifier("#hidden"),
+                &root.path().join("node_modules/#hidden/index.js"),
+            );
+            let error = core
+                .resolve_bare_import_specifier("#hidden")
+                .expect_err("undefined private import");
+            assert!(
+                error
+                    .to_string()
+                    .contains("package import `#hidden` is not defined")
+            );
+        }
+    }
+
+    #[test]
+    fn esm_legacy_package_subpaths_require_exact_files() {
+        let root = tempfile::tempdir().expect("module root");
+        write_package_fixture(root.path(), "node_modules/legacy/package.json", "{}");
+        write_package_fixture(
+            root.path(),
+            "node_modules/legacy/entry.js",
+            "module.exports = 2;",
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/legacy/sub/index.js",
+            "module.exports = 3;",
+        );
+        let core = package_test_core(root.path());
+        for (request, relative) in [
+            ("legacy/entry", "node_modules/legacy/entry.js"),
+            ("legacy/sub", "node_modules/legacy/sub/index.js"),
+            ("legacy/sub/", "node_modules/legacy/sub/index.js"),
+        ] {
+            assert_package_path(
+                core.resolve_bare_require_specifier(request),
+                &root.path().join(relative),
+            );
+            assert!(
+                core.resolve_bare_import_specifier(request).is_err(),
+                "{request}"
+            );
+        }
+        assert_package_path(
+            core.resolve_bare_import_specifier("legacy/entry.js"),
+            &root.path().join("node_modules/legacy/entry.js"),
+        );
+    }
+
+    #[test]
+    fn esm_nearest_package_does_not_fall_back_to_another_installed_version() {
+        let root = tempfile::tempdir().expect("module root");
+        write_package_fixture(root.path(), "app/node_modules/legacy/package.json", "{}");
+        write_package_fixture(
+            root.path(),
+            "node_modules/legacy/missing.js",
+            "module.exports = 5;",
+        );
+        let mut core = package_test_core(root.path());
+        core.current_module_specifier = Some(root.path().join("app/entry.mjs").display().to_string());
+        assert_package_path(
+            core.resolve_bare_require_specifier("legacy/missing.js"),
+            &root.path().join("node_modules/legacy/missing.js"),
+        );
+        assert!(
+            core.resolve_bare_import_specifier("legacy/missing.js")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn esm_legacy_package_roots_keep_main_and_index_fallbacks() {
+        for (manifest, relative) in [
+            (r#"{"main":"entry"}"#, "entry.js"),
+            (r#"{"main":"lib"}"#, "lib/index.js"),
+            (r#"{"main":"missing"}"#, "index.js"),
+            ("{}", "index.js"),
+        ] {
+            let root = tempfile::tempdir().expect("module root");
+            write_package_fixture(root.path(), "node_modules/legacy/package.json", manifest);
+            let entry = format!("node_modules/legacy/{relative}");
+            write_package_fixture(root.path(), &entry, "module.exports = 1;");
+            let core = package_test_core(root.path());
+            assert_package_path(
+                core.resolve_bare_import_specifier("legacy"),
+                &root.path().join(&entry),
+            );
+            assert_package_path(
+                core.resolve_bare_require_specifier("legacy"),
+                &root.path().join(entry),
+            );
+        }
+        let root = tempfile::tempdir().expect("module root");
+        write_package_fixture(
+            root.path(),
+            "node_modules/no-manifest/index.js",
+            "module.exports = 7;",
+        );
+        assert_package_path(
+            package_test_core(root.path()).resolve_bare_import_specifier("no-manifest"),
+            &root.path().join("node_modules/no-manifest/index.js"),
+        );
+    }
+
+    #[test]
+    fn esm_package_lookup_does_not_probe_standalone_node_modules_files() {
+        let root = tempfile::tempdir().expect("module root");
+        write_package_fixture(root.path(), "node_modules/flat.js", "module.exports = 6;");
+        let core = package_test_core(root.path());
+        assert_package_path(
+            core.resolve_bare_require_specifier("flat"),
+            &root.path().join("node_modules/flat.js"),
+        );
+        assert!(core.resolve_bare_import_specifier("flat").is_err());
+    }
+
+    #[test]
+    fn private_external_targets_use_exact_package_subpaths_for_both_callers() {
+        let root = tempfile::tempdir().expect("module root");
+        write_package_fixture(
+            root.path(),
+            "package.json",
+            r##"{"imports":{"#exact":"legacy/entry.js","#extension":"legacy/entry","#directory":"legacy/sub","#root":"legacy"}}"##,
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/legacy/package.json",
+            r#"{"main":"entry"}"#,
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/legacy/entry.js",
+            "module.exports = 2;",
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/legacy/sub/index.js",
+            "module.exports = 3;",
+        );
+        let core = package_test_core(root.path());
+        for conditions in [REQUIRE_EXPORT_CONDITIONS, IMPORT_EXPORT_CONDITIONS] {
+            for request in ["#exact", "#root"] {
+                assert_package_path(
+                    core.resolve_bare_package_specifier(request, conditions),
+                    &root.path().join("node_modules/legacy/entry.js"),
+                );
+            }
+            for request in ["#extension", "#directory"] {
+                let error = core
+                    .resolve_bare_package_specifier(request, conditions)
+                    .expect_err("no file probing for imports targets");
+                assert!(
+                    error.to_string().contains(request),
+                    "alias must remain in diagnostic"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn esm_exact_package_subpaths_decode_urls_once() {
+        let root = tempfile::tempdir().expect("module root");
+        for name in ["a#b.js", "a%23b.js", "é.js"] {
+            write_package_fixture(
+                root.path(),
+                &format!("node_modules/legacy/{name}"),
+                "module.exports = 9;",
+            );
+        }
+        let core = package_test_core(root.path());
+        for (request, name) in [
+            ("legacy/a%23b.js", "a#b.js"),
+            ("legacy/a%2523b.js", "a%23b.js"),
+            ("legacy/%C3%A9.js?query#fragment", "é.js"),
+            ("legacy//a%23b.js", "a#b.js"),
+        ] {
+            assert_package_path(
+                core.resolve_bare_import_specifier(request),
+                &root.path().join("node_modules/legacy").join(name),
+            );
+        }
+        for request in [
+            "legacy/a%2fb.js",
+            "legacy/a%5cb.js",
+            "legacy/%00.js",
+            "legacy/%ff.js",
+        ] {
+            assert!(
+                core.resolve_bare_import_specifier(request).is_err(),
+                "{request}"
+            );
+        }
+    }
+
+    #[test]
+    fn package_conditions_still_select_distinct_import_and_require_entries() {
+        let root = tempfile::tempdir().expect("module root");
+        write_package_fixture(
+            root.path(),
+            "node_modules/dual/package.json",
+            r#"{"exports":{"import":"./import.mjs","require":"./require.cjs"}}"#,
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/dual/import.mjs",
+            "export default 1;",
+        );
+        write_package_fixture(
+            root.path(),
+            "node_modules/dual/require.cjs",
+            "module.exports = 2;",
+        );
+        let core = package_test_core(root.path());
+        assert_package_path(
+            core.resolve_bare_import_specifier("dual"),
+            &root.path().join("node_modules/dual/import.mjs"),
+        );
+        assert_package_path(
+            core.resolve_bare_require_specifier("dual"),
+            &root.path().join("node_modules/dual/require.cjs"),
+        );
     }
 
     #[cfg(unix)]

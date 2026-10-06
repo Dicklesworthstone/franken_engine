@@ -17,6 +17,19 @@ fn assert_eval(source: &str, expected: &str) {
     assert_eq!(outcome.value, expected, "source: {source}");
 }
 
+/// bd-9vouw.215: a shorthand property's default may hold a `?:`, whose colon
+/// is not the property's `key:` (undici's retry handler under cheerio:
+/// `const { start, size, end = size ? size - 1 : null } = contentRange`
+/// failed to parse: "`null` is a reserved word and cannot be used as a
+/// binding name"). Node v22.2.0 and Bun 1.4.2 give the expected line.
+#[test]
+fn shorthand_defaults_may_hold_conditional_expressions_bd_9vouw_215() {
+    assert_eval(
+        r#"const { start, size, end = size ? size - 1 : null } = { start: 0, size: 10 }; const { a, b = a ? 1 : null } = { a: 0 }; function f({ x = 1 ? 'y' : 'z', w: v = 0 ? 1 : 2 }) { return x + v; } const [m = 0 ? 1 : 2, { n = null ? 3 : 4 } = {}] = []; let s = ''; for (const { t = 1 ? 'one' : 'two' } of [{}]) s += t; const { q: { r = 'k' ? 'deep' : 'no' } = {} } = {}; const { 'a=b': ab } = { 'a=b': 5 }; [start, end, b, f({}), m, n, s, r, ab].join(",");"#,
+        "0,9,,y2,2,4,one,deep,5",
+    );
+}
+
 #[test]
 fn defaults_only_replace_undefined() {
     assert_eval(

@@ -5405,6 +5405,10 @@ fn find_top_level_colon_in_pattern(source: &str) -> Option<usize> {
             '(' | '[' | '{' => depth = depth.saturating_add(1),
             ')' | ']' | '}' => depth = depth.saturating_sub(1),
             ':' if depth == 0 => return Some(i),
+            // A property key never holds a top-level `=`: from here on is a
+            // shorthand's default, whose `?:` colon is not the key's
+            // (`{ end = size ? size - 1 : null }`, undici, bd-9vouw.215).
+            '=' if depth == 0 => return None,
             _ => {}
         }
     }

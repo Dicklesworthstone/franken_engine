@@ -1,19 +1,18 @@
 //! bd-asw4m.1: Promise-backed static `events.once` through the shared
 //! EventEmitter and Promise/event-loop machinery.
 //!
-//! The supported export is lowering-only pure compute: confirmed CommonJS
-//! destructures/module aliases and the `node:events` ESM named import become a
-//! `builtin:EventsOnce` hostcall. No general-purpose module object or
-//! `ModuleLoad` authority is materialized.
+//! The first-class module routes uncancelled waits to `builtin:EventsOnce`.
+//! Destructured, aliased, computed, and ESM exports retain native Promise
+//! behavior without gaining filesystem or `ModuleLoad` authority.
 
 use std::collections::BTreeSet;
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
 use frankenengine_engine::capability::RuntimeCapability;
-use frankenengine_engine::ir_contract::{EffectBoundary, Ir0Module, Ir1Op, Ir3Instruction};
+use frankenengine_engine::ir_contract::{Ir0Module, Ir1Op, Ir3Instruction};
 use frankenengine_engine::lowering_pipeline::{
-    LoweringContext, lower_ir0_to_ir1, lower_ir0_to_ir3, lower_ir1_to_ir2,
+    LoweringContext, lower_ir0_to_ir1, lower_ir0_to_ir3,
 };
 
 fn eval_console(source: &str) -> String {
@@ -200,33 +199,32 @@ fn node_events_named_import_is_elided_to_a_builtin_capability() {
     let ir0 = Ir0Module::from_syntax_tree(tree, "events_once_named_import.mjs");
     let ir1 = lower_ir0_to_ir1(&ir0).expect("lower supported events.once ESM import");
 
-    assert!(ir1.module.ops.iter().any(|op| matches!(op,
-        Ir1Op::HostCall { capability, arg_count: 2 }
-            if capability == "builtin:EventsOnce"
-    )));
     assert!(!ir1.module.ops.iter().any(|op| matches!(op,
         Ir1Op::ImportModule { specifier } if specifier == "node:events"
     )));
 
-    let ir2 = lower_ir1_to_ir2(&ir1.module).expect("annotate events.once capability");
-    let once_op = ir2
-        .module
-        .ops
-        .iter()
-        .find(|op| {
-            matches!(&op.inner,
-                Ir1Op::HostCall { capability, .. } if capability == "builtin:EventsOnce"
-            )
-        })
-        .expect("events.once IR2 hostcall");
-    assert_eq!(once_op.effect, EffectBoundary::HostcallEffect);
-    assert_eq!(
-        once_op
-            .required_capability
-            .as_ref()
-            .map(|capability| capability.0.as_str()),
-        Some("builtin:EventsOnce")
-    );
+    // The hostcall now lives inside the first-class once function, not the
+    // outer module's op list. Check the actual flattened executable and
+    // enforce the capability boundary at execution, rather than pinning the
+    // old direct-call optimization shape.
+    let output = lower_ir0_to_ir3(
+        &ir0,
+        &LoweringContext::new("events-once-gate", "bd-305gi", "builtin-only"),
+    )
+    .expect("lower the native events.once wrapper");
+    assert!(output.ir3.instructions.iter().any(|instruction| matches!(instruction,
+        Ir3Instruction::HostCall { capability, args, .. }
+            if capability.0 == "builtin:EventsOnce" && args.count == 2
+    )));
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
+    let error = InterpreterCore::new(config, "events-once-denied")
+        .execute(&output.ir3)
+        .expect_err("the module must not bypass the missing Builtin grant");
+    assert!(format!("{error:?}").to_lowercase().contains("capability"), "{error}");
 }
 
 #[test]
@@ -255,46 +253,30 @@ fn async_function_lowering_emits_a_real_await_instruction() {
 }
 
 #[test]
-fn unsupported_or_first_class_events_once_shapes_stay_fail_closed() {
+fn first_class_events_once_shapes_execute_and_dynamic_requires_stay_refused() {
     for source in [
         "const { once } = require('events'); const saved = once; console.log(typeof saved);",
         "const events = require('events'); const saved = events.once; console.log(typeof saved);",
-        "const events = require('events'); const e = {}; events['once'](e, 'x');",
-        "const name = 'events'; const events = require(name); console.log(events);",
     ] {
-        let error = eval_error(source);
-        assert!(
-            error.contains("ambient authority violation"),
-            "unsupported events.once shape must remain ambient-refused, got: {error}"
-        );
+        assert_eq!(eval_console(source), "function");
     }
+    assert_eq!(eval_console(
+        "const events = require('events'); const e = new events(); \
+         events['once'](e, 'x').then((values) => console.log(values[0])); e.emit('x', 7);"
+    ), "7");
+    let error = eval_error(
+        "const name = 'events'; const events = require(name); console.log(events);",
+    );
+    assert!(error.contains("ambient authority violation"), "{error}");
 
-    // `import events from 'node:events'; events.once(emitter, 'x')` lowers
-    // as the supported CommonJS alias `events.once(...)` since bd-9vouw.181,
-    // so only the value use of a named import stays unsupported here.
     {
         let source = "import { once } from 'node:events';\nconsole.log(typeof once);\n";
         let tree = frankenengine_engine::parser_api_stability::parse_module(source)
-            .expect("parse unsupported ESM events shape");
-        let ir0 = Ir0Module::from_syntax_tree(tree, "unsupported_events_once.mjs");
-        // An import of a core module with a require facade lowers as that
-        // require (bd-9vouw.181), so an unsupported shape is refused at
-        // lowering by the ambient-authority refusal of `require`; a shape
-        // left as an explicit import fails when it loads. Neither becomes a
-        // forged EventsOnce HostCall.
-        match lower_ir0_to_ir1(&ir0) {
-            Err(error) => assert!(
-                error.to_string().contains("ambient authority violation"),
-                "unsupported ESM events shape must stay refused, got: {error}"
-            ),
-            Ok(ir1) => {
-                assert!(ir1.module.ops.iter().any(|op| matches!(op,
-                    Ir1Op::ImportModule { specifier } if specifier == "node:events"
-                )));
-                assert!(!ir1.module.ops.iter().any(|op| matches!(op,
-                    Ir1Op::HostCall { capability, .. } if capability == "builtin:EventsOnce"
-                )));
-            }
-        }
+            .expect("parse first-class ESM events export");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "first_class_events_once.mjs");
+        let ir1 = lower_ir0_to_ir1(&ir0).expect("lower first-class ESM export");
+        assert!(!ir1.module.ops.iter().any(|op| matches!(op,
+            Ir1Op::ImportModule { specifier } if specifier == "node:events"
+        )));
     }
 }

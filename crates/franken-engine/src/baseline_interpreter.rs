@@ -42239,7 +42239,28 @@ impl InterpreterCore {
             BuiltinFunctionKind::StandardConstructor => {
                 self.call_standard_constructor(module, builtin, args)
             }
-            BuiltinFunctionKind::StaticHostcall => self.call_static_hostcall(module, builtin, args),
+            BuiltinFunctionKind::StaticHostcall => {
+                let result = self.call_static_hostcall(module, builtin, args)?;
+                match receiver {
+                    // bd-9vouw.94: `C.from(...)` / `C.of(...)` with a
+                    // constructor `C` (a subclass of Array inherits them)
+                    // construct a C (ES2020 22.1.2.1 step 5.a, 22.1.2.3
+                    // step 4); they returned a plain Array.
+                    Some(ref constructor @ (Value::Closure(_) | Value::Function(_)))
+                        if matches!(
+                            &*builtin.module_specifier,
+                            "builtin:ArrayFrom" | "builtin:ArrayOf"
+                        ) && self.is_constructible_value(constructor) =>
+                    {
+                        self.array_static_result_for_constructor(
+                            module,
+                            constructor.clone(),
+                            result,
+                        )
+                    }
+                    _ => Ok(result),
+                }
+            }
             BuiltinFunctionKind::PrototypeGetter => {
                 self.call_prototype_getter(module, builtin, receiver.unwrap_or(Value::Undefined))
             }
@@ -101359,6 +101380,56 @@ impl InterpreterCore {
             }
         }
         Ok(Value::Undefined)
+    }
+
+    /// bd-9vouw.94: the result of Array.from / Array.of called with the
+    /// constructor `constructor`: `new constructor()` holding the elements of
+    /// the plain array the builtin produced (CreateDataPropertyOrThrow per
+    /// index), then `length` set. A construct result that is not an object
+    /// is a TypeError.
+    fn array_static_result_for_constructor(
+        &mut self,
+        module: &Ir3Module,
+        constructor: Value,
+        plain: Value,
+    ) -> Result<Value, InterpreterError> {
+        let Value::Object(plain_id) = plain else {
+            return Ok(plain);
+        };
+        let (instance, label) =
+            self.with_gc_nested_request(vec![Value::Object(plain_id)], |core| {
+                core.invoke_inline_construct_with_labels(
+                    Some(module),
+                    constructor,
+                    Vec::new(),
+                    None,
+                    None,
+                )
+            })?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        let Value::Object(instance_id) = instance else {
+            return Err(InterpreterError::TypeError {
+                expected: "object from the Array.from / Array.of constructor".to_string(),
+                got: instance.type_name().to_string(),
+            });
+        };
+        let length = self.generic_length(Some(module), plain_id)?;
+        for index in 0..usize::try_from(length).unwrap_or(usize::MAX) {
+            if let Some(element) = self.array_index_get(Some(module), plain_id, index)? {
+                self.create_data_property_or_throw(instance_id, index.to_string(), element)?;
+            }
+        }
+        self.set_object_property(
+            instance_id,
+            "length".to_string(),
+            Value::Int(i64::try_from(length).unwrap_or(i64::MAX)),
+        )?;
+        Ok(Value::Object(instance_id))
     }
 
     /// bd-9vouw.94: ES2020 22.1.3 ArraySpeciesCreate(original, length): the

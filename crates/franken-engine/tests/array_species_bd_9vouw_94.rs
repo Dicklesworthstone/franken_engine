@@ -23,7 +23,13 @@
 //! constructor made non-writable, and a non-configurable property or a
 //! non-extensible result is a TypeError.
 //!
-//! No-claim: Array.from/of ignore their `this`.
+//! PROGRAM_FROM covers Array.from / Array.of with a constructor `this`: a
+//! subclass inherits them and gets an instance of itself (they returned a
+//! plain Array), a subclass constructor runs, a plain function receiver
+//! builds a non-array, and Array.from itself still builds an Array.
+//!
+//! No-claim: an array-like source constructs with no argument (the spec
+//! passes its length); only a constructor that reads its argument can tell.
 
 #![forbid(unsafe_code)]
 
@@ -147,6 +153,16 @@ flatMap 7 true true true
 non-configurable TypeError
 non-extensible TypeError"#;
 
+const PROGRAM_FROM: &str = r#"class A extends Array {}
+class B extends Array { constructor(...a) { super(...a); this.tag = 'b'; } }
+function F() { this.made = true; }
+var a = A.from([1, 2, 3]); var o = A.of(7, 8); var b = B.from(new Set(['x', 'y'])); var f = Array.from.call(F, [5, 6]);
+console.log(a instanceof A, a.length, a.join(), o instanceof A, o.join(), b instanceof B, b.tag, b.join(), f instanceof F, f.made, f.length, f[1], Array.isArray(f), Array.from([1]).constructor === Array, A.from([4], x => x * 2).join());
+"#;
+
+const NODE_OUTPUT_FROM: &str = r#"true 3 1,2,3 true 7,8 true b x,y true true 2 6 false true 8
+"#;
+
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
@@ -214,4 +230,10 @@ fn species_results_get_create_data_property_semantics() {
         assert_eq!(actual, expected, "line {}", index + 1);
     }
     assert_eq!(output.lines().count(), NODE_OUTPUT_DEFINE.lines().count());
+}
+
+#[test]
+fn array_from_and_of_construct_their_this_bd_9vouw_94() {
+    let output = console_output(PROGRAM_FROM).expect("the program runs");
+    assert_eq!(output, NODE_OUTPUT_FROM.trim_end());
 }

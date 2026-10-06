@@ -84,3 +84,13 @@ fn a_do_statement_in_an_else_clause_keeps_its_condition_bd_9vouw_196() {
         ]
     );
 }
+
+/// bd-9vouw.207: babel's istanbul output (jsdiff's json.js) puts the `.` of a
+/// member access on a line of its own between comment lines; that line
+/// continues the previous one and the line after it continues the dot. A
+/// decimal point at a line end (`1.`) still ends its number.
+#[test]
+fn a_lone_dot_line_continues_a_member_access_bd_9vouw_207() {
+    let source = "var _line = { lineDiff: { tokenize: 42 } };\nvar o = {};\no.tokenize =\n/*istanbul ignore start*/\n_line\n/*istanbul ignore end*/\n.\n/*istanbul ignore start*/\nlineDiff\n/*istanbul ignore end*/\n.tokenize;\nvar n = 1.\nvar m = 2\nconsole.log(o.tokenize, n + m);\n";
+    assert_eq!(run(source), ["42 3"]);
+}

@@ -2409,9 +2409,13 @@ fn merge_logical_lines_requires_continuation(
     trailing_identifier: &str,
     trailing_identifier_follows_dot: bool,
 ) -> bool {
+    // A trailing `.` is a member access waiting for its name (a decimal
+    // point is recorded as the digit before it, bd-9vouw.207).
     if matches!(
         last_significant,
-        Some('=' | '?' | ':' | ',' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>')
+        Some(
+            '=' | '?' | ':' | ',' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '.'
+        )
     ) {
         return true;
     }
@@ -3348,11 +3352,14 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             // dot cannot continue the expression) and the dot is followed by
             // an identifier start (so `.5` numeric literals never merge).
             let trimmed_line = line.trim_start();
+            // A lone `.` continues too: babel's istanbul output puts the dot
+            // of `_line.lineDiff` on a line of its own between comment lines
+            // (jsdiff's json.js), which became a statement `.`
+            // (bd-9vouw.207).
             let dot_continues_previous = trimmed_line.starts_with('.')
-                && trimmed_line[1..]
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+                && trimmed_line[1..].chars().next().is_none_or(|c| {
+                    c.is_ascii_alphabetic() || c == '_' || c == '$' || c.is_whitespace()
+                })
                 && result
                     .last()
                     .is_some_and(|prev: &LogicalLine| !prev.text.ends_with(';'));
@@ -3643,6 +3650,10 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     }
                     last_significant = Some(ch);
                 }
+                // A decimal point (`1.`, `2.5`) belongs to its number; it is
+                // not a member access waiting for a name (bd-9vouw.207).
+                '.' if trailing_identifier.is_empty()
+                    && last_significant.is_some_and(|c| c.is_ascii_digit()) => {}
                 ch => {
                     last_significant = Some(ch);
                     trailing_identifier.clear();
@@ -20823,6 +20834,15 @@ mod tests {
         let lines = merge_logical_lines("var m =\n  (a * 2) /\n  (b + 1);\nf()");
         let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
         assert_eq!(texts, ["var m = (a * 2) / (b + 1);", "f()"]);
+    }
+
+    #[test]
+    fn merge_logical_lines_continues_across_a_lone_dot() {
+        // bd-9vouw.207: a line ending with `.` continues, and so does a line
+        // that is a lone `.`; a decimal point does not.
+        let lines = merge_logical_lines("x = a\n.\nb\nvar n = 1.\nf()");
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(texts, ["x = a . b", "var n = 1.", "f()"]);
     }
 
     #[test]

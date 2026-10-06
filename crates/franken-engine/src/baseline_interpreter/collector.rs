@@ -1707,6 +1707,8 @@ impl InterpreterCore {
             closures: _,
             closure_method_metadata: _,
             closure_lexical_super_metadata: _,
+            // Per-module memo of IR headers and booleans (bd-9vouw.159).
+            lexical_super_functions: _,
             arrow_lexical_this: _,
             closure_module_origins: _,
             closure_generated_function_artifacts: _,

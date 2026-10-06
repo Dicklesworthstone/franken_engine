@@ -3343,10 +3343,6 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut last_significant: Option<char> = None;
     let mut trailing_identifier = String::new();
     let mut trailing_identifier_follows_dot = false;
-    // A space or line break ends the identifier being read: the next word is
-    // a new one (`k in`, `async function`), not a continuation (`kin`).
-    let mut trailing_identifier_closed = false;
-
     for (line_idx, physical_line) in physical_lines.iter().copied().enumerate() {
         let line_no = (line_idx as u64).saturating_add(1);
         let segment = physical_line.segment;
@@ -3545,7 +3541,9 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             }
         }
 
-        trailing_identifier_closed = true;
+        // A space or line break ends the identifier being read: the next word
+        // is a new one (`k in`, `async function`), not a continuation (`kin`).
+        let mut trailing_identifier_closed = true;
         let mut chars = line.chars().peekable();
         while let Some(ch) = chars.next() {
             if in_block_comment {

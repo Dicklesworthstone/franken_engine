@@ -12218,6 +12218,27 @@ fn parse_for_statement(
 
 /// Detect `for (binding in expr)` or `for (binding of expr)` patterns.
 /// Returns `Some(Statement)` if matched, `None` for a classic C-style for.
+/// Whether the target of `pattern = value` (an array or object assignment
+/// pattern) has a member expression among its targets, which a binding
+/// pattern cannot express (bd-9vouw.229).
+fn destructuring_assignment_has_member_target(assign: &Expression) -> bool {
+    fn has_member(target: &Expression) -> bool {
+        match target {
+            Expression::Member { .. } => true,
+            Expression::ArrayLiteral(elements) => elements.iter().flatten().any(has_member),
+            Expression::ObjectLiteral(properties) => properties
+                .iter()
+                .any(|property| has_member(&property.value)),
+            Expression::SpreadElement(inner) => has_member(inner),
+            Expression::Assignment { left, .. } => has_member(left),
+            _ => false,
+        }
+    }
+    matches!(assign, Expression::Assignment { left, .. }
+        if matches!(left.as_ref(), Expression::ArrayLiteral(_) | Expression::ObjectLiteral(_))
+            && has_member(left))
+}
+
 fn try_parse_for_in_of(
     header: &str,
     rest: &str,
@@ -12257,19 +12278,23 @@ fn try_parse_for_in_of(
         // A member target (`for (o.a of xs)`, `for (this.#k in o)`) is not a
         // binding pattern. The loop binds a fresh block-scoped name and
         // assigns the target from it at the start of each iteration, which
-        // is when the spec evaluates the target reference.
-        Err(_)
-            if binding_kind.is_none()
-                && !lhs.starts_with(['[', '{'])
-                && split_for_header(header).is_none() =>
-        {
+        // is when the spec evaluates the target reference. A destructuring
+        // head with a member target (`for ([o.a, o.b] of xs)`, `for ({ k: o.v }
+        // of xs)`) is desugared the same way through the assignment-pattern
+        // parser, which takes member targets (bd-9vouw.229); a pattern that
+        // has none keeps its own binding error (an early error such as
+        // `[...x = 1]`).
+        Err(error) if binding_kind.is_none() && split_for_header(header).is_none() => {
+            let target = format!("{lhs} = {FOR_IN_OF_TARGET_BINDING}");
+            let assign = if lhs.starts_with(['[', '{']) {
+                match parse_expression(&target, span, context, 1) {
+                    Ok(assign) if destructuring_assignment_has_member_target(&assign) => assign,
+                    _ => return Err(error),
+                }
+            } else {
+                parse_expression(&target, span, context, 1)?
+            };
             let binding = BindingPattern::Identifier(FOR_IN_OF_TARGET_BINDING.to_string());
-            let assign = parse_expression(
-                &format!("{lhs} = {FOR_IN_OF_TARGET_BINDING}"),
-                span,
-                context,
-                1,
-            )?;
             let body_src = rest.trim();
             reject_declaration_in_statement_position(
                 body_src,
@@ -20954,6 +20979,34 @@ mod tests {
             texts,
             ["var d = new B()", "var t = k in d", "var n = o.new", "f()"]
         );
+    }
+
+    #[test]
+    fn for_in_of_destructuring_heads_take_member_targets_only_when_valid() {
+        // bd-9vouw.229: member targets in a destructuring head parse; a head
+        // pattern with an early error keeps it, member target or not (Node:
+        // SyntaxError for each `bad` source).
+        for source in [
+            "var o = {}; for ([o.a, o.b] of []) ;",
+            "var o = {}; for ({ k: o.v, ...o.rest } of []) ;",
+            "var o = {}; for ([o.d = 1, [o.e]] in {}) ;",
+        ] {
+            CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "for ([...x = 1] of []) ;",
+            "var o = {}; for ([...o.x = 1] of []) ;",
+            "var o = {}; for ([o.a, ...o.b,] of []) ;",
+        ] {
+            assert!(
+                CanonicalEs2020Parser
+                    .parse(source, ParseGoal::Script)
+                    .is_err(),
+                "{source} must be rejected"
+            );
+        }
     }
 
     #[test]

@@ -132,3 +132,15 @@ fn minified_for_in_of_heads_parse_bd_9vouw_219() {
     let source = "var out=[];for(const[n,r]of[[1,2],[3,4]])out.push(n+r);for(const{a,b}of[{a:1,b:2}])out.push(a*b);\nlet s=0;for(let[a]of[[5]])s+=a;for(var{b}of[{b:6}])s+=b;out.push(s);var t=[];for(t[0]of[7,8]);out.push(t[0]);\nfor(const x of\"ab\")out.push(x);for(const y of`cd`)out.push(y);for(const k in{p:1,q:2})out.push(k);\nfor(let index=0;index<2;index++)out.push('i'+index);var o={z:1},c=0;for(;'z'in o&&c<1;c++)out.push('in');for(let of of[9])out.push(of);\nconsole.log(out.join());\n";
     assert_eq!(run(source), ["3,7,2,11,8,a,b,c,d,p,q,i0,i1,in,9"]);
 }
+
+/// bd-9vouw.229: a for-in/of head that destructures into member targets
+/// (`for ([o.a, o.b] of xs)`, `for ({ k: o.v, ...o.rest } of xs)`, defaults,
+/// nesting, element targets, a labeled `continue`) assigns them at the start
+/// of each iteration. The head was parsed as a binding pattern, which has no
+/// member targets ("unsupported binding pattern"). Node v22.2.0 prints this
+/// line; Bun 1.4.2 agrees.
+#[test]
+fn for_in_of_heads_destructure_into_member_targets_bd_9vouw_229() {
+    let source = "const o = {}; const r = [];\nfor ([o.a, o.b] of [[1, 2], [3, 4]]) r.push(o.a + o.b);\nfor ({ k: o.v, ...o.rest } of [{ k: 5, x: 6 }]) r.push(o.v, JSON.stringify(o.rest));\nfor ([o.d = 9, [o.e]] of [[undefined, [7]]]) r.push(o.d, o.e);\nfor ([o.f] in { ab: 1 }) r.push(o.f);\nconst arr = [];\nfor ([arr[0], arr[1]] of [['p', 'q']]) r.push(arr.join(''));\nouter: for ([o.g] of [[1], [2], [3]]) { if (o.g === 2) continue outer; r.push('g' + o.g); }\nconsole.log(r.join(' '));\n";
+    assert_eq!(run(source), ["3 7 5 {\"x\":6} 9 7 a pq g1 g3"]);
+}

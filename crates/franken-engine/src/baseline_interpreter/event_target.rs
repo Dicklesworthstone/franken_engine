@@ -17,6 +17,9 @@
 //! rethrown from dispatchEvent (Node reports it as an uncaught exception
 //! instead); `isTrusted` is always false; an `AbortSignal.timeout` timer keeps
 //! the event loop running (Node's is unref'd).
+//! Source links use non-reused object IDs without keeping the sources alive.
+//! Existing dependent links still use strong heap references. Settled links
+//! are detached, but full weak-dependent GC semantics are not provided here.
 
 use super::*;
 
@@ -100,6 +103,8 @@ const SIGNAL_ALGORITHMS_SLOT: &str = "__signalAbortAlgorithms";
 const SIGNAL_DEPENDENTS_SLOT: &str = "__signalDependents";
 // Present only on composed signals (including any([])); absence denotes a
 // root signal. Flattened source order is retained, not a chain of composites.
+// Store source IDs as integers so a live composite does not root an abandoned
+// source and, transitively, all the other composites registered on that source.
 const SIGNAL_SOURCES_SLOT: &str = "__signalSources";
 
 /// The internal slots above: never own keys guest code lists.
@@ -618,7 +623,7 @@ impl InterpreterCore {
         // allocate or collect, and `to_abort` itself only holds native IDs.
         let mut first_error = None;
         let mut outcome = Ok(());
-        for target in std::iter::once(signal).chain(to_abort) {
+        for target in std::iter::once(signal).chain(to_abort.iter().copied()) {
             let step = self
                 .signal_run_abort_steps(module, target)
                 .map(|()| (Value::Undefined, Label::Public));
@@ -635,10 +640,70 @@ impl InterpreterCore {
         let cleanup = self.set_event_slot(signal, SIGNAL_DEPENDENTS_SLOT, Value::Undefined);
         outcome?;
         cleanup?;
+        self.signal_unlink_aborted_sources(&to_abort)?;
         if let Some((thrown, label)) = first_error {
             return Err(self.throw_guest_value(thrown, label)?);
         }
         Ok(())
+    }
+
+    /// Drop settled composites from every original source, including sources
+    /// that have not aborted. Prune each source once rather than rebuilding a
+    /// shared source's entire list for every child in a large fan-out.
+    fn signal_unlink_aborted_sources(
+        &mut self,
+        dependents: &[ObjectId],
+    ) -> Result<(), InterpreterError> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut sources = Vec::new();
+        for dependent in dependents {
+            for original in self.signal_source_objects(*dependent)? {
+                if seen.insert(original.0) {
+                    sources.push(original);
+                }
+            }
+        }
+        for original in sources {
+            let mut remaining = self.event_array_objects(original, SIGNAL_DEPENDENTS_SLOT)?;
+            let previous_len = remaining.len();
+            remaining.retain(|dependent| {
+                !self.event_slot(*dependent, SIGNAL_ABORTED_SLOT).is_truthy()
+            });
+            if remaining.len() == previous_len {
+                continue;
+            }
+            let list = if remaining.is_empty() {
+                Value::Undefined
+            } else {
+                let values: Vec<Value> = remaining.into_iter().map(Value::Object).collect();
+                Value::Object(self.alloc_array_from_values(&values)?)
+            };
+            self.set_event_slot(original, SIGNAL_DEPENDENTS_SLOT, list)?;
+        }
+        for dependent in dependents {
+            // Keep the slot present: an empty dependent is not a new root.
+            self.set_event_slot(*dependent, SIGNAL_SOURCES_SLOT, Value::Undefined)?;
+        }
+        Ok(())
+    }
+
+    /// The heap never reuses object IDs. Integer IDs therefore act as weak
+    /// source handles: skip reclaimed sources instead of retaining them via
+    /// Value::Object edges traced by the collector. The source list itself is
+    /// still an ordinary accounted, traced array owned by the composite.
+    fn signal_source_objects(&mut self, signal: ObjectId) -> Result<Vec<ObjectId>, InterpreterError> {
+        let Value::Object(list) = self.event_slot(signal, SIGNAL_SOURCES_SLOT) else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .array_like_values(list)?
+            .into_iter()
+            .filter_map(|value| match value {
+                Value::Int(id) => u32::try_from(id).ok().map(ObjectId),
+                _ => None,
+            })
+            .filter(|source| self.has_event_slot(*source, SIGNAL_ABORTED_SLOT))
+            .collect())
     }
 
     fn signal_mark_aborted(
@@ -646,8 +711,9 @@ impl InterpreterCore {
         signal: ObjectId,
         reason: Value,
     ) -> Result<(), InterpreterError> {
-        self.set_event_slot(signal, SIGNAL_ABORTED_SLOT, Value::Bool(true))?;
-        self.set_event_slot(signal, SIGNAL_REASON_SLOT, reason)
+        // Admit the potentially allocating reason before publishing aborted.
+        self.set_event_slot(signal, SIGNAL_REASON_SLOT, reason)?;
+        self.set_event_slot(signal, SIGNAL_ABORTED_SLOT, Value::Bool(true))
     }
 
     /// Remove the listeners added with this signal, then fire `abort`.
@@ -717,7 +783,7 @@ impl InterpreterCore {
         let mut seen = std::collections::BTreeSet::new();
         for source in sources {
             let candidates = if self.has_event_slot(source, SIGNAL_SOURCES_SLOT) {
-                self.event_array_objects(source, SIGNAL_SOURCES_SLOT)?
+                self.signal_source_objects(source)?
             } else {
                 vec![source]
             };
@@ -727,7 +793,10 @@ impl InterpreterCore {
                 }
             }
         }
-        let root_values: Vec<Value> = roots.iter().copied().map(Value::Object).collect();
+        let root_values: Vec<Value> = roots
+            .iter()
+            .map(|root| Value::Int(i64::from(root.0)))
+            .collect();
         let root_list = self.alloc_array_from_values(&root_values)?;
         self.set_event_slot(result, SIGNAL_SOURCES_SLOT, Value::Object(root_list))?;
         self.hide_internal_slots(result, &[SIGNAL_SOURCES_SLOT])?;
@@ -1129,5 +1198,193 @@ impl InterpreterCore {
         values.push(value);
         let list = self.alloc_array_from_values(&values)?;
         self.set_event_slot(id, slot, Value::Object(list))
+    }
+}
+
+#[cfg(test)]
+mod abort_graph_tests {
+    use super::*;
+    use crate::ir_contract::Ir0Module;
+    use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+
+    fn runtime() -> (InterpreterCore, Ir3Module) {
+        let tree = crate::parser_api_stability::parse_script("0;").expect("empty program");
+        let module = lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "abort-graph-unit.js"),
+            &LoweringContext::new("abort-graph-unit", "abort-graph-unit", "abort-graph-unit"),
+        )
+        .expect("empty program lowers")
+        .ir3;
+        let core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "abort-graph-unit");
+        (core, module)
+    }
+
+    fn any(core: &mut InterpreterCore, module: &Ir3Module, sources: &[ObjectId]) -> ObjectId {
+        let values: Vec<Value> = sources.iter().copied().map(Value::Object).collect();
+        let list = core.alloc_array_from_values(&values).expect("source array");
+        core.seed_register(0, Value::Object(list))
+            .expect("source register");
+        match core
+            .abort_signal_any(module, RegRange { start: 0, count: 1 })
+            .expect("composite signal")
+        {
+            Value::Object(signal) => signal,
+            other => panic!("expected signal object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn native_source_sets_flatten_and_deduplicate_in_input_order() {
+        let (mut core, module) = runtime();
+        let a = core.alloc_abort_signal().expect("a");
+        let b = core.alloc_abort_signal().expect("b");
+        let first = any(&mut core, &module, &[b, a, b]);
+        let second = any(&mut core, &module, &[first, a, first]);
+        assert_eq!(
+            core.signal_source_objects(second).unwrap(),
+            vec![b, a]
+        );
+        let Value::Object(source_list) = core.event_slot(second, SIGNAL_SOURCES_SLOT) else {
+            panic!("a dependent keeps its ordered source set");
+        };
+        assert_eq!(
+            core.array_like_values(source_list).unwrap(),
+            vec![Value::Int(i64::from(b.0)), Value::Int(i64::from(a.0))],
+            "source links must not be strong object references"
+        );
+        for source in [a, b] {
+            assert_eq!(
+                core.event_array_objects(source, SIGNAL_DEPENDENTS_SLOT)
+                    .unwrap(),
+                vec![first, second]
+            );
+        }
+        assert!(
+            core.event_array_objects(first, SIGNAL_DEPENDENTS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn native_settlement_unlinks_all_original_sources_without_removing_live_peers() {
+        let (mut core, module) = runtime();
+        let a = core.alloc_abort_signal().expect("a");
+        let b = core.alloc_abort_signal().expect("b");
+        let first = any(&mut core, &module, &[a, b]);
+        let second = any(&mut core, &module, &[first]);
+        let live = any(&mut core, &module, &[b]);
+        core.signal_abort_with(&module, a, Value::str("cancel"))
+            .expect("abort a");
+        assert!(
+            core.event_array_objects(a, SIGNAL_DEPENDENTS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            core.event_array_objects(b, SIGNAL_DEPENDENTS_SLOT).unwrap(),
+            vec![live]
+        );
+        for signal in [first, second] {
+            assert!(core.has_event_slot(signal, SIGNAL_SOURCES_SLOT));
+            assert!(
+                core.signal_source_objects(signal).unwrap().is_empty()
+            );
+            assert_eq!(
+                core.event_slot(signal, SIGNAL_REASON_SLOT),
+                Value::str("cancel")
+            );
+        }
+        core.signal_abort_with(&module, b, Value::str("later"))
+            .expect("abort b");
+        assert_eq!(core.event_slot(live, SIGNAL_REASON_SLOT), Value::str("later"));
+        assert_eq!(
+            core.event_slot(second, SIGNAL_REASON_SLOT),
+            Value::str("cancel")
+        );
+        assert!(
+            core.event_array_objects(b, SIGNAL_DEPENDENTS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn native_empty_composite_does_not_become_an_original_source() {
+        let (mut core, module) = runtime();
+        let empty = any(&mut core, &module, &[]);
+        let nested = any(&mut core, &module, &[empty, empty]);
+        assert!(
+            core.event_array_objects(empty, SIGNAL_DEPENDENTS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            core.signal_source_objects(nested).unwrap().is_empty()
+        );
+        assert!(!core.event_slot(nested, SIGNAL_ABORTED_SLOT).is_truthy());
+    }
+
+    #[test]
+    fn completed_requests_do_not_accumulate_on_a_long_lived_shared_source() {
+        let (mut core, module) = runtime();
+        let shared = core.alloc_abort_signal().expect("shared source");
+        for request_id in 0..32 {
+            let request = core.alloc_abort_signal().expect("request source");
+            let combined = any(&mut core, &module, &[request, shared]);
+            let nested = any(&mut core, &module, &[combined]);
+            core.signal_abort_with(&module, request, Value::Int(request_id))
+                .expect("finish request");
+            assert!(
+                core.event_array_objects(shared, SIGNAL_DEPENDENTS_SLOT)
+                    .unwrap()
+                    .is_empty(),
+                "the shared source must release request {request_id}"
+            );
+            assert_eq!(
+                core.event_slot(nested, SIGNAL_REASON_SLOT),
+                Value::Int(request_id)
+            );
+        }
+        let last = any(&mut core, &module, &[shared]);
+        core.signal_abort_with(&module, shared, Value::str("shutdown"))
+            .expect("new subscriptions still work after pruning");
+        assert_eq!(
+            core.event_slot(last, SIGNAL_REASON_SLOT),
+            Value::str("shutdown")
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn weak_source_handles_ignore_absent_and_unbranded_objects() {
+        let (mut core, module) = runtime();
+        let original = core.alloc_abort_signal().expect("original source");
+        let dependent = any(&mut core, &module, &[original]);
+        let ordinary = core.alloc_object_with_prototype(None).expect("ordinary object");
+        let list = core
+            .alloc_array_from_values(&[
+                Value::Int(-1),
+                Value::Int(i64::from(u32::MAX)),
+                Value::Int(i64::from(ordinary.0)),
+                Value::Int(i64::from(original.0)),
+            ])
+            .expect("weak handles");
+        core.set_event_slot(dependent, SIGNAL_SOURCES_SLOT, Value::Object(list))
+            .expect("source list");
+        assert_eq!(core.signal_source_objects(dependent).unwrap(), vec![original]);
+        let nested = any(&mut core, &module, &[dependent]);
+        assert_eq!(core.signal_source_objects(nested).unwrap(), vec![original]);
     }
 }

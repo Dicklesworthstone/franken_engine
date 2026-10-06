@@ -137,6 +137,17 @@ fn is_commonjs_wrapper_reference(outer_lookup: &BTreeMap<String, BindingId>, nam
         .is_some_and(|wrapper| outer_lookup.get(&capture_origin_sentinel(name)) == Some(wrapper))
 }
 
+/// Marks the body-local bridge `materialize_source_binding_id` made for a
+/// CommonJS wrapper binding (bd-9vouw.211). A nested body that assigns the
+/// wrapper (`module.exports = exports = factory()`) stores through the
+/// bridge, and the marker tells `rewrite_unresolved_function_body_loads`
+/// that the store targets the module's binding rather than a declaration of
+/// the body. Not lexical-prefixed: nested bodies do not inherit it and a
+/// block's marker restore keeps it.
+fn commonjs_wrapper_bridge_marker(binding_id: BindingId) -> String {
+    format!("\0commonjs-wrapper-bridge\0{binding_id}")
+}
+
 fn capture_cell_name(name: &str, origin_id: BindingId) -> String {
     format!("{CAPTURE_CELL_NAME_PREFIX}{origin_id}\0{name}")
 }
@@ -217,6 +228,9 @@ fn materialize_source_binding_id(
         kind: BindingKind::Let,
     });
     binding_lookup.insert(name.to_string(), binding_id);
+    if is_commonjs_wrapper_reference(binding_lookup, name) {
+        binding_lookup.insert(commonjs_wrapper_bridge_marker(binding_id), binding_id);
+    }
     Ok(binding_id)
 }
 
@@ -10675,6 +10689,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         fn_value_stack.push(src);
                         continue;
                     }
+                    if let Some(name) = runtime_global_id_to_name.get(binding_id) {
+                        // bd-9vouw.211: a name the body loads through the
+                        // scope chain (a CommonJS wrapper binding assigned in
+                        // a nested function) is stored there too.
+                        let src = pop_lowering_value(&mut fn_value_stack)?;
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src,
+                            name_pool_index: pool_idx,
+                        });
+                        fn_value_stack.push(src);
+                        continue;
+                    }
                     let dst = function_local_register(
                         *binding_id,
                         &mut fn_binding_regs,
@@ -10984,6 +11011,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     if let Some(name) = fv_id_to_name
                         .get(binding_id)
                         .or_else(|| runtime_local_id_to_name.get(binding_id))
+                        .or_else(|| runtime_global_id_to_name.get(binding_id))
                     {
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
@@ -13021,18 +13049,24 @@ fn rewrite_unresolved_function_body_loads(
     // bd-rff5g: a CommonJS wrapper binding read in a nested body is loaded by
     // name through the closure's captured scope chain, where the loader wrote
     // it (see `is_commonjs_wrapper_reference`); it is never captured.
+    // bd-9vouw.211: a store through the body's wrapper bridge
+    // (`module.exports = exports = factory()`) assigns that same binding, so
+    // only a declaration of the body makes the name local.
+    let is_wrapper_bridge = |binding_id: &BindingId| {
+        body_lookup.get(&commonjs_wrapper_bridge_marker(*binding_id)) == Some(binding_id)
+    };
     let mut commonjs_wrapper_loads: Vec<(String, BindingId)> = body_lookup
         .iter()
         .filter(|(name, binding_id)| {
             !is_internal_lowering_binding(name)
                 && !pre_lower_names.contains(name.as_str())
-                && !locally_defined_ids.contains(binding_id)
+                && (!locally_defined_ids.contains(binding_id) || is_wrapper_bridge(binding_id))
                 && is_commonjs_wrapper_reference(outer_lookup, name)
         })
         .map(|(name, binding_id)| (name.clone(), *binding_id))
         .collect();
     for (name, binding_id) in &parameter_prologue.references {
-        if !locally_defined_ids.contains(binding_id)
+        if (!locally_defined_ids.contains(binding_id) || is_wrapper_bridge(binding_id))
             && is_commonjs_wrapper_reference(outer_lookup, name)
             && !commonjs_wrapper_loads
                 .iter()

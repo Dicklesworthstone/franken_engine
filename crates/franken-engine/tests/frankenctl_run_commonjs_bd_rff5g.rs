@@ -563,3 +563,96 @@ console.log(check(), typeof Object.getPrototypeOf(Era), e.base, e.era, e.hi(), e
     );
     assert_eq!(lines, ["true function 1 2 hi true"]);
 }
+
+/// A nested function that assigns `exports` (or `module`, `require`) reads
+/// and writes the module's binding (bd-9vouw.211). The assignment made the
+/// name a fresh function-local, undefined until written, so the UMD header
+/// `if (typeof exports === "object") { module.exports = exports = factory(); }`
+/// took its browser branch in every crypto-js file, and the write never
+/// reached the module. Declarations of the body (var, let, parameter, catch
+/// parameter) stay local and leave the module's `exports` alone.
+#[test]
+fn nested_functions_assign_the_commonjs_wrapper_bindings_bd_9vouw_211() {
+    let lines = run_tree(
+        "fe_run_cjs_wrapper_assignment",
+        &[
+            (
+                "lib/core.js",
+                r#";(function (root, factory) {
+  if (typeof exports === "object") {
+    module.exports = exports = factory();
+  }
+  else if (typeof define === "function" && define.amd) {
+    define([], factory);
+  }
+  else {
+    root.Lib = factory();
+  }
+}(this, function () {
+  var Lib = Lib || { parts: ['core'] };
+  return Lib;
+}));
+"#,
+            ),
+            (
+                "lib/ext.js",
+                r#";(function (root, factory) {
+  if (typeof exports === "object") {
+    module.exports = exports = factory(require("./core"));
+  }
+  else {
+    factory(root.Lib);
+  }
+}(this, function (Lib) {
+  Lib.parts.push('ext');
+  return Lib;
+}));
+"#,
+            ),
+            (
+                "lib/assign.js",
+                r#"function set() { exports = { b: 2 }; }
+function get() { return exports; }
+function clear() { exports = null; }
+function fill() { exports ||= { filled: typeof require }; }
+const viaArrow = () => { const inner = () => { module.exports.arrow = typeof exports; }; inner(); };
+set();
+viaArrow();
+module.exports.sawWrite = JSON.stringify(get()) + ' ' + JSON.stringify(exports);
+clear();
+fill();
+module.exports.filled = JSON.stringify(exports);
+"#,
+            ),
+            (
+                "lib/locals.js",
+                r#"exports.v = function () { var exports = 3; exports = 4; return exports; };
+exports.l = function () { let exports = 5; { exports = 6; } return exports; };
+exports.p = function (exports) { exports = 7; return exports; };
+exports.c = function () { try { throw 8; } catch (exports) { exports = exports + 1; return exports; } };
+exports.after = function () { return typeof exports.v; };
+"#,
+            ),
+            (
+                "app.js",
+                r#"const ext = require('./lib/ext');
+const assign = require('./lib/assign');
+const locals = require('./lib/locals');
+console.log(ext.parts.join(), require('./lib/core') === ext, Object.keys(ext).join());
+console.log(assign.sawWrite, assign.arrow, assign.filled, Object.keys(assign).join());
+console.log(locals.v(), locals.l(), locals.p(1), locals.c(), locals.after(), Object.keys(locals).join());
+(function () { console.log(typeof module, typeof require, typeof exports); if (0) { module = 1; require = 2; exports = 3; } })();
+"#,
+            ),
+        ],
+    );
+    assert_eq!(
+        lines,
+        [
+            "core,ext true parts",
+            r#"{"b":2} {"b":2} object {"filled":"function"} arrow,sawWrite,filled"#,
+            "4 6 7 9 function v,l,p,c,after",
+            "object function object"
+        ]
+    );
+}

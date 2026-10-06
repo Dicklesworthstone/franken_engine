@@ -14206,6 +14206,9 @@ pub struct InterpreterCore {
     function_prototypes: SeedTrackedField<BTreeMap<(ContentHash, u32), ObjectId>>,
     /// Owner ids already digested, by module header (bd-9vouw.124).
     prototype_owner_ids: std::cell::RefCell<Vec<(IrHeader, PrototypeOwnerIds)>>,
+    /// Per-function "uses the lexical super" answers, by module header
+    /// (bd-9vouw.159).
+    lexical_super_functions: std::cell::RefCell<Vec<(IrHeader, std::sync::Arc<Vec<bool>>)>>,
     /// Set once a built-in function may have a backing object in
     /// `function_prototypes`; never cleared. Until then a property read on a
     /// built-in skips the identity digest (a JSON encoding and two SHA-256
@@ -15455,6 +15458,7 @@ impl InterpreterCore {
             iteration_traces: Vec::new(),
             function_prototypes: SeedTrackedField::new(BTreeMap::new()),
             prototype_owner_ids: std::cell::RefCell::new(Vec::new()),
+            lexical_super_functions: std::cell::RefCell::new(Vec::new()),
             builtin_function_backings: false,
             promise_capability_executor_calls: 0,
             virtual_property_deletions: false,
@@ -99314,25 +99318,45 @@ impl InterpreterCore {
         module: &Ir3Module,
         function_index: u32,
     ) -> Result<bool, InterpreterError> {
+        Ok(self
+            .lexical_super_functions(module)?
+            .get(function_index as usize)
+            .copied()
+            .unwrap_or(false))
+    }
+
+    /// bd-9vouw.159: for every function of `module`, whether it reads the
+    /// lexical `super` itself or in a closure it creates (transitively),
+    /// computed once per module header. Each closure creation used to answer
+    /// for its one function by sorting the whole function table and walking
+    /// from it: O(F log F) per closure (8.4% of scale_8000's time).
+    fn lexical_super_functions(
+        &self,
+        module: &Ir3Module,
+    ) -> Result<std::sync::Arc<Vec<bool>>, InterpreterError> {
+        if let Some((_, uses)) = self
+            .lexical_super_functions
+            .borrow()
+            .iter()
+            .find(|(header, _)| *header == module.header)
+        {
+            return Ok(std::sync::Arc::clone(uses));
+        }
         let function_count = module.function_table.len();
         let temporary_bytes = u64::try_from(function_count)
             .unwrap_or(u64::MAX)
             .saturating_mul(
                 (std::mem::size_of::<bool>()
-                    + std::mem::size_of::<usize>()
+                    + std::mem::size_of::<Vec<usize>>()
                     + std::mem::size_of::<(usize, usize)>() * 2) as u64,
             )
             .saturating_add(
                 (std::mem::size_of::<Vec<bool>>()
-                    + std::mem::size_of::<Vec<usize>>()
+                    + std::mem::size_of::<Vec<Vec<usize>>>()
                     + std::mem::size_of::<Vec<(usize, usize)>>() * 2) as u64,
             );
         self.check_temporary_memory_budget(temporary_bytes)?;
 
-        let root = function_index as usize;
-        if root >= function_count {
-            return Ok(false);
-        }
         let mut ordered_entries: Vec<(usize, usize)> = module
             .function_table
             .iter()
@@ -99358,33 +99382,52 @@ impl InterpreterCore {
             }
             offset = next;
         }
-        let mut visited = vec![false; function_count];
-        let mut worklist = Vec::with_capacity(function_count);
-        visited[root] = true;
-        worklist.push(root);
-        while let Some(current) = worklist.pop() {
-            let (start, end) = function_ranges[current];
+        let mut uses = vec![false; function_count];
+        let mut creators: Vec<Vec<usize>> = vec![Vec::new(); function_count];
+        let mut worklist = Vec::new();
+        for (index, (start, end)) in function_ranges.iter().copied().enumerate() {
             let Some(body) = module.instructions.get(start..end) else {
                 continue;
             };
             for instruction in body {
                 match instruction {
-                    Ir3Instruction::LoadSuper { .. } => return Ok(true),
+                    Ir3Instruction::LoadSuper { .. } => {
+                        if !uses[index] {
+                            uses[index] = true;
+                            worklist.push(index);
+                        }
+                    }
                     Ir3Instruction::CreateClosure { function_index, .. }
                     | Ir3Instruction::CreateArrowClosure { function_index, .. }
                     | Ir3Instruction::CreateAsyncFunction { function_index, .. }
                     | Ir3Instruction::CreateAsyncArrowClosure { function_index, .. } => {
                         let child = *function_index as usize;
-                        if child < function_count && !visited[child] {
-                            visited[child] = true;
-                            worklist.push(child);
+                        if child < function_count {
+                            creators[child].push(index);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        Ok(false)
+        // A function uses `super` when a closure it creates does: walk the
+        // creation edges backwards from every direct reader (iterative, and
+        // a cycle through recursion stops at visited functions).
+        while let Some(current) = worklist.pop() {
+            for &creator in &creators[current] {
+                if !uses[creator] {
+                    uses[creator] = true;
+                    worklist.push(creator);
+                }
+            }
+        }
+        let uses = std::sync::Arc::new(uses);
+        let mut memo = self.lexical_super_functions.borrow_mut();
+        if memo.len() >= PROTOTYPE_OWNER_MEMO_ENTRIES {
+            memo.remove(0);
+        }
+        memo.push((module.header.clone(), std::sync::Arc::clone(&uses)));
+        Ok(uses)
     }
 
     fn capture_current_lexical_super_metadata(
@@ -115869,15 +115912,28 @@ mod async_runtime_tests_current {
             "a long acyclic closure chain must complete without native recursion"
         );
 
+        // bd-9vouw.159: the scan runs once per module; later questions are
+        // answered from the memo and need no temporary memory.
         let baseline = core
             .sync_estimated_memory_bytes()
             .expect("descendant-scan fixture should fit before strict refusal");
         core.config.max_total_memory_bytes = baseline;
+        assert_eq!(core.function_uses_lexical_super(&module, 0), Ok(true));
+        assert_eq!(core.function_uses_lexical_super(&module, 1_000), Ok(true));
+        assert_eq!(core.lexical_super_functions.borrow().len(), 1);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        // The first scan of a module is budgeted.
+        let mut fresh = test_interpreter();
+        let fresh_baseline = fresh
+            .sync_estimated_memory_bytes()
+            .expect("an empty interpreter fits its budget");
+        fresh.config.max_total_memory_bytes = fresh_baseline;
         assert!(matches!(
-            core.function_uses_lexical_super(&module, 0),
+            fresh.function_uses_lexical_super(&module, 0),
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
-        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(fresh.estimated_memory_bytes(), fresh_baseline);
     }
 
     #[test]

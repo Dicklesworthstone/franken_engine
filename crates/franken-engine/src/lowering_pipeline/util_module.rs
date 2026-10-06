@@ -22,10 +22,17 @@
 //! engine's builtins, so labels and authority work as for user code.
 //!
 //! A `require` the program declares in an enclosing scope (a parameter, a
-//! local function) is its own and is called as written. Other specifiers
-//! and `require` as a value keep the ambient-authority refusal.
+//! local function) is its own and is called as written. The filesystem facade
+//! shares these hooks through `fs_module`; other unsupported specifiers and
+//! `require` as a value keep the ambient-authority refusal.
 
 use std::collections::BTreeSet;
+
+// Both facades share the existing engine-owned syntax and intrinsic hooks.
+// Filesystem methods carry no authority themselves: their native HostCalls
+// still require the caller's FsRead/FsWrite capability at invocation.
+#[path = "fs_module.rs"]
+mod fs_module;
 
 use super::LoweringPipelineError;
 use super::with_statement::{
@@ -65,7 +72,7 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         INSPECT_INTRINSIC => Some(UTIL_INSPECT_CAPABILITY),
         FORMAT_INTRINSIC => Some(UTIL_FORMAT_CAPABILITY),
         TYPE_TAG_INTRINSIC => Some(UTIL_TYPE_TAG_CAPABILITY),
-        _ => None,
+        _ => fs_module::intrinsic_capability(name),
     }
 }
 
@@ -130,6 +137,9 @@ const MODULE_GLOBALS: [&str; 14] = [
 /// `const %util_module = <module>;`, which the rewrite puts first in the
 /// program. Its initializer runs only engine-owned code.
 pub(super) fn is_module_declaration(statement: &Statement) -> bool {
+    if fs_module::is_module_declaration(statement) {
+        return true;
+    }
     matches!(
         statement,
         Statement::VariableDeclaration(declaration)
@@ -148,12 +158,14 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
 pub(super) fn rewrite_util_requires(
     tree: &SyntaxTree,
 ) -> Result<Option<SyntaxTree>, LoweringPipelineError> {
+    let fs_rewritten = fs_module::rewrite_fs_requires(tree)?;
+    let tree = fs_rewritten.as_ref().unwrap_or(tree);
     if !tree
         .body
         .iter()
         .any(|statement| UTIL_REQUIRE_SEARCH.in_statement(statement))
     {
-        return Ok(None);
+        return Ok(fs_rewritten);
     }
     let mut root = BTreeSet::new();
     var_names(&tree.body, &mut root);
@@ -165,7 +177,7 @@ pub(super) fn rewrite_util_requires(
     };
     rewriter.statements(&mut rewritten.body)?;
     if rewriter.replaced == 0 {
-        return Ok(None);
+        return Ok(fs_rewritten);
     }
     let span = rewritten.body.first().map_or_else(
         || SourceSpan::new(0, 0, 1, 1, 1, 1),

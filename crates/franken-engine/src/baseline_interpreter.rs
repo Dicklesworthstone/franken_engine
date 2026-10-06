@@ -51447,9 +51447,11 @@ impl InterpreterCore {
                                 if property_key.as_str() == Some("__proto__") {
                                     // `__proto__` reads the internal prototype link
                                     // (set by class `extends` and `o.__proto__ = p`),
-                                    // not a data property (bd-ppfds).
-                                    self.ordinary_get_prototype_of(oid)?
-                                        .map_or(Value::Null, Value::Object)
+                                    // not a data property (bd-ppfds). A function's
+                                    // backing object reports as the function
+                                    // (bd-9vouw.98).
+                                    let link = self.ordinary_get_prototype_of(oid)?;
+                                    self.prototype_value_for_link(Some(module), link)
                                 } else if ordinary_own_property_fast_path {
                                     let value = self
                                     .heap
@@ -52013,12 +52015,10 @@ impl InterpreterCore {
                                 // which lowers to `Child.prototype.__proto__ =
                                 // Parent.prototype`) traverse it — not a data
                                 // property (bd-ppfds). A non-object, non-null value
-                                // is a no-op per spec.
-                                let proto_update = match set_val {
-                                    Value::Object(pid) => Some(Some(pid)),
-                                    Value::Null => Some(None),
-                                    _ => None,
-                                };
+                                // is a no-op per spec; a function links to its
+                                // own-property backing (bd-9vouw.98).
+                                let proto_update =
+                                    self.prototype_link_for_value(Some(module), &set_val)?;
                                 if let Some(new_proto) = proto_update {
                                     self.store_prototype_link(oid, new_proto);
                                 }
@@ -75290,9 +75290,8 @@ impl InterpreterCore {
         match object_value {
             Value::Object(object_id) => {
                 if key.as_str() == Some("__proto__") {
-                    return Ok(self
-                        .ordinary_get_prototype_of(object_id)?
-                        .map_or(Value::Null, Value::Object));
+                    let link = self.ordinary_get_prototype_of(object_id)?;
+                    return Ok(self.prototype_value_for_link(module, link));
                 }
                 self.iterator_protocol_property(module, object_id, &key, Value::Object(object_id))
             }
@@ -85299,11 +85298,8 @@ impl InterpreterCore {
                 // prototype store would.
                 let object = self.arg_or_undefined(args, 0)?;
                 let value = self.arg_or_undefined(args, 1)?;
-                let link = match value {
-                    Value::Object(prototype_id) => Some(Some(prototype_id)),
-                    Value::Null => Some(None),
-                    _ => None,
-                };
+                // A function links to its own-property backing (bd-9vouw.98).
+                let link = self.prototype_link_for_value(module, &value)?;
                 if let (Value::Object(object_id), Some(link)) = (&object, link) {
                     let label = self
                         .get_register_label(args.start)?
@@ -86666,25 +86662,16 @@ impl InterpreterCore {
                 // Object.create(O, Properties) (ES2020 19.1.2.2): O must be an
                 // object or null; a missing O is undefined and throws.
                 let prototype_arg = self.arg_or_undefined(args, 0)?;
-                let prototype = match prototype_arg {
-                    Value::Null => None,
-                    Value::Object(proto_id) => Some(proto_id),
-                    // A callable proxy's record is its object identity:
-                    // lookups through it reach its traps and its function
-                    // target (bd-9vouw.132). No-claim: a plain function as
-                    // the prototype is still refused (its property storage
-                    // does not inherit Function.prototype).
-                    Value::BuiltinFunction(ref builtin)
-                        if builtin.kind == BuiltinFunctionKind::CallableProxy =>
-                    {
-                        Some(Self::callable_proxy_record_id(builtin)?)
-                    }
-                    other => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "object or null prototype for Object.create".to_string(),
-                            got: other.type_name().to_string(),
-                        });
-                    }
+                // A callable proxy's record is its object identity (lookups
+                // reach its traps and its function target, bd-9vouw.132); a
+                // function links to its own-property backing object
+                // (bd-9vouw.98: bundlers' `__toESM` does
+                // `Object.create(getPrototypeOf(DerivedClass))`).
+                let Some(prototype) = self.prototype_link_for_value(module, &prototype_arg)? else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object or null prototype for Object.create".to_string(),
+                        got: prototype_arg.type_name().to_string(),
+                    });
                 };
 
                 let obj_id = self.alloc_object_with_prototype(prototype)?;

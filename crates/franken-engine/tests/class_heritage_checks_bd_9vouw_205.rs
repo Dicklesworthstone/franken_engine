@@ -93,3 +93,35 @@ fn class_fields_end_at_a_line_break_before_the_next_element_bd_9vouw_230() {
         .collect();
     assert_eq!(lines, ["42 true 3 3 s true m h 7 9"]);
 }
+
+/// bd-9vouw.98: an ordinary object can have a function as its [[Prototype]]
+/// through Object.create, Object.setPrototypeOf, an object literal's
+/// `__proto__` and the `__proto__` setter: getPrototypeOf, Reflect and the
+/// `__proto__` getter report the function, its statics (a class's static
+/// method, with `this` the object) are inherited, and bundlers' `__toESM`
+/// (`Object.create(getPrototypeOf(DerivedClass))`) loads. Object.create threw
+/// "expected object or null prototype", setPrototypeOf threw, the `__proto__`
+/// forms were ignored. Ordinary prototypes are unchanged. No-claim:
+/// Function.prototype's members through such a link (`o.call`,
+/// `o instanceof Function`). Node v22.2.0's output; Bun 1.4.2 agrees.
+#[test]
+fn an_object_can_inherit_from_a_function_bd_9vouw_98() {
+    let source = "function F() {} F.s = 1;\nconst o = Object.create(F);\nconsole.log(typeof o, Object.getPrototypeOf(o) === F, o.s, Reflect.getPrototypeOf(o) === F, o.__proto__ === F);\nclass A { static k() { return 'k' + (this === o2); } }\nclass B extends A {}\nconst o2 = Object.create(Object.getPrototypeOf(B));\nconsole.log(Object.getPrototypeOf(o2) === A, o2.k());\nvar __create = Object.create, __getProtoOf = Object.getPrototypeOf, __defProp = Object.defineProperty;\nvar target = B != null ? __create(__getProtoOf(B)) : {};\n__defProp(target, 'default', { value: B, enumerable: true });\nconsole.log(typeof target.default, target.default === B, Object.keys(target).join());\nfunction G() {} G.t = 2;\nconst p = {}; Object.setPrototypeOf(p, G);\nconst q = { __proto__: G };\nconst r = {}; r.__proto__ = G;\nconsole.log(Object.getPrototypeOf(p) === G, p.t, Object.getPrototypeOf(q) === G, q.t, r.t, Object.getPrototypeOf(r) === G);\nconsole.log(Object.getPrototypeOf({}) === Object.prototype, Object.getPrototypeOf(Object.create(null)), Object.getPrototypeOf([]) === Array.prototype);\n";
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "object true 1 true true",
+            "true ktrue",
+            "function true default",
+            "true 2 true 2 2 true",
+            "true null true"
+        ]
+    );
+}

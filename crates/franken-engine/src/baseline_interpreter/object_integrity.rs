@@ -231,7 +231,14 @@ impl InterpreterCore {
             match operation {
                 ObjectIntegrityOperation::GetPrototype => {
                     if let Some(id) = target_id {
-                        return self.object_get_prototype(module, id, 0);
+                        // A function's backing object reports as the
+                        // function (bd-9vouw.98).
+                        return Ok(match self.object_get_prototype(module, id, 0)? {
+                            Value::Object(link) => {
+                                self.prototype_value_for_link(module, Some(link))
+                            }
+                            other => other,
+                        });
                     }
                     // ToObject of a primitive has this realm's intrinsic
                     // prototype. No guest-visible wrapper allocation is needed.
@@ -259,7 +266,14 @@ impl InterpreterCore {
                             target.type_name(),
                         ));
                     }
-                    let prototype = Self::integrity_prototype(&proposed)?;
+                    // A function prototype links to its own-property
+                    // backing (bd-9vouw.98).
+                    let Some(prototype) = self.prototype_link_for_value(module, &proposed)? else {
+                        return Err(Self::integrity_type_error(
+                            "object or null prototype",
+                            proposed.type_name(),
+                        ));
+                    };
                     let Some(id) = target_id else {
                         return Ok(target);
                     };
@@ -560,6 +574,64 @@ impl InterpreterCore {
         self.store_prototype_link(backing, prototype);
         self.gc_write_barrier(backing);
         Ok(true)
+    }
+
+    /// The [[Prototype]] link a proposed prototype value stands for
+    /// (bd-9vouw.98): `null`, an object, a callable proxy's record, or a
+    /// function's own-property backing object, so an ordinary object can
+    /// inherit from a function (`Object.create(Parent)` in bundlers'
+    /// `__toESM`, `Object.setPrototypeOf(o, F)`, `{ __proto__: F }`); its
+    /// statics are inherited through the backing. `None` for any other value.
+    /// Not modelled: Function.prototype's members through such a link
+    /// (`o.call`, `o instanceof Function`), since backings do not inherit it.
+    pub(super) fn prototype_link_for_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<Option<Option<ObjectId>>, InterpreterError> {
+        Ok(match value {
+            Value::Null => Some(None),
+            Value::Object(id) => Some(Some(*id)),
+            Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::CallableProxy =>
+            {
+                Some(Some(Self::callable_proxy_record_id(builtin)?))
+            }
+            callable if callable.is_callable() => match module {
+                Some(module) => self
+                    .ensure_function_own_property_object(module, callable)?
+                    .map(Some),
+                None => None,
+            },
+            _ => None,
+        })
+    }
+
+    /// The value [[GetPrototypeOf]] reports for a stored link: a function's
+    /// own-property backing object stands for the function itself
+    /// (bd-9vouw.98). Backings start with own `length` and `name`, which
+    /// keeps the reverse lookup off ordinary prototypes.
+    pub(super) fn prototype_value_for_link(
+        &self,
+        module: Option<&Ir3Module>,
+        link: Option<ObjectId>,
+    ) -> Value {
+        let Some(id) = link else {
+            return Value::Null;
+        };
+        if let Some(module) = module
+            && self.heap.get(id.0 as usize).is_some_and(|object| {
+                ["length", "name"].iter().all(|key| {
+                    object.contains_own_runtime_property(&RuntimePropertyKey::String(
+                        JsString::from(*key),
+                    ))
+                })
+            })
+            && let Some(function) = self.function_value_for_backing(module, id)
+        {
+            return function;
+        }
+        Value::Object(id)
     }
 
     fn integrity_type_error(expected: &str, got: &str) -> InterpreterError {

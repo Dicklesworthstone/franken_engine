@@ -2432,9 +2432,16 @@ fn merge_logical_lines_requires_continuation(
     // Operator keywords that cannot end an expression: babel's istanbul
     // output writes `var d = new\n/*istanbul ignore start*/\n_base[...]()`
     // (jsdiff), which ended at `new` and read `new` as a variable. After a
-    // `.` the word is a property name (`opts.new`), which can.
+    // `.` the word is a property name (`opts.new`), which can. `function`
+    // and `class` still need a name or body: istanbul splits
+    // `function\n/*istanbul ignore start*/\n_default\n...(start, ...) {`
+    // (bd-9vouw.212). `async` is absent: a line break after it is an ASI
+    // boundary (`async\nfunction f() {}` is two statements).
     if !trailing_identifier_follows_dot
-        && matches!(trailing_identifier, "new" | "in" | "instanceof" | "extends")
+        && matches!(
+            trailing_identifier,
+            "new" | "in" | "instanceof" | "extends" | "function" | "class"
+        )
     {
         return true;
     }
@@ -20854,6 +20861,26 @@ mod tests {
         assert_eq!(
             texts,
             ["var d = new B()", "var t = k in d", "var n = o.new", "f()"]
+        );
+    }
+
+    #[test]
+    fn merge_logical_lines_continues_after_function_and_class_keywords() {
+        // bd-9vouw.212: `function` and `class` still need a name or body; as
+        // property names (`o.function`) they end the line. `async` is an ASI
+        // boundary and ends its line.
+        let lines =
+            merge_logical_lines("function\nf() {}\nclass\nK {}\nvar p = o.function\nasync\ng()");
+        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "function f() {}",
+                "class K {}",
+                "var p = o.function",
+                "async",
+                "g()"
+            ]
         );
     }
 

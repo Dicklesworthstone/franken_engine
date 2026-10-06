@@ -17,6 +17,8 @@
 //!   condition split off ("do-while requires a parenthesized condition"),
 //!   and without a semicolon the next line became the body of a new
 //!   `while (c)` loop and never ran.
+//! - bd-9vouw.207: a lone `.` line continues a member access.
+//! - bd-9vouw.212: a line ending with `function` or `class` continues.
 //!
 //! Expected lines are Node v22.2.0's output (Bun 1.4.2 prints the same).
 
@@ -93,4 +95,17 @@ fn a_do_statement_in_an_else_clause_keeps_its_condition_bd_9vouw_196() {
 fn a_lone_dot_line_continues_a_member_access_bd_9vouw_207() {
     let source = "var _line = { lineDiff: { tokenize: 42 } };\nvar o = {};\no.tokenize =\n/*istanbul ignore start*/\n_line\n/*istanbul ignore end*/\n.\n/*istanbul ignore start*/\nlineDiff\n/*istanbul ignore end*/\n.tokenize;\nvar n = 1.\nvar m = 2\nconsole.log(o.tokenize, n + m);\n";
     assert_eq!(run(source), ["42 3"]);
+}
+
+/// bd-9vouw.212: `function` and `class` at a line end still need their name
+/// or body. jsdiff's distance-iterator.js (istanbul) declares
+/// `function\n/*istanbul ignore start*/\n_default\n/*istanbul ignore end*/\n(start, minLine, maxLine) {`,
+/// which ended at `function` ("_default is not defined"). As property names
+/// (`o.function`) they end the line, and `async` alone on a line is a
+/// statement of its own (no line break may follow `async` in
+/// `async function`).
+#[test]
+fn a_line_ending_with_function_or_class_continues_bd_9vouw_212() {
+    let source = "var first = _default(1, 2, 3)()\nfunction\n/*istanbul ignore start*/\n_default\n/*istanbul ignore end*/\n(start, minLine, maxLine) {\n  return function iterator() { return start + minLine + maxLine }\n}\nvar g = function\nnamed\n(a) { return a + 5 }\nasync function\nnamedA\n(a) { return a + 7 }\nclass\nK\n{ m() { return 9 } }\nvar o = { function: 3, class: 4 }\nvar p = o.function\nvar q = o.class\nvar async = 5\nasync\nfunction h() { return 6 }\nconsole.log(first, g(1), new K().m(), p, q, async, h())\nnamedA(1).then(function (v) { console.log('async', v) })\n";
+    assert_eq!(run(source), ["6 6 9 3 4 5 6", "async 8"]);
 }

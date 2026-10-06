@@ -272,7 +272,8 @@ fn unsupported_or_first_class_events_once_shapes_stay_fail_closed() {
     // `import events from 'node:events'; events.once(emitter, 'x')` lowers
     // as the supported CommonJS alias `events.once(...)` since bd-9vouw.181,
     // so only the value use of a named import stays unsupported here.
-    for source in ["import { once } from 'node:events';\nconsole.log(typeof once);\n"] {
+    {
+        let source = "import { once } from 'node:events';\nconsole.log(typeof once);\n";
         let tree = frankenengine_engine::parser_api_stability::parse_module(source)
             .expect("parse unsupported ESM events shape");
         let ir0 = Ir0Module::from_syntax_tree(tree, "unsupported_events_once.mjs");

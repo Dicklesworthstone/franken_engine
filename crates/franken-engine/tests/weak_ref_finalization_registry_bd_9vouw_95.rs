@@ -65,3 +65,21 @@ fn invalid_targets_and_calls_are_type_errors() {
         "TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError,TypeError",
     );
 }
+
+/// bd-9vouw.220: any object is a WeakMap key: a promise (delay keys its
+/// clear handles by the returned promise), a generator object, an iterator
+/// and a function, through set/get/has/delete and the constructor's
+/// entries. A promise, generator or iterator key was a TypeError ("expected
+/// object WeakMap key, got object"). Another promise is another key.
+#[test]
+fn weak_map_keys_may_be_promises_generators_and_iterators_bd_9vouw_220() {
+    check(
+        "var wm = new WeakMap(); var p = Promise.resolve(1); var g = (function* () {})(); \
+         var it = [1][Symbol.iterator](); function f() {} \
+         wm.set(p, 'p').set(g, 'g').set(it, 'i').set(f, 'f'); \
+         var seeded = new WeakMap([[p, 'sp']]); \
+         [wm.get(p), wm.get(g), wm.get(it), wm.get(f), wm.has(Promise.resolve(1)), \
+         seeded.get(p), wm.delete(p), wm.has(p)].join(' ')",
+        "p g i f false sp true false",
+    );
+}

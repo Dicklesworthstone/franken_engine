@@ -74138,20 +74138,16 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let weakmap_id = self.validate_weakmap_receiver(receiver.clone())?;
         let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        // A function is an object and a valid key (immer and memoizers key
-        // WeakMaps by function): its identity is its own-property backing
-        // object, created for `set` and only looked up otherwise.
-        let key_id = match &key {
-            Value::Object(id) => Some(id.0),
-            function if function.is_callable() => {
-                let backing = if method == "set" {
-                    self.ensure_function_own_property_object(module, function)?
-                } else {
-                    self.function_own_property_object(module, function)?
-                };
-                backing.map(|id| id.0)
-            }
-            _ => None,
+        // Any object is a valid key: immer and memoizers key WeakMaps by
+        // function, delay by promise (bd-9vouw.220). Its identity is its
+        // own-property holder (a function, promise, generator or iterator
+        // uses its backing object), created for `set` and only looked up
+        // otherwise.
+        let key_id = if key.is_object_like() {
+            self.own_property_holder(Some(module), &key, method == "set")?
+                .map(|id| id.0)
+        } else {
+            None
         };
         let Some(storage) = self.weakmap_storage.get(&weakmap_id) else {
             return Err(InterpreterError::TypeError {
@@ -92584,12 +92580,10 @@ impl InterpreterCore {
         entry: &Value,
     ) -> Result<(ObjectId, Value), InterpreterError> {
         let (key, value) = self.collection_seed_entry(module, entry)?;
-        let key_id = match (&key, module) {
-            (Value::Object(id), _) => Some(*id),
-            (function, Some(module)) if function.is_callable() => {
-                self.ensure_function_own_property_object(module, function)?
-            }
-            _ => None,
+        let key_id = if key.is_object_like() {
+            self.own_property_holder(module, &key, true)?
+        } else {
+            None
         };
         key_id
             .map(|key_id| (key_id, value))

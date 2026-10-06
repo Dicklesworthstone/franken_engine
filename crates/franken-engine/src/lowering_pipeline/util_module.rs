@@ -60,11 +60,13 @@ const TYPE_TAG_INTRINSIC: &str = "%UtilTypeTag";
 /// The program binding that caches the module object.
 const MODULE_BINDING: &str = "%util_module";
 const EVENTS_MODULE_BINDING: &str = "%events_module";
+const ASSERT_MODULE_BINDING: &str = "%assert_module";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PureModule {
     Util,
     Events,
+    Assert,
 }
 
 impl PureModule {
@@ -72,6 +74,7 @@ impl PureModule {
         match self {
             Self::Util => MODULE_BINDING,
             Self::Events => EVENTS_MODULE_BINDING,
+            Self::Assert => ASSERT_MODULE_BINDING,
         }
     }
 }
@@ -99,6 +102,11 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
 // Keep the executable source in one place for native lowering and differential tests.
 const UTIL_SOURCE: &str = include_str!("util_module.js");
 const EVENTS_SOURCE: &str = include_str!("events_module.js");
+const ASSERT_SOURCE: &str = include_str!("assert_module.js");
+
+// A private dependency, not an ambient HostCall or a public util property.
+const ASSERT_PLACEHOLDERS: [(&str, &str); 1] =
+    [("__franken_assert_util", MODULE_BINDING)];
 
 const EVENTS_PLACEHOLDERS: [(&str, &str); 2] = [
     ("__franken_events_constructor", "%EventsConstructorRef"),
@@ -126,6 +134,10 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Util, Some("types")))
     } else if *specifier == "events" || *specifier == "node:events" {
         Some((PureModule::Events, None))
+    } else if *specifier == "assert" || *specifier == "node:assert" {
+        Some((PureModule::Assert, None))
+    } else if *specifier == "assert/strict" || *specifier == "node:assert/strict" {
+        Some((PureModule::Assert, Some("strict")))
     } else {
         None
     }
@@ -164,6 +176,11 @@ const EVENTS_GLOBALS: [&str; 7] = [
     "Array", "Error", "Object", "Promise", "RangeError", "Symbol", "TypeError",
 ];
 
+const ASSERT_GLOBALS: [&str; 10] = [
+    "Array", "Error", "Map", "Object", "Reflect", "RegExp", "Set", "String",
+    "TypeError", "Uint8Array",
+];
+
 /// `const %util_module = <module>;`, which the rewrite puts first in the
 /// program. Its initializer runs only engine-owned code.
 pub(super) fn is_module_declaration(statement: &Statement) -> bool {
@@ -178,7 +195,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                 [VariableDeclarator {
                     pattern: BindingPattern::Identifier(name),
                     ..
-                }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING
+                }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING || name == ASSERT_MODULE_BINDING
             )
     )
 }
@@ -214,6 +231,11 @@ pub(super) fn rewrite_util_requires(
         modules: BTreeSet::new(),
     };
     rewriter.statements(&mut rewritten.body)?;
+    // Enum ordering initializes util before assert. Capturing its comparator
+    // in the engine-owned prelude avoids guest replacement of public exports.
+    if rewriter.modules.contains(&PureModule::Assert) {
+        rewriter.modules.insert(PureModule::Util);
+    }
     if rewriter.modules.is_empty() {
         return Ok(fs_rewritten);
     }
@@ -242,6 +264,7 @@ fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelin
     let (label, source) = match module {
         PureModule::Util => ("franken:util", UTIL_SOURCE),
         PureModule::Events => ("franken:events", EVENTS_SOURCE),
+        PureModule::Assert => ("franken:assert", ASSERT_SOURCE),
     };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
         detail: "the engine's pure builtin module source failed to parse",
@@ -272,6 +295,7 @@ fn module_source(
     let globals: &[&str] = match module {
         PureModule::Util => &MODULE_GLOBALS,
         PureModule::Events => &EVENTS_GLOBALS,
+        PureModule::Assert => &ASSERT_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
         through_global_object: globals
@@ -294,6 +318,7 @@ impl Walk for ModuleRenamer {
             if let Some((_, intrinsic)) = PLACEHOLDERS
                 .iter()
                 .chain(EVENTS_PLACEHOLDERS.iter())
+                .chain(ASSERT_PLACEHOLDERS.iter())
                 .find(|(placeholder, _)| placeholder == name)
             {
                 *name = (*intrinsic).to_string();
@@ -620,5 +645,84 @@ mod events_tests {
             EVENTS_PLACEHOLDERS.iter().map(|(_, name)| name.to_string()).collect();
         expected.insert("globalThis".to_string());
         assert_eq!(protected, expected);
+    }
+}
+
+#[cfg(test)]
+mod assert_tests {
+    use super::*;
+
+    fn parse(source: &str) -> SyntaxTree {
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "assert-rewrite.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .expect("test source parses")
+    }
+
+    #[test]
+    fn assert_dependency_is_initialized_before_all_aliases() {
+        let tree = parse(
+            "const a = require('assert'); const b = require('node:assert/strict'); \
+             const u = require('util'); function f() { return require('assert/strict'); }",
+        );
+        let rewritten = rewrite_util_requires(&tree)
+            .expect("rewrites")
+            .expect("assert used");
+        assert_eq!(rewritten.body.len(), tree.body.len() + 2);
+        for (statement, expected) in rewritten.body.iter().zip([MODULE_BINDING, ASSERT_MODULE_BINDING]) {
+            let Statement::VariableDeclaration(declaration) = statement else {
+                panic!("expected private module declaration");
+            };
+            assert_eq!(
+                declaration.declarations[0].pattern,
+                BindingPattern::Identifier(expected.to_string())
+            );
+        }
+        assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+    }
+
+    #[test]
+    fn assert_requires_preserve_guest_bindings_and_authority_checks() {
+        for source in [
+            "function f(require) { return require('assert'); }",
+            "{ let require = f; require('assert/strict'); }",
+            "for (let require of values) require('node:assert');",
+            "with (scope) require('assert');",
+            "const name = 'assert'; require(name);",
+            "require('assert/unknown');",
+        ] {
+            assert!(
+                rewrite_util_requires(&parse(source)).expect("rewrite").is_none(),
+                "{source}"
+            );
+        }
+        assert_eq!(intrinsic_capability("__franken_assert_util"), None);
+        assert_eq!(intrinsic_capability(MODULE_BINDING), None);
+    }
+
+    #[test]
+    fn assert_source_parses_and_protects_every_free_global() {
+        let free = super::tests::free_names(
+            &mut parse_module_source(PureModule::Assert).expect("shipped assert source parses"),
+        );
+        let mut expected: BTreeSet<String> =
+            ASSERT_GLOBALS.iter().map(|name| name.to_string()).collect();
+        expected.extend(["__franken_assert_util", "__franken_util_type_tag", "arguments"].map(str::to_string));
+        assert_eq!(free, expected);
+        let names = ASSERT_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let protected = super::tests::free_names(
+            &mut module_source(&names, PureModule::Assert).expect("protected assert source"),
+        );
+        assert_eq!(
+            protected,
+            [MODULE_BINDING, TYPE_TAG_INTRINSIC, "globalThis", "arguments"]
+                .into_iter().map(str::to_string).collect()
+        );
     }
 }

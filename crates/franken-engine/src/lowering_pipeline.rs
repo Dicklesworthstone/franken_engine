@@ -29453,6 +29453,7 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         ("Buffer", "concat") => Some("builtin:BufferConcat"),
         ("Buffer", "compare") => Some("builtin:BufferCompare"),
         ("Buffer", "isBuffer") => Some("builtin:BufferIsBuffer"),
+        ("Buffer", "isEncoding") => Some("builtin:BufferIsEncoding"),
         // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
         // calling convention (handler reads args.start+1.., guards count<N
         // counting a slot-0 receiver) — they are wired via
@@ -29636,6 +29637,7 @@ fn buffer_static_builtin_call_capability(
         "concat" => Some("builtin:BufferConcat"),
         "compare" => Some("builtin:BufferCompare"),
         "isBuffer" => Some("builtin:BufferIsBuffer"),
+        "isEncoding" => Some("builtin:BufferIsEncoding"),
         _ => None,
     }
 }

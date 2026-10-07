@@ -6690,7 +6690,7 @@ const SLOT0_STATIC_GLOBALS: [&str; 10] = [
     "Number",
     "Buffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 43] = [
+const SLOT0_STATIC_MEMBERS: [&str; 44] = [
     "keys",
     "hasOwn",
     "values",
@@ -6734,6 +6734,7 @@ const SLOT0_STATIC_MEMBERS: [&str; 43] = [
     "concat",
     "compare",
     "isBuffer",
+    "isEncoding",
 ];
 
 /// Owner global and member name for a slot-0 static hostcall tag, for
@@ -72948,6 +72949,34 @@ impl InterpreterCore {
         ))
     }
 
+    /// Node's `Buffer.isEncoding(encoding)` (bd-9vouw.308): whether
+    /// `encoding` is a string naming one of Buffer's encodings, ignoring case.
+    fn buffer_is_encoding_builtin(&self, args: RegRange) -> Result<Value, InterpreterError> {
+        let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let Value::Str(name) = value else {
+            return Ok(Value::Bool(false));
+        };
+        let known = name.as_str().is_some_and(|name| {
+            [
+                "utf8",
+                "utf-8",
+                "ucs2",
+                "ucs-2",
+                "utf16le",
+                "utf-16le",
+                "latin1",
+                "binary",
+                "base64",
+                "base64url",
+                "hex",
+                "ascii",
+            ]
+            .iter()
+            .any(|encoding| encoding.eq_ignore_ascii_case(name))
+        });
+        Ok(Value::Bool(known))
+    }
+
     fn buffer_to_string(
         &mut self,
         receiver: Value,
@@ -90867,6 +90896,7 @@ impl InterpreterCore {
             "builtin:BufferConcat" => self.buffer_concat(args),
             "builtin:BufferCompare" => self.buffer_static_compare(args),
             "builtin:BufferIsBuffer" => self.buffer_is_buffer_builtin(args),
+            "builtin:BufferIsEncoding" => self.buffer_is_encoding_builtin(args),
             "builtin:BufferObjectToString" | "builtin:BufferObjectReadUInt32LE" => {
                 self.buffer_object_hostcall(cap, args)
             }

@@ -92,6 +92,7 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("Buffer", "concat", 2),
     ("Buffer", "from", 3),
     ("Buffer", "isBuffer", 1),
+    ("Buffer", "isEncoding", 1),
     ("DataView.prototype", "getBigInt64", 1),
     ("DataView.prototype", "getBigUint64", 1),
     ("DataView.prototype", "getFloat32", 1),

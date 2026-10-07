@@ -1224,6 +1224,11 @@ impl InterpreterCore {
             if let Some(descriptor) = self.prototype_getter_descriptor(object_id, key)? {
                 return Ok(descriptor);
             }
+            if let Some(Value::Str(text)) = self.primitive_wrapper_value(object_id).cloned()
+                && let Some(descriptor) = self.string_own_property_descriptor(&text, key)?
+            {
+                return Ok(descriptor);
+            }
             return self.own_property_descriptor_value(object_id, key);
         };
         let Some(trap) = self.proxy_trap_value(module, handler, "getOwnPropertyDescriptor")? else {

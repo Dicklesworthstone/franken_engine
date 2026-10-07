@@ -94433,6 +94433,15 @@ impl InterpreterCore {
                 {
                     return self.function_prototype_descriptor(module, &obj_val);
                 }
+                // ToObject of a string is a String exotic object, whose
+                // indices and `length` are its own (bd-9vouw.356); no other
+                // primitive's wrapper has own properties.
+                if let Value::Str(text) = &obj_val {
+                    let text = text.clone();
+                    return Ok(self
+                        .string_own_property_descriptor(&text, &prop_name)?
+                        .unwrap_or(Value::Undefined));
+                }
                 let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Ok(Value::Undefined); // Primitives have no own property descriptors here
                 };
@@ -105001,6 +105010,32 @@ impl InterpreterCore {
             Some(Value::Str(text)) => Self::string_own_property_value(text, key),
             _ => None,
         }
+    }
+
+    /// The descriptor of a String's own `key` (ES2020 9.4.3.1
+    /// StringGetOwnProperty, 9.4.3.4 StringCreate): a code-unit index below
+    /// the length, enumerable, and `length`, not enumerable, both read-only
+    /// and non-configurable; `None` for any other key (bd-9vouw.356).
+    fn string_own_property_descriptor(
+        &mut self,
+        text: &JsString,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(name) = key.as_str() else {
+            return Ok(None);
+        };
+        let Some(value) = Self::string_own_property_value(text, name) else {
+            return Ok(None);
+        };
+        let fields = PropertyDescriptorFields {
+            value: Some(value),
+            writable: Some(false),
+            get: None,
+            set: None,
+            enumerable: Some(name != "length"),
+            configurable: Some(false),
+        };
+        self.descriptor_object_from_fields(&fields, true).map(Some)
     }
 
     fn set_class_fields_slot(

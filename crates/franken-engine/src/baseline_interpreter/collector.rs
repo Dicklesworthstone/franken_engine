@@ -60,6 +60,7 @@
 //! kept only while its key is reachable.
 
 use std::collections::HashSet;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use super::*;
 use crate::object_model::JsValue;
@@ -208,6 +209,40 @@ impl ChunkedMarks {
     }
 }
 
+/// Hashes the `Rc` addresses the marker's visited sets hold. The default
+/// SipHash with a random key took about 12% of a babel-standalone run
+/// (flat profile of a release frankenctl, 2026-10-07: `hash_one`, Sip13
+/// `write`, `HashMap<usize, ()>::insert` and rehash), since every
+/// collection inserts each reachable scope cell and frame. Addresses are
+/// distinct by construction and attacker-chosen keys cannot reach these
+/// sets, so one multiply, folded so the low bits hashbrown indexes by see
+/// the high ones, spreads them; the sets are only probed, never iterated.
+#[derive(Default)]
+struct AddressHasher(u64);
+
+impl Hasher for AddressHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.write_u64(u64::from(*byte));
+        }
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        let mixed = (self.0 ^ value).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.0 = mixed ^ (mixed >> 32);
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.write_u64(value as u64);
+    }
+}
+
+type AddressSet = HashSet<usize, BuildHasherDefault<AddressHasher>>;
+
 /// Mark state for one collection.
 struct GcMarker {
     objects: ChunkedMarks,
@@ -228,8 +263,8 @@ struct GcMarker {
     generator_stack: Vec<u32>,
     async_generators: ChunkedMarks,
     async_generator_stack: Vec<u32>,
-    visited_frames: HashSet<usize>,
-    visited_cells: HashSet<usize>,
+    visited_frames: AddressSet,
+    visited_cells: AddressSet,
 }
 
 impl GcMarker {
@@ -258,8 +293,8 @@ impl GcMarker {
             generator_stack: Vec::new(),
             async_generators: ChunkedMarks::new(async_generators_len),
             async_generator_stack: Vec::new(),
-            visited_frames: HashSet::new(),
-            visited_cells: HashSet::new(),
+            visited_frames: AddressSet::default(),
+            visited_cells: AddressSet::default(),
         }
     }
 

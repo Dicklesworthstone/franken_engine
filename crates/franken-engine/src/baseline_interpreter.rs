@@ -41228,7 +41228,7 @@ impl InterpreterCore {
                 let was_dense = self.array_cache_is_dense(arr_id);
                 let trusted_dense_length = self.array_cache_matches_visible_length(arr_id, len);
                 let last_key = last.to_string();
-                let removed_tail = self.remove_object_property(arr_id, &last_key)?;
+                let removed_tail = self.array_delete_or_throw(arr_id, &last_key)?;
                 let updated_without_scan = trusted_dense_length
                     && removed_tail
                     && self.set_array_length_after_dense_tail_removal(
@@ -41270,7 +41270,7 @@ impl InterpreterCore {
                     self.set_object_property(arr_id, (i - 1).to_string(), moved)?;
                 }
                 let last = len - 1;
-                self.remove_object_property(arr_id, &last.to_string())?;
+                self.array_delete_or_throw(arr_id, &last.to_string())?;
                 let new_len = i64::try_from(last).unwrap_or(i64::MAX);
                 self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
                 self.refresh_dense_length_cache(arr_id, last, was_dense);
@@ -42152,12 +42152,28 @@ impl InterpreterCore {
                     .splice(start..start + delete_count, items)
                     .collect();
                 let new_len = elements.len();
+                // ES2020 23.1.3.28 step 16: growing the array first writes
+                // the new top index, so a non-extensible (sealed or
+                // prevented) array refuses before any element moves
+                // (bd-9vouw.250).
+                if new_len > len
+                    && self
+                        .heap
+                        .get(arr_id.0 as usize)
+                        .is_some_and(|object| !object.extensible())
+                {
+                    return Err(InterpreterError::TypeError {
+                        expected: "an extensible array for Array.prototype.splice".to_string(),
+                        got: format!("Cannot add property {len}, object is not extensible"),
+                    });
+                }
                 let was_dense = self.array_cache_is_dense(arr_id);
                 for (i, element) in elements.into_iter().enumerate() {
                     self.set_object_property(arr_id, i.to_string(), element)?;
                 }
-                for i in new_len..len {
-                    self.remove_object_property(arr_id, &i.to_string())?;
+                // Step 18: from the top index down.
+                for i in (new_len..len).rev() {
+                    self.array_delete_or_throw(arr_id, &i.to_string())?;
                 }
                 self.set_object_property(
                     arr_id,
@@ -99684,6 +99700,30 @@ impl InterpreterCore {
         self.gc_write_barrier(object_id);
 
         Ok(())
+    }
+
+    /// DeletePropertyOrThrow (ES2020 7.3.9) of an element an Array method
+    /// removes (pop, shift, splice): a non-configurable element, such as
+    /// one of a sealed array's, is a TypeError. `Object.seal([1, 2, 3]).pop()`
+    /// returned 3 and shrank the sealed array (bd-9vouw.250). A frozen array
+    /// is still refused by `remove_object_property` and its `length` write.
+    fn array_delete_or_throw(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<bool, InterpreterError> {
+        let property = RuntimePropertyKey::String(JsString::from(key));
+        let non_configurable = self.heap.get(object_id.0 as usize).is_some_and(|object| {
+            object.own_runtime_property_value(&property).is_some()
+                && !object.own_property_attributes(&property).configurable
+        });
+        if non_configurable {
+            return Err(InterpreterError::TypeError {
+                expected: "a configurable array element".to_string(),
+                got: format!("Cannot delete property '{key}' of [object Array]"),
+            });
+        }
+        self.remove_object_property(object_id, key)
     }
 
     fn remove_object_property(

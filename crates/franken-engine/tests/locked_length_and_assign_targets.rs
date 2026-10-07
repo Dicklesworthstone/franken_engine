@@ -52,3 +52,30 @@ fn object_assign_boxes_a_primitive_target() {
         "TypeError object true 2 1 object 3 2 xy object"
     );
 }
+
+/// bd-9vouw.250: pop, shift and splice delete with DeletePropertyOrThrow,
+/// so a sealed array's (non-configurable) elements cannot be removed:
+/// `Object.seal([1, 2, 3]).pop()` returned 3 and shrank the array. The
+/// element moves the specification performs first still happen, so shift
+/// leaves `[2,3,3]` as in Node. A splice that grows a non-extensible array
+/// throws before any element moves, and deletes run from the top index
+/// down. The expected string is Node v22.2.0's completion value.
+#[test]
+fn sealed_and_non_configurable_elements_are_not_deleted_bd_9vouw_250() {
+    let source = r#"var r = [];
+function t(f) { try { return JSON.stringify(f()); } catch (e) { return e.constructor.name; } }
+var mk = () => Object.seal([1, 2, 3]);
+var d = mk(); r.push(t(() => d.pop()), JSON.stringify(d));
+d = mk(); r.push(t(() => d.shift()), JSON.stringify(d));
+d = mk(); r.push(t(() => d.splice(0, 1)), JSON.stringify(d));
+d = mk(); r.push(t(() => d.splice(1, 0, 9)), JSON.stringify(d));
+d = mk(); r.push(t(() => d.splice(0, 1, 8)), JSON.stringify(d), t(() => { d[0] = 9; return d[0]; }));
+d = Object.preventExtensions([1, 2, 3]); r.push(t(() => d.pop()), t(() => d.splice(1, 0, 7)), JSON.stringify(d));
+var n = [1, 2, 3]; Object.defineProperty(n, 1, { value: 2, configurable: false, writable: true });
+r.push(t(() => n.splice(0, 3)), JSON.stringify(n));
+r.join(' | ');"#;
+    assert_eq!(
+        eval(source),
+        r#"TypeError | [1,2,3] | TypeError | [2,3,3] | TypeError | [2,3,3] | TypeError | [1,2,3] | [1] | [8,2,3] | 9 | 3 | TypeError | [1,2] | TypeError | [1,2,null]"#
+    );
+}

@@ -67480,6 +67480,7 @@ impl InterpreterCore {
     fn promise_finally_handlers(
         &mut self,
         on_finally: Option<Value>,
+        constructor: Value,
     ) -> Result<
         (
             Option<crate::closure_model::ClosureHandle>,
@@ -67490,7 +67491,10 @@ impl InterpreterCore {
         let Some(on_finally) = on_finally.filter(Value::is_callable) else {
             return Ok((None, None));
         };
-        let holder = self.alloc_object_with_properties(&[("__onFinally", on_finally)])?;
+        let holder = self.alloc_object_with_properties(&[
+            ("__onFinally", on_finally),
+            ("__constructor", constructor),
+        ])?;
         let then_finally = self.promise_reaction_handler_from_value(
             Value::BuiltinFunction(BuiltinFunction::bound_to(
                 BuiltinFunctionKind::PromiseThenFinally,
@@ -67506,6 +67510,44 @@ impl InterpreterCore {
             "onFinally",
         )?;
         Ok((then_finally, catch_finally))
+    }
+
+    /// ES2020 25.6.5.3 step 3: SpeciesConstructor(promise, %Promise%), which
+    /// Then Finally and Catch Finally resolve onFinally's result with
+    /// (bd-9vouw.349). %Promise% for an undefined `constructor` or an
+    /// undefined or null @@species; a TypeError for a non-object
+    /// `constructor` or a species that is not a constructor.
+    fn promise_finally_species_constructor(
+        &mut self,
+        module: &Ir3Module,
+        promise: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let intrinsic = Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise"));
+        let constructor = self.get_v(
+            module,
+            promise,
+            &RuntimePropertyKey::String(JsString::from("constructor")),
+        )?;
+        if matches!(constructor, Value::Undefined) {
+            return Ok(intrinsic);
+        }
+        if !constructor.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined promise constructor".to_string(),
+                got: constructor.type_name().to_string(),
+            });
+        }
+        let species = self.species_of_constructor(module, &constructor)?;
+        if matches!(species, Value::Undefined | Value::Null) {
+            return Ok(intrinsic);
+        }
+        if !self.is_constructible_value(&species) {
+            return Err(InterpreterError::TypeError {
+                expected: "constructor @@species for a promise".to_string(),
+                got: species.type_name().to_string(),
+            });
+        }
+        Ok(species)
     }
 
     /// A property of the engine-owned holder a Promise.prototype.finally step
@@ -67525,47 +67567,55 @@ impl InterpreterCore {
     }
 
     /// ES2020 25.6.5.3.1 Then Finally / 25.6.5.3.2 Catch Finally: call
-    /// onFinally() with no arguments. A throw from it propagates (rejecting the
-    /// chain with that error). If it returns a Promise, continue with that
-    /// Promise's settlement and then pass the original value or rethrow the
-    /// original reason; otherwise pass/rethrow immediately.
+    /// onFinally() with no arguments (a throw from it rejects the chain),
+    /// resolve its result with PromiseResolve(C, result) for the
+    /// SpeciesConstructor C taken when finally was called, and return
+    /// Invoke(that promise, "then", «thunk»), where the thunk returns the
+    /// original value or throws the original reason. The `then` call, the
+    /// C construction and their jobs are observable (bd-9vouw.349): a
+    /// promise result was chained internally, past its own `then`, and any
+    /// other result passed the settlement through at once.
     fn promise_finally_step(
         &mut self,
         module: &Ir3Module,
         builtin: &BuiltinFunction,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        // Guest code runs while native locals hold values: no collection
+        // until this returns.
+        self.gc_nested_request = None;
         let settlement = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let on_finally = self.promise_finally_bound_property(builtin, "__onFinally")?;
+        let constructor = self.promise_finally_bound_property(builtin, "__constructor")?;
         let fulfilled = builtin.kind == BuiltinFunctionKind::PromiseThenFinally;
         let result =
             self.invoke_inline_method_call(Some(module), on_finally, Value::Undefined, Vec::new())?;
-        if let Value::Promise(awaited) = result {
-            let carrier = self.alloc_object_with_properties(&[("__value", settlement)])?;
-            let continuation = self.promise_reaction_handler_from_value(
-                Value::BuiltinFunction(BuiltinFunction::bound_to(
-                    if fulfilled {
-                        BuiltinFunctionKind::PromiseFinallyValueThunk
-                    } else {
-                        BuiltinFunctionKind::PromiseFinallyThrower
-                    },
-                    carrier,
-                )),
-                "onFinally",
-            )?;
-            let derived = self.register_promise_then(
-                crate::promise_model::PromiseHandle(awaited),
-                continuation,
-                None,
-                Label::Public,
-            )?;
-            return Ok(Value::Promise(derived.0));
+        let label = self
+            .pending_hostcall_result_label
+            .clone()
+            .unwrap_or(Label::Public);
+        let promise = self.promise_resolve_with_constructor(module, constructor, result, label)?;
+        let carrier = self.alloc_object_with_properties(&[("__value", settlement)])?;
+        let thunk = Value::BuiltinFunction(BuiltinFunction::bound_to(
+            if fulfilled {
+                BuiltinFunctionKind::PromiseFinallyValueThunk
+            } else {
+                BuiltinFunctionKind::PromiseFinallyThrower
+            },
+            carrier,
+        ));
+        let then = self.get_v(
+            module,
+            &promise,
+            &RuntimePropertyKey::String(JsString::from("then")),
+        )?;
+        if !then.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable then of the promise onFinally's result resolves to".to_string(),
+                got: then.type_name().to_string(),
+            });
         }
-        if fulfilled {
-            Ok(settlement)
-        } else {
-            Err(self.throw_guest_value(settlement, Label::Public)?)
-        }
+        self.invoke_inline_method_call(Some(module), then, promise, vec![thunk])
     }
 
     fn dispatch_promise_reaction_builtin(
@@ -67576,6 +67626,9 @@ impl InterpreterCore {
         kind: PromiseReactionKind,
     ) -> Result<Value, InterpreterError> {
         let receiver = receiver.unwrap_or(Value::Undefined);
+        // ES2020 25.6.5.3 step 3: finally takes SpeciesConstructor(this,
+        // %Promise%) before it reads `then` (bd-9vouw.349).
+        let mut finally_constructor = None;
         // ES2020 25.6.5.1 / 25.6.5.3: catch and finally are
         // Invoke(this, "then", ...), so a thenable `this`, or a promise
         // whose `then` was replaced, runs that `then`; only a promise with
@@ -67594,6 +67647,10 @@ impl InterpreterCore {
             // Guest code (a `then` getter, a user `then`) runs while native
             // locals hold values: no collection until this returns.
             self.gc_nested_request = None;
+            if matches!(kind, PromiseReactionKind::Finally) {
+                finally_constructor =
+                    Some(self.promise_finally_species_constructor(module, &receiver)?);
+            }
             let then = self.get_v(
                 module,
                 &receiver,
@@ -67614,8 +67671,11 @@ impl InterpreterCore {
                 let arguments = match kind {
                     PromiseReactionKind::Catch => vec![Value::Undefined, handler],
                     _ if handler.is_callable() => {
-                        let holder =
-                            self.alloc_object_with_properties(&[("__onFinally", handler)])?;
+                        let constructor = finally_constructor.clone().unwrap_or(Value::Undefined);
+                        let holder = self.alloc_object_with_properties(&[
+                            ("__onFinally", handler),
+                            ("__constructor", constructor),
+                        ])?;
                         vec![
                             Value::BuiltinFunction(BuiltinFunction::bound_to(
                                 BuiltinFunctionKind::PromiseThenFinally,
@@ -67686,7 +67746,10 @@ impl InterpreterCore {
             // swallowed rejections).
             PromiseReactionKind::Finally => {
                 let on_finally = self.builtin_arg(args, 0)?;
-                self.promise_finally_handlers(on_finally)?
+                let constructor = finally_constructor.clone().unwrap_or_else(|| {
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise"))
+                });
+                self.promise_finally_handlers(on_finally, constructor)?
             }
         };
         Ok(match species_result {
@@ -68228,7 +68291,11 @@ impl InterpreterCore {
                     }
                 };
                 let on_finally = self.promise_reaction_arg(args, 1)?;
-                let (then_finally, catch_finally) = self.promise_finally_handlers(on_finally)?;
+                // The internal hostcall has no observable species: %Promise%.
+                let (then_finally, catch_finally) = self.promise_finally_handlers(
+                    on_finally,
+                    Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise")),
+                )?;
                 let result =
                     self.register_promise_then(handle, then_finally, catch_finally, label)?;
                 Ok(Value::Promise(result.0))

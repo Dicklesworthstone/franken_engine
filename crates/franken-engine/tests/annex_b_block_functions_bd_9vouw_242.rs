@@ -78,12 +78,13 @@ r.push((function () { function dd() { return 'top'; } { function dd() { return '
 r.push((function () { { let ee = 1; if (true) function ee() {} } return typeof ee; })());
 r.push((function () { var log = [typeof ff]; while (log.length < 2) { log.push(typeof ff); function ff() {} } return log.join('/') + '/' + typeof ff; })());
 r.push((function () { try { function gg() { return 'g'; } } finally {} return gg(); })());
+r.push((function () { var o = { wf: 1 }; with (o) { { function wf() { return 'w'; } } } return typeof wf + typeof o.wf; })());
 { function scriptLevel() { return 'script'; } }
 r.push(scriptLevel());
 console.log(r.join(' | '));"#;
 
 /// Node v22.2.0's output for `PROGRAM`.
-const NODE_OUTPUT: &str = r#"function2 | undefined | function | number | undefinedundefined | undefinedfunction | undefined | function | t | u | undefined | function | function | function | undefined | function/123/decl/function | undefined/7/function | 1 | function | block | undefined | undefined/function/function | g | script"#;
+const NODE_OUTPUT: &str = r#"function2 | undefined | function | number | undefinedundefined | undefinedfunction | undefined | function | t | u | undefined | function | function | function | undefined | function/123/decl/function | undefined/7/function | 1 | function | block | undefined | undefined/function/function | g | functionnumber | script"#;
 
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

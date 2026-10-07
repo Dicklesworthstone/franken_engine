@@ -250,6 +250,15 @@ pub(super) fn walk_statement<W: Walk + ?Sized>(
             }
             Ok(())
         }
+        // A B.3.3 copy of a block function to its function's var
+        // (bd-9vouw.242) names that var through an internal target that
+        // must not resolve through the object; its value is the block's
+        // own function, which the body declares.
+        Statement::Expression(statement)
+            if crate::ast::annex_b_function_var_copy(&statement.expression).is_some() =>
+        {
+            Ok(())
+        }
         Statement::Expression(statement) => walker.expression(&mut statement.expression),
         Statement::Block(block) => walker.block(&mut block.body),
         Statement::If(statement) => {

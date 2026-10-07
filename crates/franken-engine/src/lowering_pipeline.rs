@@ -13851,8 +13851,9 @@ const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &[
 
 /// An assignment to `super.key` / `super[key]`, any operator (ES2020
 /// 12.3.5.1-3 MakeSuperPropertyReference, PutValue on a super reference):
-/// `this` is read first, then the key (ToPropertyKey, once), then the super
-/// base ([[HomeObject]].[[Prototype]]). The read of a compound or logical
+/// `this` is read first, then the key expression, then the super base
+/// ([[HomeObject]].[[Prototype]]); the key's ToPropertyKey happens at each
+/// read and write. The read of a compound or logical
 /// assignment is base.[[Get]](key, this) and the write base.[[Set]](key,
 /// value, this), both through the Reflect builtins, so the property is
 /// created on `this` or an inherited setter runs; a rejected write throws in
@@ -13918,10 +13919,13 @@ fn lower_super_member_assignment(
                 label_counter,
                 span_table,
             )?;
-            ops.push(Ir1Op::HostCall {
-                capability: "builtin:ToPropertyKey".to_string(),
-                arg_count: 1,
-            });
+            // The raw key value: ReflectGet and ReflectSet each run
+            // ToPropertyKey, as GetValue and PutValue do, so a simple
+            // assignment converts it once after its right-hand side and a
+            // compound one at the read and again at the write (Node's
+            // counts). Converting it here first ran a throwing toString
+            // before the right-hand side (Test262
+            // assignment/target-super-computed-reference).
         }
     }
     ops.push(Ir1Op::StoreBinding {

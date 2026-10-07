@@ -57448,6 +57448,15 @@ impl InterpreterCore {
         if !found {
             return Ok(false);
         }
+        // An array inherits Array.prototype[@@unscopables] once
+        // Array.prototype exists; make sure it does.
+        if self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| object.is_array)
+        {
+            self.ensure_builtin_prototype("Array")?;
+        }
         let unscopables_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Unscopables.id());
         let unscopables = self.proxy_aware_get_runtime_property(
             module,
@@ -57456,22 +57465,10 @@ impl InterpreterCore {
             object.clone(),
             0,
         )?;
+        // ES2020 8.1.1.2.1 step 5: only an object @@unscopables blocks (a
+        // deleted or replaced Array.prototype[@@unscopables] blocks nothing).
         let Value::Object(unscopables_id) = unscopables else {
-            // Array.prototype[@@unscopables] (ES2020 22.1.3.32) has no heap
-            // object here; its names are applied to arrays directly, so
-            // `with (array) { keys }` finds the enclosing `keys`.
-            let is_array =
-                self.heap
-                    .get(object_id.0 as usize)
-                    .is_some_and(|object| object.is_array)
-                    || self.builtin_prototypes.get("Array").copied().is_some_and(
-                        |array_prototype| self.chain_contains_object(*object_id, array_prototype),
-                    );
-            let blocked = is_array
-                && key
-                    .as_str()
-                    .is_some_and(|name| ARRAY_UNSCOPABLE_NAMES.contains(&name));
-            return Ok(!blocked);
+            return Ok(true);
         };
         let blocked =
             self.proxy_aware_get_runtime_property(module, unscopables_id, &key, unscopables, 0)?;
@@ -64740,8 +64737,8 @@ impl InterpreterCore {
     /// Node's order: `length`, `constructor`, the methods this engine serves,
     /// and @@iterator. Empty for any other object. Without them
     /// `Object.getOwnPropertyNames(Array.prototype)` was empty (Node: 40
-    /// names). No-claim: @@unscopables is not listed, as Array.prototype has
-    /// no @@unscopables object here.
+    /// names). @@unscopables is an ordinary own property
+    /// (install_array_unscopables), listed after these.
     ///
     /// bd-9vouw.249: every other prototype that serves its methods
     /// virtually (VIRTUAL_METHOD_PROTOTYPES) lists `constructor`, the methods
@@ -105565,6 +105562,9 @@ impl InterpreterCore {
             self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
         }
         self.install_iteration_prototype_members(canonical, prototype)?;
+        if canonical == "Array" {
+            self.install_array_unscopables(prototype)?;
+        }
         // %GeneratorFunction.prototype%.prototype is %GeneratorPrototype%
         // (ES2020 25.2.3.2), linked when that one is created.
         match canonical {
@@ -105591,6 +105591,29 @@ impl InterpreterCore {
             }
         }
         Ok(prototype)
+    }
+
+    /// Array.prototype[@@unscopables] (ES2020 22.1.3.32 and the names later
+    /// editions add): a null-prototype object whose own `true` data
+    /// properties name the methods a `with` body does not resolve on an
+    /// array, itself non-writable, non-enumerable and configurable.
+    fn install_array_unscopables(&mut self, prototype: ObjectId) -> Result<(), InterpreterError> {
+        let list = self.alloc_object_with_prototype(None)?;
+        self.store_prototype_link(list, None);
+        for name in ARRAY_UNSCOPABLE_NAMES {
+            self.set_object_property(list, name.to_string(), Value::Bool(true))?;
+        }
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Unscopables.id());
+        self.set_object_runtime_property(prototype, key.clone(), Value::Object(list))?;
+        self.set_own_property_attributes(
+            prototype,
+            &key,
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+            },
+        )
     }
 
     /// Own members of the iteration intrinsics (ES2020 25.1.2.1, 22.1.5.2,

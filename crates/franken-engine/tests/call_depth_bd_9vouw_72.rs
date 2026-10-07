@@ -177,13 +177,15 @@ fn runaway_recursion_fails_closed_at_the_depth_limit() {
     }
 }
 
-/// A call with 100 arguments needs 100 contiguous registers, so `wide`'s
-/// verified window is ~100 wide: in the 256-register profile the register-file
-/// cap (160,016 slots at the default depth) binds long before 10,000 frames.
-/// 100 frames run; 5,000 fail closed instead of growing the file.
+/// A call with 60 arguments needs 60 contiguous registers (a call with more
+/// than 64 stages them in an argument array, bd-9vouw.254), so `wide`'s
+/// verified window is over 100 wide: in the 256-register profile the
+/// register-file cap (160,016 slots at the default depth) binds long before
+/// 10,000 frames. 100 frames run; 5,000 fail closed instead of growing the
+/// file.
 #[test]
 fn wide_frames_meet_the_register_file_cap_before_the_depth_limit() {
-    let arguments = vec!["n"; 100].join(", ");
+    let arguments = vec!["n"; 60].join(", ");
     let wide = format!(
         "function zero() {{ return 0; }}
          function wide(n) {{ if (n === 0) return 0; return 1 + wide(n - 1) + zero({arguments}); }}"

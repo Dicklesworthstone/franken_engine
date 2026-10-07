@@ -193,19 +193,23 @@ fn large_destructuring_frames_work_in_functions_and_prepared_reexecution() {
 #[test]
 fn automatically_sized_registers_cannot_bypass_the_memory_budget() {
     // A frame is wide when many values are live at once: the ~300 arguments
-    // of three nested calls of 100 are, while the innermost list is built.
-    // (A depth-12 nested default, a 300-element array literal and one call
-    // of 300 arguments were used here before; none needs a wide frame since
-    // lowering reuses statement temporaries, builds long literals one entry
-    // at a time (bd-9vouw.23) and stages an argument list longer than 128 in
-    // an array. See `nested_defaults_fit_the_budget_after_register_reuse`.)
+    // of five nested calls of 60 are, while the innermost list is built.
+    // (A depth-12 nested default, a 300-element array literal, one call of
+    // 300 arguments and three nested calls of 100 were used here before;
+    // none needs a wide frame since lowering reuses statement temporaries,
+    // builds long literals one entry at a time (bd-9vouw.23) and stages an
+    // argument list longer than 64 in an array (bd-9vouw.254). See
+    // `nested_defaults_fit_the_budget_after_register_reuse`.)
     let list =
         |range: std::ops::Range<u32>| range.map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
     let source = format!(
-        "function first(value) {{ return value; }} first(7, {}, first({}, first({})));",
-        list(1..99),
-        list(1..100),
-        list(1..101)
+        "function first(value) {{ return value; }} \
+         first(7, {}, first({}, first({}, first({}, first({})))));",
+        list(1..59),
+        list(1..60),
+        list(1..60),
+        list(1..60),
+        list(1..60)
     );
     let tree = CanonicalEs2020Parser
         .parse(source.as_str(), ParseGoal::Script)

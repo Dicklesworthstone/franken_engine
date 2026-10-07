@@ -10954,6 +10954,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 dst: register,
             });
         }
+        // bd-9vouw.317: an arrow function has no new.target of its own
+        // (ES2020 12.3.8.1 GetNewTarget). A non-arrow function whose arrows
+        // read it (through arrows only) binds its own once here, declared
+        // below as `ARROW_NEW_TARGET_BINDING`, and those arrows load that
+        // name through their captured scope chain.
+        let new_target_register = (!fn_is_arrow && arrows_read_new_target(body_ops)).then(|| {
+            let register = fn_reg;
+            fn_reg = fn_reg.saturating_add(1);
+            ir3.instructions
+                .push(Ir3Instruction::LoadNewTarget { dst: register });
+            register
+        });
 
         // When this function has free variables, put parameters on the
         // scope chain so LoadScoped can find them alongside captured
@@ -10979,6 +10991,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 ir3.instructions.push(Ir3Instruction::PushScope);
             }
             let pool_idx = push_constant_optimized(&mut constant_pool, "arguments");
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index: pool_idx,
+                kind: 0,
+            });
+            ir3.instructions.push(Ir3Instruction::InitBinding {
+                name_pool_index: pool_idx,
+                src: register,
+            });
+        }
+        if let Some(register) = new_target_register {
+            if free_vars.is_empty() && arguments_register.is_none() {
+                ir3.instructions.push(Ir3Instruction::PushScope);
+            }
+            let pool_idx = push_constant_optimized(&mut constant_pool, ARROW_NEW_TARGET_BINDING);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
                 kind: 0,
@@ -12113,6 +12139,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::LoadThis { dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::LoadNewTarget if fn_is_arrow => {
+                    // bd-9vouw.317: the enclosing function's, bound in its
+                    // scope; an arrow outside any function reads undefined.
+                    let dst = alloc_register(&mut fn_reg);
+                    let name_pool_index =
+                        push_constant_optimized(&mut constant_pool, ARROW_NEW_TARGET_BINDING);
+                    ir3.instructions.push(Ir3Instruction::LoadName {
+                        dst,
+                        name_pool_index,
+                        allow_missing: true,
+                    });
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadNewTarget => {
@@ -20895,6 +20934,35 @@ fn function_reads_sloppy_this(body_ops: &[Ir1Op]) -> bool {
             body_ops,
             ..
         } => function_reads_sloppy_this(body_ops),
+        _ => false,
+    })
+}
+
+/// Scope binding holding a function's new.target for the arrow functions in
+/// it (bd-9vouw.317); no identifier can spell this name.
+const ARROW_NEW_TARGET_BINDING: &str = "new.target";
+
+/// Whether an arrow function in this body (through arrows only, whose
+/// new.target is this function's) reads new.target (bd-9vouw.317).
+fn arrows_read_new_target(body_ops: &[Ir1Op]) -> bool {
+    body_ops.iter().any(|op| match op {
+        Ir1Op::CreateFunction {
+            is_arrow: true,
+            body_ops,
+            ..
+        } => arrow_reads_new_target(body_ops),
+        _ => false,
+    })
+}
+
+fn arrow_reads_new_target(body_ops: &[Ir1Op]) -> bool {
+    body_ops.iter().any(|op| match op {
+        Ir1Op::LoadNewTarget => true,
+        Ir1Op::CreateFunction {
+            is_arrow: true,
+            body_ops,
+            ..
+        } => arrow_reads_new_target(body_ops),
         _ => false,
     })
 }

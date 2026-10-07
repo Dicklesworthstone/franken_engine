@@ -137,3 +137,40 @@ fn other_builtin_prototypes_list_their_own_names_bd_9vouw_249() {
         OWN_NAMES_NODE_OUTPUT.lines().count()
     );
 }
+
+/// bd-9vouw.249 (regression found by the rc-next28 Test262 census): `delete`
+/// of a built-in prototype accessor (`Map.prototype.size`,
+/// `DataView.prototype.buffer`, `Symbol.prototype.description`) returned
+/// true and left it: still an own property to hasOwnProperty (which this
+/// bead had just taught to see the accessors), with a descriptor, and still
+/// read through instances. Test262's verifyConfigurable deletes the property
+/// and checks hasOwnProperty, so 11 prop-desc tests went red. A redefined
+/// accessor that is then deleted is gone too (it came back as the built-in
+/// one). DELETE_NODE_OUTPUT is Node v22.2.0's output, captured
+/// programmatically.
+const DELETE_PROGRAM: &str = r#"var hop = Function.prototype.call.bind(Object.prototype.hasOwnProperty);
+var m = new Map([[1, 2]]);
+console.log(m.size, delete Map.prototype.size, hop(Map.prototype, 'size'), Map.prototype.hasOwnProperty('size'), 'size' in Map.prototype, m.size);
+console.log(delete DataView.prototype.buffer, hop(DataView.prototype, 'buffer'), Object.getOwnPropertyNames(DataView.prototype).indexOf('buffer'), new DataView(new ArrayBuffer(2)).buffer);
+console.log(delete Set.prototype.size, Object.getOwnPropertyDescriptor(Set.prototype, 'size'), Reflect.has(Set.prototype, 'size'));
+console.log(delete Symbol.prototype.description, hop(Symbol.prototype, 'description'), Symbol('d').description);
+Object.defineProperty(RegExp.prototype, 'sticky', { get() { return 'mine'; }, configurable: true });
+console.log(/a/.sticky, delete RegExp.prototype.sticky, /a/.sticky, hop(RegExp.prototype, 'sticky'), /a/y.flags);
+console.log(delete Map.prototype.size, Object.getOwnPropertyNames(Map.prototype).indexOf('size'));"#;
+
+/// Node v22.2.0's output for `DELETE_PROGRAM`.
+const DELETE_NODE_OUTPUT: &str = r#"1 true false false false undefined
+true false -1 undefined
+true undefined false
+true false undefined
+mine true undefined false 
+true -1"#;
+
+#[test]
+fn deleted_prototype_accessors_are_gone_bd_9vouw_249() {
+    let output = console_output(DELETE_PROGRAM).expect("the program runs");
+    for (index, (actual, expected)) in output.lines().zip(DELETE_NODE_OUTPUT.lines()).enumerate() {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(output.lines().count(), DELETE_NODE_OUTPUT.lines().count());
+}

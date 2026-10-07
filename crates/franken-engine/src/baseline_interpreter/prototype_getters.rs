@@ -104,11 +104,15 @@ impl InterpreterCore {
     /// The getter of accessor `key` when `object` is the prototype of an
     /// owner in PROTOTYPE_GETTERS: [[Get]] and [[HasProperty]] find these
     /// accessors there (`/a/g.global`, `'global' in re`), bd-9vouw.162.
+    /// An accessor `delete` removed is gone (bd-9vouw.249).
     pub(super) fn prototype_getter_at(
         &self,
         object: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Option<BuiltinFunction> {
+        if self.virtual_own_property_deleted(object, key) {
+            return None;
+        }
         let RuntimePropertyKey::String(key) = key else {
             return None;
         };
@@ -125,12 +129,15 @@ impl InterpreterCore {
 
     /// `{ get, set: undefined, enumerable: false, configurable: true }` when
     /// `object` is the prototype of an owner in PROTOTYPE_GETTERS and `key`
-    /// one of its accessors.
+    /// one of its accessors, unless `delete` removed it.
     pub(super) fn prototype_getter_descriptor(
         &mut self,
         object: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<Option<Value>, InterpreterError> {
+        if self.virtual_own_property_deleted(object, key) {
+            return Ok(None);
+        }
         let RuntimePropertyKey::String(key) = key else {
             return Ok(None);
         };

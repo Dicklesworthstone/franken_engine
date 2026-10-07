@@ -63011,9 +63011,12 @@ impl InterpreterCore {
             // method, `constructor`, @@iterator) is configurable, so deleting
             // it, or a stored property shadowing it, leaves it absent:
             // `delete Array.prototype.fill` returned true and left `fill`.
+            // Its accessors (`Map.prototype.size`) too: `delete` returned true
+            // and left them, own and with a descriptor (bd-9vouw.249).
             let virtual_property = self
                 .canonical_prototype_virtual_property(object_id, key)
-                .is_some();
+                .is_some()
+                || self.prototype_getter_at(object_id, key).is_some();
             let object = self
                 .heap
                 .get(object_id.0 as usize)

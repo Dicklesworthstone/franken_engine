@@ -62,6 +62,7 @@ const MODULE_BINDING: &str = "%util_module";
 const EVENTS_MODULE_BINDING: &str = "%events_module";
 const ASSERT_MODULE_BINDING: &str = "%assert_module";
 const TIMERS_MODULE_BINDING: &str = "%timers_module";
+const STRING_DECODER_MODULE_BINDING: &str = "%string_decoder_module";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PureModule {
@@ -69,6 +70,7 @@ enum PureModule {
     Events,
     Assert,
     Timers,
+    StringDecoder,
 }
 
 impl PureModule {
@@ -78,6 +80,7 @@ impl PureModule {
             Self::Events => EVENTS_MODULE_BINDING,
             Self::Assert => ASSERT_MODULE_BINDING,
             Self::Timers => TIMERS_MODULE_BINDING,
+            Self::StringDecoder => STRING_DECODER_MODULE_BINDING,
         }
     }
 }
@@ -110,6 +113,7 @@ const UTIL_SOURCE: &str = include_str!("util_module.js");
 const EVENTS_SOURCE: &str = include_str!("events_module.js");
 const ASSERT_SOURCE: &str = include_str!("assert_module.js");
 const TIMERS_SOURCE: &str = include_str!("timers_module.js");
+const STRING_DECODER_SOURCE: &str = include_str!("string_decoder_module.js");
 
 const TIMERS_PLACEHOLDERS: [(&str, &str); 3] = [
     ("__franken_timers_timeout", "%TimersPromisesSetTimeout"),
@@ -155,6 +159,8 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Timers, None))
     } else if *specifier == "timers/promises" || *specifier == "node:timers/promises" {
         Some((PureModule::Timers, Some("promises")))
+    } else if *specifier == "string_decoder" || *specifier == "node:string_decoder" {
+        Some((PureModule::StringDecoder, None))
     } else {
         None
     }
@@ -199,6 +205,11 @@ const TIMERS_GLOBALS: [&str; 7] = [
     "clearInterval",
 ];
 
+const STRING_DECODER_GLOBALS: [&str; 9] = [
+    "ArrayBuffer", "Buffer", "DataView", "Object", "Reflect", "String",
+    "TypeError", "Uint8Array", "WeakMap",
+];
+
 const EVENTS_GLOBALS: [&str; 11] = [
     "AbortController",
     "AbortSignal",
@@ -234,6 +245,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                     ..
                 }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING
                     || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
+                    || name == STRING_DECODER_MODULE_BINDING
             )
     )
 }
@@ -304,6 +316,7 @@ fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelin
         PureModule::Events => ("franken:events", EVENTS_SOURCE),
         PureModule::Assert => ("franken:assert", ASSERT_SOURCE),
         PureModule::Timers => ("franken:timers", TIMERS_SOURCE),
+        PureModule::StringDecoder => ("franken:string_decoder", STRING_DECODER_SOURCE),
     };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
         detail: "the engine's pure builtin module source failed to parse",
@@ -336,6 +349,7 @@ fn module_source(
         PureModule::Events => &EVENTS_GLOBALS,
         PureModule::Assert => &ASSERT_GLOBALS,
         PureModule::Timers => &TIMERS_GLOBALS,
+        PureModule::StringDecoder => &STRING_DECODER_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
         through_global_object: globals
@@ -826,5 +840,63 @@ mod timers_tests {
         let mut expected: BTreeSet<String> = TIMERS_PLACEHOLDERS.iter().map(|(_, name)| name.to_string()).collect();
         expected.extend(["globalThis", "arguments"].map(str::to_string));
         assert_eq!(protected, expected);
+    }
+}
+
+#[cfg(test)]
+mod string_decoder_tests {
+    use super::*;
+
+    fn parse(source: &str, goal: ParseGoal) -> SyntaxTree {
+        CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource { label: "string-decoder-rewrite.js".into(), text: source.into() },
+                goal,
+                &ParserOptions::default(),
+            )
+            .expect("test source parses")
+    }
+
+    #[test]
+    fn decoder_literals_share_one_private_module_without_loading_authority() {
+        let tree = parse(
+            "const a = require('string_decoder'); require('node:string_decoder'); \
+             function nested() { return require('string_decoder'); }",
+            ParseGoal::Script,
+        );
+        let rewritten = rewrite_util_requires(&tree).expect("rewrite").expect("decoder used");
+        assert_eq!(rewritten.body.len(), tree.body.len() + 1);
+        assert!(is_module_declaration(&rewritten.body[0]));
+        assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+    }
+
+    #[test]
+    fn decoder_requires_preserve_shadowing_and_nonliteral_loading() {
+        for source in [
+            "function f(require) { return require('string_decoder'); }",
+            "{ let require = f; require('string_decoder'); }",
+            "for (const require of values) require('node:string_decoder');",
+            "with (scope) require('string_decoder');",
+            "const name = 'string_decoder'; require(name);",
+            "require('string_decoder/unknown');",
+        ] {
+            assert!(rewrite_util_requires(&parse(source, ParseGoal::Script))
+                .expect("rewrite").is_none(), "{source}");
+        }
+        let tree = parse("import require from 'other'; require('string_decoder');", ParseGoal::Module);
+        assert!(rewrite_util_requires(&tree).expect("import shadow").is_none());
+    }
+
+    #[test]
+    fn decoder_source_parses_and_protects_all_native_dependencies() {
+        let free = super::tests::free_names(
+            &mut parse_module_source(PureModule::StringDecoder).expect("shipped source parses"),
+        );
+        let names: BTreeSet<String> = STRING_DECODER_GLOBALS.iter().map(|name| name.to_string()).collect();
+        assert_eq!(free, names);
+        let protected = super::tests::free_names(
+            &mut module_source(&names, PureModule::StringDecoder).expect("protected decoder"),
+        );
+        assert_eq!(protected, ["globalThis".to_string()].into_iter().collect());
     }
 }

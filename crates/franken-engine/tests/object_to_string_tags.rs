@@ -153,3 +153,68 @@ fn object_prototype_to_locale_string_invokes_to_string() {
         "x 5 s function 0 toLocaleString [object Object] true TypeError"
     );
 }
+
+/// bd-9vouw.270: Object.prototype.toString takes the builtinTag from the
+/// receiver's kind (IsArray looks through a Proxy; a revoked one throws),
+/// then Get(O, @@toStringTag) for every receiver (ES2024 20.1.3.6): a
+/// nulled or deleted intrinsic tag on an iterator, generator or promise
+/// prototype, a function's own or a class's static tag, a primitive's
+/// prototype tag and a Proxy's get trap or target are seen. Only an object
+/// whose first tag was an accessor was read before. Expected lines are Node
+/// v22.2.0's output, captured programmatically (Bun 1.4.2 runs this file as
+/// a strict module, where line 3's assignment to a read-only tag throws).
+/// No-claim: a string iterator is an array iterator here (no
+/// %StringIteratorPrototype%).
+#[test]
+fn object_to_string_reads_the_tag_of_every_receiver_bd_9vouw_270() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var toString = Object.prototype.toString;
+var tag = function (v) { return toString.call(v).slice(8, -1); };
+function* gen() {}
+var plain = [undefined, null, 1, 's', true, 1n, Symbol(), {}, [], function () {}, gen, gen(), async function () {}, new Map(), new Set(), new Map().keys(), new Set().values(), [][Symbol.iterator](), Promise.resolve(), new Date(0), /x/, new Error('e'), new TypeError('t'), (function () { return arguments; })(), new Uint8Array(1), new ArrayBuffer(1), Math, JSON, new Boolean(true), new Number(1), new String('s'), Object(1n), Object(Symbol())];
+console.log(plain.map(tag).join(','));
+var arrayIterProto = Object.getPrototypeOf([][Symbol.iterator]());
+Object.defineProperty(arrayIterProto, Symbol.toStringTag, { configurable: true, value: null });
+var nulled = tag([][Symbol.iterator]());
+delete arrayIterProto[Symbol.toStringTag];
+console.log(nulled, tag([][Symbol.iterator]()), tag(gen()));
+var genProto = Object.getPrototypeOf(gen());
+var generatorPrototype = Object.getPrototypeOf(genProto);
+delete generatorPrototype[Symbol.toStringTag];
+delete Promise.prototype[Symbol.toStringTag];
+delete Symbol.prototype[Symbol.toStringTag];
+BigInt.prototype[Symbol.toStringTag] = 'big';
+Object.defineProperty(Boolean.prototype, Symbol.toStringTag, { value: 'bool', configurable: true });
+console.log(tag(gen()), tag(Promise.resolve()), tag(Symbol()), tag(1n), tag(true), tag(new Boolean(false)));
+var fn = function () {};
+fn[Symbol.toStringTag] = 'custom';
+var arr = [];
+arr[Symbol.toStringTag] = 'arr';
+var err = new Error();
+err[Symbol.toStringTag] = 'err';
+class Tagged { get [Symbol.toStringTag]() { return 'cls'; } static get [Symbol.toStringTag]() { return 'static'; } }
+console.log(tag(fn), tag(arr), tag(err), tag(new Tagged()), tag(Tagged), tag({ [Symbol.toStringTag]: 5 }), tag(Object.defineProperty({}, Symbol.toStringTag, { get: function () { return new String('boxed'); } })));
+console.log(tag(new Proxy([], {})), tag(new Proxy({}, {})), tag(new Proxy(async function () {}, {})), tag(new Proxy(function () {}, {})), tag(new Proxy(new Map(), {})), kind(function () { var r = Proxy.revocable([], {}); r.revoke(); return toString.call(r.proxy); }));
+var calls = 0;
+var proxy = new Proxy({}, { get: function (t, k) { if (k === Symbol.toStringTag) { calls++; return 'trap'; } return Reflect.get(t, k); } });
+console.log(tag(proxy), calls, String({}), String([1, 2]), '' + Object.create(null, { [Symbol.toStringTag]: { value: 'nullproto' } }).constructor);
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "Undefined,Null,Number,String,Boolean,BigInt,Symbol,Object,Array,Function,GeneratorFunction,Generator,AsyncFunction,Map,Set,Map Iterator,Set Iterator,Array Iterator,Promise,Date,RegExp,Error,Error,Arguments,Uint8Array,ArrayBuffer,Math,JSON,Boolean,Number,String,BigInt,Symbol",
+            "Object Iterator Generator",
+            "Iterator Object Object BigInt bool bool",
+            "custom arr err cls static Object Object",
+            "Array Object AsyncFunction Function Map TypeError",
+            "trap 1 [object Object] 1,2 undefined",
+        ]
+    );
+}

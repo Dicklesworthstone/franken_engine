@@ -61550,57 +61550,55 @@ impl InterpreterCore {
         ))
     }
 
-    /// Object.prototype.toString called as a function (ES2020 19.1.3.6). When
-    /// the first @@toStringTag along the receiver's chain is an accessor (a
-    /// class's `get [Symbol.toStringTag]()`, %TypedArray.prototype%'s),
-    /// Get(O, @@toStringTag) runs the getter on the receiver, and a String
-    /// result is the tag; otherwise the builtinTag (bd-9vouw.93). Without an
-    /// accessor this is [`Self::object_prototype_to_string_value`].
+    /// Object.prototype.toString called as a function (ES2024 20.1.3.6):
+    /// the builtinTag from the receiver's kind (IsArray looks through a
+    /// Proxy, and a revoked one is a TypeError), then Get(O, @@toStringTag)
+    /// on the receiver (a primitive reads its prototype's), whose String
+    /// value replaces the builtinTag. Only an object whose first tag was an
+    /// accessor read it (bd-9vouw.93); a function's, a primitive's, an
+    /// iterator's, generator's or promise's tag was fixed by its kind, so an
+    /// own `fn[Symbol.toStringTag]`, a deleted `Promise.prototype` tag or a
+    /// Proxy's target were not seen (bd-9vouw.270).
     fn object_prototype_to_string_with_getters(
         &mut self,
         module: &Ir3Module,
         receiver: &Value,
     ) -> Result<Value, InterpreterError> {
-        let Value::Object(object_id) = receiver else {
-            return Ok(self.object_prototype_to_string_value(receiver));
-        };
-        if !self.first_to_string_tag_is_accessor(*object_id) {
-            return Ok(self.object_prototype_to_string_value(receiver));
-        }
-        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
-        let tag = match self.get_v(module, receiver, &key)? {
-            Value::Str(tag) => tag.to_string(),
+        let builtin_tag = match receiver {
+            Value::Undefined => return Ok(Value::str("[object Undefined]")),
+            Value::Null => return Ok(Value::str("[object Null]")),
+            Value::Bool(_) => "Boolean",
+            Value::Int(_) | Value::Float(_) => "Number",
+            Value::Str(_) => "String",
+            Value::Object(object_id) if self.active_proxy_record(*object_id)?.is_some() => {
+                if self.generic_is_array(*object_id)? {
+                    "Array"
+                } else {
+                    "Object"
+                }
+            }
             // Typed arrays have no builtinTag of their own: theirs comes
-            // from the %TypedArray.prototype% getter a subclass replaced.
-            _ if self
-                .heap
-                .get(object_id.0 as usize)
-                .is_some_and(|object| object.typed_array.is_some()) =>
+            // from the %TypedArray.prototype% getter.
+            Value::Object(object_id)
+                if self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| object.typed_array.is_some()) =>
             {
-                "Object".to_string()
+                "Object"
             }
-            _ => self.object_to_string_tag(*object_id).to_string(),
+            Value::Object(object_id) => self.object_to_string_tag(*object_id),
+            callable if callable.is_callable() => "Function",
+            _ => "Object",
         };
-        Ok(Value::str(format!("[object {tag}]")))
-    }
-
-    /// Whether the first @@toStringTag property along `object_id`'s chain
-    /// is an accessor.
-    fn first_to_string_tag_is_accessor(&self, object_id: ObjectId) -> bool {
-        let to_string_tag = core_symbol_id(WellKnownSymbol::ToStringTag.id());
-        let mut current = Some(object_id);
-        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
-            let Some(object) = current.and_then(|id| self.heap.get(id.0 as usize)) else {
-                return false;
-            };
-            match object.properties.baseline_symbol_property(to_string_tag) {
-                Some(BaselineSymbolProperty::Accessor { .. }) => return true,
-                Some(_) => return false,
-                None => {}
-            }
-            current = current.and_then(|id| self.observable_prototype_of(id));
-        }
-        false
+        // Guest code (a tag getter, a proxy trap) runs while native locals
+        // hold values: no collection until this returns.
+        self.gc_nested_request = None;
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
+        Ok(match self.get_v(module, receiver, &key)? {
+            Value::Str(tag) => Value::str(format!("[object {tag}]")),
+            _ => Value::str(format!("[object {builtin_tag}]")),
+        })
     }
 
     /// ES2020 19.1.3.6 steps 15-16: a String-valued @@toStringTag found on

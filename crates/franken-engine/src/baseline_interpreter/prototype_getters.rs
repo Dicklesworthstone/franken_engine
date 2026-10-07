@@ -360,7 +360,45 @@ impl InterpreterCore {
         {
             Self::reject_out_of_bounds_data_view(view, key)?;
         }
+        if let Some(value) = self.view_internal_slot(id, owner, key) {
+            return Ok(value);
+        }
         self.prototype_getter_own_slot(module, id, key, receiver)
+    }
+
+    /// A typed array's or DataView's [[ViewedArrayBuffer]], [[ByteOffset]],
+    /// [[ByteLength]] and [[ArrayLength]], from the view itself: a program
+    /// can redefine the own properties of those names, which the getters
+    /// read before, so `get buffer.call(view)` returned the redefinition
+    /// (bd-9vouw.320). An out-of-bounds typed array reads 0 for the three
+    /// numbers (ES2024 23.2.3); an out-of-bounds DataView was refused above.
+    fn view_internal_slot(&self, id: ObjectId, owner: &str, key: &str) -> Option<Value> {
+        let object = self.heap.get(id.0 as usize)?;
+        let int = |value: usize| Value::Int(i64::try_from(value).unwrap_or(i64::MAX));
+        match owner {
+            "TypedArray" => {
+                let view = object.typed_array.as_ref()?;
+                let in_bounds = !view.bounds.is_some_and(|bounds| bounds.out_of_bounds);
+                let number = |value: usize| int(if in_bounds { value } else { 0 });
+                match key {
+                    "buffer" => Some(Value::Object(view.buffer)),
+                    "byteLength" => Some(number(view.byte_length)),
+                    "byteOffset" => Some(number(view.byte_offset)),
+                    "length" => Some(number(view.length)),
+                    _ => None,
+                }
+            }
+            "DataView" => {
+                let view = object.data_view.as_ref()?;
+                match key {
+                    "buffer" => Some(Value::Object(view.buffer)),
+                    "byteLength" => Some(int(view.byte_length)),
+                    "byteOffset" => Some(int(view.byte_offset)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The receiver's own `key` slot (`flags`, `source`, `byteLength`, ...).

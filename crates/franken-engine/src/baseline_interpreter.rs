@@ -56778,9 +56778,15 @@ impl InterpreterCore {
         {
             return Ok(true);
         }
-        // Symbol-keyed members of %Function.prototype% exist only once it is
-        // made (see primitive_prototype_get).
-        if matches!(key, RuntimePropertyKey::Symbol(_)) {
+        // bd-9vouw.272: a sloppy ordinary function owns `caller` and
+        // `arguments`; any other function inherits %Function.prototype%'s
+        // accessors, which, like its Symbol-keyed members, exist only once it
+        // is made (see primitive_prototype_get).
+        let restricted = matches!(key.as_str(), Some("caller" | "arguments"));
+        if restricted && self.is_sloppy_ordinary_function(module, function)? {
+            return Ok(true);
+        }
+        if matches!(key, RuntimePropertyKey::Symbol(_)) || restricted {
             self.ensure_builtin_prototype("Function")?;
         }
         // A generator, async or async generator function's kind prototype
@@ -65043,14 +65049,6 @@ impl InterpreterCore {
         let Some(name) = key.as_str() else {
             return Ok(None);
         };
-        // bd-9vouw.272: Node's sloppy ordinary functions answer null for
-        // their own `caller` and `arguments`; every other function reads
-        // Function.prototype's %ThrowTypeError% accessors.
-        if matches!(name, "caller" | "arguments")
-            && self.is_sloppy_ordinary_function(module, function)?
-        {
-            return Ok(Some(Value::Null));
-        }
         let value = match function {
             Value::Function(index) => self.function_property_value(module, *index, name)?,
             Value::Closure(closure_id) => {
@@ -104538,6 +104536,12 @@ impl InterpreterCore {
         func_idx: u32,
         key: &str,
     ) -> Result<Value, InterpreterError> {
+        // bd-9vouw.272: see closure_property_value.
+        if matches!(key, "caller" | "arguments")
+            && self.is_sloppy_ordinary_function(module, &Value::Function(func_idx))?
+        {
+            return Ok(Value::Null);
+        }
         if let Some(value) = Self::function_prototype_property(key) {
             return Ok(value);
         }
@@ -104584,6 +104588,15 @@ impl InterpreterCore {
         closure_id: u32,
         key: &str,
     ) -> Result<Value, InterpreterError> {
+        // bd-9vouw.272: Node's sloppy ordinary functions answer null for
+        // their own `caller` and `arguments`; every other function reads
+        // Function.prototype's %ThrowTypeError% accessors. Both the
+        // GetProperty instruction and [[Get]] (function_own_get) ask here.
+        if matches!(key, "caller" | "arguments")
+            && self.is_sloppy_ordinary_function(module, &Value::Closure(closure_id))?
+        {
+            return Ok(Value::Null);
+        }
         if let Some(value) = Self::function_prototype_property(key) {
             return Ok(value);
         }

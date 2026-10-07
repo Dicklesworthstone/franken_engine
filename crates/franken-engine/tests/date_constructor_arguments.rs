@@ -53,3 +53,35 @@ fn date_copies_components_time_clip_and_to_primitive() {
         "5|2020-03-04T00:00:00.000Z|1999|2020-02-01T01:00:00.000Z|1|42|NaN|TypeError|1583298367000"
     );
 }
+
+/// bd-9vouw.264: called rather than constructed, `Date` ignores its
+/// arguments and returns ToDateString of the current time (ES2020 20.4.2
+/// step 1), however it is called (`Date.call`, `apply`, `Reflect.apply`, a
+/// bound Date, a callback). It returned a Date object; `new` and
+/// `Reflect.construct` still construct one. Expected lines are Node
+/// v22.2.0's output, captured programmatically; Bun 1.4.2 agrees.
+#[test]
+fn date_called_as_a_function_returns_a_string_bd_9vouw_264() {
+    let source = r#"var now = new Date().toString().slice(0, 15);
+var called = [Date(), Date(0, 0, 0), Date.call(null, 1), Date.apply(null, [1]), Reflect.apply(Date, null, [1]), Date.bind(null, 2020)(), [0].map(Date)[0]];
+console.log(called.map(function (value) { return typeof value; }).join(' '));
+console.log(called.every(function (value) { return value.slice(0, 15) === now; }));
+var bound = Date.bind(null, 2020);
+console.log(typeof new bound(1), new bound(1).getFullYear(), new Date(0).getTime(), typeof Reflect.construct(Date, [0]), Reflect.construct(Date, [0]).getTime());
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "string string string string string string string",
+            "true",
+            "object 2020 0 object 0",
+        ]
+    );
+}

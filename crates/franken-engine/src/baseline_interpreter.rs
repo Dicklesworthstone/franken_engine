@@ -42612,8 +42612,16 @@ impl InterpreterCore {
                 let reason = self.promise_finally_bound_property(builtin, "__value")?;
                 Err(self.throw_guest_value(reason, Label::Public)?)
             }
+            // ES2020 20.4.2 step 1: called rather than constructed, Date
+            // ignores its arguments and returns ToDateString of the current
+            // time, as `new Date().toString()` would.
             BuiltinFunctionKind::DateConstructor => {
-                self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))
+                let no_arguments = RegRange {
+                    start: args.start,
+                    count: 0,
+                };
+                let now = self.dispatch_builtin_hostcall("builtin:Date", no_arguments, Some(module))?;
+                self.date_prototype_method(Some(module), "toString", now, no_arguments)
             }
             BuiltinFunctionKind::PromiseConstructor => self.construct_promise(module, args),
             BuiltinFunctionKind::EventEmitterConstructor => {
@@ -53599,6 +53607,9 @@ impl InterpreterCore {
                             return Err(self.abstract_iterator_construction_error());
                         }
                         let mut result = match standard_name {
+                            _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
+                                self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
+                            }
                             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                                 self.construct_event_target_family(module, name, args)?
                             }
@@ -100801,6 +100812,9 @@ impl InterpreterCore {
             ));
         }
         let mut result = match standard_name {
+            _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
+                self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
+            }
             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                 self.construct_event_target_family(module, name, args)?
             }

@@ -42201,23 +42201,41 @@ mod tests {
         );
     }
 
+    /// bd-305gi.1: a stream form the facade does not claim is never elided to
+    /// a stream kernel HostCall; it lowers with the engine-owned stream module
+    /// (whose process.nextTick HostCall marks it) instead of the ambient
+    /// `require` refusal it met before that module existed.
+    fn assert_served_by_stream_module(source: &str, label: &str) {
+        let ops = lower_script_source_ops(source, label);
+        for kernel in [
+            "builtin:StreamReadable",
+            "builtin:StreamReadableFrom",
+            "builtin:StreamWritable",
+            "builtin:StreamPassThrough",
+            "builtin:StreamTransform",
+            "builtin:StreamPipeline",
+            "builtin:StreamPromisesPipeline",
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, kernel),
+                0,
+                "{label}: {kernel} for {source}"
+            );
+        }
+        assert!(
+            count_hostcall_deep(&ops, "builtin:ProcessNextTick") > 0,
+            "{label}: the stream module was not materialized for {source}"
+        );
+    }
+
     #[test]
-    fn stream_transform_pipeline_escapes_remain_fail_closed_bd_fw7zd_12() {
+    fn stream_transform_pipeline_escapes_get_the_module_not_the_kernel_bd_fw7zd_12() {
         for source in [
             "const { Transform } = require('stream'); console.log(Transform);",
             "const { pipeline } = require('stream'); const escaped = pipeline;",
             "const { promises } = require('stream'); console.log(promises['pipeline']);",
         ] {
-            let tree = crate::parser_api_stability::parse_script(source)
-                .expect("parse rejected stream use");
-            let ir0 = Ir0Module::from_syntax_tree(tree, "stream_rejected_bd_fw7zd_12.js");
-            let error = lower_ir0_to_ir1(&ir0).expect_err("stream escape must not be elided");
-            assert!(
-                error.to_string().contains("ambient")
-                    || error.to_string().contains("require")
-                    || error.to_string().contains("unsupported"),
-                "unexpected fail-closed error: {error}"
-            );
+            assert_served_by_stream_module(source, "stream_escape_bd_fw7zd_12.js");
         }
     }
 
@@ -42256,17 +42274,7 @@ mod tests {
                  const { PassThrough: Through } = require('stream');\n",
             ),
         ] {
-            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
-            let ir0 = Ir0Module::from_syntax_tree(tree, format!("stream_{label}_bd_fw7zd.js"));
-            let error = lower_ir0_to_ir1(&ir0)
-                .expect_err("rejected PassThrough use must preserve ambient require denial");
-            assert!(
-                matches!(
-                    error,
-                    LoweringPipelineError::AmbientAuthorityViolation { .. }
-                ),
-                "{label} should preserve ambient denial, got {error:?}"
-            );
+            assert_served_by_stream_module(source, &format!("stream_{label}_bd_fw7zd.js"));
         }
 
         for (label, source) in [
@@ -42333,14 +42341,7 @@ mod tests {
             "const { Duplex } = require('stream'); new Duplex();",
             "const stream = require('stream'); new stream.Readable();",
         ] {
-            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
-            let ir0 = Ir0Module::from_syntax_tree(tree, "unsupported_stream_constructor.js");
-            let error = lower_ir0_to_ir1(&ir0)
-                .expect_err("unsupported stream possession must preserve ambient denial");
-            assert!(matches!(
-                error,
-                LoweringPipelineError::AmbientAuthorityViolation { .. }
-            ));
+            assert_served_by_stream_module(source, "unsupported_stream_constructor.js");
         }
     }
 

@@ -27,12 +27,20 @@
 //! constructor and EventsOnce hostcall (bd-305gi), and `vm` (bd-9vouw.303):
 //! Node's shape, whose every code-running entry point refuses with an
 //! EvalError when called, so a package that loads `vm` for an optional
-//! feature loads (jsonpath-plus). No filesystem/module-load
+//! feature loads (jsonpath-plus). `stream` (bd-305gi.1) is engine-owned
+//! JavaScript too: Node's Readable / Writable / Duplex / Transform /
+//! PassThrough state machines, finished and pipeline, over the events
+//! module's EventEmitter, string_decoder and the process.nextTick queue. It
+//! serves the `require('stream')` calls the stream facade cannot claim
+//! (`class X extends Transform`, `stream.Readable`, Duplex, finished, a
+//! `require` inside a function, async iteration, ...); a top-level
+//! destructure whose every name and use the facade serves keeps the facade's
+//! HostCall lowering. No filesystem/module-load
 //! authority is introduced. The filesystem facade shares these hooks through
 //! `fs_module`; its methods retain their native fs:read/fs:write checks.
 //! Other specifiers and `require` as a value keep their existing authority checks.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 // Filesystem methods retain the caller's FsRead/FsWrite checks at invocation.
 #[path = "fs_module.rs"]
@@ -67,6 +75,7 @@ const ASSERT_MODULE_BINDING: &str = "%assert_module";
 const TIMERS_MODULE_BINDING: &str = "%timers_module";
 const STRING_DECODER_MODULE_BINDING: &str = "%string_decoder_module";
 const VM_MODULE_BINDING: &str = "%vm_module";
+const STREAM_MODULE_BINDING: &str = "%stream_module";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PureModule {
@@ -76,6 +85,8 @@ enum PureModule {
     Timers,
     StringDecoder,
     Vm,
+    // After Events and StringDecoder: its declaration reads theirs.
+    Stream,
 }
 
 impl PureModule {
@@ -87,6 +98,7 @@ impl PureModule {
             Self::Timers => TIMERS_MODULE_BINDING,
             Self::StringDecoder => STRING_DECODER_MODULE_BINDING,
             Self::Vm => VM_MODULE_BINDING,
+            Self::Stream => STREAM_MODULE_BINDING,
         }
     }
 }
@@ -109,6 +121,7 @@ pub(super) fn intrinsic_capability(name: &str) -> Option<&'static str> {
         "%TimersPromisesSetTimeout" => Some("builtin:TimersPromisesSetTimeout"),
         "%TimersPromisesSetImmediate" => Some("builtin:TimersPromisesSetImmediate"),
         "%TimersPromisesSetInterval" => Some("builtin:TimersPromisesSetInterval"),
+        "%StreamNextTick" => Some("builtin:ProcessNextTick"),
         _ => fs_module::intrinsic_capability(name),
     }
 }
@@ -120,6 +133,7 @@ const EVENTS_SOURCE: &str = include_str!("events_module.js");
 const ASSERT_SOURCE: &str = include_str!("assert_module.js");
 const TIMERS_SOURCE: &str = include_str!("timers_module.js");
 const STRING_DECODER_SOURCE: &str = include_str!("string_decoder_module.js");
+const STREAM_SOURCE: &str = include_str!("stream_module.js");
 
 const TIMERS_PLACEHOLDERS: [(&str, &str); 3] = [
     ("__franken_timers_timeout", "%TimersPromisesSetTimeout"),
@@ -164,6 +178,17 @@ const EVENTS_PLACEHOLDERS: [(&str, &str); 2] = [
     ("__franken_events_once", "%EventsOnce"),
 ];
 
+// The events and string_decoder modules the stream module builds on (each
+// declared before it), and the process.nextTick queue.
+const STREAM_PLACEHOLDERS: [(&str, &str); 3] = [
+    ("__franken_stream_events", EVENTS_MODULE_BINDING),
+    (
+        "__franken_stream_string_decoder",
+        STRING_DECODER_MODULE_BINDING,
+    ),
+    ("__franken_stream_next_tick", "%StreamNextTick"),
+];
+
 /// Recognize a literal pure-builtin request before resolving the `require`
 /// binding. The optional member selects util's `types` submodule.
 fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option<&'static str>)> {
@@ -197,6 +222,10 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::StringDecoder, None))
     } else if *specifier == "vm" || *specifier == "node:vm" {
         Some((PureModule::Vm, None))
+    } else if *specifier == "stream" || *specifier == "node:stream" {
+        Some((PureModule::Stream, None))
+    } else if *specifier == "stream/promises" || *specifier == "node:stream/promises" {
+        Some((PureModule::Stream, Some("promises")))
     } else {
         None
     }
@@ -282,6 +311,24 @@ const ASSERT_GLOBALS: [&str; 10] = [
 
 const VM_GLOBALS: [&str; 2] = ["EvalError", "TypeError"];
 
+const STREAM_GLOBALS: [&str; 15] = [
+    "AggregateError",
+    "Array",
+    "Buffer",
+    "Error",
+    "Function",
+    "Math",
+    "Number",
+    "Object",
+    "Promise",
+    "RangeError",
+    "Set",
+    "String",
+    "Symbol",
+    "TypeError",
+    "Uint8Array",
+];
+
 /// `const %util_module = <module>;`, which the rewrite puts first in the
 /// program. Its initializer runs only engine-owned code.
 pub(super) fn is_module_declaration(statement: &Statement) -> bool {
@@ -299,6 +346,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                 }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING
                     || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
                     || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
+                    || name == STREAM_MODULE_BINDING
             )
     )
 }
@@ -337,11 +385,28 @@ pub(super) fn rewrite_util_requires(
         scopes: vec![root.clone()],
         modules: BTreeSet::new(),
     };
-    rewriter.statements(&mut rewritten.body)?;
+    // The stream facade keeps the declarations it claims: the rewrite does
+    // not see their initializers.
+    let claimed = if root.contains("require") {
+        BTreeSet::new()
+    } else {
+        facade_claimed_stream_declarators(&tree.body)
+    };
+    for (index, statement) in rewritten.body.iter_mut().enumerate() {
+        let held = take_claimed_initializers(statement, index, &claimed);
+        let outcome = rewriter.statement(statement);
+        restore_claimed_initializers(statement, held);
+        outcome?;
+    }
     // Enum ordering initializes util before assert. Capturing its comparator
     // in the engine-owned prelude avoids guest replacement of public exports.
     if rewriter.modules.contains(&PureModule::Assert) {
         rewriter.modules.insert(PureModule::Util);
+    }
+    // And events and string_decoder before stream, which reads both.
+    if rewriter.modules.contains(&PureModule::Stream) {
+        rewriter.modules.insert(PureModule::Events);
+        rewriter.modules.insert(PureModule::StringDecoder);
     }
     if rewriter.modules.is_empty() {
         return Ok(fs_rewritten);
@@ -367,6 +432,163 @@ pub(super) fn rewrite_util_requires(
     Ok(Some(rewritten))
 }
 
+/// The top-level `const { ... } = require('stream')` declarators, as
+/// (statement, declarator) indexes, that the stream facade claims: each
+/// destructured name is one it serves and its own pre-scan confirms, and
+/// every reference to each local is one of its forms. The facade confirms
+/// `Readable` by a single supported use, so `Readable.from(x)` beside
+/// `class X extends Readable` would bind it to nothing; counting every
+/// reference leaves such a program to the module instead.
+fn facade_claimed_stream_declarators(body: &[Statement]) -> BTreeSet<(usize, usize)> {
+    let lookup = BTreeMap::new();
+    let confirmed = [
+        (
+            "Readable",
+            super::confirmed_stream_readable_destructured_requires(body, &lookup),
+        ),
+        (
+            "Writable",
+            super::confirmed_stream_writable_destructured_requires(body, &lookup),
+        ),
+        (
+            "PassThrough",
+            super::confirmed_stream_passthrough_destructured_requires(body, &lookup),
+        ),
+        (
+            "Transform",
+            super::confirmed_stream_transform_destructured_requires(body, &lookup),
+        ),
+        (
+            "pipeline",
+            super::confirmed_stream_pipeline_destructured_requires(body, &lookup),
+        ),
+        (
+            "promises",
+            super::confirmed_stream_promises_destructured_requires(body, &lookup),
+        ),
+    ];
+    let mut claimed = BTreeSet::new();
+    for (statement_index, statement) in body.iter().enumerate() {
+        let Statement::VariableDeclaration(declaration) = statement else {
+            continue;
+        };
+        if declaration.kind != VariableDeclarationKind::Const {
+            continue;
+        }
+        for (declarator_index, declarator) in declaration.declarations.iter().enumerate() {
+            let Some(initializer) = &declarator.initializer else {
+                continue;
+            };
+            if !matches!(
+                builtin_require_member(initializer),
+                Some((PureModule::Stream, None))
+            ) {
+                continue;
+            }
+            let BindingPattern::ObjectPattern(properties) = &declarator.pattern else {
+                continue;
+            };
+            let served = !properties.is_empty()
+                && properties.iter().all(|property| {
+                    let Some(export) = (!property.computed)
+                        .then(|| super::well_formed_static_name(&property.key))
+                        .flatten()
+                    else {
+                        return false;
+                    };
+                    let BindingPattern::Identifier(local) = &property.value else {
+                        return false;
+                    };
+                    confirmed
+                        .iter()
+                        .any(|(name, locals)| *name == export && locals.contains(local))
+                        && every_reference_is_a_facade_form(body, local, export)
+                });
+            if served {
+                claimed.insert((statement_index, declarator_index));
+            }
+        }
+    }
+    claimed
+}
+
+/// Whether each reference to `local` in `body` (at any depth, shadowed or
+/// not) is one of the facade's forms for `export`.
+fn every_reference_is_a_facade_form(body: &[Statement], local: &str, export: &str) -> bool {
+    let mut counter = FacadeFormCounter {
+        local,
+        export,
+        references: 0,
+        forms: 0,
+    };
+    let mut body = body.to_vec();
+    if counter.statements(&mut body).is_err() {
+        return false;
+    }
+    counter.forms > 0 && counter.forms == counter.references
+}
+
+struct FacadeFormCounter<'a> {
+    local: &'a str,
+    export: &'a str,
+    references: usize,
+    forms: usize,
+}
+
+impl Walk for FacadeFormCounter<'_> {
+    fn expression(&mut self, expression: &mut Expression) -> Outcome {
+        if matches!(expression, Expression::Identifier(name) if name == self.local) {
+            self.references += 1;
+            return Ok(());
+        }
+        let form = match self.export {
+            "Readable" => super::is_stream_readable_usage(expression, self.local),
+            "Writable" | "PassThrough" | "Transform" => {
+                super::is_stream_constructor_use(expression, self.local)
+            }
+            "pipeline" => super::is_stream_pipeline_direct_call(expression, self.local),
+            "promises" => super::is_stream_promises_pipeline_call(expression, self.local),
+            _ => false,
+        };
+        if form {
+            self.forms += 1;
+        }
+        walk_expression(self, expression)
+    }
+}
+
+/// Take the initializers of `statement`'s claimed declarators out while the
+/// rewrite walks it.
+fn take_claimed_initializers(
+    statement: &mut Statement,
+    statement_index: usize,
+    claimed: &BTreeSet<(usize, usize)>,
+) -> Vec<(usize, Expression)> {
+    let Statement::VariableDeclaration(declaration) = statement else {
+        return Vec::new();
+    };
+    let mut held = Vec::new();
+    for (declarator_index, declarator) in declaration.declarations.iter_mut().enumerate() {
+        if claimed.contains(&(statement_index, declarator_index))
+            && let Some(initializer) = declarator.initializer.take()
+        {
+            held.push((declarator_index, initializer));
+        }
+    }
+    held
+}
+
+fn restore_claimed_initializers(statement: &mut Statement, held: Vec<(usize, Expression)>) {
+    let Statement::VariableDeclaration(declaration) = statement else {
+        return;
+    };
+    for (declarator_index, initializer) in held {
+        if let Some(declarator) = declaration.declarations.get_mut(declarator_index) {
+            declarator.initializer = Some(initializer);
+        }
+    }
+}
+
 fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelineError> {
     let (label, source) = match module {
         PureModule::Util => ("franken:util", UTIL_SOURCE),
@@ -375,6 +597,7 @@ fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelin
         PureModule::Timers => ("franken:timers", TIMERS_SOURCE),
         PureModule::StringDecoder => ("franken:string_decoder", STRING_DECODER_SOURCE),
         PureModule::Vm => ("franken:vm", VM_SOURCE),
+        PureModule::Stream => ("franken:stream", STREAM_SOURCE),
     };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
         detail: "the engine's pure builtin module source failed to parse",
@@ -409,6 +632,7 @@ fn module_source(
         PureModule::Timers => &TIMERS_GLOBALS,
         PureModule::StringDecoder => &STRING_DECODER_GLOBALS,
         PureModule::Vm => &VM_GLOBALS,
+        PureModule::Stream => &STREAM_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
         through_global_object: globals
@@ -433,6 +657,7 @@ impl Walk for ModuleRenamer {
                 .chain(EVENTS_PLACEHOLDERS.iter())
                 .chain(ASSERT_PLACEHOLDERS.iter())
                 .chain(TIMERS_PLACEHOLDERS.iter())
+                .chain(STREAM_PLACEHOLDERS.iter())
                 .find(|(placeholder, _)| placeholder == name)
             {
                 *name = (*intrinsic).to_string();
@@ -686,6 +911,23 @@ mod tests {
         let protected = free_names(&mut module_source(&expected, PureModule::Vm).expect("builds"));
         assert_eq!(protected, BTreeSet::from(["globalThis".to_string()]));
     }
+
+    /// STREAM_SOURCE reads only STREAM_GLOBALS, its placeholders and
+    /// `arguments` (bd-305gi.1); its next-tick intrinsic is the
+    /// process.nextTick queue's HostCall.
+    #[test]
+    fn stream_source_reads_only_its_globals() {
+        let mut expected: BTreeSet<String> =
+            STREAM_GLOBALS.iter().map(|name| name.to_string()).collect();
+        expected.extend(STREAM_PLACEHOLDERS.iter().map(|(name, _)| name.to_string()));
+        expected.insert("arguments".to_string());
+        let free = free_names(&mut parse_module_source(PureModule::Stream).expect("parses"));
+        assert_eq!(free, expected);
+        assert_eq!(
+            intrinsic_capability("%StreamNextTick"),
+            Some("builtin:ProcessNextTick")
+        );
+    }
 }
 
 #[cfg(test)]
@@ -735,6 +977,75 @@ mod events_tests {
                 .expect("import binding")
                 .is_none()
         );
+    }
+
+    /// A top-level destructure whose every name and use the stream facade
+    /// serves keeps its `require('stream')` for the facade (bd-305gi.1).
+    #[test]
+    fn stream_facade_keeps_the_declarations_it_claims() {
+        for source in [
+            "const { Readable } = require('stream'); Readable.from(['a']);",
+            "const { Writable, PassThrough: P } = require('stream'); new Writable({}); new P();",
+            "const { pipeline, Transform } = require('stream'); pipeline(a, new Transform({}), done);",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            assert!(
+                rewrite_util_requires(&tree).expect(source).is_none(),
+                "{source}"
+            );
+        }
+    }
+
+    /// Every other `require('stream')` gets the module, declared after the
+    /// events and string_decoder modules it reads; a second pass changes
+    /// nothing (bd-305gi.1).
+    #[test]
+    fn unclaimed_stream_requires_get_the_module_after_its_dependencies() {
+        for source in [
+            "const stream = require('stream'); stream.Readable;",
+            "const { Readable } = require('stream'); Readable.from(['a']); class X extends Readable {}",
+            "const { Duplex } = require('node:stream'); new Duplex();",
+            "let { Readable } = require('stream'); new Readable();",
+            "function f() { return require('stream').Transform; }",
+            "const { pipeline } = require('stream/promises');",
+        ] {
+            let tree = parse(source, ParseGoal::Script);
+            let rewritten = rewrite_util_requires(&tree).expect(source).expect(source);
+            let declared: Vec<&str> = rewritten
+                .body
+                .iter()
+                .filter(|statement| is_module_declaration(statement))
+                .filter_map(|statement| match statement {
+                    Statement::VariableDeclaration(declaration) => {
+                        match declaration.declarations.as_slice() {
+                            [
+                                VariableDeclarator {
+                                    pattern: BindingPattern::Identifier(name),
+                                    ..
+                                },
+                            ] => Some(name.as_str()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                declared,
+                [
+                    EVENTS_MODULE_BINDING,
+                    STRING_DECODER_MODULE_BINDING,
+                    STREAM_MODULE_BINDING
+                ],
+                "{source}"
+            );
+            assert!(
+                rewrite_util_requires(&rewritten)
+                    .expect("second pass")
+                    .is_none(),
+                "{source}"
+            );
+        }
     }
 
     #[test]

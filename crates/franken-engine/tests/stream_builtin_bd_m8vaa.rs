@@ -2264,8 +2264,9 @@ fn promise_pipeline_success_order_and_error_propagation() {
     ]);
 }
 
+/// bd-305gi.1: `finished` is not a facade export, so these run the
+/// engine-owned stream module.
 #[test]
-#[ignore = "bd-fw7zd: finished slice not implemented yet"]
 fn finished_observes_readable_and_writable_completion() {
     assert_cases(&[
         EvalCase {
@@ -2293,27 +2294,57 @@ fn finished_observes_readable_and_writable_completion() {
     ]);
 }
 
+/// bd-305gi.1: the forms the facade does not claim (module possession,
+/// member and computed access, Duplex, `let` / `var` bindings) run the
+/// engine-owned stream module, as Node runs them. They failed closed before
+/// that module existed. A dynamic module name still does. Node v22.2.0 gives
+/// each expected line.
 #[test]
-fn unsupported_module_possession_computed_and_dynamic_forms_fail_closed() {
-    for source in [
-        "const stream = require('stream'); console.log(stream);",
-        "const stream = require('node:stream'); console.log(stream.Readable);",
-        "const stream = require('stream'); console.log(stream['Readable'].from(['x']));",
-        "const stream = require('stream'); const key = 'Readable'; console.log(stream[key]);",
-        "const name = 'stream'; const stream = require(name); console.log(stream);",
-        "const stream = require('stream'); console.log(stream.unsupportedExport);",
-        "const { Duplex } = require('stream'); console.log(Duplex);",
-        "let { Readable } = require('stream'); Readable = { from(values) { return values; } }; console.log(Readable.from(['x']));",
-        "var { Readable } = require('stream'); Readable = { from(values) { return values; } }; console.log(Readable.from(['x']));",
+fn module_possession_member_and_computed_forms_run_the_stream_module() {
+    for (source, expected) in [
+        (
+            "const stream = require('stream'); console.log(typeof stream, typeof stream.Readable, stream.Stream === stream);",
+            "function function true",
+        ),
+        (
+            "const stream = require('node:stream'); console.log(stream.Readable.name, stream.Duplex.name);",
+            "Readable Duplex",
+        ),
+        (
+            "const stream = require('stream'); stream['Readable'].from(['x']).on('data', (d) => console.log('data:' + d));",
+            "data:x",
+        ),
+        (
+            "const stream = require('stream'); const key = 'Readable'; console.log(typeof stream[key]);",
+            "function",
+        ),
+        (
+            "const stream = require('stream'); console.log(stream.unsupportedExport);",
+            "undefined",
+        ),
+        (
+            "const { Duplex } = require('stream'); const d = new Duplex({ read() {}, write(c, e, cb) { cb(); } }); console.log(typeof Duplex, d.writable, d.readable);",
+            "function true true",
+        ),
+        (
+            "let { Readable } = require('stream'); Readable = { from(values) { return values; } }; console.log(Readable.from(['x']));",
+            "[ 'x' ]",
+        ),
+        (
+            "var { Readable } = require('stream'); Readable = { from(values) { return values; } }; console.log(Readable.from(['x']));",
+            "[ 'x' ]",
+        ),
     ] {
-        let error = eval_error(source);
-        assert!(
-            error.contains("ambient authority violation")
-                || error.contains("unsupported")
-                || error.contains("not supported"),
-            "unsupported stream access must fail closed, got {error:?} for {source:?}",
-        );
+        assert_eq!(eval_console(source), expected, "{source}");
     }
+    let source = "const name = 'stream'; const stream = require(name); console.log(stream);";
+    let error = eval_error(source);
+    assert!(
+        error.contains("ambient authority violation")
+            || error.contains("unsupported")
+            || error.contains("not supported"),
+        "a dynamic stream module name must still fail closed, got {error:?}",
+    );
 }
 
 #[test]

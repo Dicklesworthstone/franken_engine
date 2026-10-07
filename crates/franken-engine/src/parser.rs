@@ -6211,7 +6211,7 @@ fn parse_primary_expression(
                 ));
             }
             if context.formal_parameters {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "an `await` expression cannot be in a parameter list",
                     span,
                     context,
@@ -6222,7 +6222,7 @@ fn parse_primary_expression(
         }
         if rest.starts_with('(') && context.await_context {
             if context.formal_parameters {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "an `await` expression cannot be in a parameter list",
                     span,
                     context,
@@ -6280,7 +6280,7 @@ fn parse_primary_expression(
             || rest.starts_with('}'))
     {
         if context.formal_parameters {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "a `yield` expression cannot be in a parameter list",
                 span,
                 context,
@@ -14261,7 +14261,7 @@ fn undeclared_private_name_error(
     context: &ParseExecutionContext<'_>,
 ) -> ParseError {
     ParseError::new(
-        ParseErrorCode::UnsupportedSyntax,
+        ParseErrorCode::InvalidSyntax,
         format!("Private field '{name}' must be declared in an enclosing class"),
         context.source_label.to_string(),
         Some(span.clone()),

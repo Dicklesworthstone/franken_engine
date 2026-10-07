@@ -63,7 +63,6 @@ enum CloneTask {
         target: ObjectId,
         keys: Vec<Value>,
         next: usize,
-        is_array: bool,
     },
     /// Pop a cloned value and define it on `target`.
     Define {
@@ -152,19 +151,8 @@ impl InterpreterCore {
                     target,
                     keys,
                     next,
-                    is_array,
                 } => {
                     let Some(key_value) = keys.get(next).cloned() else {
-                        if is_array
-                            && let Some(length) = self
-                                .heap
-                                .get(source.0 as usize)
-                                .and_then(|object| object.properties.get("length").cloned())
-                        {
-                            // Trailing holes: only the present indices were
-                            // written.
-                            self.set_object_property(target, "length".to_string(), length)?;
-                        }
                         continue;
                     };
                     tasks.push(CloneTask::Properties {
@@ -172,13 +160,20 @@ impl InterpreterCore {
                         target,
                         keys,
                         next: next + 1,
-                        is_array,
                     });
                     self.charge_property_copy_work()?;
                     let key = self.executable_property_key_from_value(&key_value);
-                    if matches!(key, RuntimePropertyKey::Symbol(_))
-                        || !self.copy_own_key_is_enumerable(module, source, &key, 0)?
-                    {
+                    // EnumerableOwnProperties is snapshotted before any value
+                    // getter runs. Later deletion skips the key, but changing
+                    // enumerability must not change that snapshot. Do not read
+                    // an inherited replacement for a deleted own property.
+                    let present = self
+                        .heap
+                        .get(source.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: source.0 })?
+                        .own_runtime_property_value(&key)
+                        .is_some();
+                    if !present {
                         continue;
                     }
                     let label = self.runtime_property_label(source, &key);
@@ -358,6 +353,13 @@ impl InterpreterCore {
             .get(id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
         let is_array = object.is_array;
+        // HTML serializes an array's length before traversing its properties.
+        // A getter may grow or shrink the source, but not the clone's shape.
+        let array_length = if is_array {
+            object.properties.get("length").cloned()
+        } else {
+            None
+        };
         let view_buffer = object
             .typed_array
             .as_ref()
@@ -463,17 +465,33 @@ impl InterpreterCore {
         } else {
             self.alloc_object_with_prototype(None)?
         };
+        if let Some(length) = array_length {
+            self.set_object_property(clone, "length".to_string(), length)?;
+        }
         state.memory.insert(id, clone);
-        let keys = self.proxy_aware_own_property_keys(module, id, 0)?;
+        let mut keys = self.proxy_aware_own_property_keys(module, id, 0)?;
         let key_bytes = Self::estimate_value_vec_bytes(&keys);
         self.apply_memory_component_delta(0, key_bytes)?;
         state.charged = state.charged.saturating_add(key_bytes);
+        // Snapshot enumerable string keys, without reading their values. Use
+        // the existing vector so filtering does not allocate a second list.
+        let mut kept = 0;
+        for index in 0..keys.len() {
+            self.charge_property_copy_work()?;
+            let key = self.executable_property_key_from_value(&keys[index]);
+            if !matches!(key, RuntimePropertyKey::Symbol(_))
+                && self.copy_own_key_is_enumerable(module, id, &key, 0)?
+            {
+                keys.swap(kept, index);
+                kept += 1;
+            }
+        }
+        keys.truncate(kept);
         tasks.push(CloneTask::Properties {
             source: id,
             target: clone,
             keys,
             next: 0,
-            is_array,
         });
         Ok(Some(Value::Object(clone)))
     }

@@ -156,3 +156,23 @@ fn strict_scripts_keep_block_functions_block_scoped_bd_9vouw_242() {
         "undefined"
     );
 }
+
+/// bd-9vouw.253: ES2020 B.3.5. A `var` may redeclare a simple catch
+/// parameter in its catch block, including a for-in head's `var`. Its
+/// initializer assigns the parameter, and the hoisted var outside stays
+/// undefined. This was refused at lowering with
+/// FE-SEM-LEXICAL-VAR-CONFLICT. Node v22.2.0 prints the expected line.
+#[test]
+fn a_var_may_redeclare_a_simple_catch_parameter_bd_9vouw_253() {
+    let source = r#"var out = [];
+try { throw 1; } catch (e) { var e = 2; out.push(e); }
+out.push(typeof e, e);
+try { throw 1; } catch (f) { for (var f in { k: 1 }) { out.push(f); } }
+out.push(f);
+try { throw 1; } catch (g) { for (var g = 5; false;) {} out.push(g); }
+console.log(out.join(' '));"#;
+    assert_eq!(
+        console_output(source).expect("the program runs"),
+        r#"2 undefined  k  5"#
+    );
+}

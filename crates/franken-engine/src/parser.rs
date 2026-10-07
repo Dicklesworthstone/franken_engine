@@ -13109,7 +13109,8 @@ fn parse_throw_statement(
 /// Synthetic parameter of a catch clause whose parameter is a destructuring
 /// pattern; the block's first statement destructures it. Like the `__seq_*`
 /// parameters it shadows a same-named outer binding inside the block only.
-const CATCH_PATTERN_PARAMETER: &str = "__catch_parameter";
+/// The lowering keeps it lexical (bd-9vouw.253).
+pub(crate) const CATCH_PATTERN_PARAMETER: &str = "__catch_parameter";
 
 fn parse_try_catch_statement(
     statement: &str,

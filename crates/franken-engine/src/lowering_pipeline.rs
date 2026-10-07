@@ -6802,13 +6802,27 @@ fn lower_statement_to_ir1_with_flow(
                     }
                     if let Some(param) = &handler.parameter {
                         binding_lookup.insert(lexical_binding_sentinel(param), 0);
+                        // ES2020 B.3.5: a `var` of a simple catch parameter's
+                        // name in the catch block is no early error, and its
+                        // initializer assigns the parameter
+                        // (`catch (e) { var e = 2; }`, bd-9vouw.253), as a
+                        // `var` redeclaring a function parameter does. The
+                        // parameter is declared like one so the `var` merges
+                        // with it instead of conflicting. A destructured
+                        // parameter stays lexical: its names come from a
+                        // `let` prologue, so a `var` of one still conflicts.
+                        let kind = if param == crate::parser::CATCH_PATTERN_PARAMETER {
+                            BindingKind::Let
+                        } else {
+                            BindingKind::Parameter
+                        };
                         let bid = alloc_shadow_binding(
                             bindings,
                             binding_lookup,
                             binding_index,
                             scope_id,
                             param,
-                            BindingKind::Let,
+                            kind,
                         );
                         binding_lookup.insert(capture_origin_sentinel(param), bid);
                         if fresh_per_entry {

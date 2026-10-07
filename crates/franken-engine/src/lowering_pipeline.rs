@@ -11457,9 +11457,42 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             &mut fn_pinned_register_high,
                             &mut fn_register_high_water,
                         );
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                        fn_value_stack.push(dst);
+                        // bd-9vouw.330: a pinned local that the next op reads
+                        // (an operator, or a static property read), or the op
+                        // after one more load, is read in place: nothing in
+                        // between can write it, those ops write only their
+                        // result, and their result register is never a pinned
+                        // one (pure_op_result_register's floor). Any other
+                        // read is a copy, as an assignment may follow it.
+                        let consumed_next = |offset: usize| {
+                            matches!(
+                                annotated_body_ops
+                                    .get(op_index + offset)
+                                    .map(|next| &next.inner),
+                                Some(
+                                    Ir1Op::BinaryOp { .. }
+                                        | Ir1Op::GetProperty {
+                                            key: Ir1PropertyKey::Static(_)
+                                        }
+                                )
+                            )
+                        };
+                        let read_in_place = src < fn_pinned_register_high
+                            && (consumed_next(1)
+                                || (matches!(
+                                    annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                                    Some(Ir1Op::LoadLiteral { .. } | Ir1Op::LoadBinding { .. })
+                                ) && matches!(
+                                    annotated_body_ops.get(op_index + 2).map(|next| &next.inner),
+                                    Some(Ir1Op::BinaryOp { .. })
+                                )));
+                        if read_in_place {
+                            fn_value_stack.push(src);
+                        } else {
+                            let dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                            fn_value_stack.push(dst);
+                        }
                     }
                 }
                 Ir1Op::LoadName {

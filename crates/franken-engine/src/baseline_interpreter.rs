@@ -99,6 +99,7 @@ mod object_integrity;
 mod package_resolution;
 pub(crate) use package_resolution::is_node_core_module_specifier;
 mod primitive_conversion;
+mod promise_capability;
 mod prototype_getters;
 mod reflect_invocation;
 mod regexp_backtrack;
@@ -3030,11 +3031,19 @@ pub enum BuiltinFunctionKind {
     /// `Promise.prototype.finally` — receiver-aware finally reaction
     /// registration (bd-bpf76).
     PromiseFinally,
-    /// The executor NewPromiseCapability hands a Promise subclass's
-    /// constructor (ES2020 25.6.1.5.1 GetCapabilitiesExecutor): it records
-    /// that it was called; the resolving functions are the new promise's own
-    /// (bd-9vouw.137).
+    /// The executor NewPromiseCapability hands C (ES2020 25.6.1.5.1
+    /// GetCapabilitiesExecutor), bound to a holder that records the resolve
+    /// and reject C passes it (bd-9vouw.137, bd-9vouw.282).
     PromiseCapabilityExecutor,
+    /// Promise.all Resolve Element Function (ES2020 25.6.4.1.2), bound to its
+    /// element's holder (bd-9vouw.282).
+    PromiseAllResolveElement,
+    /// Promise.allSettled Resolve Element Function (ES2020 25.6.4.2.2).
+    PromiseAllSettledResolveElement,
+    /// Promise.allSettled Reject Element Function (ES2020 25.6.4.2.3).
+    PromiseAllSettledRejectElement,
+    /// Promise.any Reject Element Function (ES2021 27.2.4.3.2).
+    PromiseAnyRejectElement,
     /// `RegExp.prototype.test` — receiver-aware; linear-time regex match via
     /// Rust's `regex` crate for the supported ES-compatible subset (bd-wni4m).
     RegExpTest,
@@ -5353,7 +5362,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::PromiseThen => "then",
             BuiltinFunctionKind::PromiseCatch => "catch",
             BuiltinFunctionKind::PromiseFinally => "finally",
-            BuiltinFunctionKind::PromiseCapabilityExecutor => "",
+            BuiltinFunctionKind::PromiseCapabilityExecutor
+            | BuiltinFunctionKind::PromiseAllResolveElement
+            | BuiltinFunctionKind::PromiseAllSettledResolveElement
+            | BuiltinFunctionKind::PromiseAllSettledRejectElement
+            | BuiltinFunctionKind::PromiseAnyRejectElement => "",
             BuiltinFunctionKind::RegExpTest => "test",
             BuiltinFunctionKind::ObjectHasOwnProperty => "hasOwnProperty",
             BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
@@ -5846,7 +5859,12 @@ impl BuiltinFunction {
             | K::PromiseThenFinally
             | K::PromiseCatchFinally
             | K::ArrayFromAsyncFulfilled
-            | K::ArrayFromAsyncRejected => Some(1),
+            | K::ArrayFromAsyncRejected
+            | K::PromiseAllResolveElement
+            | K::PromiseAllSettledResolveElement
+            | K::PromiseAllSettledRejectElement
+            | K::PromiseAnyRejectElement => Some(1),
+            K::PromiseCapabilityExecutor => Some(2),
             K::IteratorNext
             | K::IteratorSelf
             | K::AsyncGeneratorIteratorSelf
@@ -12940,7 +12958,7 @@ enum PromiseCombinatorState {
     Any(crate::promise_model::PromiseAnyTracker),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PromiseCombinatorKind {
     All,
     AllSettled,
@@ -14438,10 +14456,6 @@ pub struct InterpreterCore {
     /// built-in skips the identity digest (a JSON encoding and two SHA-256
     /// hashes) that locates one (bd-9vouw.17).
     builtin_function_backings: bool,
-    /// Calls of the NewPromiseCapability executor (bd-9vouw.137): a species
-    /// constructor that never calls it yields no resolving functions, the
-    /// TypeError of ES2020 25.6.1.5 step 8.
-    promise_capability_executor_calls: u64,
     /// Set once `delete` removed a virtual own property of a canonical
     /// prototype ([`HeapObject::deleted_virtual_keys`]); never cleared.
     /// Until then the virtual lookups skip the tombstone check
@@ -15684,7 +15698,6 @@ impl InterpreterCore {
             prototype_owner_ids: std::cell::RefCell::new(Vec::new()),
             lexical_super_functions: std::cell::RefCell::new(Vec::new()),
             builtin_function_backings: false,
-            promise_capability_executor_calls: 0,
             virtual_property_deletions: false,
             builtin_prototypes: SeedTrackedField::new(BTreeMap::new()),
             seed_epoch: 0,
@@ -44083,25 +44096,14 @@ impl InterpreterCore {
                         true,
                     );
                 }
-                // bd-9vouw.137: PromiseResolve(C, x) for a subclass `this`.
-                if let Some(constructor) = self.promise_static_subclass(receiver.as_ref())? {
-                    let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                    if matches!(value, Value::Promise(_)) {
-                        let value_constructor = self.get_v(
-                            module,
-                            &value,
-                            &RuntimePropertyKey::String(JsString::from("constructor")),
-                        )?;
-                        if Self::values_equal(&value_constructor, &constructor) {
-                            return Ok(value);
-                        }
-                    }
-                    let capability =
-                        self.new_promise_capability(module, constructor, vec![value.clone()])?;
-                    self.apply_promise_capability(Some(module), capability, None, args, true)?;
-                    return Ok(Value::Promise(capability.0));
+                // bd-9vouw.137, bd-9vouw.282: PromiseResolve(C, x) for the
+                // `this` C, which must be an object.
+                let constructor = Self::promise_static_this(receiver.as_ref(), "resolve")?;
+                if Self::is_intrinsic_promise_constructor(&constructor) {
+                    return self.dispatch_promise_hostcall("promise:resolve", args, Some(module));
                 }
-                self.dispatch_promise_hostcall("promise:resolve", args, Some(module))
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.promise_resolve_with_constructor(module, constructor, value)
             }
             BuiltinFunctionKind::PromiseReject => {
                 if let Some(handle_id) = builtin.bound_object {
@@ -44113,49 +44115,55 @@ impl InterpreterCore {
                         false,
                     );
                 }
-                if let Some(constructor) = self.promise_static_subclass(receiver.as_ref())? {
-                    let capability = self.new_promise_capability(module, constructor, Vec::new())?;
-                    self.apply_promise_capability(Some(module), capability, None, args, false)?;
-                    return Ok(Value::Promise(capability.0));
+                let constructor = Self::promise_static_this(receiver.as_ref(), "reject")?;
+                if Self::is_intrinsic_promise_constructor(&constructor) {
+                    return self.dispatch_promise_hostcall("promise:reject", args, Some(module));
                 }
-                self.dispatch_promise_hostcall("promise:reject", args, Some(module))
+                let reason = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.promise_reject_with_constructor(module, constructor, reason)
             }
-            BuiltinFunctionKind::PromiseAll => {
-                self.promise_combinator_for_receiver(module, "promise:all", args, receiver.as_ref())
-            }
-            BuiltinFunctionKind::PromiseRace => self.promise_combinator_for_receiver(
+            BuiltinFunctionKind::PromiseAll => self.promise_combinator_call(
                 module,
+                PromiseCombinatorKind::All,
+                "promise:all",
+                "all",
+                args,
+                receiver.as_ref(),
+            ),
+            BuiltinFunctionKind::PromiseRace => self.promise_combinator_call(
+                module,
+                PromiseCombinatorKind::Race,
                 "promise:race",
+                "race",
                 args,
                 receiver.as_ref(),
             ),
-            BuiltinFunctionKind::PromiseAllSettled => self.promise_combinator_for_receiver(
+            BuiltinFunctionKind::PromiseAllSettled => self.promise_combinator_call(
                 module,
+                PromiseCombinatorKind::AllSettled,
                 "promise:allSettled",
+                "allSettled",
                 args,
                 receiver.as_ref(),
             ),
-            BuiltinFunctionKind::PromiseAny => {
-                self.promise_combinator_for_receiver(module, "promise:any", args, receiver.as_ref())
-            }
-            // ES2024 27.2.4.8: NewPromiseCapability(this) as an object. A
-            // subclass `this` builds its own promise (bd-9vouw.137); the
-            // resolving functions settle that promise.
+            BuiltinFunctionKind::PromiseAny => self.promise_combinator_call(
+                module,
+                PromiseCombinatorKind::Any,
+                "promise:any",
+                "any",
+                args,
+                receiver.as_ref(),
+            ),
+            // ES2024 27.2.4.8: NewPromiseCapability(this) as an object, for
+            // any constructor `this` (bd-9vouw.137, bd-9vouw.282).
             BuiltinFunctionKind::PromiseWithResolvers => {
-                let promise = match self.promise_static_subclass(receiver.as_ref())? {
-                    Some(constructor) => {
-                        self.new_promise_capability(module, constructor, Vec::new())?
-                    }
-                    None => self.create_promise()?,
-                };
-                let resolve =
-                    self.make_promise_capability(BuiltinFunctionKind::PromiseResolve, promise);
-                let reject =
-                    self.make_promise_capability(BuiltinFunctionKind::PromiseReject, promise);
+                let constructor = Self::promise_static_this(receiver.as_ref(), "withResolvers")?;
+                let capability =
+                    self.new_promise_capability_record(module, constructor, Vec::new())?;
                 let result = self.alloc_object_with_properties(&[
-                    ("promise", Value::Promise(promise.0)),
-                    ("resolve", resolve),
-                    ("reject", reject),
+                    ("promise", capability.promise),
+                    ("resolve", capability.resolve),
+                    ("reject", capability.reject),
                 ])?;
                 Ok(Value::Object(result))
             }
@@ -44178,9 +44186,13 @@ impl InterpreterCore {
                 PromiseReactionKind::Finally,
             ),
             BuiltinFunctionKind::PromiseCapabilityExecutor => {
-                self.promise_capability_executor_calls =
-                    self.promise_capability_executor_calls.saturating_add(1);
-                Ok(Value::Undefined)
+                self.promise_capability_executor_call(builtin, args)
+            }
+            BuiltinFunctionKind::PromiseAllResolveElement
+            | BuiltinFunctionKind::PromiseAllSettledResolveElement
+            | BuiltinFunctionKind::PromiseAllSettledRejectElement
+            | BuiltinFunctionKind::PromiseAnyRejectElement => {
+                self.promise_combinator_element_call(module, builtin, args)
             }
             BuiltinFunctionKind::RegExpTest => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -66160,42 +66172,67 @@ impl InterpreterCore {
                 self.promise_finally_handlers(on_finally)?
             }
         };
-        let result = match species_result {
-            Some(result) => {
-                self.register_promise_then_into(handle, on_fulfilled, on_rejected, result, label)?;
-                result
-            }
-            None => self.register_promise_then(handle, on_fulfilled, on_rejected, label)?,
-        };
-        Ok(Value::Promise(result.0))
+        Ok(match species_result {
+            Some(capability) => match Self::capability_native_promise(&capability) {
+                Some(result) => {
+                    self.register_promise_then_into(
+                        handle,
+                        on_fulfilled,
+                        on_rejected,
+                        result,
+                        label,
+                    )?;
+                    Value::Promise(result.0)
+                }
+                // A capability that is not an engine promise's own functions
+                // (a species returning any object) receives the derived
+                // promise's settlement through its resolve and reject, one
+                // job later (bd-9vouw.282).
+                None => {
+                    let derived = self.register_promise_then(
+                        handle,
+                        on_fulfilled,
+                        on_rejected,
+                        label.clone(),
+                    )?;
+                    let resolve = self.promise_reaction_handler_from_value(
+                        capability.resolve.clone(),
+                        "onFulfilled",
+                    )?;
+                    let reject = self.promise_reaction_handler_from_value(
+                        capability.reject.clone(),
+                        "onRejected",
+                    )?;
+                    self.register_promise_then(derived, resolve, reject, label)?;
+                    capability.promise
+                }
+            },
+            None => Value::Promise(
+                self.register_promise_then(handle, on_fulfilled, on_rejected, label)?
+                    .0,
+            ),
+        })
     }
 
-    /// bd-9vouw.137: the result promise of then/catch/finally on `promise`
-    /// when SpeciesConstructor(promise, %Promise%) is not %Promise%: the
-    /// promise NewPromiseCapability gets from constructing the species with
-    /// the capability executor. `None` keeps %Promise%: `constructor`
-    /// undefined or %Promise%, or a species that is undefined, null or
-    /// %Promise%. A non-object `constructor`, a species that is not a
-    /// constructor, or one that never calls the executor or returns
-    /// something other than a promise, is a TypeError.
+    /// bd-9vouw.137: the capability of then/catch/finally on `promise` when
+    /// SpeciesConstructor(promise, %Promise%) is not %Promise%:
+    /// NewPromiseCapability of the species (bd-9vouw.282: any constructor).
+    /// `None` keeps %Promise%: `constructor` undefined or %Promise%, or a
+    /// species that is undefined, null or %Promise%. A non-object
+    /// `constructor` or a species that is not a constructor is a TypeError.
     fn promise_species_result(
         &mut self,
         module: &Ir3Module,
         promise: &Value,
-    ) -> Result<Option<crate::promise_model::PromiseHandle>, InterpreterError> {
+    ) -> Result<Option<promise_capability::PromiseCapabilityRecord>, InterpreterError> {
         let constructor = self.get_v(
             module,
             promise,
             &RuntimePropertyKey::String(JsString::from("constructor")),
         )?;
-        let is_intrinsic_promise = |value: &Value| {
-            matches!(value, Value::BuiltinFunction(builtin)
-                if Self::materialized_global_prototype_name(builtin) == Some("Promise")
-                    || (builtin.kind == BuiltinFunctionKind::StandardConstructor
-                        && Self::standard_constructor_name(builtin)
-                            .is_ok_and(|name| name == "Promise")))
-        };
-        if matches!(constructor, Value::Undefined) || is_intrinsic_promise(&constructor) {
+        if matches!(constructor, Value::Undefined)
+            || Self::is_intrinsic_promise_constructor(&constructor)
+        {
             return Ok(None);
         }
         if !constructor.is_object_like() {
@@ -66205,7 +66242,9 @@ impl InterpreterCore {
             });
         }
         let species = self.species_of_constructor(module, &constructor)?;
-        if matches!(species, Value::Undefined | Value::Null) || is_intrinsic_promise(&species) {
+        if matches!(species, Value::Undefined | Value::Null)
+            || Self::is_intrinsic_promise_constructor(&species)
+        {
             return Ok(None);
         }
         if !self.is_constructible_value(&species) {
@@ -66214,115 +66253,8 @@ impl InterpreterCore {
                 got: species.type_name().to_string(),
             });
         }
-        self.new_promise_capability(module, species, vec![promise.clone()])
+        self.new_promise_capability_record(module, species, vec![promise.clone()])
             .map(Some)
-    }
-
-    /// bd-9vouw.137: ES2020 25.6.1.5 NewPromiseCapability(C) for a Promise
-    /// subclass (or any constructor): construct C with the capability
-    /// executor. The resolving functions it receives are the new promise's
-    /// own when C reaches %Promise% through `super(executor)`, so the
-    /// capability is that promise. A C that never calls the executor (no
-    /// resolving functions, step 8), or that returns something other than
-    /// a promise, is a TypeError. `roots` stay reachable while C runs.
-    fn new_promise_capability(
-        &mut self,
-        module: &Ir3Module,
-        constructor: Value,
-        roots: Vec<Value>,
-    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
-        let calls_before = self.promise_capability_executor_calls;
-        let executor = Value::BuiltinFunction(BuiltinFunction::promise_capability_executor());
-        let (result, label) = self.with_gc_nested_request(roots, |core| {
-            core.invoke_inline_construct_with_labels(
-                Some(module),
-                constructor,
-                vec![executor],
-                None,
-                None,
-            )
-        })?;
-        let label = self
-            .pending_hostcall_result_label
-            .as_ref()
-            .unwrap_or(&Label::Public)
-            .join(&label);
-        self.replace_pending_hostcall_result_label(Some(label))?;
-        match result {
-            Value::Promise(handle) if self.promise_capability_executor_calls > calls_before => {
-                Ok(crate::promise_model::PromiseHandle(handle))
-            }
-            other => Err(InterpreterError::TypeError {
-                expected: "promise capability whose executor received resolving functions"
-                    .to_string(),
-                got: other.type_name().to_string(),
-            }),
-        }
-    }
-
-    /// bd-9vouw.137: the subclass a Promise static was called on, when that
-    /// `this` is a constructor other than %Promise%; `None` for %Promise%,
-    /// and for a call without a receiver (a detached static keeps working
-    /// as %Promise%'s, as before). Any other receiver is the TypeError of
-    /// NewPromiseCapability's IsConstructor check.
-    fn promise_static_subclass(
-        &self,
-        receiver: Option<&Value>,
-    ) -> Result<Option<Value>, InterpreterError> {
-        let Some(receiver) = receiver else {
-            return Ok(None);
-        };
-        let is_intrinsic_promise = matches!(receiver, Value::BuiltinFunction(builtin)
-            if Self::materialized_global_prototype_name(builtin) == Some("Promise")
-                || (builtin.kind == BuiltinFunctionKind::StandardConstructor
-                    && Self::standard_constructor_name(builtin)
-                        .is_ok_and(|name| name == "Promise")));
-        if is_intrinsic_promise || matches!(receiver, Value::Undefined) {
-            return Ok(None);
-        }
-        if !self.is_constructible_value(receiver) {
-            return Err(InterpreterError::TypeError {
-                expected: "constructor as the receiver of a Promise static".to_string(),
-                got: receiver.type_name().to_string(),
-            });
-        }
-        Ok(Some(receiver.clone()))
-    }
-
-    /// bd-9vouw.137: Promise.all / race / allSettled / any with a subclass
-    /// `this`: the capability first (a constructor that never calls the
-    /// executor throws before the iterable is read), then the combinator
-    /// over %Promise%, whose settlement passes to the subclass promise.
-    fn promise_combinator_for_receiver(
-        &mut self,
-        module: &Ir3Module,
-        capability: &str,
-        args: RegRange,
-        receiver: Option<&Value>,
-    ) -> Result<Value, InterpreterError> {
-        let Some(constructor) = self.promise_static_subclass(receiver)? else {
-            return self.dispatch_promise_hostcall(capability, args, Some(module));
-        };
-        let iterable = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let result_capability = self.new_promise_capability(module, constructor, vec![iterable])?;
-        let combined = self
-            .with_gc_nested_request(vec![Value::Promise(result_capability.0)], |core| {
-                core.dispatch_promise_hostcall(capability, args, Some(module))
-            })?;
-        let Value::Promise(combined) = combined else {
-            return Err(InterpreterError::TypeError {
-                expected: "promise from a Promise combinator".to_string(),
-                got: combined.type_name().to_string(),
-            });
-        };
-        self.register_promise_then_into(
-            crate::promise_model::PromiseHandle(combined),
-            None,
-            None,
-            result_capability,
-            Label::Public,
-        )?;
-        Ok(Value::Promise(result_capability.0))
     }
 
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.

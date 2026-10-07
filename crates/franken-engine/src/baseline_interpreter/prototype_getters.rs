@@ -17,7 +17,9 @@ use super::*;
 /// (prototype owner, property key, getter name). A key starting with `@@`
 /// names a well-known symbol ([`TYPED_ARRAY_TO_STRING_TAG`]); those accessors
 /// are real own properties of the prototype, installed when it is created.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 46] = [
+/// The [`SPECIES_GETTER_KEY`] rows are the constructors' own
+/// `get [Symbol.species]` (bd-9vouw.278), installed on the constructor.
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 54] = [
     ("Map", "size", "get size"),
     ("Set", "size", "get size"),
     ("ArrayBuffer", "byteLength", "get byteLength"),
@@ -74,10 +76,30 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 46] = [
     // WHATWG File API (bd-9vouw.226).
     ("Blob", "size", "get size"),
     ("Blob", "type", "get type"),
+    // `get [Symbol.species]() { return this }` (ES2020 22.1.2.5, 22.2.2.4,
+    // 23.1.2.2, 23.2.2.2, 24.1.3.3, 24.2.3.2, 25.6.4.6, 21.2.4.2), owned by
+    // the constructor, not its prototype. The concrete typed array
+    // constructors inherit %TypedArray%'s.
+    ("Array", SPECIES_GETTER_KEY, "get [Symbol.species]"),
+    ("ArrayBuffer", SPECIES_GETTER_KEY, "get [Symbol.species]"),
+    ("Map", SPECIES_GETTER_KEY, "get [Symbol.species]"),
+    ("Promise", SPECIES_GETTER_KEY, "get [Symbol.species]"),
+    ("RegExp", SPECIES_GETTER_KEY, "get [Symbol.species]"),
+    ("Set", SPECIES_GETTER_KEY, "get [Symbol.species]"),
+    (
+        "SharedArrayBuffer",
+        SPECIES_GETTER_KEY,
+        "get [Symbol.species]",
+    ),
+    ("TypedArray", SPECIES_GETTER_KEY, "get [Symbol.species]"),
 ];
 
 /// The key of %TypedArray%.prototype[@@toStringTag] in [`PROTOTYPE_GETTERS`].
 pub(super) const TYPED_ARRAY_TO_STRING_TAG: &str = "@@toStringTag";
+
+/// The key of a constructor's own `get [Symbol.species]` in
+/// [`PROTOTYPE_GETTERS`] (bd-9vouw.278).
+pub(super) const SPECIES_GETTER_KEY: &str = "@@species";
 
 /// The table entry a getter's specifier (`"Map.size"`) names.
 pub(super) fn prototype_getter_entry(
@@ -179,6 +201,10 @@ impl InterpreterCore {
                 got: "unknown accessor".to_string(),
             });
         };
+        // `get [Symbol.species]() { return this }`, whatever `this` is.
+        if key == SPECIES_GETTER_KEY {
+            return Ok(receiver);
+        }
         // ES2020 22.2.3.32: the receiver's [[TypedArrayName]], and undefined
         // (never a TypeError) for anything else (bd-9vouw.155).
         if key == TYPED_ARRAY_TO_STRING_TAG {

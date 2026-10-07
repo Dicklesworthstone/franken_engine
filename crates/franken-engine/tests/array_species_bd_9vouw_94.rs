@@ -163,6 +163,29 @@ console.log(a instanceof A, a.length, a.join(), o instanceof A, o.join(), b inst
 const NODE_OUTPUT_FROM: &str = r#"true 3 1,2,3 true 7,8 true b x,y true true 2 6 false true 8
 "#;
 
+/// bd-9vouw.278: each of Array, ArrayBuffer, Map, Promise, RegExp, Set,
+/// SharedArrayBuffer and %TypedArray% has its own `get [Symbol.species]`
+/// accessor (ES2020 22.1.2.5 and the like): not enumerable, configurable,
+/// no setter, `return this`. The concrete typed array constructors inherit
+/// it. A delete or redefinition is what later reads (and species lookups)
+/// see. Promise's statics are in Node's order. Expected: Node v22.2.0's
+/// output, captured programmatically.
+const PROGRAM_SPECIES_GETTERS: &str = r#"function d(C) { var x = Object.getOwnPropertyDescriptor(C, Symbol.species); return x ? [typeof x.get, x.get.name, x.get.length, x.set, x.enumerable, x.configurable, x.get.call(7) === 7].join() : 'none'; }
+var TA = Object.getPrototypeOf(Int8Array);
+console.log(['Array', 'ArrayBuffer', 'Map', 'Promise', 'RegExp', 'Set', 'SharedArrayBuffer'].map(function (n) { return n + ':' + d(globalThis[n]); }).join(' '));
+console.log(d(TA), d(Int8Array), Int8Array[Symbol.species] === Int8Array, Reflect.ownKeys(Map).indexOf(Symbol.species) >= 0, Object.getOwnPropertySymbols(Set).length);
+class A extends Array {}
+console.log(A[Symbol.species] === A, Object.getOwnPropertyDescriptor(Array, Symbol.species).get.call(A) === A);
+console.log(delete Array[Symbol.species], Array[Symbol.species], A[Symbol.species], new A(1, 2).map(function (x) { return x; }).constructor === Array);
+Object.defineProperty(Map, Symbol.species, { value: 'v' });
+console.log(Map[Symbol.species], delete Promise[Symbol.species], Promise[Symbol.species], Object.getOwnPropertyNames(Promise).join());"#;
+
+const NODE_OUTPUT_SPECIES_GETTERS: &str = r#"Array:function,get [Symbol.species],0,,false,true,true ArrayBuffer:function,get [Symbol.species],0,,false,true,true Map:function,get [Symbol.species],0,,false,true,true Promise:function,get [Symbol.species],0,,false,true,true RegExp:function,get [Symbol.species],0,,false,true,true Set:function,get [Symbol.species],0,,false,true,true SharedArrayBuffer:function,get [Symbol.species],0,,false,true,true
+function,get [Symbol.species],0,,false,true,true none true true 1
+true true
+true undefined undefined true
+v true undefined length,name,prototype,all,allSettled,any,race,resolve,reject,withResolvers"#;
+
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
@@ -236,4 +259,10 @@ fn species_results_get_create_data_property_semantics() {
 fn array_from_and_of_construct_their_this_bd_9vouw_94() {
     let output = console_output(PROGRAM_FROM).expect("the program runs");
     assert_eq!(output, NODE_OUTPUT_FROM.trim_end());
+}
+
+#[test]
+fn builtin_constructors_own_species_getters_bd_9vouw_278() {
+    let output = console_output(PROGRAM_SPECIES_GETTERS).expect("the program runs");
+    assert_eq!(output, NODE_OUTPUT_SPECIES_GETTERS);
 }

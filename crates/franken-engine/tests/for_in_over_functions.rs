@@ -37,6 +37,15 @@ const CASES: &[(&str, &str, &str)] = &[
         r#"var n = 0; for (var k in null) n++; for (var k2 in undefined) n++; function g(o) { var ks = []; for (const k in o) ks.push(k); return ks.length; } var t = null, f, c = 0; for (f in t) c++; var c2 = 0; for (let k3 in void 0) { c2++; } console.log(n, g(null), g(undefined), g({ a: 1 }), c, f, c2);"#,
         "0 0 0 1 0 undefined 0",
     ),
+    // bd-9vouw.278: `Date` and `Promise` keep their own properties on a
+    // property object; for-in over them failed ("expected function with an
+    // own-property object"), so verifyProperty of Promise.all / Date.now
+    // could not run.
+    (
+        "for_in_over_date_and_promise",
+        r#"var k = []; for (var x in Date) k.push(x); var p = []; for (var y in Promise) p.push(y); Promise.extra = 1; var q = []; for (var z in Promise) q.push(z); console.log(k.length, p.length, q.join(), Object.keys(Date).length, Object.keys(Promise).join(), Object.prototype.propertyIsEnumerable.call(Promise, 'all'));"#,
+        "0 0 extra 0 extra false",
+    ),
 ];
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser

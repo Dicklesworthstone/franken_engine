@@ -36488,26 +36488,15 @@ impl InterpreterCore {
     }
 
     /// The global `Promise`: a constructible builtin (bd-auy04) whose statics
-    /// live on its bound property object, like `Date`.
+    /// live on its bound property object, like `Date`, in Node's order, with
+    /// its own `get [Symbol.species]` (bd-9vouw.278).
     fn alloc_promise_global(&mut self) -> Result<Value, InterpreterError> {
         let properties = self.alloc_object_with_properties(&[
             ("length", Value::Int(1)),
             ("name", Value::str("Promise")),
             (
-                "resolve",
-                Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
-            ),
-            (
-                "reject",
-                Value::BuiltinFunction(BuiltinFunction::promise_reject()),
-            ),
-            (
                 "all",
                 Value::BuiltinFunction(BuiltinFunction::promise_all()),
-            ),
-            (
-                "race",
-                Value::BuiltinFunction(BuiltinFunction::promise_race()),
             ),
             (
                 "allSettled",
@@ -36518,12 +36507,25 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::promise_any()),
             ),
             (
+                "race",
+                Value::BuiltinFunction(BuiltinFunction::promise_race()),
+            ),
+            (
+                "resolve",
+                Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
+            ),
+            (
+                "reject",
+                Value::BuiltinFunction(BuiltinFunction::promise_reject()),
+            ),
+            (
                 "withResolvers",
                 Value::BuiltinFunction(BuiltinFunction::promise_with_resolvers()),
             ),
         ])?;
         self.mark_builtin_members_non_enumerable(properties)?;
         self.mark_materialized_constructor_name_and_length(properties)?;
+        self.define_species_getter(properties, "Promise")?;
         Ok(Value::BuiltinFunction(
             BuiltinFunction::promise_constructor(properties),
         ))
@@ -52144,19 +52146,16 @@ impl InterpreterCore {
                                 {
                                     value
                                 } else if Self::is_species_key(&property_key)
-                                    && Self::builtin_has_default_species(&builtin)
-                                    && !Self::builtin_function_property_object(&builtin)
-                                        .is_some_and(|object| {
-                                            self.chain_contains_runtime_property(
-                                                object,
-                                                &property_key,
-                                            )
-                                        })
+                                    && let Some(species) = self.builtin_species_value(
+                                        module,
+                                        &builtin,
+                                        Value::BuiltinFunction(builtin.clone()),
+                                    )?
                                 {
-                                    // bd-9vouw.94: `get [Symbol.species]() {
-                                    // return this }` (ES2020 22.1.2.5 and the
-                                    // like).
-                                    Value::BuiltinFunction(builtin)
+                                    // bd-9vouw.94, bd-9vouw.278: `get
+                                    // [Symbol.species]() { return this }`
+                                    // (ES2020 22.1.2.5 and the like).
+                                    species
                                 } else if property_key.as_str() == Some("prototype")
                                     && let Some(name) =
                                         Self::materialized_global_prototype_name(&builtin)
@@ -56689,7 +56688,14 @@ impl InterpreterCore {
             | Value::BigInt(_)
             | Value::Symbol(_)) => self.alloc_primitive_wrapper(primitive)?,
             // A function's own properties live on its backing object (its
-            // `name` and `length` are not enumerable), bd-9vouw.17.
+            // `name` and `length` are not enumerable), bd-9vouw.17; `Date`'s
+            // and `Promise`'s on their property object, a callable proxy's
+            // on its proxy (bd-9vouw.278).
+            Value::BuiltinFunction(ref builtin)
+                if Self::builtin_function_property_object(builtin).is_some() =>
+            {
+                Self::builtin_function_property_object(builtin).expect("checked by the guard")
+            }
             ref function if function.is_callable() && module.is_some() => {
                 let module = module.expect("checked above");
                 self.ensure_function_own_property_object(module, function)?
@@ -103997,11 +104003,9 @@ impl InterpreterCore {
             }
             match &current {
                 Value::BuiltinFunction(builtin) => {
-                    return Ok(if Self::builtin_has_default_species(builtin) {
-                        constructor.clone()
-                    } else {
-                        Value::Undefined
-                    });
+                    return Ok(self
+                        .builtin_species_value(module, builtin, constructor.clone())?
+                        .unwrap_or(Value::Undefined));
                 }
                 Value::Closure(_) | Value::Function(_) => {
                     match self.derived_constructor_parent(module, &current) {
@@ -104425,8 +104429,84 @@ impl InterpreterCore {
                     self.set_own_property_attributes(backing, &key, attributes)?;
                 }
             }
+            if Self::owns_species_getter(name) {
+                self.define_species_getter(backing, name)?;
+            }
         }
         Ok(Some(backing))
+    }
+
+    /// bd-9vouw.278: whether the constructor named `name` has its own
+    /// `get [Symbol.species]` (the concrete typed array constructors inherit
+    /// %TypedArray%'s).
+    fn owns_species_getter(name: &str) -> bool {
+        prototype_getters::PROTOTYPE_GETTERS
+            .iter()
+            .any(|(owner, key, _)| *owner == name && *key == prototype_getters::SPECIES_GETTER_KEY)
+    }
+
+    /// bd-9vouw.278: the constructor `owner`'s `get [Symbol.species]` as an
+    /// own accessor of `object`, its backing or property object: not
+    /// enumerable, configurable, no setter.
+    fn define_species_getter(
+        &mut self,
+        object: ObjectId,
+        owner: &str,
+    ) -> Result<(), InterpreterError> {
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Species.id());
+        self.define_accessor_property(
+            object,
+            key.clone(),
+            Value::BuiltinFunction(BuiltinFunction::prototype_getter(
+                owner,
+                prototype_getters::SPECIES_GETTER_KEY,
+            )),
+            AccessorKind::Get,
+        )?;
+        self.set_own_property_attributes(
+            object,
+            &key,
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: true,
+            },
+        )
+    }
+
+    /// bd-9vouw.278: Get(C, @@species) for a built-in constructor `builtin`
+    /// with no own-property object answering it, `receiver` being the
+    /// constructor the lookup started at (a subclass reaching the built-in).
+    /// The getter lives on the backing object of its owner (`builtin`, or
+    /// %TypedArray% for a concrete typed array constructor) from the moment
+    /// that object exists: then it is called, and a deleted one gives
+    /// undefined. Before, the getter's `return this` is the answer. `None`
+    /// for a built-in without @@species.
+    fn builtin_species_value(
+        &mut self,
+        module: &Ir3Module,
+        builtin: &BuiltinFunction,
+        receiver: Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if !Self::builtin_has_default_species(builtin) {
+            return Ok(None);
+        }
+        let owner = if builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && Self::standard_constructor_name(builtin)
+                .is_ok_and(|name| TypedArrayKind::from_type_name(name).is_some())
+        {
+            Value::BuiltinFunction(BuiltinFunction::standard_constructor(TYPED_ARRAY_INTRINSIC))
+        } else {
+            Value::BuiltinFunction(builtin.clone())
+        };
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Species.id());
+        match self.function_own_property_object(module, &owner)? {
+            None => Ok(Some(receiver)),
+            Some(object) if self.chain_contains_runtime_property(object, &key) => self
+                .proxy_aware_get_runtime_property(Some(module), object, &key, receiver, 0)
+                .map(Some),
+            Some(_) => Ok(Some(Value::Undefined)),
+        }
     }
 
     /// bd-9vouw.17: the own `name` or `length` a function has before its

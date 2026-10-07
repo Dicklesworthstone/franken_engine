@@ -52191,7 +52191,10 @@ impl InterpreterCore {
                     // bd-9vouw.17: an own property stored on a user function's
                     // backing object (`F.x`, class statics) wins over the
                     // synthesized function members below. `prototype` keeps
-                    // its dedicated path.
+                    // its dedicated path on a function with an intrinsic one;
+                    // another function's (an arrow's, a bound function's) is
+                    // an ordinary own property, as in function_own_get
+                    // (bd-9vouw.277).
                     let mut inherited_function_standard = None;
                     let function_backing = match &obj_val {
                         Value::Function(_)
@@ -52200,7 +52203,8 @@ impl InterpreterCore {
                         | Value::AsyncFunction(_)
                         | Value::AsyncGeneratorFunction(_)
                         | Value::BuiltinFunction(_)
-                            if property_key.as_str() != Some("prototype") =>
+                            if property_key.as_str() != Some("prototype")
+                                || !self.function_has_intrinsic_prototype(&obj_val) =>
                         {
                             match self.function_own_property_object(module, &obj_val)? {
                                 // Own `name`/`length` are the function's (never

@@ -85,3 +85,57 @@ fn resolving_functions_are_anonymous() {
         r#""" 1 "" 1 resolve reject function true"#,
     );
 }
+
+/// bd-9vouw.274: Promise.prototype.catch and finally are Invoke(this,
+/// "then", ...) (ES2020 25.6.5.1, 25.6.5.3): a thenable `this`, a primitive
+/// whose prototype has a `then`, and a promise whose `then` was replaced
+/// all have that `then` called (with undefined and onRejected, or the
+/// finally wrappers, or a non-callable onFinally twice); a throwing `then`
+/// getter or `then` propagates, finally refuses a non-object `this`, and a
+/// promise with the intrinsic `then` keeps its settlement order. Both
+/// demanded a promise. Expected lines are Node v22.2.0's output, captured
+/// programmatically (Bun 1.4.2 runs the file as a strict module, where the
+/// boolean `this` stays unboxed).
+#[test]
+fn promise_catch_and_finally_invoke_then_bd_9vouw_274() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var calls = [];
+var thenable = { then: function (a, b) { calls.push('then:' + typeof a + ',' + typeof b + ':' + (this === thenable)); return 'thenResult'; } };
+console.log(Promise.prototype.catch.call(thenable, function () {}), Promise.prototype.finally.call(thenable, function () {}), Promise.prototype.finally.call(thenable, 5), calls.join(' '));
+Boolean.prototype.then = function () { return 'bool-then:' + typeof this; };
+console.log(Promise.prototype.catch.call(true, null), kind(function () { return Promise.prototype.catch.call(undefined); }), kind(function () { return Promise.prototype.finally.call(true); }));
+delete Boolean.prototype.then;
+console.log(kind(function () { return Promise.prototype.catch.call({ get then() { throw new RangeError('g'); } }); }), kind(function () { return Promise.prototype.finally.call({ then: 1 }); }), kind(function () { return Promise.prototype.catch.call({ then: function () { throw new EvalError('t'); } }); }));
+var p = Promise.reject(new Error('boom'));
+var replaced = 0;
+var q = Promise.resolve(1);
+q.then = function (a, b) { replaced++; return Promise.prototype.then.call(this, a, b); };
+q.catch(function () {});
+q.finally(function () {});
+console.log('replaced', replaced);
+p.catch(function (e) { console.log('caught ' + e.message); }).finally(function () { console.log('finally'); }).then(function (v) { console.log('after ' + v); });
+Promise.resolve(7).finally(function () { return 99; }).then(function (v) { console.log('value ' + v); });
+Promise.reject(8).finally(function () {}).catch(function (e) { console.log('reason ' + e); });
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "thenResult thenResult thenResult then:undefined,function:true then:function,function:true then:number,number:true",
+            "bool-then:object TypeError TypeError",
+            "RangeError TypeError EvalError",
+            "replaced 2",
+            "caught boom",
+            "finally",
+            "value 7",
+            "reason 8",
+            "after undefined",
+        ]
+    );
+}

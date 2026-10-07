@@ -65976,6 +65976,62 @@ impl InterpreterCore {
         kind: PromiseReactionKind,
     ) -> Result<Value, InterpreterError> {
         let receiver = receiver.unwrap_or(Value::Undefined);
+        // ES2020 25.6.5.1 / 25.6.5.3: catch and finally are
+        // Invoke(this, "then", ...), so a thenable `this`, or a promise
+        // whose `then` was replaced, runs that `then`; only a promise with
+        // the intrinsic `then` takes the native path below. Both demanded
+        // a promise (bd-9vouw.274).
+        if matches!(
+            kind,
+            PromiseReactionKind::Catch | PromiseReactionKind::Finally
+        ) {
+            if matches!(kind, PromiseReactionKind::Finally) && !receiver.is_object_like() {
+                return Err(InterpreterError::TypeError {
+                    expected: "object receiver for Promise.prototype.finally".to_string(),
+                    got: receiver.type_name().to_string(),
+                });
+            }
+            // Guest code (a `then` getter, a user `then`) runs while native
+            // locals hold values: no collection until this returns.
+            self.gc_nested_request = None;
+            let then = self.get_v(
+                module,
+                &receiver,
+                &RuntimePropertyKey::String(JsString::from("then")),
+            )?;
+            let intrinsic = matches!(receiver, Value::Promise(_))
+                && matches!(&then, Value::BuiltinFunction(builtin)
+                    if builtin.kind == BuiltinFunctionKind::PromiseThen);
+            if !intrinsic {
+                if !then.is_callable() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "callable then of a Promise.prototype.catch/finally receiver"
+                            .to_string(),
+                        got: then.type_name().to_string(),
+                    });
+                }
+                let handler = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let arguments = match kind {
+                    PromiseReactionKind::Catch => vec![Value::Undefined, handler],
+                    _ if handler.is_callable() => {
+                        let holder =
+                            self.alloc_object_with_properties(&[("__onFinally", handler)])?;
+                        vec![
+                            Value::BuiltinFunction(BuiltinFunction::bound_to(
+                                BuiltinFunctionKind::PromiseThenFinally,
+                                holder,
+                            )),
+                            Value::BuiltinFunction(BuiltinFunction::bound_to(
+                                BuiltinFunctionKind::PromiseCatchFinally,
+                                holder,
+                            )),
+                        ]
+                    }
+                    _ => vec![handler.clone(), handler],
+                };
+                return self.invoke_inline_method_call(Some(module), then, receiver, arguments);
+            }
+        }
         // ES2020 25.6.5.4 steps 3-4 (and catch/finally through then): the
         // result comes from SpeciesConstructor(promise, %Promise%).
         let species_result = if matches!(receiver, Value::Promise(_)) {

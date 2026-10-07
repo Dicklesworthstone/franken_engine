@@ -188,3 +188,72 @@ fn simultaneously_live_short_lived_locals_fit_the_frame_bd_9vouw_214() {
         assert_eq!(lines, ["300 s299 300 s150"], "{lane:?}");
     }
 }
+
+/// `count` chained calls `.add(i, i)` (or `.add(i)` with `two_args` false).
+fn call_chain(count: usize, two_args: bool) -> String {
+    (0..count)
+        .map(|i| {
+            if two_args {
+                format!(".add({i}, {i})")
+            } else {
+                format!(".add({i})")
+            }
+        })
+        .collect()
+}
+
+/// bd-9vouw.246: a method call chain stores each link's result as the next
+/// link's receiver, and every link's temporaries (key, method, receiver and
+/// argument copies, result) stayed allocated until the statement ended:
+/// about six registers per link. babel standalone's regenerate tables are
+/// `.addRange(a, b)` chains of up to 91 links, and it failed at load with
+/// "register 256 out of bounds (max 256)". A store into a binding register
+/// now frees the temporaries above the remaining value stack. At the top
+/// level each link's receiver still pins one register until the statement
+/// ends.
+#[test]
+fn method_call_chains_reuse_registers_per_link_bd_9vouw_246() {
+    let in_function = |count: usize| {
+        format!(
+            "var o = {{ n: 0, add(x, y) {{ this.n += x + y; return this; }} }};\nfunction g() {{ var s = o{}; return s.n; }}\n",
+            call_chain(count, true)
+        )
+    };
+    let small = frame_sizes(&in_function(10));
+    let large = frame_sizes(&in_function(150));
+    assert_eq!(
+        small.iter().max(),
+        large.iter().max(),
+        "a function's frame grows with the chain: {small:?} vs {large:?}"
+    );
+
+    // Node v22.2.0 prints "8190 7140".
+    let source = format!(
+        "var o = {{ n: 0, add(x, y) {{ this.n += x + (y === undefined ? 0 : y); return this; }} }};\nfunction g() {{ o.n = 0; var s = o{}; return s.n; }}\nvar r1 = g();\no.n = 0;\nvar t = o{};\nconsole.log(r1, t.n);\n",
+        call_chain(91, true),
+        call_chain(120, false)
+    );
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let package = ExtensionPackage {
+            extension_id: "register-reuse".to_string(),
+            source: source.clone(),
+            source_file: None,
+            module_root: None,
+            capabilities: vec!["builtin".to_string()],
+            version: "1.0.0".to_string(),
+            metadata: Default::default(),
+        };
+        let lines: Vec<String> = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Script,
+            ..OrchestratorConfig::default()
+        })
+        .execute(&package)
+        .unwrap_or_else(|error| panic!("{lane:?}: {error}"))
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect();
+        assert_eq!(lines, ["8190 7140"], "{lane:?}");
+    }
+}

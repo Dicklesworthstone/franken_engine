@@ -8969,6 +8969,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     value_stack.push(dst);
+                    // The stored value now lives in the binding's register:
+                    // the temporaries that computed it are dead
+                    // (bd-9vouw.246, as after a Discard, bd-9vouw.202).
+                    if let Some(target) = expression_rewind_target(
+                        &value_stack,
+                        &iterator_anchors,
+                        statement_register_floor,
+                        pinned_register_high,
+                        &live_status_registers,
+                    ) && target < register_cursor
+                    {
+                        register_high_water = register_high_water.max(register_cursor);
+                        register_cursor = target;
+                    }
                 }
             }
             Ir1Op::PutName { name, strict } => {
@@ -11264,6 +11278,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     fn_value_stack.push(dst);
+                    // bd-9vouw.246: the stored value now lives in the
+                    // binding's register, so the temporaries that computed it
+                    // are dead (as after a Discard, bd-9vouw.202). A method
+                    // call chain stores each link's result as the next
+                    // link's receiver; without this every link took fresh
+                    // registers until the statement ended, and babel's
+                    // 91-link `.addRange(a, b)` chains overflowed the frame.
+                    if let Some(target) = expression_rewind_target(
+                        &fn_value_stack,
+                        &fn_iterator_anchors,
+                        fn_statement_register_floor,
+                        fn_pinned_register_high,
+                        &fn_live_status_registers,
+                    ) && target < fn_reg
+                    {
+                        fn_register_high_water = fn_register_high_water.max(fn_reg);
+                        fn_reg = target;
+                    }
                 }
                 Ir1Op::PutName { name, strict } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;

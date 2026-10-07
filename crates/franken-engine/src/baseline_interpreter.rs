@@ -103778,6 +103778,28 @@ impl InterpreterCore {
             }
             return Ok(result);
         }
+        // bd-9vouw.326: a Function, GeneratorFunction, AsyncFunction or
+        // AsyncGeneratorFunction subclass's instance is the function built
+        // from source text, whose [[Prototype]] is the subclass prototype:
+        // kept on its backing object, as a derived class constructor's parent
+        // is (`function_value_prototype` reads it there).
+        if result.is_callable() {
+            let intrinsic = self.function_value_prototype(Some(module), &result)?;
+            if intrinsic != Value::Object(prototype) {
+                let backing = self
+                    .ensure_function_own_property_object(module, &result)?
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "function with property storage".to_string(),
+                        got: "function without property storage".to_string(),
+                    })?;
+                self.mutate_heap(|heap| {
+                    if let Some(object) = heap.get_mut(backing.0 as usize) {
+                        object.prototype = Some(prototype);
+                    }
+                });
+            }
+            return Ok(result);
+        }
         let Value::Object(object_id) = result else {
             return Err(InterpreterError::TypeError {
                 expected: "object result from constructible builtin target".to_string(),

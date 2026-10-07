@@ -104081,18 +104081,34 @@ impl InterpreterCore {
         self.apply_memory_component_delta(0, metadata_bytes)?;
         self.closure_method_metadata.insert(closure_id, metadata);
 
-        let mut entries = match self
+        let entry = [Value::Int(kind), key, function];
+        // Append to the target's list in place. Copying it into a new array
+        // for every element made defining a class of N elements O(N^2)
+        // (2,000 private fields took 2.9 s to run, bd-9vouw.304).
+        if let Some(Value::Object(list)) = self
             .heap
             .get(target.0 as usize)
             .and_then(|object| object.class_fields.clone())
         {
-            Some(Value::Object(list)) => self.array_like_values(list)?,
-            _ => Vec::new(),
-        };
-        entries.push(Value::Int(kind));
-        entries.push(key);
-        entries.push(function);
-        let list = self.alloc_array_from_values(&entries)?;
+            let start = self.array_like_length(list)?;
+            for (offset, value) in entry.into_iter().enumerate() {
+                self.set_object_property(list, (start + offset).to_string(), value)?;
+            }
+            let length = start + 3;
+            self.set_object_property(
+                list,
+                "length".to_string(),
+                Value::Int(i64::try_from(length).unwrap_or(i64::MAX)),
+            )?;
+            let cached_length = u32::try_from(length).ok();
+            self.mutate_heap(|heap| {
+                if let Some(object) = heap.get_mut(list.0 as usize) {
+                    object.cached_dense_length = cached_length;
+                }
+            });
+            return Ok(());
+        }
+        let list = self.alloc_array_from_values(&entry)?;
         self.set_class_fields_slot(target, Some(Value::Object(list)))
     }
 

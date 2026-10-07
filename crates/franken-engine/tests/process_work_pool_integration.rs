@@ -204,13 +204,22 @@ fn supervised_drain_preserves_the_real_js_process_failure_journal() {
                           cp.execFileSync('budget-sleep', ['5']);"
             .into();
         let failed = orchestrator.execute(&package).is_err();
-        (failed, orchestrator.last_failed_host_effect_journal().to_vec())
+        (
+            failed,
+            orchestrator.last_failed_host_effect_journal().to_vec(),
+        )
     });
 
     let admission_deadline = Instant::now() + Duration::from_secs(10);
     while pool.snapshot().unwrap().in_flight == 0 {
-        assert!(!worker.is_finished(), "guest never held native dispatch admission");
-        assert!(Instant::now() < admission_deadline, "native dispatch did not start");
+        assert!(
+            !worker.is_finished(),
+            "guest never held native dispatch admission"
+        );
+        assert!(
+            Instant::now() < admission_deadline,
+            "native dispatch did not start"
+        );
         std::thread::yield_now();
     }
     // This deliberately covers the admitted-launch race as well as an already
@@ -221,10 +230,16 @@ fn supervised_drain_preserves_the_real_js_process_failure_journal() {
     // orchestrator separately before inspecting its exact failed-effect prefix.
     let (failed, journal) = worker.join().expect("orchestrator thread");
     let snapshot = drained.expect("native process dispatch drained");
-    assert!(failed, "revocation must not publish guest execution success");
+    assert!(
+        failed,
+        "revocation must not publish guest execution success"
+    );
     assert!(matches!(
         journal.as_slice(),
-        [HostEffectJournalEntry::ProcessSpawn { outcome: Err(_), .. }]
+        [HostEffectJournalEntry::ProcessSpawn {
+            outcome: Err(_),
+            ..
+        }]
     ));
     assert_eq!(snapshot.in_flight, 0);
     assert_eq!(snapshot.committed_operations, 1);
@@ -241,14 +256,18 @@ fn tenant_exhaustion_and_close_preserve_sibling_execution_and_historical_replay(
         operations: 3,
         max_in_flight: 2,
     });
-    let first = root.partition(HostEffectLimits {
-        operations: 1,
-        max_in_flight: 1,
-    }).unwrap();
-    let sibling = root.partition(HostEffectLimits {
-        operations: 2,
-        max_in_flight: 1,
-    }).unwrap();
+    let first = root
+        .partition(HostEffectLimits {
+            operations: 1,
+            max_in_flight: 1,
+        })
+        .unwrap();
+    let sibling = root
+        .partition(HostEffectLimits {
+            operations: 2,
+            max_in_flight: 1,
+        })
+        .unwrap();
     let work = ExecutionWorkPool::new(1);
     let native = native(&scratch);
     let first_provider = Arc::new(first.bind_process_spawn(native.clone(), &work));
@@ -261,7 +280,9 @@ fn tenant_exhaustion_and_close_preserve_sibling_execution_and_historical_replay(
         Arc::new(InMemoryHostEffectJournal::recording()),
         authority(),
     );
-    let recorded = recording.execute(&package()).expect("prepaid native execution");
+    let recorded = recording
+        .execute(&package())
+        .expect("prepaid native execution");
     assert_eq!(recorded.console_output[0].message, "pool-output");
     assert_eq!(recorded.host_effect_journal.len(), 1);
 
@@ -271,7 +292,9 @@ fn tenant_exhaustion_and_close_preserve_sibling_execution_and_historical_replay(
         Arc::new(InMemoryHostEffectJournal::recording()),
         authority(),
     );
-    retry.execute(&package()).expect_err("fresh authority cannot steal sibling credits");
+    retry
+        .execute(&package())
+        .expect_err("fresh authority cannot steal sibling credits");
     assert!(matches!(
         retry.last_failed_host_effect_journal(),
         [HostEffectJournalEntry::ProcessSpawn {
@@ -289,7 +312,9 @@ fn tenant_exhaustion_and_close_preserve_sibling_execution_and_historical_replay(
             Arc::new(InMemoryHostEffectJournal::recording()),
             authority(),
         );
-        let result = peer.execute(&package()).expect("reserved sibling execution");
+        let result = peer
+            .execute(&package())
+            .expect("reserved sibling execution");
         assert_eq!(result.console_output[0].message, "pool-output");
         assert_eq!(sibling.snapshot().unwrap().remaining_operations, remaining);
     }
@@ -299,10 +324,14 @@ fn tenant_exhaustion_and_close_preserve_sibling_execution_and_historical_replay(
     let mut replay = ExecutionOrchestrator::new(OrchestratorConfig::default());
     replay.set_process_spawn(
         first_provider,
-        Arc::new(InMemoryHostEffectJournal::replaying(recorded.host_effect_journal.clone())),
+        Arc::new(InMemoryHostEffectJournal::replaying(
+            recorded.host_effect_journal.clone(),
+        )),
         authority(),
     );
-    let replayed = replay.execute(&package()).expect("replay without live admission");
+    let replayed = replay
+        .execute(&package())
+        .expect("replay without live admission");
     assert_eq!(replayed.console_output[0].message, "pool-output");
     assert_eq!(replayed.host_effect_journal, recorded.host_effect_journal);
     assert_eq!(root.snapshot().unwrap(), root_snapshot);
@@ -321,9 +350,22 @@ fn real_filesystem_and_process_work_spend_one_tenant_quota() {
     };
 
     let scratch = Scratch::new();
-    let root = HostEffectWorkPool::new(HostEffectLimits { operations: 3, max_in_flight: 1 });
-    let tenant = root.partition(HostEffectLimits { operations: 2, max_in_flight: 1 }).unwrap();
-    let sibling = root.partition(HostEffectLimits { operations: 1, max_in_flight: 1 }).unwrap();
+    let root = HostEffectWorkPool::new(HostEffectLimits {
+        operations: 3,
+        max_in_flight: 1,
+    });
+    let tenant = root
+        .partition(HostEffectLimits {
+            operations: 2,
+            max_in_flight: 1,
+        })
+        .unwrap();
+    let sibling = root
+        .partition(HostEffectLimits {
+            operations: 1,
+            max_in_flight: 1,
+        })
+        .unwrap();
     let work = ExecutionWorkPool::new(1);
     let sandbox = Arc::new(SandboxedHostIo::with_root(&scratch.0).unwrap());
     let io = tenant.bind_host_io(sandbox.clone(), &work);
@@ -332,7 +374,11 @@ fn real_filesystem_and_process_work_spend_one_tenant_quota() {
         path: path.into(),
         data: bytes.to_vec(),
     };
-    io.perform(&write("first.txt", b"original"), &[HostIoCapability::FsWrite]).unwrap();
+    io.perform(
+        &write("first.txt", b"original"),
+        &[HostIoCapability::FsWrite],
+    )
+    .unwrap();
     let request = ProcessSpawnRequest::Run {
         launch: ProcessLaunch {
             executable: "budget-printf".into(),
@@ -347,8 +393,15 @@ fn real_filesystem_and_process_work_spend_one_tenant_quota() {
     };
     let canonical = process.prepare_request(&request).unwrap();
     assert_eq!(tenant.snapshot().unwrap().remaining_operations, 1);
-    let response = process.perform(&canonical, &[ProcessSpawnCapability::Spawn]).unwrap();
-    let ProcessSpawnResponse::Run { exit, stdout, stderr } = response else {
+    let response = process
+        .perform(&canonical, &[ProcessSpawnCapability::Spawn])
+        .unwrap();
+    let ProcessSpawnResponse::Run {
+        exit,
+        stdout,
+        stderr,
+    } = response
+    else {
         panic!("native process result");
     };
     assert!(exit.success);
@@ -358,10 +411,21 @@ fn real_filesystem_and_process_work_spend_one_tenant_quota() {
         io.perform(&write("first.txt", b"forbidden overwrite"), &[HostIoCapability::FsWrite]),
         Err(HostIoError::Denied { reason }) if reason == "HOST_EFFECT_BUDGET_EXHAUSTED"
     ));
-    assert_eq!(std::fs::read(scratch.0.join("first.txt")).unwrap(), b"original");
-    sibling.bind_host_io(sandbox, &work)
-        .perform(&write("sibling.txt", b"reserved"), &[HostIoCapability::FsWrite]).unwrap();
-    assert_eq!(std::fs::read(scratch.0.join("sibling.txt")).unwrap(), b"reserved");
+    assert_eq!(
+        std::fs::read(scratch.0.join("first.txt")).unwrap(),
+        b"original"
+    );
+    sibling
+        .bind_host_io(sandbox, &work)
+        .perform(
+            &write("sibling.txt", b"reserved"),
+            &[HostIoCapability::FsWrite],
+        )
+        .unwrap();
+    assert_eq!(
+        std::fs::read(scratch.0.join("sibling.txt")).unwrap(),
+        b"reserved"
+    );
     assert_eq!(tenant.snapshot().unwrap().committed_operations, 2);
     assert_eq!(sibling.snapshot().unwrap().committed_operations, 1);
     assert_eq!(root.snapshot().unwrap().in_flight, 0);
@@ -376,16 +440,37 @@ fn native_descendant_process_and_sibling_io_share_concurrency_and_separate_close
 
     let scratch = Scratch::new();
     let executable = ["/usr/bin/sleep", "/bin/sleep"]
-        .into_iter().map(PathBuf::from).find(|path| path.is_file()).expect("native sleep");
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .expect("native sleep");
     let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).unwrap();
     policy.authorize_alias("tenant-sleep", executable).unwrap();
     policy.limits.max_runtime_millis = 10_000;
-    let root = HostEffectWorkPool::new(HostEffectLimits { operations: 2, max_in_flight: 1 });
-    let child = root.partition(HostEffectLimits { operations: 1, max_in_flight: 1 }).unwrap();
-    let sibling = root.partition(HostEffectLimits { operations: 1, max_in_flight: 1 }).unwrap();
+    let root = HostEffectWorkPool::new(HostEffectLimits {
+        operations: 2,
+        max_in_flight: 1,
+    });
+    let child = root
+        .partition(HostEffectLimits {
+            operations: 1,
+            max_in_flight: 1,
+        })
+        .unwrap();
+    let sibling = root
+        .partition(HostEffectLimits {
+            operations: 1,
+            max_in_flight: 1,
+        })
+        .unwrap();
     let work = ExecutionWorkPool::new(1);
-    let provider = Arc::new(child.bind_process_spawn(Arc::new(NativeProcessSpawn::new(policy).unwrap()), &work));
-    let io = sibling.bind_host_io(Arc::new(SandboxedHostIo::with_root(&scratch.0).unwrap()), &work);
+    let provider = Arc::new(
+        child.bind_process_spawn(Arc::new(NativeProcessSpawn::new(policy).unwrap()), &work),
+    );
+    let io = sibling.bind_host_io(
+        Arc::new(SandboxedHostIo::with_root(&scratch.0).unwrap()),
+        &work,
+    );
     let worker = std::thread::spawn(move || {
         let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
         orchestrator.set_process_spawn(
@@ -396,7 +481,10 @@ fn native_descendant_process_and_sibling_io_share_concurrency_and_separate_close
         let mut package = package();
         package.source = "require('child_process').execFileSync('tenant-sleep', ['5']);".into();
         let failed = orchestrator.execute(&package).is_err();
-        (failed, orchestrator.last_failed_host_effect_journal().to_vec())
+        (
+            failed,
+            orchestrator.last_failed_host_effect_journal().to_vec(),
+        )
     });
     let deadline = Instant::now() + Duration::from_secs(10);
     while root.snapshot().unwrap().in_flight == 0 {
@@ -406,21 +494,35 @@ fn native_descendant_process_and_sibling_io_share_concurrency_and_separate_close
     }
     // Admission is the boundary under test, not a claim that the OS child has
     // already started. Revocation must cover both sides of that launch race.
-    let write = HostIoRequest::FsWrite { path: "peer.txt".into(), data: b"peer survived".to_vec() };
+    let write = HostIoRequest::FsWrite {
+        path: "peer.txt".into(),
+        data: b"peer survived".to_vec(),
+    };
     let refused = io.perform(&write, &[HostIoCapability::FsWrite]);
     let untouched = !scratch.0.join("peer.txt").exists();
     let remaining = sibling.snapshot().unwrap().remaining_operations;
     let drained = child.revoke_and_drain(Duration::from_secs(5));
     let (failed, journal) = worker.join().expect("native execution worker");
-    assert!(matches!(refused, Err(HostIoError::Denied { reason }) if reason == "HOST_EFFECT_CONCURRENCY_LIMIT"));
+    assert!(
+        matches!(refused, Err(HostIoError::Denied { reason }) if reason == "HOST_EFFECT_CONCURRENCY_LIMIT")
+    );
     assert!(untouched);
     assert_eq!(remaining, 1);
     assert_eq!(drained.unwrap().in_flight, 0);
     assert!(failed);
-    assert!(matches!(journal.as_slice(), [HostEffectJournalEntry::ProcessSpawn { outcome: Err(_), .. }]));
+    assert!(matches!(
+        journal.as_slice(),
+        [HostEffectJournalEntry::ProcessSpawn {
+            outcome: Err(_),
+            ..
+        }]
+    ));
     assert!(!root.is_revoked() && !sibling.is_revoked());
     io.perform(&write, &[HostIoCapability::FsWrite]).unwrap();
-    assert_eq!(std::fs::read(scratch.0.join("peer.txt")).unwrap(), b"peer survived");
+    assert_eq!(
+        std::fs::read(scratch.0.join("peer.txt")).unwrap(),
+        b"peer survived"
+    );
     assert_eq!(root.revoke_and_drain(Duration::ZERO).unwrap().in_flight, 0);
 }
 
@@ -436,31 +538,55 @@ fn ancestor_close_does_not_disable_native_descendant_child_cleanup() {
     let mut policy = ProcessSpawnPolicy::jailed(&scratch.0).unwrap();
     let executable = policy.authorize_executable("/bin/cat").unwrap();
     policy.limits.max_runtime_millis = 2000;
-    let root = HostEffectWorkPool::new(HostEffectLimits { operations: 2, max_in_flight: 1 });
-    let tenant = root.partition(HostEffectLimits { operations: 2, max_in_flight: 1 }).unwrap();
-    let cell = tenant.partition(HostEffectLimits { operations: 2, max_in_flight: 1 }).unwrap();
+    let root = HostEffectWorkPool::new(HostEffectLimits {
+        operations: 2,
+        max_in_flight: 1,
+    });
+    let tenant = root
+        .partition(HostEffectLimits {
+            operations: 2,
+            max_in_flight: 1,
+        })
+        .unwrap();
+    let cell = tenant
+        .partition(HostEffectLimits {
+            operations: 2,
+            max_in_flight: 1,
+        })
+        .unwrap();
     let provider = cell.bind_process_spawn(
         Arc::new(NativeProcessSpawn::new(policy).unwrap()),
         &ExecutionWorkPool::new(1),
     );
-    let response = provider.perform(&ProcessSpawnRequest::Spawn {
-        launch: ProcessLaunch {
-            executable,
-            argv: Vec::new(),
-            env: BTreeMap::new(),
-            cwd: None,
-            shell: false,
-            stdio: ProcessStdio::default(),
-        },
-    }, &[ProcessSpawnCapability::Spawn]).unwrap();
+    let response = provider
+        .perform(
+            &ProcessSpawnRequest::Spawn {
+                launch: ProcessLaunch {
+                    executable,
+                    argv: Vec::new(),
+                    env: BTreeMap::new(),
+                    cwd: None,
+                    shell: false,
+                    stdio: ProcessStdio::default(),
+                },
+            },
+            &[ProcessSpawnCapability::Spawn],
+        )
+        .unwrap();
     let ProcessSpawnResponse::Spawned { handle } = response else {
         panic!("native child handle");
     };
     assert_eq!(root.revoke_and_drain(Duration::ZERO).unwrap().in_flight, 0);
     assert!(cell.is_revoked());
     let before_cleanup = cell.snapshot().unwrap();
-    assert_eq!(provider.cleanup_handle(&handle), Ok(ProcessSpawnResponse::Cleaned { was_present: true }));
-    assert_eq!(provider.cleanup_handle(&handle), Ok(ProcessSpawnResponse::Cleaned { was_present: false }));
+    assert_eq!(
+        provider.cleanup_handle(&handle),
+        Ok(ProcessSpawnResponse::Cleaned { was_present: true })
+    );
+    assert_eq!(
+        provider.cleanup_handle(&handle),
+        Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+    );
     assert_eq!(cell.snapshot().unwrap(), before_cleanup);
     assert_eq!(before_cleanup.remaining_operations, 1);
 }

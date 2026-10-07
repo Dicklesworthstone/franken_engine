@@ -94,7 +94,11 @@ impl ProcessSpawnProvider for Observed {
         "observed-hierarchy-process"
     }
 
-    fn perform(&self, _: &ProcessSpawnRequest, _: &[ProcessSpawnCapability]) -> ProcessSpawnOutcome {
+    fn perform(
+        &self,
+        _: &ProcessSpawnRequest,
+        _: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
         panic!("live process control must be forwarded")
     }
 
@@ -106,7 +110,10 @@ impl ProcessSpawnProvider for Observed {
     ) -> ProcessSpawnOutcome {
         control.checkpoint()?;
         self.process_calls.fetch_add(1, Ordering::SeqCst);
-        assert!(!self.panic_on_process.load(Ordering::SeqCst), "native unwind");
+        assert!(
+            !self.panic_on_process.load(Ordering::SeqCst),
+            "native unwind"
+        );
         *self.process_control.lock().unwrap() = Some(control);
         process_success()
     }
@@ -126,9 +133,18 @@ fn tenants_spend_prepaid_credits_across_io_and_process_without_double_charging()
     let inner = Arc::new(Observed::default());
     assert_eq!(root.snapshot().unwrap().remaining_operations, 0);
     for tenant in [&first, &second] {
-        tenant.bind_host_io(inner.clone(), &work).perform(&read(), IO).unwrap();
-        tenant.bind_process_spawn(inner.clone(), &work).perform(&run(), PROCESS).unwrap();
-        assert!(matches!(tenant.admit(), Err(HostEffectBudgetError::Exhausted)));
+        tenant
+            .bind_host_io(inner.clone(), &work)
+            .perform(&read(), IO)
+            .unwrap();
+        tenant
+            .bind_process_spawn(inner.clone(), &work)
+            .perform(&run(), PROCESS)
+            .unwrap();
+        assert!(matches!(
+            tenant.admit(),
+            Err(HostEffectBudgetError::Exhausted)
+        ));
     }
     assert_eq!(inner.io_calls.load(Ordering::SeqCst), 2);
     assert_eq!(inner.process_calls.load(Ordering::SeqCst), 2);
@@ -143,7 +159,10 @@ fn exhausted_tenant_cannot_consume_a_siblings_reservation() {
     let second = root.partition(limits(2, 1)).unwrap();
     drop(first.admit().unwrap());
     for _ in 0..4 {
-        assert!(matches!(first.clone().admit(), Err(HostEffectBudgetError::Exhausted)));
+        assert!(matches!(
+            first.clone().admit(),
+            Err(HostEffectBudgetError::Exhausted)
+        ));
     }
     assert_eq!(second.snapshot().unwrap().remaining_operations, 2);
     drop(second.admit().unwrap());
@@ -169,14 +188,20 @@ fn nested_delegation_and_owner_drop_never_refund_credits() {
 fn failed_delegations_do_not_change_parent_accounting() {
     let root = HostEffectWorkPool::new(limits(3, 2));
     let before = root.snapshot().unwrap();
-    assert!(matches!(root.partition(limits(4, 1)), Err(HostEffectBudgetError::Exhausted)));
+    assert!(matches!(
+        root.partition(limits(4, 1)),
+        Err(HostEffectBudgetError::Exhausted)
+    ));
     assert!(matches!(
         root.partition(limits(1, 3)),
         Err(HostEffectBudgetError::ConcurrencyLimitBroadened)
     ));
     assert_eq!(root.snapshot().unwrap(), before);
     root.revoke();
-    assert!(matches!(root.partition(limits(0, 0)), Err(HostEffectBudgetError::Revoked)));
+    assert!(matches!(
+        root.partition(limits(0, 0)),
+        Err(HostEffectBudgetError::Revoked)
+    ));
     assert_eq!(root.snapshot().unwrap(), before);
 }
 
@@ -185,8 +210,14 @@ fn empty_and_zero_concurrency_children_cannot_dispatch_or_leak_ancestor_permits(
     let root = HostEffectWorkPool::new(limits(2, 2));
     let empty = root.partition(limits(0, 1)).unwrap();
     let closed = root.partition(limits(1, 0)).unwrap();
-    assert!(matches!(empty.admit(), Err(HostEffectBudgetError::Exhausted)));
-    assert!(matches!(closed.admit(), Err(HostEffectBudgetError::ConcurrencyLimit)));
+    assert!(matches!(
+        empty.admit(),
+        Err(HostEffectBudgetError::Exhausted)
+    ));
+    assert!(matches!(
+        closed.admit(),
+        Err(HostEffectBudgetError::ConcurrencyLimit)
+    ));
     for scope in [&root, &empty, &closed] {
         assert_eq!(scope.snapshot().unwrap().in_flight, 0);
     }
@@ -202,7 +233,10 @@ fn an_intermediate_cap_rolls_back_provisional_root_admission() {
     let second = tenant.partition(limits(2, 1)).unwrap();
     let permit = first.admit().unwrap();
     let before = second.snapshot().unwrap();
-    assert!(matches!(second.admit(), Err(HostEffectBudgetError::ConcurrencyLimit)));
+    assert!(matches!(
+        second.admit(),
+        Err(HostEffectBudgetError::ConcurrencyLimit)
+    ));
     assert_eq!(second.snapshot().unwrap(), before);
     assert_eq!(root.snapshot().unwrap().in_flight, 1);
     drop(permit);
@@ -218,7 +252,10 @@ fn dropping_ancestor_owners_does_not_detach_caps_or_revocation() {
     let cell = tenant.partition(limits(2, 1)).unwrap();
     drop(tenant);
     let first = cell.admit().unwrap();
-    assert!(matches!(cell.admit(), Err(HostEffectBudgetError::ConcurrencyLimit)));
+    assert!(matches!(
+        cell.admit(),
+        Err(HostEffectBudgetError::ConcurrencyLimit)
+    ));
     root.revoke();
     drop(root);
     assert!(cell.is_revoked());
@@ -247,11 +284,17 @@ fn root_drain_counts_descendants_and_child_drain_ignores_siblings() {
     let sibling = root.partition(limits(1, 1)).unwrap();
     let child_permit = child.admit().unwrap();
     let sibling_permit = sibling.admit().unwrap();
-    assert_eq!(child.revoke_and_drain(Duration::ZERO), Err(HostEffectDrainError::TimedOut { in_flight: 1 }));
+    assert_eq!(
+        child.revoke_and_drain(Duration::ZERO),
+        Err(HostEffectDrainError::TimedOut { in_flight: 1 })
+    );
     drop(child_permit);
     assert_eq!(child.revoke_and_drain(Duration::ZERO).unwrap().in_flight, 0);
     assert!(!root.is_revoked() && !sibling.is_revoked());
-    assert_eq!(root.revoke_and_drain(Duration::ZERO), Err(HostEffectDrainError::TimedOut { in_flight: 1 }));
+    assert_eq!(
+        root.revoke_and_drain(Duration::ZERO),
+        Err(HostEffectDrainError::TimedOut { in_flight: 1 })
+    );
     drop(sibling_permit);
     assert_eq!(root.revoke_and_drain(Duration::ZERO).unwrap().in_flight, 0);
 }
@@ -265,17 +308,28 @@ fn final_descendant_release_wakes_both_child_and_root_closers() {
     let mut closers = Vec::new();
     for scope in [root.clone(), child.clone()] {
         let done = done.clone();
-        closers.push(std::thread::spawn(move || done.send(scope.revoke_and_drain(WAIT)).unwrap()));
+        closers.push(std::thread::spawn(move || {
+            done.send(scope.revoke_and_drain(WAIT)).unwrap()
+        }));
     }
     let deadline = Instant::now() + WAIT;
-    while !root.state.revoked.load(Ordering::Acquire) || !child.state.revoked.load(Ordering::Acquire) {
+    while !root.state.revoked.load(Ordering::Acquire)
+        || !child.state.revoked.load(Ordering::Acquire)
+    {
         assert!(Instant::now() < deadline);
         std::thread::yield_now();
     }
     assert!(results.try_recv().is_err());
     drop(permit);
     for _ in 0..2 {
-        assert_eq!(results.recv_timeout(Duration::from_secs(2)).unwrap().unwrap().in_flight, 0);
+        assert_eq!(
+            results
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap()
+                .in_flight,
+            0
+        );
     }
     for closer in closers {
         closer.join().unwrap();
@@ -296,7 +350,10 @@ fn concurrent_partitions_cannot_mint_more_than_the_root_allowance() {
         }));
     }
     start.wait();
-    let children: Vec<_> = workers.into_iter().filter_map(|worker| worker.join().unwrap().ok()).collect();
+    let children: Vec<_> = workers
+        .into_iter()
+        .filter_map(|worker| worker.join().unwrap().ok())
+        .collect();
     assert_eq!(children.len(), 16);
     assert_eq!(root.snapshot().unwrap().remaining_operations, 0);
     for child in children {
@@ -335,18 +392,54 @@ fn ancestor_poison_reaches_retained_io_and_process_controls_and_denies_drain() {
     let child = root.partition(limits(3, 1)).unwrap();
     let work = ExecutionWorkPool::new(1);
     let inner = Arc::new(Observed::default());
-    child.bind_host_io(inner.clone(), &work).perform(&read(), IO).unwrap();
-    child.bind_process_spawn(inner.clone(), &work).perform(&run(), PROCESS).unwrap();
+    child
+        .bind_host_io(inner.clone(), &work)
+        .perform(&read(), IO)
+        .unwrap();
+    child
+        .bind_process_spawn(inner.clone(), &work)
+        .perform(&run(), PROCESS)
+        .unwrap();
     let alias = root.clone();
-    assert!(std::panic::catch_unwind(move || {
-        let _guard = alias.state.accounting.lock().unwrap();
-        panic!("ancestor accounting poison");
-    }).is_err());
-    assert!(inner.io_control.lock().unwrap().as_ref().unwrap().checkpoint().is_err());
-    assert!(inner.process_control.lock().unwrap().as_ref().unwrap().checkpoint().is_err());
-    assert!(matches!(child.admit(), Err(HostEffectBudgetError::AccountingPoisoned)));
-    assert!(matches!(child.partition(limits(1, 1)), Err(HostEffectBudgetError::AccountingPoisoned)));
-    assert_eq!(child.revoke_and_drain(Duration::ZERO), Err(HostEffectDrainError::AccountingPoisoned));
+    assert!(
+        std::panic::catch_unwind(move || {
+            let _guard = alias.state.accounting.lock().unwrap();
+            panic!("ancestor accounting poison");
+        })
+        .is_err()
+    );
+    assert!(
+        inner
+            .io_control
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .checkpoint()
+            .is_err()
+    );
+    assert!(
+        inner
+            .process_control
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .checkpoint()
+            .is_err()
+    );
+    assert!(matches!(
+        child.admit(),
+        Err(HostEffectBudgetError::AccountingPoisoned)
+    ));
+    assert!(matches!(
+        child.partition(limits(1, 1)),
+        Err(HostEffectBudgetError::AccountingPoisoned)
+    ));
+    assert_eq!(
+        child.revoke_and_drain(Duration::ZERO),
+        Err(HostEffectDrainError::AccountingPoisoned)
+    );
     assert_eq!(child.snapshot().unwrap().remaining_operations, 1);
 }
 
@@ -359,11 +452,21 @@ fn provider_unwind_quarantines_the_family_but_preserves_cleanup() {
     inner.panic_on_process.store(true, Ordering::SeqCst);
     let work = ExecutionWorkPool::new(1);
     let process = first.bind_process_spawn(inner.clone(), &work);
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process.perform(&run(), PROCESS))).is_err());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || process.perform(&run(), PROCESS)
+        ))
+        .is_err()
+    );
     assert!(root.is_revoked() && sibling.is_revoked());
     assert_eq!(first.snapshot().unwrap().remaining_operations, 1);
     assert_eq!(root.revoke_and_drain(Duration::ZERO).unwrap().in_flight, 0);
-    assert!(sibling.bind_host_io(inner.clone(), &work).perform(&read(), IO).is_err());
+    assert!(
+        sibling
+            .bind_host_io(inner.clone(), &work)
+            .perform(&read(), IO)
+            .is_err()
+    );
     process.cleanup_handle("engine-owned-handle").unwrap();
     assert_eq!(inner.cleanups.load(Ordering::SeqCst), 1);
 }
@@ -379,7 +482,11 @@ impl ProcessSpawnProvider for PausedProcess {
         "paused-hierarchy-process"
     }
 
-    fn perform(&self, _: &ProcessSpawnRequest, _: &[ProcessSpawnCapability]) -> ProcessSpawnOutcome {
+    fn perform(
+        &self,
+        _: &ProcessSpawnRequest,
+        _: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
         panic!("controlled dispatch required")
     }
 
@@ -408,10 +515,13 @@ fn a_process_in_one_tenant_blocks_io_in_another_at_the_ancestor_limit() {
     let work = ExecutionWorkPool::new(1);
     let (entered_tx, entered) = channel();
     let (release, release_rx) = channel();
-    let process = first.bind_process_spawn(Arc::new(PausedProcess {
-        entered: entered_tx,
-        release: Mutex::new(release_rx),
-    }), &work);
+    let process = first.bind_process_spawn(
+        Arc::new(PausedProcess {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        }),
+        &work,
+    );
     let worker = std::thread::spawn(move || process.perform(&run(), PROCESS));
     entered.recv_timeout(WAIT).unwrap();
     let inner = Arc::new(Observed::default());
@@ -425,9 +535,12 @@ fn a_process_in_one_tenant_blocks_io_in_another_at_the_ancestor_limit() {
     assert_eq!(before_release.in_flight, 1);
     assert_eq!(second.snapshot().unwrap().remaining_operations, 1);
     io.perform(&read(), IO).unwrap();
-    assert_eq!(root.snapshot().unwrap(), HostEffectSnapshot {
-        remaining_operations: 0,
-        committed_operations: 2,
-        in_flight: 0,
-    });
+    assert_eq!(
+        root.snapshot().unwrap(),
+        HostEffectSnapshot {
+            remaining_operations: 0,
+            committed_operations: 2,
+            in_flight: 0,
+        }
+    );
 }

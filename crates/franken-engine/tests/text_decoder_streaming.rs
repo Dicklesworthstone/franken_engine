@@ -11,7 +11,10 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserS
 fn check(source: &str, expected: &str) {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
-            ParserSource { label: "text-decoder.js".into(), text: source.into() },
+            ParserSource {
+                label: "text-decoder.js".into(),
+                text: source.into(),
+            },
             ParseGoal::Script,
             &ParserOptions::default(),
         )
@@ -34,13 +37,22 @@ fn check(source: &str, expected: &str) {
                 RuntimeCapability::HeapAllocate,
                 RuntimeCapability::Builtin,
                 RuntimeCapability::Console,
-            ].into_iter().collect();
+            ]
+            .into_iter()
+            .collect();
             let mut core = InterpreterCore::new(config, "text-decoder");
             core.set_gc_stress_interval(stress);
             let result = core.execute(&module).expect("decoder executes");
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
-            let output = result.console_output.iter().map(|entry| entry.message.as_str())
-                .collect::<Vec<_>>().join("\n");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+            let output = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
             assert_eq!(output, expected, "profile={v8}, GC={stress:?}");
         }
     }
@@ -58,7 +70,10 @@ for (const bytes of [[0,216], [0,220], [0,216,65], [0,216,65,0], [0,216,1,216,0,
 "#;
 #[test]
 fn utf16_malformed_input_never_returns_lone_surrogates() {
-    check(UTF16_INVALID, "65533\ntrue\n65533\ntrue\n65533\ntrue\n65533,65\ntrue\n65533,55297,56320\ntrue");
+    check(
+        UTF16_INVALID,
+        "65533\ntrue\n65533\ntrue\n65533\ntrue\n65533,65\ntrue\n65533,55297,56320\ntrue",
+    );
 }
 
 const UTF16_BIG_ENDIAN: &str = r#"
@@ -73,7 +88,10 @@ console.log(kept.charCodeAt(0), kept.length);
 "#;
 #[test]
 fn big_endian_labels_bom_and_supplementary_characters() {
-    check(UTF16_BIG_ENDIAN, "utf-16be 4 65 128512 65279\nutf-16be 4 65 128512 65279\nutf-16be 4 65 128512 65279\n65279 5");
+    check(
+        UTF16_BIG_ENDIAN,
+        "utf-16be 4 65 128512 65279\nutf-16be 4 65 128512 65279\nutf-16be 4 65 128512 65279\n65279 5",
+    );
 }
 
 const UTF16_VIEW: &str = r#"
@@ -102,7 +120,10 @@ console.log(decoder.decode(new Uint8Array([172])).charCodeAt(0));
 "#;
 #[test]
 fn utf8_incomplete_characters_wait_for_later_chunks_or_explicit_flush() {
-    check(UTF8_CHUNKS, "[\"\",\"\",\"€\",\"\",\"\",\"\",\"😀\",\"\"]\n65533\n65533");
+    check(
+        UTF8_CHUNKS,
+        "[\"\",\"\",\"€\",\"\",\"\",\"\",\"😀\",\"\"]\n65533\n65533",
+    );
 }
 
 const UTF16_CHUNKS: &str = r#"
@@ -117,7 +138,10 @@ for (const encoding of ['utf-16le', 'utf-16be']) {
 "#;
 #[test]
 fn utf16_bom_surrogates_and_odd_bytes_cross_arbitrary_chunk_boundaries() {
-    check(UTF16_CHUNKS, "[\"\",\"\",\"\",\"\",\"\",\"😀\",\"\",\"A\",\"\"]\n[\"\",\"\",\"\",\"\",\"\",\"😀\",\"\",\"A\",\"\"]");
+    check(
+        UTF16_CHUNKS,
+        "[\"\",\"\",\"\",\"\",\"\",\"😀\",\"\",\"A\",\"\"]\n[\"\",\"\",\"\",\"\",\"\",\"😀\",\"\",\"A\",\"\"]",
+    );
 }
 
 const BOM_LIFETIME: &str = r#"
@@ -156,7 +180,10 @@ console.log(d.decode().length);
 "#;
 #[test]
 fn fatal_mode_distinguishes_incomplete_from_malformed_and_resets_after_failure() {
-    check(FATAL_STREAM, "0\ntrue\nA\n0\ntrue\nA\n0\ntrue\nA\ntrue\nB\n0");
+    check(
+        FATAL_STREAM,
+        "0\ntrue\nA\n0\ntrue\nA\n0\ntrue\nA\ntrue\nB\n0",
+    );
 }
 
 const MALFORMED_STREAM: &str = r#"
@@ -175,7 +202,10 @@ console.log(d.decode().length, d.decode().length);
 "#;
 #[test]
 fn malformed_prefixes_are_replaced_without_swallowing_following_characters() {
-    check(MALFORMED_STREAM, "65533,65\n65533,65533,65533\n65533,65,66\n65533\n0\n1 0");
+    check(
+        MALFORMED_STREAM,
+        "65533,65\n65533,65533,65533\n65533,65,66\n65533\n0\n1 0",
+    );
 }
 
 const COPIED_CARRY: &str = r#"

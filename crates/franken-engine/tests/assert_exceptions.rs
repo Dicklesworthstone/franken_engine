@@ -241,7 +241,10 @@ const completion = (async function () {
 
 #[test]
 fn public_utility_mutation_cannot_replace_private_assertion_dependencies() {
-    assert_output(PUBLIC_MUTATION, "ERR_INVALID_ARG_TYPE\nERR_ASSERTION throws");
+    assert_output(
+        PUBLIC_MUTATION,
+        "ERR_INVALID_ARG_TYPE\nERR_ASSERTION throws",
+    );
 }
 
 const ASYNC_ORDER: &str = r#"

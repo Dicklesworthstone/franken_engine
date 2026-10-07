@@ -99,7 +99,15 @@ console.log(order.join(','));
 
 #[test]
 fn nested_compositions_abort_with_the_original_reason() {
-    check(NESTED, &["true true true", "true true true", "true", "first,second,third"]);
+    check(
+        NESTED,
+        &[
+            "true true true",
+            "true true true",
+            "true",
+            "first,second,third",
+        ],
+    );
 }
 
 const ROOT_ORDER: &str = r#"
@@ -225,7 +233,16 @@ catch (error) { console.log(error instanceof TypeError); }
 
 #[test]
 fn first_preaborted_reason_wins_but_every_input_is_validated() {
-    check(PREABORTED, &["true true 0", "true true 0", "true true 0", "true true 0", "true"]);
+    check(
+        PREABORTED,
+        &[
+            "true true 0",
+            "true true 0",
+            "true true 0",
+            "true true 0",
+            "true",
+        ],
+    );
 }
 
 const CREATED_DURING_ABORT: &str = r#"
@@ -309,7 +326,10 @@ console.log(log.join(','), calls, b.reason);
 
 #[test]
 fn guest_listener_errors_do_not_skip_dependent_cancellation_or_replace_first_error() {
-    check(NATIVE_SOURCE_ERROR, &["true", "source-after,a,b 0 canceled"]);
+    check(
+        NATIVE_SOURCE_ERROR,
+        &["true", "source-after,a,b 0 canceled"],
+    );
 }
 
 const NATIVE_UNDEFINED_ERROR: &str = r#"
@@ -414,7 +434,10 @@ console.log(log.join(','));
 
 #[test]
 fn unlinking_a_dispatch_snapshot_does_not_remove_its_replacement() {
-    check(NATIVE_REMOVE_DURING_DISPATCH, &["first", "first,replacement", "first,replacement"]);
+    check(
+        NATIVE_REMOVE_DURING_DISPATCH,
+        &["first", "first,replacement", "first,replacement"],
+    );
 }
 
 const SHARED_LISTENER_LIFETIME: &str = r#"

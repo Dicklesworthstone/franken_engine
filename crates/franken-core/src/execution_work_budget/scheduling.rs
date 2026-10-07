@@ -10,7 +10,9 @@ use crate::checkpoint::CancellationToken;
 use crate::ir_contract::Ir3Module;
 
 mod task;
-pub use task::{ExecutionTask, ExecutionTaskControl, ExecutionTaskJoinError, ExecutionTaskStartError};
+pub use task::{
+    ExecutionTask, ExecutionTaskControl, ExecutionTaskJoinError, ExecutionTaskStartError,
+};
 
 impl ExecutionWorkPool {
     /// Reserve work when enqueueing a job, before a native VM is constructed.

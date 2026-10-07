@@ -633,7 +633,9 @@ mod tests {
         fn checkpoint(&self) -> Result<(), crate::host_io::HostIoError> {
             use std::sync::atomic::Ordering;
             self.0
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1))
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                    left.checked_sub(1)
+                })
                 .map(|_| ())
                 .map_err(|_| crate::host_io::HostIoError::Denied {
                     reason: "execution stopped".into(),
@@ -664,7 +666,10 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(error.to_string(), "HOST_IO_EXECUTION_CANCELLED");
         assert!(!revocation.is_revoked());
-        assert_eq!(listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
     }
 
     #[test]
@@ -711,7 +716,10 @@ mod tests {
         let mut fresh = controlled_deadline(20);
         fresh.revocation = Some(revocation);
         assert_eq!(
-            SocketConnector { deadline: fresh }.check_active().unwrap_err().kind(),
+            SocketConnector { deadline: fresh }
+                .check_active()
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::PermissionDenied
         );
     }
@@ -733,7 +741,9 @@ mod tests {
                     let _ = self.entered.send(());
                 }
                 if self.cancelled.load(Ordering::Acquire) {
-                    Err(crate::host_io::HostIoError::Denied { reason: "stop".into() })
+                    Err(crate::host_io::HostIoError::Denied {
+                        reason: "stop".into(),
+                    })
                 } else {
                     Ok(())
                 }
@@ -749,7 +759,9 @@ mod tests {
         });
         let deadline = NetworkDeadline::new(Duration::from_secs(10))
             .unwrap()
-            .with_control(crate::host_io::control::OperationControl::new(control.clone()));
+            .with_control(crate::host_io::control::OperationControl::new(
+                control.clone(),
+            ));
         assert!(deadline.revocation.is_none());
         let worker = std::thread::spawn(move || {
             let mut connector = SocketConnector { deadline };
@@ -758,11 +770,9 @@ mod tests {
             // An empty native poll has no ready socket to wake it. Repeated
             // short waits must retain the same execution and absolute budget.
             loop {
-                if let Err(error) = connector.wait(
-                    &mut pending,
-                    Duration::from_secs(10),
-                    &mut last_error,
-                ) {
+                if let Err(error) =
+                    connector.wait(&mut pending, Duration::from_secs(10), &mut last_error)
+                {
                     let _ = done.send(error.kind());
                     break;
                 }

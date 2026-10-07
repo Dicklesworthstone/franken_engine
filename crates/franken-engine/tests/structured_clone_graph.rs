@@ -116,7 +116,10 @@ for (const mode of ['hide', 'show']) {
 
 #[test]
 fn getters_cannot_change_the_captured_enumerable_key_set() {
-    check(ENUMERABILITY, &["hide {\"first\":1,\"later\":2} 1", "show {\"first\":1} 0"]);
+    check(
+        ENUMERABILITY,
+        &["hide {\"first\":1,\"later\":2} 1", "show {\"first\":1} 0"],
+    );
 }
 
 const DELETE: &str = r#"
@@ -178,7 +181,10 @@ console.log(Object.keys(clone.last).join(','), clone.first.child === clone.last)
 
 #[test]
 fn each_container_takes_its_snapshot_when_first_reached_in_depth_first_order() {
-    check(DEPTH_FIRST, &["first,child,last first,last", "value,late true"]);
+    check(
+        DEPTH_FIRST,
+        &["first,child,last first,last", "value,late true"],
+    );
 }
 
 const MAP_SNAPSHOT: &str = r#"
@@ -267,7 +273,13 @@ console.log(clone.first !== clone.third, clone.third !== inner);
 
 #[test]
 fn nested_clone_and_json_calls_preserve_outer_snapshot_ownership() {
-    check(REENTRANT_CLONE, &["{\"first\":{\"value\":[1,2]},\"second\":{\"other\":3},\"third\":{\"value\":[1,2]}}", "true true"]);
+    check(
+        REENTRANT_CLONE,
+        &[
+            "{\"first\":{\"value\":[1,2]},\"second\":{\"other\":3},\"third\":{\"value\":[1,2]}}",
+            "true true",
+        ],
+    );
 }
 
 const BINARY_GRAPH: &str = r#"

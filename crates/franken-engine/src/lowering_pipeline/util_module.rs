@@ -122,8 +122,7 @@ const TIMERS_PLACEHOLDERS: [(&str, &str); 3] = [
 ];
 
 // A private dependency, not an ambient HostCall or a public util property.
-const ASSERT_PLACEHOLDERS: [(&str, &str); 1] =
-    [("__franken_assert_util", MODULE_BINDING)];
+const ASSERT_PLACEHOLDERS: [(&str, &str); 1] = [("__franken_assert_util", MODULE_BINDING)];
 
 const EVENTS_PLACEHOLDERS: [(&str, &str); 2] = [
     ("__franken_events_constructor", "%EventsConstructorRef"),
@@ -206,8 +205,15 @@ const TIMERS_GLOBALS: [&str; 7] = [
 ];
 
 const STRING_DECODER_GLOBALS: [&str; 9] = [
-    "ArrayBuffer", "Buffer", "DataView", "Object", "Reflect", "String",
-    "TypeError", "Uint8Array", "WeakMap",
+    "ArrayBuffer",
+    "Buffer",
+    "DataView",
+    "Object",
+    "Reflect",
+    "String",
+    "TypeError",
+    "Uint8Array",
+    "WeakMap",
 ];
 
 const EVENTS_GLOBALS: [&str; 11] = [
@@ -225,8 +231,16 @@ const EVENTS_GLOBALS: [&str; 11] = [
 ];
 
 const ASSERT_GLOBALS: [&str; 10] = [
-    "Array", "Error", "Map", "Object", "Reflect", "RegExp", "Set", "String",
-    "TypeError", "Uint8Array",
+    "Array",
+    "Error",
+    "Map",
+    "Object",
+    "Reflect",
+    "RegExp",
+    "Set",
+    "String",
+    "TypeError",
+    "Uint8Array",
 ];
 
 /// `const %util_module = <module>;`, which the rewrite puts first in the
@@ -271,7 +285,11 @@ pub(super) fn rewrite_util_requires(
     for statement in &tree.body {
         if let Statement::Import(import) = statement {
             root.extend(
-                import.clause.binding_names().into_iter().map(str::to_string),
+                import
+                    .clause
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
             );
         }
     }
@@ -411,7 +429,10 @@ impl BuiltinRewriter {
     }
 
     /// Recognize builtin requests only when `require` is the free name.
-    fn builtin_require(&self, expression: &Expression) -> Option<(PureModule, Option<&'static str>)> {
+    fn builtin_require(
+        &self,
+        expression: &Expression,
+    ) -> Option<(PureModule, Option<&'static str>)> {
         if self.scopes.iter().any(|scope| scope.contains("require")) {
             return None;
         }
@@ -480,12 +501,20 @@ impl Walk for BuiltinRewriter {
             }
             Statement::ForIn(for_statement) => {
                 names.extend(
-                    for_statement.binding.binding_names().into_iter().map(str::to_string),
+                    for_statement
+                        .binding
+                        .binding_names()
+                        .into_iter()
+                        .map(str::to_string),
                 );
             }
             Statement::ForOf(for_statement) => {
                 names.extend(
-                    for_statement.binding.binding_names().into_iter().map(str::to_string),
+                    for_statement
+                        .binding
+                        .binding_names()
+                        .into_iter()
+                        .map(str::to_string),
                 );
             }
             // A dynamic object environment can supply its own require.
@@ -648,7 +677,11 @@ mod events_tests {
             "import require from 'other'; require('events');",
             ParseGoal::Module,
         );
-        assert!(rewrite_util_requires(&tree).expect("import binding").is_none());
+        assert!(
+            rewrite_util_requires(&tree)
+                .expect("import binding")
+                .is_none()
+        );
     }
 
     #[test]
@@ -664,10 +697,18 @@ mod events_tests {
             .expect("modules used");
         assert_eq!(rewritten.body.len(), tree.body.len() + 2);
         assert_eq!(
-            rewritten.body.iter().filter(|s| is_module_declaration(s)).count(),
+            rewritten
+                .body
+                .iter()
+                .filter(|s| is_module_declaration(s))
+                .count(),
             2
         );
-        assert!(rewrite_util_requires(&rewritten).expect("second pass").is_none());
+        assert!(
+            rewrite_util_requires(&rewritten)
+                .expect("second pass")
+                .is_none()
+        );
     }
 
     #[test]
@@ -696,8 +737,10 @@ mod events_tests {
         let protected = super::tests::free_names(
             &mut module_source(&globals, PureModule::Events).expect("protected module source"),
         );
-        let mut expected: BTreeSet<String> =
-            EVENTS_PLACEHOLDERS.iter().map(|(_, name)| name.to_string()).collect();
+        let mut expected: BTreeSet<String> = EVENTS_PLACEHOLDERS
+            .iter()
+            .map(|(_, name)| name.to_string())
+            .collect();
         expected.insert("globalThis".to_string());
         assert_eq!(protected, expected);
     }
@@ -730,7 +773,11 @@ mod assert_tests {
             .expect("rewrites")
             .expect("assert used");
         assert_eq!(rewritten.body.len(), tree.body.len() + 2);
-        for (statement, expected) in rewritten.body.iter().zip([MODULE_BINDING, ASSERT_MODULE_BINDING]) {
+        for (statement, expected) in rewritten
+            .body
+            .iter()
+            .zip([MODULE_BINDING, ASSERT_MODULE_BINDING])
+        {
             let Statement::VariableDeclaration(declaration) = statement else {
                 panic!("expected private module declaration");
             };
@@ -739,7 +786,11 @@ mod assert_tests {
                 BindingPattern::Identifier(expected.to_string())
             );
         }
-        assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+        assert!(
+            rewrite_util_requires(&rewritten)
+                .expect("idempotent")
+                .is_none()
+        );
     }
 
     #[test]
@@ -753,7 +804,9 @@ mod assert_tests {
             "require('assert/unknown');",
         ] {
             assert!(
-                rewrite_util_requires(&parse(source)).expect("rewrite").is_none(),
+                rewrite_util_requires(&parse(source))
+                    .expect("rewrite")
+                    .is_none(),
                 "{source}"
             );
         }
@@ -768,7 +821,14 @@ mod assert_tests {
         );
         let mut expected: BTreeSet<String> =
             ASSERT_GLOBALS.iter().map(|name| name.to_string()).collect();
-        expected.extend(["__franken_assert_util", "__franken_util_type_tag", "arguments"].map(str::to_string));
+        expected.extend(
+            [
+                "__franken_assert_util",
+                "__franken_util_type_tag",
+                "arguments",
+            ]
+            .map(str::to_string),
+        );
         assert_eq!(free, expected);
         let names = ASSERT_GLOBALS.iter().map(|name| name.to_string()).collect();
         let protected = super::tests::free_names(
@@ -776,8 +836,15 @@ mod assert_tests {
         );
         assert_eq!(
             protected,
-            [MODULE_BINDING, TYPE_TAG_INTRINSIC, "globalThis", "arguments"]
-                .into_iter().map(str::to_string).collect()
+            [
+                MODULE_BINDING,
+                TYPE_TAG_INTRINSIC,
+                "globalThis",
+                "arguments"
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
         );
     }
 }
@@ -789,7 +856,10 @@ mod timers_tests {
     fn parse(source: &str) -> SyntaxTree {
         CanonicalEs2020Parser
             .parse_with_options(
-                ParserSource { label: "timers-rewrite.js".into(), text: source.into() },
+                ParserSource {
+                    label: "timers-rewrite.js".into(),
+                    text: source.into(),
+                },
                 ParseGoal::Script,
                 &ParserOptions::default(),
             )
@@ -798,11 +868,19 @@ mod timers_tests {
 
     #[test]
     fn timer_aliases_share_one_private_module_and_do_not_schedule_at_load() {
-        let tree = parse("require('timers'); require('node:timers/promises'); require('timers/promises');");
-        let rewritten = rewrite_util_requires(&tree).expect("rewrite").expect("timer module");
+        let tree = parse(
+            "require('timers'); require('node:timers/promises'); require('timers/promises');",
+        );
+        let rewritten = rewrite_util_requires(&tree)
+            .expect("rewrite")
+            .expect("timer module");
         assert_eq!(rewritten.body.len(), tree.body.len() + 1);
         assert!(is_module_declaration(&rewritten.body[0]));
-        assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+        assert!(
+            rewrite_util_requires(&rewritten)
+                .expect("idempotent")
+                .is_none()
+        );
     }
 
     #[test]
@@ -815,7 +893,12 @@ mod timers_tests {
             "const name = 'timers'; require(name);",
             "require('timers/unknown');",
         ] {
-            assert!(rewrite_util_requires(&parse(source)).expect("rewrite").is_none(), "{source}");
+            assert!(
+                rewrite_util_requires(&parse(source))
+                    .expect("rewrite")
+                    .is_none(),
+                "{source}"
+            );
         }
         assert_eq!(intrinsic_capability("__franken_timers_timeout"), None);
         for (_, intrinsic) in TIMERS_PLACEHOLDERS {
@@ -829,7 +912,8 @@ mod timers_tests {
         let free = super::tests::free_names(
             &mut parse_module_source(PureModule::Timers).expect("timer source parses"),
         );
-        let mut expected: BTreeSet<String> = TIMERS_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let mut expected: BTreeSet<String> =
+            TIMERS_GLOBALS.iter().map(|name| name.to_string()).collect();
         expected.extend(TIMERS_PLACEHOLDERS.iter().map(|(name, _)| name.to_string()));
         expected.insert("arguments".to_string());
         assert_eq!(free, expected);
@@ -837,7 +921,10 @@ mod timers_tests {
         let protected = super::tests::free_names(
             &mut module_source(&names, PureModule::Timers).expect("protected source"),
         );
-        let mut expected: BTreeSet<String> = TIMERS_PLACEHOLDERS.iter().map(|(_, name)| name.to_string()).collect();
+        let mut expected: BTreeSet<String> = TIMERS_PLACEHOLDERS
+            .iter()
+            .map(|(_, name)| name.to_string())
+            .collect();
         expected.extend(["globalThis", "arguments"].map(str::to_string));
         assert_eq!(protected, expected);
     }
@@ -850,7 +937,10 @@ mod string_decoder_tests {
     fn parse(source: &str, goal: ParseGoal) -> SyntaxTree {
         CanonicalEs2020Parser
             .parse_with_options(
-                ParserSource { label: "string-decoder-rewrite.js".into(), text: source.into() },
+                ParserSource {
+                    label: "string-decoder-rewrite.js".into(),
+                    text: source.into(),
+                },
                 goal,
                 &ParserOptions::default(),
             )
@@ -864,10 +954,16 @@ mod string_decoder_tests {
              function nested() { return require('string_decoder'); }",
             ParseGoal::Script,
         );
-        let rewritten = rewrite_util_requires(&tree).expect("rewrite").expect("decoder used");
+        let rewritten = rewrite_util_requires(&tree)
+            .expect("rewrite")
+            .expect("decoder used");
         assert_eq!(rewritten.body.len(), tree.body.len() + 1);
         assert!(is_module_declaration(&rewritten.body[0]));
-        assert!(rewrite_util_requires(&rewritten).expect("idempotent").is_none());
+        assert!(
+            rewrite_util_requires(&rewritten)
+                .expect("idempotent")
+                .is_none()
+        );
     }
 
     #[test]
@@ -880,11 +976,22 @@ mod string_decoder_tests {
             "const name = 'string_decoder'; require(name);",
             "require('string_decoder/unknown');",
         ] {
-            assert!(rewrite_util_requires(&parse(source, ParseGoal::Script))
-                .expect("rewrite").is_none(), "{source}");
+            assert!(
+                rewrite_util_requires(&parse(source, ParseGoal::Script))
+                    .expect("rewrite")
+                    .is_none(),
+                "{source}"
+            );
         }
-        let tree = parse("import require from 'other'; require('string_decoder');", ParseGoal::Module);
-        assert!(rewrite_util_requires(&tree).expect("import shadow").is_none());
+        let tree = parse(
+            "import require from 'other'; require('string_decoder');",
+            ParseGoal::Module,
+        );
+        assert!(
+            rewrite_util_requires(&tree)
+                .expect("import shadow")
+                .is_none()
+        );
     }
 
     #[test]
@@ -892,7 +999,10 @@ mod string_decoder_tests {
         let free = super::tests::free_names(
             &mut parse_module_source(PureModule::StringDecoder).expect("shipped source parses"),
         );
-        let names: BTreeSet<String> = STRING_DECODER_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let names: BTreeSet<String> = STRING_DECODER_GLOBALS
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
         assert_eq!(free, names);
         let protected = super::tests::free_names(
             &mut module_source(&names, PureModule::StringDecoder).expect("protected decoder"),

@@ -2,11 +2,18 @@ use super::*;
 use crate::host_io::{DenyAllHostIo, HostIoResponse};
 
 fn limits(requests: u64, request_bytes: u64, max_in_flight: usize) -> HostIoBudgetLimits {
-    HostIoBudgetLimits { requests, request_bytes, max_in_flight }
+    HostIoBudgetLimits {
+        requests,
+        request_bytes,
+        max_in_flight,
+    }
 }
 
 fn request() -> HostIoRequest {
-    HostIoRequest::FsWrite { path: "a".into(), data: vec![7] }
+    HostIoRequest::FsWrite {
+        path: "a".into(),
+        data: vec![7],
+    }
 }
 
 #[test]
@@ -16,8 +23,13 @@ fn delegated_work_is_spendable_after_the_ancestor_balance_is_exhausted() {
     let second = root.partition(limits(2, 4, 1)).unwrap();
     assert_eq!(root.snapshot().unwrap().remaining_requests, 0);
     for child in [&first, &second] {
-        for _ in 0..2 { drop(child.admit(&request()).unwrap()); }
-        assert!(matches!(child.admit(&request()), Err(HostIoBudgetError::RequestsExhausted)));
+        for _ in 0..2 {
+            drop(child.admit(&request()).unwrap());
+        }
+        assert!(matches!(
+            child.admit(&request()),
+            Err(HostIoBudgetError::RequestsExhausted)
+        ));
         assert_eq!(child.snapshot().unwrap().remaining_request_bytes, 0);
     }
     assert_eq!(root.snapshot().unwrap().remaining_request_bytes, 0);
@@ -57,7 +69,10 @@ fn global_concurrency_is_not_multiplied_by_tenant_partitions() {
     let admission = first.admit(&request()).unwrap();
     assert_eq!(root.snapshot().unwrap().in_flight, 1);
     let before = second.snapshot().unwrap();
-    assert!(matches!(second.admit(&request()), Err(HostIoBudgetError::TooManyInFlight)));
+    assert!(matches!(
+        second.admit(&request()),
+        Err(HostIoBudgetError::TooManyInFlight)
+    ));
     assert_eq!(second.snapshot().unwrap(), before);
     drop(admission);
     let admission = second.admit(&request()).unwrap();
@@ -90,9 +105,15 @@ fn root_revocation_stops_every_prepaid_descendant() {
     drop(root);
     drop(tenant);
     assert!(cell.is_revoked());
-    assert!(matches!(cell.admit(&request()), Err(HostIoBudgetError::Revoked)));
+    assert!(matches!(
+        cell.admit(&request()),
+        Err(HostIoBudgetError::Revoked)
+    ));
     assert_eq!(cell.snapshot().unwrap().remaining_requests, 2);
-    assert!(matches!(cell.partition(limits(0, 0, 0)), Err(HostIoBudgetError::Revoked)));
+    assert!(matches!(
+        cell.partition(limits(0, 0, 0)),
+        Err(HostIoBudgetError::Revoked)
+    ));
 }
 
 #[test]
@@ -113,11 +134,18 @@ fn ancestor_poison_is_fail_closed_even_when_the_child_balance_is_healthy() {
     let root = HostIoWorkBudget::new(limits(1, 2, 1));
     let child = root.partition(limits(1, 2, 1)).unwrap();
     let shared = root.shared.clone();
-    assert!(std::thread::spawn(move || {
-        let _guard = shared.balance.lock().unwrap();
-        panic!("ancestor accounting failed");
-    }).join().is_err());
-    assert!(matches!(child.admit(&request()), Err(HostIoBudgetError::Poisoned)));
+    assert!(
+        std::thread::spawn(move || {
+            let _guard = shared.balance.lock().unwrap();
+            panic!("ancestor accounting failed");
+        })
+        .join()
+        .is_err()
+    );
+    assert!(matches!(
+        child.admit(&request()),
+        Err(HostIoBudgetError::Poisoned)
+    ));
     assert_eq!(child.snapshot().unwrap().remaining_requests, 1);
 }
 
@@ -128,7 +156,10 @@ fn maximum_depth_is_bounded_even_for_empty_partitions_and_debug_output() {
         current = current.partition(limits(0, 0, 1)).unwrap();
     }
     let before = current.snapshot().unwrap();
-    assert!(matches!(current.partition(limits(0, 0, 1)), Err(HostIoBudgetError::HierarchyDepthExceeded)));
+    assert!(matches!(
+        current.partition(limits(0, 0, 1)),
+        Err(HostIoBudgetError::HierarchyDepthExceeded)
+    ));
     assert_eq!(current.snapshot().unwrap(), before);
     assert!(format!("{current:?}").len() < 256);
 }
@@ -139,7 +170,9 @@ fn already_admitted_child_observes_live_ancestor_revocation() {
     let child = root.partition(limits(1, 2, 1)).unwrap();
     let admission = child.admit(&request()).unwrap();
     let control = BudgetControl {
-        budget: child, supervisor: Arc::new(UnrestrictedHostIoControl), refused: AtomicBool::new(false),
+        budget: child,
+        supervisor: Arc::new(UnrestrictedHostIoControl),
+        refused: AtomicBool::new(false),
     };
     assert!(control.checkpoint().is_ok());
     root.revoke();
@@ -151,7 +184,9 @@ fn already_admitted_child_observes_live_ancestor_revocation() {
 #[derive(Debug)]
 struct Successful;
 impl HostIoProvider for Successful {
-    fn name(&self) -> &str { "successful" }
+    fn name(&self) -> &str {
+        "successful"
+    }
     fn perform(&self, _: &HostIoRequest, _: &[HostIoCapability]) -> HostIoOutcome {
         Ok(HostIoResponse::FsWrite { bytes_written: 1 })
     }
@@ -162,7 +197,11 @@ fn live_provider_dispatch_uses_prepaid_tenant_credits_without_double_charging() 
     let root = HostIoWorkBudget::new(limits(1, 2, 1));
     let child = root.partition(limits(1, 2, 1)).unwrap();
     let wrapped = BudgetedHostIo::new(Arc::new(Successful), child.clone());
-    assert!(wrapped.perform(&request(), &[HostIoCapability::FsWrite]).is_ok());
+    assert!(
+        wrapped
+            .perform(&request(), &[HostIoCapability::FsWrite])
+            .is_ok()
+    );
     assert_eq!(child.snapshot().unwrap().remaining_requests, 0);
     assert_eq!(root.snapshot().unwrap().in_flight, 0);
 }
@@ -172,7 +211,11 @@ fn denial_and_drop_do_not_refund_delegated_allowance() {
     let root = HostIoWorkBudget::new(limits(2, 4, 1));
     let child = root.partition(limits(2, 4, 1)).unwrap();
     let wrapped = BudgetedHostIo::new(Arc::new(DenyAllHostIo), child);
-    assert!(wrapped.perform(&request(), &[HostIoCapability::FsWrite]).is_err());
+    assert!(
+        wrapped
+            .perform(&request(), &[HostIoCapability::FsWrite])
+            .is_err()
+    );
     drop(wrapped);
     assert_eq!(root.snapshot().unwrap().remaining_requests, 0);
     assert_eq!(root.snapshot().unwrap().remaining_request_bytes, 0);

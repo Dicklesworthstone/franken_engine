@@ -1,6 +1,8 @@
 use super::*;
 use crate::host_io::budget::{HostIoBudgetError, HostIoBudgetLimits};
-use crate::host_io::{HostIoCapability, HostIoError, HostIoProvider, HostIoRequest, SandboxedHostIo};
+use crate::host_io::{
+    HostIoCapability, HostIoError, HostIoProvider, HostIoRequest, SandboxedHostIo,
+};
 use std::sync::{Arc, Barrier, mpsc};
 
 fn budget(requests: u64, concurrency: usize) -> HostIoWorkBudget {
@@ -21,12 +23,21 @@ fn idle_close_is_terminal_idempotent_and_does_not_spend_credits() {
     let before = pool.snapshot().unwrap();
     let closed = pool.revoke_and_drain(Duration::ZERO).unwrap();
     assert_eq!(closed.remaining_requests, before.remaining_requests);
-    assert_eq!(closed.remaining_request_bytes, before.remaining_request_bytes);
+    assert_eq!(
+        closed.remaining_request_bytes,
+        before.remaining_request_bytes
+    );
     assert_eq!(closed.in_flight, 0);
     assert!(closed.revoked);
     assert_eq!(pool.revoke_and_drain(Duration::ZERO).unwrap(), closed);
-    assert!(matches!(pool.admit(&request()), Err(HostIoBudgetError::Revoked)));
-    assert!(matches!(pool.partition(pool.limits()), Err(HostIoBudgetError::Revoked)));
+    assert!(matches!(
+        pool.admit(&request()),
+        Err(HostIoBudgetError::Revoked)
+    ));
+    assert!(matches!(
+        pool.partition(pool.limits()),
+        Err(HostIoBudgetError::Revoked)
+    ));
 }
 
 #[test]
@@ -38,7 +49,10 @@ fn timeout_leaves_scope_revoked_and_retry_waits_for_the_original_call() {
         Err(HostIoDrainError::TimedOut { in_flight: 1 })
     );
     assert!(pool.is_revoked());
-    assert!(matches!(pool.admit(&request()), Err(HostIoBudgetError::Revoked)));
+    assert!(matches!(
+        pool.admit(&request()),
+        Err(HostIoBudgetError::Revoked)
+    ));
     drop(permit);
     let closed = pool.revoke_and_drain(Duration::ZERO).unwrap();
     assert_eq!(closed.remaining_requests, 3);
@@ -60,13 +74,22 @@ fn root_waits_for_prepaid_grandchildren_not_just_direct_calls() {
     drop(permit);
     assert_eq!(root.revoke_and_drain(Duration::ZERO).unwrap().in_flight, 0);
     assert_eq!(child.revoke_and_drain(Duration::ZERO).unwrap().in_flight, 0);
-    assert_eq!(leaf.revoke_and_drain(Duration::ZERO).unwrap().remaining_requests, 3);
+    assert_eq!(
+        leaf.revoke_and_drain(Duration::ZERO)
+            .unwrap()
+            .remaining_requests,
+        3
+    );
 }
 
 #[test]
 fn closing_one_tenant_does_not_wait_for_or_revoke_a_sibling() {
     let root = budget(4, 2);
-    let limits = HostIoBudgetLimits { requests: 1, request_bytes: 1, max_in_flight: 1 };
+    let limits = HostIoBudgetLimits {
+        requests: 1,
+        request_bytes: 1,
+        max_in_flight: 1,
+    };
     let first = root.partition(limits).unwrap();
     let second = root.partition(limits).unwrap();
     let permit = second.admit(&request()).unwrap();
@@ -128,7 +151,13 @@ fn unwinding_releases_every_ancestor_for_drain_without_refund() {
     });
     assert!(result.is_err());
     assert!(child.is_revoked());
-    assert_eq!(child.revoke_and_drain(Duration::ZERO).unwrap().remaining_requests, 1);
+    assert_eq!(
+        child
+            .revoke_and_drain(Duration::ZERO)
+            .unwrap()
+            .remaining_requests,
+        1
+    );
     assert_eq!(root.revoke_and_drain(Duration::ZERO).unwrap().in_flight, 0);
 }
 
@@ -140,8 +169,14 @@ fn poisoned_scope_or_ancestor_never_yields_a_successful_drain() {
         let _lock = root.shared.balance.lock().unwrap();
         panic!("poison accounting");
     });
-    assert_eq!(root.revoke_and_drain(Duration::ZERO), Err(HostIoDrainError::AccountingPoisoned));
-    assert_eq!(child.revoke_and_drain(Duration::ZERO), Err(HostIoDrainError::AccountingPoisoned));
+    assert_eq!(
+        root.revoke_and_drain(Duration::ZERO),
+        Err(HostIoDrainError::AccountingPoisoned)
+    );
+    assert_eq!(
+        child.revoke_and_drain(Duration::ZERO),
+        Err(HostIoDrainError::AccountingPoisoned)
+    );
     assert!(root.is_revoked());
     assert!(child.is_revoked());
 }
@@ -149,9 +184,15 @@ fn poisoned_scope_or_ancestor_never_yields_a_successful_drain() {
 #[test]
 fn impossible_deadline_still_revokes_the_scope() {
     let pool = budget(2, 1);
-    assert_eq!(pool.revoke_and_drain(Duration::MAX), Err(HostIoDrainError::DeadlineOverflow));
+    assert_eq!(
+        pool.revoke_and_drain(Duration::MAX),
+        Err(HostIoDrainError::DeadlineOverflow)
+    );
     assert!(pool.is_revoked());
-    assert!(matches!(pool.admit(&request()), Err(HostIoBudgetError::Revoked)));
+    assert!(matches!(
+        pool.admit(&request()),
+        Err(HostIoBudgetError::Revoked)
+    ));
 }
 
 #[test]
@@ -185,7 +226,8 @@ impl Scratch {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "fe-host-io-drain-{}-{sequence}", std::process::id()
+            "fe-host-io-drain-{}-{sequence}",
+            std::process::id()
         ));
         std::fs::create_dir(&path).unwrap();
         Self(path)
@@ -203,12 +245,25 @@ impl Drop for Scratch {
 fn a_drained_native_provider_cannot_mutate_the_filesystem() {
     let scratch = Scratch::new();
     let pool = budget(2, 1);
-    let provider = SandboxedHostIo::with_root(&scratch.0).unwrap().with_work_budget(pool.clone());
-    let write = HostIoRequest::FsWrite { path: "target".into(), data: b"before".to_vec() };
-    provider.perform(&write, &[HostIoCapability::FsWrite]).unwrap();
+    let provider = SandboxedHostIo::with_root(&scratch.0)
+        .unwrap()
+        .with_work_budget(pool.clone());
+    let write = HostIoRequest::FsWrite {
+        path: "target".into(),
+        data: b"before".to_vec(),
+    };
+    provider
+        .perform(&write, &[HostIoCapability::FsWrite])
+        .unwrap();
     let closed = pool.revoke_and_drain(Duration::ZERO).unwrap();
-    let write = HostIoRequest::FsWrite { path: "target".into(), data: b"after".to_vec() };
-    assert!(matches!(provider.perform(&write, &[HostIoCapability::FsWrite]), Err(HostIoError::Denied { .. })));
+    let write = HostIoRequest::FsWrite {
+        path: "target".into(),
+        data: b"after".to_vec(),
+    };
+    assert!(matches!(
+        provider.perform(&write, &[HostIoCapability::FsWrite]),
+        Err(HostIoError::Denied { .. })
+    ));
     assert_eq!(std::fs::read(scratch.0.join("target")).unwrap(), b"before");
     assert_eq!(pool.snapshot().unwrap(), closed);
 }
@@ -244,7 +299,9 @@ fn root_drain_cancels_and_joins_a_real_descendant_network_read() {
                 Err(error) => panic!("accept: {error}"),
             }
         };
-        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
         let _ = accepted_tx.send(());
         // No response is sent. Only real cancellation/close can end the
         // client's native read before its operation deadline.
@@ -253,7 +310,10 @@ fn root_drain_cancels_and_joins_a_real_descendant_network_read() {
     });
     let worker = std::thread::spawn(move || {
         provider.perform(
-            &HostIoRequest::NetworkRecv { endpoint: address.to_string(), max_len: 16 },
+            &HostIoRequest::NetworkRecv {
+                endpoint: address.to_string(),
+                max_len: 16,
+            },
             &[HostIoCapability::NetworkRecv],
         )
     });
@@ -264,7 +324,10 @@ fn root_drain_cancels_and_joins_a_real_descendant_network_read() {
     assert!(connected.is_ok());
     assert!(drain.is_ok(), "cooperative network drain failed: {drain:?}");
     assert!(matches!(outcome, Err(HostIoError::Denied { .. })));
-    assert!(matches!(peer_close, Ok(0)), "native socket was not closed: {peer_close:?}");
+    assert!(
+        matches!(peer_close, Ok(0)),
+        "native socket was not closed: {peer_close:?}"
+    );
     assert_eq!(root.snapshot().unwrap().in_flight, 0);
     assert_eq!(child.snapshot().unwrap().in_flight, 0);
     assert_eq!(child.snapshot().unwrap().remaining_requests, 1);

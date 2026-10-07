@@ -182,7 +182,10 @@ console.log(Map, Object, Promise);
 
 #[test]
 fn guest_require_and_global_bindings_are_not_captured() {
-    assert_output(SHADOWING, "local:assert\nloop:assert/strict\nguest-map guest-object guest-promise");
+    assert_output(
+        SHADOWING,
+        "local:assert\nloop:assert/strict\nguest-map guest-object guest-promise",
+    );
 }
 
 const PRIVATE_COMPARISON: &str = r#"

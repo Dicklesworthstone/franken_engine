@@ -24,7 +24,11 @@ fn assert_output(source: &str, expected: &str) {
         .expect("regression source parses");
     let module = lower_ir0_to_ir3(
         &Ir0Module::from_syntax_tree(tree, "util-deep-strict-equal.js"),
-        &LoweringContext::new("util-equal-trace", "util-equal-decision", "util-equal-policy"),
+        &LoweringContext::new(
+            "util-equal-trace",
+            "util-equal-decision",
+            "util-equal-policy",
+        ),
     )
     .expect("util comparison lowers without filesystem authority")
     .ir3;

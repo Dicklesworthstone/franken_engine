@@ -55,9 +55,10 @@ struct CloneState {
 
 impl CloneState {
     fn reserve(&mut self, core: &mut InterpreterCore, bytes: u64) -> Result<(), InterpreterError> {
-        let total = self.charged.checked_add(bytes).ok_or_else(|| {
-            core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
-        })?;
+        let total = self
+            .charged
+            .checked_add(bytes)
+            .ok_or_else(|| core.memory_budget_error(u64::MAX, core.heap_object_count_u32()))?;
         core.json_reserve_temporary(bytes)?;
         self.charged = total;
         Ok(())
@@ -583,24 +584,28 @@ impl InterpreterCore {
         }
         let is_map = type_tag == "Map";
         let charged = self.heap.get(storage_id.0 as usize).map_or(0, |storage| {
-            storage.properties.iter().fold(0_u64, |bytes, (repr, value)| {
-                // A decoded key's UTF-16 payload fits within twice its stored
-                // representation length. The pair includes its Value headers.
-                let key_bytes = if is_map {
-                    (repr.len() as u64).saturating_mul(2)
-                } else {
-                    0
-                };
-                bytes.saturating_add(std::mem::size_of::<(Value, Value)>() as u64)
-                    .saturating_add(key_bytes)
-                    .saturating_add(Self::estimate_value_bytes(value))
-            })
+            storage
+                .properties
+                .iter()
+                .fold(0_u64, |bytes, (repr, value)| {
+                    // A decoded key's UTF-16 payload fits within twice its stored
+                    // representation length. The pair includes its Value headers.
+                    let key_bytes = if is_map {
+                        (repr.len() as u64).saturating_mul(2)
+                    } else {
+                        0
+                    };
+                    bytes
+                        .saturating_add(std::mem::size_of::<(Value, Value)>() as u64)
+                        .saturating_add(key_bytes)
+                        .saturating_add(Self::estimate_value_bytes(value))
+                })
         });
         state.reserve(self, charged)?;
         let mut entries = Vec::new();
-        entries.try_reserve_exact(count).map_err(|_| {
-            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
-        })?;
+        entries
+            .try_reserve_exact(count)
+            .map_err(|_| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
         if let Some(storage) = self.heap.get(storage_id.0 as usize) {
             for (repr, value) in storage.properties.iter() {
                 let key = if is_map {
@@ -754,7 +759,10 @@ mod resource_tests {
             ));
             assert!(core.pending_exception.is_none(), "not a guest clone error");
             assert_eq!(core.json_parse_temporary_bytes, 0);
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
             core.config.instruction_budget = 1_000_000;
             assert!(matches!(
                 clone_value(&mut core, Value::Object(source)),
@@ -772,13 +780,23 @@ mod resource_tests {
             let before = core.estimated_memory_bytes();
             core.config.max_total_memory_bytes = before;
             let mut state = state();
-            let (tag, slot) = if is_map { ("Map", "__entries") } else { ("Set", "__values") };
+            let (tag, slot) = if is_map {
+                ("Map", "__entries")
+            } else {
+                ("Set", "__values")
+            };
             let result = core.structured_clone_collection_entries(source, tag, slot, &mut state);
-            assert!(matches!(result, Err(InterpreterError::MemoryBudgetExceeded { .. })));
+            assert!(matches!(
+                result,
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
             assert_eq!(state.charged, 0, "a refused snapshot owns no charge");
             assert_eq!(core.json_parse_temporary_bytes, 0);
             assert_eq!(core.estimated_memory_bytes(), before);
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
         }
     }
 
@@ -804,7 +822,10 @@ mod resource_tests {
         assert!(clone_value(&mut core, Value::Object(source)).is_ok());
         assert_eq!(core.json_parse_temporary_bytes, 37);
         core.json_release_temporary(37);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -812,29 +833,46 @@ mod resource_tests {
         let mut core = runtime();
         let map = collection(&mut core, true, 64);
         let set = collection(&mut core, false, 64);
-        let source = core.alloc_array_from_values(&[Value::Object(map), Value::Object(set)]).unwrap();
+        let source = core
+            .alloc_array_from_values(&[Value::Object(map), Value::Object(set)])
+            .unwrap();
         let mut state = state();
-        assert!(core.structured_clone_walk(None, Value::Object(source), &mut state).is_ok());
+        assert!(
+            core.structured_clone_walk(None, Value::Object(source), &mut state)
+                .is_ok()
+        );
         assert_eq!(state.memory.len(), 3);
         assert_eq!(state.charged, 3 * CLONE_MEMO_ENTRY_BYTES);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
         state.memory.clear();
         let charged = state.charged;
         state.release(&mut core, charged);
         assert_eq!(core.json_parse_temporary_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
     fn shared_objects_are_memoized_and_charged_once() {
         let mut core = runtime();
-        let shared = core.alloc_object_with_properties(&[("n", Value::Int(7))]).unwrap();
+        let shared = core
+            .alloc_object_with_properties(&[("n", Value::Int(7))])
+            .unwrap();
         let source = core.alloc_empty_map().unwrap().0;
         for n in 0..32 {
-            core.map_collection_set(source, Value::Int(n), Value::Object(shared)).unwrap();
+            core.map_collection_set(source, Value::Int(n), Value::Object(shared))
+                .unwrap();
         }
         let mut state = state();
-        assert!(core.structured_clone_walk(None, Value::Object(source), &mut state).is_ok());
+        assert!(
+            core.structured_clone_walk(None, Value::Object(source), &mut state)
+                .is_ok()
+        );
         assert_eq!(state.memory.len(), 2);
         assert_eq!(state.charged, 2 * CLONE_MEMO_ENTRY_BYTES);
         state.memory.clear();
@@ -847,7 +885,8 @@ mod resource_tests {
     fn binary_copy_refusal_does_not_allocate_an_unbudgeted_payload() {
         let mut core = runtime();
         let source = core.alloc_array_buffer_object(1024).unwrap();
-        core.with_array_buffer_bytes_mut(source, |bytes| bytes.fill(0xA5)).unwrap();
+        core.with_array_buffer_bytes_mut(source, |bytes| bytes.fill(0xA5))
+            .unwrap();
         core.set_register(0, Value::Object(source)).unwrap();
         let heap_before = core.heap_size();
         let before = core.estimated_memory_bytes();
@@ -857,18 +896,25 @@ mod resource_tests {
             Err(InterpreterError::MemoryBudgetExceeded { .. })
         ));
         assert_eq!(core.heap_size(), heap_before);
-        assert!(core.with_array_buffer_bytes(source, |bytes| bytes.iter().all(|byte| *byte == 0xA5)).unwrap());
+        assert!(
+            core.with_array_buffer_bytes(source, |bytes| bytes.iter().all(|byte| *byte == 0xA5))
+                .unwrap()
+        );
         assert!(core.pending_exception.is_none());
         assert_eq!(core.json_parse_temporary_bytes, 0);
         assert_eq!(core.estimated_memory_bytes(), before);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
     fn failed_clone_drops_snapshots_without_releasing_an_outer_reservation() {
         let mut core = runtime();
         let source = core.alloc_empty_map().unwrap().0;
-        core.map_collection_set(source, Value::Int(1), Value::Symbol(SymbolId(1))).unwrap();
+        core.map_collection_set(source, Value::Int(1), Value::Symbol(SymbolId(1)))
+            .unwrap();
         core.json_reserve_temporary(37).unwrap();
         assert!(matches!(
             clone_value(&mut core, Value::Object(source)),
@@ -877,7 +923,10 @@ mod resource_tests {
         assert!(core.pending_exception.is_some());
         assert_eq!(core.json_parse_temporary_bytes, 37);
         core.json_release_temporary(37);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -888,10 +937,16 @@ mod resource_tests {
         token.cancel();
         core.config.cancellation_token = Some(token);
         let before = core.heap_size();
-        assert_eq!(clone_value(&mut core, Value::Object(source)), Err(InterpreterError::Cancelled));
+        assert_eq!(
+            clone_value(&mut core, Value::Object(source)),
+            Err(InterpreterError::Cancelled)
+        );
         assert_eq!(core.heap_size(), before);
         assert!(core.pending_exception.is_none());
         assert_eq!(core.json_parse_temporary_bytes, 0);
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 }

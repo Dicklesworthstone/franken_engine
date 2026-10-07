@@ -212,10 +212,16 @@ fn node_events_named_import_is_elided_to_a_builtin_capability() {
         &LoweringContext::new("events-once-gate", "bd-305gi", "builtin-only"),
     )
     .expect("lower the native events.once wrapper");
-    assert!(output.ir3.instructions.iter().any(|instruction| matches!(instruction,
-        Ir3Instruction::HostCall { capability, args, .. }
-            if capability.0 == "builtin:EventsOnce" && args.count == 2
-    )));
+    assert!(
+        output
+            .ir3
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction,
+                Ir3Instruction::HostCall { capability, args, .. }
+                    if capability.0 == "builtin:EventsOnce" && args.count == 2
+            ))
+    );
     let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
@@ -224,7 +230,10 @@ fn node_events_named_import_is_elided_to_a_builtin_capability() {
     let error = InterpreterCore::new(config, "events-once-denied")
         .execute(&output.ir3)
         .expect_err("the module must not bypass the missing Builtin grant");
-    assert!(format!("{error:?}").to_lowercase().contains("capability"), "{error}");
+    assert!(
+        format!("{error:?}").to_lowercase().contains("capability"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -260,13 +269,15 @@ fn first_class_events_once_shapes_execute_and_dynamic_requires_stay_refused() {
     ] {
         assert_eq!(eval_console(source), "function");
     }
-    assert_eq!(eval_console(
-        "const events = require('events'); const e = new events(); \
+    assert_eq!(
+        eval_console(
+            "const events = require('events'); const e = new events(); \
          events['once'](e, 'x').then((values) => console.log(values[0])); e.emit('x', 7);"
-    ), "7");
-    let error = eval_error(
-        "const name = 'events'; const events = require(name); console.log(events);",
+        ),
+        "7"
     );
+    let error =
+        eval_error("const name = 'events'; const events = require(name); console.log(events);");
     assert!(error.contains("ambient authority violation"), "{error}");
 
     {

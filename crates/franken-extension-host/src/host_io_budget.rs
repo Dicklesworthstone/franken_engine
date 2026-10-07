@@ -159,7 +159,11 @@ impl HostIoWorkBudget {
 
     pub fn is_revoked(&self) -> bool {
         self.shared.revoked.load(Ordering::Acquire)
-            || self.shared.ancestors.iter().any(|scope| scope.revoked.load(Ordering::Acquire))
+            || self
+                .shared
+                .ancestors
+                .iter()
+                .any(|scope| scope.revoked.load(Ordering::Acquire))
     }
 
     /// Permanently delegate work credits to a tenant or cell. Siblings cannot
@@ -193,7 +197,11 @@ impl HostIoWorkBudget {
                 ancestors: ancestors.into(),
             }),
         };
-        let mut balance = self.shared.balance.lock().map_err(|_| HostIoBudgetError::Poisoned)?;
+        let mut balance = self
+            .shared
+            .balance
+            .lock()
+            .map_err(|_| HostIoBudgetError::Poisoned)?;
         self.check_active()?;
         if limits.requests > balance.requests {
             return Err(HostIoBudgetError::RequestsExhausted);
@@ -230,7 +238,11 @@ impl HostIoWorkBudget {
         if self.is_revoked() {
             Err(HostIoBudgetError::Revoked)
         } else if self.shared.balance.is_poisoned()
-            || self.shared.ancestors.iter().any(|scope| scope.balance.is_poisoned())
+            || self
+                .shared
+                .ancestors
+                .iter()
+                .any(|scope| scope.balance.is_poisoned())
         {
             Err(HostIoBudgetError::Poisoned)
         } else {
@@ -248,8 +260,16 @@ impl HostIoWorkBudget {
             budget: self.clone(),
             scopes: Vec::with_capacity(self.shared.ancestors.len() + 1),
         };
-        for scope in self.shared.ancestors.iter().chain(std::iter::once(&self.shared)) {
-            let mut balance = scope.balance.lock().map_err(|_| HostIoBudgetError::Poisoned)?;
+        for scope in self
+            .shared
+            .ancestors
+            .iter()
+            .chain(std::iter::once(&self.shared))
+        {
+            let mut balance = scope
+                .balance
+                .lock()
+                .map_err(|_| HostIoBudgetError::Poisoned)?;
             self.check_active()?;
             if balance.in_flight >= scope.limits.max_in_flight {
                 return Err(HostIoBudgetError::TooManyInFlight);
@@ -259,7 +279,11 @@ impl HostIoWorkBudget {
             // Never hold two scope locks at once, and never hold one across
             // provider dispatch. Partial acquisition rolls back through Drop.
         }
-        let mut balance = self.shared.balance.lock().map_err(|_| HostIoBudgetError::Poisoned)?;
+        let mut balance = self
+            .shared
+            .balance
+            .lock()
+            .map_err(|_| HostIoBudgetError::Poisoned)?;
         self.check_active()?;
         if balance.requests == 0 {
             return Err(HostIoBudgetError::RequestsExhausted);
@@ -288,7 +312,9 @@ impl Drop for Admission {
             self.budget.revoke();
         }
         for scope in self.scopes.iter().rev() {
-            let mut balance = scope.balance.lock()
+            let mut balance = scope
+                .balance
+                .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             // Poison recovery releases capacity only. New admission remains
             // fail-closed and committed/delegated work is never refunded.
@@ -368,7 +394,9 @@ struct BudgetControl {
 
 impl HostIoControl for BudgetControl {
     fn checkpoint(&self) -> Result<(), HostIoError> {
-        self.budget.check_active().map_err(HostIoBudgetError::host_error)?;
+        self.budget
+            .check_active()
+            .map_err(HostIoBudgetError::host_error)?;
         if !self.refused.load(Ordering::Acquire) && self.supervisor.checkpoint().is_err() {
             self.refused.store(true, Ordering::Release);
         }
@@ -406,7 +434,9 @@ impl HostIoProvider for BudgetedHostIo {
     ) -> HostIoOutcome {
         let required = request.required_capability();
         if !granted.contains(&required) {
-            return Err(HostIoError::CapabilityMissing { capability: required });
+            return Err(HostIoError::CapabilityMissing {
+                capability: required,
+            });
         }
         let control = Arc::new(BudgetControl {
             budget: self.budget.clone(),
@@ -414,12 +444,17 @@ impl HostIoProvider for BudgetedHostIo {
             refused: AtomicBool::new(false),
         });
         control.checkpoint()?;
-        let _admission = self.budget.admit(request).map_err(HostIoBudgetError::host_error)?;
+        let _admission = self
+            .budget
+            .admit(request)
+            .map_err(HostIoBudgetError::host_error)?;
         // Close a revocation race after debit; never refund the reservation.
         control.checkpoint()?;
         // Never drop live control by falling back to inner.perform. The trait's
         // default refuses uncontrolled network implementations for this reason.
-        let outcome = self.inner.perform_controlled(request, granted, control.clone());
+        let outcome = self
+            .inner
+            .perform_controlled(request, granted, control.clone());
         control.checkpoint()?;
         outcome
     }

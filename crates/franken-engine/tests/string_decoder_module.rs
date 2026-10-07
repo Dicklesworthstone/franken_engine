@@ -42,10 +42,19 @@ fn check(source: &str, expected: &str, goal: ParseGoal) {
             .collect();
             let mut core = InterpreterCore::new(config, "string-decoder");
             core.set_gc_stress_interval(stress);
-            let result = core.execute(&lowered.ir3).expect("decoder fixture executes");
-            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
-            let actual = result.console_output.iter().map(|entry| entry.message.as_str())
-                .collect::<Vec<_>>().join("\n");
+            let result = core
+                .execute(&lowered.ir3)
+                .expect("decoder fixture executes");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+            let actual = result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
             assert_eq!(actual, expected, "v8={v8_profile}, GC={stress:?}");
         }
     }
@@ -64,7 +73,11 @@ console.log(decoder.end(Buffer.from([0xac])), decoder.lastNeed, decoder.lastTota
 
 #[test]
 fn module_values_and_split_utf8_preserve_identity_and_carry() {
-    check(BASIC, "true true utf8\n\"\" 2 3\n\"\" 1\n€ 0 0", ParseGoal::Script);
+    check(
+        BASIC,
+        "true true utf8\n\"\" 2 3\n\"\" 1\n€ 0 0",
+        ParseGoal::Script,
+    );
 }
 
 const SPLITS: &str = r#"
@@ -99,7 +112,11 @@ console.log(decoder.write(Buffer.from('again')), decoder.lastNeed);
 
 #[test]
 fn malformed_utf8_and_truncated_sequences_use_native_replacement_rules() {
-    check(MALFORMED, "\"\"\n\"�A\"\n\"��\"\n\"�\"\nagain 0", ParseGoal::Script);
+    check(
+        MALFORMED,
+        "\"\"\n\"�A\"\n\"��\"\n\"�\"\nagain 0",
+        ParseGoal::Script,
+    );
 }
 
 const UTF16: &str = r#"
@@ -114,7 +131,11 @@ console.log(decoder.end(Buffer.from([0x42, 0x00])));
 
 #[test]
 fn utf16_surrogates_odd_bytes_and_reuse() {
-    check(UTF16, "utf16le \"\"\n\"\" 1\n😀 0\n\"\" \"\"\nB", ParseGoal::Script);
+    check(
+        UTF16,
+        "utf16le \"\"\n\"\" 1\n😀 0\n\"\" \"\"\nB",
+        ParseGoal::Script,
+    );
 }
 
 const BASE64: &str = r#"
@@ -132,7 +153,11 @@ for (const encoding of ['base64', 'base64url']) {
 
 #[test]
 fn base64_quanta_and_url_safe_final_padding() {
-    check(BASE64, "true 2\n+/++Qg== 0\ntrue 2\n-_--Qg 0", ParseGoal::Script);
+    check(
+        BASE64,
+        "true 2\n+/++Qg== 0\ntrue 2\n-_--Qg 0",
+        ParseGoal::Script,
+    );
 }
 
 const VIEWS: &str = r#"
@@ -183,7 +208,11 @@ console.log(decoder.text('abcd', -2));
 
 #[test]
 fn strings_do_not_consume_pending_bytes_and_text_starts_a_fresh_sequence() {
-    check(STRINGS, "already decoded 2\nprefix:� 0\nA\nBC 0\ncd", ParseGoal::Script);
+    check(
+        STRINGS,
+        "already decoded 2\nprefix:� 0\nA\nBC 0\ncd",
+        ParseGoal::Script,
+    );
 }
 
 const VALIDATION: &str = r#"
@@ -206,7 +235,11 @@ console.log(unknown, invalid);
 
 #[test]
 fn encoding_aliases_and_invalid_inputs_have_stable_error_codes() {
-    check(VALIDATION, "utf8\nutf8\nutf8\nutf16le\nutf16le\nlatin1\nascii\nhex\n5 7", ParseGoal::Script);
+    check(
+        VALIDATION,
+        "utf8\nutf8\nutf8\nutf16le\nutf16le\nlatin1\nascii\nhex\n5 7",
+        ParseGoal::Script,
+    );
 }
 
 const SHADOWS: &str = r#"

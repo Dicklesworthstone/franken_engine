@@ -29,7 +29,10 @@ fn read() -> HostIoRequest {
 fn wait_for_revocation(pool: &HostEffectWorkPool) {
     let deadline = Instant::now() + WAIT;
     while !pool.is_revoked() {
-        assert!(Instant::now() < deadline, "closer never requested revocation");
+        assert!(
+            Instant::now() < deadline,
+            "closer never requested revocation"
+        );
         std::thread::yield_now();
     }
 }
@@ -91,7 +94,11 @@ impl ProcessSpawnProvider for Parked {
         "parked-process-drain-test"
     }
 
-    fn perform(&self, _: &ProcessSpawnRequest, _: &[ProcessSpawnCapability]) -> ProcessSpawnOutcome {
+    fn perform(
+        &self,
+        _: &ProcessSpawnRequest,
+        _: &[ProcessSpawnCapability],
+    ) -> ProcessSpawnOutcome {
         panic!("live process control must be forwarded")
     }
 
@@ -191,7 +198,10 @@ fn last_permit_wakes_all_closers_and_the_first_completion_is_not_enough() {
     drop(second);
     // Without final-permit notification, waiters remain asleep for WAIT.
     for _ in 0..8 {
-        let result = results.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        let result = results
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
         assert_eq!(result.in_flight, 0);
         assert_eq!(result.committed_operations, 2);
     }
@@ -254,7 +264,10 @@ fn one_frontier_drains_both_process_and_io_bindings() {
     let io_worker = std::thread::spawn(move || io.perform(&read(), &[HostIoCapability::FsRead]));
     let process_worker = std::thread::spawn(move || {
         process.perform(
-            &ProcessSpawnRequest::Wait { handle: "test-handle".into(), timeout_millis: None },
+            &ProcessSpawnRequest::Wait {
+                handle: "test-handle".into(),
+                timeout_millis: None,
+            },
             &[ProcessSpawnCapability::Spawn],
         )
     });
@@ -271,11 +284,19 @@ fn one_frontier_drains_both_process_and_io_bindings() {
     assert!(result.try_recv().is_err());
     process_release.send(()).unwrap();
     assert!(process_worker.join().unwrap().is_err());
-    let snapshot = result.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+    let snapshot = result
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
     drain.join().unwrap();
-    assert_eq!(snapshot, HostEffectSnapshot {
-        remaining_operations: 1, committed_operations: 2, in_flight: 0,
-    });
+    assert_eq!(
+        snapshot,
+        HostEffectSnapshot {
+            remaining_operations: 1,
+            committed_operations: 2,
+            in_flight: 0,
+        }
+    );
 }
 
 #[test]
@@ -295,11 +316,17 @@ fn provider_unwind_wakes_drain_without_refunding_or_reactivating_work() {
     wait_for_revocation(&budget);
     release.send(()).unwrap();
     assert!(worker.join().unwrap().is_err());
-    let snapshot = result.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+    let snapshot = result
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
     drain.join().unwrap();
     assert_eq!(snapshot.in_flight, 0);
     assert_eq!(snapshot.committed_operations, 1);
-    assert!(matches!(budget.admit(), Err(HostEffectBudgetError::Revoked)));
+    assert!(matches!(
+        budget.admit(),
+        Err(HostEffectBudgetError::Revoked)
+    ));
 }
 
 #[test]
@@ -307,10 +334,13 @@ fn accounting_poison_never_certifies_idle_even_after_permit_release() {
     let budget = pool(1, 1);
     let permit = budget.admit().unwrap();
     let alias = budget.clone();
-    assert!(std::panic::catch_unwind(move || {
-        let _guard = alias.state.accounting.lock().unwrap();
-        panic!("poison the accounting boundary");
-    }).is_err());
+    assert!(
+        std::panic::catch_unwind(move || {
+            let _guard = alias.state.accounting.lock().unwrap();
+            panic!("poison the accounting boundary");
+        })
+        .is_err()
+    );
     drop(permit);
     assert_eq!(
         budget.revoke_and_drain(Duration::ZERO),
@@ -327,13 +357,22 @@ fn poisoned_accounting_reaches_an_already_admitted_io_control() {
     let worker = std::thread::spawn(move || provider.perform(&read(), &[HostIoCapability::FsRead]));
     entered.recv_timeout(WAIT).unwrap();
     let alias = budget.clone();
-    assert!(std::panic::catch_unwind(move || {
-        let _guard = alias.state.accounting.lock().unwrap();
-        panic!("poison while native work holds admission");
-    }).is_err());
+    assert!(
+        std::panic::catch_unwind(move || {
+            let _guard = alias.state.accounting.lock().unwrap();
+            panic!("poison while native work holds admission");
+        })
+        .is_err()
+    );
     release.send(()).unwrap();
-    assert!(matches!(worker.join().unwrap(), Err(HostIoError::Denied { .. })));
-    assert_eq!(budget.revoke_and_drain(WAIT), Err(HostEffectDrainError::AccountingPoisoned));
+    assert!(matches!(
+        worker.join().unwrap(),
+        Err(HostIoError::Denied { .. })
+    ));
+    assert_eq!(
+        budget.revoke_and_drain(WAIT),
+        Err(HostEffectDrainError::AccountingPoisoned)
+    );
 }
 
 #[test]
@@ -355,10 +394,15 @@ fn even_an_unrepresentable_wait_revokes_before_returning() {
 struct ReentrantDrain(HostEffectWorkPool);
 
 impl HostIoProvider for ReentrantDrain {
-    fn name(&self) -> &str { "reentrant-drain-test" }
+    fn name(&self) -> &str {
+        "reentrant-drain-test"
+    }
     fn perform(&self, _: &HostIoRequest, _: &[HostIoCapability]) -> HostIoOutcome {
         // This would deadlock if a provider ran under the accounting lock.
-        assert_eq!(self.0.revoke_and_drain(Duration::ZERO), Err(HostEffectDrainError::TimedOut { in_flight: 1 }));
+        assert_eq!(
+            self.0.revoke_and_drain(Duration::ZERO),
+            Err(HostEffectDrainError::TimedOut { in_flight: 1 })
+        );
         Ok(HostIoResponse::FsRead { bytes: vec![1] })
     }
 }
@@ -366,9 +410,22 @@ impl HostIoProvider for ReentrantDrain {
 #[test]
 fn a_provider_cannot_drain_its_own_permit_or_run_under_the_accounting_lock() {
     let budget = pool(2, 1);
-    let provider = budget.bind_host_io(Arc::new(ReentrantDrain(budget.clone())), &ExecutionWorkPool::new(1));
-    assert!(provider.perform(&read(), &[HostIoCapability::FsRead]).is_err());
-    assert_eq!(budget.revoke_and_drain(Duration::ZERO).unwrap().committed_operations, 1);
+    let provider = budget.bind_host_io(
+        Arc::new(ReentrantDrain(budget.clone())),
+        &ExecutionWorkPool::new(1),
+    );
+    assert!(
+        provider
+            .perform(&read(), &[HostIoCapability::FsRead])
+            .is_err()
+    );
+    assert_eq!(
+        budget
+            .revoke_and_drain(Duration::ZERO)
+            .unwrap()
+            .committed_operations,
+        1
+    );
 }
 
 #[test]
@@ -376,8 +433,14 @@ fn fresh_bindings_and_scopes_cannot_resurrect_a_drained_pool() {
     let budget = pool(2, 1);
     let snapshot = budget.revoke_and_drain(Duration::ZERO).unwrap();
     let inner = Arc::new(CountingIo::default());
-    let provider = budget.clone().bind_host_io(inner.clone(), &ExecutionWorkPool::new(100));
-    assert!(provider.perform(&read(), &[HostIoCapability::FsRead]).is_err());
+    let provider = budget
+        .clone()
+        .bind_host_io(inner.clone(), &ExecutionWorkPool::new(100));
+    assert!(
+        provider
+            .perform(&read(), &[HostIoCapability::FsRead])
+            .is_err()
+    );
     assert_eq!(inner.0.load(Ordering::SeqCst), 0);
     assert_eq!(budget.snapshot().unwrap(), snapshot);
 }
@@ -401,11 +464,16 @@ fn racing_dispatch_cannot_cross_a_successfully_drained_frontier() {
         start.wait();
         let snapshot = budget.revoke_and_drain(WAIT).unwrap();
         let completed_calls = inner.0.load(Ordering::SeqCst);
-        for worker in workers { let _ = worker.join().unwrap(); }
+        for worker in workers {
+            let _ = worker.join().unwrap();
+        }
         assert_eq!(inner.0.load(Ordering::SeqCst), completed_calls);
         assert_eq!(budget.snapshot().unwrap(), snapshot);
         assert_eq!(snapshot.in_flight, 0);
-        assert_eq!(snapshot.committed_operations + snapshot.remaining_operations, 16);
+        assert_eq!(
+            snapshot.committed_operations + snapshot.remaining_operations,
+            16
+        );
     }
 }
 
@@ -420,13 +488,19 @@ mod native {
     impl Scratch {
         fn new() -> Self {
             static SEQ: AtomicUsize = AtomicUsize::new(0);
-            let path = std::env::temp_dir().join(format!("franken-effect-drain-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+            let path = std::env::temp_dir().join(format!(
+                "franken-effect-drain-{}-{}",
+                std::process::id(),
+                SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
             std::fs::create_dir_all(&path).unwrap();
             Self(path)
         }
     }
     impl Drop for Scratch {
-        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 
     #[test]
@@ -454,13 +528,20 @@ mod native {
             drop(stream);
         });
         let budget = pool(1, 1);
-        let native = SandboxedHostIo::with_root(&scratch.0).unwrap()
-            .with_network_timeout(WAIT + WAIT).unwrap();
+        let native = SandboxedHostIo::with_root(&scratch.0)
+            .unwrap()
+            .with_network_timeout(WAIT + WAIT)
+            .unwrap();
         let provider = budget.bind_host_io(Arc::new(native), &ExecutionWorkPool::new(1));
-        let worker = std::thread::spawn(move || provider.perform(
-            &HostIoRequest::NetworkRecv { endpoint: address.to_string(), max_len: 16 },
-            &[HostIoCapability::NetworkRecv],
-        ));
+        let worker = std::thread::spawn(move || {
+            provider.perform(
+                &HostIoRequest::NetworkRecv {
+                    endpoint: address.to_string(),
+                    max_len: 16,
+                },
+                &[HostIoCapability::NetworkRecv],
+            )
+        });
         connected.recv_timeout(WAIT).unwrap();
         // No data or EOF is supplied to unblock read. The real network provider
         // must observe the forwarded revocation and release its actual permit.
@@ -487,18 +568,34 @@ mod native {
         let budget = pool(1, 1);
         let provider = budget.bind_process_spawn(native, &ExecutionWorkPool::new(1));
         let launch = ProcessLaunch {
-            executable, argv: Vec::new(), env: Default::default(), cwd: None,
-            shell: false, stdio: ProcessStdio::default(),
+            executable,
+            argv: Vec::new(),
+            env: Default::default(),
+            cwd: None,
+            shell: false,
+            stdio: ProcessStdio::default(),
         };
-        let ProcessSpawnResponse::Spawned { handle } = provider.perform(
-            &ProcessSpawnRequest::Spawn { launch }, &[ProcessSpawnCapability::Spawn],
-        ).unwrap() else { panic!("real child handle"); };
+        let ProcessSpawnResponse::Spawned { handle } = provider
+            .perform(
+                &ProcessSpawnRequest::Spawn { launch },
+                &[ProcessSpawnCapability::Spawn],
+            )
+            .unwrap()
+        else {
+            panic!("real child handle");
+        };
         // Spawn's provider call ended, but the child resource is still owned.
         let snapshot = budget.revoke_and_drain(Duration::ZERO).unwrap();
         assert_eq!(snapshot.in_flight, 0);
         assert_eq!(snapshot.committed_operations, 1);
-        assert_eq!(provider.cleanup_handle(&handle), Ok(ProcessSpawnResponse::Cleaned { was_present: true }));
-        assert_eq!(provider.cleanup_handle(&handle), Ok(ProcessSpawnResponse::Cleaned { was_present: false }));
+        assert_eq!(
+            provider.cleanup_handle(&handle),
+            Ok(ProcessSpawnResponse::Cleaned { was_present: true })
+        );
+        assert_eq!(
+            provider.cleanup_handle(&handle),
+            Ok(ProcessSpawnResponse::Cleaned { was_present: false })
+        );
         assert_eq!(budget.snapshot().unwrap(), snapshot);
     }
 }

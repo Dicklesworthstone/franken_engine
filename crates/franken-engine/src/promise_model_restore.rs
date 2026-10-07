@@ -39,8 +39,13 @@ impl<'de> Deserialize<'de> for MicrotaskQueue {
 
         // Dequeue takes consumed slots. Counting an occupied slot before the
         // cursor would make pending_count disagree with reachable work.
-        if snapshot.tasks[..snapshot.cursor].iter().any(Option::is_some) {
-            return Err(D::Error::custom("microtask before cursor is still occupied"));
+        if snapshot.tasks[..snapshot.cursor]
+            .iter()
+            .any(Option::is_some)
+        {
+            return Err(D::Error::custom(
+                "microtask before cursor is still occupied",
+            ));
         }
 
         Ok(Self {
@@ -67,7 +72,10 @@ impl<'de> Deserialize<'de> for MacrotaskQueue {
 
         let snapshot = Snapshot::deserialize(deserializer)?;
         let lanes = [
-            (MacrotaskSource::MessageChannel, &snapshot.message_channel_tasks),
+            (
+                MacrotaskSource::MessageChannel,
+                &snapshot.message_channel_tasks,
+            ),
             (MacrotaskSource::Immediate, &snapshot.immediate_tasks),
             (MacrotaskSource::Timer, &snapshot.timer_tasks),
             (MacrotaskSource::IoCompletion, &snapshot.io_completion_tasks),
@@ -79,7 +87,9 @@ impl<'de> Deserialize<'de> for MacrotaskQueue {
                 // A heap's container, not the task's source field, determines
                 // scheduling priority. Refuse source/lane disagreement.
                 if task.source != source {
-                    return Err(D::Error::custom("macrotask source does not match queue lane"));
+                    return Err(D::Error::custom(
+                        "macrotask source does not match queue lane",
+                    ));
                 }
                 if task.registration_seq >= snapshot.next_registration_seq {
                     return Err(D::Error::custom(
@@ -89,7 +99,9 @@ impl<'de> Deserialize<'de> for MacrotaskQueue {
                 // Registration IDs are global across every lane: cancellation
                 // and replay must never identify two tasks with one ID.
                 if !registrations.insert(task.registration_seq) {
-                    return Err(D::Error::custom("duplicate macrotask registration sequence"));
+                    return Err(D::Error::custom(
+                        "duplicate macrotask registration sequence",
+                    ));
                 }
             }
         }
@@ -284,7 +296,12 @@ mod tests {
             10,
             Label::Confidential,
         );
-        queue.schedule(MacrotaskSource::Immediate, ClosureHandle(4), 0, Label::Internal);
+        queue.schedule(
+            MacrotaskSource::Immediate,
+            ClosureHandle(4),
+            0,
+            Label::Internal,
+        );
         queue
     }
 
@@ -297,8 +314,18 @@ mod tests {
             original.estimated_memory_bytes()
         );
         assert_eq!(
-            restored.schedule(MacrotaskSource::Timer, ClosureHandle(9), 10, Label::Internal),
-            original.schedule(MacrotaskSource::Timer, ClosureHandle(9), 10, Label::Internal)
+            restored.schedule(
+                MacrotaskSource::Timer,
+                ClosureHandle(9),
+                10,
+                Label::Internal
+            ),
+            original.schedule(
+                MacrotaskSource::Timer,
+                ClosureHandle(9),
+                10,
+                Label::Internal
+            )
         );
         for now in [0, 9, 10, u64::MAX] {
             while let Some(expected) = original.dequeue_ready(now) {
@@ -341,7 +368,11 @@ mod tests {
     #[test]
     fn macrotask_restore_rejects_task_in_the_wrong_source_lane() {
         let mut encoded = serde_json::to_value(macrotask_populated()).unwrap();
-        let timer = encoded["timer_tasks"].as_array_mut().unwrap().pop().unwrap();
+        let timer = encoded["timer_tasks"]
+            .as_array_mut()
+            .unwrap()
+            .pop()
+            .unwrap();
         encoded["message_channel_tasks"]
             .as_array_mut()
             .unwrap()

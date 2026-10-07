@@ -10,7 +10,10 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions, ParserS
 fn execute(source: &str, goal: ParseGoal, allow_timer: bool) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
-            ParserSource { label: "timers-module.js".into(), text: source.into() },
+            ParserSource {
+                label: "timers-module.js".into(),
+                text: source.into(),
+            },
             goal,
             &ParserOptions::default(),
         )
@@ -35,15 +38,27 @@ fn execute(source: &str, goal: ParseGoal, allow_timer: bool) -> Result<String, S
     }
     let mut core = InterpreterCore::new(config, "timers-module");
     let result = core.execute(&module);
-    assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    assert_eq!(
+        core.estimated_memory_bytes(),
+        core.recompute_estimated_memory_bytes()
+    );
     result
-        .map(|result| result.console_output.iter().map(|entry| entry.message.as_str())
-            .collect::<Vec<_>>().join("\n"))
+        .map(|result| {
+            result
+                .console_output
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
         .map_err(|error| format!("execute: {error}"))
 }
 
 fn check(source: &str, expected: &str) {
-    assert_eq!(execute(source, ParseGoal::Script, true).as_deref(), Ok(expected));
+    assert_eq!(
+        execute(source, ParseGoal::Script, true).as_deref(),
+        Ok(expected)
+    );
 }
 
 const IDENTITY: &str = r#"
@@ -62,7 +77,10 @@ console.log(typeof descriptor.get, descriptor.enumerable, descriptor.configurabl
 
 #[test]
 fn native_identities_and_aliases_survive_materialization() {
-    check(IDENTITY, "true true\ntrue true true true true true true\ntrue true\nfunction true true");
+    check(
+        IDENTITY,
+        "true true\ntrue true true true true true true\ntrue true\nfunction true true",
+    );
 }
 
 const CALLBACKS: &str = r#"
@@ -157,7 +175,10 @@ const promises = require('timers/promises');
 
 #[test]
 fn module_prelude_does_not_capture_guest_globals_or_destructuring_bindings() {
-    check(SHADOWS, "guest Object guest interval guest clear guest immediate\nnative");
+    check(
+        SHADOWS,
+        "guest Object guest interval guest clear guest immediate\nnative",
+    );
 }
 
 const HANDLES: &str = r#"
@@ -190,13 +211,18 @@ import promises, { setTimeout as sleep, setInterval as every } from 'node:timers
 
 #[test]
 fn esm_named_imports_are_real_function_values_not_call_site_rewrites() {
-    assert_eq!(execute(ESM, ParseGoal::Module, true).as_deref(), Ok("true true\nesm\ntick"));
+    assert_eq!(
+        execute(ESM, ParseGoal::Module, true).as_deref(),
+        Ok("true true\nesm\ntick")
+    );
 }
 
 #[test]
 fn loading_timer_modules_schedules_nothing_and_needs_no_timer_authority() {
-    assert_eq!(execute(IDENTITY, ParseGoal::Script, false).as_deref(),
-        Ok("true true\ntrue true true true true true true\ntrue true\nfunction true true"));
+    assert_eq!(
+        execute(IDENTITY, ParseGoal::Script, false).as_deref(),
+        Ok("true true\ntrue true true true true true true\ntrue true\nfunction true true")
+    );
 }
 
 #[test]
@@ -207,6 +233,9 @@ fn first_class_invocation_does_not_grant_timer_authority() {
         "const t = require('timers/promises'); const run = t.setTimeout; run(1);",
     ] {
         let error = execute(source, ParseGoal::Script, false).expect_err("Timer grant is required");
-        assert!(error.to_lowercase().contains("capability"), "{source}: {error}");
+        assert!(
+            error.to_lowercase().contains("capability"),
+            "{source}: {error}"
+        );
     }
 }

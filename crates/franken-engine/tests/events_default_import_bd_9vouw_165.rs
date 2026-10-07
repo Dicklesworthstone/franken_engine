@@ -159,7 +159,11 @@ console.log(typeof E.on, typeof E.once, E.once.length, E.on.length);
 
 #[test]
 fn first_class_events_support_nested_mutable_destructured_and_computed_forms() {
-    assert_native_events(MODULE_VALUES, "true true true true\nfunction function 2 2\nready:42", false);
+    assert_native_events(
+        MODULE_VALUES,
+        "true true true true\nfunction function 2 2\nready:42",
+        false,
+    );
 }
 
 const ITERATOR_QUEUE: &str = r#"
@@ -221,7 +225,11 @@ console.log(e.listenerCount('x'), e.listenerCount('error'));
 
 #[test]
 fn iterator_abort_rejects_first_waiter_and_cleans_up_all_listeners() {
-    assert_native_events(ITERATOR_ABORT, "0 0\nAbortError ABORT_ERR stop\ntrue", false);
+    assert_native_events(
+        ITERATOR_ABORT,
+        "0 0\nAbortError ABORT_ERR stop\ntrue",
+        false,
+    );
 }
 
 const ONCE_ABORT: &str = r#"
@@ -252,7 +260,11 @@ console.log(calls.join(','));
 
 #[test]
 fn high_and_low_watermarks_pause_and_resume_the_producer() {
-    assert_native_events(ITERATOR_BACKPRESSURE, "pause\n1 2 3\npause,resume\n0 0", false);
+    assert_native_events(
+        ITERATOR_BACKPRESSURE,
+        "pause\n1 2 3\npause,resume\n0 0",
+        false,
+    );
 }
 
 const ERROR_AS_DATA: &str = r#"
@@ -292,7 +304,11 @@ const E = require('events'); console.log(typeof E, E === require('node:events'))
 
 #[test]
 fn source_owned_require_bindings_are_not_replaced_with_native_modules() {
-    assert_native_events(REQUIRE_SHADOWING, "local:events\nloop:events\nblock:events\nfunction true", false);
+    assert_native_events(
+        REQUIRE_SHADOWING,
+        "local:events\nloop:events\nblock:events\nfunction true",
+        false,
+    );
 }
 
 const ESM_EXPORTS: &str = r#"
@@ -339,7 +355,11 @@ console.log(first.listenerCount('ready'), first.listenerCount('error'),
 
 #[test]
 fn stopped_public_abort_events_cannot_keep_once_or_iterator_waits_pending() {
-    assert_native_events(STOPPED_ABORT, "0 0 0 0\non true\ndone true\nonce AbortError ABORT_ERR true", false);
+    assert_native_events(
+        STOPPED_ABORT,
+        "0 0 0 0\non true\ndone true\nonce AbortError ABORT_ERR true",
+        false,
+    );
 }
 
 const STOPPED_COMPOSED_ABORT: &str = r#"
@@ -359,7 +379,11 @@ console.log(root.signal.aborted, nested.aborted, emitter.listenerCount('data'), 
 
 #[test]
 fn private_cancellation_flattens_nested_signals_and_preserves_falsy_reasons() {
-    assert_native_events(STOPPED_COMPOSED_ABORT, "true true 0 0\nAbortError ABORT_ERR true", false);
+    assert_native_events(
+        STOPPED_COMPOSED_ABORT,
+        "true true 0 0\nAbortError ABORT_ERR true",
+        false,
+    );
 }
 
 const COMPLETED_ABORT_WAIT: &str = r#"
@@ -386,7 +410,11 @@ Promise.resolve().then(() => console.log('completed', completed));
 
 #[test]
 fn successful_and_closed_waits_do_not_cancel_the_caller_signal() {
-    assert_native_events(COMPLETED_ABORT_WAIT, "false 0\nreturn true\ncompleted 1\nsuccess 42\nfailure true", false);
+    assert_native_events(
+        COMPLETED_ABORT_WAIT,
+        "false 0\nreturn true\ncompleted 1\nsuccess 42\nfailure true",
+        false,
+    );
 }
 
 // These cases exercise protected native state rather than emulating mutable
@@ -428,7 +456,11 @@ console.log(emitter.listenerCount('data'), emitter.listenerCount('error'));
 
 #[test]
 fn synthetic_abort_event_is_not_a_native_cancellation_transition() {
-    assert_native_events(PROTECTED_SYNTHETIC, "false 1\n0 0\nvalue 42\nabort real", false);
+    assert_native_events(
+        PROTECTED_SYNTHETIC,
+        "false 1\n0 0\nvalue 42\nabort real",
+        false,
+    );
 }
 
 const PROTECTED_PROTOTYPES: &str = r#"
@@ -475,5 +507,9 @@ console.log('aborted', controller.signal.aborted);
 
 #[test]
 fn reentrant_public_abort_listener_cannot_publish_success_after_cancellation() {
-    assert_native_events(PROTECTED_REENTRANT, "0 0 0 0\naborted true\non true\nonce true", false);
+    assert_native_events(
+        PROTECTED_REENTRANT,
+        "0 0 0 0\naborted true\non true\nonce true",
+        false,
+    );
 }

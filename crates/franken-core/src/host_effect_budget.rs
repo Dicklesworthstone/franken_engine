@@ -310,7 +310,10 @@ impl fmt::Debug for BudgetedHostIo {
         // may retain secret paths, payloads, tokens and policy diagnostics.
         f.debug_struct("BudgetedHostIo")
             .field("limits", &self.pool.limits())
-            .field("revoked", &(self.pool.is_revoked() || self.scope.is_revoked()))
+            .field(
+                "revoked",
+                &(self.pool.is_revoked() || self.scope.is_revoked()),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -382,7 +385,9 @@ impl HostIoProvider for BudgetedHostIo {
         let _permit = self.pool.admit().map_err(HostEffectBudgetError::host_io)?;
         // A racing revocation may consume admission; it never refunds it.
         control.checkpoint()?;
-        let outcome = self.provider.perform_controlled(request, granted, control.clone());
+        let outcome = self
+            .provider
+            .perform_controlled(request, granted, control.clone());
         control.checkpoint()?;
         outcome
     }

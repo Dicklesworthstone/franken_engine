@@ -666,9 +666,8 @@ impl InterpreterCore {
         for original in sources {
             let mut remaining = self.event_array_objects(original, SIGNAL_DEPENDENTS_SLOT)?;
             let previous_len = remaining.len();
-            remaining.retain(|dependent| {
-                !self.event_slot(*dependent, SIGNAL_ABORTED_SLOT).is_truthy()
-            });
+            remaining
+                .retain(|dependent| !self.event_slot(*dependent, SIGNAL_ABORTED_SLOT).is_truthy());
             if remaining.len() == previous_len {
                 continue;
             }
@@ -691,7 +690,10 @@ impl InterpreterCore {
     /// source handles: skip reclaimed sources instead of retaining them via
     /// Value::Object edges traced by the collector. The source list itself is
     /// still an ordinary accounted, traced array owned by the composite.
-    fn signal_source_objects(&mut self, signal: ObjectId) -> Result<Vec<ObjectId>, InterpreterError> {
+    fn signal_source_objects(
+        &mut self,
+        signal: ObjectId,
+    ) -> Result<Vec<ObjectId>, InterpreterError> {
         let Value::Object(list) = self.event_slot(signal, SIGNAL_SOURCES_SLOT) else {
             return Ok(Vec::new());
         };
@@ -1289,10 +1291,7 @@ mod abort_graph_tests {
         let b = core.alloc_abort_signal().expect("b");
         let first = any(&mut core, &module, &[b, a, b]);
         let second = any(&mut core, &module, &[first, a, first]);
-        assert_eq!(
-            core.signal_source_objects(second).unwrap(),
-            vec![b, a]
-        );
+        assert_eq!(core.signal_source_objects(second).unwrap(), vec![b, a]);
         let Value::Object(source_list) = core.event_slot(second, SIGNAL_SOURCES_SLOT) else {
             panic!("a dependent keeps its ordered source set");
         };
@@ -1340,9 +1339,7 @@ mod abort_graph_tests {
         );
         for signal in [first, second] {
             assert!(core.has_event_slot(signal, SIGNAL_SOURCES_SLOT));
-            assert!(
-                core.signal_source_objects(signal).unwrap().is_empty()
-            );
+            assert!(core.signal_source_objects(signal).unwrap().is_empty());
             assert_eq!(
                 core.event_slot(signal, SIGNAL_REASON_SLOT),
                 Value::str("cancel")
@@ -1350,7 +1347,10 @@ mod abort_graph_tests {
         }
         core.signal_abort_with(&module, b, Value::str("later"))
             .expect("abort b");
-        assert_eq!(core.event_slot(live, SIGNAL_REASON_SLOT), Value::str("later"));
+        assert_eq!(
+            core.event_slot(live, SIGNAL_REASON_SLOT),
+            Value::str("later")
+        );
         assert_eq!(
             core.event_slot(second, SIGNAL_REASON_SLOT),
             Value::str("cancel")
@@ -1376,9 +1376,7 @@ mod abort_graph_tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(
-            core.signal_source_objects(nested).unwrap().is_empty()
-        );
+        assert!(core.signal_source_objects(nested).unwrap().is_empty());
         assert!(!core.event_slot(nested, SIGNAL_ABORTED_SLOT).is_truthy());
     }
 
@@ -1421,7 +1419,9 @@ mod abort_graph_tests {
         let (mut core, module) = runtime();
         let original = core.alloc_abort_signal().expect("original source");
         let dependent = any(&mut core, &module, &[original]);
-        let ordinary = core.alloc_object_with_prototype(None).expect("ordinary object");
+        let ordinary = core
+            .alloc_object_with_prototype(None)
+            .expect("ordinary object");
         let list = core
             .alloc_array_from_values(&[
                 Value::Int(-1),
@@ -1432,7 +1432,10 @@ mod abort_graph_tests {
             .expect("weak handles");
         core.set_event_slot(dependent, SIGNAL_SOURCES_SLOT, Value::Object(list))
             .expect("source list");
-        assert_eq!(core.signal_source_objects(dependent).unwrap(), vec![original]);
+        assert_eq!(
+            core.signal_source_objects(dependent).unwrap(),
+            vec![original]
+        );
         let nested = any(&mut core, &module, &[dependent]);
         assert_eq!(core.signal_source_objects(nested).unwrap(), vec![original]);
     }
@@ -1453,7 +1456,11 @@ mod abort_graph_tests {
             ])
             .expect("listener options");
         core.event_target_add_listener(
-            module, target, Value::str("work"), callback.clone(), Value::Object(options),
+            module,
+            target,
+            Value::str("work"),
+            callback.clone(),
+            Value::Object(options),
         )
         .expect("signal-bound listener");
         core.event_target_find_record(target, "work", &callback, flags[0])
@@ -1464,7 +1471,10 @@ mod abort_graph_tests {
     fn listener_object(core: &mut InterpreterCore) -> Value {
         // EventListener objects are valid even without a handleEvent method.
         // Public-path fixtures below exercise actual guest callback invocation.
-        Value::Object(core.alloc_object_with_prototype(None).expect("listener object"))
+        Value::Object(
+            core.alloc_object_with_prototype(None)
+                .expect("listener object"),
+        )
     }
 
     #[test]
@@ -1475,19 +1485,48 @@ mod abort_graph_tests {
         let callback = listener_object(&mut core);
         let other_callback = listener_object(&mut core);
         let record = listen(&mut core, &module, target, signal, callback, [false, false]);
-        let peer = listen(&mut core, &module, target, signal, other_callback, [false, false]);
-        assert_eq!(core.event_slot(record, "signal"), Value::Int(i64::from(signal.0)));
+        let peer = listen(
+            &mut core,
+            &module,
+            target,
+            signal,
+            other_callback,
+            [false, false],
+        );
+        assert_eq!(
+            core.event_slot(record, "signal"),
+            Value::Int(i64::from(signal.0))
+        );
         core.event_target_remove_record(target, record).unwrap();
-        assert_eq!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap(), vec![peer]);
-        assert_eq!(core.event_array_objects(target, LISTENERS_SLOT).unwrap(), vec![peer]);
+        assert_eq!(
+            core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+                .unwrap(),
+            vec![peer]
+        );
+        assert_eq!(
+            core.event_array_objects(target, LISTENERS_SLOT).unwrap(),
+            vec![peer]
+        );
         assert_eq!(core.event_slot(record, "signal"), Value::Undefined);
         let list = core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT);
         core.event_target_remove_record(target, record).unwrap();
-        assert_eq!(core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT), list, "idempotent unlink");
-        core.abort_signal(&module, signal, Value::Undefined).unwrap();
+        assert_eq!(
+            core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT),
+            list,
+            "idempotent unlink"
+        );
+        core.abort_signal(&module, signal, Value::Undefined)
+            .unwrap();
         assert!(core.event_slot(peer, "removed").is_truthy());
-        assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert!(
+            core.event_array_objects(target, LISTENERS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -1496,13 +1535,38 @@ mod abort_graph_tests {
         let signal = core.alloc_abort_signal().unwrap();
         let target = core.alloc_event_target("EventTarget").unwrap();
         let callback = listener_object(&mut core);
-        let record = listen(&mut core, &module, target, signal, callback.clone(), [false, true]);
-        let event = core.alloc_event("Event", "work", [false; 3], Value::Null).unwrap();
-        core.event_target_dispatch(&module, &Value::Object(target), &Value::Object(event)).unwrap();
-        assert!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap().is_empty());
-        assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
-        assert_eq!(core.event_slot(record, "callback"), callback, "snapshot must retain its callback");
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        let record = listen(
+            &mut core,
+            &module,
+            target,
+            signal,
+            callback.clone(),
+            [false, true],
+        );
+        let event = core
+            .alloc_event("Event", "work", [false; 3], Value::Null)
+            .unwrap();
+        core.event_target_dispatch(&module, &Value::Object(target), &Value::Object(event))
+            .unwrap();
+        assert!(
+            core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            core.event_array_objects(target, LISTENERS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            core.event_slot(record, "callback"),
+            callback,
+            "snapshot must retain its callback"
+        );
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -1512,13 +1576,27 @@ mod abort_graph_tests {
         let target = core.alloc_event_target("EventTarget").unwrap();
         let callback = listener_object(&mut core);
         for attempt in 0..128 {
-            let record = listen(&mut core, &module, target, signal, callback.clone(), [false, false]);
+            let record = listen(
+                &mut core,
+                &module,
+                target,
+                signal,
+                callback.clone(),
+                [false, false],
+            );
             core.event_target_remove_record(target, record).unwrap();
-            assert!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap().is_empty(),
-                "completed registration {attempt} was retained");
+            assert!(
+                core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+                    .unwrap()
+                    .is_empty(),
+                "completed registration {attempt} was retained"
+            );
         }
         assert!(!core.event_slot(signal, SIGNAL_ABORTED_SLOT).is_truthy());
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -1528,14 +1606,33 @@ mod abort_graph_tests {
         let second = core.alloc_abort_signal().unwrap();
         let target = core.alloc_event_target("EventTarget").unwrap();
         let callback = listener_object(&mut core);
-        let old = listen(&mut core, &module, target, first, callback.clone(), [false, false]);
+        let old = listen(
+            &mut core,
+            &module,
+            target,
+            first,
+            callback.clone(),
+            [false, false],
+        );
         core.event_target_remove_record(target, old).unwrap();
         let new = listen(&mut core, &module, target, second, callback, [false, false]);
         core.abort_signal(&module, first, Value::Undefined).unwrap();
-        assert_eq!(core.event_array_objects(target, LISTENERS_SLOT).unwrap(), vec![new]);
-        assert_eq!(core.event_array_objects(second, SIGNAL_ALGORITHMS_SLOT).unwrap(), vec![new]);
-        core.abort_signal(&module, second, Value::Undefined).unwrap();
-        assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
+        assert_eq!(
+            core.event_array_objects(target, LISTENERS_SLOT).unwrap(),
+            vec![new]
+        );
+        assert_eq!(
+            core.event_array_objects(second, SIGNAL_ALGORITHMS_SLOT)
+                .unwrap(),
+            vec![new]
+        );
+        core.abort_signal(&module, second, Value::Undefined)
+            .unwrap();
+        assert!(
+            core.event_array_objects(target, LISTENERS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1544,14 +1641,44 @@ mod abort_graph_tests {
         let signal = core.alloc_abort_signal().unwrap();
         let target = core.alloc_event_target("EventTarget").unwrap();
         let callback = listener_object(&mut core);
-        let bubbling = listen(&mut core, &module, target, signal, callback.clone(), [false, false]);
-        let capture = listen(&mut core, &module, target, signal, callback.clone(), [true, false]);
-        assert_eq!(listen(&mut core, &module, target, signal, callback, [false, false]), bubbling);
-        assert_eq!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap(), vec![bubbling, capture]);
+        let bubbling = listen(
+            &mut core,
+            &module,
+            target,
+            signal,
+            callback.clone(),
+            [false, false],
+        );
+        let capture = listen(
+            &mut core,
+            &module,
+            target,
+            signal,
+            callback.clone(),
+            [true, false],
+        );
+        assert_eq!(
+            listen(&mut core, &module, target, signal, callback, [false, false]),
+            bubbling
+        );
+        assert_eq!(
+            core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+                .unwrap(),
+            vec![bubbling, capture]
+        );
         core.event_target_remove_record(target, bubbling).unwrap();
-        assert_eq!(core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT).unwrap(), vec![capture]);
-        core.abort_signal(&module, signal, Value::Undefined).unwrap();
-        assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
+        assert_eq!(
+            core.event_array_objects(signal, SIGNAL_ALGORITHMS_SLOT)
+                .unwrap(),
+            vec![capture]
+        );
+        core.abort_signal(&module, signal, Value::Undefined)
+            .unwrap();
+        assert!(
+            core.event_array_objects(target, LISTENERS_SLOT)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1565,12 +1692,23 @@ mod abort_graph_tests {
             listen(&mut core, &module, target, signal, callback, [false, false]);
             targets.push(target);
         }
-        core.abort_signal(&module, signal, Value::Undefined).unwrap();
-        assert_eq!(core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT), Value::Undefined);
+        core.abort_signal(&module, signal, Value::Undefined)
+            .unwrap();
+        assert_eq!(
+            core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT),
+            Value::Undefined
+        );
         for target in targets {
-            assert!(core.event_array_objects(target, LISTENERS_SLOT).unwrap().is_empty());
+            assert!(
+                core.event_array_objects(target, LISTENERS_SLOT)
+                    .unwrap()
+                    .is_empty()
+            );
         }
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]
@@ -1581,7 +1719,9 @@ mod abort_graph_tests {
         let existing = listener_object(&mut core);
         let peer = listen(&mut core, &module, target, signal, existing, [false, false]);
         let callback = listener_object(&mut core);
-        let options = core.alloc_object_with_properties(&[("signal", Value::Object(signal))]).unwrap();
+        let options = core
+            .alloc_object_with_properties(&[("signal", Value::Object(signal))])
+            .unwrap();
         let target_list = core.event_slot(target, LISTENERS_SLOT);
         let signal_list = core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT);
         // Permit the listener record and replacement target list, but refuse
@@ -1589,14 +1729,28 @@ mod abort_graph_tests {
         let before = core.heap.live_len();
         core.config.max_heap_objects = u32::try_from(before + 2).unwrap();
         core.event_target_add_listener(
-            &module, target, Value::str("work"), callback, Value::Object(options),
+            &module,
+            target,
+            Value::str("work"),
+            callback,
+            Value::Object(options),
         )
         .expect_err("cancellation registration must fail at the object limit");
-        assert_eq!(core.heap.live_len(), before + 2, "reach the cancellation allocation");
+        assert_eq!(
+            core.heap.live_len(),
+            before + 2,
+            "reach the cancellation allocation"
+        );
         assert_eq!(core.event_slot(target, LISTENERS_SLOT), target_list);
         assert_eq!(core.event_slot(signal, SIGNAL_ALGORITHMS_SLOT), signal_list);
-        assert_eq!(core.event_array_objects(target, LISTENERS_SLOT).unwrap(), vec![peer]);
+        assert_eq!(
+            core.event_array_objects(target, LISTENERS_SLOT).unwrap(),
+            vec![peer]
+        );
         assert!(!core.event_slot(peer, "removed").is_truthy());
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 }

@@ -110,11 +110,18 @@ impl InterpreterCore {
         self.set_object_property(decoder, "fatal".to_string(), Value::Bool(fatal))?;
         self.set_object_property(decoder, "ignoreBOM".to_string(), Value::Bool(ignore_bom))?;
         self.set_object_property(decoder, DECODER_STATE_SLOT.to_string(), Value::Int(0))?;
-        self.hide_internal_slots(decoder, &["encoding", "fatal", "ignoreBOM", DECODER_STATE_SLOT])?;
+        self.hide_internal_slots(
+            decoder,
+            &["encoding", "fatal", "ignoreBOM", DECODER_STATE_SLOT],
+        )?;
         self.set_own_property_attributes(
             decoder,
             &RuntimePropertyKey::String(JsString::from(DECODER_STATE_SLOT)),
-            PropertyAttributes { writable: false, enumerable: false, configurable: false },
+            PropertyAttributes {
+                writable: false,
+                enumerable: false,
+                configurable: false,
+            },
         )?;
         Ok(Value::Object(decoder))
     }
@@ -210,13 +217,22 @@ impl InterpreterCore {
                 let input = self.arg_or_undefined(args, 0)?;
                 let stream = match self.arg_or_undefined(args, 1)? {
                     Value::Undefined | Value::Null => false,
-                    Value::Object(options) => self.proxy_aware_get_property(
-                        None, options, "stream", Value::Object(options), 0,
-                    )?.is_truthy(),
-                    other => return Err(InterpreterError::TypeError {
-                        expected: "an options object for TextDecoder.prototype.decode".to_string(),
-                        got: other.type_name().to_string(),
-                    }),
+                    Value::Object(options) => self
+                        .proxy_aware_get_property(
+                            None,
+                            options,
+                            "stream",
+                            Value::Object(options),
+                            0,
+                        )?
+                        .is_truthy(),
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "an options object for TextDecoder.prototype.decode"
+                                .to_string(),
+                            got: other.type_name().to_string(),
+                        });
+                    }
                 };
                 // Option accessors may reenter decode or mutate the input.
                 // Read the current state and copy the view only after them.
@@ -246,13 +262,15 @@ impl InterpreterCore {
                     self.join_object_mutation_label(decoder, &label)?;
                 }
                 let decoded = state.decode(&encoding, bytes, fatal, ignore_bom, stream);
-                self.set_object_property(decoder, DECODER_STATE_SLOT.to_string(), Value::Int(state.pack()))?;
-                let units = decoded.ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: format!("valid {encoding} data"),
-                            got: format!("The encoded data was not valid for encoding {encoding}"),
-                        }
-                    })?;
+                self.set_object_property(
+                    decoder,
+                    DECODER_STATE_SLOT.to_string(),
+                    Value::Int(state.pack()),
+                )?;
+                let units = decoded.ok_or_else(|| InterpreterError::TypeError {
+                    expected: format!("valid {encoding} data"),
+                    got: format!("The encoded data was not valid for encoding {encoding}"),
+                })?;
                 Ok(Value::Str(JsString::from_code_units(&units)))
             }
             _ => Err(InterpreterError::TypeError {
@@ -375,7 +393,11 @@ impl DecodeState {
             bytes.extend_from_slice(&self.pending[..self.pending_len]);
             bytes.rotate_right(self.pending_len);
         }
-        let end = if stream { complete_prefix(encoding, &bytes) } else { bytes.len() };
+        let end = if stream {
+            complete_prefix(encoding, &bytes)
+        } else {
+            bytes.len()
+        };
         let decoded = decode_bytes(encoding, &bytes[..end], fatal, ignore_bom || self.bom_seen);
         if decoded.is_none() {
             // Node's decoder is reusable after a fatal decoding failure. Do not
@@ -588,9 +610,16 @@ mod utf16_decoder_tests {
     fn utf16_invalid_subparts_are_scalar_replacements_in_both_byte_orders() {
         for encoding in ["utf-16le", "utf-16be"] {
             let bytes = |units: &[u16]| {
-                units.iter().flat_map(|unit| {
-                    if encoding == "utf-16be" { unit.to_be_bytes() } else { unit.to_le_bytes() }
-                }).collect::<Vec<_>>()
+                units
+                    .iter()
+                    .flat_map(|unit| {
+                        if encoding == "utf-16be" {
+                            unit.to_be_bytes()
+                        } else {
+                            unit.to_le_bytes()
+                        }
+                    })
+                    .collect::<Vec<_>>()
             };
             for (input, expected) in [
                 (&[0xD800][..], &[0xFFFD][..]),
@@ -599,12 +628,18 @@ mod utf16_decoder_tests {
                 (&[0xD800, 0xD801, 0xDC00][..], &[0xFFFD, 0xD801, 0xDC00][..]),
                 (&[0xDC00, 0xD800, 0xDC00][..], &[0xFFFD, 0xD800, 0xDC00][..]),
             ] {
-                assert_eq!(decode_bytes(encoding, &bytes(input), false, false).as_deref(), Some(expected));
+                assert_eq!(
+                    decode_bytes(encoding, &bytes(input), false, false).as_deref(),
+                    Some(expected)
+                );
                 assert_eq!(decode_bytes(encoding, &bytes(input), true, false), None);
             }
             let mut unmatched = bytes(&[0xD800]);
             unmatched.push(0x41);
-            assert_eq!(decode_bytes(encoding, &unmatched, false, false), Some(vec![0xFFFD]));
+            assert_eq!(
+                decode_bytes(encoding, &unmatched, false, false),
+                Some(vec![0xFFFD])
+            );
             assert_eq!(decode_bytes(encoding, &unmatched, true, false), None);
         }
     }
@@ -615,8 +650,14 @@ mod utf16_decoder_tests {
             ("utf-16le", [0xFF, 0xFE, 0x3D, 0xD8, 0x00, 0xDE, 0xFF, 0xFE]),
             ("utf-16be", [0xFE, 0xFF, 0xD8, 0x3D, 0xDE, 0x00, 0xFE, 0xFF]),
         ] {
-            assert_eq!(decode_bytes(encoding, &bytes, true, false), Some(vec![0xD83D, 0xDE00, 0xFEFF]));
-            assert_eq!(decode_bytes(encoding, &bytes, true, true), Some(vec![0xFEFF, 0xD83D, 0xDE00, 0xFEFF]));
+            assert_eq!(
+                decode_bytes(encoding, &bytes, true, false),
+                Some(vec![0xD83D, 0xDE00, 0xFEFF])
+            );
+            assert_eq!(
+                decode_bytes(encoding, &bytes, true, true),
+                Some(vec![0xFEFF, 0xD83D, 0xDE00, 0xFEFF])
+            );
         }
     }
 }
@@ -630,7 +671,12 @@ mod streaming_decoder_tests {
         for pending_len in 0..=3 {
             for bom_seen in [false, true] {
                 for streaming in [false, true] {
-                    let state = DecodeState { pending: [0xEF, 0xBB, 0xBF], pending_len, bom_seen, streaming };
+                    let state = DecodeState {
+                        pending: [0xEF, 0xBB, 0xBF],
+                        pending_len,
+                        bom_seen,
+                        streaming,
+                    };
                     assert_eq!(DecodeState::unpack(state.pack()), state);
                     assert!(state.pack() >= 0 && state.pack() < (1 << 28));
                 }
@@ -643,10 +689,18 @@ mod streaming_decoder_tests {
         for first in 0..=u8::MAX {
             for second in 0..=u8::MAX {
                 let mut state = DecodeState::default();
-                let mut actual = state.decode("utf-8", vec![first], false, false, true).unwrap();
-                actual.extend(state.decode("utf-8", vec![second], false, false, true).unwrap());
+                let mut actual = state
+                    .decode("utf-8", vec![first], false, false, true)
+                    .unwrap();
+                actual.extend(
+                    state
+                        .decode("utf-8", vec![second], false, false, true)
+                        .unwrap(),
+                );
                 actual.extend(state.decode("utf-8", vec![], false, false, false).unwrap());
-                let expected: Vec<u16> = String::from_utf8_lossy(&[first, second]).encode_utf16().collect();
+                let expected: Vec<u16> = String::from_utf8_lossy(&[first, second])
+                    .encode_utf16()
+                    .collect();
                 assert_eq!(actual, expected, "bytes {first:02x} {second:02x}");
                 assert_eq!(state.pending_len, 0);
             }
@@ -657,12 +711,26 @@ mod streaming_decoder_tests {
     fn all_single_utf16_units_stream_as_scalars_in_both_byte_orders() {
         for encoding in ["utf-16le", "utf-16be"] {
             for unit in 0..=u16::MAX {
-                let bytes = if encoding == "utf-16be" { unit.to_be_bytes() } else { unit.to_le_bytes() };
+                let bytes = if encoding == "utf-16be" {
+                    unit.to_be_bytes()
+                } else {
+                    unit.to_le_bytes()
+                };
                 let mut state = DecodeState::default();
-                let mut actual = state.decode(encoding, vec![bytes[0]], false, true, true).unwrap();
-                actual.extend(state.decode(encoding, vec![bytes[1]], false, true, true).unwrap());
+                let mut actual = state
+                    .decode(encoding, vec![bytes[0]], false, true, true)
+                    .unwrap();
+                actual.extend(
+                    state
+                        .decode(encoding, vec![bytes[1]], false, true, true)
+                        .unwrap(),
+                );
                 actual.extend(state.decode(encoding, vec![], false, true, false).unwrap());
-                let expected = if (0xD800..=0xDFFF).contains(&unit) { 0xFFFD } else { unit };
+                let expected = if (0xD800..=0xDFFF).contains(&unit) {
+                    0xFFFD
+                } else {
+                    unit
+                };
                 assert_eq!(actual, [expected], "{encoding}: {unit:04x}");
             }
         }
@@ -671,20 +739,35 @@ mod streaming_decoder_tests {
     #[test]
     fn incomplete_utf16_pair_and_odd_byte_share_one_flush_error() {
         let mut state = DecodeState::default();
-        assert_eq!(state.decode("utf-16le", vec![0, 0xD8, 65], false, false, true), Some(vec![]));
+        assert_eq!(
+            state.decode("utf-16le", vec![0, 0xD8, 65], false, false, true),
+            Some(vec![])
+        );
         assert_eq!(state.pending_len, 3);
-        assert_eq!(state.decode("utf-16le", vec![], false, false, false), Some(vec![0xFFFD]));
-        assert_eq!(state.decode("utf-16le", vec![], false, false, false), Some(vec![]));
+        assert_eq!(
+            state.decode("utf-16le", vec![], false, false, false),
+            Some(vec![0xFFFD])
+        );
+        assert_eq!(
+            state.decode("utf-16le", vec![], false, false, false),
+            Some(vec![])
+        );
     }
 
     #[test]
     fn fatal_error_resets_carry_and_bom_state_before_reuse() {
         let mut state = DecodeState::default();
-        assert_eq!(state.decode("utf-8", vec![0xEF, 0xBB, 0xBF, 0xE2], true, false, true), Some(vec![]));
+        assert_eq!(
+            state.decode("utf-8", vec![0xEF, 0xBB, 0xBF, 0xE2], true, false, true),
+            Some(vec![])
+        );
         assert!(state.bom_seen);
         assert_eq!(state.decode("utf-8", vec![65], true, false, true), None);
         assert_eq!(state, DecodeState::default());
-        assert_eq!(state.decode("utf-8", vec![0xEF, 0xBB, 0xBF, 66], true, false, true), Some(vec![66]));
+        assert_eq!(
+            state.decode("utf-8", vec![0xEF, 0xBB, 0xBF, 66], true, false, true),
+            Some(vec![66])
+        );
     }
 
     #[test]
@@ -692,29 +775,71 @@ mod streaming_decoder_tests {
         let tree = crate::parser_api_stability::parse_script("0;").unwrap();
         let module = crate::lowering_pipeline::lower_ir0_to_ir3(
             &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "decoder-label.js"),
-            &crate::lowering_pipeline::LoweringContext::new("decoder-label", "carry", "builtin-only"),
-        ).unwrap().ir3;
-        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "decoder-carry-label");
-        let decoder = core.construct_text_decoder(None, RegRange { start: 0, count: 0 }).unwrap();
-        let Value::Object(id) = decoder else { panic!("decoder object"); };
+            &crate::lowering_pipeline::LoweringContext::new(
+                "decoder-label",
+                "carry",
+                "builtin-only",
+            ),
+        )
+        .unwrap()
+        .ir3;
+        let mut core =
+            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "decoder-carry-label");
+        let decoder = core
+            .construct_text_decoder(None, RegRange { start: 0, count: 0 })
+            .unwrap();
+        let Value::Object(id) = decoder else {
+            panic!("decoder object");
+        };
         let prefix = core.alloc_uint8_array_from_bytes(&[0xE2, 0x82]).unwrap();
-        let options = core.alloc_object_with_properties(&[("stream", Value::Bool(true))]).unwrap();
+        let options = core
+            .alloc_object_with_properties(&[("stream", Value::Bool(true))])
+            .unwrap();
         core.seed_register(0, Value::Object(prefix)).unwrap();
         core.seed_register(1, Value::Object(options)).unwrap();
         core.set_register_label(0, Label::Secret).unwrap();
-        assert_eq!(core.text_codec_method("decode", decoder.clone(), RegRange { start: 0, count: 2 }).unwrap(), Value::str(""));
+        assert_eq!(
+            core.text_codec_method("decode", decoder.clone(), RegRange { start: 0, count: 2 })
+                .unwrap(),
+            Value::str("")
+        );
         assert_eq!(core.object_mutation_labels.get(&id), Some(&Label::Secret));
         let suffix = core.alloc_uint8_array_from_bytes(&[0xAC]).unwrap();
         core.seed_register(0, Value::Object(suffix)).unwrap();
         core.set_register_label(0, Label::Public).unwrap();
-        let method = core.get_v(&module, &decoder, &RuntimePropertyKey::String("decode".into())).unwrap();
-        let (value, label) = core.invoke_inline_method_call_with_argument_label(
-            Some(&module), method, decoder, vec![Value::Object(suffix)], None,
-        ).unwrap();
+        let method = core
+            .get_v(
+                &module,
+                &decoder,
+                &RuntimePropertyKey::String("decode".into()),
+            )
+            .unwrap();
+        let (value, label) = core
+            .invoke_inline_method_call_with_argument_label(
+                Some(&module),
+                method,
+                decoder,
+                vec![Value::Object(suffix)],
+                None,
+            )
+            .unwrap();
         assert_eq!(value, Value::str("€"));
-        assert!(label >= Label::Secret, "a public suffix must preserve the prefix's label");
-        assert_eq!(core.heap.get(id.0 as usize).unwrap().properties.get(DECODER_STATE_SLOT), Some(&Value::Int(0)));
+        assert!(
+            label >= Label::Secret,
+            "a public suffix must preserve the prefix's label"
+        );
+        assert_eq!(
+            core.heap
+                .get(id.0 as usize)
+                .unwrap()
+                .properties
+                .get(DECODER_STATE_SLOT),
+            Some(&Value::Int(0))
+        );
         assert_eq!(core.object_mutation_labels.get(&id), Some(&Label::Secret));
-        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 }

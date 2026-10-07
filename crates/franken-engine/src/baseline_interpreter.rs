@@ -15531,6 +15531,15 @@ impl InterpreterCore {
         if self.scope_chain.resolve(name).is_some() {
             return Ok(false);
         }
+        // The global object's NaN, Infinity and undefined are
+        // non-configurable (ES2020 18.1): `delete NaN` is false. A function's
+        // `arguments` is a binding of its own scope even when nothing else
+        // reads it (and no runtime binding was declared): false inside a call.
+        if matches!(name, "NaN" | "Infinity" | "undefined")
+            || (name == "arguments" && !self.call_stack.is_empty())
+        {
+            return Ok(false);
+        }
 
         let in_generated_artifact = self.active_generated_function_artifact.is_some();
         let present = if in_generated_artifact {
@@ -15548,11 +15557,6 @@ impl InterpreterCore {
                 && let Some((global, key)) = self.global_object_binding(None, name)?
             {
                 return self.proxy_aware_delete_runtime_property(None, global, &key, 0);
-            }
-            // The global object's NaN, Infinity and undefined are
-            // non-configurable (ES2020 18.1): `delete NaN` is false.
-            if matches!(name, "NaN" | "Infinity" | "undefined") {
-                return Ok(false);
             }
             // Genuinely missing name: `delete` of an unresolvable Reference is
             // `true` with no side effect.

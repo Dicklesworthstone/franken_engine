@@ -16124,7 +16124,10 @@ fn lower_expression_to_ir1_inner(
                     // and a var-created global's DeleteBinding answer
                     // false). It evaluated x and answered true. A `with`
                     // body reaches here only for names its object lacks.
-                    Expression::Identifier(_) => {
+                    // `undefined` parses as a literal but names the global
+                    // object's non-configurable property (or a local
+                    // binding): `delete undefined` is false either way.
+                    Expression::Identifier(_) | Expression::UndefinedLiteral => {
                         ops.push(Ir1Op::LoadLiteral {
                             value: Ir1Literal::Boolean(false),
                         });

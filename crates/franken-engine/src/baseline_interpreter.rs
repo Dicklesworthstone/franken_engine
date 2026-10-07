@@ -41198,8 +41198,11 @@ impl InterpreterCore {
                 // method's kind. A bound `it.next` used its own iterator
                 // whatever the receiver, so `next.call({})` and a Map
                 // iterator's next on a Set iterator advanced it; now they are
-                // TypeErrors and an iterator receiver is the one advanced. A
-                // bound next called with no receiver still steps its own.
+                // TypeErrors and an iterator receiver is the one advanced.
+                // So is a detached `next()` (no receiver) and
+                // `next.call(undefined)`, which stepped the iterator the
+                // method was read from (bd-9vouw.310); the iteration
+                // statements advance iterators directly, not through here.
                 let incompatible = |name: &str| {
                     let tag = match name {
                         MAP_ITERATOR_PROTOTYPE => "Map Iterator",
@@ -41217,8 +41220,7 @@ impl InterpreterCore {
                         *handle
                     }
                     (Some(Value::Iterator(handle)), None) => *handle,
-                    (None | Some(Value::Undefined), Some(bound)) => bound,
-                    (Some(_), Some(bound)) => {
+                    (_, Some(bound)) => {
                         let method_kind = self.iterator_intrinsic_prototype_name(bound);
                         return Err(self.throw_js_error("TypeError", incompatible(method_kind)));
                     }

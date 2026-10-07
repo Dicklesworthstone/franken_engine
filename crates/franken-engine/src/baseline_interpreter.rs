@@ -35920,11 +35920,19 @@ impl InterpreterCore {
     }
 
     /// Instruction-boundary check for an armed state capture. O(1) when
-    /// disarmed or already captured.
+    /// disarmed or already captured: the dispatch loop runs it before every
+    /// instruction, so the disarmed check is inlined there and the rest is
+    /// out of line (bd-9vouw.329).
+    #[inline]
     fn check_state_capture_boundary(&mut self) {
-        let Some(requested) = self.state_capture_tick else {
-            return;
-        };
+        if let Some(requested) = self.state_capture_tick {
+            self.capture_state_at_armed_boundary(requested);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn capture_state_at_armed_boundary(&mut self, requested: u64) {
         let seen = self.nondeterminism_event_count();
         if seen < requested {
             return;
@@ -51114,7 +51122,13 @@ impl InterpreterCore {
             }
             // Retire the handoff even on EOF, implicit return, or budget refusal.
             // Only this iteration's adjacent InitBinding may consume it.
-            let pending_cyclic_import_binding = self.pending_cyclic_import_binding.take();
+            // Tested before taking: moving the (usually absent) handoff out
+            // copied the whole Option before every instruction (bd-9vouw.329).
+            let pending_cyclic_import_binding = if self.pending_cyclic_import_binding.is_some() {
+                self.pending_cyclic_import_binding.take()
+            } else {
+                None
+            };
             // Time-travel debugger state capture at the instruction boundary
             // (bd-fqlfw.3.5.5). O(1) branch when disarmed.
             self.check_state_capture_boundary();

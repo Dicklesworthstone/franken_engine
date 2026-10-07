@@ -52628,14 +52628,15 @@ impl InterpreterCore {
                                     &property_key,
                                 )?;
                                 if property_key.as_str() == Some("__proto__")
-                                    && !self.heap[oid.0 as usize]
-                                        .contains_own_runtime_property(&property_key)
+                                    && self.proto_key_reaches_accessor(oid)
                                 {
                                     // `__proto__` reads the internal prototype link
                                     // (set by class `extends` and `o.__proto__ = p`),
                                     // not a data property (bd-ppfds). A function's
                                     // backing object reports as the function
-                                    // (bd-9vouw.98).
+                                    // (bd-9vouw.98). An own `__proto__` data
+                                    // property or a null-prototype chain reads
+                                    // as an ordinary property (bd-9vouw.318).
                                     let link = self.ordinary_get_prototype_of(oid)?;
                                     self.prototype_value_for_link(Some(module), link)
                                 } else if ordinary_own_property_fast_path {
@@ -53290,9 +53291,11 @@ impl InterpreterCore {
                                     // authenticated side table; no guest-writable
                                     // mirror property is created.
                                 } else if property_key.as_str() == Some("__proto__")
-                                    && !self.heap[oid.0 as usize]
-                                        .contains_own_runtime_property(&property_key)
+                                    && self.proto_key_reaches_accessor(oid)
                                 {
+                                    // Otherwise (an own `__proto__`, a null-prototype
+                                    // chain) it is an ordinary data write below
+                                    // (bd-9vouw.318).
                                     // `__proto__` sets the internal prototype link so
                                     // prototype-chain lookups (incl. class `extends`,
                                     // which lowers to `Child.prototype.__proto__ =
@@ -61181,6 +61184,40 @@ impl InterpreterCore {
             .and_then(|object| self.observable_prototype_link(object, id))
     }
 
+    /// Whether `object.__proto__` reaches %Object.prototype%'s `__proto__`
+    /// accessor (Annex B.2.2.1): neither the receiver nor any object before
+    /// %Object.prototype% on its chain has an own `__proto__`, and the chain
+    /// does reach %Object.prototype%. Otherwise `__proto__` is an ordinary
+    /// property name: an own data property (JSON.parse, defineProperty,
+    /// spread) is read and written as data, and a null-prototype object has
+    /// no such accessor, so a read is undefined and a write defines it
+    /// (bd-9vouw.318). A Proxy receiver keeps the accessor path, whose
+    /// setter runs its setPrototypeOf trap (bd-9vouw.311).
+    fn proto_key_reaches_accessor(&self, id: ObjectId) -> bool {
+        let key = RuntimePropertyKey::String(JsString::from("__proto__"));
+        let object_prototype = self.builtin_prototypes.get("Object").copied();
+        let mut current = id;
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(object) = self.heap.get(current.0 as usize) else {
+                return false;
+            };
+            if object.brand() == Some(PROXY_TYPE_TAG) {
+                return current == id;
+            }
+            if object.contains_own_runtime_property(&key) {
+                return false;
+            }
+            if Some(current) == object_prototype {
+                return true;
+            }
+            match object.prototype {
+                Some(next) => current = next,
+                None => return !object.is_null_prototype,
+            }
+        }
+        false
+    }
+
     /// Whether `id`'s chain ends at %Object.prototype%, allocated or not; an
     /// explicit null link ends it before.
     fn chain_reaches_object_prototype(&self, id: ObjectId) -> bool {
@@ -63991,6 +64028,25 @@ impl InterpreterCore {
                 if let Value::Object(receiver) = &receiver {
                     self.reflect_admit_mutation_label(*receiver)?;
                 }
+            }
+            // [[Set]] of `__proto__` that reaches %Object.prototype%'s
+            // accessor runs its setter (Annex B.2.2.1.2), as SetProperty
+            // does: Object.assign and Reflect.set of a `__proto__` key set
+            // the prototype, and a refused change is a TypeError
+            // (bd-9vouw.318). They defined an own `__proto__` data property.
+            if key.as_str() == Some("__proto__")
+                && receiver == Value::Object(object_id)
+                && self.proto_key_reaches_accessor(object_id)
+            {
+                if let Some(new_proto) = self.prototype_link_for_value(module, &value)?
+                    && !self.object_set_prototype(module, object_id, new_proto, 0)?
+                {
+                    return Err(InterpreterError::TypeError {
+                        expected: "a permitted __proto__ change".to_string(),
+                        got: "a cyclic or refused prototype".to_string(),
+                    });
+                }
+                return Ok(true);
             }
             let mut define_on_receiver = false;
             if let Some(key) = key.as_str() {
@@ -78777,9 +78833,7 @@ impl InterpreterCore {
         self.preflight_legacy_property_key_for_hook(&key)?;
         match object_value {
             Value::Object(object_id) => {
-                if key.as_str() == Some("__proto__")
-                    && !self.heap[object_id.0 as usize].contains_own_runtime_property(&key)
-                {
+                if key.as_str() == Some("__proto__") && self.proto_key_reaches_accessor(object_id) {
                     let link = self.ordinary_get_prototype_of(object_id)?;
                     return Ok(self.prototype_value_for_link(module, link));
                 }

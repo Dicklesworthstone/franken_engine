@@ -81445,25 +81445,63 @@ impl InterpreterCore {
         let prospective_accessor_bytes = new_edge_bytes.saturating_add(preserved_edge_bytes);
         let has_exact_only_properties = object.properties.exact_len() != object.properties.len();
         let ordinary_key = key.as_str().filter(|_| !has_exact_only_properties);
-        let previous_property_bytes =
-            Self::estimate_ordered_property_map_bytes_nonalloc(&object.properties);
-        let next_property_bytes = Self::estimate_projected_string_accessor_map_bytes(
-            &object.properties,
-            &key,
-            prospective_accessor_bytes,
-        );
-        let requested_bytes = self
-            .estimated_memory_bytes
-            .saturating_sub(previous_property_bytes)
-            .saturating_add(next_property_bytes);
-        let construction_peak = ordinary_key.map_or_else(
-            || {
-                new_edge_bytes
-                    .saturating_add(previous_property_bytes)
-                    .max(next_property_bytes)
-            },
-            |key| new_edge_bytes.saturating_add(Self::estimate_string_bytes(key)),
-        );
+        let (requested_bytes, construction_peak) = match ordinary_key {
+            // An ordinary key leaves every other entry's estimate as it was
+            // (no exact key order before or after), so the request moves by
+            // this entry's own change. Estimating the whole map before and
+            // after made defining N accessors on one object O(N^2): a class
+            // with many getters, a bundle's export getters (bd-9vouw.335).
+            Some(ordinary) => {
+                let entry_base = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_string_bytes(ordinary).saturating_mul(2));
+                let previous_entry = object.properties.get(ordinary).map_or(0, |value| {
+                    entry_base.saturating_add(Self::estimate_execution_seed_value_bytes(value))
+                });
+                let next_entry = entry_base.saturating_add(prospective_accessor_bytes);
+                let requested_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(previous_entry)
+                    .saturating_add(next_entry);
+                #[cfg(debug_assertions)]
+                {
+                    let previous_property_bytes =
+                        Self::estimate_ordered_property_map_bytes_nonalloc(&object.properties);
+                    let next_property_bytes = Self::estimate_projected_string_accessor_map_bytes(
+                        &object.properties,
+                        &key,
+                        prospective_accessor_bytes,
+                    );
+                    debug_assert_eq!(
+                        requested_bytes,
+                        self.estimated_memory_bytes
+                            .saturating_sub(previous_property_bytes)
+                            .saturating_add(next_property_bytes),
+                        "an accessor entry's own delta is the whole map's (bd-9vouw.335)"
+                    );
+                }
+                (
+                    requested_bytes,
+                    new_edge_bytes.saturating_add(Self::estimate_string_bytes(ordinary)),
+                )
+            }
+            None => {
+                let previous_property_bytes =
+                    Self::estimate_ordered_property_map_bytes_nonalloc(&object.properties);
+                let next_property_bytes = Self::estimate_projected_string_accessor_map_bytes(
+                    &object.properties,
+                    &key,
+                    prospective_accessor_bytes,
+                );
+                (
+                    self.estimated_memory_bytes
+                        .saturating_sub(previous_property_bytes)
+                        .saturating_add(next_property_bytes),
+                    new_edge_bytes
+                        .saturating_add(previous_property_bytes)
+                        .max(next_property_bytes),
+                )
+            }
+        };
         self.check_temporary_memory_budget(construction_peak)?;
         if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));

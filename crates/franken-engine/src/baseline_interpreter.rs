@@ -41042,6 +41042,31 @@ impl InterpreterCore {
                     return Ok(result);
                 }
                 let value = self.string_pattern_this(module, &receiver)?;
+                // ES2021 22.1.3.19 steps 2.c-4: a RegExp whose @@replace is
+                // undefined or null is searched for as its ToString text
+                // ("/./g"), not matched as a pattern.
+                if let Some(Value::Object(pattern_id)) = self.builtin_arg(args, 0)?
+                    && self
+                        .regexp_source_flags_from_value(&Value::Object(pattern_id))
+                        .is_some()
+                    && !self.regexp_uses_builtin_symbol_method(
+                        pattern_id,
+                        &RuntimePropertyKey::Symbol(WellKnownSymbol::Replace.id()),
+                    )
+                {
+                    let search =
+                        self.conversion_to_string(Some(module), Value::Object(pattern_id))?;
+                    let (_, replacement) = self.string_replace_args(Some(module), args)?;
+                    let label = self.join_arg_range_label(args)?;
+                    return self.string_replace_js(
+                        Some(module),
+                        value.as_ref(),
+                        &Value::Str(search),
+                        &replacement,
+                        true,
+                        label,
+                    );
+                }
                 self.string_replace_all_method(module, &value, args)
             }
             BuiltinFunctionKind::StringCodePointAt => {

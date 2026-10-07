@@ -287,3 +287,52 @@ console.log(JSON.stringify('\u{1F600}'.match(uu)), JSON.stringify('\u{1F600}'.ma
         ]
     );
 }
+
+/// bd-9vouw.257: RegExp.prototype[@@matchAll] (ES2024 22.2.6.9) constructs
+/// its matcher through @@species with ToString(Get(R, "flags")) and copies
+/// `lastIndex`, so an own `flags` decides globality (Test262
+/// Symbol.matchAll/this-get-flags.js went red when flags moved into internal
+/// slots, bd-9vouw.150); a direct call on a non-global RegExp yields its one
+/// match (it was a TypeError); String.prototype.matchAll rejects a RegExp
+/// whose observable flags lack "g"; a subclass's exec runs once per match
+/// plus the final null; the receiver's lastIndex is left alone. Expected
+/// lines are Node v22.2.0's output, captured programmatically.
+///
+/// No-claim: the iterator's matches are collected when @@matchAll is called.
+#[test]
+fn regexp_match_all_reads_flags_bd_9vouw_257() {
+    let source = r##"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var show = function (iterator) { return JSON.stringify([...iterator].map(function (m) { return m[0] + '@' + m.index; })); };
+var flagged = /\w/;
+Object.defineProperty(flagged, 'flags', { value: 'g' });
+console.log(show(flagged[Symbol.matchAll]('a*b')), show(/\w/[Symbol.matchAll]('a*b')), show(/\w/g[Symbol.matchAll]('a*b')));
+var notGlobal = /\w/g;
+Object.defineProperty(notGlobal, 'flags', { value: '' });
+console.log(attempt(function () { return 'ab'.matchAll(notGlobal); }), attempt(function () { return 'ab'.matchAll(/b/); }), show(notGlobal[Symbol.matchAll]('ab')));
+var execs = 0;
+class Sub extends RegExp { exec(s) { execs++; return super.exec(s); } }
+console.log(show('xAyA'.matchAll(new Sub('A', 'g'))), execs);
+var start = /a/g;
+start.lastIndex = 2;
+console.log(show(start[Symbol.matchAll]('aaaa')), start.lastIndex);
+var empties = /(?:)/g;
+Object.defineProperty(empties, 'flags', { value: 'g' });
+console.log(show(empties[Symbol.matchAll]('ab')));"##;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r##"["a@0","b@2"] ["a@0"] ["a@0","b@2"]"##,
+            r##"TypeError TypeError ["a@0"]"##,
+            r##"["A@1","A@3"] 3"##,
+            r##"["a@2","a@3"] 2"##,
+            r##"["@0","@1","@2"]"##,
+        ]
+    );
+}

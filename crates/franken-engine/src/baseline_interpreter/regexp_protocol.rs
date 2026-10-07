@@ -14,9 +14,12 @@
 //! replace and split reach them too, through the receiver's builtin
 //! @@method.
 //!
-//! No-claim: @@matchAll keeps the matcher path (its RegExpStringIterator
-//! is not a lazy iterator here); `lastIndex` writes reach object
-//! receivers only (a function receiver's are not modeled).
+//! @@matchAll constructs its matcher through @@species with the observable
+//! flags and copies `lastIndex` (ES2024 22.2.6.9).
+//!
+//! No-claim: the RegExpStringIterator collects its matches when @@matchAll
+//! is called (it is not lazy) and is an array iterator; `lastIndex` writes
+//! reach object receivers only (a function receiver's are not modeled).
 
 use super::*;
 
@@ -82,8 +85,7 @@ impl InterpreterCore {
     /// receiver that is not pristine, with `string` not yet converted,
     /// `extra` the method's second argument (replaceValue, limit) and
     /// `label` the join of the arguments' labels, which every guest call
-    /// receives and the result carries. `None` for @@matchAll, which keeps
-    /// the matcher path.
+    /// receives and the result carries. `None` for any other method.
     pub(super) fn regexp_symbol_method_generic(
         &mut self,
         module: &Ir3Module,
@@ -93,7 +95,10 @@ impl InterpreterCore {
         extra: Value,
         label: &Label,
     ) -> Result<Option<Value>, InterpreterError> {
-        if !matches!(method, "@@match" | "@@search" | "@@replace" | "@@split") {
+        if !matches!(
+            method,
+            "@@match" | "@@matchAll" | "@@search" | "@@replace" | "@@split"
+        ) {
             return Ok(None);
         }
         if !rx.is_object_like() {
@@ -110,6 +115,7 @@ impl InterpreterCore {
             "@@match" => self.regexp_symbol_match_generic(module, rx, &input, label)?,
             "@@search" => self.regexp_symbol_search_generic(module, rx, &input, label)?,
             "@@replace" => self.regexp_symbol_replace_generic(module, rx, &input, extra, label)?,
+            "@@matchAll" => self.regexp_symbol_match_all_generic(module, rx, &input, label)?,
             _ => self.regexp_symbol_split_generic(module, rx, &input, extra, label)?,
         };
         let joined = self
@@ -121,16 +127,17 @@ impl InterpreterCore {
         Ok(Some(result))
     }
 
-    /// String.prototype.replaceAll step 2.b (ES2021 22.1.3.19) for a
-    /// RegExp search value that is not pristine: ToString(Get(searchValue,
-    /// "flags")) must contain "g" (undefined or null flags are a
-    /// TypeError). A pristine RegExp's flags are checked from its slot by
-    /// the matcher path.
-    pub(super) fn string_replace_all_observable_flags_check(
+    /// String.prototype.replaceAll / matchAll step 2.b (ES2021 22.1.3.19,
+    /// ES2020 21.1.3.12) for a RegExp argument that is not pristine:
+    /// ToString(Get(regexp, "flags")) must contain "g" (undefined or null
+    /// flags are a TypeError). A pristine RegExp's flags are checked from
+    /// its slot by the matcher path.
+    pub(super) fn string_global_regexp_observable_flags_check(
         &mut self,
         module: &Ir3Module,
         receiver: &Value,
         args: RegRange,
+        method: &str,
     ) -> Result<(), InterpreterError> {
         if matches!(receiver, Value::Undefined | Value::Null) {
             return Ok(());
@@ -147,7 +154,7 @@ impl InterpreterCore {
         let flags = self.protocol_get(module, &search, "flags")?;
         if matches!(flags, Value::Undefined | Value::Null) {
             return Err(InterpreterError::TypeError {
-                expected: "RegExp flags for String.prototype.replaceAll".to_string(),
+                expected: format!("RegExp flags for String.prototype.{method}"),
                 got: flags.type_name().to_string(),
             });
         }
@@ -157,7 +164,7 @@ impl InterpreterCore {
             .contains('g')
         {
             return Err(InterpreterError::TypeError {
-                expected: "global RegExp for String.prototype.replaceAll".to_string(),
+                expected: format!("global RegExp for String.prototype.{method}"),
                 got: "non-global RegExp".to_string(),
             });
         }
@@ -621,49 +628,47 @@ impl InterpreterCore {
         Ok(result)
     }
 
-    /// ES2024 22.2.6.14 RegExp.prototype[@@split].
-    fn regexp_symbol_split_generic(
+    /// SpeciesConstructor(rx, %RegExp%) (ES2020 7.3.20).
+    fn regexp_species_constructor(
         &mut self,
         module: &Ir3Module,
         rx: &Value,
-        input: &JsString,
-        limit: Value,
-        label: &Label,
     ) -> Result<Value, InterpreterError> {
-        // SpeciesConstructor(rx, %RegExp%) (ES2020 7.3.20).
         let intrinsic = Value::BuiltinFunction(BuiltinFunction::standard_constructor("RegExp"));
         let constructor = self.protocol_get(module, rx, "constructor")?;
-        let species = if matches!(constructor, Value::Undefined) {
-            intrinsic
-        } else {
-            if !constructor.is_object_like() {
-                return Err(InterpreterError::TypeError {
-                    expected: "object or undefined RegExp constructor".to_string(),
-                    got: constructor.type_name().to_string(),
-                });
-            }
-            match self.species_of_constructor(module, &constructor)? {
-                Value::Undefined | Value::Null => intrinsic,
-                species if self.is_constructible_value(&species) => species,
-                other => {
-                    return Err(InterpreterError::TypeError {
-                        expected: "constructor @@species for a RegExp".to_string(),
-                        got: other.type_name().to_string(),
-                    });
-                }
-            }
-        };
-        let flags = self.regexp_protocol_flags(module, rx)?;
-        let unicode_matching = flags.contains('u') || flags.contains('v');
-        let new_flags = if flags.contains('y') {
-            flags
-        } else {
-            format!("{flags}y")
-        };
-        let (splitter, splitter_label) = self.invoke_inline_construct_with_labels(
+        if matches!(constructor, Value::Undefined) {
+            return Ok(intrinsic);
+        }
+        if !constructor.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or undefined RegExp constructor".to_string(),
+                got: constructor.type_name().to_string(),
+            });
+        }
+        match self.species_of_constructor(module, &constructor)? {
+            Value::Undefined | Value::Null => Ok(intrinsic),
+            species if self.is_constructible_value(&species) => Ok(species),
+            other => Err(InterpreterError::TypeError {
+                expected: "constructor @@species for a RegExp".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// Construct(species, « rx, flags »): the matcher or splitter, with the
+    /// arguments' label.
+    fn regexp_construct_matcher(
+        &mut self,
+        module: &Ir3Module,
+        species: Value,
+        rx: &Value,
+        flags: String,
+        label: &Label,
+    ) -> Result<Value, InterpreterError> {
+        let (matcher, matcher_label) = self.invoke_inline_construct_with_labels(
             Some(module),
             species,
-            vec![rx.clone(), Value::str(new_flags)],
+            vec![rx.clone(), Value::str(flags)],
             Some(IsolatedCallLabels {
                 receiver: Label::Public,
                 arguments: IsolatedArgumentLabels::Uniform(label.clone()),
@@ -674,9 +679,74 @@ impl InterpreterCore {
             .pending_hostcall_result_label
             .as_ref()
             .unwrap_or(&Label::Public)
-            .join(&splitter_label);
+            .join(&matcher_label);
         self.replace_pending_hostcall_result_label(Some(joined))?;
         self.observe_scoped_callback_result()?;
+        Ok(matcher)
+    }
+
+    /// ES2024 22.2.6.9 RegExp.prototype[@@matchAll], with the
+    /// RegExpStringIterator's matches (22.2.9.2.1) collected now.
+    fn regexp_symbol_match_all_generic(
+        &mut self,
+        module: &Ir3Module,
+        rx: &Value,
+        input: &JsString,
+        label: &Label,
+    ) -> Result<Value, InterpreterError> {
+        let species = self.regexp_species_constructor(module, rx)?;
+        let flags = self.regexp_protocol_flags(module, rx)?;
+        let global = flags.contains('g');
+        let full_unicode = flags.contains('u') || flags.contains('v');
+        let matcher = self.regexp_construct_matcher(module, species, rx, flags, label)?;
+        let last_index = self.protocol_get(module, rx, "lastIndex")?;
+        let last_index = self.protocol_to_length(module, last_index)?;
+        self.protocol_set(
+            module,
+            &matcher,
+            "lastIndex",
+            Self::protocol_number(last_index),
+        )?;
+        let units = input.code_units_vec();
+        let mut matches = Vec::new();
+        loop {
+            self.charge_property_copy_work()?;
+            let result = self.regexp_exec_generic(module, &matcher, input, label)?;
+            if matches!(result, Value::Null) {
+                break;
+            }
+            if !global {
+                matches.push(result);
+                break;
+            }
+            let matched = self.protocol_get(module, &result, "0")?;
+            if self.protocol_to_string(module, matched)?.utf16_len() == 0 {
+                self.regexp_protocol_step_past_empty(module, &matcher, &units, full_unicode)?;
+            }
+            matches.push(result);
+        }
+        let array = self.alloc_array_from_values(&matches)?;
+        self.array_prototype_iterator_for_receiver(Value::Object(array), "values")
+    }
+
+    /// ES2024 22.2.6.14 RegExp.prototype[@@split].
+    fn regexp_symbol_split_generic(
+        &mut self,
+        module: &Ir3Module,
+        rx: &Value,
+        input: &JsString,
+        limit: Value,
+        label: &Label,
+    ) -> Result<Value, InterpreterError> {
+        let species = self.regexp_species_constructor(module, rx)?;
+        let flags = self.regexp_protocol_flags(module, rx)?;
+        let unicode_matching = flags.contains('u') || flags.contains('v');
+        let new_flags = if flags.contains('y') {
+            flags
+        } else {
+            format!("{flags}y")
+        };
+        let splitter = self.regexp_construct_matcher(module, species, rx, new_flags, label)?;
         // ToUint32(limit), 2^32 - 1 for undefined.
         let limit = if matches!(limit, Value::Undefined) {
             u64::from(u32::MAX)

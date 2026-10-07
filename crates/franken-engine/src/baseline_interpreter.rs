@@ -40870,7 +40870,12 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StringReplaceAll => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                self.string_replace_all_observable_flags_check(module, &receiver, args)?;
+                self.string_global_regexp_observable_flags_check(
+                    module,
+                    &receiver,
+                    args,
+                    "replaceAll",
+                )?;
                 if let Some(result) = self.string_pattern_protocol_call(
                     module,
                     &receiver,
@@ -40982,6 +40987,12 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StringMatchAll => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                self.string_global_regexp_observable_flags_check(
+                    module,
+                    &receiver,
+                    args,
+                    "matchAll",
+                )?;
                 if let Some(result) = self.string_pattern_protocol_call(
                     module,
                     &receiver,
@@ -74789,7 +74800,14 @@ impl InterpreterCore {
         // bd-9vouw.257: a receiver whose reads are observable (a user exec,
         // an overridden flags getter, a subclass, a plain object) runs the
         // ES2024 22.2.6 algorithms instead of the matcher.
-        if method != "@@matchAll" && !self.regexp_is_pristine(&receiver) {
+        // A direct @@matchAll of a non-global RegExp yields its one match
+        // (only String.prototype.matchAll requires the g flag); the
+        // matcher path refused it.
+        let non_global_match_all = method == "@@matchAll"
+            && self
+                .regexp_source_flags_from_value(&receiver)
+                .is_some_and(|(_, flags)| !flags.contains('g'));
+        if non_global_match_all || !self.regexp_is_pristine(&receiver) {
             let string = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
             let extra = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
             let label = self.join_arg_range_label(args)?;
@@ -74983,8 +75001,8 @@ impl InterpreterCore {
 
     /// A String method's pattern whose `symbol` method is this realm's
     /// RegExp.prototype builtin: `None` (the caller's matcher algorithm)
-    /// for a pristine RegExp or @@matchAll, otherwise the builtin's
-    /// specification algorithm with `this` the pattern (bd-9vouw.257).
+    /// for a pristine RegExp, otherwise the builtin's specification
+    /// algorithm with `this` the pattern (bd-9vouw.257).
     fn string_pattern_builtin_symbol_call(
         &mut self,
         module: &Ir3Module,
@@ -74996,7 +75014,7 @@ impl InterpreterCore {
         let Some(method) = regexp_symbol_method_key(symbol.id()) else {
             return Ok(None);
         };
-        if method == "@@matchAll" || self.regexp_is_pristine(pattern) {
+        if self.regexp_is_pristine(pattern) {
             return Ok(None);
         }
         let extra = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);

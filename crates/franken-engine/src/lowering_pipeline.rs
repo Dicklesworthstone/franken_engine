@@ -7601,13 +7601,20 @@ fn lower_statement_to_ir1_with_flow(
                         arg_count: 0,
                     });
                 } else {
-                    // Load the parent constructor evaluated once above.
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: super_binding.expect("user superclass binding"),
-                    });
-                    ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".into()),
-                    });
+                    // The parent constructor evaluated once above.
+                    let prototype_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "class_super_prototype",
+                    )?;
+                    emit_heritage_prototype(
+                        ops,
+                        super_binding.expect("user superclass binding"),
+                        prototype_binding,
+                        label_counter,
+                    );
                 }
 
                 // Child.prototype inherits from Parent.prototype. An internal
@@ -14165,6 +14172,45 @@ fn lower_super_member_assignment(
     Ok(())
 }
 
+/// Push a user superclass's prototype for `builtin:ClassPrototypeLink`
+/// (ES2020 14.6.13 step 6.e-g): null for `extends null`, whose `prototype`
+/// is not read, and otherwise the parent's `prototype`, which the link
+/// checks is an object or null (bd-9vouw.325). The parent is null or a
+/// constructor here: `RegisterDerivedConstructor` rejected anything else.
+fn emit_heritage_prototype(
+    ops: &mut Vec<Ir1Op>,
+    super_binding: BindingId,
+    result_binding: BindingId,
+    label_counter: &mut u32,
+) {
+    let link = alloc_label(label_counter);
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Null,
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Discard);
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: super_binding,
+    });
+    ops.push(Ir1Op::JumpIfNullish { label_id: link });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: super_binding,
+    });
+    ops.push(Ir1Op::GetProperty {
+        key: Ir1PropertyKey::Static("prototype".into()),
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Discard);
+    ops.push(Ir1Op::Label { id: link });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: result_binding,
+    });
+}
+
 /// ES2020 9.2.1 [[Call]] step 2: a class constructor called without `new`
 /// (Function.prototype.call, Reflect.apply, a bound call included) throws a
 /// TypeError before its parameters or body run (bd-9vouw.292). Emitted at
@@ -20636,12 +20682,19 @@ fn lower_expression_to_ir1_inner(
                         arg_count: 0,
                     });
                 } else {
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: super_binding.expect("user superclass binding"),
-                    });
-                    ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".into()),
-                    });
+                    let prototype_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "class_expression_super_prototype",
+                    )?;
+                    emit_heritage_prototype(
+                        ops,
+                        super_binding.expect("user superclass binding"),
+                        prototype_binding,
+                        label_counter,
+                    );
                 }
                 ops.push(Ir1Op::HostCall {
                     capability: CLASS_PROTOTYPE_LINK_CAPABILITY.to_string(),

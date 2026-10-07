@@ -114,7 +114,8 @@ expression: scrubbed_actual
                 }
               },
               "is_async": false,
-              "is_generator": false
+              "is_generator": false,
+              "strict": true
             }
           }
         },

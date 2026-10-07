@@ -80,7 +80,8 @@ expression: scrubbed_actual
           "start_column": "[START_COLUMN]",
           "end_line": "[END_LINE]",
           "end_column": "[END_COLUMN]"
-        }
+        },
+        "strict": false
       }
     }
   ],

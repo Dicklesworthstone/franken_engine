@@ -40476,8 +40476,13 @@ impl InterpreterCore {
         // /[[Delete]] (getters and traps see every step), and so does a concat
         // that spreads a Proxy or an @@isConcatSpreadable object.
         if Self::has_generic_array_path(builtin.kind)
-            && let Some(object_id) =
-                self.generic_array_receiver(module, builtin.kind, receiver.as_ref(), args)?
+            && let Some(object_id) = self.generic_array_receiver(
+                module,
+                builtin.kind,
+                Self::is_typed_array_prototype_builtin(builtin),
+                receiver.as_ref(),
+                args,
+            )?
         {
             // A function `this` stays the method's observable O (bd-9vouw.285).
             let function = receiver

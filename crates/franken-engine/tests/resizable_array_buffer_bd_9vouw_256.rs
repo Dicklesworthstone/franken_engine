@@ -199,3 +199,35 @@ console.log(arraySeen.join(','));
         ]
     );
 }
+
+/// bd-9vouw.256: Array.prototype.join on a typed array reads the length,
+/// then runs the separator's toString (which may resize the buffer), then
+/// reads each index, an index past the new length as undefined; the
+/// separator was stringified without calling its toString
+/// ("[object Object]") once Array.prototype.join stopped taking
+/// %TypedArray%.prototype.join's path. Expected line: Node v22.2.0's
+/// output, captured programmatically (Bun 1.4.2 agrees).
+#[test]
+fn array_join_on_typed_arrays_converts_the_separator_after_the_length_bd_9vouw_256() {
+    let source = r#"var out = [];
+[true, false].forEach(function (grow) {
+  [false, true].forEach(function (tracking) {
+    var rab = new ArrayBuffer(4, { maxByteLength: 8 });
+    var ta = tracking ? new Uint8Array(rab) : new Uint8Array(rab, 0, 4);
+    var evil = { toString: function () { rab.resize(grow ? 6 : 2); return '.'; } };
+    out.push(Array.prototype.join.call(ta, evil));
+  });
+});
+var rab2 = new ArrayBuffer(4, { maxByteLength: 8 });
+var ta2 = new Uint8Array(rab2);
+console.log(out.join(' | '), Array.prototype.join.call(ta2, { toString: function () { return '-'; } }), ta2.join({ toString: function () { return '+'; } }));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(lines, ["0.0.0.0 | 0.0.0.0 | ... | 0.0.. 0-0-0-0 0+0+0+0",]);
+}

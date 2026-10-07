@@ -79,11 +79,17 @@ impl InterpreterCore {
     /// object holding its own properties (its indices and `length`,
     /// bd-9vouw.285; a callable proxy's record); and an Array receiver of a
     /// concat that must spread generically. Arrays read their element
-    /// storage, and typed arrays keep their own paths.
+    /// storage, and typed arrays keep their own paths, except that
+    /// Array.prototype.join (not %TypedArray%.prototype.join,
+    /// `typed_array_method`) runs on a typed array generically: its length
+    /// is read before the separator's ToString, which may resize the
+    /// buffer, and an index past the new length reads undefined
+    /// (bd-9vouw.256).
     pub(super) fn generic_array_receiver(
         &mut self,
         module: &Ir3Module,
         kind: BuiltinFunctionKind,
+        typed_array_method: bool,
         receiver: Option<&Value>,
         args: RegRange,
     ) -> Result<Option<ObjectId>, InterpreterError> {
@@ -140,7 +146,8 @@ impl InterpreterCore {
                             && !self.array_has_dense_data_elements(object_id));
                     return Ok(generic.then_some(object_id));
                 }
-                Ok((!is_typed_array && !iterator).then_some(object_id))
+                let generic_typed_array = kind == K::ArrayJoin && !typed_array_method;
+                Ok(((!is_typed_array || generic_typed_array) && !iterator).then_some(object_id))
             }
             Some(
                 primitive @ (Value::Bool(_)

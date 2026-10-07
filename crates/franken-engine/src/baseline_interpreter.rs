@@ -100763,6 +100763,37 @@ impl InterpreterCore {
         Ok(view)
     }
 
+    /// The argument checks of DataView ( buffer, byteOffset, byteLength )
+    /// (ES2024 25.3.2.1 steps 2-9) without constructing the view: the
+    /// TypeError for a buffer that is not an ArrayBuffer and the
+    /// RangeErrors of the offset and length. Callers pass only primitive
+    /// offsets and lengths, whose ToIndex has no observable effect.
+    fn validate_data_view_arguments(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let buffer = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let buffer_id = match buffer {
+            Value::Object(id)
+                if self
+                    .heap
+                    .get(id.0 as usize)
+                    .is_some_and(|object| object.array_buffer.is_some()) =>
+            {
+                id
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "ArrayBuffer".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        self.data_view_buffer_view_shape(Some(module), buffer_id, args)?;
+        Ok(())
+    }
+
     /// Allocate a new object with an explicit prototype link.
     ///
     /// Returns an error if the heap exceeds `u32::MAX` objects, preventing
@@ -101858,6 +101889,37 @@ impl InterpreterCore {
                 expected: "constructor".to_string(),
                 got: format!("{name} is not a constructor"),
             });
+        }
+        // Promise ( executor ) (ES2024 27.2.3.1 step 2) and DataView
+        // (25.3.2.1 steps 2-9) validate their arguments before
+        // GetPrototypeFromConstructor; the read below came first for every
+        // builtin, so a throwing `prototype` getter on newTarget hid their
+        // TypeError / RangeError. ToIndex of an object offset or length is
+        // observable, so a DataView is validated up front only when both are
+        // primitives; construction validates again after the read, as the
+        // specification re-checks the buffer then.
+        if builtin.kind == BuiltinFunctionKind::PromiseConstructor {
+            let executor = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            if !executor.is_callable() {
+                return Err(InterpreterError::TypeError {
+                    expected: "a callable Promise executor".to_string(),
+                    got: format!(
+                        "Promise resolver {} is not a function",
+                        executor.type_name()
+                    ),
+                });
+            }
+        }
+        if standard_name == Some("DataView") {
+            let mut primitive = true;
+            for index in 1..3 {
+                primitive &= !self
+                    .builtin_arg(args, index)?
+                    .is_some_and(|value| value.is_object_like());
+            }
+            if primitive {
+                self.validate_data_view_arguments(module, args)?;
+            }
         }
         // GetPrototypeFromConstructor(newTarget, default) (ES2024 10.1.14):
         // Get(newTarget, "prototype") observably (a getter or proxy trap runs

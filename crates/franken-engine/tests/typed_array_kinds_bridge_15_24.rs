@@ -472,3 +472,43 @@ console.log(b.first(), b.length, b instanceof Uint8Array, String(Uint8Array.from
         ]
     );
 }
+
+/// bd-9vouw.273 follow-up (regression found by the rc-next33 merged-tree
+/// Test262 census): Promise checks that its executor is callable, and
+/// DataView checks its buffer, offset and length, before reading
+/// newTarget's `prototype`; the engine read the prototype first for every
+/// builtin, so a throwing `prototype` getter hid their TypeError /
+/// RangeError (Test262 Promise/get-prototype-abrupt-executor-not-callable,
+/// DataView/byteOffset-validated-against-initial-buffer-length). With valid
+/// arguments the getter still runs, and a plain newTarget's prototype is
+/// used. Expected lines are Node v22.2.0's output, captured
+/// programmatically.
+///
+/// No-claim: a DataView offset or length that is an object converts after
+/// the prototype read (converting it early would run its valueOf twice).
+#[test]
+fn constructors_validate_arguments_before_reading_new_target_prototype_bd_9vouw_273() {
+    let source = r#"function k(f) { try { f(); return 'ok'; } catch (e) { return e.constructor.name; } }
+var poisoned = Object.defineProperty(function () {}.bind(), 'prototype', { get: function () { throw new SyntaxError('prototype read'); } });
+console.log(k(function () { Reflect.construct(Promise, [], poisoned); }), k(function () { Reflect.construct(Promise, [1], poisoned); }), k(function () { Reflect.construct(Promise, [function () {}], poisoned); }));
+console.log(k(function () { Reflect.construct(DataView, [new ArrayBuffer(0), 10], poisoned); }), k(function () { Reflect.construct(DataView, [new ArrayBuffer(4), 2, 8], poisoned); }), k(function () { Reflect.construct(DataView, [{}, 0], poisoned); }), k(function () { Reflect.construct(DataView, [new ArrayBuffer(8), -1], poisoned); }), k(function () { Reflect.construct(DataView, [new ArrayBuffer(8), 2], poisoned); }));
+function Plain() {}
+var view = Reflect.construct(DataView, [new ArrayBuffer(8), 2], Plain);
+console.log(Object.getPrototypeOf(view) === Plain.prototype, Object.getPrototypeOf(Reflect.construct(Promise, [function () {}], Plain)) === Plain.prototype);
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "TypeError TypeError SyntaxError",
+            "RangeError RangeError TypeError RangeError SyntaxError",
+            "true true",
+        ]
+    );
+}

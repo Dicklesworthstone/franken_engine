@@ -5984,6 +5984,109 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
     "AsyncGeneratorFunction",
 ];
 
+/// The name of the wrapper a generator or async dynamic function is
+/// compiled inside; NUL-free but not a name source text can collide with in
+/// the one-statement wrapper it heads.
+const DYNAMIC_FUNCTION_WRAPPER: &str = "__franken_dynamic_function";
+
+/// The kind of function CreateDynamicFunction builds (ES2020 19.2.1.1.1):
+/// the Function constructor's, or %GeneratorFunction%'s, %AsyncFunction%'s
+/// or %AsyncGeneratorFunction%'s (bd-9vouw.321).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DynamicFunctionKind {
+    Normal,
+    Generator,
+    Async,
+    AsyncGenerator,
+}
+
+impl DynamicFunctionKind {
+    fn for_constructor(name: &str) -> Option<Self> {
+        match name {
+            "GeneratorFunction" => Some(Self::Generator),
+            "AsyncFunction" => Some(Self::Async),
+            "AsyncGeneratorFunction" => Some(Self::AsyncGenerator),
+            _ => None,
+        }
+    }
+
+    fn constructor_name(self) -> &'static str {
+        match self {
+            Self::Normal => "Function",
+            Self::Generator => "GeneratorFunction",
+            Self::Async => "AsyncFunction",
+            Self::AsyncGenerator => "AsyncGeneratorFunction",
+        }
+    }
+
+    fn is_async(self) -> bool {
+        matches!(self, Self::Async | Self::AsyncGenerator)
+    }
+
+    fn is_generator(self) -> bool {
+        matches!(self, Self::Generator | Self::AsyncGenerator)
+    }
+
+    /// The source of the wrapper whose one statement returns the function.
+    fn wrapper_source(self, parameters: &str, body: &str) -> String {
+        let prefix = match self {
+            Self::Normal => "function",
+            Self::Generator => "function*",
+            Self::Async => "async function",
+            Self::AsyncGenerator => "async function*",
+        };
+        format!(
+            "function {DYNAMIC_FUNCTION_WRAPPER}() {{\nreturn {prefix} anonymous({parameters}\n) {{\n{body}\n}};\n}}"
+        )
+    }
+
+    /// Bytes the wrapper adds to the generated source, for the scratch
+    /// charge taken before any source is built.
+    fn wrapper_overhead_bytes(self) -> u64 {
+        match self {
+            Self::Normal => 0,
+            _ => self.wrapper_source("", "").len() as u64,
+        }
+    }
+
+    /// Whether `tree` is exactly the wrapper: one declaration of
+    /// [`DYNAMIC_FUNCTION_WRAPPER`] whose body is one `return` of a function
+    /// named `anonymous` of this kind. Anything else means the parameters
+    /// or body closed the inner function early, which CreateDynamicFunction
+    /// parses as separate productions and rejects as a SyntaxError.
+    fn is_exact_wrapper(self, tree: &crate::ast::SyntaxTree) -> bool {
+        use crate::ast::{Expression, ReturnStatement, Statement};
+        let [Statement::FunctionDeclaration(wrapper)] = tree.body.as_slice() else {
+            return false;
+        };
+        if wrapper.name.as_deref() != Some(DYNAMIC_FUNCTION_WRAPPER)
+            || !wrapper.params.is_empty()
+            || wrapper.is_async
+            || wrapper.is_generator
+        {
+            return false;
+        }
+        let [
+            Statement::Return(ReturnStatement {
+                argument:
+                    Some(Expression::Function {
+                        name,
+                        is_async,
+                        is_generator,
+                        ..
+                    }),
+                ..
+            }),
+        ] = wrapper.body.body.as_slice()
+        else {
+            return false;
+        };
+        name.as_deref() == Some("anonymous")
+            && *is_async == self.is_async()
+            && *is_generator == self.is_generator()
+    }
+}
+
 /// bd-9vouw.17: standard constructors bound as first-class global values.
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
@@ -39441,6 +39544,26 @@ impl InterpreterCore {
         module: &Ir3Module,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        self.construct_dynamic_function(module, args, DynamicFunctionKind::Normal)
+    }
+
+    /// CreateDynamicFunction (ES2020 19.2.1.1.1) for the Function
+    /// constructor and, through a generated wrapper, for %GeneratorFunction%,
+    /// %AsyncFunction% and %AsyncGeneratorFunction% (bd-9vouw.321). A
+    /// generated function runs its body as a plain call, so a generator or
+    /// async kind is compiled as `function WRAPPER() { return <kind>
+    /// anonymous(params) { body }; }`. The wrapper runs once, in the same
+    /// contained-codegen envelope, and its result is a real function of that
+    /// kind whose closure carries the generated artifact's provenance, as a
+    /// function returned from `new Function(...)` code does. The wrapper
+    /// must parse to exactly that return, so text in the parameters or body
+    /// cannot close the inner function and run in the wrapper.
+    fn construct_dynamic_function(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        kind: DynamicFunctionKind,
+    ) -> Result<Value, InterpreterError> {
         // bd-9vouw.60: code generation is the call the behavior firewall
         // exists to see, but a builtin callee never reaches the per-call hook
         // (only IR3 functions and closures do). Every Function-constructor
@@ -39480,10 +39603,13 @@ impl InterpreterCore {
                         total.saturating_add(u64::try_from(text.len()).unwrap_or(u64::MAX))
                     })
                     .saturating_add(u64::from(args.count))
-                    .saturating_add("function anonymous() {\n\n}".len() as u64),
+                    .saturating_add("function anonymous() {\n\n}".len() as u64)
+                    .saturating_add(kind.wrapper_overhead_bytes()),
                 args.count,
             ),
-            None => self.generated_function_compilation_scratch_bytes(args)?,
+            None => self
+                .generated_function_compilation_scratch_bytes(args)?
+                .saturating_add(kind.wrapper_overhead_bytes()),
         };
         let record_construction_audit =
             self.generated_code_audit.len() < MAX_GENERATED_CODE_AUDIT_ENTRIES;
@@ -39521,8 +39647,12 @@ impl InterpreterCore {
                 granted_capabilities: Vec::new(),
                 outcome: "constructed".to_string(),
             });
-            let generated_source =
-                Self::function_constructor_source(&parameter_source, &body_source);
+            let generated_source = match kind {
+                DynamicFunctionKind::Normal => {
+                    Self::function_constructor_source(&parameter_source, &body_source)
+                }
+                kind => kind.wrapper_source(&parameter_source, &body_source),
+            };
             self.run_pre_allocation_hook(module, AllocKind::Function, generated_source.len())?;
 
             let parser_source = ParserSource {
@@ -39560,6 +39690,12 @@ impl InterpreterCore {
                     });
                 }
             };
+            if kind != DynamicFunctionKind::Normal && !kind.is_exact_wrapper(&syntax_tree) {
+                return Err(self.throw_js_error(
+                    "SyntaxError",
+                    format!("invalid parameters or body for {}", kind.constructor_name()),
+                ));
+            }
             let ir0 = Ir0Module::from_syntax_tree(syntax_tree, "<function-constructor>");
             let lowering_ctx = LoweringContext::new(
                 &self.trace_id,
@@ -39578,11 +39714,15 @@ impl InterpreterCore {
                     });
                 }
             };
+            let entry_name = match kind {
+                DynamicFunctionKind::Normal => "anonymous",
+                _ => DYNAMIC_FUNCTION_WRAPPER,
+            };
             let function_index = lowering_output
                 .ir3
                 .function_table
                 .iter()
-                .position(|desc| desc.name.as_deref() == Some("anonymous"))
+                .position(|desc| desc.name.as_deref() == Some(entry_name))
                 .ok_or_else(|| InterpreterError::ModuleLoweringFailed {
                     specifier: "<function-constructor>".to_string(),
                     error: "generated function descriptor missing".to_string(),
@@ -39613,15 +39753,28 @@ impl InterpreterCore {
             compilation_scratch_bytes,
             audit_entry,
         );
-        match retained {
-            Ok(builtin) => Ok(Value::BuiltinFunction(builtin)),
+        let wrapper = match retained {
+            Ok(builtin) => builtin,
             Err(error) => {
                 self.estimated_memory_bytes = self
                     .estimated_memory_bytes
                     .saturating_sub(compilation_scratch_bytes);
-                Err(error)
+                return Err(error);
             }
+        };
+        if kind == DynamicFunctionKind::Normal {
+            return Ok(Value::BuiltinFunction(wrapper));
         }
+        // The wrapper returns the generator, async or async generator
+        // function its body defines.
+        let (function, label) = self.call_generated_function_artifact(
+            &wrapper,
+            RegRange { start: 0, count: 0 },
+            None,
+            None,
+        )?;
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        Ok(function)
     }
 
     fn function_constructor_source(parameter_source: &str, body_source: &str) -> String {
@@ -107198,13 +107351,16 @@ impl InterpreterCore {
                 expected: "a concrete typed array constructor".to_string(),
                 got: "Abstract class TypedArray not directly constructable".to_string(),
             }),
-            // Creating a generator or async function from source text is
-            // not supported (the Function constructor's contained-codegen
-            // path compiles ordinary functions only): a typed refusal.
-            name if FUNCTION_KIND_INTRINSICS.contains(&name) => Err(InterpreterError::TypeError {
-                expected: "the Function constructor".to_string(),
-                got: format!("{name} from source text is not supported"),
-            }),
+            // A generator or async function from source text, through the
+            // Function constructor's contained-codegen path (bd-9vouw.321).
+            name if FUNCTION_KIND_INTRINSICS.contains(&name) => {
+                let kind = DynamicFunctionKind::for_constructor(name).ok_or_else(|| {
+                    InterpreterError::InternalError {
+                        details: format!("{name} has no dynamic function kind"),
+                    }
+                })?;
+                self.construct_dynamic_function(module, args, kind)
+            }
             "Array" => {
                 let values = self.call_arguments(args)?;
                 if let [length @ (Value::Int(_) | Value::Float(_))] = values.as_slice() {

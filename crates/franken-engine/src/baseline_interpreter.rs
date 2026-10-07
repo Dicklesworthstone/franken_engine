@@ -64927,6 +64927,38 @@ impl InterpreterCore {
     /// Own enumerable String keys of `object_id` in ES order, honoring the
     /// Proxy `ownKeys` + `getOwnPropertyDescriptor` traps (bd-9trje). Used by
     /// the Object.keys/values/entries proxy branch.
+    /// ES2020 7.3.22 EnumerableOwnPropertyNames(O, key+value) for a Proxy:
+    /// [[OwnPropertyKeys]], then for each string key its [[GetOwnProperty]]
+    /// and, when enumerable, its [[Get]] before the next key's descriptor
+    /// (Object.entries / Object.values, bd-9vouw.347). Reading every
+    /// descriptor first, then every value, ran the traps out of order.
+    fn proxy_enumerable_own_entries(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+    ) -> Result<Vec<(JsString, Value)>, InterpreterError> {
+        // Guest traps run while native locals hold their results: no
+        // collection until this returns.
+        self.gc_nested_request = None;
+        let keys = self.proxy_aware_own_property_keys(module, object_id, 0)?;
+        let mut entries = Vec::new();
+        for key_value in keys {
+            if let Value::Str(key) = key_value
+                && self.own_string_key_is_enumerable(module, object_id, &key, 0)?
+            {
+                let value = self.proxy_aware_get_runtime_property(
+                    module,
+                    object_id,
+                    &RuntimePropertyKey::String(key.clone()),
+                    Value::Object(object_id),
+                    0,
+                )?;
+                entries.push((key, value));
+            }
+        }
+        Ok(entries)
+    }
+
     fn proxy_own_enumerable_string_keys(
         &mut self,
         module: Option<&Ir3Module>,
@@ -90562,18 +90594,13 @@ impl InterpreterCore {
                     }),
                     Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
                         // bd-9trje: read each enumerable Proxy key's value through
-                        // the get trap, in ownKeys-trap order.
-                        let keys = self.proxy_own_enumerable_string_keys(module, obj_id)?;
-                        let mut values = Vec::with_capacity(keys.len());
-                        for key in keys {
-                            values.push(self.proxy_aware_get_runtime_property(
-                                module,
-                                obj_id,
-                                &RuntimePropertyKey::String(key),
-                                Value::Object(obj_id),
-                                0,
-                            )?);
-                        }
+                        // the get trap, in ownKeys-trap order, right after its
+                        // descriptor (bd-9vouw.347).
+                        let values = self
+                            .proxy_enumerable_own_entries(module, obj_id)?
+                            .into_iter()
+                            .map(|(_, value)| value)
+                            .collect::<Vec<_>>();
                         let array_id = self.alloc_array_from_values(&values)?;
                         Ok(Value::Object(array_id))
                     }
@@ -90630,17 +90657,11 @@ impl InterpreterCore {
                     }),
                     Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
                         // bd-9trje: [key, value] pairs for each enumerable Proxy key,
-                        // key order from the ownKeys trap, values from the get trap.
-                        let keys = self.proxy_own_enumerable_string_keys(module, obj_id)?;
-                        let mut entry_values = Vec::with_capacity(keys.len());
-                        for key in keys {
-                            let value = self.proxy_aware_get_runtime_property(
-                                module,
-                                obj_id,
-                                &RuntimePropertyKey::String(key.clone()),
-                                Value::Object(obj_id),
-                                0,
-                            )?;
+                        // key order from the ownKeys trap, each value from the get
+                        // trap right after its descriptor (bd-9vouw.347).
+                        let entries = self.proxy_enumerable_own_entries(module, obj_id)?;
+                        let mut entry_values = Vec::with_capacity(entries.len());
+                        for (key, value) in entries {
                             let entry_array_id =
                                 self.alloc_array_from_values(&[Value::Str(key), value])?;
                             entry_values.push(Value::Object(entry_array_id));
@@ -94333,8 +94354,28 @@ impl InterpreterCore {
             }
 
             "builtin:ObjectGetOwnPropertyDescriptors" => {
-                // Object.getOwnPropertyDescriptors(O), ES2020 19.1.2.9.
-                let obj_val = self.arg_or_undefined(args, 0)?;
+                // Object.getOwnPropertyDescriptors(O), ES2020 19.1.2.9:
+                // ToObject(O) (a primitive's wrapper; undefined and null are
+                // TypeErrors), then each key of [[OwnPropertyKeys]] through
+                // [[GetOwnProperty]], so a Proxy's ownKeys and
+                // getOwnPropertyDescriptor traps run, in key order
+                // (bd-9vouw.347). Only the ordinary heap path ran: a Proxy
+                // gave {} and a primitive was a TypeError.
+                let obj_val = match self.arg_or_undefined(args, 0)? {
+                    nullish @ (Value::Undefined | Value::Null) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object for Object.getOwnPropertyDescriptors".to_string(),
+                            got: nullish.type_name().to_string(),
+                        });
+                    }
+                    primitive @ (Value::Bool(_)
+                    | Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Str(_)
+                    | Value::BigInt(_)
+                    | Value::Symbol(_)) => Value::Object(self.alloc_primitive_wrapper(primitive)?),
+                    other => other,
+                };
                 let Some(obj_id) = self.own_property_holder(module, &obj_val, true)? else {
                     return Err(InterpreterError::TypeError {
                         expected: "object for Object.getOwnPropertyDescriptors".to_string(),
@@ -94342,14 +94383,15 @@ impl InterpreterCore {
                     });
                 };
                 self.join_pending_hostcall_stream_label(obj_id)?;
-                let keys = self
-                    .heap
-                    .get(obj_id.0 as usize)
-                    .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
-                    .own_runtime_property_keys();
+                // Guest traps run while native locals hold the result: no
+                // collection until this returns.
+                self.gc_nested_request = None;
+                let keys = self.proxy_aware_own_property_keys(module, obj_id, 0)?;
                 let result_id = self.alloc_object_with_prototype(None)?;
                 for key in keys {
-                    let descriptor = self.own_property_descriptor_value(obj_id, &key)?;
+                    let key = self.executable_property_key_from_value(&key);
+                    let descriptor =
+                        self.proxy_aware_own_property_descriptor(module, obj_id, &key, 0)?;
                     if !matches!(descriptor, Value::Undefined) {
                         self.set_object_runtime_property(result_id, key, descriptor)?;
                     }

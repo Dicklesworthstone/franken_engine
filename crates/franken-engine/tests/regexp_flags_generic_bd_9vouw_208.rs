@@ -88,3 +88,67 @@ console.log(re.source, String(re), re.test('P/Q'));"#;
         ]
     );
 }
+
+/// bd-9vouw.257 (first part): RegExp.prototype.test is RegExpExec(R, S)
+/// (ES2020 21.2.5.13, 21.2.5.2.1). `this` must be an object; a callable
+/// `exec` other than the intrinsic one runs instead of the matcher (its
+/// result must be an object or null), so a subclass overriding exec or an
+/// object borrowing test answers through it; an object with neither is a
+/// TypeError (it answered false). RegExpBuiltinExec reads
+/// ToLength(lastIndex) for every regexp, global or not, so an object
+/// lastIndex's valueOf runs once (and may throw) and the property keeps the
+/// object. Expected lines are Node v22.2.0's output, captured
+/// programmatically.
+///
+/// No-claim: @@match, @@replace, @@search, @@split and @@matchAll do not yet
+/// call a user exec or read its result generically.
+#[test]
+fn regexp_test_runs_regexp_exec_bd_9vouw_257() {
+    let source = r#"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var o = { test: RegExp.prototype.test };
+console.log(attempt(() => o.test('x')), attempt(() => RegExp.prototype.test.call(1, 'x')), attempt(() => RegExp.prototype.test.call(undefined, 'x')));
+var calls = 0;
+var withExec = { exec(s) { calls++; return s === 'hit' ? {} : null; } };
+console.log(RegExp.prototype.test.call(withExec, 'hit'), RegExp.prototype.test.call(withExec, 'miss'), calls);
+var r = /a/;
+r.exec = function () { return null; };
+console.log(r.test('a'), attempt(() => { var q = /a/; q.exec = () => 1; return q.test('a'); }), attempt(() => { var q = /a/; q.exec = 5; return q.test('a'); }));
+class R extends RegExp { exec(s) { return s.length > 2 ? super.exec(s) : null; } }
+console.log(new R('a').test('a'), new R('a').test('aaa'));
+var gets = 0;
+var counter = { valueOf() { gets++; return 1; } };
+var g = /b/g;
+g.lastIndex = counter;
+var m = g.exec('bab');
+console.log(m && m.index, g.lastIndex, gets);
+var ng = /./;
+ng.lastIndex = counter;
+ng.exec('abc');
+console.log(ng.lastIndex === counter, gets);
+var thrower = /a/;
+thrower.lastIndex = { valueOf() { throw new SyntaxError('li'); } };
+console.log(attempt(() => thrower.exec('a')), attempt(() => thrower.test('a')));
+var gt = /b/g;
+gt.lastIndex = { valueOf() { return 2; } };
+console.log(gt.test('abcb'), gt.lastIndex, /a/.test('a'), /a/g.test('ba'));"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"TypeError TypeError TypeError"#,
+            r#"true false 2"#,
+            r#"false TypeError true"#,
+            r#"false true"#,
+            r#"2 3 1"#,
+            r#"true 2"#,
+            r#"SyntaxError SyntaxError"#,
+            r#"true 4 true true"#,
+        ]
+    );
+}

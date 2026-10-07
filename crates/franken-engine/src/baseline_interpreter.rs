@@ -40532,7 +40532,8 @@ impl InterpreterCore {
                 } else {
                     Value::Undefined
                 };
-                self.regexp_prototype_exec(receiver, &input)
+                let last_index = self.regexp_coerced_last_index(module, &receiver)?;
+                self.regexp_prototype_exec_from(receiver, &input, last_index)
             }
             BuiltinFunctionKind::RegExpSymbolMethod => self.regexp_symbol_method_call(
                 module,
@@ -44068,13 +44069,31 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::RegExpTest => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                // ES2020 21.2.5.13 step 3: ToString(S) (bd-9vouw.213).
-                let input = if self.regexp_source_flags_from_value(&receiver).is_some() {
-                    Value::str(self.builtin_arg_text(Some(module), args, 0)?)
-                } else {
-                    self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined)
-                };
-                self.regexp_test_value(&receiver, &input)
+                // ES2020 21.2.5.13: `this` must be an object, then
+                // ToString(S) (bd-9vouw.213), then RegExpExec(R, S): a
+                // callable `exec` other than the intrinsic one runs, and an
+                // object without one that is no RegExp is a TypeError
+                // (bd-9vouw.257).
+                if !receiver.is_object_like() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object receiver for RegExp.prototype.test".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                let input = Value::str(self.builtin_arg_text(Some(module), args, 0)?);
+                if let Some(exec) = self.regexp_user_exec(module, &receiver)? {
+                    let result = self.regexp_call_user_exec(module, exec, &receiver, &input)?;
+                    return Ok(Value::Bool(!matches!(result, Value::Null)));
+                }
+                if self.regexp_source_flags_from_value(&receiver).is_none() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "RegExp receiver or callable exec for RegExp.prototype.test"
+                            .to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                let last_index = self.regexp_coerced_last_index(module, &receiver)?;
+                self.regexp_test_value_from(&receiver, &input, last_index)
             }
             BuiltinFunctionKind::BigIntToString => {
                 // ES2020 20.2.3.3: thisBigIntValue, then a radix in 2..=36.
@@ -58954,6 +58973,17 @@ impl InterpreterCore {
         receiver: &Value,
         input: &Value,
     ) -> Result<Value, InterpreterError> {
+        self.regexp_test_value_from(receiver, input, None)
+    }
+
+    /// [`Self::regexp_test_value`] with `lastIndex` already coerced
+    /// (`regexp_coerced_last_index`).
+    fn regexp_test_value_from(
+        &mut self,
+        receiver: &Value,
+        input: &Value,
+        last_index: Option<f64>,
+    ) -> Result<Value, InterpreterError> {
         let Some((source, flags)) = self.regexp_source_flags_from_value(receiver) else {
             return Ok(Value::Bool(false));
         };
@@ -58961,7 +58991,7 @@ impl InterpreterCore {
         // sticky regex reads and advances lastIndex exactly as exec does.
         // Ignoring it made `while (re.test(s))` over a /g regex loop forever.
         if flags.contains('g') || flags.contains('y') {
-            let result = self.regexp_prototype_exec(receiver.clone(), input)?;
+            let result = self.regexp_prototype_exec_from(receiver.clone(), input, last_index)?;
             return Ok(Value::Bool(!matches!(result, Value::Null)));
         }
         let regex = self.compile_regexp_pattern(&source, &flags)?;
@@ -74905,6 +74935,18 @@ impl InterpreterCore {
         receiver: Value,
         input: &Value,
     ) -> Result<Value, InterpreterError> {
+        self.regexp_prototype_exec_from(receiver, input, None)
+    }
+
+    /// RegExpBuiltinExec (ES2020 21.2.5.2.2), with `last_index` the
+    /// already-coerced ToNumber(lastIndex) when it was an object
+    /// (`regexp_coerced_last_index`); `None` reads the stored number.
+    fn regexp_prototype_exec_from(
+        &mut self,
+        receiver: Value,
+        input: &Value,
+        last_index: Option<f64>,
+    ) -> Result<Value, InterpreterError> {
         let Some((source, flags)) = self.regexp_source_flags_from_value(&receiver) else {
             return Err(InterpreterError::TypeError {
                 expected: "RegExp receiver for RegExp.prototype.exec".to_string(),
@@ -74921,10 +74963,10 @@ impl InterpreterCore {
         let regex = self.compile_regexp_pattern(&source, &flags)?;
         let sticky = flags.contains('y');
         let tracks_last_index = sticky || flags.contains('g');
-        let last_index = if tracks_last_index {
-            self.regexp_last_index_start(regexp_id)
-        } else {
-            0
+        let last_index = match (tracks_last_index, last_index) {
+            (false, _) => 0,
+            (true, Some(number)) => Self::to_length_index(number),
+            (true, None) => self.regexp_last_index_start(regexp_id),
         };
         let length = text.encode_utf16().count();
         let found = if last_index > length {
@@ -74958,12 +75000,97 @@ impl InterpreterCore {
             .get(regexp_id.0 as usize)
             .and_then(|object| object.properties.get("lastIndex").cloned())
             .unwrap_or(Value::Int(0));
-        let number = Self::coerce_to_float(&value).unwrap_or(0.0);
+        Self::to_length_index(Self::coerce_to_float(&value).unwrap_or(0.0))
+    }
+
+    /// ToLength of an already-numeric lastIndex, as a UTF-16 index.
+    fn to_length_index(number: f64) -> usize {
         if number > 0.0 {
             number.trunc() as usize
         } else {
             0
         }
+    }
+
+    /// ES2020 21.2.5.2.2 step 4: ToLength(? Get(R, "lastIndex")) runs for
+    /// every RegExpBuiltinExec, global or not, so an object lastIndex's
+    /// valueOf is called (and may throw) exactly once; the property keeps
+    /// the object. `Some` is the coerced number for an object lastIndex,
+    /// `None` when the stored value needs no guest code (bd-9vouw.257).
+    fn regexp_coerced_last_index(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+    ) -> Result<Option<f64>, InterpreterError> {
+        let Value::Object(regexp_id) = receiver else {
+            return Ok(None);
+        };
+        let stored = self
+            .heap
+            .get(regexp_id.0 as usize)
+            .and_then(|object| object.properties.get("lastIndex").cloned());
+        let Some(value) = stored.filter(Value::is_object_like) else {
+            return Ok(None);
+        };
+        let number = self.object_to_number_primitive(Some(module), value)?;
+        if matches!(number, Value::Symbol(_) | Value::BigInt(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: "lastIndex convertible to a number".to_string(),
+                got: number.type_name().to_string(),
+            });
+        }
+        Ok(Some(Self::coerce_to_float(&number).unwrap_or(f64::NAN)))
+    }
+
+    /// RegExpExec's `exec` (ES2020 21.2.5.2.1 steps 3-4): a callable
+    /// `exec` other than the intrinsic RegExp.prototype.exec, which runs
+    /// instead of the matcher; `None` when the intrinsic (or no callable)
+    /// `exec` leaves the builtin path (bd-9vouw.257).
+    fn regexp_user_exec(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let exec = self.get_v(
+            module,
+            receiver,
+            &RuntimePropertyKey::String(JsString::from("exec")),
+        )?;
+        let intrinsic = matches!(&exec, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::RegExpPrototypeExec);
+        Ok((!intrinsic && exec.is_callable()).then_some(exec))
+    }
+
+    /// Call a user `exec` with `receiver` as `this`; its result must be an
+    /// object or null (ES2020 21.2.5.2.1 step 4.b).
+    fn regexp_call_user_exec(
+        &mut self,
+        module: &Ir3Module,
+        exec: Value,
+        receiver: &Value,
+        input: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let (result, label) = self.invoke_inline_method_call_with_argument_label(
+            Some(module),
+            exec,
+            receiver.clone(),
+            vec![input.clone()],
+            None,
+        )?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()?;
+        if !matches!(result, Value::Null) && !result.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "object or null from a RegExp exec method".to_string(),
+                got: result.type_name().to_string(),
+            });
+        }
+        Ok(result)
     }
 
     /// `Set(R, "lastIndex", index, true)` (ES2020 21.2.5.2.2): a RegExp

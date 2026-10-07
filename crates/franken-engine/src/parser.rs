@@ -9494,8 +9494,15 @@ fn try_parse_object_accessor(
                     let key =
                         parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
                     let source = context.function_sources.text_through_body(part, after);
-                    let value =
-                        parse_function_expression(after, span, context, recursion_depth + 1)?;
+                    // An accessor is a method: its body may use `super.x`
+                    // (ES2020 14.3.8 HasSuperProperty is allowed in
+                    // MethodDefinition), refused here before.
+                    let value = parse_object_method_function_expression(
+                        after,
+                        span,
+                        context,
+                        recursion_depth + 1,
+                    )?;
                     let value = with_function_source(value, source);
                     reject_object_accessor_arity(kind, &value, span, context)?;
                     return Ok(Some((key, value, true, kind)));
@@ -9522,8 +9529,12 @@ fn try_parse_object_accessor(
         let source = context
             .function_sources
             .text_through_body(part, &rest[paren_idx..]);
-        let value =
-            parse_function_expression(&rest[paren_idx..], span, context, recursion_depth + 1)?;
+        let value = parse_object_method_function_expression(
+            &rest[paren_idx..],
+            span,
+            context,
+            recursion_depth + 1,
+        )?;
         let value = with_function_source(value, source);
         reject_object_accessor_arity(kind, &value, span, context)?;
         return Ok(Some((key, value, false, kind)));

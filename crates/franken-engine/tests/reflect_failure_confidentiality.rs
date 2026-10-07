@@ -425,3 +425,277 @@ fn implicit_prototype_reflect_set_retains_descriptor_confidentiality_bd_9vouw_28
         }
     }
 }
+
+fn implicit_prototype_strict_write(
+    config: InterpreterConfig,
+    definition_label: Label,
+    null_prototype: bool,
+    leak: bool,
+) -> (InterpreterCore, Ir3Module) {
+    let (mut core, mut module) =
+        implicit_prototype_write(config, definition_label, null_prototype, false);
+    core.seed_register(9, Value::str("name")).unwrap();
+    let write_index = module
+        .instructions
+        .iter()
+        .position(|instruction| {
+            matches!(instruction, Ir3Instruction::HostCall { capability, .. }
+                if capability.0 == "builtin:ReflectSet")
+        })
+        .expect("the shared fixture ends with its public-input property write");
+    module.instructions.truncate(write_index);
+    let try_start = module.instructions.len() as u32;
+    module.instructions.extend([
+        Ir3Instruction::BeginTry {
+            catch_target: try_start + 5,
+            finally_target: None,
+        },
+        Ir3Instruction::SetProperty {
+            obj: 0,
+            key: 1,
+            val: 2,
+        },
+        Ir3Instruction::EndTry,
+        Ir3Instruction::GetProperty {
+            obj: 0,
+            key: 1,
+            dst: 7,
+        },
+        Ir3Instruction::Jump {
+            target: try_start + 7,
+        },
+        Ir3Instruction::EnterCatch { dst: 7 },
+        Ir3Instruction::GetProperty {
+            obj: 7,
+            key: 9,
+            dst: 7,
+        },
+    ]);
+    return_or_leak(&mut module, 7, leak);
+    (core, module)
+}
+
+#[test]
+fn implicit_prototype_strict_set_retains_caught_type_error_confidentiality_bd_9vouw_280() {
+    for (definition_label, null_prototype) in [
+        (Label::Public, false),
+        (Label::Secret, false),
+        (Label::Secret, true),
+    ] {
+        for leak in [false, true] {
+            for config in configs() {
+                let (mut core, module) = implicit_prototype_strict_write(
+                    config,
+                    definition_label.clone(),
+                    null_prototype,
+                    leak,
+                );
+                let expected_label = if null_prototype {
+                    Label::Public
+                } else {
+                    definition_label.clone()
+                };
+                if leak && expected_label == Label::Secret {
+                    assert_sink_denied(core, &module);
+                    continue;
+                }
+                let result = core
+                    .execute(&module)
+                    .expect("the strict write's TypeError must reach its catch handler");
+                assert_eq!(
+                    result.value,
+                    if null_prototype {
+                        Value::Int(9)
+                    } else {
+                        Value::str("TypeError")
+                    }
+                );
+                assert_eq!(
+                    result.completion_label, expected_label,
+                    "a caught TypeError must retain the descriptor that refused the write"
+                );
+                for register in [0, 1, 2, 9] {
+                    assert_eq!(
+                        core.get_register_label(register).unwrap(),
+                        &Label::Public,
+                        "the direct write and error-name lookup use Public input aliases"
+                    );
+                }
+                assert_eq!(result.console_output.len(), usize::from(leak));
+                if leak {
+                    assert_eq!(
+                        result.console_output[0].message,
+                        if null_prototype { "9" } else { "TypeError" }
+                    );
+                }
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "direct write observation must release its scope on success and catch"
+                );
+            }
+        }
+    }
+}
+
+fn nested_implicit_prototype_strict_write(
+    config: InterpreterConfig,
+    definition_label: Label,
+    null_prototype: bool,
+    leak: bool,
+) -> (InterpreterCore, Ir3Module) {
+    let (mut core, mut module) =
+        implicit_prototype_strict_write(config, definition_label, null_prototype, leak);
+    let receiver = core.alloc_object_with_prototype(None).unwrap();
+    // Install the Public own setter before the program labels Object.prototype.
+    // Selecting this outer accessor does not inspect the Secret prototype.
+    core.set_object_property(
+        receiver,
+        "invoke".into(),
+        Value::Accessor {
+            get: None,
+            set: Some(std::sync::Arc::new(Value::Function(0))),
+        },
+    )
+    .unwrap();
+    core.seed_register(10, Value::Object(receiver)).unwrap();
+    core.seed_register(11, Value::str("invoke")).unwrap();
+    let outer_write = module
+        .instructions
+        .iter_mut()
+        .find(|instruction| matches!(instruction, Ir3Instruction::SetProperty { .. }))
+        .expect("the strict fixture has one direct write");
+    *outer_write = Ir3Instruction::SetProperty {
+        obj: 10,
+        key: 11,
+        val: 0,
+    };
+    let entry = module.instructions.len() as u32;
+    let pool_index = module.constant_pool.len() as u32;
+    module.constant_pool.push("locked".into());
+    module.instructions.extend([
+        Ir3Instruction::LoadStr { dst: 1, pool_index },
+        Ir3Instruction::LoadInt { dst: 2, value: 9 },
+        Ir3Instruction::SetProperty {
+            obj: 0,
+            key: 1,
+            val: 2,
+        },
+        Ir3Instruction::Return { value: 2 },
+    ]);
+    module.function_table = vec![Ir3FunctionDesc {
+        entry,
+        arity: 1,
+        frame_size: 3,
+        name: Some("write_argument_locked".into()),
+        is_generator: false,
+        rest_param_index: None,
+    }];
+    (core, module)
+}
+
+#[test]
+fn nested_setter_native_type_error_keeps_implicit_descriptor_confidentiality_bd_9vouw_280() {
+    for (definition_label, null_prototype) in [
+        (Label::Public, false),
+        (Label::Secret, false),
+        (Label::Secret, true),
+    ] {
+        for leak in [false, true] {
+            for config in configs() {
+                let (mut core, module) = nested_implicit_prototype_strict_write(
+                    config,
+                    definition_label.clone(),
+                    null_prototype,
+                    leak,
+                );
+                let expected_label = if null_prototype {
+                    Label::Public
+                } else {
+                    definition_label.clone()
+                };
+                if leak && expected_label == Label::Secret {
+                    assert_sink_denied(core, &module);
+                    continue;
+                }
+                let result = core
+                    .execute(&module)
+                    .expect("an isolated setter's native error must reach the outer catch");
+                assert_eq!(
+                    result.value,
+                    if null_prototype {
+                        Value::Int(9)
+                    } else {
+                        Value::str("TypeError")
+                    }
+                );
+                assert_eq!(
+                    result.completion_label, expected_label,
+                    "isolated callback restoration must retain the inner descriptor observation"
+                );
+                for register in [0, 1, 2, 9, 10, 11] {
+                    assert_eq!(core.get_register_label(register).unwrap(), &Label::Public);
+                }
+                assert_eq!(result.console_output.len(), usize::from(leak));
+                if leak {
+                    assert_eq!(
+                        result.console_output[0].message,
+                        if null_prototype { "9" } else { "TypeError" }
+                    );
+                }
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "nested setter scope and exception carriers must release reservations"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn caught_secret_write_fault_does_not_taint_later_public_work_bd_9vouw_280() {
+    for nested in [false, true] {
+        for config in configs() {
+            let (mut core, mut module) = if nested {
+                nested_implicit_prototype_strict_write(config, Label::Secret, false, false)
+            } else {
+                implicit_prototype_strict_write(config, Label::Secret, false, false)
+            };
+            // Both the successful and caught paths converge at this return.
+            // Continue after that boundary with an unrelated Public literal.
+            let continuation = module.instructions.len() as u32;
+            let completion = module
+                .instructions
+                .iter_mut()
+                .find(|instruction| matches!(instruction, Ir3Instruction::Return { value: 7 }))
+                .expect("the main fixture returns the property result or caught error name");
+            *completion = Ir3Instruction::Jump {
+                target: continuation,
+            };
+            let pool_index = module.constant_pool.len() as u32;
+            module.constant_pool.push("after".into());
+            module.instructions.extend([
+                Ir3Instruction::LoadStr {
+                    dst: 12,
+                    pool_index,
+                },
+                call("builtin:ConsoleLog", 12, 1, 13),
+                Ir3Instruction::Return { value: 12 },
+            ]);
+            let result = core
+                .execute(&module)
+                .expect("the write's observation scope must end after its catch");
+            assert_eq!(core.get_register_label(7).unwrap(), &Label::Secret);
+            assert_eq!(result.value, Value::str("after"));
+            assert_eq!(result.completion_label, Label::Public);
+            assert_eq!(result.console_output.len(), 1);
+            assert_eq!(result.console_output[0].message, "after");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "the completed write must not retain callback context or reservations"
+            );
+        }
+    }
+}

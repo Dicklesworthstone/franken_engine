@@ -53134,337 +53134,356 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
-                    let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
-                    let property_key = self.executable_property_key_from_value(&key_val);
-                    let has_hook_target = matches!(&obj_val, Value::Object(_))
-                        || matches!(
-                            &obj_val,
-                            Value::BuiltinFunction(builtin)
-                                if Self::builtin_function_property_object(builtin).is_some()
-                        );
-                    if !has_hook_target {
-                        self.preflight_legacy_property_key_for_hook(&property_key)?;
-                    }
-                    let binary_object_id = match &obj_val {
-                        Value::Object(object_id) => self
-                            .array_buffer_id_for_object(*object_id)
-                            .map(|_| *object_id),
-                        _ => None,
-                    };
-                    let set_val = self.read_reg(val)?;
+                    let observation = self.begin_property_write_observation(obj, key, val)?;
+                    let outcome = (|| {
+                        let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
+                        let property_key = self.executable_property_key_from_value(&key_val);
+                        let has_hook_target = matches!(&obj_val, Value::Object(_))
+                            || matches!(
+                                &obj_val,
+                                Value::BuiltinFunction(builtin)
+                                    if Self::builtin_function_property_object(builtin).is_some()
+                            );
+                        if !has_hook_target {
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
+                        }
+                        let binary_object_id = match &obj_val {
+                            Value::Object(object_id) => self
+                                .array_buffer_id_for_object(*object_id)
+                                .map(|_| *object_id),
+                            _ => None,
+                        };
+                        let set_val = self.read_reg(val)?;
 
-                    match obj_val {
-                        Value::Object(oid) => {
-                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
-                            let mutation_label = self
-                                .get_register_label(obj)?
-                                .join(self.get_register_label(key)?)
-                                .join(self.get_register_label(val)?);
-                            self.join_object_mutation_label(oid, &mutation_label)?;
-                            let handled_url = match property_key.as_str() {
-                                Some(key) => self.set_url_object_property(
+                        match obj_val {
+                            Value::Object(oid) => {
+                                self.run_pre_runtime_property_access_hook(
+                                    module,
                                     oid,
-                                    key,
-                                    &set_val,
-                                    &mutation_label,
-                                )?,
-                                None => false,
-                            };
-                            if handled_url {
-                                // Native URL setter committed through its
-                                // authenticated side table; no guest-writable
-                                // mirror property is created.
-                            } else if property_key.as_str() == Some("__proto__")
-                                && !self.heap[oid.0 as usize]
-                                    .contains_own_runtime_property(&property_key)
-                            {
-                                // `__proto__` sets the internal prototype link so
-                                // prototype-chain lookups (incl. class `extends`,
-                                // which lowers to `Child.prototype.__proto__ =
-                                // Parent.prototype`) traverse it — not a data
-                                // property (bd-ppfds). A non-object, non-null value
-                                // is a no-op per spec; a function links to its
-                                // own-property backing (bd-9vouw.98).
-                                let proto_update =
-                                    self.prototype_link_for_value(Some(module), &set_val)?;
-                                if let Some(new_proto) = proto_update {
-                                    self.store_prototype_link(oid, new_proto);
-                                }
-                            } else {
-                                // Precharge and stage the label before the value
-                                // write. The value mutation then sees the
-                                // combined retained size; failure restores the
-                                // old sparse label instead of committing an
-                                // unlabeled value under memory pressure.
-                                let value_label = self.get_register_label(val)?.clone();
-                                let label_owner = self
-                                    .proxy_set_receiver_object(&Value::Object(oid))?
-                                    .unwrap_or(oid);
-                                let previous_label = self
-                                    .own_stored_runtime_property_label(label_owner, &property_key);
-                                self.set_own_runtime_property_label(
-                                    label_owner,
                                     &property_key,
-                                    &value_label,
                                 )?;
-                                let set_result = self.proxy_aware_set_runtime_property(
-                                    Some(module),
-                                    oid,
-                                    &property_key,
-                                    set_val,
-                                    Value::Object(oid),
-                                    0,
-                                );
-                                let committed = match set_result {
-                                    Ok(committed) => committed,
-                                    Err(error) => {
+                                let mutation_label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.join_object_mutation_label(oid, &mutation_label)?;
+                                let handled_url = match property_key.as_str() {
+                                    Some(key) => self.set_url_object_property(
+                                        oid,
+                                        key,
+                                        &set_val,
+                                        &mutation_label,
+                                    )?,
+                                    None => false,
+                                };
+                                if handled_url {
+                                    // Native URL setter committed through its
+                                    // authenticated side table; no guest-writable
+                                    // mirror property is created.
+                                } else if property_key.as_str() == Some("__proto__")
+                                    && !self.heap[oid.0 as usize]
+                                        .contains_own_runtime_property(&property_key)
+                                {
+                                    // `__proto__` sets the internal prototype link so
+                                    // prototype-chain lookups (incl. class `extends`,
+                                    // which lowers to `Child.prototype.__proto__ =
+                                    // Parent.prototype`) traverse it — not a data
+                                    // property (bd-ppfds). A non-object, non-null value
+                                    // is a no-op per spec; a function links to its
+                                    // own-property backing (bd-9vouw.98).
+                                    let proto_update =
+                                        self.prototype_link_for_value(Some(module), &set_val)?;
+                                    if let Some(new_proto) = proto_update {
+                                        self.store_prototype_link(oid, new_proto);
+                                    }
+                                } else {
+                                    // Precharge and stage the label before the value
+                                    // write. The value mutation then sees the
+                                    // combined retained size; failure restores the
+                                    // old sparse label instead of committing an
+                                    // unlabeled value under memory pressure.
+                                    let value_label = self.get_register_label(val)?.clone();
+                                    let label_owner = self
+                                        .proxy_set_receiver_object(&Value::Object(oid))?
+                                        .unwrap_or(oid);
+                                    let previous_label = self.own_stored_runtime_property_label(
+                                        label_owner,
+                                        &property_key,
+                                    );
+                                    self.set_own_runtime_property_label(
+                                        label_owner,
+                                        &property_key,
+                                        &value_label,
+                                    )?;
+                                    let set_result = self.proxy_aware_set_runtime_property(
+                                        Some(module),
+                                        oid,
+                                        &property_key,
+                                        set_val,
+                                        Value::Object(oid),
+                                        0,
+                                    );
+                                    let committed = match set_result {
+                                        Ok(committed) => committed,
+                                        Err(error) => {
+                                            self.set_own_runtime_property_label(
+                                                label_owner,
+                                                &property_key,
+                                                &previous_label,
+                                            )?;
+                                            return Err(error);
+                                        }
+                                    };
+                                    if !committed && strict {
                                         self.set_own_runtime_property_label(
                                             label_owner,
                                             &property_key,
                                             &previous_label,
                                         )?;
-                                        return Err(error);
+                                        return Err(
+                                            self.rejected_strict_set_error(oid, &property_key)
+                                        );
                                     }
-                                };
-                                if !committed && strict {
-                                    self.set_own_runtime_property_label(
-                                        label_owner,
-                                        &property_key,
-                                        &previous_label,
-                                    )?;
-                                    return Err(self.rejected_strict_set_error(oid, &property_key));
-                                }
-                                // A sloppy write that [[Set]] rejected left the
-                                // object as it was: restore the prior label.
-                                let owns_property = committed
-                                    && self.heap.get(label_owner.0 as usize).is_some_and(
-                                        |object| {
-                                            object.contains_own_runtime_property(&property_key)
-                                        },
-                                    );
-                                // ([[Set]] itself grows an array's length.)
-                                if !owns_property {
-                                    // Prototype accessors and successful traps
-                                    // need not create an own data property.
-                                    self.set_own_runtime_property_label(
-                                        label_owner,
-                                        &property_key,
-                                        &previous_label,
-                                    )?;
+                                    // A sloppy write that [[Set]] rejected left the
+                                    // object as it was: restore the prior label.
+                                    let owns_property = committed
+                                        && self.heap.get(label_owner.0 as usize).is_some_and(
+                                            |object| {
+                                                object.contains_own_runtime_property(&property_key)
+                                            },
+                                        );
+                                    // ([[Set]] itself grows an array's length.)
+                                    if !owns_property {
+                                        // Prototype accessors and successful traps
+                                        // need not create an own data property.
+                                        self.set_own_runtime_property_label(
+                                            label_owner,
+                                            &property_key,
+                                            &previous_label,
+                                        )?;
+                                    }
                                 }
                             }
-                        }
-                        function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if property_key.as_str() == Some("prototype") =>
-                        {
-                            let label = self
-                                .get_register_label(obj)?
-                                .join(self.get_register_label(key)?)
-                                .join(self.get_register_label(val)?);
-                            self.set_constructor_prototype_override(
-                                module, &function, set_val, label,
-                            )?;
-                        }
-                        // bd-9vouw.17: a built-in's own `name` and `length`
-                        // are non-writable too.
-                        Value::BuiltinFunction(ref builtin)
-                            if Self::builtin_function_property_object(builtin).is_none()
-                                && matches!(property_key.as_str(), Some("name" | "length")) =>
-                        {
-                            if strict {
-                                return Err(Self::read_only_property_error(&property_key));
+                            function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncGeneratorFunction(_))
+                                if property_key.as_str() == Some("prototype") =>
+                            {
+                                let label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.set_constructor_prototype_override(
+                                    module, &function, set_val, label,
+                                )?;
                             }
-                        }
-                        // bd-9vouw.272: a built-in or bound function inherits
-                        // Function.prototype's `caller` / `arguments`.
-                        Value::BuiltinFunction(ref builtin)
-                            if builtin.kind != BuiltinFunctionKind::CallableProxy
-                                && matches!(
-                                    property_key.as_str(),
-                                    Some("caller" | "arguments")
-                                )
-                                && self.restricted_function_property_set(
+                            // bd-9vouw.17: a built-in's own `name` and `length`
+                            // are non-writable too.
+                            Value::BuiltinFunction(ref builtin)
+                                if Self::builtin_function_property_object(builtin).is_none()
+                                    && matches!(property_key.as_str(), Some("name" | "length")) =>
+                            {
+                                if strict {
+                                    return Err(Self::read_only_property_error(&property_key));
+                                }
+                            }
+                            // bd-9vouw.272: a built-in or bound function inherits
+                            // Function.prototype's `caller` / `arguments`.
+                            Value::BuiltinFunction(ref builtin)
+                                if builtin.kind != BuiltinFunctionKind::CallableProxy
+                                    && matches!(
+                                        property_key.as_str(),
+                                        Some("caller" | "arguments")
+                                    )
+                                    && self.restricted_function_property_set(
+                                        module,
+                                        &Value::BuiltinFunction(builtin.clone()),
+                                        &property_key,
+                                        &set_val,
+                                        strict,
+                                    )? => {}
+                            Value::BuiltinFunction(builtin) => {
+                                let property_object =
+                                    match Self::builtin_function_property_object(&builtin) {
+                                        Some(property_object) => property_object,
+                                        // Other built-ins keep assigned properties
+                                        // (`fn.displayName = ...`) on a backing object.
+                                        None => self
+                                            .ensure_function_own_property_object(
+                                                module,
+                                                &Value::BuiltinFunction(builtin.clone()),
+                                            )?
+                                            .ok_or_else(|| InterpreterError::TypeError {
+                                                expected: "object with writable properties"
+                                                    .to_string(),
+                                                got: builtin.display_name().to_string(),
+                                            })?,
+                                    };
+                                let mutation_label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.join_object_mutation_label(property_object, &mutation_label)?;
+                                self.set_backing_object_property(
                                     module,
-                                    &Value::BuiltinFunction(builtin.clone()),
+                                    property_object,
+                                    &property_key,
+                                    val,
+                                    Value::BuiltinFunction(builtin),
+                                    strict,
+                                )?;
+                            }
+                            // bd-9vouw.17: a function's own `name` and `length`
+                            // are non-writable (ES2020 9.2.4 / 9.2.8), so [[Set]]
+                            // rejects the write, unless the program redefined
+                            // them on the backing object (a `static name()`
+                            // method, Object.defineProperty).
+                            ref function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_))
+                                if matches!(property_key.as_str(), Some("name" | "length"))
+                                    && !self.function_backing_has_own_property(
+                                        module,
+                                        function,
+                                        &property_key,
+                                    )? =>
+                            {
+                                if strict {
+                                    return Err(Self::read_only_property_error(&property_key));
+                                }
+                            }
+                            // bd-9vouw.216: `F.__proto__ = P` runs Object.prototype's
+                            // `__proto__` setter (ES2020 B.2.2.1.2): an object, a
+                            // function or null becomes F's [[Prototype]] (`F.s`
+                            // then inherits P's statics), anything else is
+                            // ignored, and a cycle is a TypeError. It stored an
+                            // own property named `__proto__`.
+                            ref function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_))
+                                if property_key.as_str() == Some("__proto__")
+                                    && !self.function_backing_has_own_property(
+                                        module,
+                                        function,
+                                        &property_key,
+                                    )? =>
+                            {
+                                if (set_val.is_object_like() || matches!(set_val, Value::Null))
+                                    && !self.set_function_value_prototype(
+                                        Some(module),
+                                        function,
+                                        &set_val,
+                                    )?
+                                {
+                                    return Err(InterpreterError::TypeError {
+                                        expected: "acyclic __proto__ value".to_string(),
+                                        got: "a prototype chain that reaches the function"
+                                            .to_string(),
+                                    });
+                                }
+                            }
+                            // bd-9vouw.272: `caller` / `arguments` the function
+                            // does not define (Function.prototype's accessors, or
+                            // a sloppy function's read-only own ones).
+                            ref function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_))
+                                if self.restricted_function_property_set(
+                                    module,
+                                    function,
                                     &property_key,
                                     &set_val,
                                     strict,
                                 )? => {}
-                        Value::BuiltinFunction(builtin) => {
-                            let property_object =
-                                match Self::builtin_function_property_object(&builtin) {
-                                    Some(property_object) => property_object,
-                                    // Other built-ins keep assigned properties
-                                    // (`fn.displayName = ...`) on a backing object.
-                                    None => self
-                                        .ensure_function_own_property_object(
-                                            module,
-                                            &Value::BuiltinFunction(builtin.clone()),
-                                        )?
-                                        .ok_or_else(|| InterpreterError::TypeError {
-                                            expected: "object with writable properties".to_string(),
-                                            got: builtin.display_name().to_string(),
-                                        })?,
-                                };
-                            let mutation_label = self
-                                .get_register_label(obj)?
-                                .join(self.get_register_label(key)?)
-                                .join(self.get_register_label(val)?);
-                            self.join_object_mutation_label(property_object, &mutation_label)?;
-                            self.set_backing_object_property(
-                                module,
-                                property_object,
-                                &property_key,
-                                val,
-                                Value::BuiltinFunction(builtin),
-                                strict,
-                            )?;
-                        }
-                        // bd-9vouw.17: a function's own `name` and `length`
-                        // are non-writable (ES2020 9.2.4 / 9.2.8), so [[Set]]
-                        // rejects the write, unless the program redefined
-                        // them on the backing object (a `static name()`
-                        // method, Object.defineProperty).
-                        ref function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if matches!(property_key.as_str(), Some("name" | "length"))
-                                && !self.function_backing_has_own_property(
+                            // Other own properties (`F.x = 1`,
+                            // `Test262Error.thrower = ...`) live on the function's
+                            // backing object.
+                            ref function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_)) => {
+                                let property_object = self
+                                    .ensure_function_own_property_object(module, function)?
+                                    .expect(
+                                        "user function values always have a backing-object key",
+                                    );
+                                let mutation_label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.join_object_mutation_label(property_object, &mutation_label)?;
+                                self.set_backing_object_property(
                                     module,
-                                    function,
+                                    property_object,
                                     &property_key,
-                                )? =>
-                        {
-                            if strict {
-                                return Err(Self::read_only_property_error(&property_key));
+                                    val,
+                                    function.clone(),
+                                    strict,
+                                )?;
                             }
-                        }
-                        // bd-9vouw.216: `F.__proto__ = P` runs Object.prototype's
-                        // `__proto__` setter (ES2020 B.2.2.1.2): an object, a
-                        // function or null becomes F's [[Prototype]] (`F.s`
-                        // then inherits P's statics), anything else is
-                        // ignored, and a cycle is a TypeError. It stored an
-                        // own property named `__proto__`.
-                        ref function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if property_key.as_str() == Some("__proto__")
-                                && !self.function_backing_has_own_property(
+                            // A promise, generator or async generator object keeps
+                            // assigned properties (`p.cancel = fn`) on its backing
+                            // object; the assignment threw "expected object".
+                            ref exotic if Self::has_exotic_backing_object(exotic) => {
+                                let property_object = self
+                                    .ensure_function_own_property_object(module, exotic)?
+                                    .expect(
+                                        "promise and generator values have a backing-object key",
+                                    );
+                                let mutation_label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.join_object_mutation_label(property_object, &mutation_label)?;
+                                self.set_backing_object_property(
                                     module,
-                                    function,
+                                    property_object,
                                     &property_key,
-                                )? =>
-                        {
-                            if (set_val.is_object_like() || matches!(set_val, Value::Null))
-                                && !self.set_function_value_prototype(
-                                    Some(module),
-                                    function,
-                                    &set_val,
-                                )?
-                            {
+                                    val,
+                                    exotic.clone(),
+                                    strict,
+                                )?;
+                            }
+                            // bd-9vouw.146: [[Set]] with a primitive base creates
+                            // no property (its receiver is not an object), so
+                            // sloppy code ignores the write. undefined and null
+                            // have no properties at all and throw in either mode.
+                            Value::Bool(_)
+                            | Value::Int(_)
+                            | Value::Float(_)
+                            | Value::BigInt(_)
+                            | Value::Str(_)
+                            | Value::Symbol(_)
+                                if !strict => {}
+                            _ => {
                                 return Err(InterpreterError::TypeError {
-                                    expected: "acyclic __proto__ value".to_string(),
-                                    got: "a prototype chain that reaches the function".to_string(),
+                                    expected: "object".to_string(),
+                                    got: self.nullish_access_subject(
+                                        &obj_val,
+                                        &property_key,
+                                        "setting",
+                                    ),
                                 });
                             }
                         }
-                        // bd-9vouw.272: `caller` / `arguments` the function
-                        // does not define (Function.prototype's accessors, or
-                        // a sloppy function's read-only own ones).
-                        ref function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if self.restricted_function_property_set(
-                                module,
-                                function,
-                                &property_key,
-                                &set_val,
-                                strict,
-                            )? => {}
-                        // Other own properties (`F.x = 1`,
-                        // `Test262Error.thrower = ...`) live on the function's
-                        // backing object.
-                        ref function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_)) => {
-                            let property_object = self
-                                .ensure_function_own_property_object(module, function)?
-                                .expect("user function values always have a backing-object key");
+                        if let Some(object_id) = binary_object_id {
                             let mutation_label = self
                                 .get_register_label(obj)?
                                 .join(self.get_register_label(key)?)
                                 .join(self.get_register_label(val)?);
-                            self.join_object_mutation_label(property_object, &mutation_label)?;
-                            self.set_backing_object_property(
-                                module,
-                                property_object,
-                                &property_key,
-                                val,
-                                function.clone(),
-                                strict,
-                            )?;
+                            self.join_binary_storage_label(object_id, &mutation_label)?;
                         }
-                        // A promise, generator or async generator object keeps
-                        // assigned properties (`p.cancel = fn`) on its backing
-                        // object; the assignment threw "expected object".
-                        ref exotic if Self::has_exotic_backing_object(exotic) => {
-                            let property_object = self
-                                .ensure_function_own_property_object(module, exotic)?
-                                .expect("promise and generator values have a backing-object key");
-                            let mutation_label = self
-                                .get_register_label(obj)?
-                                .join(self.get_register_label(key)?)
-                                .join(self.get_register_label(val)?);
-                            self.join_object_mutation_label(property_object, &mutation_label)?;
-                            self.set_backing_object_property(
-                                module,
-                                property_object,
-                                &property_key,
-                                val,
-                                exotic.clone(),
-                                strict,
-                            )?;
-                        }
-                        // bd-9vouw.146: [[Set]] with a primitive base creates
-                        // no property (its receiver is not an object), so
-                        // sloppy code ignores the write. undefined and null
-                        // have no properties at all and throw in either mode.
-                        Value::Bool(_)
-                        | Value::Int(_)
-                        | Value::Float(_)
-                        | Value::BigInt(_)
-                        | Value::Str(_)
-                        | Value::Symbol(_)
-                            if !strict => {}
-                        _ => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: self.nullish_access_subject(
-                                    &obj_val,
-                                    &property_key,
-                                    "setting",
-                                ),
-                            });
-                        }
-                    }
-                    if let Some(object_id) = binary_object_id {
-                        let mutation_label = self
-                            .get_register_label(obj)?
-                            .join(self.get_register_label(key)?)
-                            .join(self.get_register_label(val)?);
-                        self.join_binary_storage_label(object_id, &mutation_label)?;
-                    }
+                        Ok(())
+                    })();
+                    self.finish_property_write_observation(observation, outcome)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::DefineAccessor {

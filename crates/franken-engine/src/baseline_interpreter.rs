@@ -2241,6 +2241,18 @@ pub fn js_number_to_value(value: f64) -> Value {
     }
 }
 
+/// ES2020 6.1.6.1.3 Number::exponentiate. It differs from IEEE-754 `pow`
+/// (`f64::powf`) in two cases: a NaN exponent gives NaN even for a base of 1,
+/// and a base of +1 or -1 to an infinite exponent gives NaN, not 1.
+#[inline]
+pub fn js_exponentiate(base: f64, exponent: f64) -> f64 {
+    if exponent.is_nan() || (base.abs() == 1.0 && exponent.is_infinite()) {
+        f64::NAN
+    } else {
+        base.powf(exponent)
+    }
+}
+
 /// `x + y` for two Numbers held as `Value::Int` (always safe integers), with
 /// Number semantics: exact while the result is a safe integer, otherwise the
 /// IEEE-754 double result (bd-9vouw.2). Never wraps.
@@ -55974,9 +55986,7 @@ impl InterpreterCore {
             got: format!("{} ** {}", a.type_name(), b.type_name()),
         })?;
 
-        // JS exponentiation uses float power
-        let result = x.powf(y);
-        Ok(js_number_to_value(result))
+        Ok(js_number_to_value(js_exponentiate(x, y)))
     }
 
     fn eval_unary_plus(&self, src: u32) -> Result<Value, InterpreterError> {
@@ -89979,18 +89989,9 @@ impl InterpreterCore {
                     _ => f64::NAN,
                 };
 
-                let result = base_num.powf(exp_num);
-
-                // Return as int if it's a whole number within range
-                if result.fract() == 0.0
-                    && result.is_finite()
-                    && result >= i64::MIN as f64
-                    && result <= i64::MAX as f64
-                {
-                    Ok(Value::Int(result as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(result)))
-                }
+                // A -0 result (`Math.pow(-0, 3)`) stays -0, and a whole
+                // result past 2^53 stays a double, as `**` gives them.
+                Ok(js_number_to_value(js_exponentiate(base_num, exp_num)))
             }
             "builtin:StringPrototypeIncludes" => {
                 // String.prototype.includes(searchString[, position]) implementation
@@ -90126,18 +90127,8 @@ impl InterpreterCore {
                     _ => f64::NAN,
                 };
 
-                let result = num.sqrt();
-
-                // Return as int if it's a whole number within range
-                if result.fract() == 0.0
-                    && result.is_finite()
-                    && result >= i64::MIN as f64
-                    && result <= i64::MAX as f64
-                {
-                    Ok(Value::Int(result as i64))
-                } else {
-                    Ok(Value::Float(Float64::new(result)))
-                }
+                // ES2020 20.2.2.32: the square root of -0 is -0.
+                Ok(js_number_to_value(num.sqrt()))
             }
             "builtin:StringPrototypeStartsWith" => {
                 // String.prototype.startsWith(searchString[, position]) implementation
@@ -90715,17 +90706,8 @@ impl InterpreterCore {
                     _ => f64::NAN,
                 };
 
-                if num.is_nan() || num.is_infinite() {
-                    Ok(Value::Float(Float64::new(num)))
-                } else {
-                    let truncated = num.trunc();
-                    // Return as int if it fits in i64 range
-                    if truncated >= i64::MIN as f64 && truncated <= i64::MAX as f64 {
-                        Ok(Value::Int(truncated as i64))
-                    } else {
-                        Ok(Value::Float(Float64::new(truncated)))
-                    }
-                }
+                // ES2020 20.2.2.35: -0 and -1 < x < 0 truncate to -0.
+                Ok(js_number_to_value(num.trunc()))
             }
             "builtin:ArrayPrototypeSplice" => {
                 // Array.prototype.splice(start[, deleteCount[, ...items]]) implementation (simplified)

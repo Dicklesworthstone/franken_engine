@@ -16313,7 +16313,9 @@ impl InterpreterCore {
             .unwrap_or(Label::Public)
             .join(&self.binary_storage_label(*object_id));
         if let Some(object) = self.heap.get(object_id.0 as usize) {
-            for property in object.properties.values() {
+            // A join is order-insensitive: no per-key lookup for creation
+            // order (bd-9vouw.333).
+            for property in object.properties.values_unordered() {
                 label = label.join(&self.process_dynamic_value_label(property, visited));
             }
         }
@@ -78836,7 +78838,8 @@ impl InterpreterCore {
             winner = Some(candidate);
         }
         if let Some(object) = self.heap.get(object_id.0 as usize) {
-            for property in object.properties.values() {
+            // The largest label wins whatever the order (bd-9vouw.333).
+            for property in object.properties.values_unordered() {
                 if let Some(candidate) = self.process_dynamic_value_label_ref(property, visited)
                     && winner.is_none_or(|current| candidate > current)
                 {

@@ -803,6 +803,18 @@ impl<V> OrderedStringMap<V> {
         self.iter().map(|(_, value)| value)
     }
 
+    /// The values of [`Self::values`], in no particular order: the indexed
+    /// entries, then the named ones by key. `values` keeps own-property
+    /// order by looking each named key up again; an order-insensitive fold,
+    /// such as a label join over an object's values, needs neither
+    /// (bd-9vouw.333).
+    pub fn values_unordered(&self) -> impl Iterator<Item = &V> {
+        self.array_entries
+            .values()
+            .map(|(_, value)| value)
+            .chain(self.by_key.values())
+    }
+
     /// Iterate entries in ES own-property string-key order.
     pub fn iter(&self) -> OrderedStringMapIter<'_, V> {
         OrderedStringMapIter {
@@ -3808,6 +3820,26 @@ mod tests {
 
     fn str_val(s: &str) -> JsValue {
         JsValue::str(s)
+    }
+
+    #[test]
+    fn unordered_values_are_the_ordered_values_bd_9vouw_333() {
+        let mut map = OrderedStringMap::new();
+        for index in 0..40 {
+            map.insert(format!("k{index}"), index);
+            map.insert(index.to_string(), 1000 + index);
+        }
+        for index in (0..40).step_by(3) {
+            map.remove(&format!("k{index}"));
+            map.remove(&index.to_string());
+        }
+        map.insert("k3".to_string(), 7);
+        let mut ordered: Vec<i32> = map.values().copied().collect();
+        let mut unordered: Vec<i32> = map.values_unordered().copied().collect();
+        assert_eq!(ordered.len(), map.len());
+        ordered.sort_unstable();
+        unordered.sort_unstable();
+        assert_eq!(unordered, ordered);
     }
 
     #[test]

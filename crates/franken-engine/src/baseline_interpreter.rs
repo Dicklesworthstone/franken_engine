@@ -51191,7 +51191,13 @@ impl InterpreterCore {
             {
                 self.preflight_bigint_literal_write(*dst, value)?;
             }
-            let instr = compact_instruction.is_none().then(|| instr_ref.clone());
+            // An instruction Tier-R always hands to the reentrant path is not
+            // cloned: that path reads it in place, and the clone of a HostCall
+            // allocated its capability tag only to drop it (bd-9vouw.348).
+            let reentrant_only =
+                compact_instruction.is_none() && self.tier_r_always_reentrant(instr_ref);
+            let instr =
+                (compact_instruction.is_none() && !reentrant_only).then(|| instr_ref.clone());
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction
@@ -51231,6 +51237,12 @@ impl InterpreterCore {
                     self.tier_i_instructions_executed.saturating_add(1);
                 self.execute_compact_tier1_instruction(module, compact_instruction)?;
                 continue;
+            }
+            if reentrant_only {
+                return Ok(DispatchOutcome::ReentrantInstruction {
+                    instruction_ip: self.ip,
+                    profile_start,
+                });
             }
 
             // bd-9vouw.37: a numeric operator with an object operand runs its
@@ -65326,6 +65338,27 @@ impl InterpreterCore {
     /// Whether a numeric operator has an object operand, or a loose equality
     /// compares an object with a primitive; only the reentrant Tier-R path can
     /// run that conversion (bd-9vouw.37).
+    /// The instructions run_loop_dispatch's Tier-R arms always return to the
+    /// reentrant path for: a HostCall (but the generator prologue's, which
+    /// suspends there), the for-in / for-of iterator steps, IteratorClose,
+    /// ArraySlice and SpreadIntoArray.
+    fn tier_r_always_reentrant(&self, instruction: &Ir3Instruction) -> bool {
+        match instruction {
+            Ir3Instruction::HostCall { capability, .. } => {
+                !(self.suspend_at_generator_prologue
+                    && capability.0 == crate::capability::GENERATOR_PROLOGUE_CAPABILITY)
+            }
+            Ir3Instruction::ForInInit { .. }
+            | Ir3Instruction::ForInNext { .. }
+            | Ir3Instruction::ForOfInit { .. }
+            | Ir3Instruction::ForOfNext { .. }
+            | Ir3Instruction::IteratorClose { .. }
+            | Ir3Instruction::ArraySlice { .. }
+            | Ir3Instruction::SpreadIntoArray { .. } => true,
+            _ => false,
+        }
+    }
+
     fn numeric_operator_needs_to_primitive(&self, instruction: &Ir3Instruction) -> bool {
         if let Ir3Instruction::Eq { lhs, rhs, .. } | Ir3Instruction::NotEq { lhs, rhs, .. } =
             instruction

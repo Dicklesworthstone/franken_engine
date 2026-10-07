@@ -59240,7 +59240,21 @@ impl InterpreterCore {
         // length". (bd-9a8cz.1, bd-8tsdh) This path previously clamped a negative
         // count to 0 (returning "") and reported the size guard as a TypeError,
         // both of which diverged from the spec and from the stdlib path.
-        let count_int = match self.builtin_number_arg(module, args, 0)? {
+        let count = self.builtin_number_arg(module, args, 0)?;
+        // +Infinity is a RangeError even for the empty string, whose
+        // repetition the length guard below lets through ("".repeat(Infinity)
+        // returned "").
+        let infinite = match &count {
+            Some(Value::Float(number)) => number.inner() == f64::INFINITY,
+            Some(Value::Str(text)) => primitive_conversion::string_number(text) == f64::INFINITY,
+            _ => false,
+        };
+        if infinite {
+            return Err(InterpreterError::RangeError {
+                message: "Invalid count value: Infinity".to_string(),
+            });
+        }
+        let count_int = match count {
             Some(arg) => Self::value_as_integer(&arg),
             None => 0,
         };

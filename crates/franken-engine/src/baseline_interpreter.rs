@@ -3622,6 +3622,10 @@ pub enum BuiltinFunctionKind {
     /// (ES2024 25.1.6, bd-9vouw.256), named by the specifier, one of
     /// [`resizable_buffers::ARRAY_BUFFER_METHODS`]. Append only.
     ArrayBufferMethod,
+    /// `Date.prototype[@@toPrimitive](hint)` (ES2020 20.3.4.45):
+    /// OrdinaryToPrimitive with "default" read as "string"
+    /// (bd-9vouw.259). Append only.
+    DatePrototypeToPrimitive,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5108,7 +5112,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::BooleanPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
             BuiltinFunctionKind::SymbolPrototypeValueOf => "valueOf",
-            BuiltinFunctionKind::SymbolPrototypeToPrimitive => "[Symbol.toPrimitive]",
+            BuiltinFunctionKind::SymbolPrototypeToPrimitive
+            | BuiltinFunctionKind::DatePrototypeToPrimitive => "[Symbol.toPrimitive]",
             BuiltinFunctionKind::RegExpPrototypeCompile => "compile",
             BuiltinFunctionKind::SharedArrayBufferMethod => {
                 match self.module_specifier.0.as_deref() {
@@ -5749,7 +5754,9 @@ impl BuiltinFunction {
             | K::RegExpPrototypeToString
             | K::RegExpPrototypeCompile => "RegExp.prototype",
             K::DateNow | K::DateParse | K::DateUtc => "Date",
-            K::DateGetTime | K::DatePrototypeMethod => "Date.prototype",
+            K::DateGetTime | K::DatePrototypeMethod | K::DatePrototypeToPrimitive => {
+                "Date.prototype"
+            }
             K::SymbolPrototypeToString
             | K::SymbolPrototypeValueOf
             | K::SymbolPrototypeToPrimitive => "Symbol.prototype",
@@ -44243,6 +44250,43 @@ impl InterpreterCore {
                     got: other.as_ref().map_or("undefined", Value::type_name).to_string(),
                 }),
             },
+            // Date.prototype[@@toPrimitive](hint) (ES2020 20.3.4.45): any
+            // object `this`, a hint of exactly "string", "default" or
+            // "number", then OrdinaryToPrimitive (bd-9vouw.259).
+            BuiltinFunctionKind::DatePrototypeToPrimitive => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                if !receiver.is_object_like() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object receiver for Date.prototype[Symbol.toPrimitive]"
+                            .to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
+                let hint = match self.builtin_arg(args, 0)? {
+                    Some(Value::Str(hint)) => hint.to_string(),
+                    _ => String::new(),
+                };
+                let prefer_string = match hint.as_str() {
+                    "string" | "default" => true,
+                    "number" => false,
+                    _ => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "hint \"string\", \"number\" or \"default\" for Date.prototype[Symbol.toPrimitive]".to_string(),
+                            got: hint,
+                        });
+                    }
+                };
+                match &receiver {
+                    Value::Object(object_id) => {
+                        self.ordinary_to_primitive(Some(module), *object_id, &receiver, prefer_string)
+                    }
+                    _ => self.coerce_runtime_primitive_with_hint(
+                        Some(module),
+                        receiver,
+                        if prefer_string { "string" } else { "number" },
+                    ),
+                }
+            }
             // String.prototype[@@iterator] (ES2020 21.1.3.29) iterates
             // ToString(RequireObjectCoercible(this)): a String wrapper (core-js
             // feature detection calls it on `new String`, which aborted
@@ -63689,15 +63733,25 @@ impl InterpreterCore {
     /// `valueOf` method or any `@@toPrimitive` property (bd-9vouw.37).
     fn object_has_user_conversion_hook(&self, object_id: ObjectId) -> bool {
         let to_primitive = WellKnownSymbol::ToPrimitive.id();
+        // A Date converts through Date.prototype[@@toPrimitive]: the
+        // intrinsic one is not a guest hook, so a Date keeps its
+        // non-observable string form, but a Date without it converts
+        // generically (OrdinaryToPrimitive reads "default" as "number")
+        // (bd-9vouw.259).
+        let is_date = self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| object.brand() == Some("Date"));
+        let mut to_primitive_seen = false;
         let mut current = Some(object_id);
         // Bounded like the other prototype walks; a longer chain keeps the
         // non-observable conversion.
         for _ in 0..128 {
             let Some(id) = current else {
-                return false;
+                break;
             };
             let Some(object) = self.heap.get(id.0 as usize) else {
-                return false;
+                break;
             };
             let guest_method = |name: &str| {
                 matches!(
@@ -63711,18 +63765,26 @@ impl InterpreterCore {
                     )
                 )
             };
-            if guest_method("toString")
-                || guest_method("valueOf")
-                || object
+            if guest_method("toString") || guest_method("valueOf") {
+                return true;
+            }
+            // The first @@toPrimitive on the chain is the one ToPrimitive
+            // calls.
+            if !to_primitive_seen
+                && let Some(hook) = object
                     .properties
                     .baseline_symbol_property(core_symbol_id(to_primitive))
-                    .is_some()
             {
-                return true;
+                if !matches!(hook, BaselineSymbolProperty::Data(Value::BuiltinFunction(builtin))
+                    if builtin.kind == BuiltinFunctionKind::DatePrototypeToPrimitive)
+                {
+                    return true;
+                }
+                to_primitive_seen = true;
             }
             current = self.observable_prototype_link(object, id);
         }
-        false
+        is_date && !to_primitive_seen
     }
 
     /// Route an error raised while a reentrant instruction ran guest code: a
@@ -63812,6 +63874,57 @@ impl InterpreterCore {
         self.coerce_runtime_primitive_with_hint(module, value, hint)
     }
 
+    /// ES2020 7.1.1.1 OrdinaryToPrimitive(O, hint): toString then valueOf
+    /// for the "string" hint (`prefer_string`), valueOf then toString
+    /// otherwise; the first primitive result wins, and two object results
+    /// are a TypeError. Each method's result label joins the pending one.
+    fn ordinary_to_primitive(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        value: &Value,
+        prefer_string: bool,
+    ) -> Result<Value, InterpreterError> {
+        let names = if prefer_string {
+            ["toString", "valueOf"]
+        } else {
+            ["valueOf", "toString"]
+        };
+        for name in names {
+            let method = self.iterator_protocol_property(
+                module,
+                object_id,
+                &RuntimePropertyKey::String(JsString::from(name)),
+                value.clone(),
+            )?;
+            self.observe_scoped_callback_result()?;
+            if !method.is_callable() {
+                continue;
+            }
+            let (result, label) = self.invoke_inline_method_call_with_argument_label(
+                module,
+                method,
+                value.clone(),
+                Vec::new(),
+                None,
+            )?;
+            let label = self
+                .pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public)
+                .join(&label);
+            self.replace_pending_hostcall_result_label(Some(label))?;
+            self.observe_scoped_callback_result()?;
+            if !result.is_object_like() {
+                return Ok(result);
+            }
+        }
+        Err(InterpreterError::TypeError {
+            expected: "primitive conversion result".to_string(),
+            got: "object from both conversion methods".to_string(),
+        })
+    }
+
     /// ES2020 7.1.1 ToPrimitive with an explicit hint: "string", "number" or
     /// "default" (`+` and `==`). @@toPrimitive receives the hint; without it
     /// OrdinaryToPrimitive tries toString first only for "string".
@@ -63834,51 +63947,21 @@ impl InterpreterCore {
                     value.clone(),
                 )?;
                 self.observe_scoped_callback_result()?;
-                let mut primitive = None;
-                if let Some(method) = exotic {
-                    let (result, label) = self.invoke_inline_method_call_with_argument_label(
-                        module,
-                        method,
-                        value.clone(),
-                        vec![Value::str(hint)],
-                        None,
-                    )?;
-                    let label = self
-                        .pending_hostcall_result_label
-                        .as_ref()
-                        .unwrap_or(&Label::Public)
-                        .join(&label);
-                    self.replace_pending_hostcall_result_label(Some(label))?;
-                    self.observe_scoped_callback_result()?;
-                    if result.is_object_like() {
-                        return Err(InterpreterError::TypeError {
-                            expected: "primitive from Symbol.toPrimitive".to_string(),
-                            got: result.type_name().to_string(),
-                        });
+                match exotic {
+                    // Date.prototype[@@toPrimitive] (ES2020 20.3.4.45) is
+                    // OrdinaryToPrimitive with "default" read as "string"
+                    // (bd-9vouw.259).
+                    Some(Value::BuiltinFunction(builtin))
+                        if builtin.kind == BuiltinFunctionKind::DatePrototypeToPrimitive =>
+                    {
+                        self.ordinary_to_primitive(module, object_id, &value, hint != "number")?
                     }
-                    primitive = Some(result);
-                } else {
-                    let names = if prefer_string {
-                        ["toString", "valueOf"]
-                    } else {
-                        ["valueOf", "toString"]
-                    };
-                    for name in names {
-                        let method = self.iterator_protocol_property(
-                            module,
-                            object_id,
-                            &RuntimePropertyKey::String(JsString::from(name)),
-                            value.clone(),
-                        )?;
-                        self.observe_scoped_callback_result()?;
-                        if !method.is_callable() {
-                            continue;
-                        }
+                    Some(method) => {
                         let (result, label) = self.invoke_inline_method_call_with_argument_label(
                             module,
                             method,
                             value.clone(),
-                            Vec::new(),
+                            vec![Value::str(hint)],
                             None,
                         )?;
                         let label = self
@@ -63888,16 +63971,16 @@ impl InterpreterCore {
                             .join(&label);
                         self.replace_pending_hostcall_result_label(Some(label))?;
                         self.observe_scoped_callback_result()?;
-                        if !result.is_object_like() {
-                            primitive = Some(result);
-                            break;
+                        if result.is_object_like() {
+                            return Err(InterpreterError::TypeError {
+                                expected: "primitive from Symbol.toPrimitive".to_string(),
+                                got: result.type_name().to_string(),
+                            });
                         }
+                        result
                     }
+                    None => self.ordinary_to_primitive(module, object_id, &value, prefer_string)?,
                 }
-                primitive.ok_or_else(|| InterpreterError::TypeError {
-                    expected: "primitive conversion result".to_string(),
-                    got: "object from both conversion methods".to_string(),
-                })?
             } else if value.is_callable() {
                 // Functions have no @@toPrimitive, so OrdinaryToPrimitive
                 // reaches Function.prototype.toString unless the function
@@ -101916,15 +101999,19 @@ impl InterpreterCore {
         // Symbol.prototype[@@toPrimitive] (ES2020 19.4.3.5; writable false,
         // enumerable false, configurable true): ToPrimitive of a Symbol
         // wrapper is its symbol, so ToString of the wrapper throws as for the
-        // symbol itself (bd-9vouw.239).
-        if canonical == "Symbol" {
+        // symbol itself (bd-9vouw.239). Date.prototype's (20.3.4.45, the same
+        // attributes) reads the "default" hint as "string" (bd-9vouw.259).
+        let to_primitive_kind = match canonical {
+            "Symbol" => Some(BuiltinFunctionKind::SymbolPrototypeToPrimitive),
+            "Date" => Some(BuiltinFunctionKind::DatePrototypeToPrimitive),
+            _ => None,
+        };
+        if let Some(kind) = to_primitive_kind {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToPrimitive.id());
             self.set_object_runtime_property(
                 prototype,
                 key.clone(),
-                Value::BuiltinFunction(BuiltinFunction::new_kind(
-                    BuiltinFunctionKind::SymbolPrototypeToPrimitive,
-                )),
+                Value::BuiltinFunction(BuiltinFunction::new_kind(kind)),
             )?;
             self.set_own_property_attributes(
                 prototype,

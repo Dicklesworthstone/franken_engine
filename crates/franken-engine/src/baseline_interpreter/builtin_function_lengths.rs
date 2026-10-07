@@ -115,6 +115,7 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("Date", "UTC", 7),
     ("Date", "now", 0),
     ("Date", "parse", 1),
+    ("Date.prototype", "[Symbol.toPrimitive]", 1),
     ("Date.prototype", "getDate", 0),
     ("Date.prototype", "getDay", 0),
     ("Date.prototype", "getFullYear", 0),

@@ -174,3 +174,48 @@ fn annex_b_get_year_set_year_and_to_gmt_string_bd_9vouw_240() {
         "124 -1 NaN 0 1 921493800000 1999-03-15T10:30:00.000Z 984652200000 2001-03-15T10:30:00.000Z -62318640600000 -5 NaN NaN -631152000000 1950-01-01T00:00:00.000Z true toUTCString TypeError -2114380800000",
     );
 }
+
+/// bd-9vouw.259: Date.prototype[@@toPrimitive] (ES2020 20.3.4.45) was
+/// missing; 14 of the 18 Node-passing Test262 tests under
+/// built-ins/Date/prototype/Symbol.toPrimitive failed. It is
+/// OrdinaryToPrimitive on any object `this` with "default" read as
+/// "string", and a TypeError for another hint or a primitive `this`. A
+/// replacement is honored, and once it is deleted a Date converts
+/// generically ("default" then reads valueOf first). Expected lines are Node
+/// v22.2.0's (TZ=UTC), captured programmatically.
+#[test]
+fn date_to_primitive_bd_9vouw_259() {
+    let source = r#"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var toPrimitive = Date.prototype[Symbol.toPrimitive];
+var desc = Object.getOwnPropertyDescriptor(Date.prototype, Symbol.toPrimitive);
+console.log(typeof toPrimitive, toPrimitive.name, toPrimitive.length, desc.writable, desc.enumerable, desc.configurable, Object.getOwnPropertySymbols(Date.prototype).length);
+var d = new Date(0);
+console.log(typeof toPrimitive.call(d, 'number'), toPrimitive.call(d, 'number'), toPrimitive.call(d, 'default') === d.toString(), toPrimitive.call(d, 'string') === d.toString());
+var plain = { toString() { return 'S'; }, valueOf() { return 7; } };
+console.log(toPrimitive.call(plain, 'string'), toPrimitive.call(plain, 'default'), toPrimitive.call(plain, 'number'));
+console.log(attempt(() => toPrimitive.call(d, 'other')), attempt(() => toPrimitive.call(d)), attempt(() => toPrimitive.call(d, { toString() { return 'number'; } })), attempt(() => toPrimitive.call(1, 'number')), attempt(() => toPrimitive.call({ toString: null, valueOf: null }, 'number')));
+console.log(typeof (d + ''), d + '' === d.toString(), +d, d - 1, `${d}` === d.toString(), d == d.toString(), d < 1);
+Object.defineProperty(Date.prototype, Symbol.toPrimitive, { value: function (hint) { return 'hint:' + hint; }, configurable: true });
+console.log(d + '', `${d}`, +d, String(d));
+delete Date.prototype[Symbol.toPrimitive];
+console.log(d + '', `${d}` === d.toString(), +d);"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"function [Symbol.toPrimitive] 1 false false true 1"#,
+            r#"number 0 true true"#,
+            r#"S S 7"#,
+            r#"TypeError TypeError TypeError TypeError TypeError"#,
+            r#"string true 0 -1 true true true"#,
+            r#"hint:default hint:string NaN hint:string"#,
+            r#"0 true 0"#,
+        ]
+    );
+}

@@ -5,14 +5,21 @@
 //! U+FFFD. The decoder supports utf-8 (with BOM handling and U+FFFD
 //! replacement of maximal ill-formed subparts, or a TypeError when `fatal`),
 //! utf-16le/be, and windows-1252 (which the `latin1`, `ascii` and `iso-8859-1`
-//! labels name). Unsupported labels are a RangeError. The `stream`
-//! option of `decode` is not supported: every call decodes a complete input.
+//! labels name). Unsupported labels are a RangeError. Streaming decode retains
+//! at most three copied bytes and one BOM decision per decoder. An ordinary
+//! decode call flushes the stream; a subsequent call starts a fresh stream.
 
 use super::*;
 
 /// The internal-slot tags of encoder and decoder instances.
 pub(super) const TEXT_ENCODER_TYPE: &str = "TextEncoder";
 pub(super) const TEXT_DECODER_TYPE: &str = "TextDecoder";
+
+// Fixed-size heap-accounted state, not a side table or a retained input view.
+// Guest writes/deletion/redefinition are disabled; native writes use the same
+// internal property setter as the other codec slots. This representation does
+// not introduce a new object edge for the collector to trace.
+const DECODER_STATE_SLOT: &str = "__textDecoderState";
 
 /// The canonical encoding name of a TextDecoder label (WHATWG Encoding 4.2,
 /// for the encodings supported here), or `None` when it is unsupported.
@@ -102,7 +109,13 @@ impl InterpreterCore {
         self.set_object_property(decoder, "encoding".to_string(), Value::str(encoding))?;
         self.set_object_property(decoder, "fatal".to_string(), Value::Bool(fatal))?;
         self.set_object_property(decoder, "ignoreBOM".to_string(), Value::Bool(ignore_bom))?;
-        self.hide_internal_slots(decoder, &["encoding", "fatal", "ignoreBOM"])?;
+        self.set_object_property(decoder, DECODER_STATE_SLOT.to_string(), Value::Int(0))?;
+        self.hide_internal_slots(decoder, &["encoding", "fatal", "ignoreBOM", DECODER_STATE_SLOT])?;
+        self.set_own_property_attributes(
+            decoder,
+            &RuntimePropertyKey::String(JsString::from(DECODER_STATE_SLOT)),
+            PropertyAttributes { writable: false, enumerable: false, configurable: false },
+        )?;
         Ok(Value::Object(decoder))
     }
 
@@ -194,6 +207,20 @@ impl InterpreterCore {
             }
             "decode" => {
                 let decoder = self.text_codec_receiver(&receiver, TEXT_DECODER_TYPE, method)?;
+                let input = self.arg_or_undefined(args, 0)?;
+                let stream = match self.arg_or_undefined(args, 1)? {
+                    Value::Undefined | Value::Null => false,
+                    Value::Object(options) => self.proxy_aware_get_property(
+                        None, options, "stream", Value::Object(options), 0,
+                    )?.is_truthy(),
+                    other => return Err(InterpreterError::TypeError {
+                        expected: "an options object for TextDecoder.prototype.decode".to_string(),
+                        got: other.type_name().to_string(),
+                    }),
+                };
+                // Option accessors may reenter decode or mutate the input.
+                // Read the current state and copy the view only after them.
+                let bytes = self.text_codec_input_bytes(&input)?;
                 let slot = |core: &Self, key: &str| {
                     core.heap
                         .get(decoder.0 as usize)
@@ -206,10 +233,21 @@ impl InterpreterCore {
                 };
                 let fatal = slot(self, "fatal").is_truthy();
                 let ignore_bom = slot(self, "ignoreBOM").is_truthy();
-                let input = self.arg_or_undefined(args, 0)?;
-                let bytes = self.text_codec_input_bytes(&input)?;
-                let units =
-                    decode_bytes(&encoding, &bytes, fatal, ignore_bom).ok_or_else(|| {
+                let mut state = match slot(self, DECODER_STATE_SLOT) {
+                    Value::Int(packed) => DecodeState::unpack(packed),
+                    // Decoders from older heap snapshots have no pending bytes.
+                    _ => DecodeState::default(),
+                };
+                // Incomplete bytes and the BOM decision carry information into
+                // later calls. Admit that provenance before publishing state;
+                // a public suffix must not declassify a secret prefix.
+                if stream || state.streaming {
+                    let label = self.join_arg_range_with_object_mutation_label(args)?;
+                    self.join_object_mutation_label(decoder, &label)?;
+                }
+                let decoded = state.decode(&encoding, bytes, fatal, ignore_bom, stream);
+                self.set_object_property(decoder, DECODER_STATE_SLOT.to_string(), Value::Int(state.pack()))?;
+                let units = decoded.ok_or_else(|| {
                         InterpreterError::TypeError {
                             expected: format!("valid {encoding} data"),
                             got: format!("The encoded data was not valid for encoding {encoding}"),
@@ -284,6 +322,111 @@ impl InterpreterCore {
             backing[..bytes.len()].copy_from_slice(bytes);
         })?;
         Ok(view)
+    }
+}
+
+/// A UTF-8 prefix is at most three bytes; UTF-16 can retain one high surrogate
+/// and one odd byte. No complete input chunk or previously returned text lives
+/// here. The packed state uses only 28 bits and remains a fixed-size heap value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DecodeState {
+    pending: [u8; 3],
+    pending_len: usize,
+    bom_seen: bool,
+    streaming: bool,
+}
+
+impl DecodeState {
+    fn pack(self) -> i64 {
+        i64::from(self.pending[0])
+            | (i64::from(self.pending[1]) << 8)
+            | (i64::from(self.pending[2]) << 16)
+            | ((self.pending_len as i64) << 24)
+            | ((self.bom_seen as i64) << 26)
+            | ((self.streaming as i64) << 27)
+    }
+
+    fn unpack(packed: i64) -> Self {
+        Self {
+            pending: [packed as u8, (packed >> 8) as u8, (packed >> 16) as u8],
+            pending_len: ((packed >> 24) & 3) as usize,
+            bom_seen: packed & (1 << 26) != 0,
+            streaming: packed & (1 << 27) != 0,
+        }
+    }
+
+    fn decode(
+        &mut self,
+        encoding: &str,
+        mut bytes: Vec<u8>,
+        fatal: bool,
+        ignore_bom: bool,
+        stream: bool,
+    ) -> Option<Vec<u16>> {
+        if !self.streaming {
+            *self = Self::default();
+        }
+        if self.pending_len != 0 {
+            // Reuse the owned input copy. The only added bytes are the bounded
+            // carry; nothing points back into an ArrayBuffer supplied by guest.
+            bytes.extend_from_slice(&self.pending[..self.pending_len]);
+            bytes.rotate_right(self.pending_len);
+        }
+        let end = if stream { complete_prefix(encoding, &bytes) } else { bytes.len() };
+        let decoded = decode_bytes(encoding, &bytes[..end], fatal, ignore_bom || self.bom_seen);
+        if decoded.is_none() {
+            // Node's decoder is reusable after a fatal decoding failure. Do not
+            // retain stale bytes or its prior BOM decision after that failure.
+            *self = Self::default();
+            return None;
+        }
+        if !stream {
+            // No carry or BOM decision may survive a successful final flush.
+            *self = Self::default();
+            return decoded;
+        }
+        self.streaming = true;
+        self.bom_seen |= end != 0;
+        self.pending = [0; 3];
+        self.pending_len = bytes.len() - end;
+        debug_assert!(self.pending_len <= self.pending.len());
+        self.pending[..self.pending_len].copy_from_slice(&bytes[end..]);
+        decoded
+    }
+}
+
+/// The longest prefix that does not end in an incomplete character. Malformed
+/// complete subparts stay in the prefix: streaming must not postpone a fatal
+/// error merely because the same chunk also ends with an incomplete character.
+fn complete_prefix(encoding: &str, bytes: &[u8]) -> usize {
+    match encoding {
+        "utf-16le" | "utf-16be" => {
+            let mut end = bytes.len() & !1;
+            if end >= 2 {
+                let pair = [bytes[end - 2], bytes[end - 1]];
+                let last = if encoding == "utf-16be" {
+                    u16::from_be_bytes(pair)
+                } else {
+                    u16::from_le_bytes(pair)
+                };
+                if (0xD800..=0xDBFF).contains(&last) {
+                    end -= 2;
+                }
+            }
+            end
+        }
+        "windows-1252" => bytes.len(),
+        _ => {
+            let mut offset = 0;
+            while let Err(error) = std::str::from_utf8(&bytes[offset..]) {
+                offset += error.valid_up_to();
+                match error.error_len() {
+                    Some(length) => offset += length,
+                    None => return offset,
+                }
+            }
+            bytes.len()
+        }
     }
 }
 
@@ -472,5 +615,103 @@ mod utf16_decoder_tests {
             assert_eq!(decode_bytes(encoding, &bytes, true, false), Some(vec![0xD83D, 0xDE00, 0xFEFF]));
             assert_eq!(decode_bytes(encoding, &bytes, true, true), Some(vec![0xFEFF, 0xD83D, 0xDE00, 0xFEFF]));
         }
+    }
+}
+
+#[cfg(test)]
+mod streaming_decoder_tests {
+    use super::*;
+
+    #[test]
+    fn packed_state_roundtrips_every_bounded_carry_length() {
+        for pending_len in 0..=3 {
+            for bom_seen in [false, true] {
+                for streaming in [false, true] {
+                    let state = DecodeState { pending: [0xEF, 0xBB, 0xBF], pending_len, bom_seen, streaming };
+                    assert_eq!(DecodeState::unpack(state.pack()), state);
+                    assert!(state.pack() >= 0 && state.pack() < (1 << 28));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn all_two_byte_utf8_streams_equal_one_complete_decode() {
+        for first in 0..=u8::MAX {
+            for second in 0..=u8::MAX {
+                let mut state = DecodeState::default();
+                let mut actual = state.decode("utf-8", vec![first], false, false, true).unwrap();
+                actual.extend(state.decode("utf-8", vec![second], false, false, true).unwrap());
+                actual.extend(state.decode("utf-8", vec![], false, false, false).unwrap());
+                let expected: Vec<u16> = String::from_utf8_lossy(&[first, second]).encode_utf16().collect();
+                assert_eq!(actual, expected, "bytes {first:02x} {second:02x}");
+                assert_eq!(state.pending_len, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn all_single_utf16_units_stream_as_scalars_in_both_byte_orders() {
+        for encoding in ["utf-16le", "utf-16be"] {
+            for unit in 0..=u16::MAX {
+                let bytes = if encoding == "utf-16be" { unit.to_be_bytes() } else { unit.to_le_bytes() };
+                let mut state = DecodeState::default();
+                let mut actual = state.decode(encoding, vec![bytes[0]], false, true, true).unwrap();
+                actual.extend(state.decode(encoding, vec![bytes[1]], false, true, true).unwrap());
+                actual.extend(state.decode(encoding, vec![], false, true, false).unwrap());
+                let expected = if (0xD800..=0xDFFF).contains(&unit) { 0xFFFD } else { unit };
+                assert_eq!(actual, [expected], "{encoding}: {unit:04x}");
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_utf16_pair_and_odd_byte_share_one_flush_error() {
+        let mut state = DecodeState::default();
+        assert_eq!(state.decode("utf-16le", vec![0, 0xD8, 65], false, false, true), Some(vec![]));
+        assert_eq!(state.pending_len, 3);
+        assert_eq!(state.decode("utf-16le", vec![], false, false, false), Some(vec![0xFFFD]));
+        assert_eq!(state.decode("utf-16le", vec![], false, false, false), Some(vec![]));
+    }
+
+    #[test]
+    fn fatal_error_resets_carry_and_bom_state_before_reuse() {
+        let mut state = DecodeState::default();
+        assert_eq!(state.decode("utf-8", vec![0xEF, 0xBB, 0xBF, 0xE2], true, false, true), Some(vec![]));
+        assert!(state.bom_seen);
+        assert_eq!(state.decode("utf-8", vec![65], true, false, true), None);
+        assert_eq!(state, DecodeState::default());
+        assert_eq!(state.decode("utf-8", vec![0xEF, 0xBB, 0xBF, 66], true, false, true), Some(vec![66]));
+    }
+
+    #[test]
+    fn buffered_input_provenance_remains_on_the_decoder_after_public_suffix_and_flush() {
+        let tree = crate::parser_api_stability::parse_script("0;").unwrap();
+        let module = crate::lowering_pipeline::lower_ir0_to_ir3(
+            &crate::ir_contract::Ir0Module::from_syntax_tree(tree, "decoder-label.js"),
+            &crate::lowering_pipeline::LoweringContext::new("decoder-label", "carry", "builtin-only"),
+        ).unwrap().ir3;
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "decoder-carry-label");
+        let decoder = core.construct_text_decoder(None, RegRange { start: 0, count: 0 }).unwrap();
+        let Value::Object(id) = decoder else { panic!("decoder object"); };
+        let prefix = core.alloc_uint8_array_from_bytes(&[0xE2, 0x82]).unwrap();
+        let options = core.alloc_object_with_properties(&[("stream", Value::Bool(true))]).unwrap();
+        core.seed_register(0, Value::Object(prefix)).unwrap();
+        core.seed_register(1, Value::Object(options)).unwrap();
+        core.set_register_label(0, Label::Secret).unwrap();
+        assert_eq!(core.text_codec_method("decode", decoder.clone(), RegRange { start: 0, count: 2 }).unwrap(), Value::str(""));
+        assert_eq!(core.object_mutation_labels.get(&id), Some(&Label::Secret));
+        let suffix = core.alloc_uint8_array_from_bytes(&[0xAC]).unwrap();
+        core.seed_register(0, Value::Object(suffix)).unwrap();
+        core.set_register_label(0, Label::Public).unwrap();
+        let method = core.get_v(&module, &decoder, &RuntimePropertyKey::String("decode".into())).unwrap();
+        let (value, label) = core.invoke_inline_method_call_with_argument_label(
+            Some(&module), method, decoder, vec![Value::Object(suffix)], None,
+        ).unwrap();
+        assert_eq!(value, Value::str("€"));
+        assert!(label >= Label::Secret, "a public suffix must preserve the prefix's label");
+        assert_eq!(core.heap.get(id.0 as usize).unwrap().properties.get(DECODER_STATE_SLOT), Some(&Value::Int(0)));
+        assert_eq!(core.object_mutation_labels.get(&id), Some(&Label::Secret));
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
     }
 }

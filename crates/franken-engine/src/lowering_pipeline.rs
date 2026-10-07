@@ -8614,6 +8614,60 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
+    // bd-9vouw.255: lowering-internal bindings (short-circuit results,
+    // optional-chain bases, destructuring sources, for-in/of iterators)
+    // written before every read hold a register only while in use, as
+    // function-body temporaries do (bd-9vouw.23). Each pinned a register for
+    // the whole script, and since the stack empties inside such an
+    // expression, every statement's floor rose past its first temporary: a
+    // script with about 250 top-level `a || b`, `o?.p`, `[x] = xs` or
+    // `for (const v of xs)` ran out of the 256-register frame. A closure
+    // copies a captured binding's register by name when it is created, so
+    // captured, compound-assigned, declared-function, per-iteration and
+    // exported bindings keep their pinned register.
+    let closure_capture_ids =
+        ir2.ops
+            .iter()
+            .flat_map(|op| match &op.inner {
+                Ir1Op::CreateFunction { free_vars, .. }
+                | Ir1Op::DeclareFunction { free_vars, .. } => free_vars.as_slice(),
+                _ => &[],
+            })
+            .filter_map(|name| name_to_binding_id.get(name).copied())
+            .collect::<BTreeSet<_>>();
+    let other_reference_ids = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::AssignOp { binding_id, .. }
+            | Ir1Op::DeclareFunction { binding_id, .. }
+            | Ir1Op::CreatePerIterationBinding { binding_id, .. }
+            | Ir1Op::ExportBinding { binding_id, .. } => Some(*binding_id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let short_lived_temporaries = short_lived_local_release_points(
+        ir2.ops.iter().map(|op| &op.inner),
+        &binding_id_to_name
+            .iter()
+            .filter(|(binding_id, name)| {
+                is_internal_lowering_binding(name)
+                    && !scoped_runtime_binding_ids.contains(binding_id)
+                    && !tdz_binding_ids.contains(binding_id)
+                    && !const_assignment_binding_ids.contains(binding_id)
+                    && !closure_capture_ids.contains(binding_id)
+                    && !other_reference_ids.contains(binding_id)
+            })
+            .map(|(binding_id, _)| *binding_id)
+            .collect(),
+    );
+    let mut short_lived_releases = BTreeMap::<usize, Vec<BindingId>>::new();
+    for (binding_id, last_use) in &short_lived_temporaries {
+        short_lived_releases
+            .entry(last_use.saturating_add(1))
+            .or_default()
+            .push(*binding_id);
+    }
     // bd-9vouw.23: other bindings occupy a frame register for the whole body,
     // so a body declaring more lexical bindings than a frame holds failed at
     // runtime ("register N out of bounds"). Root-scope `let`/`const` bindings
@@ -8631,7 +8685,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             )
         })
         .map(|binding| binding.binding_id)
-        .filter(|id| !scoped_runtime_binding_ids.contains(id))
+        .filter(|id| {
+            !scoped_runtime_binding_ids.contains(id) && !short_lived_temporaries.contains_key(id)
+        })
         .collect::<BTreeSet<_>>()
         .into_iter()
         .skip(MAX_REGISTER_RESIDENT_ROOT_LEXICALS)
@@ -8731,7 +8787,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         .filter(|scope| scope.parent.is_none())
         .flat_map(|scope| scope.bindings.iter())
     {
-        if !scoped_runtime_binding_ids.contains(&binding.binding_id) {
+        if !scoped_runtime_binding_ids.contains(&binding.binding_id)
+            && !short_lived_temporaries.contains_key(&binding.binding_id)
+        {
             binding_registers
                 .entry(binding.binding_id)
                 .or_insert_with(|| alloc_register(&mut register_cursor));
@@ -8744,7 +8802,27 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     let mut iterator_anchors = Vec::<IteratorAnchor>::new();
     for (op_index, op) in ir2.ops.iter().enumerate() {
         prune_iterator_anchors(&mut iterator_anchors, &value_stack);
+        // A short-lived temporary's register is free once its last
+        // reference (the previous op) has been lowered.
+        for binding_id in short_lived_releases.get(&op_index).into_iter().flatten() {
+            if let Some(register) = binding_registers.get(binding_id) {
+                live_status_registers.remove(register);
+            }
+        }
         if value_stack.is_empty() && live_status_registers.is_empty() {
+            // bd-9vouw.255: the stack also empties inside a statement, after
+            // a jump that consumes its condition (`x ||= y`, `a && b`) and
+            // at a for-in/of loop's exit, which drops the iterator. Nothing
+            // above the floor is live there either, so the cursor rewinds as
+            // after a statement's Pop. Taking the cursor as the new floor
+            // kept those temporaries for the rest of the body, one to three
+            // registers per such statement, until a few hundred of them ran
+            // out of the 256-register frame.
+            let target = statement_register_floor.max(pinned_register_high);
+            if target < register_cursor {
+                register_high_water = register_high_water.max(register_cursor);
+                register_cursor = target;
+            }
             statement_register_floor = register_cursor;
         }
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
@@ -8878,13 +8956,16 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                     value_stack.push(dst);
                 } else {
-                    let source_reg = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(
-                            &mut register_cursor,
-                            &mut pinned_register_high,
-                            &mut register_high_water,
-                        )
-                    });
+                    let source_reg = function_local_register(
+                        *binding_id,
+                        &mut binding_registers,
+                        &short_lived_temporaries,
+                        &mut live_status_registers,
+                        &value_stack,
+                        &mut register_cursor,
+                        &mut pinned_register_high,
+                        &mut register_high_water,
+                    );
                     let dst = alloc_register(&mut register_cursor);
                     ir3.instructions.push(Ir3Instruction::Move {
                         dst,
@@ -8939,19 +9020,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                     value_stack.push(src);
                 } else {
-                    let dst = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(
-                            &mut register_cursor,
-                            &mut pinned_register_high,
-                            &mut register_high_water,
-                        )
-                    });
+                    let dst = function_local_register(
+                        *binding_id,
+                        &mut binding_registers,
+                        &short_lived_temporaries,
+                        &mut live_status_registers,
+                        &value_stack,
+                        &mut register_cursor,
+                        &mut pinned_register_high,
+                        &mut register_high_water,
+                    );
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     value_stack.push(dst);
                 }
             }
             Ir1Op::StoreBinding { binding_id } => {
-                let src = pop_lowering_value(&mut value_stack)?;
+                // Peeked, not popped: a short-lived temporary's register is
+                // chosen below while the stored value is still on the stack.
+                let src = peek_lowering_value(&value_stack)?;
                 if runtime_lexical_binding_ids.contains(binding_id) {
                     // Declaration stores initialize scope-routed lexical
                     // bindings. Bare loop-head updates use AssignOp below and
@@ -8963,7 +9049,6 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         name_pool_index: pool_index,
                         src,
                     });
-                    value_stack.push(src);
                 } else if scoped_runtime_binding_ids.contains(binding_id) {
                     let name =
                         runtime_scope_binding_name(*binding_id, &runtime_scope_binding_names_by_id);
@@ -8972,15 +9057,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         src,
                         name_pool_index: pool_index,
                     });
-                    value_stack.push(src);
                 } else {
-                    let dst = *binding_registers.entry(*binding_id).or_insert_with(|| {
-                        alloc_pinned_register(
-                            &mut register_cursor,
-                            &mut pinned_register_high,
-                            &mut register_high_water,
-                        )
-                    });
+                    let dst = function_local_register(
+                        *binding_id,
+                        &mut binding_registers,
+                        &short_lived_temporaries,
+                        &mut live_status_registers,
+                        &value_stack,
+                        &mut register_cursor,
+                        &mut pinned_register_high,
+                        &mut register_high_water,
+                    );
+                    pop_lowering_value(&mut value_stack)?;
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     value_stack.push(dst);
                     // The stored value now lives in the binding's register:
@@ -10901,7 +10989,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             })
             .collect::<BTreeSet<_>>();
         let mut fn_short_lived_locals = short_lived_local_release_points(
-            body_ops,
+            body_ops.iter(),
             &register_local_ids
                 .iter()
                 .filter(|binding_id| {
@@ -11066,6 +11154,13 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 }
             }
             if fn_value_stack.is_empty() && fn_live_status_registers.is_empty() {
+                // bd-9vouw.255: as at the top level, an empty stack inside a
+                // statement leaves nothing live above the floor.
+                let target = fn_statement_register_floor.max(fn_pinned_register_high);
+                if target < fn_reg {
+                    fn_register_high_water = fn_register_high_water.max(fn_reg);
+                    fn_reg = target;
+                }
                 fn_statement_register_floor = fn_reg;
             }
             // We handle a core subset of ops that appear in function bodies.
@@ -33430,9 +33525,10 @@ const MAX_LOCAL_ASSIGNMENT_PASSES: usize = 64;
 /// one iteration to the next: the loop head does not have the local
 /// assigned, so each iteration writes it before reading it.
 /// Returns the release point of each qualifying local: the op index after
-/// which its register is free.
-fn short_lived_local_release_points(
-    body_ops: &[Ir1Op],
+/// which its register is free. `body_ops` is walked once per pass, so callers
+/// pass a cheap iterator (the top-level body's ops are IR2-annotated).
+fn short_lived_local_release_points<'a>(
+    body_ops: impl Iterator<Item = &'a Ir1Op> + Clone,
     candidates: &BTreeSet<BindingId>,
 ) -> BTreeMap<BindingId, usize> {
     fn flow_into(states: &mut BTreeMap<u32, Vec<u64>>, label: u32, state: &[u64]) -> bool {
@@ -33466,7 +33562,7 @@ fn short_lived_local_release_points(
         .collect::<BTreeMap<_, _>>();
     let words = candidates.len().div_ceil(64);
     let label_positions = body_ops
-        .iter()
+        .clone()
         .enumerate()
         .filter_map(|(index, op)| match op {
             Ir1Op::Label { id } => Some((*id, index)),
@@ -33481,7 +33577,7 @@ fn short_lived_local_release_points(
         let mut changed = false;
         // `None`: unreachable by fallthrough (after a jump, return or throw).
         let mut state = Some(vec![0u64; words]);
-        for op in body_ops {
+        for op in body_ops.clone() {
             match op {
                 Ir1Op::Label { id } => {
                     state = match (state, label_states.get(id)) {
@@ -33553,7 +33649,7 @@ fn short_lived_local_release_points(
 
     let mut back_edges = Vec::<(usize, usize)>::new();
     let mut reference_spans = BTreeMap::<BindingId, (usize, usize)>::new();
-    for (index, op) in body_ops.iter().enumerate() {
+    for (index, op) in body_ops.enumerate() {
         match op {
             Ir1Op::Jump { label_id }
             | Ir1Op::JumpIfFalsy { label_id }
@@ -33665,7 +33761,8 @@ fn short_lived_overlap_spills(
 /// register instead placed each local above its own statement's temporaries,
 /// so locals live across many statements (a `var` in an inlined `finally`
 /// copy) ratcheted the frame by a statement's width each. Every other local
-/// pins a fresh register for the rest of the body.
+/// pins a fresh register for the rest of the body. The top-level body's
+/// lowering-internal temporaries take the same route (bd-9vouw.255).
 #[allow(clippy::too_many_arguments)]
 fn function_local_register(
     binding_id: BindingId,

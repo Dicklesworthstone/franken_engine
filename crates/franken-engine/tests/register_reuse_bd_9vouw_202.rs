@@ -257,3 +257,82 @@ fn method_call_chains_reuse_registers_per_link_bd_9vouw_246() {
         assert_eq!(lines, ["8190 7140"], "{lane:?}");
     }
 }
+
+/// The statements of `fn top_level_temporaries_are_short_lived_bd_9vouw_255`.
+const TEMPORARY_SHAPES: [&str; 9] = [
+    "n += a || b;",
+    "n += a && b;",
+    "n += o.q ?? 2;",
+    "n += o?.p;",
+    "[x] = xs; n += x;",
+    "for (const v of xs) n += v;",
+    "for (const k in o) n += k.length;",
+    "x = null; x ??= 5; n += x;",
+    "x = 0; x ||= 2; n += x;",
+];
+
+/// bd-9vouw.255: at the top level, the lowering-internal binding behind
+/// each `||`, `&&`, `??`, `?.`, array destructuring and for-of loop pinned a
+/// register for the whole script; they now hold one only while in use, as
+/// function-body temporaries do (bd-9vouw.23). And where the value stack
+/// emptied inside a statement (a jump consuming its condition, a for-in/of
+/// loop's exit), the following statements started above that statement's
+/// temporaries, at the top level and in function bodies alike. About 250
+/// such top-level statements, a 130-term top-level `a || a || ...` chain or
+/// 90 for-in loops in one function ran out of the 256-register frame
+/// ("register 256 out of bounds"). Node v22.2.0 prints "7200 7 8 9 180".
+#[test]
+fn top_level_temporaries_are_short_lived_bd_9vouw_255() {
+    let prologue = "var a = 0, b = 1, x, n = 0, o = { p: 2, q: null }, xs = [3, 4];\n";
+    for shape in TEMPORARY_SHAPES {
+        // The same statements at the top level and in a function body.
+        let frames = |count: usize| {
+            let body = format!("{prologue}{}", format!("{shape}\n").repeat(count));
+            (
+                frame_sizes(&body),
+                frame_sizes(&format!("function g() {{\n{body}return n;\n}}\n")),
+            )
+        };
+        assert_eq!(
+            frames(20),
+            frames(300),
+            "frames grow with `{shape}` statements"
+        );
+    }
+
+    let mut source = prologue.to_string();
+    for shape in TEMPORARY_SHAPES {
+        source.push_str(&format!("{shape}\n").repeat(300));
+    }
+    source.push_str(&format!("var r = {}7;\n", "a || ".repeat(299)));
+    source.push_str(&format!("var s = {}8;\n", "b && ".repeat(299)));
+    source.push_str(&format!("var u = {}9;\n", "o.q ?? ".repeat(299)));
+    source.push_str(&format!(
+        "function g() {{\nvar m = 0;\n{}return m;\n}}\n",
+        "for (const k in o) m += k.length;\n".repeat(90)
+    ));
+    source.push_str("console.log(n, r, s, u, g());\n");
+    for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
+        let package = ExtensionPackage {
+            extension_id: "register-reuse".to_string(),
+            source: source.clone(),
+            source_file: None,
+            module_root: None,
+            capabilities: vec!["builtin".to_string()],
+            version: "1.0.0".to_string(),
+            metadata: Default::default(),
+        };
+        let lines: Vec<String> = ExecutionOrchestrator::new(OrchestratorConfig {
+            force_lane: Some(lane),
+            parse_goal: ParseGoal::Script,
+            ..OrchestratorConfig::default()
+        })
+        .execute(&package)
+        .unwrap_or_else(|error| panic!("{lane:?}: {error}"))
+        .console_output
+        .into_iter()
+        .map(|line| line.message)
+        .collect();
+        assert_eq!(lines, ["7200 7 8 9 180"], "{lane:?}");
+    }
+}

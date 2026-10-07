@@ -44516,6 +44516,13 @@ impl InterpreterCore {
                     });
                 };
                 let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                // ToBigInt (ES2020 7.1.13) starts with ToPrimitive(value,
+                // number): a wrapped or valueOf-bearing object converts.
+                let value = if value.is_object_like() {
+                    self.coerce_runtime_primitive(Some(module), value, false)?
+                } else {
+                    value
+                };
                 let Value::BigInt(digits) = self.coerce_to_bigint(value)? else {
                     unreachable!("coerce_to_bigint returns a BigInt");
                 };
@@ -62220,6 +62227,12 @@ impl InterpreterCore {
             .iter()
             .filter_map(|name| self.builtin_prototypes.get(*name).copied())
             .collect::<Vec<_>>();
+        // The NativeError prototypes are ordinary objects (ES2020
+        // 19.5.6.3), not Error instances, although their chains reach
+        // Error.prototype: `TypeError.prototype` is "[object Object]".
+        if error_prototypes.contains(&object_id) {
+            return "Object";
+        }
         let mut current = object.prototype;
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
             let Some(prototype) = current else {
@@ -91215,8 +91228,17 @@ impl InterpreterCore {
                 self.string_match_value(&this_str, &pattern_val)
             }
             "builtin:Symbol" => {
+                // ES2020 19.4.1.1 step 3 / 19.4.2.2 step 1: ToString of an
+                // object description or key runs its toString (or
+                // @@toPrimitive); it used the non-calling display string.
                 let description = if args.count > 0 {
-                    self.symbol_description_argument(Some(self.read_reg(args.start)?))?
+                    let value = self.read_reg(args.start)?;
+                    let value = if value.is_object_like() {
+                        Value::Str(self.conversion_to_string(module, value)?)
+                    } else {
+                        value
+                    };
+                    self.symbol_description_argument(Some(value))?
                 } else {
                     None
                 };
@@ -91227,6 +91249,11 @@ impl InterpreterCore {
                     self.read_reg(args.start)?
                 } else {
                     Value::Undefined
+                };
+                let value = if value.is_object_like() {
+                    Value::Str(self.conversion_to_string(module, value)?)
+                } else {
+                    value
                 };
                 let key = self.symbol_registry_key_argument(value)?;
                 self.intern_global_symbol(key).map(Value::Symbol)
@@ -91441,8 +91468,8 @@ impl InterpreterCore {
                 } else if num < 0.0 {
                     Ok(Value::Int(-1))
                 } else {
-                    // Handle +0 and -0
-                    Ok(Value::Int(0))
+                    // +0 and -0 answer themselves (Math.sign(-0) is -0).
+                    Ok(Value::Float(Float64::new(num)))
                 }
             }
             "builtin:ObjectDefineProperty" => {
@@ -92700,10 +92727,12 @@ impl InterpreterCore {
                     }
                 }
 
-                let result = if has_nan {
-                    f64::NAN
-                } else if has_infinity {
+                // ES2020 20.2.2.18 steps 4-5: an infinite argument makes the
+                // result +Infinity even beside a NaN.
+                let result = if has_infinity {
                     f64::INFINITY
+                } else if has_nan {
+                    f64::NAN
                 } else {
                     sum_of_squares.sqrt()
                 };
@@ -93672,13 +93701,12 @@ impl InterpreterCore {
             "builtin:ArrayFromAsync" => self.array_from_async_builtin(module, args),
 
             "builtin:ObjectIs" => {
-                // Object.is(value1, value2) implementation
-                if args.count < 3 {
-                    return Ok(Value::Bool(false));
-                }
-
-                let val1 = self.read_reg(args.start + 1)?;
-                let val2 = self.read_reg(args.start + 2)?;
+                // Object.is(value1, value2) implementation (slot 0 is the
+                // receiver). A missing argument is undefined, so
+                // `Object.is()` and `Object.is(undefined)` are true; they
+                // answered false.
+                let val1 = self.arg_or_undefined(args, 1)?;
+                let val2 = self.arg_or_undefined(args, 2)?;
 
                 Ok(Value::Bool(Self::same_value(&val1, &val2)))
             }
@@ -93824,8 +93852,9 @@ impl InterpreterCore {
                     _ => f64::NAN,
                 };
 
-                // atanh is only defined for -1 < x < 1
-                if num <= -1.0 || num >= 1.0 {
+                // atanh is NaN outside [-1, 1] and -Infinity / +Infinity at
+                // -1 / 1 (ES2020 20.2.2.7).
+                if num < -1.0 || num > 1.0 {
                     Ok(Value::Float(Float64::new(f64::NAN)))
                 } else {
                     Ok(Value::Float(Float64::new(num.atanh())))
@@ -106286,8 +106315,20 @@ impl InterpreterCore {
                 }
             }
             "BigInt" => {
-                let value = self.call_arguments(args)?.into_iter().next();
-                self.bigint_from_value(value.unwrap_or(Value::Undefined))
+                // ES2020 20.2.1.1 step 2: ToPrimitive(value, number) first,
+                // so an object's valueOf / toString / @@toPrimitive decides
+                // (it was a TypeError for every object).
+                let value = self
+                    .call_arguments(args)?
+                    .into_iter()
+                    .next()
+                    .unwrap_or(Value::Undefined);
+                let value = if value.is_object_like() {
+                    self.coerce_runtime_primitive(Some(module), value, false)?
+                } else {
+                    value
+                };
+                self.bigint_from_value(value)
             }
             _ => Err(InterpreterError::TypeError {
                 expected: "callable standard constructor".to_string(),

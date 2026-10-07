@@ -9867,6 +9867,22 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
             return None;
         }
         u64::from_str_radix(bin, 2).ok()?
+    } else if digits_ref.len() > 1
+        && digits_ref.starts_with('0')
+        && digits_ref.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        // Annex B.1.1: a leading zero followed only by octal digits is a
+        // LegacyOctalIntegerLiteral (`010` is 8), one with an 8 or 9 a
+        // NonOctalDecimalIntegerLiteral (`08` is 8). Neither may contain a
+        // separator. Read as decimal, `070` was 70.
+        if digits.contains('_') {
+            return None;
+        }
+        if digits_ref.bytes().all(|byte| (b'0'..=b'7').contains(&byte)) {
+            u64::from_str_radix(&digits_ref[1..], 8).ok()?
+        } else {
+            digits_ref.parse::<u64>().ok()?
+        }
     } else if digits_ref.chars().all(|c| c.is_ascii_digit()) {
         digits_ref.parse::<u64>().ok()?
     } else {

@@ -37239,7 +37239,13 @@ impl InterpreterCore {
             ("platform", Value::str(NODE_OS_PLATFORM)),
             ("pid", Value::Int(1)),
         ])?);
-        let console = self.alloc_console_global()?;
+        // The modules of a program share one `console`, `performance`,
+        // `JSON`, `Reflect` and `Atomics` (bd-9vouw.297): a later module binds
+        // the realm global object's own property, so a member one module adds
+        // or replaces (reflect-metadata's `Reflect.defineMetadata`, a console
+        // wrapper) is seen by the others and `globalThis.console === console`.
+        // Each module made its own copies.
+        let console = self.realm_namespace_global("console", Self::alloc_console_global)?;
         // bd-1piai: these ordinary JavaScript globals live in the realm-owned
         // name map, not in the replaceable module scope. Seed each one exactly
         // once so assignments, aliases, and nested module execution all observe
@@ -37259,7 +37265,8 @@ impl InterpreterCore {
         } else {
             Some(self.alloc_date_global()?)
         };
-        let performance = self.alloc_performance_global()?;
+        let performance =
+            self.realm_namespace_global("performance", Self::alloc_performance_global)?;
 
         self.inject_runtime_global_binding("process", process)?;
         self.inject_runtime_global_binding("console", console)?;
@@ -37276,12 +37283,17 @@ impl InterpreterCore {
         for (name, value) in Self::stateless_global_values() {
             self.inject_runtime_global_binding(name, value)?;
         }
-        let json = self.alloc_json_global()?;
-        self.inject_runtime_global_binding("JSON", Value::Object(json))?;
-        let reflect = self.alloc_reflect_global()?;
-        self.inject_runtime_global_binding("Reflect", Value::Object(reflect))?;
-        let atomics = self.alloc_atomics_global()?;
-        self.inject_runtime_global_binding("Atomics", Value::Object(atomics))?;
+        let json = self
+            .realm_namespace_global("JSON", |this| this.alloc_json_global().map(Value::Object))?;
+        self.inject_runtime_global_binding("JSON", json)?;
+        let reflect = self.realm_namespace_global("Reflect", |this| {
+            this.alloc_reflect_global().map(Value::Object)
+        })?;
+        self.inject_runtime_global_binding("Reflect", reflect)?;
+        let atomics = self.realm_namespace_global("Atomics", |this| {
+            this.alloc_atomics_global().map(Value::Object)
+        })?;
+        self.inject_runtime_global_binding("Atomics", atomics)?;
         self.seed_global_object()
     }
 
@@ -37391,6 +37403,32 @@ impl InterpreterCore {
     /// only through the gated identifier. Its intrinsic members are a
     /// snapshot of the bindings, which resolve first; a free name no binding
     /// resolves reads and writes its properties (`realm_global_object`).
+    /// The namespace object a module binds as `name` (bd-9vouw.297): the
+    /// realm global object's own data property when it holds an object with
+    /// a Public stored label (the copy the first module seeded, or the one a
+    /// program assigned to `globalThis[name]`), else a fresh one from
+    /// `alloc`: before the global object exists, or when the program deleted
+    /// the property or stored a non-object, an accessor or a labelled value
+    /// there (binding that would drop its label).
+    fn realm_namespace_global(
+        &mut self,
+        name: &str,
+        alloc: impl FnOnce(&mut Self) -> Result<Value, InterpreterError>,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(global) = self.realm_global_object {
+            let key = RuntimePropertyKey::String(JsString::from(name));
+            if self.runtime_property_label(global, &key) == Label::Public
+                && let Some(value @ Value::Object(_)) = self
+                    .heap
+                    .get(global.0 as usize)
+                    .and_then(|object| object.own_runtime_property_value(&key))
+            {
+                return Ok(value);
+            }
+        }
+        alloc(self)
+    }
+
     fn seed_global_object(&mut self) -> Result<(), InterpreterError> {
         // One global object per realm: a repeated injection keeps its identity.
         let bound = self

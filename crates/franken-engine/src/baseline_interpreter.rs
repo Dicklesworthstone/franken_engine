@@ -55733,11 +55733,37 @@ impl InterpreterCore {
                     }
 
                     let awaited_value = self.read_reg(promise_reg)?;
-                    let awaited_label = self.get_register_label(promise_reg)?.clone();
+                    let mut awaited_label = self.get_register_label(promise_reg)?.clone();
 
                     // Convert the awaited value to a Promise if it's not already one
                     let promise_handle = match awaited_value {
-                        Value::Promise(h) => crate::promise_model::PromiseHandle(h),
+                        Value::Promise(h) => {
+                            // PromiseResolve reads its `constructor`
+                            // (bd-9vouw.352); what the read observes labels
+                            // the await, and a pending HostCall result label
+                            // is set aside.
+                            let saved_result_label = self.take_pending_hostcall_result_label();
+                            let keeps = self.await_keeps_promise(module, h);
+                            let observed = self.take_pending_hostcall_result_label();
+                            if let Some(saved) = saved_result_label {
+                                self.replace_pending_hostcall_result_label(Some(saved))?;
+                            }
+                            if let Some(observed) = observed {
+                                awaited_label = awaited_label.join(&observed);
+                            }
+                            if keeps? {
+                                crate::promise_model::PromiseHandle(h)
+                            } else {
+                                let handle = self.create_promise()?;
+                                self.resolve_promise_with_value(
+                                    Some(module),
+                                    handle,
+                                    Value::Promise(h),
+                                    awaited_label.clone(),
+                                )?;
+                                handle
+                            }
+                        }
                         // await an object: PromiseResolve adopts a thenable
                         // through a PromiseResolveThenableJob (bd-9vouw.174).
                         Value::Object(_) => {

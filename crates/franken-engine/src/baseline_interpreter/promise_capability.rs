@@ -276,6 +276,29 @@ impl InterpreterCore {
         Ok(capability.promise)
     }
 
+    /// Await's PromiseResolve(%Promise%, promise) step 2 (ES2020 6.2.3.1,
+    /// 25.6.4.5.1; bd-9vouw.352): whether Get(promise, "constructor") is
+    /// %Promise%, so the promise itself is awaited. The read is observable
+    /// (an own property, a subclass prototype's, a redefined
+    /// Promise.prototype.constructor) and its abrupt completion is the
+    /// await's; any other constructor awaits a fresh %Promise% resolved with
+    /// the promise, which reads its `then`.
+    pub(super) fn await_keeps_promise(
+        &mut self,
+        module: &Ir3Module,
+        promise: u32,
+    ) -> Result<bool, InterpreterError> {
+        let constructor = self.get_v(
+            module,
+            &Value::Promise(promise),
+            &RuntimePropertyKey::String(JsString::from("constructor")),
+        )?;
+        Ok(Self::values_equal(
+            &constructor,
+            &Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise")),
+        ))
+    }
+
     /// Promise.reject(r) for a C other than %Promise% (ES2020 25.6.4.4).
     pub(super) fn promise_reject_with_constructor(
         &mut self,

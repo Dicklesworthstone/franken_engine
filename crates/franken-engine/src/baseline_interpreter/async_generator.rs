@@ -452,7 +452,16 @@ impl InterpreterCore {
             let source = match value {
                 Value::Promise(handle) => {
                     exact_value = None;
-                    PromiseHandle(handle)
+                    let (adopting, observed_label) =
+                        self.async_generator_promise_source(id, handle, &label)?;
+                    label = observed_label;
+                    match adopting {
+                        Some(promise) => {
+                            owned_source = Some(promise);
+                            promise
+                        }
+                        None => PromiseHandle(handle),
+                    }
                 }
                 Value::Object(object) => {
                     exact_value = None;
@@ -533,6 +542,142 @@ impl InterpreterCore {
     ) -> Result<(PromiseHandle, Label), InterpreterError> {
         let backing = self.async_generators[id as usize].generator_id;
         let owner = Arc::clone(&self.generators[backing as usize].owner_module);
+        self.in_async_generator_await_context(floor, |this| {
+            this.json_charge_work()?;
+            let promise = this.create_promise()?;
+            let resolution = (|| {
+                let key = this.executable_property_key_from_value(&Value::str("then"));
+                this.reflect_observe_selected_property(object, &key)?;
+                let then = this.iterator_protocol_property(
+                    Some(owner.as_ref()),
+                    object,
+                    &key,
+                    Value::Object(object),
+                )?;
+                let then_bytes = Self::estimate_value_bytes(&then);
+                this.json_reserve_temporary(then_bytes)?;
+                let resolution = (|| {
+                    this.observe_scoped_callback_result()?;
+                    let label = this.json_parse_context_label()?;
+                    if let Value::Closure(then_id) = then {
+                        this.enqueue_resolve_thenable(
+                            promise,
+                            crate::closure_model::ClosureHandle(then_id),
+                            Value::Object(object),
+                            label.clone(),
+                        )?;
+                    } else {
+                        // Preserve the shared Promise lane's callable coverage.
+                        // Never look up then twice: a getter can replace itself.
+                        this.fulfill_promise(
+                            promise,
+                            Self::value_to_js_value(&Value::Object(object)),
+                            label.clone(),
+                        )?;
+                    }
+                    Ok(label)
+                })();
+                this.json_release_temporary(then_bytes);
+                resolution
+            })();
+            let resolution = match resolution {
+                Ok(label) => Ok(label),
+                Err(error) => match this.async_generator_exception(error, floor) {
+                    Ok(rejection) => this
+                        .promise_value(&rejection.value)
+                        .and_then(|reason| {
+                            this.reject_promise(promise, reason, rejection.label.clone())
+                        })
+                        .map(|()| rejection.label),
+                    Err(error) => Err(error),
+                },
+            };
+            match resolution {
+                Ok(label) => Ok((promise, label)),
+                Err(error) => {
+                    // This internal Promise is not yet owned by an await
+                    // continuation. Close it explicitly on resource failure.
+                    if let Ok(epoch) = this
+                        .promise_store
+                        .terminally_reject_without_jobs(promise, floor)
+                    {
+                        this.close_terminal_async_promise_dependencies(epoch, floor);
+                    }
+                    Err(error)
+                }
+            }
+        })
+    }
+
+    /// Await's PromiseResolve(%Promise%, promise) (bd-9vouw.352): the
+    /// promise's `constructor` is read once under the await context. When it
+    /// is %Promise% the promise itself is awaited (`None`); any other awaits
+    /// a fresh %Promise% resolved with it, whose `then` is read now. An abrupt
+    /// read awaits that promise rejected with the error, so the body sees the
+    /// throw one job later than the spec's direct one. The label is the await
+    /// context's after the read, as for a thenable's `then`.
+    fn async_generator_promise_source(
+        &mut self,
+        id: u32,
+        handle: u32,
+        floor: &Label,
+    ) -> Result<(Option<PromiseHandle>, Label), InterpreterError> {
+        let backing = self.async_generators[id as usize].generator_id;
+        let owner = Arc::clone(&self.generators[backing as usize].owner_module);
+        self.in_async_generator_await_context(floor, |this| {
+            this.json_charge_work()?;
+            let keeps = this
+                .await_keeps_promise(owner.as_ref(), handle)
+                .and_then(|keeps| this.observe_scoped_callback_result().map(|()| keeps));
+            if matches!(keeps, Ok(true)) {
+                return Ok((None, this.json_parse_context_label()?));
+            }
+            let promise = this.create_promise()?;
+            let settled = match keeps {
+                Ok(_) => this.json_parse_context_label().and_then(|label| {
+                    this.resolve_promise_with_value(
+                        Some(owner.as_ref()),
+                        promise,
+                        Value::Promise(handle),
+                        label.clone(),
+                    )
+                    .map(|()| label)
+                }),
+                Err(error) => match this.async_generator_exception(error, floor) {
+                    Ok(rejection) => this
+                        .promise_value(&rejection.value)
+                        .and_then(|reason| {
+                            this.reject_promise(promise, reason, rejection.label.clone())
+                        })
+                        .map(|()| rejection.label),
+                    Err(error) => Err(error),
+                },
+            };
+            match settled {
+                Ok(label) => Ok((Some(promise), label)),
+                Err(error) => {
+                    // Not yet owned by an await continuation: close it here.
+                    if let Ok(epoch) = this
+                        .promise_store
+                        .terminally_reject_without_jobs(promise, floor)
+                    {
+                        this.close_terminal_async_promise_dependencies(epoch, floor);
+                    }
+                    Err(error)
+                }
+            }
+        })
+    }
+
+    /// Runs an await's PromiseResolve reads (a promise's `constructor`, a
+    /// thenable's `then`) under the await's context label, the current
+    /// context joined with `floor`, so a getter they run is labeled by it;
+    /// the caller's inline-callback context is restored afterwards.
+    fn in_async_generator_await_context<T>(
+        &mut self,
+        floor: &Label,
+        read: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
         let context = self.json_parse_context_label()?;
         let context = self.join_owned_label_with_temporary_budget(context, floor)?;
         let saved_bytes = self
@@ -548,71 +693,7 @@ impl InterpreterCore {
             return Err(error);
         }
         let saved_context = self.active_inline_callback_context_label.replace(context);
-        let outcome = (|| {
-            self.json_charge_work()?;
-            let promise = self.create_promise()?;
-            let resolution = (|| {
-                let key = self.executable_property_key_from_value(&Value::str("then"));
-                self.reflect_observe_selected_property(object, &key)?;
-                let then = self.iterator_protocol_property(
-                    Some(owner.as_ref()),
-                    object,
-                    &key,
-                    Value::Object(object),
-                )?;
-                let then_bytes = Self::estimate_value_bytes(&then);
-                self.json_reserve_temporary(then_bytes)?;
-                let resolution = (|| {
-                    self.observe_scoped_callback_result()?;
-                    let label = self.json_parse_context_label()?;
-                    if let Value::Closure(then_id) = then {
-                        self.enqueue_resolve_thenable(
-                            promise,
-                            crate::closure_model::ClosureHandle(then_id),
-                            Value::Object(object),
-                            label.clone(),
-                        )?;
-                    } else {
-                        // Preserve the shared Promise lane's callable coverage.
-                        // Never look up then twice: a getter can replace itself.
-                        self.fulfill_promise(
-                            promise,
-                            Self::value_to_js_value(&Value::Object(object)),
-                            label.clone(),
-                        )?;
-                    }
-                    Ok(label)
-                })();
-                self.json_release_temporary(then_bytes);
-                resolution
-            })();
-            let resolution = match resolution {
-                Ok(label) => Ok(label),
-                Err(error) => match self.async_generator_exception(error, floor) {
-                    Ok(rejection) => self
-                        .promise_value(&rejection.value)
-                        .and_then(|reason| {
-                            self.reject_promise(promise, reason, rejection.label.clone())
-                        })
-                        .map(|()| rejection.label),
-                    Err(error) => Err(error),
-                },
-            };
-            match resolution {
-                Ok(label) => Ok((promise, label)),
-                Err(error) => {
-                    // This internal Promise is not yet owned by an await
-                    // continuation. Close it explicitly on resource failure.
-                    if let Ok(epoch) = self
-                        .promise_store
-                        .terminally_reject_without_jobs(promise, floor)
-                    {
-                        self.close_terminal_async_promise_dependencies(epoch, floor);
-                    }
-                    Err(error)
-                }
-            }
-        })();
+        let outcome = read(self);
         let context = self
             .active_inline_callback_context_label
             .take()

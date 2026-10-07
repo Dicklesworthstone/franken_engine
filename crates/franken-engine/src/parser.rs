@@ -14405,11 +14405,6 @@ fn parse_class_body_members(
                 )
             })?;
         let method_name = rest[..paren_idx].trim();
-        let actual_kind = if method_name == "constructor" {
-            MethodKind::Constructor
-        } else {
-            kind
-        };
         let (key, computed) = if private_key_len > 0 {
             // `#m() {}`, `get #x() {}`: keyed by the private name (see
             // MethodKind::Field).
@@ -14449,6 +14444,40 @@ fn parse_class_body_members(
                 )?,
                 false,
             )
+        };
+        // ES2022 15.7.1: a non-static method whose PropName is
+        // "constructor" (`constructor`, `'constructor'`) is the class
+        // constructor, and as a getter, setter, generator or async method it
+        // is an early error; a static one is an ordinary static method
+        // (`static constructor() {}` was taken for the constructor and
+        // lost, bd-9vouw.288). A static method named "prototype" is an
+        // early error.
+        let prop_name = match &key {
+            Expression::Identifier(name) if !computed => Some(name.as_str()),
+            Expression::StringLiteral(name) if !computed => name.as_str(),
+            _ => None,
+        };
+        let actual_kind = match prop_name {
+            Some("constructor") if !is_static => {
+                if kind != MethodKind::Method || is_async || is_generator {
+                    return Err(ParseError::new(
+                        ParseErrorCode::UnsupportedSyntax,
+                        "a class constructor may not be a getter, setter, generator or async method",
+                        context.source_label.to_string(),
+                        Some(span.clone()),
+                    ));
+                }
+                MethodKind::Constructor
+            }
+            Some("prototype") if is_static => {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "classes may not have a static method named 'prototype'",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            _ => kind,
         };
         let rest = &rest[paren_idx..];
 

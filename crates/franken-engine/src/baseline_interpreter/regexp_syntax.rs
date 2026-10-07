@@ -217,9 +217,14 @@ impl Translator {
                     .position(|&c| c == '}')
                     .map_or(self.index + 2, |close| self.index + close + 1);
                 let text: String = self.chars[self.index..end].iter().collect();
-                match surrogate_property_class(&text) {
-                    Some(class) => self.out.push_str(class),
-                    None => self.out.push_str(&text),
+                let string_property = (self.unicode_sets && escaped == 'p')
+                    .then(|| text.get(3..text.len().saturating_sub(1)))
+                    .flatten()
+                    .and_then(string_property_pattern);
+                match (string_property, surrogate_property_class(&text)) {
+                    (Some(pattern), _) => self.out.push_str(&pattern),
+                    (None, Some(class)) => self.out.push_str(class),
+                    (None, None) => self.out.push_str(&text),
                 }
                 self.index = end;
             }
@@ -1402,6 +1407,36 @@ pub(super) fn unicode_property_escape_error(pattern: &str, flags: &str) -> Optio
     None
 }
 
+/// A property of strings (ES2024 22.2.2.9: `\p{RGI_Emoji}` with the `v`
+/// flag, outside a class) as a `regex` group over the Unicode emoji
+/// properties (bd-9vouw.247). string-width 8.3 tests every grapheme with
+/// `/^\p{RGI_Emoji}$/v`, and both RegExp routes rejected the escape, so it
+/// failed to load. The groups follow the UTS #51 sequence grammar that the
+/// RGI lists instantiate, longest kind first so a match takes the whole
+/// sequence. No-claim: a flag is any pair of regional indicators and a ZWJ
+/// sequence any emoji elements joined by U+200D, a superset of the RGI
+/// lists (the three RGI tag sequences are exact); `\p{RGI_Emoji}` inside a
+/// class is not supported.
+fn string_property_pattern(body: &str) -> Option<String> {
+    const KEYCAP: &str = r"[#*0-9]\x{FE0F}\x{20E3}";
+    const FLAG: &str = r"\p{Regional_Indicator}\p{Regional_Indicator}";
+    const TAG: &str = r"\x{1F3F4}\x{E0067}\x{E0062}(?:\x{E0065}\x{E006E}\x{E0067}|\x{E0073}\x{E0063}\x{E0074}|\x{E0077}\x{E006C}\x{E0073})\x{E007F}";
+    const MODIFIER: &str = r"\p{Emoji_Modifier_Base}\p{Emoji_Modifier}";
+    const BASIC: &str = r"(?:[\p{Emoji_Presentation}--\p{Regional_Indicator}]|[\p{Emoji}--\p{Emoji_Presentation}--[#*0-9]]\x{FE0F})";
+    const ELEMENT: &str = r"(?:\p{Emoji_Modifier_Base}\p{Emoji_Modifier}|[\p{Extended_Pictographic}\p{Emoji_Presentation}]\x{FE0F}?)";
+    let zwj = format!(r"{ELEMENT}(?:\x{{200D}}{ELEMENT})+");
+    Some(match body {
+        "Basic_Emoji" => BASIC.to_string(),
+        "Emoji_Keycap_Sequence" => format!("(?:{KEYCAP})"),
+        "RGI_Emoji_Flag_Sequence" => format!("(?:{FLAG})"),
+        "RGI_Emoji_Modifier_Sequence" => format!("(?:{MODIFIER})"),
+        "RGI_Emoji_Tag_Sequence" => format!("(?:{TAG})"),
+        "RGI_Emoji_ZWJ_Sequence" => format!("(?:{zwj})"),
+        "RGI_Emoji" => format!("(?:{zwj}|{TAG}|{FLAG}|{MODIFIER}|{KEYCAP}|{BASIC})"),
+        _ => return None,
+    })
+}
+
 /// The class for a `\p{..}` or `\P{..}` (whole escape text) that names the
 /// surrogate category, which the `regex` crate does not know. Matching runs
 /// over strings that hold no lone surrogate (see the module notes), so
@@ -1443,6 +1478,43 @@ mod tests {
         js_pattern_to_rust, unicode_property_escape_error,
     };
     use regex::{Regex, RegexBuilder};
+
+    /// bd-9vouw.247: properties of strings with `v`; the expected values
+    /// are Node v22.2.0's.
+    #[test]
+    fn rgi_emoji_properties_of_strings_match_whole_sequences() {
+        let rgi = rust_with(r"^\p{RGI_Emoji}$", "v");
+        for (text, expected) in [
+            ("\u{1F44D}\u{1F3FD}", true),
+            ("\u{1F1FA}\u{1F1F8}", true),
+            ("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", true),
+            ("1\u{FE0F}\u{20E3}", true),
+            ("\u{1F600}", true),
+            ("\u{A9}\u{FE0F}", true),
+            ("a", false),
+            ("\u{A9}", false),
+            ("\u{1F1FA}", false),
+            (
+                "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}",
+                true,
+            ),
+            ("\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}", true),
+            ("\u{1F3FD}", true),
+            ("#\u{FE0F}\u{20E3}", true),
+            ("\u{1F600}\u{FE0F}", false),
+            ("x\u{1F44D}", false),
+        ] {
+            assert_eq!(rgi.is_match(text), expected, "{text:?}");
+        }
+        let any = rust_with(r"\p{RGI_Emoji}", "v");
+        assert_eq!(
+            any.replace_all("a\u{1F44D}\u{1F3FD}b\u{1F600}", "[E]"),
+            "a[E]b[E]"
+        );
+        assert!(!rust_with(r"^\p{Basic_Emoji}$", "v").is_match("\u{1F44D}\u{1F3FD}"));
+        assert!(rust_with(r"^\p{Emoji_Keycap_Sequence}$", "v").is_match("#\u{FE0F}\u{20E3}"));
+        assert!(unicode_property_escape_error(r"^\p{RGI_Emoji}$", "v").is_none());
+    }
 
     #[test]
     fn property_name_tables_are_sorted_for_binary_search() {

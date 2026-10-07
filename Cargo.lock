@@ -2002,6 +2002,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "unicode-normalization",
+ "unicode-segmentation",
  "url",
  "uuid",
  "wait-timeout",

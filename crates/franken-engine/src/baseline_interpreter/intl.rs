@@ -18,8 +18,8 @@
 //! instead of falling back, except a five-to-eight-letter language such as
 //! `generic`, which falls back to en-US as in Node); DateTimeFormat has
 //! formatToParts (the pieces `format` joins), NumberFormat does not; no
-//! formatRange, BigInt formatting, DisplayNames, Locale or Segmenter, and no
-//! supportedLocalesOf. The methods are own properties of each
+//! formatRange, BigInt formatting, DisplayNames or Locale, and no
+//! supportedLocalesOf. Segmenter is UAX #29 (see `intl_segmenter`). The methods are own properties of each
 //! object, not prototype methods: `Intl.DateTimeFormat.prototype` is
 //! undefined and `instanceof Intl.NumberFormat` is false.
 
@@ -44,13 +44,14 @@ pub(super) enum DateOptionsFor {
 }
 
 /// The service constructors on `Intl`.
-const SERVICES: [&str; 6] = [
+const SERVICES: [&str; 7] = [
     "NumberFormat",
     "DateTimeFormat",
     "Collator",
     "PluralRules",
     "RelativeTimeFormat",
     "ListFormat",
+    "Segmenter",
 ];
 
 /// The languages RelativeTimeFormat and ListFormat have patterns for (and
@@ -156,6 +157,7 @@ impl InterpreterCore {
                 self.intl_relative_time_format_options(module, requested, &options)?
             }
             "ListFormat" => self.intl_list_format_options(module, requested, &options)?,
+            "Segmenter" => self.intl_segmenter_options(module, requested, &options)?,
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "an Intl service constructor".to_string(),
@@ -172,6 +174,7 @@ impl InterpreterCore {
             "DateTimeFormat" => &["format", "formatToParts", "resolvedOptions"],
             "Collator" => &["compare", "resolvedOptions"],
             "RelativeTimeFormat" | "ListFormat" => &["format", "formatToParts", "resolvedOptions"],
+            "Segmenter" => &["segment", "resolvedOptions"],
             _ => &["select", "resolvedOptions"],
         };
         for method in methods {
@@ -207,6 +210,9 @@ impl InterpreterCore {
             .unwrap_or_default()
             .to_string();
         let (service, method) = name.split_once('.').unwrap_or(("", ""));
+        if service == "Segments" {
+            return self.intl_segments_method(module, builtin, method, args);
+        }
         let resolved = builtin
             .bound_object
             .map(ObjectId)
@@ -248,6 +254,11 @@ impl InterpreterCore {
                     self.set_object_property(copy, key, value)?;
                 }
                 Ok(Value::Object(copy))
+            }
+            "segment" if service == "Segmenter" => {
+                let input = arg(self, 0)?;
+                let input = self.intl_to_string(module, input)?;
+                self.intl_segment(resolved, input)
             }
             "format" if service == "NumberFormat" => {
                 let value = arg(self, 0)?;
@@ -432,7 +443,7 @@ impl InterpreterCore {
     }
 
     /// GetOption for a string option restricted to `allowed`.
-    fn intl_string_option(
+    pub(super) fn intl_string_option(
         &mut self,
         module: &Ir3Module,
         options: &Value,
@@ -1479,7 +1490,7 @@ impl InterpreterCore {
         }
     }
 
-    fn intl_to_number(
+    pub(super) fn intl_to_number(
         &mut self,
         module: &Ir3Module,
         value: Value,

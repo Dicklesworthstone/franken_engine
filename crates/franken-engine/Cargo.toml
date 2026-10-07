@@ -348,6 +348,9 @@ franken-engine-deterministic-derive = { path = "../franken-engine-deterministic-
 franken-engine-fixed-layout-derive = { path = "../franken-engine-fixed-layout-derive" }
 bumpalo = { version = "3", features = ["collections"] }
 unicode-normalization = "0.1"
+# UAX #29 grapheme, word and sentence boundaries for Intl.Segmenter
+# (bd-9vouw.247); already in the build through fp-io -> arrow -> comfy-table.
+unicode-segmentation = "1.13"
 rustix = { version = "1.1", features = ["event", "fs", "process", "time"] }
 wait4 = "0.1"
 wait-timeout = "0.2"

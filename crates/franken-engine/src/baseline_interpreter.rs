@@ -89,6 +89,7 @@ mod date_locale;
 mod event_target;
 mod inspect;
 mod intl;
+mod intl_segmenter;
 mod iterator_helpers;
 mod json_parse;
 mod json_stringify;
@@ -5438,17 +5439,25 @@ impl BuiltinFunction {
                 "PluralRules",
                 "RelativeTimeFormat",
                 "ListFormat",
+                "Segmenter",
             ]
             .iter()
             .copied()
             .find(|name| self.module_specifier.0.as_deref() == Some(*name))
             .unwrap_or("IntlConstructor"),
+            BuiltinFunctionKind::IntlMethod
+                if self.module_specifier.0.as_deref() == Some("Segments.iterator") =>
+            {
+                "[Symbol.iterator]"
+            }
             BuiltinFunctionKind::IntlMethod => [
                 "format",
                 "formatToParts",
                 "compare",
                 "select",
                 "resolvedOptions",
+                "segment",
+                "containing",
             ]
             .iter()
             .copied()
@@ -5759,6 +5768,8 @@ impl BuiltinFunction {
                 Some("Collator") => "Intl.Collator.prototype",
                 Some("RelativeTimeFormat") => "Intl.RelativeTimeFormat.prototype",
                 Some("ListFormat") => "Intl.ListFormat.prototype",
+                Some("Segmenter") => "Intl.Segmenter.prototype",
+                Some("Segments") => "Intl.Segments",
                 _ => "Intl.PluralRules.prototype",
             },
             K::ConsoleLog

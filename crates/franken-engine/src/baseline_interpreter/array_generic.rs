@@ -17,9 +17,10 @@
 //!
 //! No-claim: on a proxy `values`/`keys`/`entries` (and so for-of) read the
 //! elements when the iterator is created, not lazily (an array-like keeps the
-//! ordinary lazy iterator); `flat`, `flatMap` and `toSpliced` keep the
-//! ordinary paths, as do typed arrays used as array-likes. A function `this`
-//! runs here over its own properties (bd-9vouw.285).
+//! ordinary lazy iterator); typed arrays used as array-likes keep their
+//! ordinary paths. A function `this` runs here over its own properties
+//! (bd-9vouw.285). `flat`, `flatMap` and `toSpliced` run here too
+//! (bd-9vouw.354).
 
 use super::*;
 
@@ -64,6 +65,9 @@ impl InterpreterCore {
                 | K::ArrayToSorted
                 | K::ArrayToReversed
                 | K::ArrayWith
+                | K::ArrayToSpliced
+                | K::ArrayFlat
+                | K::ArrayFlatMap
                 | K::ArrayKeys
                 | K::ArrayValues
                 | K::ArrayEntries
@@ -313,7 +317,13 @@ impl InterpreterCore {
         use BuiltinFunctionKind as K;
         if matches!(
             kind,
-            K::ArrayMap | K::ArrayFilter | K::ArraySliceMethod | K::ArraySplice | K::ArrayConcat
+            K::ArrayMap
+                | K::ArrayFilter
+                | K::ArraySliceMethod
+                | K::ArraySplice
+                | K::ArrayConcat
+                | K::ArrayFlat
+                | K::ArrayFlatMap
         ) {
             // Length, species constructors, element reads and callbacks can
             // each replace the pending result slot. Keep their observations
@@ -773,6 +783,9 @@ impl InterpreterCore {
                 }
                 let len = self.generic_length(m, o)?;
                 let in_place = kind == K::ArraySort;
+                if !in_place {
+                    Self::generic_array_create_length(len)?;
+                }
                 let mut items = self.generic_buffer(len)?;
                 for k in 0..len {
                     let key = Self::generic_index_key(k);
@@ -797,6 +810,7 @@ impl InterpreterCore {
             }
             K::ArrayToReversed => {
                 let len = self.generic_length(m, o)?;
+                Self::generic_array_create_length(len)?;
                 let mut items = self.generic_buffer(len)?;
                 for k in (0..len).rev() {
                     items.push(self.generic_get(m, o, &Self::generic_index_key(k))?);
@@ -816,6 +830,7 @@ impl InterpreterCore {
                         message: "Invalid index for Array.prototype.with".to_string(),
                     });
                 }
+                Self::generic_array_create_length(len)?;
                 let replacement = arg(self, 1)?;
                 let mut items = self.generic_buffer(len)?;
                 for k in 0..len {
@@ -826,6 +841,63 @@ impl InterpreterCore {
                     });
                 }
                 Value::Object(self.alloc_array_from_values(&items)?)
+            }
+            // ES2023 23.1.3.35: the elements before `start`, the items,
+            // then the elements after the skipped ones, into an ArrayCreate
+            // of the new length (bd-9vouw.354).
+            K::ArrayToSpliced => {
+                let len = self.generic_length(m, o)?;
+                let start = self.generic_relative_index(m, arg(self, 0)?, len, 0)?;
+                let skip = match args.count {
+                    0 => 0,
+                    1 => len - start,
+                    _ => {
+                        let requested = self.generic_to_integer(m, arg(self, 1)?)?;
+                        requested.clamp(0.0, (len - start) as f64) as u64
+                    }
+                };
+                let new_len = len - skip + u64::from(args.count.saturating_sub(2));
+                if new_len > MAX_SAFE_LENGTH {
+                    return Err(Self::generic_length_error());
+                }
+                Self::generic_array_create_length(new_len)?;
+                let mut items = self.generic_buffer(new_len)?;
+                for k in 0..start {
+                    items.push(self.generic_get(m, o, &Self::generic_index_key(k))?);
+                }
+                for index in 2..args.count {
+                    items.push(arg(self, index)?);
+                }
+                for k in start + skip..len {
+                    items.push(self.generic_get(m, o, &Self::generic_index_key(k))?);
+                }
+                Value::Object(self.alloc_array_from_values(&items)?)
+            }
+            // ES2019 22.1.3.10-11: FlattenIntoArray into ArraySpeciesCreate(O,
+            // 0); flatMap maps the top-level elements and flattens one level
+            // (bd-9vouw.354).
+            K::ArrayFlat | K::ArrayFlatMap => {
+                let len = self.generic_length(m, o)?;
+                let (depth, mapper, this_arg) = if kind == K::ArrayFlat {
+                    let depth = match arg(self, 0)? {
+                        Value::Undefined => 1.0,
+                        depth => self.generic_to_integer(m, depth)?.max(0.0),
+                    };
+                    (depth, None, Value::Undefined)
+                } else {
+                    let mapper = arg(self, 0)?;
+                    if !mapper.is_callable() {
+                        return Err(InterpreterError::TypeError {
+                            expected: "callable Array.prototype.flatMap mapper".to_string(),
+                            got: mapper.type_name().to_string(),
+                        });
+                    }
+                    (1.0, Some(mapper), arg(self, 1)?)
+                };
+                let result = self.array_species_result(module, o, 0)?;
+                let mapper = mapper.as_ref().map(|mapper| (mapper, &this_arg));
+                self.generic_flatten_into(m, result, o, len, depth, mapper)?;
+                Value::Object(result)
             }
             K::ArrayKeys | K::ArrayValues | K::ArrayEntries => {
                 let len = self.generic_length(m, o)?;
@@ -1136,6 +1208,80 @@ impl InterpreterCore {
         }
         indices.sort_unstable();
         Ok(Some(indices))
+    }
+
+    /// ArrayCreate(len)'s RangeError (ES2020 9.4.2.2) for toReversed,
+    /// toSorted, with and toSpliced, before any element is read or buffered:
+    /// an array-like's length past 2^32 - 1 (`{ length: 2 ** 32 }`) is no
+    /// array's, and buffering it first exhausted the memory budget instead
+    /// (bd-9vouw.354).
+    fn generic_array_create_length(len: u64) -> Result<(), InterpreterError> {
+        if len > u64::from(u32::MAX) {
+            return Err(InterpreterError::RangeError {
+                message: "Invalid array length".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// FlattenIntoArray (ES2019 22.1.3.10.1) over [[HasProperty]] and
+    /// [[Get]]: each present element of `source` (through `mapper` at the
+    /// top level only) is spread when `depth` remains and IsArray holds,
+    /// else defined at the next target index. Sources wait on an explicit
+    /// stack, so deep nesting cannot exhaust the native stack; an
+    /// `Infinity` depth stays infinite. `mapper` is flatMap's callback and
+    /// its `this`.
+    fn generic_flatten_into(
+        &mut self,
+        m: Option<&Ir3Module>,
+        target: ObjectId,
+        source: ObjectId,
+        source_len: u64,
+        depth: f64,
+        mapper: Option<(&Value, &Value)>,
+    ) -> Result<(), InterpreterError> {
+        let mut target_index = 0u64;
+        // (source, its length, the next index, the depth left, mapped)
+        let mut stack = vec![(source, source_len, 0u64, depth, true)];
+        while let Some(frame) = stack.last_mut() {
+            let (from, len, index, depth_left, mapped) = *frame;
+            if index >= len {
+                stack.pop();
+                continue;
+            }
+            frame.2 += 1;
+            let key = Self::generic_index_key(index);
+            if !self.generic_has(m, from, &key)? {
+                continue;
+            }
+            let mut element = self.generic_get(m, from, &key)?;
+            if mapped && let Some((mapper, this_arg)) = mapper {
+                element = self.invoke_inline_method_call(
+                    m,
+                    mapper.clone(),
+                    this_arg.clone(),
+                    vec![
+                        element,
+                        Self::generic_length_value(index),
+                        self.generic_object_value(from),
+                    ],
+                )?;
+            }
+            if depth_left > 0.0
+                && let Value::Object(inner) = element
+                && self.generic_is_array(inner)?
+            {
+                let inner_len = self.generic_length(m, inner)?;
+                stack.push((inner, inner_len, 0, depth_left - 1.0, false));
+                continue;
+            }
+            if target_index >= MAX_SAFE_LENGTH {
+                return Err(Self::generic_length_error());
+            }
+            self.generic_create_data_property(m, target, target_index, element)?;
+            target_index += 1;
+        }
+        Ok(())
     }
 
     /// A buffer for up to `len` elements, charged to the temporary budget

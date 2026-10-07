@@ -141,3 +141,32 @@ fn property_access_on_null_or_undefined_has_nodes_message_bd_9vouw_108() {
         "TypeError: Cannot read properties of null (reading 'x') | TypeError: Cannot read properties of undefined (reading 'y') | TypeError: Cannot set properties of null (setting 'k') | TypeError: Cannot read properties of undefined (reading 'Symbol(k)') | TypeError: Cannot read properties of null (reading '0') | TypeError: Cannot read properties of undefined (reading 'f') | TypeError"
     );
 }
+
+/// bd-9vouw.239: a String.prototype method called with a Symbol `this`
+/// throws a TypeError (ToString of a Symbol, and thisStringValue for
+/// toString / valueOf); slice, padEnd and trimStart returned the symbol's
+/// internal name. Number and boolean receivers still convert. Node v22.2.0
+/// gives this value; Bun 1.4.2 agrees.
+#[test]
+fn string_methods_reject_a_symbol_this_bd_9vouw_239() {
+    let source = "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\nvar s = Symbol('q'), P = String.prototype;\n[attempt(() => P.slice.call(s)), attempt(() => P.codePointAt.call(s, 0)), attempt(() => P.padEnd.call(s, 3)),\n attempt(() => P.toLowerCase.call(s)), attempt(() => P.trimStart.call(s)), attempt(() => P.valueOf.call(s)),\n attempt(() => P.toString.call(s)), attempt(() => P.includes.call(s, 'q')),\n attempt(() => P.slice.call(12345, 1, 3)), attempt(() => P.toUpperCase.call(true)), attempt(() => s.toString()),\n attempt(() => s.description)].join(' ');\n";
+    assert_eq!(
+        eval(source),
+        "TypeError TypeError TypeError TypeError TypeError TypeError TypeError TypeError 23 TRUE Symbol(q) q"
+    );
+}
+
+/// bd-9vouw.239: Symbol.prototype[@@toPrimitive] (name "[Symbol.toPrimitive]",
+/// length 1, non-writable, configurable) answers the symbol of a symbol or
+/// wrapper `this`, so ToString of a Symbol wrapper throws as for the symbol
+/// (String(), `+ ''`, a template, join, a String.prototype method), while its
+/// toString and description still work. Node v22.2.0 gives this value; Bun
+/// 1.4.2 agrees.
+#[test]
+fn symbol_wrappers_convert_through_symbol_to_primitive_bd_9vouw_239() {
+    let source = "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\nvar w = Object(Symbol('q')), tp = Symbol.prototype[Symbol.toPrimitive];\nvar d = Object.getOwnPropertyDescriptor(Symbol.prototype, Symbol.toPrimitive);\n[typeof tp, tp.name, tp.length, d.writable, d.enumerable, d.configurable,\n attempt(() => tp.call(Symbol('a')).toString()), attempt(() => tp.call(w).description), attempt(() => tp.call({})),\n attempt(() => String(w)), attempt(() => w + ''), attempt(() => `${w}`), attempt(() => [w].join()),\n attempt(() => String.prototype.slice.call(w)), attempt(() => w.toString()), attempt(() => w.description)].join(' ');\n";
+    assert_eq!(
+        eval(source),
+        "function [Symbol.toPrimitive] 1 false false true Symbol(a) q TypeError TypeError TypeError TypeError TypeError TypeError Symbol(q) q"
+    );
+}

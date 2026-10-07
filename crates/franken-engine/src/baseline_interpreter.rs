@@ -3600,6 +3600,10 @@ pub enum BuiltinFunctionKind {
     /// Blob.prototype.slice / text / arrayBuffer (bd-9vouw.226), named by
     /// the specifier, one of [`blob::BLOB_METHODS`]. Append only.
     BlobMethod,
+    /// `Symbol.prototype[@@toPrimitive]` (ES2020 19.4.3.5): thisSymbolValue
+    /// whatever the hint, so ToPrimitive of a Symbol wrapper is its symbol
+    /// (bd-9vouw.239). Append only.
+    SymbolPrototypeToPrimitive,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5086,6 +5090,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::BooleanPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
             BuiltinFunctionKind::SymbolPrototypeValueOf => "valueOf",
+            BuiltinFunctionKind::SymbolPrototypeToPrimitive => "[Symbol.toPrimitive]",
             BuiltinFunctionKind::BlobMethod => blob::BLOB_METHODS
                 .iter()
                 .copied()
@@ -5701,7 +5706,9 @@ impl BuiltinFunction {
             }
             K::DateNow | K::DateParse | K::DateUtc => "Date",
             K::DateGetTime | K::DatePrototypeMethod => "Date.prototype",
-            K::SymbolPrototypeToString | K::SymbolPrototypeValueOf => "Symbol.prototype",
+            K::SymbolPrototypeToString
+            | K::SymbolPrototypeValueOf
+            | K::SymbolPrototypeToPrimitive => "Symbol.prototype",
             K::BlobMethod => "Blob.prototype",
             K::BigIntAsIntN | K::BigIntAsUintN => "BigInt",
             K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
@@ -40230,6 +40237,18 @@ impl InterpreterCore {
             }
             receiver = Some(primitive);
         }
+        // A Symbol `this` has no ToString (ES2020 7.1.12) and no
+        // [[StringData]], so every String.prototype method throws a TypeError
+        // for it; `String.prototype.slice.call(Symbol())` threw nothing
+        // (bd-9vouw.239).
+        if matches!(receiver, Some(Value::Symbol(_)))
+            && builtin.spec_owner() == Some("String.prototype")
+        {
+            return Err(InterpreterError::TypeError {
+                expected: format!("string-convertible this for {}", builtin.display_name()),
+                got: "symbol".to_string(),
+            });
+        }
         // Array.prototype methods on a Proxy, an array-like that is not an
         // Array or a primitive `this` run over [[Get]]/[[Set]]/[[HasProperty]]
         // /[[Delete]] (getters and traps see every step), and so does a concat
@@ -44016,10 +44035,11 @@ impl InterpreterCore {
             BuiltinFunctionKind::BlobMethod => {
                 self.blob_method(module, builtin, args, receiver, receiver_register)
             }
-            BuiltinFunctionKind::SymbolPrototypeValueOf => match receiver {
+            BuiltinFunctionKind::SymbolPrototypeValueOf
+            | BuiltinFunctionKind::SymbolPrototypeToPrimitive => match receiver {
                 Some(symbol @ Value::Symbol(_)) => Ok(symbol),
                 other => Err(InterpreterError::TypeError {
-                    expected: "Symbol receiver for Symbol.prototype.valueOf".to_string(),
+                    expected: format!("Symbol receiver for Symbol.prototype.{}", builtin.spec_name()),
                     got: other.as_ref().map_or("undefined", Value::type_name).to_string(),
                 }),
             },
@@ -101138,6 +101158,29 @@ impl InterpreterCore {
         ) {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
             self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
+            self.set_own_property_attributes(
+                prototype,
+                &key,
+                PropertyAttributes {
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                },
+            )?;
+        }
+        // Symbol.prototype[@@toPrimitive] (ES2020 19.4.3.5; writable false,
+        // enumerable false, configurable true): ToPrimitive of a Symbol
+        // wrapper is its symbol, so ToString of the wrapper throws as for the
+        // symbol itself (bd-9vouw.239).
+        if canonical == "Symbol" {
+            let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToPrimitive.id());
+            self.set_object_runtime_property(
+                prototype,
+                key.clone(),
+                Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::SymbolPrototypeToPrimitive,
+                )),
+            )?;
             self.set_own_property_attributes(
                 prototype,
                 &key,

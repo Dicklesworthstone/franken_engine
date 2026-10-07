@@ -395,6 +395,7 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("String.prototype", "valueOf", 0),
     ("Symbol", "for", 1),
     ("Symbol", "keyFor", 1),
+    ("Symbol.prototype", "[Symbol.toPrimitive]", 1),
     ("Symbol.prototype", "toString", 0),
     ("Symbol.prototype", "valueOf", 0),
     ("TextDecoder.prototype", "decode", 0),

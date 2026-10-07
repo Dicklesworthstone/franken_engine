@@ -59283,6 +59283,94 @@ impl InterpreterCore {
         escaped
     }
 
+    /// ES2020 21.2.3.1 RegExp(pattern, flags), for a construction, a call
+    /// (`called`: NewTarget undefined) and a literal. IsRegExp runs once (it
+    /// reads pattern[@@match]): a called RegExp returns a pattern that
+    /// IsRegExp whose `constructor` is RegExp when no flags are given; a
+    /// RegExp pattern copies its source, and its flags when none are given;
+    /// any other object IsRegExp accepts supplies its `source` and `flags`
+    /// properties. ToString then converts both through ToPrimitive, so an
+    /// object's toString / valueOf runs (and may throw); they read
+    /// "[object Object]".
+    fn construct_regexp(
+        &mut self,
+        module: Option<&Ir3Module>,
+        pattern_value: Value,
+        flags_value: Value,
+        called: bool,
+    ) -> Result<Value, InterpreterError> {
+        let pattern_is_regexp = match module {
+            Some(module) => self.is_regexp_observable(module, &pattern_value)?,
+            None => false,
+        };
+        if let (true, true, Value::Undefined, Some(module)) =
+            (called, pattern_is_regexp, &flags_value, module)
+        {
+            let constructor = self.get_v(
+                module,
+                &pattern_value,
+                &RuntimePropertyKey::String(JsString::from("constructor")),
+            )?;
+            if matches!(&constructor, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::StandardConstructor
+                    && Self::standard_constructor_name(builtin).ok() == Some("RegExp"))
+            {
+                return Ok(pattern_value);
+            }
+        }
+        let regexp_slots = match &pattern_value {
+            Value::Object(id) => self.regexp_source_flags_from_object(*id),
+            _ => None,
+        };
+        let (pattern_source, flags_source) = match (regexp_slots, module) {
+            (Some((source, flags)), _) => {
+                let flags = match flags_value {
+                    Value::Undefined => Value::str(flags),
+                    other => other,
+                };
+                (Value::str(source), flags)
+            }
+            (None, Some(module)) if pattern_is_regexp => {
+                let source = self.get_v(
+                    module,
+                    &pattern_value,
+                    &RuntimePropertyKey::String(JsString::from("source")),
+                )?;
+                let flags = match flags_value {
+                    Value::Undefined => self.get_v(
+                        module,
+                        &pattern_value,
+                        &RuntimePropertyKey::String(JsString::from("flags")),
+                    )?,
+                    other => other,
+                };
+                (source, flags)
+            }
+            _ => (pattern_value, flags_value),
+        };
+        let pattern = match pattern_source {
+            Value::Undefined => String::new(),
+            other => self.conversion_to_string(module, other)?.to_string(),
+        };
+        let flags = match flags_source {
+            Value::Undefined => String::new(),
+            other => self.conversion_to_string(module, other)?.to_string(),
+        };
+        // ES2020 21.2.3.2.2 RegExpInitialize: invalid flags or a pattern that
+        // does not parse are a SyntaxError here, not at the first match (the
+        // literal's early-error rule). A pattern in the compiled cache already
+        // ran, so a literal evaluated in a loop is checked once.
+        let compiled = self
+            .regexp_cache
+            .borrow()
+            .iter()
+            .any(|(cached, cached_flags, _)| *cached == pattern && *cached_flags == flags);
+        if !compiled && let Some(message) = regexp_literal_early_error(&pattern, &flags) {
+            return Err(self.throw_syntax_error(message));
+        }
+        Ok(Value::Object(self.alloc_regexp_object(pattern, flags)?))
+    }
+
     fn regexp_source_flags_from_object(&self, object_id: ObjectId) -> Option<(String, String)> {
         let object = self.heap.get(object_id.0 as usize)?;
         if object.brand() != Some("RegExp") {
@@ -92001,41 +92089,11 @@ impl InterpreterCore {
                 Ok(Value::Float(result.into()))
             }
 
+            // `new RegExp(...)` and RegExp literals.
             "builtin:RegExp" => {
-                // RegExp constructor / literal (ES2020 21.2.3.1). A RegExp
-                // pattern copies its source, and its flags when no flags are
-                // given; any other pattern value is converted with ToString.
                 let pattern_value = self.arg_or_undefined(args, 0)?;
                 let flags_value = self.arg_or_undefined(args, 1)?;
-                let regexp_source = match &pattern_value {
-                    Value::Object(id) => self.regexp_source_flags_from_object(*id),
-                    _ => None,
-                };
-                let pattern = match (&regexp_source, &pattern_value) {
-                    (Some((source, _)), _) => source.clone(),
-                    (None, Value::Undefined) => String::new(),
-                    (None, other) => self.value_to_string(other),
-                };
-                let flags = match (&regexp_source, &flags_value) {
-                    (Some((_, flags)), Value::Undefined) => flags.clone(),
-                    (_, Value::Undefined) => String::new(),
-                    (_, other) => self.value_to_string(other),
-                };
-                // ES2020 21.2.3.2.2 RegExpInitialize: invalid flags or a
-                // pattern that does not parse are a SyntaxError here, not
-                // at the first match (the literal's early-error rule). A
-                // pattern in the compiled cache already ran, so a literal
-                // evaluated in a loop is checked once.
-                let compiled = self
-                    .regexp_cache
-                    .borrow()
-                    .iter()
-                    .any(|(cached, cached_flags, _)| *cached == pattern && *cached_flags == flags);
-                if !compiled && let Some(message) = regexp_literal_early_error(&pattern, &flags) {
-                    return Err(self.throw_syntax_error(message));
-                }
-
-                Ok(Value::Object(self.alloc_regexp_object(pattern, flags)?))
+                self.construct_regexp(module, pattern_value, flags_value, false)
             }
 
             "builtin:ArrayPrototypeReduceRight" => self.array_prototype_reduce_right(args, module),
@@ -102063,6 +102121,9 @@ impl InterpreterCore {
             _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
             }
+            Some("RegExp") => {
+                self.dispatch_builtin_hostcall("builtin:RegExp", args, Some(module))?
+            }
             Some(name) if Self::buffer_family_constructor(name) => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?
             }
@@ -105719,9 +105780,14 @@ impl InterpreterCore {
                 })
             }
             "Symbol" => self.dispatch_builtin_hostcall("builtin:Symbol", args, Some(module)),
-            // `RegExp(p, f)` and `new R(p, f)` through a RegExp value: the same
-            // hostcall `new RegExp(...)` and literals lower to.
-            "RegExp" => self.dispatch_builtin_hostcall("builtin:RegExp", args, Some(module)),
+            // `RegExp(p, f)` called; a construction through a RegExp value
+            // (`new R(p, f)`, Reflect.construct) dispatches from
+            // construct_builtin_with_new_target.
+            "RegExp" => {
+                let pattern_value = self.arg_or_undefined(args, 0)?;
+                let flags_value = self.arg_or_undefined(args, 1)?;
+                self.construct_regexp(Some(module), pattern_value, flags_value, true)
+            }
             "WeakMap" | "WeakSet" => {
                 self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }

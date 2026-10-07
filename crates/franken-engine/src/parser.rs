@@ -2421,6 +2421,11 @@ fn previous_line_ends_expression(text: &str) -> bool {
         .rev()
         .find(|(_, c)| !is_identifier_char(*c))
         .map_or(0, |(index, c)| index + c.len_utf8());
+    // A Statement-position `let` is an identifier: `if (a) let\n(b)` calls
+    // it, and `if (a) let\n[b] = c` stays one statement, which is an error.
+    if &code[word_start..] == "let" && ends_with_statement_position_let(code) {
+        return true;
+    }
     if matches!(
         &code[word_start..],
         "return"
@@ -2453,6 +2458,26 @@ fn previous_line_ends_expression(text: &str) -> bool {
             let clause = strip_leading_labels(clause).trim_start();
             starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export")
         })
+}
+
+/// Whether `text` ends with a `let` that is a whole Statement: the body of
+/// an `if`, `else`, loop or `with` header or of a label (`if (a) let`,
+/// `L: let`). A Statement is never a lexical declaration, so that `let` is
+/// an identifier and a line break after it ends its expression statement
+/// unless the next line continues the expression (ES2020 13.5 lookahead,
+/// 11.9.1): `if (a) let\nx = 1` is `if (a) let;` then `x = 1;`.
+fn ends_with_statement_position_let(text: &str) -> bool {
+    let code = strip_comments_to_whitespace(text);
+    let Some(before) = code.trim_end().strip_suffix("let") else {
+        return false;
+    };
+    if before.ends_with(|ch: char| ch == '_' || ch == '$' || ch == '.' || ch.is_alphanumeric()) {
+        return false;
+    }
+    let before = before.trim_end();
+    let tail = text_after_last_top_level_terminator(before).trim();
+    (!tail.is_empty() && strip_leading_labels(tail).is_empty())
+        || statement_header_takes_unbraced_body(before)
 }
 
 fn logical_line_from_buffer(
@@ -3842,7 +3867,10 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     last_significant,
                     trailing_identifier.as_str(),
                     trailing_identifier_follows_dot,
-                ))
+                )
+                || (trailing_identifier == "let"
+                    && !trailing_identifier_follows_dot
+                    && ends_with_statement_position_let(&current_text)))
         {
             if let Some(logical_line) = logical_line_from_buffer(
                 &current_text,
@@ -4626,7 +4654,11 @@ fn parse_statement_inner(
         return parse_export(statement, span, context).map(Statement::Export);
     }
 
-    if let Some(kind) = parse_variable_declaration_kind(statement) {
+    if let Some(kind) = parse_variable_declaration_kind(statement)
+        && (kind != VariableDeclarationKind::Let
+            || context.strict_mode
+            || let_starts_lexical_declaration(&statement["let".len()..]))
+    {
         return parse_variable_declaration(statement, kind, span, context)
             .map(Statement::VariableDeclaration);
     }
@@ -5794,6 +5826,15 @@ fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclaratio
         }
     }
     None
+}
+
+/// ES2020 13.3.1: `let` starts a lexical declaration only before a binding
+/// identifier or pattern. Before anything else sloppy code reads it as an
+/// identifier (`let = 1`, the body `let` of `if (a) let;`).
+fn let_starts_lexical_declaration(after_let: &str) -> bool {
+    after_let.trim_start().chars().next().is_some_and(|ch| {
+        ch == '[' || ch == '{' || ch == '_' || ch == '$' || ch == '\\' || ch.is_alphabetic()
+    })
 }
 
 fn parse_variable_declaration(

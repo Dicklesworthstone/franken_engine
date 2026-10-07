@@ -7431,6 +7431,7 @@ fn lower_statement_to_ir1_with_flow(
                 &mut body_binding_index,
                 body_scope,
             )?;
+            emit_class_call_check(&mut body_ops, &class_name, &mut body_label_counter);
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 Some(&class_name),
@@ -13819,6 +13820,32 @@ const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &[
     "queueMicrotask",
 ];
 
+/// ES2020 9.2.1 [[Call]] step 2: a class constructor called without `new`
+/// (Function.prototype.call, Reflect.apply, a bound call included) throws a
+/// TypeError before its parameters or body run (bd-9vouw.292). Emitted at
+/// the start of every class constructor body, before the parameter
+/// prologue: new.target is the constructor (truthy) under `new`,
+/// Reflect.construct and super(), and undefined for a plain call.
+fn emit_class_call_check(ops: &mut Vec<Ir1Op>, class_name: &str, label_counter: &mut u32) {
+    let constructed = *label_counter;
+    *label_counter = label_counter.saturating_add(1);
+    ops.push(Ir1Op::LoadNewTarget);
+    ops.push(Ir1Op::JumpIfTruthy {
+        label_id: constructed,
+    });
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(
+            format!("Class constructor {class_name} cannot be invoked without 'new'").into(),
+        ),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:TypeError".to_string(),
+        arg_count: 1,
+    });
+    ops.push(Ir1Op::Throw);
+    ops.push(Ir1Op::Label { id: constructed });
+}
+
 fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
     ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::String(format!("{name} is not defined").into()),
@@ -20003,6 +20030,7 @@ fn lower_expression_to_ir1_inner(
                 &mut body_binding_index,
                 body_scope,
             )?;
+            emit_class_call_check(&mut body_ops, &class_name, &mut body_label_counter);
             let parameter_prologue = lower_function_parameter_prologue(
                 &destructure_params,
                 name.as_deref(),

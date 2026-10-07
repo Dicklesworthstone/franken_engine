@@ -9754,6 +9754,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     }
                 }
                 value_stack.push(dst);
+                // An identifier assignment expression (`[i = 2, i = 3]`,
+                // `f(++i, ++i)`) is an AssignOp: its value is read from a
+                // copy when the expression goes on to use it, as for
+                // StoreBinding (store_result_needs_copy).
+                if store_result_needs_copy(
+                    ir2.ops.get(op_index + 1).map(|next| &next.inner),
+                    dst,
+                    &iterator_cleanup_labels,
+                ) {
+                    let copy = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move {
+                        dst: copy,
+                        src: dst,
+                    });
+                    pop_lowering_value(&mut value_stack)?;
+                    value_stack.push(copy);
+                }
             }
             Ir1Op::Label { id } => {
                 // Record the label target FIRST so that catch_target in
@@ -11934,6 +11951,21 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             .push(Ir3Instruction::Move { dst, src: result });
                     }
                     fn_value_stack.push(dst);
+                    // As in the top-level loop: a used assignment value is a
+                    // copy, not the binding's register.
+                    if store_result_needs_copy(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                        dst,
+                        &fn_iterator_cleanup_labels,
+                    ) {
+                        let copy = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: copy,
+                            src: dst,
+                        });
+                        pop_lowering_value(&mut fn_value_stack)?;
+                        fn_value_stack.push(copy);
+                    }
                 }
                 Ir1Op::GetProperty { key } => {
                     let (obj, key_reg) = match key {

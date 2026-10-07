@@ -94972,12 +94972,22 @@ impl InterpreterCore {
                         Value::Object(object_id),
                         "string",
                     ) {
+                        // ToString of a Symbol (a Symbol wrapper converts to
+                        // its symbol, bd-9vouw.239) is a TypeError.
+                        Ok(Value::Symbol(_)) => {
+                            active.remove(&array_id.0);
+                            return Err(Self::symbol_to_string_error());
+                        }
                         Ok(primitive) => self.value_to_string(&primitive),
                         Err(error) => {
                             active.remove(&array_id.0);
                             return Err(error);
                         }
                     }
+                }
+                Value::Symbol(_) => {
+                    active.remove(&array_id.0);
+                    return Err(Self::symbol_to_string_error());
                 }
                 other => self.value_to_string(&other),
             };

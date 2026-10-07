@@ -14,15 +14,18 @@ use frankenengine_extension_host::host_io::{
 };
 
 fn run(source: &str, root: &Path, filesystem_caps: &[&str]) -> Result<Vec<String>, String> {
+    let mut capabilities = vec!["vm_dispatch", "heap_allocate", "builtin", "console"];
+    capabilities.extend_from_slice(filesystem_caps);
+    run_granting(source, root, &capabilities)
+}
+
+/// Runs `source` holding exactly `capabilities`.
+fn run_granting(source: &str, root: &Path, capabilities: &[&str]) -> Result<Vec<String>, String> {
     let provider = Arc::new(SandboxedHostIo::with_root(root).expect("sandbox provider"));
     let recorder: Arc<dyn HostIoRecorder> = Arc::new(InMemoryHostIoTranscript::recording());
     let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig::default());
     orchestrator.set_host_io(provider, Some(recorder));
-    let mut capabilities: Vec<String> = ["vm_dispatch", "heap_allocate", "builtin", "console"]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    capabilities.extend(filesystem_caps.iter().map(|capability| (*capability).to_string()));
+    let capabilities = capabilities.iter().map(|capability| (*capability).to_string()).collect();
     let package = ExtensionPackage {
         extension_id: "fs-module-object-regression".into(),
         source: source.into(),
@@ -153,4 +156,36 @@ fn lexical_require_is_not_replaced_and_guest_globals_do_not_capture_the_facade()
         root.path(), &[],
     ).expect("lexical shadowing is preserved");
     assert_eq!(output, ["custom:fs", "function 4", "block:node:fs"]);
+}
+
+/// Building the module calls no builtin, so a program holding only its
+/// filesystem and console grants runs; `fs.constants` was `Object.freeze`d,
+/// which needed the builtin capability. The output is Node v22.2.0's.
+#[test]
+fn module_construction_needs_no_builtin_authority() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run_granting(
+        "const fs = require('fs'); fs.writeFileSync('out.txt', 'bytes'); \
+         console.log(fs.readFileSync('out.txt', 'utf8'), fs.constants.R_OK);",
+        root.path(),
+        &["vm_dispatch", "heap_allocate", "console", "fs_read", "fs_write"],
+    )
+    .expect("an fs program runs on its filesystem grants alone");
+    assert_eq!(output, ["bytes 4"]);
+}
+
+/// Like Node's, `fs.constants` has a null prototype and is not frozen, and
+/// fs/promises shares it. Expected line: Node v22.2.0's output.
+#[test]
+fn constants_have_a_null_prototype_and_are_not_frozen() {
+    let root = tempfile::tempdir().expect("sandbox");
+    let output = run(
+        "const c = require('fs').constants; \
+         console.log(Object.getPrototypeOf(c) === null, Object.isFrozen(c), c.F_OK, c.R_OK, \
+           c.W_OK, c.X_OK, require('fs/promises').constants === c);",
+        root.path(),
+        &[],
+    )
+    .expect("constants are plain data");
+    assert_eq!(output, ["true false 0 4 2 1 true"]);
 }

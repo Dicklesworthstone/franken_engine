@@ -63535,7 +63535,19 @@ impl InterpreterCore {
                     }
                 }
             }
-            let Some(receiver_id) = self.proxy_set_receiver_object(&receiver)? else {
+            // A function receiver's own properties live on its backing object
+            // (bd-9vouw.17): an Array.prototype method writing to a function
+            // `this` (bd-9vouw.285) creates or replaces them there. A function
+            // without a backing object still refuses.
+            let receiver_id = match (&receiver, module) {
+                (function, Some(module))
+                    if function.is_callable() && !Self::is_callable_proxy(function) =>
+                {
+                    self.function_own_property_object(module, function)?
+                }
+                _ => self.proxy_set_receiver_object(&receiver)?,
+            };
+            let Some(receiver_id) = receiver_id else {
                 return Ok(false);
             };
             let Some(receiver_object) = self.heap.get(receiver_id.0 as usize) else {

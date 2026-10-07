@@ -286,3 +286,73 @@ fn canonical_numeric_keys_skip_the_prototype() {
         "false,false,true,true,false,false,true,false,,1,",
     );
 }
+
+/// bd-9vouw.267: a typed array's numeric keys follow the integer-indexed
+/// exotic object methods (ES2024 10.4.5). [[Set]] on the array converts the
+/// value (valueOf runs and may throw; a BigInt for a Number array or a
+/// Symbol is a TypeError) and writes only a valid index: "-0", "1.1", "-1",
+/// "Infinity" and indices past the end create no property. Through another
+/// receiver a valid index defines the receiver's own property and an
+/// invalid one does nothing. [[DefineOwnProperty]] writes a given value and
+/// refuses invalid indices and non-configurable, non-enumerable,
+/// non-writable or accessor descriptors; [[GetOwnProperty]] describes an
+/// element as a writable, enumerable, configurable data property. Expected
+/// lines are Node v22.2.0's output, captured programmatically; Bun 1.4.2
+/// agrees except on line 8, where it creates `viaProto[3]` against
+/// 10.4.5.5 step 1.b.ii.
+#[test]
+fn typed_array_numeric_keys_are_integer_indexed_bd_9vouw_267() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var ta = new Float64Array(2);
+ta['-0'] = 1; ta['1.1'] = 2; ta['-1'] = 3; ta['2'] = 4; ta['Infinity'] = 5; ta['01'] = 6;
+console.log(JSON.stringify(Object.keys(ta)), ta.hasOwnProperty('-0'), ta.hasOwnProperty('1.1'), ta.hasOwnProperty('2'), ta['01'], ta['-0'], '1.1' in ta, String(ta));
+var calls = 0;
+var counted = { valueOf: function () { calls++; return 7; } };
+ta['5'] = counted; ta['-0'] = counted; ta[0] = counted;
+console.log(calls, ta[0]);
+console.log(kind(function () { ta[1] = 1n; }), kind(function () { ta['9'] = Symbol(); }), kind(function () { ta[0] = { valueOf: function () { throw new RangeError('v'); } }; }));
+var big = new BigInt64Array(1);
+console.log(kind(function () { big[0] = 1; }), kind(function () { big['-0'] = 2; }), kind(function () { big[0] = '7'; return big[0]; }), kind(function () { big[0] = { valueOf: function () { return 9n; } }; return big[0]; }));
+var d = new Int32Array(2);
+console.log(Reflect.defineProperty(d, '0', { value: 8 }), d[0], Reflect.defineProperty(d, '0', { value: 9, configurable: true, enumerable: true, writable: true }), d[0]);
+console.log(Reflect.defineProperty(d, '2', { value: 1 }), Reflect.defineProperty(d, '-0', { value: 1 }), Reflect.defineProperty(d, '0.5', { value: 1 }), Reflect.defineProperty(d, '0', { value: 1, configurable: false }), Reflect.defineProperty(d, '0', { value: 1, enumerable: false }), Reflect.defineProperty(d, '0', { value: 1, writable: false }), Reflect.defineProperty(d, '0', { get: function () { return 1; } }), d[0]);
+console.log(kind(function () { Object.defineProperty(d, '5', { value: 1 }); }), kind(function () { Object.defineProperty(d, '1', { value: { valueOf: function () { throw new RangeError('d'); } } }); }), Reflect.defineProperty(d, 'x', { value: 3 }), d.x, JSON.stringify(Object.getOwnPropertyDescriptor(d, '1')));
+var target = new Int32Array([5]);
+var viaProto = Object.create(target);
+viaProto[0] = 11; viaProto[3] = 12;
+console.log(target[0], viaProto.hasOwnProperty('0'), viaProto[0], viaProto.hasOwnProperty('3'), viaProto[3]);
+var receiver = {};
+console.log(Reflect.set(target, 0, 13, receiver), target[0], receiver[0], Reflect.set(target, 4, 14, receiver), receiver.hasOwnProperty('4'));
+var inner = new Int32Array(10);
+var outer = Object.create(inner);
+calls = 0;
+console.log(Reflect.set(outer, 100, counted, inner), calls, inner.hasOwnProperty('100'));
+var d = new Int32Array(2);
+console.log(JSON.stringify(Object.getOwnPropertyDescriptor(d, '1')), JSON.stringify(Object.getOwnPropertyDescriptor(d, '2')), JSON.stringify(Object.getOwnPropertyDescriptor(d, '-0')), d.hasOwnProperty(1), d.hasOwnProperty(2), 1 in d, 2 in d, '-0' in d, delete d[2], delete d['-0']);
+console.log(Reflect.deleteProperty(d, '0'), d.propertyIsEnumerable(0), JSON.stringify(Reflect.ownKeys(d)));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "[\"0\",\"1\",\"01\"] false false false 6 undefined false 0,0",
+            "3 7",
+            "TypeError TypeError RangeError",
+            "TypeError TypeError 7 9",
+            "true 8 true 9",
+            "false false false false false false false 9",
+            "TypeError RangeError true 3 {\"value\":0,\"writable\":true,\"enumerable\":true,\"configurable\":true}",
+            "5 true 11 false undefined",
+            "true 5 13 true false",
+            "true 1 false",
+            "{\"value\":0,\"writable\":true,\"enumerable\":true,\"configurable\":true} undefined undefined true false true false false true true",
+            "false true [\"0\",\"1\"]",
+        ]
+    );
+}

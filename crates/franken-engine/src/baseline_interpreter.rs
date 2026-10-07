@@ -8208,6 +8208,16 @@ const ERROR_PROTOTYPE_NAMES: [&str; 8] = [
     "AggregateError",
 ];
 
+/// What [[Set]] of a typed array does with a canonical numeric key
+/// (`typed_array_set_runtime_property`).
+enum TypedArraySetOutcome {
+    /// The set is complete with this result.
+    Done(bool),
+    /// A valid index through another receiver: OrdinarySet defines the
+    /// property on the receiver without walking further up the chain.
+    DefineOnReceiver,
+}
+
 /// A property descriptor as read by ES2020 6.2.5.5 ToPropertyDescriptor.
 /// `None` marks an absent field; a present `get`/`set` holds a callable or
 /// `undefined`.
@@ -62825,11 +62835,15 @@ impl InterpreterCore {
                     self.reflect_admit_mutation_label(*receiver)?;
                 }
             }
-            if let Some(key) = key.as_str()
-                && let Some(success) =
-                    self.typed_array_indexed_set_property(object_id, key, &value)?
-            {
-                return Ok(success);
+            let mut define_on_receiver = false;
+            if let Some(key) = key.as_str() {
+                match self
+                    .typed_array_set_runtime_property(module, object_id, key, &value, &receiver)?
+                {
+                    Some(TypedArraySetOutcome::Done(success)) => return Ok(success),
+                    Some(TypedArraySetOutcome::DefineOnReceiver) => define_on_receiver = true,
+                    None => {}
+                }
             }
             // A String wrapper's own indices and `length` are non-writable
             // (ES2020 9.4.3.1): OrdinarySet fails, so `Object.assign('a',
@@ -62843,16 +62857,24 @@ impl InterpreterCore {
             }
             let mut owner = object_id;
             let mut owner_depth = depth;
-            loop {
+            while !define_on_receiver {
                 if owner_depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
                     return Err(InterpreterError::StackOverflow {
                         depth: owner_depth as usize,
                         max: MAX_PROTOTYPE_CHAIN_DEPTH as usize,
                     });
                 }
-                if owner != object_id && self.proxy_record(owner)?.is_some() {
-                    // OrdinarySet delegates to the prototype's [[Set]] before
-                    // consulting the receiver. Preserve that receiver exactly.
+                // OrdinarySet delegates to the prototype's [[Set]] before
+                // consulting the receiver. Preserve that receiver exactly. A
+                // typed array's [[Set]] answers numeric keys itself
+                // (ES2024 10.4.5.5).
+                if owner != object_id
+                    && (self.proxy_record(owner)?.is_some()
+                        || self
+                            .heap
+                            .get(owner.0 as usize)
+                            .is_some_and(|object| object.typed_array.is_some()))
+                {
                     return self.proxy_aware_set_runtime_property(
                         module,
                         owner,
@@ -69304,6 +69326,155 @@ impl InterpreterCore {
         Ok(Some(true))
     }
 
+    /// TypedArraySetElement steps 1-2 (ES2024 10.4.5.16): ToBigInt for a
+    /// BigInt array, ToNumber otherwise, running an object's @@toPrimitive,
+    /// valueOf or toString. A BigInt for a Number array and a Symbol are
+    /// TypeErrors. The conversion happens even when the index is invalid.
+    fn typed_array_element_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        kind: TypedArrayKind,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        let primitive = self.object_to_number_primitive(module, value)?;
+        if kind.is_bigint() {
+            return self.typed_array_prepare_value(kind, primitive);
+        }
+        match primitive {
+            Value::BigInt(_) | Value::Symbol(_) => Err(InterpreterError::TypeError {
+                expected: format!("value convertible to a Number for {}", kind.type_name()),
+                got: primitive.type_name().to_string(),
+            }),
+            primitive => Ok(primitive),
+        }
+    }
+
+    /// [[Set]] of a typed array (ES2024 10.4.5.5) for a key that is a
+    /// CanonicalNumericIndexString ("0", "-0", "1.1", "-1", "Infinity").
+    /// On the typed array itself it is TypedArraySetElement: the value is
+    /// converted, then written when the index is a valid integer index;
+    /// any other numeric key writes nothing and creates no property. Through
+    /// another receiver an invalid index does nothing, and a valid one is
+    /// OrdinarySet with the element's writable data descriptor, which
+    /// defines the property on the receiver. `None` for any other key or
+    /// object.
+    fn typed_array_set_runtime_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &str,
+        value: &Value,
+        receiver: &Value,
+    ) -> Result<Option<TypedArraySetOutcome>, InterpreterError> {
+        let Some(view) = self.typed_array_view_for_object(object_id)? else {
+            return Ok(None);
+        };
+        let index = Self::typed_array_integer_index_key(key);
+        if index.is_none() && !Self::canonical_numeric_index_string(key) {
+            return Ok(None);
+        }
+        if !matches!(receiver, Value::Object(receiver_id) if *receiver_id == object_id) {
+            let valid = index.is_some_and(|index| index < view.length);
+            return Ok(Some(if valid {
+                TypedArraySetOutcome::DefineOnReceiver
+            } else {
+                TypedArraySetOutcome::Done(true)
+            }));
+        }
+        let converted = self.typed_array_element_value(module, view.kind, value.clone())?;
+        if index.is_some() {
+            // The conversion can run guest code that shrank the buffer; the
+            // write re-reads the view and skips an index now out of range.
+            self.typed_array_indexed_set_property(object_id, key, &converted)?;
+        }
+        Ok(Some(TypedArraySetOutcome::Done(true)))
+    }
+
+    /// For a typed array and a CanonicalNumericIndexString key, whether
+    /// the key is a valid integer index (IsValidIntegerIndex); `None` for
+    /// any other key or object.
+    fn typed_array_numeric_key_is_valid(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Option<bool>, InterpreterError> {
+        let Some(view) = self.typed_array_view_for_object(object_id)? else {
+            return Ok(None);
+        };
+        Ok(match Self::typed_array_integer_index_key(key) {
+            Some(index) => Some(index < view.length),
+            None => Self::canonical_numeric_index_string(key).then_some(false),
+        })
+    }
+
+    /// [[GetOwnProperty]] of a typed array (ES2024 10.4.5.1) for a
+    /// CanonicalNumericIndexString key: the element as a writable,
+    /// enumerable, configurable data property, or undefined when the index
+    /// is not valid. `None` for any other key or object.
+    fn typed_array_own_property_descriptor(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(name) = key.as_str() else {
+            return Ok(None);
+        };
+        match self.typed_array_numeric_key_is_valid(object_id, name)? {
+            None => Ok(None),
+            Some(false) => Ok(Some(Value::Undefined)),
+            Some(true) => {
+                let value = self
+                    .typed_array_indexed_get_property(object_id, name)?
+                    .unwrap_or(Value::Undefined);
+                let descriptor = self.alloc_object_with_properties(&[
+                    ("value", value),
+                    ("writable", Value::Bool(true)),
+                    ("enumerable", Value::Bool(true)),
+                    ("configurable", Value::Bool(true)),
+                ])?;
+                Ok(Some(Value::Object(descriptor)))
+            }
+        }
+    }
+
+    /// [[DefineOwnProperty]] of a typed array (ES2024 10.4.5.3) for a
+    /// CanonicalNumericIndexString key: false for an index that is not a
+    /// valid integer index, a descriptor that is non-configurable,
+    /// non-enumerable, non-writable or an accessor; otherwise a given value
+    /// is written with TypedArraySetElement. `None` for any other key or
+    /// object.
+    fn typed_array_define_own_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+        fields: &PropertyDescriptorFields,
+    ) -> Result<Option<bool>, InterpreterError> {
+        let Some(key) = key.as_str() else {
+            return Ok(None);
+        };
+        let Some(view) = self.typed_array_view_for_object(object_id)? else {
+            return Ok(None);
+        };
+        let index = Self::typed_array_integer_index_key(key);
+        if index.is_none() && !Self::canonical_numeric_index_string(key) {
+            return Ok(None);
+        }
+        if !index.is_some_and(|index| index < view.length)
+            || fields.configurable == Some(false)
+            || fields.enumerable == Some(false)
+            || fields.is_accessor()
+            || fields.writable == Some(false)
+        {
+            return Ok(Some(false));
+        }
+        if let Some(value) = fields.value.clone() {
+            let converted = self.typed_array_element_value(module, view.kind, value)?;
+            self.typed_array_indexed_set_property(object_id, key, &converted)?;
+        }
+        Ok(Some(true))
+    }
+
     fn typed_array_view_for_object(
         &self,
         object_id: ObjectId,
@@ -75369,6 +75540,14 @@ impl InterpreterCore {
     ) -> Result<bool, InterpreterError> {
         if let Value::Object(object_id) = receiver {
             self.join_pending_hostcall_stream_label(*object_id)?;
+            // A typed array owns exactly its valid integer indices among
+            // the numeric keys (ES2024 10.4.5.1).
+            let key = self.executable_property_key_from_value(property);
+            if let Some(name) = key.as_str()
+                && let Some(valid) = self.typed_array_numeric_key_is_valid(*object_id, name)?
+            {
+                return Ok(valid);
+            }
             // A Proxy answers through [[GetOwnProperty]]: its
             // getOwnPropertyDescriptor trap, else its target's (ES2020
             // 9.5.5). Its own record has none of the target's keys, so every

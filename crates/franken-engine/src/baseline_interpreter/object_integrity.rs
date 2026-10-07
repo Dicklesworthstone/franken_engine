@@ -978,6 +978,9 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         self.integrity_step(object_id, depth)?;
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            if let Some(descriptor) = self.typed_array_own_property_descriptor(object_id, key)? {
+                return Ok(descriptor);
+            }
             if let Some(descriptor) = self.prototype_getter_descriptor(object_id, key)? {
                 return Ok(descriptor);
             }
@@ -1054,6 +1057,11 @@ impl InterpreterCore {
     ) -> Result<bool, InterpreterError> {
         self.integrity_step(object_id, depth)?;
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            if let Some(defined) =
+                self.typed_array_define_own_property(module, object_id, &key, &fields)?
+            {
+                return Ok(defined);
+            }
             return self.define_own_property_from_descriptor(object_id, key, fields);
         };
         let Some(trap) = self.proxy_trap_value(module, handler, "defineProperty")? else {

@@ -121,7 +121,9 @@ impl InterpreterCore {
                     let generic = (kind == K::ArrayConcat
                         && self.concat_spreads_generically(object_id, args)?)
                         || self.converts_object_argument(kind, args)?
-                        || length_locked;
+                        || length_locked
+                        || (kind == K::ArraySort
+                            && !self.array_sorts_on_element_storage(object_id, args)?);
                     return Ok(generic.then_some(object_id));
                 }
                 Ok((!is_typed_array && !iterator).then_some(object_id))
@@ -167,6 +169,53 @@ impl InterpreterCore {
             }
         }
         Ok(false)
+    }
+
+    /// Whether Array.prototype.sort may sort the Array `array_id`'s element
+    /// storage directly: the comparator is undefined or callable, every
+    /// index below the length is an own writable data property, and without
+    /// a comparator every element is a primitive other than a Symbol, whose
+    /// ToString runs no guest code. Otherwise the sort runs generically, as
+    /// ES2023 23.1.3.30 writes it: holes are skipped and deleted after the
+    /// sorted values, element getters and setters run, an object's ToString
+    /// calls its `toString`, and any other comparator is a TypeError.
+    fn array_sorts_on_element_storage(
+        &self,
+        array_id: ObjectId,
+        args: RegRange,
+    ) -> Result<bool, InterpreterError> {
+        let compared = match self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined) {
+            Value::Undefined => false,
+            comparator if comparator.is_callable() => true,
+            _ => return Ok(false),
+        };
+        let Some(object) = self.heap.get(array_id.0 as usize) else {
+            return Ok(false);
+        };
+        let Some(Value::Int(length)) = object.properties.get("length") else {
+            return Ok(false);
+        };
+        for index in 0..*length {
+            let key = RuntimePropertyKey::String(JsString::from(index.to_string()));
+            match object.own_runtime_property_value(&key) {
+                None | Some(Value::Accessor { .. }) => return Ok(false),
+                Some(
+                    Value::Undefined
+                    | Value::Null
+                    | Value::Bool(_)
+                    | Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Str(_)
+                    | Value::BigInt(_),
+                ) => {}
+                Some(_) if compared => {}
+                Some(_) => return Ok(false),
+            }
+            if !object.own_property_attributes(&key).writable {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Whether concat on the Array `receiver` must spread generically: an

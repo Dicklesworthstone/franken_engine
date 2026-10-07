@@ -42075,9 +42075,12 @@ impl InterpreterCore {
             ),
             BuiltinFunctionKind::ArraySort => {
                 // ES2020 23.1.3.27: in-place sort. With a comparator, order by
-                // the sign of comparator(a, b) (manual insertion sort, since the
-                // comparator re-enters the interpreter); otherwise lexicographic
-                // by ToString. Returns the array.
+                // the sign of comparator(a, b) (a merge sort, since the
+                // comparator re-enters the interpreter); otherwise by the
+                // UTF-16 code units of ToString. Returns the array. An Array
+                // with holes, accessors, read-only elements or (without a
+                // comparator) object elements sorts generically
+                // (`array_sorts_on_element_storage`).
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(arr_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -42109,9 +42112,12 @@ impl InterpreterCore {
                         elements =
                             self.merge_sort_with_comparator(module, &comparator, elements)?;
                     } else {
-                        elements.sort_by(|a, b| {
-                            Self::sort_string_key(a).cmp(&Self::sort_string_key(b))
-                        });
+                        let mut keyed = elements
+                            .into_iter()
+                            .map(|element| (Self::sort_utf16_key(&element), element))
+                            .collect::<Vec<_>>();
+                        keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+                        elements = keyed.into_iter().map(|(_, element)| element).collect();
                     }
                     elements.extend(std::iter::repeat_n(Value::Undefined, undefined_count));
                     let was_dense = self.array_cache_is_dense(arr_id);
@@ -42410,8 +42416,7 @@ impl InterpreterCore {
                         }
                     }
                 } else {
-                    elements
-                        .sort_by(|a, b| Self::sort_string_key(a).cmp(&Self::sort_string_key(b)));
+                    elements.sort_by_cached_key(Self::sort_utf16_key);
                 }
                 let result = self.alloc_array_with_prototype(None)?;
                 for (index, element) in elements.into_iter().enumerate() {
@@ -73717,6 +73722,16 @@ impl InterpreterCore {
 
     /// Default `Array.prototype.sort` ordering key: the element's string form
     /// (ES sorts by `ToString` when no comparator is given).
+    /// The UTF-16 code units of a primitive's ToString, which SortCompare
+    /// orders (ES2020 22.1.3.27.1); code point order differs once a string
+    /// holds both astral and U+E000..U+FFFF characters.
+    fn sort_utf16_key(value: &Value) -> Vec<u16> {
+        match value {
+            Value::Str(text) => text.encode_utf16().collect(),
+            other => Self::sort_string_key(other).encode_utf16().collect(),
+        }
+    }
+
     fn sort_string_key(value: &Value) -> String {
         match value {
             Value::Str(s) => s.to_string(),

@@ -104,3 +104,65 @@ fn sort_with_comparator_orders_numerically() {
         "1"
     );
 }
+
+/// bd-9vouw.265: `Array.prototype.sort` on an Array follows ES2023
+/// 23.1.3.30 when its element storage cannot stand in for the spec steps:
+/// holes are skipped and deleted after the sorted values (they became own
+/// `undefined` elements), element setters run, an object element's ToString
+/// calls its `toString` (it was ordered as ""), a comparator that is
+/// neither undefined nor callable is a TypeError even for 0 or 1 elements,
+/// a frozen array throws, and strings order by UTF-16 code units (an astral
+/// character sorts before U+FFFF), as `toSorted` does too. Expected lines
+/// are Node v22.2.0's output, captured programmatically; Bun 1.4.2 agrees.
+#[test]
+fn array_sort_runs_spec_steps_on_irregular_arrays_bd_9vouw_265() {
+    let source = r#"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var holes = [3, , 1, undefined, , 2];
+holes.sort();
+console.log(holes.length, JSON.stringify(Object.keys(holes)), String(holes), 4 in holes, 5 in holes);
+var sparse = [];
+sparse[5] = 'e'; sparse[2] = 'b'; sparse[9] = 'a';
+sparse.sort();
+console.log(sparse.length, JSON.stringify(Object.keys(sparse)), String(sparse));
+var calls = 0;
+var counted = { toString: function () { calls++; return 'x'; } };
+[counted, counted].sort();
+console.log(calls > 0, String([{ toString: function () { return 'b'; } }, { toString: function () { return 'a'; } }].sort()));
+console.log(attempt(function () { return [].sort({}); }), attempt(function () { return [1].sort(null); }), attempt(function () { return [2, 1].sort(1); }));
+var log = [];
+var accessors = [3, 2, 1];
+Object.defineProperty(accessors, '1', { get: function () { log.push('get'); return 2; }, set: function (v) { log.push('set' + v); }, configurable: true });
+accessors.sort();
+console.log(log.join(','), String([accessors[0], accessors[2]]));
+console.log(JSON.stringify(['￿', '😀', 'a'].sort()), JSON.stringify(['￿', '😀'].toSorted()));
+var frozen = Object.freeze([2, 1]);
+console.log(attempt(function () { return frozen.sort(); }), String(frozen));
+Array.prototype[0] = 'z';
+var inherit = [, 'a'];
+inherit.sort();
+delete Array.prototype[0];
+console.log(JSON.stringify(inherit), inherit.hasOwnProperty(0), inherit.hasOwnProperty(1));
+console.log(String([10, 9, 1, 100].sort()), String([10, 9, 1, 100].sort(function (a, b) { return a - b; })), String([true, null, 'm', 0.5, -0].sort()));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "6 [\"0\",\"1\",\"2\",\"3\"] 1,2,3,,, false false",
+            "10 [\"0\",\"1\",\"2\"] a,b,e,,,,,,,",
+            "true a,b",
+            "TypeError TypeError TypeError",
+            "get,set2 1,3",
+            "[\"a\",\"\u{1f600}\",\"\u{ffff}\"] [\"\u{1f600}\",\"\u{ffff}\"]",
+            "TypeError 2,1",
+            "[\"a\",\"z\"] true true",
+            "1,10,100,9 1,9,10,100 0,0.5,m,,true",
+        ]
+    );
+}

@@ -13119,6 +13119,9 @@ fn for_in_of_statement(
 /// - an awaited `next()` per step;
 /// - on break, return or throw from the body, an awaited `return()`
 ///   (AsyncIteratorClose). No close after `next()` throws or reports done.
+///   After a throw, getting, calling or awaiting `return` cannot replace the
+///   body's exception: its errors are dropped (ES2022 AsyncIteratorClose
+///   returns a throw completion before the close's own).
 ///
 /// Before this, `for await` ran as a synchronous for-of: an async
 /// generator's `next()` promise was taken as the iteration result, and the
@@ -13161,14 +13164,19 @@ fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
          let __franken_fa_sync = __franken_fa_am == null; \
          let __franken_fa_it = __franken_fa_sync ? __franken_fa_src[Symbol.iterator]() : \
          __franken_fa_am.call(__franken_fa_src); \
-         let __franken_fa_fin = false; \
+         let __franken_fa_fin = false; let __franken_fa_thrown = false; \
          try {{ while (true) {{ __franken_fa_fin = true; \
          let __franken_fa_r = await __franken_fa_it.next(); \
          if (__franken_fa_r.done) break; \
          __franken_fa_fin = false; \
          {bind} {body}{body_terminator} }} }} \
-         finally {{ if (!__franken_fa_fin) {{ let __franken_fa_ret = __franken_fa_it.return; \
-         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }}"
+         catch (__franken_fa_e) {{ __franken_fa_thrown = true; throw __franken_fa_e; }} \
+         finally {{ if (!__franken_fa_fin) {{ if (__franken_fa_thrown) {{ \
+         try {{ let __franken_fa_ret = __franken_fa_it.return; \
+         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} \
+         catch (__franken_fa_ignored) {{}} }} else {{ \
+         let __franken_fa_ret = __franken_fa_it.return; \
+         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }} }}"
     ))
 }
 

@@ -54063,6 +54063,14 @@ impl InterpreterCore {
                                 got: format!("{name} is not a constructor"),
                             });
                         }
+                        // ES2020 21.1.1.1 step 2: only a call turns a Symbol
+                        // into its descriptive string; `new String(sym)` is
+                        // ToString(sym), a TypeError.
+                        if standard_name == Some("String")
+                            && matches!(self.builtin_arg(args, 0)?, Some(Value::Symbol(_)))
+                        {
+                            return Err(Self::symbol_to_string_error());
+                        }
                         // ES2025 27.1.3.1 step 1: NewTarget is Iterator itself.
                         if standard_name == Some("Iterator") {
                             return Err(self.abstract_iterator_construction_error());
@@ -102496,6 +102504,13 @@ impl InterpreterCore {
                 expected: "constructor".to_string(),
                 got: format!("{name} is not a constructor"),
             });
+        }
+        // ES2020 21.1.1.1 step 2: constructed, String is ToString(value), a
+        // TypeError for a Symbol (only a call answers its descriptive string).
+        if standard_name == Some("String")
+            && matches!(self.builtin_arg(args, 0)?, Some(Value::Symbol(_)))
+        {
+            return Err(Self::symbol_to_string_error());
         }
         // Promise ( executor ) (ES2024 27.2.3.1 step 2) and DataView
         // (25.3.2.1 steps 2-9) validate their arguments before

@@ -68632,6 +68632,13 @@ impl InterpreterCore {
         #[cfg(test)]
         let entry_drift = self.memory_walk_drift();
         let mut dequeued_since_compaction = 0u32;
+        // Node's processTicksAndRejections: drain the whole next-tick queue,
+        // then let the microtask checkpoint run every queued job (jobs those
+        // jobs queue included), and only then the ticks queued meanwhile;
+        // repeat until both are empty. Draining the ticks before every job
+        // ran a tick that a job queued ahead of the jobs already waiting
+        // (bd-9vouw.319).
+        let mut tick_round = true;
 
         while drained < max_drain {
             // Collector safe point between microtasks (bd-9vouw.57).
@@ -68646,13 +68653,20 @@ impl InterpreterCore {
                 self.event_loop.microtasks.compact();
                 self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
             }
-            // bd-8nrud: Node ordering — the next-tick queue drains completely
-            // before every Promise microtask, including ticks enqueued by the
-            // microtask executed on the previous iteration.
-            self.drain_next_tick_queue(module, &mut drained, max_drain)?;
+            // bd-8nrud: the next-tick queue drains completely before the
+            // round's Promise microtasks.
+            if tick_round {
+                self.drain_next_tick_queue(module, &mut drained, max_drain)?;
+                tick_round = false;
+            }
             let previous_promise_bytes = self.promise_runtime_memory_bytes();
             let Some(task) = self.event_loop.microtasks.dequeue() else {
-                break;
+                if self.next_tick_queue.is_empty() {
+                    break;
+                }
+                // Ticks the round's jobs queued run now, then their jobs.
+                tick_round = true;
+                continue;
             };
             let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
             drained += 1;

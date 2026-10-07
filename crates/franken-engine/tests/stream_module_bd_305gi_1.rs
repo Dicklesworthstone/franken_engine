@@ -8,17 +8,11 @@
 //! Readable.from, async iteration, Writable buffering, cork/writev,
 //! _final, construct, destroy, errors with Node's codes, Transform
 //! subclassing through `class` and util.inherits, pipe backpressure,
-//! pipeline (callback, promises and async-generator stages), Duplex and
-//! the legacy Stream. Each probe reads `require('stream')` through a
-//! namespace binding, a form the lowering facade never claims, so every
-//! probe runs the module (the facade's own forms are pinned by
+//! pipeline (callback, promises and async-generator stages), finished,
+//! Duplex and the legacy Stream. Each probe reads `require('stream')`
+//! through a namespace binding, a form the lowering facade never claims,
+//! so every probe runs the module (the facade's own forms are pinned by
 //! stream_builtin_bd_m8vaa).
-//!
-//! The 40th probe, f01 (finished and stream.promises.finished), is not
-//! here: it never matched. Readable.from closes through a process.nextTick
-//! queued inside a promise job, which Node runs after the whole microtask
-//! queue drains and the engine runs between promise jobs (bd-9vouw.319).
-//! It returns with that fix.
 
 use frankenengine_engine::HybridRouter;
 
@@ -149,6 +143,34 @@ setTimeout(() => dst.destroy(), 5);
 setTimeout(() => console.log(log.join(' ')), 120);
 "##;
     assert_eq!(console_line(source), "pipeline:ERR_STREAM_PREMATURE_CLOSE");
+}
+
+#[test]
+fn f01_finished() {
+    let source = r##"
+const __stream = require('stream');
+const { finished, Readable, Writable } = __stream;
+const fp = __stream.promises.finished;
+const log = [];
+const r = Readable.from(['a']);
+finished(r, (err) => log.push('r-finished:' + err));
+r.resume();
+const w = new Writable({ write(c, e, cb) { cb(); } });
+finished(w, (err) => log.push('w-finished:' + err));
+w.end('z');
+const r2 = new Readable({ read() {} });
+finished(r2, (err) => log.push('r2:' + (err && err.code)));
+r2.destroy();
+const w3 = new Writable({ write(c, e, cb) { cb(); } });
+fp(w3).then(() => log.push('w3-promise'));
+w3.end();
+
+setTimeout(() => console.log(log.join(' ')), 100);
+"##;
+    assert_eq!(
+        console_line(source),
+        "r2:ERR_STREAM_PREMATURE_CLOSE w-finished:undefined w3-promise r-finished:undefined"
+    );
 }
 
 #[test]

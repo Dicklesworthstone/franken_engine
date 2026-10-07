@@ -100,7 +100,8 @@ expression: actual_json
           "free_var_ids": [],
           "is_generator": false,
           "is_async": false,
-          "rest_param_index": null
+          "rest_param_index": null,
+          "sloppy": true
         }
       },
       "Pop",
@@ -204,7 +205,8 @@ expression: actual_json
             "free_var_ids": [],
             "is_generator": false,
             "is_async": false,
-            "rest_param_index": null
+            "rest_param_index": null,
+            "sloppy": true
           }
         },
         "effect": "Pure",
@@ -333,7 +335,10 @@ expression: actual_json
       }
     ],
     "specialization": null,
-    "required_capabilities": []
+    "required_capabilities": [],
+    "sloppy_functions": {
+      "1": true
+    }
   },
   "ir2_flow_proof_artifact": {
     "schema_version": "frankenengine.ir2_flow_proof_witness.v1",
@@ -397,7 +402,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:0bd42df7d694f6cefac160235253d91e098be045a331ad00b4ddf9c5d2f8e94a",
-      "output_hash": "sha256:4579ef02b8a0fbd5a4faf272856593f138ba36a40568e6d64da470b7e63aab82",
+      "output_hash": "sha256:02c1d00d5bed0e9046165136960c59ecd950508f00c38cdf698fb75c68c39734",
       "rollback_token": "sha256:0bd42df7d694f6cefac160235253d91e098be045a331ad00b4ddf9c5d2f8e94a",
       "invariant_checks": [
         {
@@ -441,7 +446,7 @@ expression: actual_json
     {
       "pass_id": "ir2_to_ir3",
       "input_hash": "sha256:0bd42df7d694f6cefac160235253d91e098be045a331ad00b4ddf9c5d2f8e94a",
-      "output_hash": "sha256:4579ef02b8a0fbd5a4faf272856593f138ba36a40568e6d64da470b7e63aab82",
+      "output_hash": "sha256:02c1d00d5bed0e9046165136960c59ecd950508f00c38cdf698fb75c68c39734",
       "input_op_count": 3,
       "output_op_count": 8
     }

@@ -161,3 +161,16 @@ fn locale_strings_refuse_what_they_do_not_format() {
         "January,TypeError,TypeError"
     );
 }
+
+/// bd-9vouw.240: Annex B B.2.4 getYear (the year minus 1900), setYear
+/// (MakeFullYear: 0..=99 is 1900 plus it, a NaN year makes the date NaN, a
+/// NaN date starts from +0; the argument's valueOf runs) and toGMTString,
+/// which is toUTCString itself. Node v22.2.0 (TZ=UTC) gives this value; Bun
+/// 1.4.2 agrees.
+#[test]
+fn annex_b_get_year_set_year_and_to_gmt_string_bd_9vouw_240() {
+    check(
+        "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\nvar d = new Date(Date.UTC(2024, 2, 15, 10, 30));\nvar n = new Date(NaN);\nvar out = [d.getYear(), new Date(Date.UTC(1899, 0, 1)).getYear(), n.getYear(), Date.prototype.getYear.length, Date.prototype.setYear.length,\n  d.setYear(99), d.toISOString(), d.setYear(2001), d.toISOString(), d.setYear(-5.7), d.getUTCFullYear(), d.setYear(NaN), String(d.getTime()),\n  n.setYear(50), new Date(n.getTime()).toISOString(),\n  Date.prototype.toGMTString === Date.prototype.toUTCString, Date.prototype.toGMTString.name, attempt(() => Date.prototype.getYear.call({})),\n  attempt(() => new Date(0).setYear({ valueOf() { return 3; } }))];\nout.join(' ');\n",
+        "124 -1 NaN 0 1 921493800000 1999-03-15T10:30:00.000Z 984652200000 2001-03-15T10:30:00.000Z -62318640600000 -5 NaN NaN -631152000000 1950-01-01T00:00:00.000Z true toUTCString TypeError -2114380800000",
+    );
+}

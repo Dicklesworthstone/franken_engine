@@ -6190,7 +6190,7 @@ fn console_elapsed_time(elapsed_ms: f64) -> String {
 /// `Date.prototype` methods served by [`BuiltinFunctionKind::DatePrototypeMethod`].
 /// FrankenEngine is hermetic: local time is UTC, so each local accessor
 /// equals its `UTC` twin and `getTimezoneOffset()` is 0.
-const DATE_PROTOTYPE_METHODS: [&str; 43] = [
+const DATE_PROTOTYPE_METHODS: [&str; 45] = [
     "valueOf",
     "getFullYear",
     "getUTCFullYear",
@@ -6234,6 +6234,9 @@ const DATE_PROTOTYPE_METHODS: [&str; 43] = [
     "toLocaleString",
     "toLocaleDateString",
     "toLocaleTimeString",
+    // Annex B B.2.4 (bd-9vouw.240).
+    "getYear",
+    "setYear",
 ];
 
 /// ES2020 20.4.1 time-value arithmetic on milliseconds since the epoch (UTC).
@@ -60317,6 +60320,14 @@ impl InterpreterCore {
                 })
             }
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
+            // Annex B B.2.4.3: the initial value of toGMTString is
+            // %Date.prototype.toUTCString% itself (bd-9vouw.240).
+            ("Date", "toGMTString") => Some(BuiltinFunction {
+                kind: BuiltinFunctionKind::DatePrototypeMethod,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty("toUTCString"),
+                iterator_handle: None,
+                bound_object: None,
+            }),
             ("Date", method) if DATE_PROTOTYPE_METHODS.contains(&method) => Some(BuiltinFunction {
                 kind: BuiltinFunctionKind::DatePrototypeMethod,
                 module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
@@ -73405,6 +73416,8 @@ impl InterpreterCore {
         let result = match method {
             "valueOf" => return Ok(number(t)),
             "getFullYear" | "getUTCFullYear" => return Ok(number(getter(year_from_time))),
+            // Annex B B.2.4.1: the year minus 1900.
+            "getYear" => return Ok(number(getter(year_from_time) - 1900.0)),
             "getMonth" | "getUTCMonth" => return Ok(number(getter(month_from_time))),
             "getDate" | "getUTCDate" => return Ok(number(getter(date_from_time))),
             "getDay" | "getUTCDay" => return Ok(number(getter(week_day))),
@@ -73568,6 +73581,23 @@ impl InterpreterCore {
                         make_day(year_from_time(t), first, arg(1, date_from_time(t))),
                         time_part(t),
                     )),
+                    // Annex B B.2.4.2: MakeFullYear (a NaN year makes the
+                    // date NaN, 0..=99 is 1900 plus it) over the local date,
+                    // a NaN date starting from +0; local time is UTC here.
+                    "setYear" if first.is_nan() => f64::NAN,
+                    "setYear" => {
+                        let year = first.trunc();
+                        let full_year = if (0.0..=99.0).contains(&year) {
+                            1900.0 + year
+                        } else {
+                            year
+                        };
+                        let base = if t.is_nan() { 0.0 } else { t };
+                        time_clip(make_date(
+                            make_day(full_year, month_from_time(base), date_from_time(base)),
+                            time_part(base),
+                        ))
+                    }
                     "setFullYear" | "setUTCFullYear" => {
                         // A NaN date starts from +0 (20.4.4.21 step 1).
                         let base = if t.is_nan() { 0.0 } else { t };

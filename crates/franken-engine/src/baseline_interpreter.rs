@@ -59449,13 +59449,20 @@ impl InterpreterCore {
             }
             _ => (pattern_value, flags_value),
         };
+        // A literal's pattern and flags are strings already: no ToString.
         let pattern = match pattern_source {
             Value::Undefined => String::new(),
-            other => self.conversion_to_string(module, other)?.to_string(),
+            Value::Str(text) => text.to_string(),
+            other => self
+                .scoped_conversion(|this| this.conversion_to_string(module, other))?
+                .to_string(),
         };
         let flags = match flags_source {
             Value::Undefined => String::new(),
-            other => self.conversion_to_string(module, other)?.to_string(),
+            Value::Str(text) => text.to_string(),
+            other => self
+                .scoped_conversion(|this| this.conversion_to_string(module, other))?
+                .to_string(),
         };
         // ES2020 21.2.3.2.2 RegExpInitialize: invalid flags or a pattern that
         // does not parse are a SyntaxError here, not at the first match (the

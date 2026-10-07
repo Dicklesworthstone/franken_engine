@@ -363,6 +363,43 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// Runs `conversion` (conversion_to_string / conversion_to_number) for
+    /// a builtin step that is not inside an operation already scoping the
+    /// inline-callback context (JSON, the conversion builtins,
+    /// check_sink_confidentiality). The provenance floor the conversion
+    /// records there (json_observe_label) is joined into the pending
+    /// hostcall-result label, as primitive_conversion_builtin does, and
+    /// cleared. Left set, it outlived the call: after construct_regexp's
+    /// ToString of a literal's pattern, every later register write took the
+    /// context-joining path (Test262's property-escape harness ran 18% more
+    /// instructions once one regex literal had been created). Inside an
+    /// enclosing scope the observation accumulates there, as before.
+    pub(super) fn scoped_conversion<T>(
+        &mut self,
+        conversion: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        if self.active_inline_callback_context_label.is_some() {
+            return conversion(self);
+        }
+        let outcome = conversion(self);
+        let Some(context) = self.active_inline_callback_context_label.take() else {
+            return outcome;
+        };
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(Self::estimate_label_bytes(&context));
+        let value = outcome?;
+        let joined = self.clone_dominant_label_with_temporary_budget(
+            &context,
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+            0,
+        )?;
+        self.replace_pending_hostcall_result_label(Some(joined))?;
+        Ok(value)
+    }
+
     pub(super) fn conversion_to_string(
         &mut self,
         module: Option<&Ir3Module>,

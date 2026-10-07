@@ -68739,7 +68739,7 @@ impl InterpreterCore {
             Some(length) => length,
             None if resizable => remaining / element_size,
             None => {
-                if remaining % element_size != 0 {
+                if !remaining.is_multiple_of(element_size) {
                     return Err(InterpreterError::RangeError {
                         message: format!(
                             "{} view byteLength {remaining} is not a multiple of element size {element_size}",

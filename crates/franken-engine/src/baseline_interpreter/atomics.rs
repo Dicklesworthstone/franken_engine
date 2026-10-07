@@ -135,16 +135,16 @@ impl InterpreterCore {
         index: usize,
     ) -> Result<Value, InterpreterError> {
         match method {
-            "load" => self.atomics_read(&view, index),
+            "load" => self.atomics_read(view, index),
             "store" => {
                 let value = self.atomics_value_arg(module, args, 2, view.kind)?;
-                self.atomics_write(&view, index, &value)?;
+                self.atomics_write(view, index, &value)?;
                 Ok(value)
             }
             "add" | "sub" | "and" | "or" | "xor" | "exchange" => {
                 let value = self.atomics_value_arg(module, args, 2, view.kind)?;
                 let operand = Self::atomics_bits(view.kind, &value)?;
-                let old = self.atomics_read(&view, index)?;
+                let old = self.atomics_read(view, index)?;
                 let old_bits = Self::atomics_bits(view.kind, &old)?;
                 let new_bits = match method {
                     "add" => old_bits.wrapping_add(operand),
@@ -154,16 +154,16 @@ impl InterpreterCore {
                     "xor" => old_bits ^ operand,
                     _ => operand,
                 };
-                self.atomics_write_bits(&view, index, new_bits)?;
+                self.atomics_write_bits(view, index, new_bits)?;
                 Ok(old)
             }
             "compareExchange" => {
                 let expected = self.atomics_value_arg(module, args, 2, view.kind)?;
                 let replacement = self.atomics_value_arg(module, args, 3, view.kind)?;
-                let old = self.atomics_read(&view, index)?;
+                let old = self.atomics_read(view, index)?;
                 if Self::atomics_bits(view.kind, &old)? == Self::atomics_bits(view.kind, &expected)?
                 {
-                    self.atomics_write(&view, index, &replacement)?;
+                    self.atomics_write(view, index, &replacement)?;
                 }
                 Ok(old)
             }
@@ -178,7 +178,7 @@ impl InterpreterCore {
                 } else {
                     timeout.max(0.0)
                 };
-                let current = self.atomics_read(&view, index)?;
+                let current = self.atomics_read(view, index)?;
                 if Self::atomics_bits(view.kind, &current)?
                     != Self::atomics_bits(view.kind, &expected)?
                 {

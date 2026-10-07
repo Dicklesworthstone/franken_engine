@@ -220,7 +220,9 @@ fn method_call_chains_reuse_registers_per_link_bd_9vouw_246() {
         )
     };
     let small = frame_sizes(&in_function(10));
-    let large = frame_sizes(&in_function(150));
+    // 127 links is the most the parser's recursion budget takes (two levels
+    // a link; Node takes thousands), so 120.
+    let large = frame_sizes(&in_function(120));
     assert_eq!(
         small.iter().max(),
         large.iter().max(),

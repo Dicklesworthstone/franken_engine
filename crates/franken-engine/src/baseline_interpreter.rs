@@ -59219,8 +59219,14 @@ impl InterpreterCore {
         }
         let mut last = 0usize;
         let mut budget = self.regexp_retention_budget();
-        let matches =
-            self.regexp_all_captures(&regex, input, CaptureRetention::AllGroups, &mut budget)?;
+        // @@split runs its own sticky splitter: the caller's flag is moot.
+        let matches = self.regexp_all_captures(
+            &regex,
+            input,
+            CaptureRetention::AllGroups,
+            &mut budget,
+            false,
+        )?;
         if let Some(spans) = matches.last() {
             self.record_legacy_regexp_match(input, spans);
         }
@@ -60133,16 +60139,43 @@ impl InterpreterCore {
     }
 
     /// [`CompiledRegExp::all_captures`] charged to `budget`.
+    /// Every match of a global exec loop from position 0. A sticky pattern's
+    /// loop stops at its first failure: each match must start where the
+    /// previous one left lastIndex (bd-9vouw.315). The leftmost match from a
+    /// position starts there whenever one can, so the sticky matches are
+    /// the leading run of the leftmost ones that start where expected.
     fn regexp_all_captures(
         &self,
         regex: &CompiledRegExp,
         input: &str,
         retention: CaptureRetention,
         budget: &mut RetentionBudget,
+        sticky: bool,
     ) -> Result<Vec<Captures>, InterpreterError> {
-        regex
+        let mut all = regex
             .all_captures(input, retention, budget)
-            .map_err(|error| self.regexp_global_match_error(error))
+            .map_err(|error| self.regexp_global_match_error(error))?;
+        if sticky {
+            let mut expected = 0usize;
+            let contiguous = all
+                .iter()
+                .take_while(|spans| match spans[0] {
+                    Some((from, to)) if from == expected => {
+                        // The exec loop's AdvanceStringIndex past an empty
+                        // match, as all_captures steps.
+                        expected = if from == to {
+                            to + input[to..].chars().next().map_or(1, char::len_utf8)
+                        } else {
+                            to
+                        };
+                        true
+                    }
+                    _ => false,
+                })
+                .count();
+            all.truncate(contiguous);
+        }
+        Ok(all)
     }
 
     /// Charge `bytes` of native result text to `budget`.
@@ -60214,11 +60247,19 @@ impl InterpreterCore {
             let result_id = self.alloc_array_with_prototype(None)?;
             let mut count = 0usize;
             let mut budget = self.regexp_retention_budget();
+            // A sticky loop may stop early, so its last kept match needs
+            // its groups for the legacy RegExp statics.
+            let sticky = flags.contains('y');
             let matches = self.regexp_all_captures(
                 &regex,
                 input,
-                CaptureRetention::WholeMatchExceptLast,
+                if sticky {
+                    CaptureRetention::AllGroups
+                } else {
+                    CaptureRetention::WholeMatchExceptLast
+                },
                 &mut budget,
+                sticky,
             )?;
             if let Some(spans) = matches.last() {
                 self.record_legacy_regexp_match(input, spans);
@@ -60476,7 +60517,9 @@ impl InterpreterCore {
             .regexp_source_flags_from_value(pattern)
             .unwrap_or_else(|| (self.regexp_create_source(pattern), String::new()));
         let regex = self.compile_regexp_pattern(&source, &flags)?;
-        let found = regex.captures_at(input, 0, false)?;
+        // ES2020 21.2.5.9 @@search: RegExpExec with lastIndex 0, so a sticky
+        // pattern matches only at the start (bd-9vouw.315).
+        let found = regex.captures_at(input, 0, flags.contains('y'))?;
         if let Some(spans) = &found {
             self.record_legacy_regexp_match(input, spans);
         }
@@ -60523,7 +60566,13 @@ impl InterpreterCore {
                 {
                     self.set_regexp_last_index(regexp_id, 0)?;
                 }
-                self.regexp_all_captures(&regex, input, CaptureRetention::AllGroups, &mut budget)?
+                self.regexp_all_captures(
+                    &regex,
+                    input,
+                    CaptureRetention::AllGroups,
+                    &mut budget,
+                    flags.contains('y'),
+                )?
             } else if flags.contains('y')
                 && let Some(regexp_id) = regexp_id
             {

@@ -7699,10 +7699,18 @@ fn lower_statement_to_ir1_with_flow(
                 if method.is_generator {
                     push_generator_prologue_end(&mut m_body_ops);
                 }
+                // The member's own mentions with the class-level ones: the
+                // whole class's set cost each member the size of the class,
+                // O(members^2) to lower one class.
+                let member_mentions = MentionedNames::of_class(
+                    cls.name.as_deref(),
+                    cls.super_class.as_deref(),
+                    std::slice::from_ref(method),
+                );
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     None,
-                    &class_mentions,
+                    &member_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
@@ -20684,10 +20692,17 @@ fn lower_expression_to_ir1_inner(
                 if method.is_generator {
                     push_generator_prologue_end(&mut m_body_ops);
                 }
+                // The member's own mentions with the class-level ones (see
+                // the class declaration path).
+                let member_mentions = MentionedNames::of_class(
+                    name.as_deref(),
+                    super_class.as_deref(),
+                    std::slice::from_ref(method),
+                );
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     name.as_deref(),
-                    &class_mentions,
+                    &member_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,

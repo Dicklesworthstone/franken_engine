@@ -2888,8 +2888,12 @@ impl ExecutionOrchestrator {
             // Step 6.5 (bd-drb55): seal and verify the IR4 witness against the
             // exact executed IR3 before any downstream phase can observe this
             // run as successful.
-            let ir4_witness =
-                Self::seal_ir4_witness(&lowering_output.ir3, &source_label, &exec_result)?;
+            let ir4_witness = Self::seal_ir4_witness(
+                &lowering_output.ir3,
+                adaptive_routing_context.ir3_content_hash.clone(),
+                &source_label,
+                &exec_result,
+            )?;
 
             // Step 7: Assess risk.
             let evidence = Self::build_evidence(
@@ -3778,12 +3782,18 @@ impl ExecutionOrchestrator {
     /// Sealing happens only on the success path. A failed execution never
     /// certifies a complete witness; its performed-effect prefix is retained
     /// separately in `last_failed_host_effect_journal`.
+    ///
+    /// `ir3_hash` is `ir3`'s content hash, computed once for the run's
+    /// adaptive routing context: `ir3` is the lowering output's, which the
+    /// run never mutates, so hashing it again here repeated a full
+    /// canonical encoding of the module.
     fn seal_ir4_witness(
         ir3: &Ir3Module,
+        ir3_hash: ContentHash,
         source_label: &str,
         exec: &ExecutionResult,
     ) -> Result<Ir4Module, OrchestratorError> {
-        let ir3_hash = ir3.content_hash();
+        debug_assert_eq!(ir3_hash, ir3.content_hash());
         let mut witness = Ir4Module::new(ir3_hash, source_label);
         // The interpreter returned `Ok`, so the program ran to completion;
         // uncaught exceptions, timeouts, and cancellation all surface as

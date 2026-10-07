@@ -60291,6 +60291,14 @@ impl InterpreterCore {
                 ),
             });
         }
+        // The backtracking parser refuses these; the `regex` crate would
+        // compile them as nested repetitions.
+        if regexp_syntax::has_nested_quantifier(pattern, flags) {
+            return Err(InterpreterError::TypeError {
+                expected: "valid RegExp pattern".to_string(),
+                got: "Nothing to repeat".to_string(),
+            });
+        }
         let mut case_insensitive = false;
         let mut multi_line = false;
         let mut dot_matches_new_line = false;

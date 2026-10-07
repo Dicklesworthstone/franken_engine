@@ -1366,6 +1366,97 @@ pub(super) const TOO_MANY_PROPERTY_ESCAPES: &str = "Too many Unicode property es
 
 /// Upper bound on the property escapes in `pattern` (a `\p{`/`\P{` that is
 /// itself escaped is counted too, which only errs on the strict side).
+/// ES2020 21.2.1: a Term is an Atom with at most one Quantifier (a prefix
+/// and an optional lazy `?`), so a quantifier right after another has
+/// nothing to repeat: `a**`, `a+?+`, `x{1}{1,}`. The `regex` crate reads
+/// those as nested repetitions. Escapes (a `\u{...}` code point in `u`/`v`
+/// mode as a whole), classes (nested in `v` mode) and the `?` opening a
+/// group's `(?:`, `(?=`, `(?<name>` are skipped.
+pub(super) fn has_nested_quantifier(pattern: &str, flags: &str) -> bool {
+    let unicode = flags.contains('u') || flags.contains('v');
+    let unicode_sets = flags.contains('v');
+    let chars: Vec<char> = pattern.chars().collect();
+    let digits_from = |from: usize| {
+        chars[from.min(chars.len())..]
+            .iter()
+            .take_while(|ch| ch.is_ascii_digit())
+            .count()
+    };
+    let braced_len = |at: usize| {
+        let min_digits = digits_from(at + 1);
+        if min_digits == 0 {
+            return None;
+        }
+        let mut cursor = at + 1 + min_digits;
+        if chars.get(cursor) == Some(&',') {
+            cursor += 1 + digits_from(cursor + 1);
+        }
+        (chars.get(cursor) == Some(&'}')).then_some(cursor + 1 - at)
+    };
+    let mut index = 0;
+    let mut after_quantifier = false;
+    while let Some(&ch) = chars.get(index) {
+        let quantifier_len = match ch {
+            '*' | '+' | '?' => Some(1),
+            '{' => braced_len(index),
+            _ => None,
+        };
+        if let Some(length) = quantifier_len {
+            if after_quantifier {
+                return true;
+            }
+            index += length;
+            if chars.get(index) == Some(&'?') {
+                index += 1;
+            }
+            after_quantifier = true;
+            continue;
+        }
+        after_quantifier = false;
+        index += match ch {
+            '\\' if unicode
+                && chars.get(index + 1) == Some(&'u')
+                && chars.get(index + 2) == Some(&'{') =>
+            {
+                chars[index + 3..]
+                    .iter()
+                    .position(|&close| close == '}')
+                    .map_or(chars.len() - index, |close| close + 4)
+            }
+            '\\' => 2,
+            '[' => class_len(&chars, index, unicode_sets),
+            '(' if chars.get(index + 1) == Some(&'?') => 2,
+            _ => 1,
+        };
+    }
+    false
+}
+
+/// The length of the class opening at `start`, to its closing `]` (classes
+/// nest in `v` mode), or to the end of an unterminated one.
+fn class_len(chars: &[char], start: usize, unicode_sets: bool) -> usize {
+    let mut depth = 0usize;
+    let mut index = start;
+    while let Some(&ch) = chars.get(index) {
+        match ch {
+            '\\' => {
+                index += 2;
+                continue;
+            }
+            '[' if depth == 0 || unicode_sets => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return index + 1 - start;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    chars.len() - start
+}
+
 pub(super) fn property_escape_count(pattern: &str) -> usize {
     pattern.matches("\\p{").count() + pattern.matches("\\P{").count()
 }
@@ -1475,9 +1566,60 @@ fn valid_property_escape(body: &str, negated: bool, unicode_sets: bool) -> bool 
 mod tests {
     use super::{
         GENERAL_CATEGORY_VALUES, LONE_PROPERTY_NAMES, SCRIPT_VALUES, STRING_PROPERTY_NAMES,
-        js_pattern_to_rust, unicode_property_escape_error,
+        has_nested_quantifier, js_pattern_to_rust, unicode_property_escape_error,
     };
     use regex::{Regex, RegexBuilder};
+
+    /// bd-9vouw.337: a quantifier right after another is a SyntaxError;
+    /// one quantifier with its lazy `?` is not. Verdicts are Node v22.2.0's
+    /// `new RegExp(pattern, flags)`.
+    #[test]
+    fn a_quantifier_after_a_quantifier_has_nothing_to_repeat() {
+        for (pattern, flags) in [
+            ("a**", ""),
+            ("a+++", ""),
+            ("a????", ""),
+            ("x{1}{1,}", ""),
+            ("x{0,1}{1,}", ""),
+            ("a*??", ""),
+            ("a+?+", ""),
+            ("a{1}??", ""),
+            ("a{1,}?{2}", ""),
+            ("(a)?*", ""),
+            ("a*{1}", ""),
+            ("[a-z]+*", ""),
+            (".**", ""),
+            (r"\d{2}{3}", "u"),
+            (r"\u{10}*", ""),
+            (r"\\**", ""),
+            ("[^]**", ""),
+        ] {
+            assert!(has_nested_quantifier(pattern, flags), "/{pattern}/{flags}");
+        }
+        for (pattern, flags) in [
+            (r"\u{10}*", "u"),
+            (r"\u{1F600}*", "u"),
+            ("[*]*", ""),
+            ("a{,5}*", ""),
+            ("(?:a)*?", ""),
+            ("a*?", ""),
+            ("a{1}?", ""),
+            ("(?=a)*", ""),
+            ("[[a]--[b]]*", "v"),
+            (r"\p{L}*", "u"),
+            ("a{1}{", ""),
+            ("a{1}{x}", ""),
+            ("(?<n>a)*", ""),
+            (r"[\]]*", ""),
+            (r"[\]*]", ""),
+            (r"a\*\*", ""),
+            (r"\x2a*", ""),
+            ("(?:a|b)+?", ""),
+            ("(?<=a)b*", ""),
+        ] {
+            assert!(!has_nested_quantifier(pattern, flags), "/{pattern}/{flags}");
+        }
+    }
 
     /// bd-9vouw.247: properties of strings with `v`; the expected values
     /// are Node v22.2.0's.

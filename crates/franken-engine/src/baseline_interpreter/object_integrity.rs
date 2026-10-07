@@ -467,6 +467,29 @@ impl InterpreterCore {
 
     /// [[GetPrototypeOf]] of a function value: a derived class's parent, the
     /// link recorded by `Object.setPrototypeOf`, else `Function.prototype`.
+    /// ES2020 19.5.6.2 (ES2021 20.5.7.2 for AggregateError): each
+    /// NativeError constructor's [[Prototype]] is %Error%, so a read of a
+    /// static it lacks (`RangeError.captureStackTrace`) continues on Error.
+    pub(super) fn native_error_constructor_parent(function: &Value) -> Option<Value> {
+        let Value::BuiltinFunction(builtin) = function else {
+            return None;
+        };
+        (builtin.kind == BuiltinFunctionKind::StandardConstructor
+            && matches!(
+                Self::standard_constructor_name(builtin).ok(),
+                Some(
+                    "EvalError"
+                        | "RangeError"
+                        | "ReferenceError"
+                        | "SyntaxError"
+                        | "TypeError"
+                        | "URIError"
+                        | "AggregateError"
+                )
+            ))
+        .then(|| Value::BuiltinFunction(BuiltinFunction::standard_constructor("Error")))
+    }
+
     pub(super) fn function_value_prototype(
         &mut self,
         module: Option<&Ir3Module>,
@@ -507,6 +530,9 @@ impl InterpreterCore {
             return Ok(Value::BuiltinFunction(
                 BuiltinFunction::standard_constructor(TYPED_ARRAY_INTRINSIC),
             ));
+        }
+        if let Some(parent) = Self::native_error_constructor_parent(function) {
+            return Ok(parent);
         }
         // ES2020 25.2.2, 25.7.2; ES2018 25.3.2: %GeneratorFunction%,
         // %AsyncFunction% and %AsyncGeneratorFunction% inherit from %Function%.

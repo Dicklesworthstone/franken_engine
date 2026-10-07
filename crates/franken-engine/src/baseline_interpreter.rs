@@ -64898,6 +64898,15 @@ impl InterpreterCore {
                 {
                     return Ok(own);
                 }
+                if let Some(parent) = Self::native_error_constructor_parent(callable) {
+                    return self.get_v_with_receiver(
+                        module,
+                        &parent,
+                        key,
+                        receiver,
+                        depth.saturating_add(1),
+                    );
+                }
                 let prototype =
                     Self::function_intrinsic_prototype_name(callable).unwrap_or("Function");
                 if prototype != "Function" {

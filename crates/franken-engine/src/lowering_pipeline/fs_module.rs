@@ -162,7 +162,11 @@ struct RequireRewriter {
 }
 
 impl RequireRewriter {
-    fn scoped(&mut self, names: BTreeSet<String>, walk: impl FnOnce(&mut Self) -> Outcome) -> Outcome {
+    fn scoped(
+        &mut self,
+        names: BTreeSet<String>,
+        walk: impl FnOnce(&mut Self) -> Outcome,
+    ) -> Outcome {
         self.scopes.push(names);
         let result = walk(self);
         self.scopes.pop();
@@ -201,7 +205,10 @@ mod tests {
     fn parse(source: &str) -> SyntaxTree {
         CanonicalEs2020Parser
             .parse_with_options(
-                ParserSource { label: "fs-rewrite-test.js".into(), text: source.into() },
+                ParserSource {
+                    label: "fs-rewrite-test.js".into(),
+                    text: source.into(),
+                },
                 ParseGoal::Script,
                 &ParserOptions::default(),
             )
@@ -223,17 +230,28 @@ mod tests {
             "require('fs/unsupported');",
             "const name = 'fs'; require(name);",
         ] {
-            assert!(rewrite_fs_requires(&parse(source)).expect("rewrite").is_none(), "{source}");
+            assert!(
+                rewrite_fs_requires(&parse(source))
+                    .expect("rewrite")
+                    .is_none(),
+                "{source}"
+            );
         }
     }
 
     #[test]
     fn all_core_specifiers_share_one_program_module() {
         let tree = parse("const fs = require('fs'); require('node:fs'); require('fs/promises');");
-        let rewritten = rewrite_fs_requires(&tree).expect("rewrite").expect("fs module");
+        let rewritten = rewrite_fs_requires(&tree)
+            .expect("rewrite")
+            .expect("fs module");
         assert_eq!(rewritten.body.len(), tree.body.len() + 1);
         assert!(is_module_declaration(&rewritten.body[0]));
-        assert!(rewrite_fs_requires(&rewritten).expect("idempotent").is_none());
+        assert!(
+            rewrite_fs_requires(&rewritten)
+                .expect("idempotent")
+                .is_none()
+        );
     }
 
     #[test]

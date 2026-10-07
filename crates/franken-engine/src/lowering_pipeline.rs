@@ -13820,6 +13820,239 @@ const PREDECLARED_RUNTIME_GLOBALS: &[&str] = &[
     "queueMicrotask",
 ];
 
+/// An assignment to `super.key` / `super[key]`, any operator (ES2020
+/// 12.3.5.1-3 MakeSuperPropertyReference, PutValue on a super reference):
+/// `this` is read first, then the key (ToPropertyKey, once), then the super
+/// base ([[HomeObject]].[[Prototype]]). The read of a compound or logical
+/// assignment is base.[[Get]](key, this) and the write base.[[Set]](key,
+/// value, this), both through the Reflect builtins, so the property is
+/// created on `this` or an inherited setter runs; a rejected write throws in
+/// strict code. The ordinary member path wrote to the base object itself:
+/// `super.x = 1` in a class method stored x on the parent prototype, and in
+/// an object literal method on Object.prototype.
+#[allow(clippy::too_many_arguments)]
+fn lower_super_member_assignment(
+    operator: AssignmentOperator,
+    property: &Expression,
+    computed: bool,
+    right: &Expression,
+    strict: bool,
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    root_scope_id: ScopeId,
+    label_counter: &mut u32,
+    span_table: &mut Vec<Ir1OpSpanEntry>,
+) -> Result<(), LoweringPipelineError> {
+    let temporary = |purpose: &str,
+                     bindings: &mut Vec<ResolvedBinding>,
+                     binding_lookup: &mut BTreeMap<String, BindingId>,
+                     binding_index: &mut BindingId| {
+        alloc_internal_binding(
+            bindings,
+            binding_lookup,
+            binding_index,
+            root_scope_id,
+            purpose,
+        )
+    };
+    let this_binding = temporary(
+        "super_assignment_this",
+        bindings,
+        binding_lookup,
+        binding_index,
+    )?;
+    ops.push(Ir1Op::LoadThis);
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: this_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    let key_binding = temporary(
+        "super_assignment_key",
+        bindings,
+        binding_lookup,
+        binding_index,
+    )?;
+    match (property, computed) {
+        (Expression::Identifier(name), false) => ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String(name.as_str().into()),
+        }),
+        _ => {
+            lower_expression_to_ir1(
+                property,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?;
+            ops.push(Ir1Op::HostCall {
+                capability: "builtin:ToPropertyKey".to_string(),
+                arg_count: 1,
+            });
+        }
+    }
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: key_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    let base_binding = temporary(
+        "super_assignment_base",
+        bindings,
+        binding_lookup,
+        binding_index,
+    )?;
+    ops.push(Ir1Op::LoadSuper);
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: base_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    let value_binding = temporary(
+        "super_assignment_value",
+        bindings,
+        binding_lookup,
+        binding_index,
+    )?;
+    let push_current = |ops: &mut Vec<Ir1Op>| {
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: base_binding,
+        });
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: key_binding,
+        });
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: this_binding,
+        });
+        ops.push(Ir1Op::HostCall {
+            capability: "builtin:ReflectGet".to_string(),
+            arg_count: 3,
+        });
+    };
+    let mut end_label = None;
+    let mut postfix_old = None;
+    match operator {
+        AssignmentOperator::Assign => {
+            lower_expression_to_ir1(
+                right,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?;
+        }
+        AssignmentOperator::LogicalAndAssign
+        | AssignmentOperator::LogicalOrAssign
+        | AssignmentOperator::NullishCoalescingAssign => {
+            // The current value is the result unless the operator assigns.
+            push_current(ops);
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: value_binding,
+            });
+            let eval_rhs_label = alloc_label(label_counter);
+            let end = alloc_label(label_counter);
+            ops.push(match operator {
+                AssignmentOperator::LogicalAndAssign => Ir1Op::JumpIfTruthy {
+                    label_id: eval_rhs_label,
+                },
+                AssignmentOperator::LogicalOrAssign => Ir1Op::JumpIfFalsyConsume {
+                    label_id: eval_rhs_label,
+                },
+                _ => Ir1Op::JumpIfNullish {
+                    label_id: eval_rhs_label,
+                },
+            });
+            ops.push(Ir1Op::Jump { label_id: end });
+            ops.push(Ir1Op::Label { id: eval_rhs_label });
+            lower_expression_to_ir1(
+                right,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+                span_table,
+            )?;
+            end_label = Some(end);
+        }
+        _ => {
+            push_current(ops);
+            // `x++` / `x--` evaluate to ToNumeric(current) (bd-9vouw.119).
+            if operator.is_postfix_update() {
+                let old_binding = temporary(
+                    "super_assignment_old",
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                )?;
+                push_to_numeric_ir1(ops);
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: old_binding,
+                });
+                postfix_old = Some(old_binding);
+            }
+            match operator.update_step() {
+                Some(step) => ops.push(Ir1Op::UnaryOp { operator: step }),
+                None => {
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: compound_assignment_binary_operator(operator)?,
+                    });
+                }
+            }
+        }
+    }
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: value_binding,
+    });
+    ops.push(Ir1Op::Pop);
+    // base.[[Set]](key, value, this)
+    for binding_id in [base_binding, key_binding, value_binding, this_binding] {
+        ops.push(Ir1Op::LoadBinding { binding_id });
+    }
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:ReflectSet".to_string(),
+        arg_count: 4,
+    });
+    if strict {
+        let stored = alloc_label(label_counter);
+        ops.push(Ir1Op::JumpIfTruthy { label_id: stored });
+        ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("Cannot assign to read only property of super".into()),
+        });
+        ops.push(Ir1Op::HostCall {
+            capability: "builtin:TypeError".to_string(),
+            arg_count: 1,
+        });
+        ops.push(Ir1Op::Throw);
+        ops.push(Ir1Op::Label { id: stored });
+    } else {
+        ops.push(Ir1Op::Pop);
+    }
+    if let Some(end) = end_label {
+        ops.push(Ir1Op::Label { id: end });
+    }
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: postfix_old.unwrap_or(value_binding),
+    });
+    Ok(())
+}
+
 /// ES2020 9.2.1 [[Call]] step 2: a class constructor called without `new`
 /// (Function.prototype.call, Reflect.apply, a bound call included) throws a
 /// TypeError before its parameters or body run (bd-9vouw.292). Emitted at
@@ -16099,6 +16332,22 @@ fn lower_expression_to_ir1_inner(
                 ..
             } = left.as_ref()
             {
+                if matches!(object.as_ref(), Expression::Super) {
+                    return lower_super_member_assignment(
+                        *operator,
+                        property,
+                        *computed,
+                        right,
+                        member_assignment_is_strict(*assignment_strictness),
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    );
+                }
                 if matches!(
                     operator,
                     AssignmentOperator::LogicalAndAssign

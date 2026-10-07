@@ -356,17 +356,18 @@ impl InterpreterCore {
             value = result;
         }
         // ES2020 24.5.2.2 step 4: a Number, String, Boolean or BigInt wrapper
-        // serializes as its primitive (bd-9vouw.73).
-        if let Value::Object(object_id) = &value
-            && let Some(
-                primitive @ (Value::Int(_)
-                | Value::Float(_)
-                | Value::Str(_)
-                | Value::Bool(_)
-                | Value::BigInt(_)),
-            ) = self.primitive_wrapper_value(*object_id)
-        {
-            value = primitive.clone();
+        // serializes as its primitive (bd-9vouw.73). A Number wrapper goes
+        // through ToNumber and a String wrapper through ToString, so their
+        // valueOf / toString run (and may throw).
+        if let Value::Object(object_id) = &value {
+            value = match self.primitive_wrapper_value(*object_id).cloned() {
+                Some(Value::Int(_) | Value::Float(_)) => {
+                    js_number_to_value(self.conversion_to_number(module, value, false)?)
+                }
+                Some(Value::Str(_)) => Value::Str(self.conversion_to_string(module, value)?),
+                Some(primitive @ (Value::Bool(_) | Value::BigInt(_))) => primitive,
+                _ => value,
+            };
         }
         Ok(value)
     }
@@ -395,6 +396,19 @@ impl InterpreterCore {
                     replacer.clone(),
                     &JsString::from(index.to_string()),
                 )?;
+                // ES2020 24.5.2 step 4.b.iii.5.e: a Number or String wrapper
+                // item is ToString'd (its toString runs).
+                let value = match &value {
+                    Value::Object(object_id)
+                        if matches!(
+                            self.primitive_wrapper_value(*object_id),
+                            Some(Value::Int(_) | Value::Float(_) | Value::Str(_))
+                        ) =>
+                    {
+                        Value::Str(self.conversion_to_string(module, value)?)
+                    }
+                    _ => value,
+                };
                 let key = match value {
                     Value::Str(key) => Some(key),
                     Value::Int(number) => {
@@ -423,9 +437,21 @@ impl InterpreterCore {
             state.release(self, seen_bytes);
             state.property_list = Some(list);
         }
-        // The runtime has no authenticated NumberData/StringData wrapper slot.
-        // Never infer one from guest-spoofable __type/__value properties. Plain
-        // objects (including such spoofs) are ignored, as the JSON contract says.
+        // ES2020 24.5.2 step 5: a Number wrapper space is ToNumber'd and a
+        // String wrapper ToString'd (their valueOf / toString run). A wrapper
+        // is recognized by its heap object's primitive_value slot
+        // (bd-9vouw.73), never by guest-spoofable __type / __value
+        // properties; any other object space is ignored.
+        let space = match &space {
+            Value::Object(object_id) => match self.primitive_wrapper_value(*object_id) {
+                Some(Value::Int(_) | Value::Float(_)) => {
+                    js_number_to_value(self.conversion_to_number(module, space, false)?)
+                }
+                Some(Value::Str(_)) => Value::Str(self.conversion_to_string(module, space)?),
+                _ => space,
+            },
+            _ => space,
+        };
         let gap = match space {
             Value::Str(text) => text.encode_utf16().take(10).collect::<Vec<_>>(),
             Value::Int(number) => vec![u16::from(b' '); number.clamp(0, 10) as usize],

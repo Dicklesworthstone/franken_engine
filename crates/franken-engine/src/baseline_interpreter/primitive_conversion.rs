@@ -392,7 +392,7 @@ impl InterpreterCore {
         Ok(text)
     }
 
-    fn conversion_to_number(
+    pub(super) fn conversion_to_number(
         &mut self,
         module: Option<&Ir3Module>,
         input: Value,

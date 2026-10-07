@@ -15972,6 +15972,46 @@ fn lower_expression_to_ir1_inner(
                     return Ok(());
                 }
                 match argument.as_ref() {
+                    // `delete super.x` / `delete super[k]` (ES2022 13.5.1.2):
+                    // the super reference evaluates `this` and the key
+                    // expression, with no ToPropertyKey and no super base,
+                    // and the delete then throws a ReferenceError. It used
+                    // to delete from the super base (a TypeError on a null
+                    // one, and a removed parent method).
+                    Expression::Member {
+                        object,
+                        property,
+                        computed,
+                        ..
+                    } if matches!(object.as_ref(), Expression::Super) => {
+                        ops.push(Ir1Op::LoadThis);
+                        ops.push(Ir1Op::Pop);
+                        if *computed {
+                            lower_expression_to_ir1(
+                                property,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                                span_table,
+                            )?;
+                            ops.push(Ir1Op::Pop);
+                        }
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::String("Unsupported reference to 'super'".into()),
+                        });
+                        ops.push(Ir1Op::HostCall {
+                            capability: "builtin:ReferenceError".to_string(),
+                            arg_count: 1,
+                        });
+                        ops.push(Ir1Op::Throw);
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Undefined,
+                        });
+                        return Ok(());
+                    }
                     Expression::Member {
                         object,
                         property,

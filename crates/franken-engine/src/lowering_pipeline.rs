@@ -44,9 +44,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
-    BlockStatement, ExportKind, Expression, FunctionParam, ImportClause, MethodKind,
-    ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
-    VariableDeclarationKind,
+    BlockStatement, ExportKind, Expression, FunctionParam, ImportClause, MethodDefinition,
+    MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement,
+    UnaryOperator, VariableDeclarationKind,
 };
 use crate::capability::{APPLY_HOSTCALL_TARGET_PREFIX, hostcall_result_contract};
 use crate::effect_set::{EffectKind, EffectSet};
@@ -3068,10 +3068,13 @@ fn rewrite_class_expression_self_capture(
 /// Prepare a fresh function-like lookup without eagerly materializing every
 /// inherited name. NUL markers carry source-lexical visibility only; an exact
 /// normal bridge binding is allocated later, and only when a descendant
-/// actually references that name.
+/// actually references that name. The enclosing scope's lexical and
+/// capture-origin markers are inherited for the names `mentioned` holds (see
+/// `MentionedNames`).
 fn prepare_function_body_bindings(
     statements: Option<&[Statement]>,
     self_name: Option<&str>,
+    mentioned: &MentionedNames<'_>,
     outer_lookup: &BTreeMap<String, BindingId>,
     body_lookup: &mut BTreeMap<String, BindingId>,
     body_binding_index: &mut BindingId,
@@ -3127,9 +3130,29 @@ fn prepare_function_body_bindings(
         LEXICAL_BINDING_SENTINEL_PREFIX,
         CAPTURE_ORIGIN_SENTINEL_PREFIX,
     ] {
-        for (key, binding_id) in prefixed_entries(outer_lookup, prefix) {
-            if !body_lookup.contains_key(key) {
-                body_lookup.insert(key.clone(), *binding_id);
+        // Markers of internal names (the CommonJS wrapper and canonical
+        // `require` markers, lowering temporaries) whatever the code names.
+        for internal in ["\0", "<", "@@franken_internal_"] {
+            let internal_prefix = format!("{prefix}{internal}");
+            for (key, binding_id) in prefixed_entries(outer_lookup, &internal_prefix) {
+                if !body_lookup.contains_key(key) {
+                    body_lookup.insert(key.clone(), *binding_id);
+                }
+            }
+        }
+        let mut key = prefix.to_string();
+        for name in mentioned
+            .names
+            .iter()
+            .copied()
+            .chain(AUTHENTICATED_COMMONJS_RUNTIME_BINDINGS)
+        {
+            key.truncate(prefix.len());
+            key.push_str(name);
+            if !body_lookup.contains_key(&key)
+                && let Some(&binding_id) = outer_lookup.get(&key)
+            {
+                body_lookup.insert(key.clone(), binding_id);
             }
         }
     }
@@ -3146,6 +3169,327 @@ fn prepare_function_body_bindings(
     }
 
     pre_lower_names
+}
+
+/// Every name a function-like unit's code mentions, at any depth (nested
+/// functions and classes included): identifier references, which takes in
+/// member property names and object keys, and declared and bound names.
+///
+/// A fresh body lookup inherits the enclosing scope's lexical and
+/// capture-origin markers for these names only (bd-9vouw.223). Lowering reads
+/// those markers by name, and the name is one the code being lowered
+/// mentions: a reference, a declaration, an assignment target, a callee or
+/// member object, or a timers export read as `timers.<name>`; the CommonJS
+/// wrapper names, read without a mention, are always inherited. Copying every
+/// enclosing marker cost each function the size of its enclosing scope, so N
+/// functions in a scope of N bindings lowered in O(N^2) (2,000 sibling
+/// functions took 22 s).
+#[derive(Default)]
+struct MentionedNames<'a> {
+    names: BTreeSet<&'a str>,
+}
+
+impl<'a> MentionedNames<'a> {
+    fn of_function(
+        name: Option<&'a str>,
+        params: &'a [FunctionParam],
+        body: &'a [Statement],
+    ) -> Self {
+        let mut mentioned = Self::default();
+        mentioned.function(name, params, body);
+        mentioned
+    }
+
+    fn of_arrow(params: &'a [FunctionParam], body: &'a ArrowBody) -> Self {
+        let mut mentioned = Self::default();
+        mentioned.arrow(params, body);
+        mentioned
+    }
+
+    fn of_class(
+        name: Option<&'a str>,
+        super_class: Option<&'a Expression>,
+        body: &'a [MethodDefinition],
+    ) -> Self {
+        let mut mentioned = Self::default();
+        mentioned.class(name, super_class, body);
+        mentioned
+    }
+
+    fn of_patterns(patterns: impl IntoIterator<Item = &'a BindingPattern>) -> Self {
+        let mut mentioned = Self::default();
+        for pattern in patterns {
+            mentioned.pattern(pattern);
+        }
+        mentioned
+    }
+
+    fn statements(&mut self, statements: &'a [Statement]) {
+        for statement in statements {
+            self.statement(statement);
+        }
+    }
+
+    fn statement(&mut self, statement: &'a Statement) {
+        match statement {
+            // A module's own top level only; never inside a function-like
+            // unit.
+            Statement::Import(_) => {}
+            Statement::Export(export) => match &export.kind {
+                ExportKind::Default(expression) => self.expression(expression),
+                ExportKind::NamedClause(_) => {}
+            },
+            Statement::VariableDeclaration(declaration) => {
+                for declarator in &declaration.declarations {
+                    self.pattern(&declarator.pattern);
+                    if let Some(initializer) = &declarator.initializer {
+                        self.expression(initializer);
+                    }
+                }
+            }
+            Statement::Expression(statement) => self.expression(&statement.expression),
+            Statement::Block(block) => self.statements(&block.body),
+            Statement::If(statement) => {
+                self.expression(&statement.condition);
+                self.statement(&statement.consequent);
+                if let Some(alternate) = &statement.alternate {
+                    self.statement(alternate);
+                }
+            }
+            Statement::For(statement) => {
+                if let Some(init) = &statement.init {
+                    self.statement(init);
+                }
+                if let Some(condition) = &statement.condition {
+                    self.expression(condition);
+                }
+                if let Some(update) = &statement.update {
+                    self.expression(update);
+                }
+                self.statement(&statement.body);
+            }
+            Statement::While(statement) => {
+                self.expression(&statement.condition);
+                self.statement(&statement.body);
+            }
+            Statement::With(statement) => {
+                self.expression(&statement.object);
+                self.statement(&statement.body);
+            }
+            Statement::DoWhile(statement) => {
+                self.statement(&statement.body);
+                self.expression(&statement.condition);
+            }
+            Statement::Return(statement) => {
+                if let Some(argument) = &statement.argument {
+                    self.expression(argument);
+                }
+            }
+            Statement::Throw(statement) => self.expression(&statement.argument),
+            Statement::TryCatch(statement) => {
+                self.statements(&statement.block.body);
+                if let Some(handler) = &statement.handler {
+                    if let Some(parameter) = &handler.parameter {
+                        self.names.insert(parameter);
+                    }
+                    self.statements(&handler.body.body);
+                }
+                if let Some(finalizer) = &statement.finalizer {
+                    self.statements(&finalizer.body);
+                }
+            }
+            Statement::Switch(statement) => {
+                self.expression(&statement.discriminant);
+                for case in &statement.cases {
+                    if let Some(test) = &case.test {
+                        self.expression(test);
+                    }
+                    self.statements(&case.consequent);
+                }
+            }
+            Statement::Break(_) | Statement::Continue(_) => {}
+            Statement::FunctionDeclaration(function) => {
+                self.function(
+                    function.name.as_deref(),
+                    &function.params,
+                    &function.body.body,
+                );
+            }
+            Statement::ClassDeclaration(class) => {
+                self.class(
+                    class.name.as_deref(),
+                    class.super_class.as_deref(),
+                    &class.body,
+                );
+            }
+            Statement::ForIn(statement) => {
+                self.pattern(&statement.binding);
+                self.expression(&statement.object);
+                self.statement(&statement.body);
+            }
+            Statement::ForOf(statement) => {
+                self.pattern(&statement.binding);
+                self.expression(&statement.iterable);
+                self.statement(&statement.body);
+            }
+            Statement::Labeled(statement) => self.statement(&statement.body),
+        }
+    }
+
+    fn expression(&mut self, expression: &'a Expression) {
+        match expression {
+            Expression::Identifier(name) => {
+                self.names.insert(name);
+            }
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::FloatLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral
+            | Expression::UndefinedLiteral
+            | Expression::This
+            | Expression::SloppyThis
+            | Expression::NewTarget
+            | Expression::ImportMeta
+            | Expression::Raw(_)
+            | Expression::RegExpLiteral { .. }
+            | Expression::Super => {}
+            Expression::Await(inner) | Expression::SpreadElement(inner) => self.expression(inner),
+            Expression::Yield { argument, .. } => {
+                if let Some(argument) = argument {
+                    self.expression(argument);
+                }
+            }
+            Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+                self.expression(left);
+                self.expression(right);
+            }
+            Expression::Unary { argument, .. } => self.expression(argument),
+            Expression::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
+                self.expression(test);
+                self.expression(consequent);
+                self.expression(alternate);
+            }
+            Expression::Call {
+                callee, arguments, ..
+            }
+            | Expression::OptionalCall {
+                callee, arguments, ..
+            }
+            | Expression::New { callee, arguments } => {
+                self.expression(callee);
+                for argument in arguments {
+                    self.expression(argument);
+                }
+            }
+            Expression::Member {
+                object, property, ..
+            }
+            | Expression::OptionalMember {
+                object, property, ..
+            } => {
+                self.expression(object);
+                self.expression(property);
+            }
+            Expression::ArrayLiteral(elements) => {
+                for element in elements.iter().flatten() {
+                    self.expression(element);
+                }
+            }
+            Expression::ObjectLiteral(properties) => {
+                for property in properties {
+                    self.expression(&property.key);
+                    self.expression(&property.value);
+                }
+            }
+            Expression::ArrowFunction { params, body, .. } => self.arrow(params, body),
+            Expression::TemplateLiteral { expressions, .. } => {
+                for expression in expressions {
+                    self.expression(expression);
+                }
+            }
+            Expression::Function {
+                name, params, body, ..
+            } => self.function(name.as_deref(), params, &body.body),
+            Expression::ClassExpression {
+                name,
+                super_class,
+                body,
+            } => self.class(name.as_deref(), super_class.as_deref(), body),
+        }
+    }
+
+    fn pattern(&mut self, pattern: &'a BindingPattern) {
+        match pattern {
+            BindingPattern::Identifier(name) => {
+                self.names.insert(name);
+            }
+            BindingPattern::ObjectPattern(properties) => {
+                for property in properties {
+                    self.expression(&property.key);
+                    self.pattern(&property.value);
+                }
+            }
+            BindingPattern::ArrayPattern(elements) => {
+                for element in elements.iter().flatten() {
+                    self.pattern(element);
+                }
+            }
+            BindingPattern::Rest(inner) => self.pattern(inner),
+            BindingPattern::AssignmentPattern { left, right } => {
+                self.pattern(left);
+                self.expression(right);
+            }
+        }
+    }
+
+    fn function(
+        &mut self,
+        name: Option<&'a str>,
+        params: &'a [FunctionParam],
+        body: &'a [Statement],
+    ) {
+        if let Some(name) = name {
+            self.names.insert(name);
+        }
+        for param in params {
+            self.pattern(&param.pattern);
+        }
+        self.statements(body);
+    }
+
+    fn arrow(&mut self, params: &'a [FunctionParam], body: &'a ArrowBody) {
+        for param in params {
+            self.pattern(&param.pattern);
+        }
+        match body {
+            ArrowBody::Expression(expression) => self.expression(expression),
+            ArrowBody::Block(block) => self.statements(&block.body),
+        }
+    }
+
+    fn class(
+        &mut self,
+        name: Option<&'a str>,
+        super_class: Option<&'a Expression>,
+        body: &'a [MethodDefinition],
+    ) {
+        if let Some(name) = name {
+            self.names.insert(name);
+        }
+        if let Some(super_class) = super_class {
+            self.expression(super_class);
+        }
+        for method in body {
+            self.expression(&method.key);
+            self.function(None, &method.params, &method.body.body);
+        }
+    }
 }
 
 fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
@@ -4591,6 +4935,7 @@ fn lower_function_parameter_prologue(
     let pre_lower_names = prepare_function_body_bindings(
         None,
         self_name,
+        &MentionedNames::of_patterns(destructure_params.iter().map(|(_, pattern)| *pattern)),
         outer_lookup,
         &mut prologue_lookup,
         body_binding_index,
@@ -6845,6 +7190,7 @@ fn lower_statement_to_ir1_with_flow(
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&func.body.body),
                 None,
+                &MentionedNames::of_function(func.name.as_deref(), &func.params, &func.body.body),
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
@@ -7011,10 +7357,16 @@ fn lower_statement_to_ir1_with_flow(
                 body_scope,
                 &mut body_label_counter,
             )?;
+            let class_mentions = MentionedNames::of_class(
+                cls.name.as_deref(),
+                cls.super_class.as_deref(),
+                &cls.body,
+            );
             let ctor_statements = constructor.map(|ctor| ctor.body.body.as_slice());
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
                 Some(&class_name),
+                &class_mentions,
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
@@ -7261,6 +7613,7 @@ fn lower_statement_to_ir1_with_flow(
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     None,
+                    &class_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
@@ -14361,6 +14714,7 @@ fn try_lower_arrow_expression_to_ir1(
     let pre_lower_names = prepare_function_body_bindings(
         body_statements,
         None,
+        &MentionedNames::of_arrow(params, body),
         binding_lookup,
         &mut body_lookup,
         &mut body_binding_index,
@@ -18704,6 +19058,7 @@ fn lower_expression_to_ir1_inner(
             let pre_lower_names = prepare_function_body_bindings(
                 Some(&body.body),
                 name.as_deref(),
+                &MentionedNames::of_function(name.as_deref(), params, &body.body),
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
@@ -19273,10 +19628,13 @@ fn lower_expression_to_ir1_inner(
                 body_scope,
                 &mut body_label_counter,
             )?;
+            let class_mentions =
+                MentionedNames::of_class(name.as_deref(), super_class.as_deref(), body);
             let ctor_statements = constructor.map(|ctor| ctor.body.body.as_slice());
             let ctor_pre_lower_names = prepare_function_body_bindings(
                 ctor_statements,
                 name.as_deref(),
+                &class_mentions,
                 binding_lookup,
                 &mut body_lookup,
                 &mut body_binding_index,
@@ -19531,6 +19889,7 @@ fn lower_expression_to_ir1_inner(
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     name.as_deref(),
+                    &class_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
@@ -49019,6 +49378,81 @@ mod tests {
                 panic!("lower_ir0_to_ir3 failed: {err:?}");
             }
         }
+    }
+
+    /// bd-9vouw.223: a function body inherits the enclosing scope's lexical
+    /// and capture-origin markers for the names its code mentions (here `v1`
+    /// directly and `v999` only inside a nested function), the CommonJS
+    /// wrapper's and the internal ones, and for no other enclosing name.
+    #[test]
+    fn a_body_inherits_markers_only_for_names_its_code_mentions_bd_9vouw_223() {
+        let mut outer = BTreeMap::new();
+        for index in 0..1000u32 {
+            let name = format!("v{index}");
+            outer.insert(name.clone(), index + 1);
+            outer.insert(lexical_binding_sentinel(&name), 0);
+            outer.insert(capture_origin_sentinel(&name), index + 1);
+        }
+        outer.insert("require".to_string(), 2000);
+        outer.insert(commonjs_wrapper_sentinel("require"), 2000);
+        outer.insert(capture_origin_sentinel("require"), 2000);
+        outer.insert(CANONICAL_COMMONJS_REQUIRE_SENTINEL.to_string(), 2000);
+        outer.insert(
+            capture_origin_sentinel(&make_internal_binding_name("for_of_source", 7)),
+            7,
+        );
+        let body = vec![
+            Statement::Expression(ExpressionStatement {
+                expression: Expression::Identifier("v1".to_string()),
+                span: span(),
+            }),
+            Statement::Return(ReturnStatement {
+                argument: Some(Expression::Function {
+                    name: None,
+                    params: Vec::new(),
+                    body: BlockStatement {
+                        body: vec![Statement::Return(ReturnStatement {
+                            argument: Some(Expression::Identifier("v999".to_string())),
+                            span: span(),
+                        })],
+                        span: span(),
+                    },
+                    is_async: false,
+                    is_generator: false,
+                }),
+                span: span(),
+            }),
+        ];
+        let mentioned = MentionedNames::of_function(None, &[], &body);
+        let mut body_lookup = BTreeMap::new();
+        let mut body_binding_index = 0;
+        prepare_function_body_bindings(
+            Some(&body),
+            None,
+            &mentioned,
+            &outer,
+            &mut body_lookup,
+            &mut body_binding_index,
+        );
+        let inherited = body_lookup
+            .iter()
+            .map(|(key, id)| (key.clone(), *id))
+            .collect::<Vec<_>>();
+        let mut expected = vec![
+            (lexical_binding_sentinel("v1"), 0),
+            (capture_origin_sentinel("v1"), 2),
+            (lexical_binding_sentinel("v999"), 0),
+            (capture_origin_sentinel("v999"), 1000),
+            (commonjs_wrapper_sentinel("require"), 2000),
+            (capture_origin_sentinel("require"), 2000),
+            (CANONICAL_COMMONJS_REQUIRE_SENTINEL.to_string(), 2000),
+            (
+                capture_origin_sentinel(&make_internal_binding_name("for_of_source", 7)),
+                7,
+            ),
+        ];
+        expected.sort();
+        assert_eq!(inherited, expected);
     }
 
     /// bd-9vouw.227: the tracked sweeps of BindingFlowShapes reset exactly

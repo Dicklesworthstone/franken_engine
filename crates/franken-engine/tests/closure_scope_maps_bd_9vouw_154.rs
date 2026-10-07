@@ -125,3 +125,33 @@ fn many_pending_async_calls_beside_a_large_scope_fit_the_budget() {
     );
     assert_eq!(eval_deterministic(&source), "300 function");
 }
+
+/// bd-9vouw.223: 2,000 functions beside 2,000 bindings, the shape that
+/// lowered in O(functions x bindings) (each function body copied every
+/// enclosing lexical and capture-origin marker; bd-9vouw.153 measured 25 s at
+/// 4,000 of each). A body now inherits the markers of the names its code
+/// mentions, so the closures below still reach what they name through
+/// functions that never name it: a counter two functions out, a shadowing
+/// `console`, a class field and method, a parameter default, a block-scoped
+/// and a catch-scoped shadow. Node v22.2.0 gives this value; Bun 1.4.2
+/// agrees.
+#[test]
+fn closures_reach_outer_names_through_functions_that_never_name_them() {
+    let mut source: String = (0..2000).map(|i| format!("var c{i} = {i};\n")).collect();
+    source.extend((0..2000).map(|i| format!("function f{i}(x) {{ return x + c{i}; }}\n")));
+    source.push_str(
+        "let counter = 0;\n\
+         function outer() { return function middle() { return () => ++counter; }; }\n\
+         const bump = outer()();\n\
+         bump(); bump();\n\
+         function make() { const console = { log: () => 'mine' }; return function () { return function () { return console.log(); }; }; }\n\
+         function k() { let secret = 's'; return class { f = secret; m() { return secret + this.f; } }; }\n\
+         function p() { let d = 'd'; return ({ a = d } = {}) => a; }\n\
+         let x = 'outer';\n\
+         function b() { { let x = 'block'; } return () => x; }\n\
+         let e = 'outer-e';\n\
+         function c() { try { throw 'inner-e'; } catch (e) { return () => e; } }\n\
+         [f0(1), f1999(1), counter, make()()(), new (k())().m(), p()(), b()(), c()(), e].join(' ');",
+    );
+    assert_eq!(eval(&source), "1 2000 2 mine ss d outer inner-e outer-e");
+}

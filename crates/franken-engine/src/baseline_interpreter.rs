@@ -4980,10 +4980,6 @@ impl BuiltinFunction {
         Self::new_kind(BuiltinFunctionKind::PromiseWithResolvers)
     }
 
-    fn promise_capability_executor() -> Self {
-        Self::new_kind(BuiltinFunctionKind::PromiseCapabilityExecutor)
-    }
-
     fn promise_finally() -> Self {
         Self {
             kind: BuiltinFunctionKind::PromiseFinally,
@@ -44466,7 +44462,7 @@ impl InterpreterCore {
                 // hooks run before the receiver check (bd-9vouw.279); a
                 // missing V is the key "undefined".
                 let property = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let property = self.to_property_key_value(Some(module), property)?;
+                let property = self.coerce_to_property_key(Some(module), property)?;
                 // Step 2: ToObject(this value).
                 if matches!(receiver, Value::Undefined | Value::Null) {
                     return Err(InterpreterError::TypeError {
@@ -44485,7 +44481,7 @@ impl InterpreterCore {
                 // ES2020 19.1.3.4 step 1: ToPropertyKey(V) (bd-9vouw.279); a
                 // missing V is the key "undefined".
                 let property = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                let property = self.to_property_key_value(Some(module), property)?;
+                let property = self.coerce_to_property_key(Some(module), property)?;
                 // Step 2: ToObject(this value).
                 if matches!(receiver, Value::Undefined | Value::Null) {
                     return Err(InterpreterError::TypeError {
@@ -64411,7 +64407,7 @@ impl InterpreterCore {
     /// its @@toPrimitive / toString / valueOf, which may throw. It was read
     /// with the engine's internal representation, so `[1, 2]` defined
     /// "[object#15]" instead of "1,2". Primitives come back unchanged.
-    fn to_property_key_value(
+    fn coerce_to_property_key(
         &mut self,
         module: Option<&Ir3Module>,
         value: Value,
@@ -88991,7 +88987,7 @@ impl InterpreterCore {
                 }
                 // Then ToPropertyKey(P) (bd-9vouw.279).
                 let property = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-                let property = self.to_property_key_value(module, property)?;
+                let property = self.coerce_to_property_key(module, property)?;
                 let own = self.value_has_own_property(module, &object, &property)?;
                 Ok(Value::Bool(own))
             }
@@ -91117,7 +91113,7 @@ impl InterpreterCore {
                 // Step 2, ToPropertyKey(P), runs an object key's hooks after
                 // step 1's type check (bd-9vouw.279).
                 let prop_val = if obj_val.is_object_like() {
-                    self.to_property_key_value(module, prop_val)?
+                    self.coerce_to_property_key(module, prop_val)?
                 } else {
                     prop_val
                 };
@@ -92477,7 +92473,7 @@ impl InterpreterCore {
                     });
                 }
                 let prop_val = self.read_reg(args.start + 1)?;
-                let prop_val = self.to_property_key_value(module, prop_val)?;
+                let prop_val = self.coerce_to_property_key(module, prop_val)?;
                 let prop_name = self.executable_property_key_from_value(&prop_val);
                 // bd-9vouw.17: a function's own properties (its `length` and
                 // `name` included) are on its backing object. `prototype`

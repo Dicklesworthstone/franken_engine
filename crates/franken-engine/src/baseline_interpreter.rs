@@ -7292,6 +7292,24 @@ enum RuntimePropertyKey {
     Symbol(SymbolId),
 }
 
+impl From<&str> for RuntimePropertyKey {
+    fn from(value: &str) -> Self {
+        Self::String(JsString::from(value))
+    }
+}
+
+impl From<&String> for RuntimePropertyKey {
+    fn from(value: &String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl From<&RuntimePropertyKey> for RuntimePropertyKey {
+    fn from(value: &RuntimePropertyKey) -> Self {
+        value.clone()
+    }
+}
+
 fn core_symbol_id(symbol: SymbolId) -> CoreSymbolId {
     CoreSymbolId(symbol.0)
 }
@@ -14333,7 +14351,7 @@ struct EventListenerRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EventOnceWrapperState {
     target: ObjectId,
-    event: String,
+    event: RuntimePropertyKey,
     original_listener: Value,
     fired: bool,
     /// `Some(waiter_id)` when this wrapper is the guest-visible carrier for a
@@ -14918,10 +14936,11 @@ pub struct InterpreterCore {
     child_process_task_in_flight_bytes: u64,
     /// Registered listeners shared by standalone `EventEmitter` objects and the
     /// HTTP stream objects (`ClientRequest` / `IncomingMessage`), keyed by heap
-    /// object id then event name. Records stay in registration order and carry
+    /// object id then exact string/Symbol event name. No string encoding can
+    /// alias a symbol identity (bd-9vouw.307). Records stay in registration order and carry
     /// `once` state; holding them outside the heap keeps listeners live across
     /// deferred HTTP event-loop turns (bd-3894s, bd-2dmnn).
-    event_listeners: BTreeMap<ObjectId, BTreeMap<String, Vec<EventListenerRecord>>>,
+    event_listeners: BTreeMap<ObjectId, BTreeMap<RuntimePropertyKey, Vec<EventListenerRecord>>>,
     /// Private state for stable callable `once` wrappers, keyed by the same
     /// heap object that backs each wrapper's public `.listener` property.
     /// Execution-local state is cleared before a restored heap can reuse an
@@ -14930,7 +14949,8 @@ pub struct InterpreterCore {
     /// Promise-backed static `events.once` waiters. Linked Resolve/Reject
     /// records share a waiter id so settling either event removes every sibling
     /// link before its Promise reaction becomes observable (bd-asw4m.1).
-    event_promise_waiters: BTreeMap<ObjectId, BTreeMap<String, Vec<EventPromiseWaiterRecord>>>,
+    event_promise_waiters:
+        BTreeMap<ObjectId, BTreeMap<RuntimePropertyKey, Vec<EventPromiseWaiterRecord>>>,
     next_event_promise_waiter_id: u64,
     /// Authenticated child-process facades whose native lifecycle has settled
     /// under provider limits. Pending facades move here on their deterministic
@@ -19814,7 +19834,7 @@ impl InterpreterCore {
             self.project_loopback_mirror_property(server, "listening", &listening_value)?;
         let listener_bytes = callback.as_ref().map_or(0, |callback| {
             Self::estimate_event_listener_record_bytes(
-                "listening",
+                &RuntimePropertyKey::from("listening"),
                 &EventListenerRecord {
                     listener: callback.clone(),
                     once: true,
@@ -23812,13 +23832,12 @@ impl InterpreterCore {
                 max: self.config.max_registers,
             })?;
         let event_value = self.read_reg(event_reg)?;
-        let Value::Str(event) = event_value else {
+        let Some(event) = self.event_name_arg(args, 1)? else {
             return Err(InterpreterError::TypeError {
-                expected: "string event name".to_string(),
+                expected: "string or symbol event name".to_string(),
                 got: event_value.type_name().to_string(),
             });
         };
-        let event = event.to_string();
         let registration_label = self.join_arg_range_label(args)?;
         let next_waiter_id = self
             .next_event_promise_waiter_id
@@ -23826,16 +23845,18 @@ impl InterpreterCore {
             .ok_or_else(|| InterpreterError::InternalError {
                 details: "events.once waiter id space exhausted".to_string(),
             })?;
-        let link_count = if event == "error" { 1 } else { 2 };
+        let error_event = RuntimePropertyKey::from("error");
+        let link_count = if event == error_event { 1 } else { 2 };
         let added_bytes = (0..link_count).fold(0u64, |total, index| {
-            let link_event = if index == 0 { event.as_str() } else { "error" };
+            let link_event = if index == 0 { &event } else { &error_event };
             total.saturating_add(Self::estimate_event_promise_waiter_record_bytes(
                 link_event,
                 &registration_label,
             ))
         });
         let waiter_id = self.next_event_promise_waiter_id;
-        let pump_reserved = self.reserve_readable_activation_pump(target_id, &event)?;
+        let pump_reserved =
+            self.reserve_readable_activation_pump(target_id, event.as_str().unwrap_or_default())?;
         let promise = match self.create_promise() {
             Ok(promise) => promise,
             Err(error) => {
@@ -23865,11 +23886,11 @@ impl InterpreterCore {
             .entry(event.clone())
             .or_default()
             .push(resolve_record);
-        if event != "error" {
+        if event != error_event {
             self.event_promise_waiters
                 .entry(target_id)
                 .or_default()
-                .entry("error".to_string())
+                .entry(error_event.clone())
                 .or_default()
                 .push(EventPromiseWaiterRecord {
                     waiter_id,
@@ -23885,10 +23906,10 @@ impl InterpreterCore {
         // through settle_event_promise_waiters, which strips these wrappers — so
         // its `.listener` is intentionally inert and the emit dispatch loop never
         // invokes it.
-        let wrapper_events: Vec<String> = if event == "error" {
+        let wrapper_events = if event == error_event {
             vec![event.clone()]
         } else {
-            vec![event.clone(), "error".to_string()]
+            vec![event.clone(), error_event]
         };
         let mut wrapper_rollback: Vec<(ObjectId, usize)> = Vec::new();
         for wrapper_event in &wrapper_events {
@@ -23932,9 +23953,11 @@ impl InterpreterCore {
             }
             wrapper_rollback.push((property_object, previous_heap_len));
         }
-        if let Err(error) =
-            self.activate_readable_from_data_flow_with_reservation(target_id, &event, pump_reserved)
-        {
+        if let Err(error) = self.activate_readable_from_data_flow_with_reservation(
+            target_id,
+            event.as_str().unwrap_or_default(),
+            pump_reserved,
+        ) {
             self.unwind_static_once_wrappers(target_id, waiter_id, &wrapper_rollback);
             self.remove_event_promise_waiter_links(target_id, waiter_id);
             self.next_event_promise_waiter_id = waiter_id;
@@ -24068,7 +24091,7 @@ impl InterpreterCore {
     fn settle_event_promise_waiters(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: &RuntimePropertyKey,
         arguments: &[Value],
         emission_label: &Label,
     ) -> Result<bool, InterpreterError> {
@@ -24113,17 +24136,18 @@ impl InterpreterCore {
     fn insert_event_listener(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         record: EventListenerRecord,
         prepend: bool,
     ) -> Result<(), InterpreterError> {
-        let added_bytes = Self::estimate_event_listener_record_bytes(event, &record);
+        let event = event.into();
+        let added_bytes = Self::estimate_event_listener_record_bytes(&event, &record);
         self.apply_memory_component_delta(0, added_bytes)?;
         let listeners = self
             .event_listeners
             .entry(target_id)
             .or_default()
-            .entry(event.to_string())
+            .entry(event)
             .or_default();
         if prepend {
             listeners.insert(0, record);
@@ -24137,7 +24161,7 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_EVENT_ONCE_WRAPPER_BASE_BYTES
             .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
             .saturating_add(std::mem::size_of::<EventOnceWrapperState>() as u64)
-            .saturating_add(Self::estimate_string_bytes(&state.event))
+            .saturating_add(Self::estimate_event_name_bytes(&state.event))
             .saturating_add(Self::estimate_value_bytes(&state.original_listener))
     }
 
@@ -24147,13 +24171,13 @@ impl InterpreterCore {
     fn create_event_once_wrapper(
         &mut self,
         target: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         original_listener: Value,
         static_once_waiter: Option<u64>,
     ) -> Result<(Value, ObjectId, usize), InterpreterError> {
         let state = EventOnceWrapperState {
             target,
-            event: event.to_string(),
+            event: event.into(),
             original_listener: original_listener.clone(),
             fired: false,
             static_once_waiter,
@@ -24259,7 +24283,7 @@ impl InterpreterCore {
     fn event_remove_listener_meta_value(
         &self,
         target_id: ObjectId,
-        event: &str,
+        event: &RuntimePropertyKey,
         removal_argument: &Value,
     ) -> Value {
         let records = self
@@ -24279,14 +24303,15 @@ impl InterpreterCore {
     fn rollback_inserted_event_listener(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         prepend: bool,
     ) {
+        let event = event.into();
         let (removed, event_empty) = {
             let Some(listeners) = self
                 .event_listeners
                 .get_mut(&target_id)
-                .and_then(|by_event| by_event.get_mut(event))
+                .and_then(|by_event| by_event.get_mut(&event))
             else {
                 return;
             };
@@ -24299,7 +24324,7 @@ impl InterpreterCore {
         };
         if event_empty {
             if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
-                by_event.remove(event);
+                by_event.remove(&event);
             }
         }
         if self
@@ -24312,7 +24337,7 @@ impl InterpreterCore {
         if let Some(removed) = removed {
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
-                .saturating_sub(Self::estimate_event_listener_record_bytes(event, &removed));
+                .saturating_sub(Self::estimate_event_listener_record_bytes(&event, &removed));
         }
     }
 
@@ -24322,11 +24347,12 @@ impl InterpreterCore {
     fn event_listener_records_for(
         &self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
     ) -> Vec<EventListenerRecord> {
+        let event = event.into();
         self.event_listeners
             .get(&target_id)
-            .and_then(|by_event| by_event.get(event))
+            .and_then(|by_event| by_event.get(&event))
             .cloned()
             .unwrap_or_default()
     }
@@ -24371,7 +24397,7 @@ impl InterpreterCore {
     fn guest_event_listener_records_for(
         &self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
     ) -> Vec<EventListenerRecord> {
         self.event_listener_records_for(target_id, event)
             .into_iter()
@@ -24387,9 +24413,10 @@ impl InterpreterCore {
         destination: ObjectId,
         token: u32,
     ) -> usize {
+        let event = RuntimePropertyKey::from(event);
         self.event_listeners
             .get(&target_id)
-            .and_then(|by_event| by_event.get(event))
+            .and_then(|by_event| by_event.get(&event))
             .map(|records| {
                 records
                     .iter()
@@ -24426,23 +24453,24 @@ impl InterpreterCore {
     fn remove_event_listener(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         listener: &Value,
     ) -> Option<EventListenerRecord> {
+        let event = event.into();
         let index = self
             .event_listeners
             .get(&target_id)?
-            .get(event)?
+            .get(&event)?
             .iter()
             .rposition(|record| self.event_listener_matches(record, listener))?;
         let (removed, event_empty) = {
-            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(event)?;
+            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(&event)?;
             let removed = listeners.remove(index);
             (removed, listeners.is_empty())
         };
         if event_empty {
             if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
-                by_event.remove(event);
+                by_event.remove(&event);
             }
         }
         if self
@@ -24452,7 +24480,7 @@ impl InterpreterCore {
         {
             self.event_listeners.remove(&target_id);
         }
-        self.release_event_listener_memory(event, &removed);
+        self.release_event_listener_memory(&event, &removed);
         Some(removed)
     }
 
@@ -24468,7 +24496,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         target_id: ObjectId,
-        event: &str,
+        event: &RuntimePropertyKey,
         meta_label: Label,
     ) -> Result<(), InterpreterError> {
         let snapshot = self.event_listener_records_for(target_id, event);
@@ -24487,7 +24515,7 @@ impl InterpreterCore {
                 module,
                 target_id,
                 "removeListener",
-                vec![Value::str(event), meta],
+                vec![event.value(), meta],
                 meta_label.clone(),
             )?;
         }
@@ -24513,7 +24541,7 @@ impl InterpreterCore {
         )
     }
 
-    /// Allocation-free teardown for one authenticated internal pipe callback.
+    /// Teardown for one authenticated internal pipe callback.
     /// `readable_pipe` reserves the exact upper bound for postvalidation plus
     /// both eventual listener scans before exposing the link to guest code.
     fn remove_readable_pipe_listener_records(
@@ -24524,11 +24552,12 @@ impl InterpreterCore {
         destination: ObjectId,
         token: u32,
     ) -> usize {
+        let event = RuntimePropertyKey::from(event);
         let (removed_count, released_bytes, event_empty) = {
             let Some(listeners) = self
                 .event_listeners
                 .get_mut(&target_id)
-                .and_then(|by_event| by_event.get_mut(event))
+                .and_then(|by_event| by_event.get_mut(&event))
             else {
                 return 0;
             };
@@ -24538,7 +24567,7 @@ impl InterpreterCore {
                 if Self::is_readable_pipe_listener_for(&record.listener, kind, destination, token) {
                     removed_count = removed_count.saturating_add(1);
                     released_bytes = released_bytes
-                        .saturating_add(Self::estimate_event_listener_record_bytes(event, record));
+                        .saturating_add(Self::estimate_event_listener_record_bytes(&event, record));
                     false
                 } else {
                     true
@@ -24548,7 +24577,7 @@ impl InterpreterCore {
         };
         if event_empty {
             if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
-                by_event.remove(event);
+                by_event.remove(&event);
             }
         }
         if self
@@ -24567,11 +24596,12 @@ impl InterpreterCore {
     fn remove_once_event_listener(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         listener: &Value,
     ) -> Option<EventListenerRecord> {
+        let event = event.into();
         let (removed, event_empty) = {
-            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(event)?;
+            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(&event)?;
             let index = listeners.iter().position(|record| {
                 record.once && Self::strict_eq_values(&record.listener, listener)
             })?;
@@ -24580,7 +24610,7 @@ impl InterpreterCore {
         };
         if event_empty {
             if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
-                by_event.remove(event);
+                by_event.remove(&event);
             }
         }
         if self
@@ -24590,13 +24620,13 @@ impl InterpreterCore {
         {
             self.event_listeners.remove(&target_id);
         }
-        self.release_event_listener_memory(event, &removed);
+        self.release_event_listener_memory(&event, &removed);
         Some(removed)
     }
 
     /// Remove one event bucket, or every bucket for an emitter, and release
     /// the same conservative memory charge applied during registration.
-    fn clear_event_listeners(&mut self, target_id: ObjectId, event: Option<&str>) {
+    fn clear_event_listeners(&mut self, target_id: ObjectId, event: Option<&RuntimePropertyKey>) {
         let released_bytes = match (self.event_listeners.get(&target_id), event) {
             (Some(by_event), Some(event)) => by_event.get(event).map_or(0, |records| {
                 records
@@ -24803,9 +24833,10 @@ impl InterpreterCore {
         &self,
         args: RegRange,
         index: u32,
-    ) -> Result<Option<String>, InterpreterError> {
+    ) -> Result<Option<RuntimePropertyKey>, InterpreterError> {
         Ok(match self.builtin_arg(args, index)? {
-            Some(Value::Str(event)) => Some(event.to_string()),
+            Some(Value::Str(event)) => Some(RuntimePropertyKey::String(event)),
+            Some(Value::Symbol(event)) => Some(RuntimePropertyKey::Symbol(event)),
             _ => None,
         })
     }
@@ -24863,7 +24894,7 @@ impl InterpreterCore {
                 module,
                 target,
                 "removeListener",
-                vec![Value::str(event.as_str()), removal_meta_listener],
+                vec![event.value(), removal_meta_listener],
                 argument_label.clone(),
             )?;
         }
@@ -24895,15 +24926,16 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         arguments: Vec<Value>,
         emission_label: Label,
     ) -> Result<bool, InterpreterError> {
-        let records = self.event_listener_records_for(target_id, event);
+        let event = event.into();
+        let records = self.event_listener_records_for(target_id, &event);
         self.emit_event_listener_snapshot(
             module,
             target_id,
-            event,
+            &event,
             arguments,
             emission_label,
             records,
@@ -24917,15 +24949,16 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         arguments: Vec<Value>,
         emission_label: Label,
         records: Vec<EventListenerRecord>,
     ) -> Result<bool, InterpreterError> {
+        let event = event.into();
         let settled_waiter =
-            self.settle_event_promise_waiters(target_id, event, &arguments, &emission_label)?;
+            self.settle_event_promise_waiters(target_id, &event, &arguments, &emission_label)?;
         if records.is_empty() {
-            if event == "error" && !settled_waiter {
+            if event.as_str() == Some("error") && !settled_waiter {
                 let thrown = if let Some(value) = arguments.first() {
                     value.clone()
                 } else {
@@ -24964,7 +24997,7 @@ impl InterpreterCore {
                 // Bare one-shot records are engine-internal callbacks (pipe,
                 // pipeline, and the current Writable end-callback carrier),
                 // not registrations made through EventEmitter.once().
-                let _ = self.remove_once_event_listener(target_id, event, &record.listener);
+                let _ = self.remove_once_event_listener(target_id, &event, &record.listener);
             }
             self.invoke_inline_method_call_with_argument_label(
                 Some(module),
@@ -28916,12 +28949,12 @@ impl InterpreterCore {
                 let error_has_handler = self
                     .event_listeners
                     .get(&object_id)
-                    .and_then(|by_event| by_event.get("error"))
+                    .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("error")))
                     .is_some_and(|records| !records.is_empty())
                     || self
                         .event_promise_waiters
                         .get(&object_id)
-                        .and_then(|by_event| by_event.get("error"))
+                        .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("error")))
                         .is_some_and(|records| !records.is_empty());
                 let prepared_error_event = if !terminal_error_emitted
                     && self
@@ -29534,12 +29567,12 @@ impl InterpreterCore {
     fn has_readable_pull_observer(&self, object_id: ObjectId) -> bool {
         self.event_listeners
             .get(&object_id)
-            .and_then(|events| events.get("readable"))
+            .and_then(|events| events.get(&RuntimePropertyKey::from("readable")))
             .is_some_and(|records| !records.is_empty())
             || self
                 .event_promise_waiters
                 .get(&object_id)
-                .and_then(|events| events.get("readable"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("readable")))
                 .is_some_and(|waiters| !waiters.is_empty())
     }
 
@@ -29804,14 +29837,14 @@ impl InterpreterCore {
         let data_scan_len = self
             .event_listeners
             .get(&source_id)
-            .and_then(|by_event| by_event.get("data"))
+            .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("data")))
             .map(Vec::len)
             .unwrap_or(0)
             .saturating_add(1);
         let end_scan_len = self
             .event_listeners
             .get(&source_id)
-            .and_then(|by_event| by_event.get("end"))
+            .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("end")))
             .map(Vec::len)
             .unwrap_or(0)
             .saturating_add(1);
@@ -43697,7 +43730,7 @@ impl InterpreterCore {
                             || self
                                 .event_promise_waiters
                                 .get(&req_id)
-                                .and_then(|events| events.get("response"))
+                                .and_then(|events| events.get(&RuntimePropertyKey::from("response")))
                                 .is_some_and(|waiters| !waiters.is_empty());
                         // bd-3894s slice (2c)+(2d): deliver the response to the
                         // `http.request(url[, opts], cb)` callback AND to every
@@ -43768,8 +43801,8 @@ impl InterpreterCore {
                 let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 if event
-                    .as_deref()
-                    .is_some_and(|event| matches!(event, "data" | "end"))
+                    .as_ref()
+                    .is_some_and(|event| matches!(event.as_str(), Some("data" | "end")))
                     && self.readable_pipe_links.contains_key(&target_id)
                 {
                     return Err(InterpreterError::TypeError {
@@ -43787,13 +43820,16 @@ impl InterpreterCore {
                 if let Some(event) = event
                     && listener.is_callable()
                 {
+                    // Only native string event names drive host lifecycle hooks;
+                    // a symbol (even Symbol("data")) is an independent event.
+                    let native_event = event.as_str().unwrap_or_default();
                     let pump_reserved =
-                        self.reserve_readable_activation_pump(target_id, &event)?;
+                        self.reserve_readable_activation_pump(target_id, native_event)?;
                     let new_listener_emission = self.emit_event_listener_records(
                         module,
                         target_id,
                         "newListener",
-                        vec![Value::str(event.as_str()), listener.clone()],
+                        vec![event.value(), listener.clone()],
                         listener_label,
                     );
                     if let Err(error) = new_listener_emission {
@@ -43821,14 +43857,14 @@ impl InterpreterCore {
                     }
                     if let Err(error) = self.activate_readable_from_data_flow_with_reservation(
                         target_id,
-                        &event,
+                        native_event,
                         pump_reserved,
                     ) {
                         self.rollback_inserted_event_listener(target_id, &event, false);
                         return Err(error);
                     }
                     if let Err(error) =
-                        self.activate_completed_child_process_event(target_id, &event)
+                        self.activate_completed_child_process_event(target_id, native_event)
                     {
                         self.rollback_inserted_event_listener(target_id, &event, false);
                         return Err(error);
@@ -43849,8 +43885,8 @@ impl InterpreterCore {
                 let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 if event
-                    .as_deref()
-                    .is_some_and(|event| matches!(event, "data" | "end"))
+                    .as_ref()
+                    .is_some_and(|event| matches!(event.as_str(), Some("data" | "end")))
                     && self.readable_pipe_links.contains_key(&target_id)
                 {
                     return Err(InterpreterError::TypeError {
@@ -43873,13 +43909,14 @@ impl InterpreterCore {
                         BuiltinFunctionKind::EmitterPrependListener
                             | BuiltinFunctionKind::EmitterPrependOnceListener
                     );
+                    let native_event = event.as_str().unwrap_or_default();
                     let pump_reserved =
-                        self.reserve_readable_activation_pump(target_id, &event)?;
+                        self.reserve_readable_activation_pump(target_id, native_event)?;
                     let new_listener_emission = self.emit_event_listener_records(
                         module,
                         target_id,
                         "newListener",
-                        vec![Value::str(event.as_str()), listener.clone()],
+                        vec![event.value(), listener.clone()],
                         listener_label,
                     );
                     if let Err(error) = new_listener_emission {
@@ -43940,7 +43977,7 @@ impl InterpreterCore {
                     }
                     if let Err(error) = self.activate_readable_from_data_flow_with_reservation(
                         target_id,
-                        &event,
+                        native_event,
                         pump_reserved,
                     ) {
                         self.rollback_inserted_event_listener(target_id, &event, prepend);
@@ -43953,7 +43990,7 @@ impl InterpreterCore {
                         return Err(error);
                     }
                     if let Err(error) =
-                        self.activate_completed_child_process_event(target_id, &event)
+                        self.activate_completed_child_process_event(target_id, native_event)
                     {
                         self.rollback_inserted_event_listener(target_id, &event, prepend);
                         if let Some((property_object, previous_heap_len)) = wrapper_allocation {
@@ -43988,7 +44025,7 @@ impl InterpreterCore {
                         module,
                         target_id,
                         "removeListener",
-                            vec![Value::str(event.as_str()), removal_meta_listener],
+                            vec![event.value(), removal_meta_listener],
                         listener_label,
                     )?;
                     }
@@ -44005,8 +44042,8 @@ impl InterpreterCore {
                 };
                 let event = self.event_name_arg(args, 0)?;
                 let invalidates_pipe = event
-                    .as_deref()
-                    .is_none_or(|event| matches!(event, "data" | "end"));
+                    .as_ref()
+                    .is_none_or(|event| matches!(event.as_str(), Some("data" | "end")));
                 // bd-asw4m.6: Node emits a `removeListener` meta-event for every
                 // listener dropped by removeAllListeners, but ONLY when a
                 // `removeListener` handler is registered — otherwise it takes the
@@ -44017,7 +44054,7 @@ impl InterpreterCore {
                     .is_empty();
                 if has_remove_listener_handler {
                     let meta_label = self.join_arg_range_label(args)?;
-                    if let Some(event) = event.as_deref() {
+                    if let Some(event) = event.as_ref() {
                         self.remove_all_listeners_for_event_with_meta(
                             module, target_id, event, meta_label,
                         )?;
@@ -44027,13 +44064,13 @@ impl InterpreterCore {
                         // its own handlers observe the other removals (Node
                         // ordering). Snapshot the key set first — the meta
                         // handlers may mutate the live map.
-                        let keys: Vec<String> = self
+                        let keys: Vec<RuntimePropertyKey> = self
                             .event_listeners
                             .get(&target_id)
                             .map(|by_event| by_event.keys().cloned().collect())
                             .unwrap_or_default();
                         for key in keys {
-                            if key == "removeListener" {
+                            if key.as_str() == Some("removeListener") {
                                 continue;
                             }
                             self.remove_all_listeners_for_event_with_meta(
@@ -44046,7 +44083,7 @@ impl InterpreterCore {
                         self.remove_all_listeners_for_event_with_meta(
                             module,
                             target_id,
-                            "removeListener",
+                            &RuntimePropertyKey::from("removeListener"),
                             meta_label,
                         )?;
                     }
@@ -44106,7 +44143,7 @@ impl InterpreterCore {
                                     !Self::is_internal_readable_pipe_listener(&record.listener)
                                 })
                             })
-                            .map(|(event, _)| Value::str(event.as_str()))
+                            .map(|(event, _)| event.value())
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
@@ -98456,19 +98493,32 @@ impl InterpreterCore {
         Self::estimate_symbol_state_bytes(&self.symbol_state)
     }
 
-    fn estimate_event_listener_record_bytes(event: &str, record: &EventListenerRecord) -> u64 {
+    fn estimate_event_name_bytes(event: &RuntimePropertyKey) -> u64 {
+        match event {
+            RuntimePropertyKey::String(event) => Self::estimate_js_string_bytes(event),
+            RuntimePropertyKey::Symbol(_) => std::mem::size_of::<SymbolId>() as u64,
+        }
+    }
+
+    fn estimate_event_listener_record_bytes(
+        event: &RuntimePropertyKey,
+        record: &EventListenerRecord,
+    ) -> u64 {
         MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES
-            .saturating_add(Self::estimate_string_bytes(event))
+            .saturating_add(Self::estimate_event_name_bytes(event))
             .saturating_add(Self::estimate_value_bytes(&record.listener))
     }
 
-    fn estimate_event_promise_waiter_record_bytes(event: &str, label: &Label) -> u64 {
+    fn estimate_event_promise_waiter_record_bytes(
+        event: &RuntimePropertyKey,
+        label: &Label,
+    ) -> u64 {
         let label_bytes = match label {
             Label::Custom { name, .. } => Self::estimate_string_bytes(name),
             _ => 0,
         };
         MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES
-            .saturating_add(Self::estimate_string_bytes(event))
+            .saturating_add(Self::estimate_event_name_bytes(event))
             .saturating_add(label_bytes)
     }
 
@@ -100544,7 +100594,11 @@ impl InterpreterCore {
         )
     }
 
-    fn release_event_listener_memory(&mut self, event: &str, record: &EventListenerRecord) {
+    fn release_event_listener_memory(
+        &mut self,
+        event: &RuntimePropertyKey,
+        record: &EventListenerRecord,
+    ) {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(Self::estimate_event_listener_record_bytes(event, record));
@@ -132334,7 +132388,7 @@ mod async_runtime_tests_current {
                 refused
                     .event_listeners
                     .get(&refused_readable)
-                    .and_then(|events| events.get("close"))
+                    .and_then(|events| events.get(&RuntimePropertyKey::from("close")))
                     .map(Vec::len),
                 Some(1),
                 "settlement retry must not emit or clear close again"
@@ -133221,7 +133275,10 @@ mod async_runtime_tests_current {
             once: false,
         };
         let baseline_bytes = core.estimated_memory_bytes();
-        let record_bytes = InterpreterCore::estimate_event_listener_record_bytes(event, &record);
+        let record_bytes = InterpreterCore::estimate_event_listener_record_bytes(
+            &RuntimePropertyKey::from(event),
+            &record,
+        );
 
         assert_eq!(baseline_bytes, core.recompute_estimated_memory_bytes());
         core.config.max_total_memory_bytes = baseline_bytes
@@ -133261,6 +133318,148 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn exact_event_keys_are_collision_free_and_memory_atomic_bd_9vouw_307() {
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_branded_object("EventEmitter", &[])
+            .expect("event target");
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("event")))
+            .expect("event symbol");
+        let symbol_key = RuntimePropertyKey::Symbol(symbol);
+        let keys = [
+            RuntimePropertyKey::from(symbol_key.diagnostic().as_str()),
+            symbol_key,
+            RuntimePropertyKey::String(JsString::from_code_units(&[0xD800])),
+            RuntimePropertyKey::String(JsString::from_code_units(&[0xD801])),
+            RuntimePropertyKey::from("\u{FFFD}"),
+        ];
+        let record = EventListenerRecord {
+            listener: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ArrayIsArray,
+            )),
+            once: false,
+        };
+        let baseline_bytes = core.estimated_memory_bytes();
+
+        for (index, key) in keys.iter().enumerate() {
+            let before = core.estimated_memory_bytes();
+            let record_bytes = InterpreterCore::estimate_event_listener_record_bytes(key, &record);
+            core.config.max_total_memory_bytes = before + record_bytes - 1;
+            assert!(matches!(
+                core.insert_event_listener(target, key, record.clone(), false),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            assert!(core.event_listener_records_for(target, key).is_empty());
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(before, core.recompute_estimated_memory_bytes());
+
+            core.config.max_total_memory_bytes = before + record_bytes;
+            core.insert_event_listener(target, key, record.clone(), false)
+                .expect("exact event registration budget");
+            assert_eq!(core.event_listeners[&target].len(), index + 1);
+            assert_eq!(core.estimated_memory_bytes(), before + record_bytes);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(
+                core.remove_event_listener(target, key, &record.listener),
+                Some(record.clone())
+            );
+            assert!(core.event_listener_records_for(target, key).is_empty());
+            for remaining in &keys[index + 1..] {
+                assert_eq!(core.event_listener_records_for(target, remaining).len(), 1);
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+        assert!(!core.event_listeners.contains_key(&target));
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+    }
+
+    #[test]
+    fn symbol_event_waiters_preserve_labels_and_release_links_bd_9vouw_307() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        for reject in [false, true] {
+            let mut core = test_interpreter();
+            let target = core
+                .alloc_branded_object("EventEmitter", &[])
+                .expect("event target");
+            let symbol = core
+                .allocate_private_symbol(Some(JsString::from("error")))
+                .expect("event symbol");
+            let event = RuntimePropertyKey::Symbol(symbol);
+            let registration_label = Label::Custom {
+                name: "symbol-event-registration".to_string(),
+                level: 4,
+            };
+            core.write_reg_with_label(0, Value::Object(target), Label::Public)
+                .expect("event target register");
+            core.write_reg_with_label(1, event.value(), registration_label.clone())
+                .expect("classified symbol event register");
+            let Value::Promise(promise) = core
+                .register_event_promise_once(RegRange { start: 0, count: 2 })
+                .expect("symbol events.once registration")
+            else {
+                panic!("events.once returns a promise");
+            };
+            assert_eq!(core.event_listener_records_for(target, &event).len(), 1);
+            assert_eq!(core.event_listener_records_for(target, "error").len(), 1);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+
+            let emitted = if reject {
+                RuntimePropertyKey::from("error")
+            } else {
+                event.clone()
+            };
+            core.emit_event_listener_records(
+                &module,
+                target,
+                &emitted,
+                vec![Value::str("payload")],
+                Label::Secret,
+            )
+            .expect("settle symbol waiter");
+            let settled = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(promise))
+                .expect("settled event promise");
+            assert_eq!(settled.label, registration_label.join(&Label::Secret));
+            if reject {
+                assert!(matches!(
+                    &settled.state,
+                    crate::promise_model::PromiseState::Rejected(
+                        crate::object_model::JsValue::Str(value)
+                    ) if value == "payload"
+                ));
+            } else {
+                assert!(matches!(
+                    &settled.state,
+                    crate::promise_model::PromiseState::Fulfilled(
+                        crate::object_model::JsValue::Object(_)
+                    )
+                ));
+            }
+            assert!(!core.event_listeners.contains_key(&target));
+            assert!(!core.event_promise_waiters.contains_key(&target));
+            assert!(core.event_once_wrappers.values().all(|state| state.fired));
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
     fn event_once_wrapper_allocation_is_atomic_accounted_and_seed_safe_bd_asw4m_2() {
         let mut core = test_interpreter();
         let target = core
@@ -133277,7 +133476,7 @@ mod async_runtime_tests_current {
             Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
         let projected_state = EventOnceWrapperState {
             target,
-            event: "tick".to_string(),
+            event: RuntimePropertyKey::from("tick"),
             original_listener: original_listener.clone(),
             fired: false,
             static_once_waiter: None,
@@ -133431,7 +133630,7 @@ mod async_runtime_tests_current {
         assert!(
             core.event_listeners
                 .get(&source)
-                .and_then(|events| events.get("source"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("source")))
                 .is_some_and(|records| records.len() == 1),
             "scheduling must not consume the source once registration"
         );
@@ -133459,14 +133658,14 @@ mod async_runtime_tests_current {
         assert!(
             core.event_listeners
                 .get(&source)
-                .and_then(|events| events.get("source"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("source")))
                 .is_none(),
             "direct wrapper invocation consumes its captured source registration"
         );
         assert!(
             core.event_listeners
                 .get(&delivery_target)
-                .and_then(|events| events.get("response"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("response")))
                 .is_some_and(|records| {
                     records.len() == 1
                         && InterpreterCore::strict_eq_values(&records[0].listener, &wrapper)
@@ -133543,7 +133742,7 @@ mod async_runtime_tests_current {
         assert!(
             core.event_listeners
                 .get(&target)
-                .and_then(|events| events.get("response"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("response")))
                 .is_some_and(|records| {
                     records.len() == 1
                         && InterpreterCore::strict_eq_values(&records[0].listener, &late)

@@ -172,6 +172,71 @@ fn awaiting_error_itself_resolves_instead_of_rejecting() {
 }
 
 #[test]
+fn symbol_once_waiters_resolve_independently_and_unlink_errors_bd_9vouw_307() {
+    let source = r#"
+        const { once, EventEmitter } = require('events');
+        const emitter = new EventEmitter();
+        const first = Symbol('ready');
+        const second = Symbol('ready');
+        const errorSymbol = Symbol('error');
+        const original = { value: 7 };
+        once(emitter, first).then(values => {
+          console.log('first:' + values.length + ':' +
+            (values[0] === original) + ':' + (values[1] === second));
+        });
+        once(emitter, second).then(values => console.log(values[0]));
+        once(emitter, errorSymbol).then(values => console.log(values[0]));
+        console.log(emitter.listenerCount(first) + ':' + emitter.listenerCount(second) + ':' +
+          emitter.listenerCount('error'));
+        console.log(typeof emitter.rawListeners(first)[0]);
+        console.log(emitter.emit('ready', 'wrong') + ':' +
+          emitter.emit(Symbol('ready'), 'wrong'));
+        emitter.emit(first, original, second);
+        console.log(emitter.listenerCount(first) + ':' + emitter.listenerCount(second) + ':' +
+          emitter.listenerCount('error'));
+        emitter.emit(second, 'second');
+        emitter.emit(errorSymbol, 'symbol-error');
+        console.log(emitter.eventNames().length);
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "1:1:3\nfunction\nfalse:false\n0:1:2\n0\nfirst:2:true:true\nsecond\nsymbol-error"
+    );
+}
+
+#[test]
+fn symbol_error_name_still_rejects_on_string_error_bd_9vouw_307() {
+    let source = r#"
+        const { once, EventEmitter } = require('events');
+        const emitter = new EventEmitter();
+        const key = Symbol('error');
+        const original = new Error('failed');
+        (async () => {
+          const pending = once(emitter, key);
+          console.log(emitter.listenerCount('error'));
+          emitter.emit('error', original);
+          try {
+            await pending;
+            console.log('wrong');
+          } catch (error) {
+            console.log('rejected:' + (error === original));
+          }
+          console.log(emitter.listenerCount(key) + ':' + emitter.listenerCount('error'));
+          console.log(emitter.emit(key, 'stale'));
+          try {
+            emitter.emit('error', original);
+          } catch (error) {
+            console.log('unhandled:' + (error === original));
+          }
+        })();
+    "#;
+    assert_eq!(
+        eval_console(source),
+        "1\nrejected:true\n0:0\nfalse\nunhandled:true"
+    );
+}
+
+#[test]
 fn waiter_memory_accounting_matches_eager_reference_before_and_after_cleanup() {
     let pending = execute_core(
         "const { once, EventEmitter } = require('events'); const emitter = new EventEmitter(); once(emitter, 'pending');",
@@ -188,6 +253,19 @@ fn waiter_memory_accounting_matches_eager_reference_before_and_after_cleanup() {
         settled.estimated_memory_bytes(),
         settled.recompute_estimated_memory_bytes()
     );
+
+    for source in [
+        "const { once, EventEmitter } = require('events'); const emitter = new EventEmitter(); const key = Symbol('pending'); once(emitter, key);",
+        "const { once, EventEmitter } = require('events'); const emitter = new EventEmitter(); const key = Symbol('ready'); once(emitter, key); emitter.emit(key, 'ok');",
+        "const { once, EventEmitter } = require('events'); const emitter = new EventEmitter(); once(emitter, '\\uD800');",
+    ] {
+        let core = execute_core(source);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "exact event-name accounting for {source}"
+        );
+    }
 }
 
 #[test]

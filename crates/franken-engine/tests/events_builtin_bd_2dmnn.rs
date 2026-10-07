@@ -134,6 +134,139 @@ fn listener_introspection_returns_detached_arrays() {
 }
 
 #[test]
+fn symbol_event_names_preserve_identity_and_string_separation_bd_9vouw_307() {
+    let src = r#"
+        const EventEmitter = require('events');
+        const e = new EventEmitter();
+        const first = Symbol('tick');
+        const second = Symbol('tick');
+        const shared = Symbol.for('tick');
+        const out = [];
+        e.on(first, value => out.push('first:' + value));
+        e.on(second, value => out.push('second:' + value));
+        e.on(shared, value => out.push('shared:' + value));
+        e.on('tick', value => out.push('string:' + value));
+        e.on('Symbol(tick)', value => out.push('display:' + value));
+        e.on('~pk~s:14', value => out.push('encoded:' + value));
+        console.log(e.listenerCount(first) + ':' + e.listenerCount(second) + ':' +
+          e.listenerCount(Symbol.for('tick')) + ':' + e.listenerCount(Symbol('tick')));
+        const names = e.eventNames();
+        console.log(names.length + ':' + names.includes(first) + ':' +
+          names.includes(second) + ':' + names.includes(shared) + ':' +
+          names.includes('tick') + ':' + names.includes('Symbol(tick)') + ':' +
+          names.includes('~pk~s:14'));
+        e.emit(second, 2);
+        e.emit(first, 1);
+        e.emit(shared, 3);
+        e.emit('tick', 4);
+        e.emit('Symbol(tick)', 5);
+        e.emit('~pk~s:14', 6);
+        console.log(out.join(','));
+        console.log(e.emit(Symbol('error'), 'ordinary symbol event'));
+        e.removeAllListeners(first);
+        console.log(e.listenerCount(first) + ':' + e.listenerCount(second) + ':' +
+          e.listenerCount('tick') + ':' + e.eventNames().includes(first));
+        e.removeAllListeners();
+        console.log(e.eventNames().length);
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "1:1:1:0\n6:true:true:true:true:true:true\nsecond:2,first:1,shared:3,string:4,display:5,encoded:6\nfalse\n0:1:1:false\n0"
+    );
+}
+
+#[test]
+fn symbol_once_prepend_removal_and_reentrant_wrappers_bd_9vouw_307() {
+    let src = r#"
+        const { EventEmitter } = require('events');
+        const e = new EventEmitter();
+        const key = Symbol();
+        const out = [];
+        const duplicate = () => out.push('tail');
+        const front = () => out.push('front');
+        const first = () => out.push('once');
+        e.on(key, duplicate);
+        e.on(key, duplicate);
+        e.prependListener(key, front);
+        e.prependOnceListener(key, first);
+        const raw = e.rawListeners(key);
+        console.log(e.listenerCount(key) + ':' + e.listenerCount(key, duplicate));
+        console.log((raw[0].listener === first) + ':' +
+          (e.listeners(key)[0] === first) + ':' + (raw[1] === front));
+        e.emit(key);
+        e.off(key, duplicate);
+        e.removeListener(key, front);
+        console.log(e.listenerCount(key) + ':' + e.listenerCount(key, duplicate));
+        e.emit(key);
+        console.log(out.join(','));
+
+        const manual = Symbol('manual');
+        const original = value => { out.push(value); return value; };
+        e.once(manual, original);
+        const wrapper = e.rawListeners(manual)[0];
+        console.log(wrapper('direct') + ':' + e.listenerCount(manual));
+        console.log(String(wrapper('again')) + ':' + e.emit(manual));
+        e.once(manual, original);
+        e.removeListener(manual, original);
+        e.once(manual, original);
+        e.off(manual, e.rawListeners(manual)[0]);
+        console.log(e.emit(manual));
+
+        const recursive = Symbol('recursive');
+        let calls = 0;
+        e.once(recursive, () => { calls += 1; e.emit(recursive); });
+        e.emit(recursive);
+        console.log(calls + ':' + e.listenerCount(recursive));
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "4:2\ntrue:true:true\n1:1\nonce,front,tail,tail,tail\ndirect:0\nundefined:false\nfalse\n1:0"
+    );
+}
+
+#[test]
+fn symbol_meta_events_and_exact_utf16_names_bd_9vouw_307() {
+    let src = r#"
+        const { EventEmitter } = require('events');
+        const e = new EventEmitter();
+        const key = Symbol('removeListener');
+        const original = () => {};
+        const out = [];
+        e.on('newListener', (name, listener) => {
+          if (name === key) out.push('add:' + (listener === original));
+        });
+        e.on('removeListener', (name, listener) => {
+          if (name === key) out.push('remove:' + (listener === original));
+        });
+        e.once(key, original);
+        e.emit(key);
+        e.on(key, original);
+        e.removeAllListeners(key);
+        console.log(out.join(','));
+        e.on(key, original);
+        e.removeAllListeners();
+        console.log(e.eventNames().length);
+
+        const exact = new EventEmitter();
+        exact.on('\uD800', () => out.push('d800'));
+        exact.on('\uD801', () => out.push('d801'));
+        exact.on('\uFFFD', () => out.push('replacement'));
+        out.length = 0;
+        exact.emit('\uD801');
+        exact.emit('\uD800');
+        exact.emit('\uFFFD');
+        console.log(out.join(','));
+        console.log(exact.eventNames().length + ':' +
+          exact.eventNames().includes('\uD800') + ':' +
+          exact.eventNames().includes('\uD801'));
+    "#;
+    assert_eq!(
+        eval_console(src),
+        "add:true,remove:true,add:true,remove:true\n0\nd801,d800,replacement\n3:true:true"
+    );
+}
+
+#[test]
 fn raw_listeners_expose_stable_callable_once_wrappers_bd_asw4m_2() {
     let src = r#"
         const { EventEmitter } = require('events');

@@ -25602,6 +25602,42 @@ impl InterpreterCore {
     /// Enumerable own String properties in the baseline object model. Array
     /// length is an own property, but must not enter JSON/Object.keys-style
     /// enumeration. Reflect.ownKeys continues to use the unfiltered own keys.
+    /// ES2020 7.3.23 EnumerableOwnPropertyNames over an ordinary object's
+    /// own string-keyed properties (its typed-array or String-wrapper
+    /// indices excepted): the key list is taken first, then each key is
+    /// checked ([[GetOwnProperty]]) and read ([[Get]]) in turn, so a getter
+    /// that deletes a later key or makes it non-enumerable drops it, and a
+    /// later value is read after the earlier getters ran. They were all
+    /// read up front.
+    fn enumerable_own_property_entries(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+    ) -> Result<Vec<(JsString, Value)>, InterpreterError> {
+        let keys = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .properties
+            .exact_keys();
+        self.join_pending_hostcall_stream_label(object_id)?;
+        let mut entries = Vec::with_capacity(keys.len());
+        for key in keys {
+            if !self.ordinary_own_string_key_is_enumerable(object_id, &key) {
+                continue;
+            }
+            let value = self.proxy_aware_get_runtime_property(
+                module,
+                object_id,
+                &RuntimePropertyKey::String(key.clone()),
+                Value::Object(object_id),
+                0,
+            )?;
+            entries.push((key, value));
+        }
+        Ok(entries)
+    }
+
     fn ordinary_own_string_key_is_enumerable(&self, object_id: ObjectId, key: &JsString) -> bool {
         if let Some(view) = self
             .heap
@@ -88974,30 +89010,10 @@ impl InterpreterCore {
                             .into_iter()
                             .map(|(_, value)| value)
                             .collect::<Vec<_>>();
-                        values.extend(
-                            self.heap
-                                .get(obj_id.0 as usize)
-                                .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
-                                .properties
-                                .exact_entries()
-                                .into_iter()
-                                .filter(|(key, _)| {
-                                    self.ordinary_own_string_key_is_enumerable(obj_id, key)
-                                })
-                                .map(|(_, value)| value.clone()),
-                        );
-                        self.join_pending_hostcall_stream_label(obj_id)?;
-                        // [[Get]] of each value: an accessor property's getter
-                        // runs (the accessor itself leaked, "[object Object]").
-                        let mut resolved = Vec::with_capacity(values.len());
-                        for value in values {
-                            resolved.push(self.resolve_accessor_get(
-                                module,
-                                value,
-                                Value::Object(obj_id),
-                            )?);
+                        for (_, value) in self.enumerable_own_property_entries(module, obj_id)? {
+                            values.push(value);
                         }
-                        let array_id = self.alloc_array_from_values(&resolved)?;
+                        let array_id = self.alloc_array_from_values(&values)?;
                         Ok(Value::Object(array_id))
                     }
                     Value::Str(text) => {
@@ -89068,21 +89084,8 @@ impl InterpreterCore {
                             _ => unreachable!("matched an object or a string"),
                         };
                         if let Some(obj_id) = obj_id {
-                            entries.extend(
-                                self.heap
-                                    .get(obj_id.0 as usize)
-                                    .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
-                                    .properties
-                                    .exact_entries()
-                                    .into_iter()
-                                    .filter(|(key, _)| {
-                                        self.ordinary_own_string_key_is_enumerable(obj_id, key)
-                                    })
-                                    .map(|(key, value)| (key, value.clone())),
-                            );
-                        }
-                        if let Some(obj_id) = obj_id {
-                            self.join_pending_hostcall_stream_label(obj_id)?;
+                            let own = self.enumerable_own_property_entries(module, obj_id)?;
+                            entries.extend(own);
                         }
                         let mut entry_values = Vec::with_capacity(entries.len());
 

@@ -37,9 +37,15 @@ fn string_raw_direct_call_reads_raw_property() {
     assert_eq!(eval("String.raw({ raw: [\"x\", \"y\"] }, \"Z\");"), "xZy");
 }
 
+/// An empty `raw` yields the empty string; a missing one is ToObject(undefined),
+/// a TypeError (ES2020 21.1.2.4 step 3; Node v22.2.0: `TypeError ""` for
+/// `String.raw({})` and `String.raw({ raw: [] })`). This test asserted ""
+/// for the missing case too, the old lenient answer b98fb79d4 replaced.
 #[test]
-fn string_raw_empty_or_missing_raw_yields_empty_string() {
-    assert_eq!(eval("String.raw({});"), "");
+fn string_raw_empty_raw_is_empty_and_missing_raw_is_a_type_error() {
+    assert!(
+        eval("String.raw({});").contains("TypeError: Cannot convert undefined or null to object")
+    );
     assert_eq!(eval("String.raw({ raw: [] });"), "");
 }
 

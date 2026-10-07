@@ -96329,9 +96329,9 @@ impl InterpreterCore {
                 // decodeURIComponent(value): slot-0 convention, shared by direct
                 // calls and the first-class value. A malformed escape is a
                 // URIError (ES2020 18.2.6.1.2), which callers catch.
-                let encoded_str = self.builtin_arg_text(module, args, 0)?;
-                match percent_decode_utf8(&encoded_str, "") {
-                    Some(decoded) => Ok(Value::str(decoded)),
+                let encoded = self.builtin_arg_js_text(module, args, 0)?;
+                match percent_decode_js_string(&encoded, "") {
+                    Some(decoded) => Ok(Value::Str(decoded)),
                     None => Err(self.throw_uri_malformed(None)),
                 }
             }
@@ -96351,9 +96351,9 @@ impl InterpreterCore {
                 // decodeURI(value): slot-0 convention, shared by direct
                 // calls and the first-class value. A malformed escape is a
                 // URIError (ES2020 18.2.6.1.2), which callers catch.
-                let encoded_str = self.builtin_arg_text(module, args, 0)?;
-                match percent_decode_utf8(&encoded_str, ";/?:@&=+$,#") {
-                    Some(decoded) => Ok(Value::str(decoded)),
+                let encoded = self.builtin_arg_js_text(module, args, 0)?;
+                match percent_decode_js_string(&encoded, ";/?:@&=+$,#") {
+                    Some(decoded) => Ok(Value::Str(decoded)),
                     None => Err(self.throw_uri_malformed(None)),
                 }
             }
@@ -111209,6 +111209,44 @@ fn percent_decode_utf8(encoded: &str, reserved: &str) -> Option<String> {
         index += length * 3;
     }
     Some(out)
+}
+
+/// [`percent_decode_utf8`] over a string's exact UTF-16 content: a lone
+/// surrogate, which no escape can contain, is kept as written (ES2020
+/// 18.2.6.1.2: a code unit other than `%` is appended unchanged), and the
+/// well-formed runs between them decode as before. A sequence of escapes
+/// that a surrogate interrupts is malformed either way.
+fn percent_decode_js_string(encoded: &JsString, reserved: &str) -> Option<JsString> {
+    if let Some(text) = encoded.as_str() {
+        return percent_decode_utf8(text, reserved).map(JsString::from);
+    }
+    let units = encoded.code_units_vec();
+    let mut out: Vec<u16> = Vec::with_capacity(units.len());
+    let decode_run = |run: &[u16], out: &mut Vec<u16>| -> Option<()> {
+        let text = String::from_utf16(run).ok()?;
+        out.extend(percent_decode_utf8(&text, reserved)?.encode_utf16());
+        Some(())
+    };
+    let mut run_start = 0;
+    let mut index = 0;
+    while index < units.len() {
+        let unit = units[index];
+        let pair_follows = units
+            .get(index + 1)
+            .is_some_and(|next| (0xDC00..0xE000).contains(next));
+        if (0xD800..0xDC00).contains(&unit) && pair_follows {
+            index += 2;
+            continue;
+        }
+        if (0xD800..0xE000).contains(&unit) {
+            decode_run(&units[run_start..index], &mut out)?;
+            out.push(unit);
+            run_start = index + 1;
+        }
+        index += 1;
+    }
+    decode_run(&units[run_start..], &mut out)?;
+    Some(JsString::from_code_units(&out))
 }
 
 // ---------------------------------------------------------------------------

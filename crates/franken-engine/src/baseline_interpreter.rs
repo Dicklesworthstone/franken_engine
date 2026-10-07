@@ -63459,15 +63459,24 @@ impl InterpreterCore {
     /// (PROTOTYPE_GETTERS). `Object.getOwnPropertyNames(Map.prototype)` was
     /// empty. No-claim: the methods are in alphabetical order, not Node's
     /// creation order.
+    ///
+    /// The other canonical prototypes list what
+    /// [`Self::canonical_prototype_own_virtual_value`] supplies for them the
+    /// same way: Object.prototype its `constructor` and methods,
+    /// Error.prototype its `constructor` and `toString`, a NativeError's or a
+    /// concrete typed array's prototype its `constructor`. Each was missing
+    /// from `Object.getOwnPropertyNames` (Object.prototype listed nothing)
+    /// though `hasOwnProperty` answered true.
     fn canonical_prototype_virtual_own_keys(&self, object_id: ObjectId) -> Vec<Value> {
-        if self.builtin_prototypes.get("Array") != Some(&object_id) {
-            let Some(name) = VIRTUAL_METHOD_PROTOTYPES
-                .iter()
-                .copied()
-                .find(|name| self.builtin_prototypes.get(*name) == Some(&object_id))
-            else {
-                return Vec::new();
-            };
+        let Some(name) = self
+            .builtin_prototypes
+            .iter()
+            .find(|(_, prototype)| **prototype == object_id)
+            .map(|(name, _)| name.as_str())
+        else {
+            return Vec::new();
+        };
+        if name != "Array" {
             let owner = format!("{name}.prototype");
             let methods = builtin_function_lengths::BUILTIN_FUNCTION_LENGTHS
                 .iter()
@@ -103355,6 +103364,24 @@ impl InterpreterCore {
                     writable: false,
                     enumerable: false,
                     configurable: true,
+                },
+            )?;
+        }
+        // Each concrete TypedArray.prototype has an own BYTES_PER_ELEMENT
+        // (ES2020 22.2.6.1; not writable, enumerable or configurable), as its
+        // constructor does: `Int16Array.prototype.BYTES_PER_ELEMENT` was
+        // undefined.
+        if let Some(kind) = TypedArrayKind::from_type_name(canonical) {
+            let key = RuntimePropertyKey::String(JsString::from("BYTES_PER_ELEMENT"));
+            let size = i64::try_from(kind.element_size()).unwrap_or(i64::MAX);
+            self.set_object_runtime_property(prototype, key.clone(), Value::Int(size))?;
+            self.set_own_property_attributes(
+                prototype,
+                &key,
+                PropertyAttributes {
+                    writable: false,
+                    enumerable: false,
+                    configurable: false,
                 },
             )?;
         }

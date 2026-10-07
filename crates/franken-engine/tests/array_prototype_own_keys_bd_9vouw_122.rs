@@ -178,3 +178,59 @@ fn deleted_prototype_accessors_are_gone_bd_9vouw_249() {
     }
     assert_eq!(output.lines().count(), DELETE_NODE_OUTPUT.lines().count());
 }
+
+/// bd-9vouw.249 (remaining prototypes): Object.prototype,
+/// Error.prototype, the NativeError prototypes and the concrete typed array
+/// prototypes answered hasOwnProperty('constructor') (and Object.prototype
+/// hasOwnProperty for each method) but `Object.getOwnPropertyNames` left
+/// those names out: Object.prototype listed nothing (Node: 12 names). Each
+/// concrete typed array prototype also lacked its own BYTES_PER_ELEMENT
+/// (ES2020 22.2.6.1; not writable, enumerable or configurable; Test262
+/// TypedArrayConstructors/*/prototype/BYTES_PER_ELEMENT.js). PROTO_NAMES_PROGRAM
+/// compares sorted names (the engine's virtual methods come in alphabetical
+/// order, not Node's creation order), the descriptors, that the property
+/// cannot be deleted or assigned, and that for-in, Object.keys and
+/// JSON.stringify still see no prototype methods.
+///
+/// No-claim: Object.prototype's names in creation order (only the sorted
+/// set is compared), and its `__proto__`, which is not an own accessor
+/// here (bd-9vouw.284), so the program leaves it out of Node's list.
+const PROTO_NAMES_PROGRAM: &str = r#"var names = function (proto) { return Object.getOwnPropertyNames(proto).sort().join(','); };
+console.log(Object.getOwnPropertyNames(Object.prototype).filter(function (name) { return name !== '__proto__'; }).sort().join());
+console.log(names(Error.prototype), '|', names(RangeError.prototype), '|', names(AggregateError.prototype));
+console.log(Object.getOwnPropertyNames(Int16Array.prototype).join(), Reflect.ownKeys(BigUint64Array.prototype).join(), names(Float32Array.prototype));
+var kinds = [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array, BigInt64Array, BigUint64Array];
+console.log(kinds.map(function (C) { var d = Object.getOwnPropertyDescriptor(C.prototype, 'BYTES_PER_ELEMENT'); return d.value + (d.writable ? 'w' : '') + (d.enumerable ? 'e' : '') + (d.configurable ? 'c' : ''); }).join());
+console.log(Float64Array.prototype.BYTES_PER_ELEMENT, Object.create(Int16Array.prototype).BYTES_PER_ELEMENT, new Uint32Array(1).BYTES_PER_ELEMENT, delete Int32Array.prototype.BYTES_PER_ELEMENT, Int32Array.prototype.BYTES_PER_ELEMENT);
+console.log((function () { 'use strict'; try { Int8Array.prototype.BYTES_PER_ELEMENT = 9; return 'no throw'; } catch (e) { return e.constructor.name; } })(), Int8Array.prototype.BYTES_PER_ELEMENT);
+var keys = [];
+for (var k in { a: 1 }) keys.push(k);
+console.log(keys.join(), Object.keys(Object.prototype).length, Object.keys(Error.prototype).length, Object.keys(Uint8Array.prototype).length, JSON.stringify(Object.prototype));
+delete Object.prototype.__lookupSetter__;
+console.log(Object.getOwnPropertyNames(Object.prototype).indexOf('__lookupSetter__'), Object.prototype.hasOwnProperty('constructor'), Object.getOwnPropertyNames(Object.create(null)).length);"#;
+
+/// Node v22.2.0's output for `PROTO_NAMES_PROGRAM`.
+const PROTO_NAMES_NODE_OUTPUT: &str = r#"__defineGetter__,__defineSetter__,__lookupGetter__,__lookupSetter__,constructor,hasOwnProperty,isPrototypeOf,propertyIsEnumerable,toLocaleString,toString,valueOf
+constructor,message,name,toString | constructor,message,name | constructor,message,name
+constructor,BYTES_PER_ELEMENT constructor,BYTES_PER_ELEMENT BYTES_PER_ELEMENT,constructor
+1,1,1,2,2,4,4,4,8,8,8
+8 2 4 false 4
+TypeError 1
+a 0 0 0 {}
+-1 true 0"#;
+
+#[test]
+fn remaining_builtin_prototypes_list_their_own_names_bd_9vouw_249() {
+    let output = console_output(PROTO_NAMES_PROGRAM).expect("the program runs");
+    for (index, (actual, expected)) in output
+        .lines()
+        .zip(PROTO_NAMES_NODE_OUTPUT.lines())
+        .enumerate()
+    {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(
+        output.lines().count(),
+        PROTO_NAMES_NODE_OUTPUT.lines().count()
+    );
+}

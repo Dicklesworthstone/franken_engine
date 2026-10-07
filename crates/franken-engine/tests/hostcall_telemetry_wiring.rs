@@ -648,3 +648,32 @@ fn incident_trace_with_telemetry_recorder_carries_retention_evidence() {
         "trace content_hash must differ once real telemetry_log is bridged in"
     );
 }
+
+/// bd-9vouw.348: once the recorder's channel is full, a builtin hostcall's
+/// record is refused without hashing its arguments, and the refusal is still
+/// counted as `record` counts it (bd-z8w7k): the channel keeps its full
+/// prefix, every later builtin call is a channel_full drop, nothing is a
+/// monotonicity drop, and two runs agree.
+#[test]
+fn builtin_hostcalls_past_a_full_channel_are_counted_drops() {
+    let source = "var s = 0; for (var i = 0; i < 9000; i++) { s += Math.max(i, 1); }";
+    let first = run_to_core("trace-full-channel", source);
+    let telemetry = first.hostcall_telemetry();
+    let capacity = telemetry.len();
+    assert_eq!(
+        telemetry.remaining_capacity(),
+        0,
+        "9,000 calls fill the channel"
+    );
+    let drops = telemetry.drop_counts();
+    assert_eq!(drops.monotonicity_violation, 0);
+    assert_eq!(drops.empty_extension_id, 0);
+    assert!(
+        drops.channel_full as usize + capacity >= 9000,
+        "every builtin call is retained or counted: {capacity} retained, {} dropped",
+        drops.channel_full
+    );
+    let second = run_to_core("trace-full-channel", source);
+    assert_eq!(second.hostcall_telemetry().drop_counts(), drops);
+    assert_eq!(second.hostcall_telemetry().records(), telemetry.records());
+}

@@ -670,6 +670,27 @@ impl TelemetryRecorder {
             .saturating_sub(self.records.len())
     }
 
+    /// While the channel is full, count the refusal [`Self::record`] would
+    /// give a record arriving at `timestamp_ns` (a monotonicity violation
+    /// for an earlier timestamp, else a full channel; bd-z8w7k) without its
+    /// input, and return true. A hot caller (every builtin hostcall) then
+    /// skips building an input it cannot retain, the hash of its arguments
+    /// included (bd-9vouw.348). Returns false, counting nothing, while the
+    /// channel has room. Callers never pass an empty extension id, which
+    /// `record` would count first.
+    pub fn refuse_while_full(&mut self, timestamp_ns: u64) -> bool {
+        if self.records.len() < self.config.channel_capacity {
+            return false;
+        }
+        if timestamp_ns < self.last_timestamp_ns {
+            self.dropped.monotonicity_violation =
+                self.dropped.monotonicity_violation.saturating_add(1);
+        } else {
+            self.dropped.channel_full = self.dropped.channel_full.saturating_add(1);
+        }
+        true
+    }
+
     /// Access all recorded events.
     pub fn records(&self) -> &[HostcallTelemetryRecord] {
         &self.records
@@ -2527,6 +2548,34 @@ mod tests {
         let _ = recorder.record(4, test_input("attacker", HostcallType::FsWrite));
         assert_eq!(recorder.drop_counts().channel_full, 2);
         assert_eq!(recorder.dropped_records(), 2);
+    }
+
+    /// bd-9vouw.348: refusing without an input counts what `record` counts,
+    /// and leaves the recorder (and its completeness-aware hash) as `record`
+    /// would; it counts nothing while the channel has room.
+    #[test]
+    fn refuse_while_full_counts_what_record_counts() {
+        let mut by_record = small_recorder(2);
+        let mut by_refusal = small_recorder(2);
+        assert!(!by_refusal.refuse_while_full(1));
+        assert_eq!(by_refusal.dropped_records(), 0);
+        for recorder in [&mut by_record, &mut by_refusal] {
+            recorder
+                .record(1, test_input("ext-001", HostcallType::FsRead))
+                .unwrap();
+            recorder
+                .record(2, test_input("ext-001", HostcallType::FsRead))
+                .unwrap();
+        }
+        for timestamp in [3, 1, 4, 4] {
+            let _ = by_record.record(timestamp, test_input("ext-001", HostcallType::FsWrite));
+            assert!(by_refusal.refuse_while_full(timestamp));
+        }
+        assert_eq!(by_refusal.drop_counts(), by_record.drop_counts());
+        assert_eq!(by_refusal.drop_counts().channel_full, 3);
+        assert_eq!(by_refusal.drop_counts().monotonicity_violation, 1);
+        assert_eq!(by_refusal.records(), by_record.records());
+        assert_eq!(by_refusal.content_hash(), by_record.content_hash());
     }
 
     #[test]

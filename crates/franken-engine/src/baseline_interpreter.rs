@@ -87959,9 +87959,12 @@ impl InterpreterCore {
         self.clear_pending_hostcall_result_label();
         self.builtin_dispatch_hit_unknown_member = false;
         // bd-9vouw.76: a language operation is not a host call, so it leaves
-        // no telemetry record either.
-        let args_hash =
-            (!is_language_operation_tag(cap)).then(|| self.hostcall_arguments_hash(args));
+        // no telemetry record either. The telemetry channel only grows: once
+        // it is full, a record is refused (and counted) without its input, so
+        // its arguments are not serialized and hashed (bd-9vouw.348).
+        let telemetry = !is_language_operation_tag(cap);
+        let args_hash = (telemetry && self.telemetry_recorder.remaining_capacity() > 0)
+            .then(|| self.hostcall_arguments_hash(args));
         if cap.starts_with("builtin:Math") {
             for offset in 0..args.count {
                 if let Value::BigInt(_) = self.read_reg(args.start + offset)? {
@@ -87987,9 +87990,17 @@ impl InterpreterCore {
         // hostcalls. Record the outer builtin in completion order so its
         // deterministic timestamp cannot precede an already-retained inner
         // record and trigger a false monotonicity drop (bd-juz83).
-        if let Some(args_hash) = args_hash {
+        if telemetry {
             let timestamp_ns = self.instructions_executed;
-            self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
+            match args_hash {
+                Some(args_hash) => {
+                    self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
+                }
+                None => {
+                    // Full before the dispatch, so still full.
+                    self.telemetry_recorder.refuse_while_full(timestamp_ns);
+                }
+            }
         }
         outcome
     }

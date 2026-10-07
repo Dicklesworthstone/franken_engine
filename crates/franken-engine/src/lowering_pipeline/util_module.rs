@@ -199,8 +199,18 @@ const TIMERS_GLOBALS: [&str; 7] = [
     "clearInterval",
 ];
 
-const EVENTS_GLOBALS: [&str; 7] = [
-    "Array", "Error", "Object", "Promise", "RangeError", "Symbol", "TypeError",
+const EVENTS_GLOBALS: [&str; 11] = [
+    "AbortController",
+    "AbortSignal",
+    "Array",
+    "Error",
+    "EventTarget",
+    "Object",
+    "Promise",
+    "RangeError",
+    "Reflect",
+    "Symbol",
+    "TypeError",
 ];
 
 const ASSERT_GLOBALS: [&str; 10] = [

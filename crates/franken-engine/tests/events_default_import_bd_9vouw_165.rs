@@ -108,30 +108,41 @@ fn assert_native_events(source: &str, expected: &str, module: bool) {
         &LoweringContext::new("events-module", "bd-305gi", "builtin-only"),
     )
     .expect("events source lowers without filesystem authority");
-    let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::Builtin,
-        RuntimeCapability::Console,
-    ]
-    .into_iter()
-    .collect();
-    let mut core = InterpreterCore::new(config, "events-module");
-    let result = core.execute(&lowered.ir3).expect("events source executes");
-    assert_eq!(
-        core.estimated_memory_bytes(),
-        core.recompute_estimated_memory_bytes()
-    );
-    assert_eq!(
-        result
-            .console_output
-            .iter()
-            .map(|entry| entry.message.as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        expected,
-    );
+    for v8_profile in [false, true] {
+        for stress in [None, Some(7)] {
+            let mut config = if v8_profile {
+                InterpreterConfig::v8_defaults()
+            } else {
+                InterpreterConfig::quickjs_defaults()
+            };
+            config.granted_capabilities = [
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::HeapAllocate,
+                RuntimeCapability::Builtin,
+                RuntimeCapability::Console,
+            ]
+            .into_iter()
+            .collect();
+            let mut core = InterpreterCore::new(config, "events-module");
+            core.set_gc_stress_interval(stress);
+            let result = core.execute(&lowered.ir3).expect("events source executes");
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes(),
+                "v8={v8_profile}, GC={stress:?}"
+            );
+            assert_eq!(
+                result
+                    .console_output
+                    .iter()
+                    .map(|entry| entry.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                expected,
+                "v8={v8_profile}, GC={stress:?}"
+            );
+        }
+    }
 }
 
 const MODULE_VALUES: &str = r#"
@@ -298,6 +309,7 @@ fn esm_default_and_named_exports_are_first_class_native_values() {
 
 const GLOBAL_SHADOWING: &str = r#"
 const Array = 0, Error = 0, Object = 0, Promise = 0, RangeError = 0, Symbol = 0, TypeError = 0;
+const AbortController = 0, AbortSignal = 0, EventTarget = 0, Reflect = 0;
 const E = require('events'); const e = new E(); const it = E.on(e, 'x');
 it.next().then((r) => console.log(r.value[0], Array, Promise)); e.emit('x', 7); it.return();
 "#;
@@ -305,4 +317,163 @@ it.next().then((r) => console.log(r.value[0], Array, Promise)); e.emit('x', 7); 
 #[test]
 fn module_globals_are_not_captured_by_guest_lexical_declarations() {
     assert_native_events(GLOBAL_SHADOWING, "7 0 0", false);
+}
+
+const STOPPED_ABORT: &str = r#"
+const E = require('events');
+const controller = new AbortController();
+const first = new E(); const second = new E();
+const reason = { cancellation: true };
+controller.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+E.once(first, 'ready', { signal: controller.signal }).catch(error => {
+  console.log('once', error.name, error.code, error.cause === reason);
+});
+const iterator = E.on(second, 'data', { signal: controller.signal });
+iterator.next().catch(error => console.log('on', error.cause === reason));
+iterator.next().then(result => console.log('done', result.done));
+controller.signal.addEventListener('abort', () => console.log('wrong public listener'));
+controller.abort(reason);
+console.log(first.listenerCount('ready'), first.listenerCount('error'),
+  second.listenerCount('data'), second.listenerCount('error'));
+"#;
+
+#[test]
+fn stopped_public_abort_events_cannot_keep_once_or_iterator_waits_pending() {
+    assert_native_events(STOPPED_ABORT, "0 0 0 0\non true\ndone true\nonce AbortError ABORT_ERR true", false);
+}
+
+const STOPPED_COMPOSED_ABORT: &str = r#"
+const E = require('events');
+const root = new AbortController();
+const middle = AbortSignal.any([root.signal]);
+const nested = AbortSignal.any([middle]);
+const emitter = new E();
+root.signal.addEventListener('abort', event => event.stopImmediatePropagation());
+middle.addEventListener('abort', event => event.stopImmediatePropagation());
+nested.addEventListener('abort', event => event.stopImmediatePropagation());
+const iterator = E.on(emitter, 'data', { signal: nested });
+iterator.next().catch(error => console.log(error.name, error.code, error.cause === false));
+root.abort(false);
+console.log(root.signal.aborted, nested.aborted, emitter.listenerCount('data'), emitter.listenerCount('error'));
+"#;
+
+#[test]
+fn private_cancellation_flattens_nested_signals_and_preserves_falsy_reasons() {
+    assert_native_events(STOPPED_COMPOSED_ABORT, "true true 0 0\nAbortError ABORT_ERR true", false);
+}
+
+const COMPLETED_ABORT_WAIT: &str = r#"
+const E = require('events');
+const root = new AbortController();
+const emitter = new E();
+const original = new Error('original');
+let completed = 0;
+E.once(emitter, 'success', { signal: root.signal }).then(values => {
+  console.log('success', values[0]); completed++;
+});
+emitter.emit('success', 42);
+E.once(emitter, 'failure', { signal: root.signal }).catch(error => {
+  console.log('failure', error === original); completed++;
+});
+emitter.emit('error', original);
+const iterator = E.on(emitter, 'data', { signal: root.signal });
+iterator.next().then(result => { console.log('return', result.done); completed++; });
+iterator.return();
+console.log(root.signal.aborted, emitter.eventNames().length);
+root.abort('later');
+Promise.resolve().then(() => console.log('completed', completed));
+"#;
+
+#[test]
+fn successful_and_closed_waits_do_not_cancel_the_caller_signal() {
+    assert_native_events(COMPLETED_ABORT_WAIT, "false 0\nreturn true\ncompleted 1\nsuccess 42\nfailure true", false);
+}
+
+// These cases exercise protected native state rather than emulating mutable
+// public signal properties. They intentionally do not claim Node parity for
+// synthetic abort dispatch or guest-replaced signal APIs.
+const PROTECTED_METHODS: &str = r#"
+const E = require('events');
+const controller = new AbortController();
+const emitter = new E();
+const signal = controller.signal;
+const reason = { real: true };
+const fail = () => { throw new Error('guest signal method was called'); };
+signal.addEventListener = fail;
+signal.removeEventListener = fail;
+Object.defineProperty(signal, 'aborted', { value: false });
+Object.defineProperty(signal, 'reason', { value: 'forged' });
+E.once(emitter, 'ready', { signal }).catch(error => console.log(error.cause === reason));
+controller.abort(reason);
+console.log(emitter.listenerCount('ready'), emitter.listenerCount('error'));
+"#;
+
+#[test]
+fn signal_method_replacement_cannot_hijack_cancellation_or_its_reason() {
+    assert_native_events(PROTECTED_METHODS, "0 0\ntrue", false);
+}
+
+const PROTECTED_SYNTHETIC: &str = r#"
+const E = require('events');
+const controller = new AbortController(); const emitter = new E();
+const iterator = E.on(emitter, 'data', { signal: controller.signal });
+iterator.next().then(result => console.log('value', result.value[0]));
+controller.signal.dispatchEvent(new Event('abort'));
+emitter.emit('data', 42);
+console.log(controller.signal.aborted, emitter.listenerCount('data'));
+iterator.next().catch(error => console.log('abort', error.cause));
+controller.abort('real');
+console.log(emitter.listenerCount('data'), emitter.listenerCount('error'));
+"#;
+
+#[test]
+fn synthetic_abort_event_is_not_a_native_cancellation_transition() {
+    assert_native_events(PROTECTED_SYNTHETIC, "false 1\n0 0\nvalue 42\nabort real", false);
+}
+
+const PROTECTED_PROTOTYPES: &str = r#"
+const E = require('events');
+const controller = new AbortController(); const emitter = new E();
+const signal = controller.signal;
+const abort = AbortController.prototype.abort;
+const apply = Reflect.apply;
+const fail = () => { throw new Error('guest replacement'); };
+AbortSignal.any = fail;
+AbortController.prototype.abort = fail;
+EventTarget.prototype.addEventListener = fail;
+EventTarget.prototype.removeEventListener = fail;
+Reflect.apply = fail;
+Object.defineProperty = fail;
+Object.create = fail;
+Array.prototype[Symbol.iterator] = fail;
+E.once(emitter, 'ready', { signal }).catch(error => console.log(error.code, error.cause));
+apply(abort, controller, ['cancel']);
+console.log(emitter.listenerCount('ready'), emitter.listenerCount('error'));
+"#;
+
+#[test]
+fn captured_native_signal_operations_survive_guest_prototype_replacement() {
+    assert_native_events(PROTECTED_PROTOTYPES, "0 0\nABORT_ERR cancel", false);
+}
+
+const PROTECTED_REENTRANT: &str = r#"
+const E = require('events'); const controller = new AbortController();
+const first = new E(); const second = new E(); const reason = { stop: true };
+controller.signal.addEventListener('abort', () => {
+  first.emit('ready', 'stale');
+  second.emit('data', 'stale');
+  console.log(first.listenerCount('ready'), first.listenerCount('error'),
+    second.listenerCount('data'), second.listenerCount('error'));
+});
+E.once(first, 'ready', { signal: controller.signal }).then(
+  () => console.log('wrong success'), error => console.log('once', error.cause === reason));
+const iterator = E.on(second, 'data', { signal: controller.signal });
+iterator.next().then(() => console.log('wrong data'), error => console.log('on', error.cause === reason));
+controller.abort(reason);
+console.log('aborted', controller.signal.aborted);
+"#;
+
+#[test]
+fn reentrant_public_abort_listener_cannot_publish_success_after_cancellation() {
+    assert_native_events(PROTECTED_REENTRANT, "0 0 0 0\naborted true\non true\nonce true", false);
 }

@@ -6,14 +6,16 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const nodeEvents = require('node:events');
+const { spawnSync } = require('node:child_process');
 const nativeOnce = nodeEvents.once;
 const source = fs.readFileSync(path.join(__dirname,
   '../crates/franken-engine/src/lowering_pipeline/events_module.js'), 'utf8');
-const factory = new Function('__franken_events_constructor', '__franken_events_once', 'return ' + source);
-function candidate() {
+const factory = new Function('__franken_events_constructor', '__franken_events_once',
+  'AbortController', 'AbortSignal', 'return ' + source);
+function candidate(Controller = AbortController, Signal = AbortSignal) {
   class AdapterEmitter extends nodeEvents.EventEmitter {}
   Object.defineProperty(AdapterEmitter, 'name', { value: 'EventEmitter' });
-  return factory(() => AdapterEmitter, (...args) => nativeOnce(...args));
+  return factory(() => AdapterEmitter, (...args) => nativeOnce(...args), Controller, Signal);
 }
 function reason(error) {
   return { name: error && error.name, code: error && error.code, cause: error && error.cause };
@@ -42,9 +44,31 @@ async function run() {
   const programs = new Map([...rustTests.matchAll(/const (\w+): &str = r#"([\s\S]*?)"#;/g)]
     .map(match => [match[1], match[2]]));
   let rustSourceChecks=0;
+  let protectedSourceChecks = 0;
   for (const match of rustTests.matchAll(/assert_native_events\(\s*(\w+),\s*("(?:[^"\\]|\\.)*"),\s*false,?\s*\)/g)) {
     const name = match[1], program = programs.get(name), expected = JSON.parse(match[2]);
     assert.ok(program, 'missing regression source ' + name);
+    if (name.startsWith('PROTECTED_')) {
+      // A separate process contains the intentional primordial mutations.
+      // These stronger cancellation-state contracts are candidate-only, not
+      // Node-equivalence cases and not executions of the Rust test harness.
+      const child = spawnSync(process.execPath, ['-'], {
+        input: `const nodeEvents = require('node:events');
+          class AdapterEmitter extends nodeEvents.EventEmitter {}
+          const make = new Function('__franken_events_constructor', '__franken_events_once', ${JSON.stringify('return ' + source)});
+          const E = make(() => AdapterEmitter, nodeEvents.once);
+          new Function('require', ${JSON.stringify(program)})(name => {
+            if (name !== 'events' && name !== 'node:events') throw new Error('unexpected dependency');
+            return E;
+          });`,
+        encoding: 'utf8', timeout: 2000,
+      });
+      if (child.error) throw child.error;
+      assert.equal(child.status, 0, name + ': ' + child.stderr);
+      assert.equal(child.stdout.trimEnd(), expected, name);
+      protectedSourceChecks++;
+      continue;
+    }
     await compare('Rust regression source under host adapters ' + name, async E => {
       const lines = [];
       const log = (...args) => lines.push(require('node:util').format(...args));
@@ -59,7 +83,9 @@ async function run() {
     });
     rustSourceChecks++;
   }
-  assert.equal(rustSourceChecks,programs.size-1,'every non-ESM regression source must be exercised');
+  assert.equal(protectedSourceChecks, 4, 'every protected-state fixture must be exercised');
+  assert.equal(rustSourceChecks + protectedSourceChecks, programs.size-1,
+    'every non-ESM regression source must be exercised');
   const esm=require('node:child_process').spawnSync(process.execPath,
     ['--input-type=module','-e',programs.get('ESM_EXPORTS')],{encoding:'utf8',timeout:2000});
   assert.equal(esm.status,0,esm.stderr);
@@ -241,8 +267,99 @@ async function run() {
     assert.equal(e.listenerCount('error'),0);
     assert.equal(nodeEvents.getEventListeners(controller.signal,'abort').length,0);
   }
+  // Observe actual native Node controllers/compositions behind the adapter.
+  // This establishes that the JS layer releases the private source on every
+  // terminal path; native FrankenEngine graph unlinking/GC is a separate gate.
+  let privateLifetimeChecks = 0;
+  for (const action of ['once-success', 'once-error', 'once-abort', 'on-return',
+    'on-close', 'on-throw', 'on-abort', 'cleanup-failure', 'registration-failure']) {
+    const controllers = [], dependents = [], root = new AbortController();
+    const failure = new Error('composition registration failed');
+    function TrackedController() {
+      const controller = new AbortController();
+      controllers.push(controller);
+      return controller;
+    }
+    TrackedController.prototype = AbortController.prototype;
+    const TrackedSignal = {
+      prototype: AbortSignal.prototype,
+      any(sources) {
+        // Exercise the private iterable protocol as FrankenEngine does, even
+        // though Node's any() directly indexes its Array argument.
+        const iterator = sources[Symbol.iterator]();
+        assert.equal(iterator.next().value, sources[0]);
+        assert.equal(iterator.next().value, sources[1]);
+        assert.equal(iterator.next().done, true);
+        assert.equal(iterator.return().done, true);
+        const dependent = AbortSignal.any(sources);
+        dependents.push(dependent);
+        if (action === 'registration-failure') throw failure;
+        return dependent;
+      },
+    };
+    const E = candidate(TrackedController, TrackedSignal), emitter = new E();
+    const options = { signal: root.signal, close: ['end'] };
+    if (action === 'registration-failure') {
+      assert.throws(() => E.on(emitter, 'work', options), error => error === failure);
+    } else if (action.startsWith('once-')) {
+      const pending = outcome(E.once(emitter, 'work', options));
+      if (action === 'once-success') emitter.emit('work', 42);
+      if (action === 'once-error') emitter.emit('error', failure);
+      if (action === 'once-abort') root.abort(failure);
+      await bounded(pending);
+    } else {
+      const iterator = E.on(emitter, 'work', options);
+      const pending = outcome(iterator.next());
+      if (action === 'cleanup-failure') {
+        const remove = emitter.removeListener;
+        emitter.removeListener = function (name, listener) {
+          remove.call(this, name, listener);
+          if (name === 'work') throw failure;
+          return this;
+        };
+        await iterator.return();
+      }
+      if (action === 'on-return') await iterator.return();
+      if (action === 'on-close') emitter.emit('end');
+      if (action === 'on-throw') iterator.throw(failure);
+      if (action === 'on-abort') root.abort(failure);
+      await bounded(pending);
+      await iterator.return();
+    }
+    assert.equal(controllers.length, 1, action);
+    assert.equal(dependents.length, 1, action);
+    assert.equal(controllers[0].signal.aborted, true, action + ' release source');
+    assert.equal(dependents[0].aborted, true, action + ' private dependent');
+    assert.equal(root.signal.aborted, action.endsWith('-abort'), action + ' caller state');
+    assert.equal(nodeEvents.getEventListeners(dependents[0], 'abort').length, 0, action);
+    assert.equal(emitter.eventNames().length, 0, action);
+    privateLifetimeChecks++;
+  }
+  // Do not count the private-dependent dispatch phase as Node-equivalent.
+  // A public listener can observe the emitter before the private event has
+  // removed its listeners, although ready/error/next paths already enforce
+  // the native cancellation state and the operation settles as cancelled.
+  async function cleanupPhase(E) {
+    const root = new AbortController(), emitter = new E();
+    const iterator = E.on(emitter, 'work', { signal: root.signal });
+    const pending = outcome(iterator.next());
+    let countDuringSourceEvent;
+    root.signal.addEventListener('abort', () => {
+      countDuringSourceEvent = emitter.listenerCount('work');
+    });
+    root.abort();
+    assert.equal((await bounded(pending)).error.code, 'ABORT_ERR');
+    return countDuringSourceEvent;
+  }
+  const referencePhase = await cleanupPhase(nodeEvents);
+  const candidatePhase = await cleanupPhase(candidate());
+  assert.equal(referencePhase, 0);
+  assert.equal(candidatePhase, 1);
   console.log(JSON.stringify({node:process.version,differentialChecks:count,
     rustRegressionSourcesCheckedThroughHostAdapters:rustSourceChecks,esmReferenceOnly:1,
+    candidateOnlyProtectedSourceChecks:protectedSourceChecks,
+    candidateOnlyPrivateLifetimeChecks:privateLifetimeChecks,
+    disclosedNonParity: { listenersDuringSourceAbort: { node: referencePhase, candidate: candidatePhase } },
     registrationCleanupInvariants:2,failures:0,
     scope:'exact events JavaScript plus Node hostcall adapters; Rust path not executed'},null,2));
 }

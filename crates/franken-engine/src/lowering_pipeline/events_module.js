@@ -4,6 +4,77 @@
   // and memory accounting remain in the existing EventEmitter implementation.
   var EventEmitter = __franken_events_constructor();
 
+  // Capture the native signal operations before guest code can replace public
+  // methods. A private dependent signal cannot have its abort event stopped by
+  // a listener on the caller's signal. Its second source lets completed waits
+  // detach through the native abort-graph cleanup instead of retaining one
+  // dependent on a long-lived caller signal for each completed operation.
+  // Dependent events run after the source's public event. Delivery paths below
+  // therefore consult native aborted state too; synthetic public abort events
+  // do not cancel work. This is an API cancellation boundary, not execution
+  // preemption, and assumes genuine realm intrinsics at module initialization.
+  var Controller = AbortController;
+  var composeSignal = AbortSignal.any;
+  var apply = Reflect.apply;
+  var defineProperty = Object.defineProperty;
+  var createObject = Object.create;
+  var iteratorKey = Symbol.iterator;
+  var controllerSignal = Object.getOwnPropertyDescriptor(AbortController.prototype, 'signal').get;
+  var signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted').get;
+  var signalReason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'reason').get;
+  var abortController = AbortController.prototype.abort;
+  var addListener = EventTarget.prototype.addEventListener;
+  var removeListener = EventTarget.prototype.removeEventListener;
+
+  function isAborted(signal) { return apply(signalAborted, signal, []); }
+  function signalPair(first, second) {
+    var pair = [first, second];
+    // The native any() consumes an iterable. Do not let guest replacement of
+    // Array.prototype's iterator change these private cancellation sources.
+    // Keep a real array for Node's Array-only reference implementation too.
+    var descriptor = createObject(null);
+    descriptor.value = function () {
+      var index = 0;
+      return {
+        next: function () {
+          if (index === 0) { index = 1; return { value: first, done: false }; }
+          if (index === 1) { index = 2; return { value: second, done: false }; }
+          return { value: undefined, done: true };
+        },
+        return: function () { index = 2; return { value: undefined, done: true }; }
+      };
+    };
+    defineProperty(pair, iteratorKey, descriptor);
+    return pair;
+  }
+  function protectedAbort(signal, listener) {
+    var release = new Controller();
+    var dependent;
+    var disposed = false;
+    function dispose() {
+      if (disposed) { return; }
+      disposed = true;
+      try {
+        if (dependent !== undefined) {
+          apply(removeListener, dependent, ['abort', listener]);
+        }
+      } finally {
+        // Remove the listener first: disposal must not report cancellation.
+        // This source and its dependent are private and cannot call guest code.
+        // A private null reason avoids allocating a default DOMException.
+        apply(abortController, release, [null]);
+      }
+    }
+    try {
+      dependent = composeSignal(signalPair(signal, apply(controllerSignal, release, [])));
+      apply(addListener, dependent, ['abort', listener,
+        { once: true, capture: false, passive: false, signal: undefined }]);
+    } catch (error) {
+      try { dispose(); } finally { throw error; }
+    }
+    return dispose;
+  }
+
   function invalidType(name) {
     var error = new TypeError('Invalid ' + name);
     error.code = 'ERR_INVALID_ARG_TYPE';
@@ -16,12 +87,11 @@
     return options;
   }
   function abortSignal(signal) {
-    if (signal !== undefined &&
-        (signal === null || typeof signal !== 'object' ||
-         typeof signal.aborted !== 'boolean' ||
-         typeof signal.addEventListener !== 'function' ||
-         typeof signal.removeEventListener !== 'function')) {
-      throw invalidType('options.signal');
+    if (signal !== undefined) {
+      // Authenticate through the native accessor, not guest-replaceable
+      // properties or methods. Duck-typed lookalikes confer no cancellation.
+      try { isAborted(signal); }
+      catch (error) { throw invalidType('options.signal'); }
     }
     return signal;
   }
@@ -29,9 +99,11 @@
     var error = new Error('The operation was aborted');
     error.name = 'AbortError';
     error.code = 'ABORT_ERR';
-    Object.defineProperty(error, 'cause', {
-      value: signal.reason, writable: true, configurable: true
-    });
+    var descriptor = createObject(null);
+    descriptor.value = apply(signalReason, signal, []);
+    descriptor.writable = true;
+    descriptor.configurable = true;
+    defineProperty(error, 'cause', descriptor);
     return error;
   }
 
@@ -84,14 +156,12 @@
         });
       },
       abort: function (signal, listener) {
-        if (signal === undefined) { return; }
-        // Public AbortSignal delivery can be stopped by an earlier guest
-        // listener. This adapter is not the host's uninterruptible execution
-        // cancellation boundary; that requires a native abort subscription.
-        register(function () { signal.addEventListener('abort', listener, { once: true }); },
-          function () { signal.removeEventListener('abort', listener); });
+        if (signal === undefined || closed) { return; }
+        var dispose = function () {};
+        register(function () { dispose = protectedAbort(signal, listener); },
+          function () { dispose(); });
         // The signal may have changed while another listener was installed.
-        if (!closed && signal.aborted) { listener(); }
+        if (!closed && isAborted(signal)) { listener(); }
       }
     };
   }
@@ -100,18 +170,27 @@
     var signal;
     try {
       signal = abortSignal(optionsObject(options).signal);
-      if (signal !== undefined && signal.aborted) { throw aborted(signal); }
+      if (signal !== undefined && isAborted(signal)) { throw aborted(signal); }
       // Preserve the native Promise/IFC path and its reaction ordering when
       // there is no cancellation obligation to attach.
       var isEventTarget = emitter !== null && emitter !== undefined &&
         typeof emitter.on !== 'function' && typeof emitter.addEventListener === 'function';
       if (signal === undefined && !isEventTarget) { return __franken_events_once(emitter, eventName); }
     } catch (error) { return Promise.reject(error); }
+    // Node's once awaits its internal event Promise before settling the
+    // returned Promise. Preserve that reaction boundary for the adapter path
+    // too (the native no-signal path above already owns its Promise contract).
     return new Promise(function (resolve, reject) {
       var links = subscriptions(emitter);
       var settled = false;
       function finish(error, values, failed) {
         if (settled) { return; }
+        // Native state is published before public abort listeners. A listener
+        // on that public event must not race cancellation by emitting success
+        // while the private dependent's abort event is still awaiting delivery.
+        if (signal !== undefined && isAborted(signal)) {
+          error = aborted(signal); values = undefined; failed = true;
+        }
         settled = true;
         try { links.close(); } catch (cleanupError) { reject(cleanupError); return; }
         if (failed) { reject(error); } else { resolve(values); }
@@ -123,7 +202,7 @@
         }
         links.abort(signal, function () { finish(aborted(signal), undefined, true); });
       } catch (error) { finish(error, undefined, true); }
-    });
+    }).then();
   }
 
   // Linked FIFOs release dequeued nodes without array shifting or retaining
@@ -158,7 +237,7 @@
   function on(emitter, eventName, options = {}) {
     optionsObject(options);
     var signal = abortSignal(options.signal);
-    if (signal !== undefined && signal.aborted) { throw aborted(signal); }
+    if (signal !== undefined && isAborted(signal)) { throw aborted(signal); }
     var high = watermark(options, 'highWaterMark', 'highWatermark', 9007199254740991);
     var low = watermark(options, 'lowWaterMark', 'lowWatermark', 1);
     var closeEvents = options.close;
@@ -172,6 +251,9 @@
     function result(value, done) { return { value: value, done: done }; }
     function finish(error, failed) {
       if (finished) { return; }
+      if (signal !== undefined && isAborted(signal)) {
+        error = aborted(signal); failed = true;
+      }
       finished = true;
       try { links.close(); } catch (cleanupError) { error = cleanupError; failed = true; }
       if (failed && waiters.size > 0) { take(waiters).reject(error); }
@@ -180,6 +262,7 @@
     }
     function event(...args) {
       if (finished) { return; }
+      if (signal !== undefined && isAborted(signal)) { fail(aborted(signal)); return; }
       if (waiters.size > 0) { take(waiters).resolve(result(args, false)); }
       else {
         put(values, args);
@@ -193,6 +276,7 @@
     function close() { finish(undefined, false); }
     var iterator = {
       next: function () {
+        if (!finished && signal !== undefined && isAborted(signal)) { fail(aborted(signal)); }
         if (values.size > 0) {
           var value = take(values);
           if (paused && values.size < low) { paused = false; emitter.resume(); }

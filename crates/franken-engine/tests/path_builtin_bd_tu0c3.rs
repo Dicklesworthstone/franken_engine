@@ -537,15 +537,19 @@ fn unused_path_alias_keeps_ambient_denial() {
 }
 
 #[test]
-fn usage_only_inside_function_body_stays_fail_closed() {
-    // Function bodies are opaque to the usage scan (fail-closed): a usage
-    // reachable only through a function body does NOT confirm the alias.
-    let err = eval_err(
-        "const path = require('path');\nfunction f() { return path.join('a', 'b'); }\nconsole.log(f());",
-    );
-    assert!(
-        err.contains("ambient authority violation"),
-        "expected ambient-authority denial for function-body-only usage, got: {err}"
+fn usage_only_inside_function_body_gets_the_path_module() {
+    // Function bodies are opaque to the facade's usage scan, so a usage
+    // reachable only through a function body still does not confirm the
+    // alias. The program used to be refused here; since bd-9vouw.300 the
+    // alias a function reads gets the engine's path module (the pure module
+    // bd-9vouw.181 gives every require form the facade cannot claim, with no
+    // authority beyond the facade's own HostCalls), so it runs as in Node.
+    // The unused alias above stays refused.
+    assert_eq!(
+        eval_console(
+            "const path = require('path');\nfunction f() { return path.join('a', 'b'); }\nconsole.log(f());",
+        ),
+        "a/b"
     );
 }
 

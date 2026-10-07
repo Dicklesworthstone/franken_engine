@@ -159,3 +159,51 @@ fn member_access_and_calls_after_a_class_expression() {
         "A true object 5 1 B 2",
     );
 }
+
+/// bd-9vouw.266: a class's `static get` / `static set` accessor is a method
+/// of the constructor (ES2020 14.3.9 with the class as its object): named
+/// "get x" / "set x" ("get [desc]" for a Symbol key), without a
+/// `prototype`, and not a constructor. Defining one named `prototype` throws
+/// a TypeError (the class's `prototype` is non-configurable), and a second
+/// `super()` in a derived constructor is a ReferenceError (8.1.1.3.1
+/// BindThisValue). Static accessors were plain constructible functions
+/// named by their bare key, and the double `super()` threw a TypeError.
+/// Expected lines are Node v22.2.0's output, captured programmatically; Bun
+/// 1.4.2 agrees.
+#[test]
+fn static_class_accessors_are_methods_bd_9vouw_266() {
+    let source = r#"function kind(f) { try { f(); return 'none'; } catch (e) { return e.constructor.name; } }
+var namedSym = Symbol('tag');
+class C {
+  get x() { return 1; }
+  static get s() { return 2; }
+  static set s(v) {}
+  static get 5() { return 5; }
+  static get [namedSym]() { return 3; }
+}
+var sd = Object.getOwnPropertyDescriptor(C, 's');
+var nd = Object.getOwnPropertyDescriptor(C, '5');
+var yd = Object.getOwnPropertyDescriptor(C, namedSym);
+console.log('prototype' in sd.get, 'prototype' in sd.set, 'prototype' in nd.get, sd.get.hasOwnProperty('prototype'), typeof sd.get.prototype);
+console.log(sd.get.name, sd.set.name, nd.get.name, yd.get.name, C.s, C[5], C[namedSym]);
+console.log(kind(function () { return new sd.get(); }), kind(function () { class D { static get ['prototype']() {} } }), kind(function () { class D { static set ['prototype'](v) {} } }));
+class Base {}
+console.log(kind(function () { class D extends Base { constructor() { super(); super(); } } new D(); }), kind(function () { class D extends Base { constructor() { super(); } } new D(); }));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "false false false false undefined",
+            "get s set s get 5 get [tag] 2 5 3",
+            "TypeError TypeError TypeError",
+            "ReferenceError none",
+        ]
+    );
+}

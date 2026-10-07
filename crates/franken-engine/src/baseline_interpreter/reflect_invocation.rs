@@ -530,14 +530,17 @@ impl InterpreterCore {
                 expected: "active derived constructor".to_string(),
                 got: "super() outside a constructor".to_string(),
             })?;
-        if !frame.derived_constructor || frame.this_initialized {
+        if frame.derived_constructor && frame.this_initialized {
+            // ES2020 8.1.1.3.1 BindThisValue step 3.
+            return Err(self.throw_js_error(
+                "ReferenceError",
+                "Super constructor may only be called once".to_string(),
+            ));
+        }
+        if !frame.derived_constructor {
             return Err(InterpreterError::TypeError {
                 expected: "uninitialized derived-constructor this binding".to_string(),
-                got: if frame.derived_constructor {
-                    "super() called more than once".to_string()
-                } else {
-                    "super() in a base constructor".to_string()
-                },
+                got: "super() in a base constructor".to_string(),
             });
         }
         // A builtin parent (`extends Array`, `extends Error`, ...) is

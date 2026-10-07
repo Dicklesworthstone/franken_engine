@@ -52800,11 +52800,25 @@ impl InterpreterCore {
                             self.define_accessor_property(oid, property_key, func_val, kind)?;
                         }
                         // bd-9vouw.17: class `static get x()` / `static set x()`.
+                        // Like a static method (DefineMethod below), the
+                        // accessor is a method of the constructor's own
+                        // properties: named "get x" / "set x", without a
+                        // `prototype`, not a constructor (bd-9vouw.266).
                         ref function @ (Value::Function(_)
                         | Value::Closure(_)
                         | Value::GeneratorFunction(_)
                         | Value::AsyncFunction(_)
                         | Value::AsyncGeneratorFunction(_)) => {
+                            // A class's `prototype` is non-configurable, so
+                            // `static get ['prototype']()` fails its
+                            // DefinePropertyOrThrow (ES2020 14.6.13 step 21).
+                            if property_key.as_str() == Some("prototype") {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "a configurable property for a static class accessor"
+                                        .to_string(),
+                                    got: "the class's non-configurable `prototype`".to_string(),
+                                });
+                            }
                             let backing = self
                                 .ensure_function_own_property_object(module, function)?
                                 .expect("user function values always have a backing-object key");
@@ -52812,6 +52826,14 @@ impl InterpreterCore {
                                 module,
                                 backing,
                                 &property_key,
+                            )?;
+                            let definition_label = self.get_register_label(obj)?.clone();
+                            self.register_accessor_home_object(
+                                &func_val,
+                                backing,
+                                &property_key,
+                                kind,
+                                definition_label,
                             )?;
                             self.define_accessor_property(backing, property_key, func_val, kind)?;
                         }
@@ -53320,13 +53342,19 @@ impl InterpreterCore {
                         });
                     };
                     if !frame.derived_constructor || frame.this_initialized {
-                        let error = InterpreterError::TypeError {
-                            expected: "uninitialized derived-constructor this binding".to_string(),
-                            got: if frame.derived_constructor {
-                                "super() called more than once".to_string()
-                            } else {
-                                "super() in a base constructor".to_string()
-                            },
+                        // A second super() is a ReferenceError (ES2020
+                        // 8.1.1.3.1 BindThisValue step 3).
+                        let error = if frame.derived_constructor {
+                            self.throw_js_error(
+                                "ReferenceError",
+                                "Super constructor may only be called once".to_string(),
+                            )
+                        } else {
+                            InterpreterError::TypeError {
+                                expected: "uninitialized derived-constructor this binding"
+                                    .to_string(),
+                                got: "super() in a base constructor".to_string(),
+                            }
                         };
                         match self.route_isolated_explicit_throw(module, error)? {
                             None => continue,

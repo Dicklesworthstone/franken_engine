@@ -77,13 +77,19 @@ fn a_module_with_a_frame_wider_than_256_registers_runs_bd_9vouw_262() {
         "compile failed: {}",
         String::from_utf8_lossy(&compiled.stderr)
     );
-    let artifact: serde_json::Value =
-        serde_json::from_slice(&fs::read(&artifact).expect("read artifact")).expect("json");
-    let widest = artifact["lowering"]["ir3"]["function_table"]
-        .as_array()
-        .expect("function table")
-        .iter()
-        .filter_map(|function| function["frame_size"].as_u64())
+    // The artifact nests deeper than serde_json's default recursion limit,
+    // so the function table's frame sizes are read from its text.
+    let artifact = fs::read_to_string(&artifact).expect("read artifact");
+    let widest = artifact
+        .match_indices("\"frame_size\":")
+        .filter_map(|(at, key)| {
+            artifact[at + key.len()..]
+                .trim_start()
+                .split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse::<u64>()
+                .ok()
+        })
         .max()
         .expect("a function");
     assert!(

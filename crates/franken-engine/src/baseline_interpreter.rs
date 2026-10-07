@@ -52935,6 +52935,17 @@ impl InterpreterCore {
                         | Value::GeneratorFunction(_)
                         | Value::AsyncFunction(_)
                         | Value::AsyncGeneratorFunction(_)) => {
+                            // The class's `prototype` is neither writable nor
+                            // configurable, so `static ['prototype']() {}`
+                            // fails its DefinePropertyOrThrow (ES2020
+                            // 14.3.8 step 8, bd-9vouw.266).
+                            if property_key.as_str() == Some("prototype") {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "a configurable property for a static class method"
+                                        .to_string(),
+                                    got: "the class's non-configurable `prototype`".to_string(),
+                                });
+                            }
                             let backing = self
                                 .ensure_function_own_property_object(module, function)?
                                 .expect("user function values always have a backing-object key");
@@ -101988,10 +101999,19 @@ impl InterpreterCore {
         };
         let prototype = Value::str("prototype");
         if self.object_own_property_contains(function, &prototype) && !names.contains(&prototype) {
+            // Integer keys come first, then string keys in creation order:
+            // `length` and `name`, then `prototype` (made before any static
+            // member), so `prototype` goes after the leading integer keys
+            // and `length`/`name` (ES2020 9.1.11.1).
             let (length, name) = (Value::str("length"), Value::str("name"));
             let position = names
                 .iter()
-                .position(|key| *key != length && *key != name)
+                .position(|key| {
+                    *key != length
+                        && *key != name
+                        && !matches!(key, Value::Str(text)
+                            if Self::canonical_array_index_key(&text.to_string()).is_some())
+                })
                 .unwrap_or(names.len());
             names.insert(position, prototype);
         }

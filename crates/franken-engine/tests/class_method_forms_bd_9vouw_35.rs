@@ -207,3 +207,40 @@ console.log(kind(function () { class D extends Base { constructor() { super(); s
         ]
     );
 }
+
+/// bd-9vouw.266: a static method, generator or async method named
+/// `prototype` (a computed key) throws a TypeError, as the accessors do; an
+/// instance method of that name is fine. `Object.getOwnPropertyNames` of a
+/// class or function lists `prototype` after its integer keys and
+/// `length`/`name`, before later string keys (it came first when the
+/// function had integer keys). Expected lines are Node v22.2.0's output,
+/// captured programmatically; Bun 1.4.2 agrees.
+#[test]
+fn static_prototype_methods_and_function_key_order_bd_9vouw_266() {
+    let source = r#"function kind(f) { try { f(); return 'none'; } catch (e) { return e.constructor.name; } }
+console.log(kind(function () { class D { static ['prototype']() {} } }), kind(function () { class D { static *['prototype']() {} } }), kind(function () { class D { static async ['prototype']() {} } }), kind(function () { class D { ['prototype']() {} } }));
+class C {
+  static a() { return 'A'; }
+  static [1]() { return 'B'; }
+  static c() { return 'C'; }
+  static [2]() { return 'D'; }
+}
+function F() { 'use strict'; }
+F[3] = 1; F.z = 2;
+console.log(Object.getOwnPropertyNames(C).join(), Object.getOwnPropertyNames(F).join(), Object.getOwnPropertyNames(class {}).join());
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "TypeError TypeError TypeError none",
+            "1,2,length,name,prototype,a,c 3,length,name,prototype,z length,name,prototype",
+        ]
+    );
+}

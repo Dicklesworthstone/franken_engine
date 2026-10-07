@@ -12313,22 +12313,22 @@ fn try_parse_for_in_of(
     let lhs = header[..split_pos].trim();
     let rhs = header[split_pos + keyword.len()..].trim();
 
-    // Parse binding: optionally `let x`, `const x`, `var x`, or bare `x`.
-    let (binding_kind, binding_src) = if let Some(after) = lhs
-        .strip_prefix("let ")
-        .or_else(|| lhs.strip_prefix("let\t"))
-    {
-        (Some(VariableDeclarationKind::Let), after.trim())
-    } else if let Some(after) = lhs
-        .strip_prefix("const ")
-        .or_else(|| lhs.strip_prefix("const\t"))
-    {
-        (Some(VariableDeclarationKind::Const), after.trim())
-    } else if let Some(after) = lhs
-        .strip_prefix("var ")
-        .or_else(|| lhs.strip_prefix("var\t"))
-    {
-        (Some(VariableDeclarationKind::Var), after.trim())
+    // Parse binding: optionally `let x`, `const x`, `var x`, or bare `x`. A
+    // pattern may follow the keyword directly, as minifiers write it
+    // (`for(const[k,v]of m)`, `for(let{a}of xs)`): a for-in/of head never
+    // reads `let [` or `let {` as an expression (bd-9vouw.219), and a bare
+    // `let` stays the variable `let` (bd-9vouw.233).
+    let declaration = |keyword: &str| {
+        lhs.strip_prefix(keyword)
+            .filter(|after| after.starts_with([' ', '\t', '[', '{']))
+            .map(str::trim)
+    };
+    let (binding_kind, binding_src) = if let Some(after) = declaration("let") {
+        (Some(VariableDeclarationKind::Let), after)
+    } else if let Some(after) = declaration("const") {
+        (Some(VariableDeclarationKind::Const), after)
+    } else if let Some(after) = declaration("var") {
+        (Some(VariableDeclarationKind::Var), after)
     } else {
         (None, lhs)
     };
@@ -12494,8 +12494,9 @@ fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
     }
     let value = "__franken_fa_sync ? await __franken_fa_r.value : __franken_fa_r.value";
     let is_declaration = ["let", "const", "var"].iter().any(|kind| {
-        lhs.strip_prefix(kind)
-            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_whitespace()))
+        lhs.strip_prefix(kind).is_some_and(|rest| {
+            rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '[' || c == '{')
+        })
     });
     let bind = if is_declaration {
         format!("{lhs} = {value};")

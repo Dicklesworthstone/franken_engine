@@ -177,3 +177,15 @@ fn a_for_in_head_assigns_the_variable_let_bd_9vouw_233() {
     let source = "var let;\nfor (let in { a: 1, b: 2 }) {}\nconsole.log(let);\nvar o = { p: 0 };\nfor (let in o) { o.p += 1; }\nconsole.log(o.p, let);\n";
     assert_eq!(run(source), ["b", "1 p"]);
 }
+
+/// bd-9vouw.219 (follow-up): a declaration keyword followed directly by a
+/// pattern (`for(let{a}of xs)`, `for(var[c]in o)`, `for await(const[k,v]of
+/// xs)`) declares it; the head was read as `let` / `const` / `var`
+/// variables (`const is not defined`, "invalid assignment target"), which
+/// failed minified_for_in_of_heads_parse_bd_9vouw_219 at its first gate.
+/// Node v22.2.0 prints this line; Bun 1.4.2 agrees.
+#[test]
+fn declaration_keywords_glued_to_patterns_declare_them_bd_9vouw_219() {
+    let source = "var out=[];for(let{a}of[{a:1}])out.push(a);for(let[b]of[[2]])out.push(b);var let_=3;for(var[c]in{x:1})out.push(c);(async()=>{for await(const[k,v]of[[4,5]])out.push(k+v);for await(let{z}of[{z:6}])out.push(z);console.log(out.join());})();\n";
+    assert_eq!(run(source), ["1,2,x,9,6"]);
+}

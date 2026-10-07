@@ -1039,6 +1039,7 @@ fn config_clone_preserves_all_fields() {
         trace_id_prefix: "clone-test".to_string(),
         policy_id: "policy-clone".to_string(),
         parser_options: Default::default(),
+        auto_size_register_window: false,
     };
     let cloned = cfg.clone();
     assert_eq!(cloned.loss_matrix_preset, LossMatrixPreset::Conservative);

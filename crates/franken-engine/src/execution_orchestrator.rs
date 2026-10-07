@@ -689,6 +689,13 @@ pub struct OrchestratorConfig {
     pub commonjs_entry: bool,
     /// Parser mode + deterministic budget configuration.
     pub parser_options: ParserOptions,
+    /// The trusted host lets each lane's register window grow to the entry
+    /// module's widest verified frame, the extra register carriers charged
+    /// to the memory budget (bd-9vouw.262: `frankenctl run` sets it, as
+    /// @babel/standalone needs more than the deterministic lane's 256).
+    /// Off by default: the configured `*_max_registers` then stay the
+    /// ceiling, as an operator who set them expects.
+    pub auto_size_register_window: bool,
     /// Prefix for generated trace IDs.
     pub trace_id_prefix: String,
     /// Policy ID for decision context.
@@ -709,6 +716,7 @@ impl Default for OrchestratorConfig {
             parse_goal: ParseGoal::Script,
             commonjs_entry: false,
             parser_options: ParserOptions::default(),
+            auto_size_register_window: false,
             trace_id_prefix: "orch".to_string(),
             policy_id: "default-policy".to_string(),
         }
@@ -3549,11 +3557,13 @@ impl ExecutionOrchestrator {
     }
 
     /// The two lane configurations for one execution. `widest_frame` is the
-    /// entry module's widest verified IR3 frame: each lane's register window
-    /// is widened to it, with the extra register carriers charged to the
-    /// memory budget as source eval does (bd-9vouw.262). The deterministic
-    /// lane's 256 registers otherwise refused a module whose functions the
-    /// lowering had sized wider (@babel/standalone failed at load).
+    /// entry module's widest verified IR3 frame: when the host enables
+    /// `auto_size_register_window`, each lane's register window is widened
+    /// to it, with the extra register carriers charged to the memory budget
+    /// as source eval does (bd-9vouw.262). The deterministic lane's 256
+    /// registers otherwise refuse a module whose functions the lowering
+    /// sized wider (@babel/standalone failed at load); without the opt-in
+    /// the configured window is the ceiling.
     fn lane_router_for_execution(
         &self,
         package: &ExtensionPackage,
@@ -3606,8 +3616,10 @@ impl ExecutionOrchestrator {
             v8_config.module_root = Some(root);
             v8_config.canonical_module_root = canonical_root;
         }
-        crate::reserve_eval_register_capacity(&mut quickjs_config, widest_frame)?;
-        crate::reserve_eval_register_capacity(&mut v8_config, widest_frame)?;
+        if self.config.auto_size_register_window {
+            crate::reserve_eval_register_capacity(&mut quickjs_config, widest_frame)?;
+            crate::reserve_eval_register_capacity(&mut v8_config, widest_frame)?;
+        }
 
         Ok(LaneRouter::with_configs(quickjs_config, v8_config))
     }

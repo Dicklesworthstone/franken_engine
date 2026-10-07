@@ -92,6 +92,63 @@ fn configured_register_limits_reach_both_native_profiles() {
     }
 }
 
+/// A function holding 96 locals and a 64-entry object literal whose last
+/// value is another 64-entry literal: its compiled frame is wider than the
+/// deterministic lane's default 256 registers (bd-9vouw.262's program).
+/// Node v22.2.0 prints "4560 64 64 63".
+fn wide_frame_program() -> String {
+    let declarations: String = (0..96).map(|i| format!("var v{i} = {i};")).collect();
+    let inner: Vec<String> = (0..64).map(|j| format!("i{j}: v{}", j % 96)).collect();
+    let mut outer: Vec<String> = (0..63).map(|i| format!("k{i}: v{i}")).collect();
+    outer.push(format!("k63: {{ {} }}", inner.join(", ")));
+    let uses: Vec<String> = (0..96).map(|i| format!("v{i}")).collect();
+    format!(
+        "function wide() {{ {declarations} var o = {{ {} }}; return [{}, \
+         Object.keys(o).length, Object.keys(o.k63).length, o.k63.i63]; }} \
+         console.log(wide().join(' '));",
+        outer.join(", "),
+        uses.join(" + ")
+    )
+}
+
+/// bd-9vouw.262 follow-up: growing the lanes' register windows to the entry
+/// module's widest frame is the host's opt-in (`frankenctl run` sets it).
+/// Without it the deterministic lane's configured 256 registers stay the
+/// ceiling and refuse the wide module (as configured_register_limits_*
+/// requires of any configured window); with it the module runs.
+#[test]
+fn register_window_auto_sizing_is_the_hosts_opt_in() {
+    let wide = package(&wide_frame_program());
+    let error = orchestrator(LaneChoice::QuickJs, RuntimeConfig::default())
+        .execute(&wide)
+        .expect_err("the configured 256-register window is the ceiling");
+    assert!(
+        matches!(
+            error.primary_error(),
+            OrchestratorError::Interpreter(InterpreterError::RegisterOutOfBounds { max: 256, .. })
+        ),
+        "{error:?}"
+    );
+    assert_closed(&error);
+    let result = ExecutionOrchestrator::try_new_lab_with_runtime_config(
+        OrchestratorConfig {
+            force_lane: Some(LaneChoice::QuickJs),
+            auto_size_register_window: true,
+            ..OrchestratorConfig::default()
+        },
+        RuntimeConfig::default(),
+    )
+    .expect("valid lab resource configuration")
+    .execute(&wide)
+    .expect("the opted-in window grows to the module's widest frame");
+    let lines: Vec<&str> = result
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(lines, ["4560 64 64 63"]);
+}
+
 #[test]
 fn configured_call_depth_reaches_both_native_profiles() {
     let package = package(

@@ -73,6 +73,7 @@ fn create_deterministic_config() -> OrchestratorConfig {
         parse_goal: ParseGoal::Script,
         commonjs_entry: false,
         parser_options: ParserOptions::default(),
+        auto_size_register_window: false,
         trace_id_prefix: "metamorphic_test".to_string(),
         policy_id: "metamorphic_test_policy".to_string(),
     }

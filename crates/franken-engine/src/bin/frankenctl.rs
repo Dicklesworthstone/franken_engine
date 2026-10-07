@@ -4625,6 +4625,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let mut orchestrator_config = OrchestratorConfig {
         parse_goal: args.parse_goal,
         commonjs_entry: args.commonjs_entry,
+        auto_size_register_window: true,
         trace_id_prefix: "frankenctl-run".to_string(),
         parser_options: args.limits.parser_options(),
         ..OrchestratorConfig::default()
@@ -9368,6 +9369,7 @@ fn execute_run_report_replay(args: ReplayArgs) -> Result<i32, String> {
     let mut orchestrator_config = OrchestratorConfig {
         parse_goal,
         commonjs_entry: input.commonjs_entry,
+        auto_size_register_window: true,
         trace_id_prefix: "frankenctl-run".to_string(),
         policy_id: input.policy_id.clone(),
         epoch: SecurityEpoch::from_raw(input.policy_epoch),

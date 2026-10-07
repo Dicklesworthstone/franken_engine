@@ -4583,6 +4583,26 @@ fn parse_statement_inner(
         }
     }
 
+    // TypeScript's and babel's CommonJS export preamble, `exports.a =
+    // exports.b = ... = void 0;`, one link per export (bd-9vouw.232): as one
+    // right-nested assignment it cost a parser recursion level and a register
+    // per link (refused past 255 links, a register overflow past ~200). Its
+    // stores run innermost first with a constant value and side-effect-free
+    // targets, so separate assignments in that order are the same program.
+    if let Some(targets) = export_void_chain_targets(statement)
+        && targets.len() > 1
+    {
+        let mut body = Vec::with_capacity(targets.len());
+        for target in targets.iter().rev() {
+            let expression = parse_expression(&format!("{target} = void 0"), &span, context, 1)?;
+            body.push(Statement::Expression(ExpressionStatement {
+                expression,
+                span: span.clone(),
+            }));
+        }
+        return Ok(Statement::Block(BlockStatement { body, span }));
+    }
+
     // A bare expression statement may be a top-level comma sequence (`a, b`);
     // ES2020 §14.5 ExpressionStatement is an Expression, which includes the
     // comma operator. Declarations (`let a = 1, b = 2`) are handled earlier, so
@@ -4592,6 +4612,48 @@ fn parse_statement_inner(
         expression,
         span,
     }))
+}
+
+/// The targets, outermost first, of a statement `T1 = T2 = ... = void 0`
+/// whose every target is `exports.<name>`, `module.exports.<name>` or
+/// `this.<name>` (an ASCII identifier name, no spaces), bd-9vouw.232.
+fn export_void_chain_targets(statement: &str) -> Option<Vec<&str>> {
+    fn take_target(text: &str) -> Option<(&str, &str)> {
+        let after_base = ["module.exports.", "exports.", "this."]
+            .iter()
+            .find_map(|base| text.strip_prefix(base))?;
+        let name_len = after_base
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+            .count();
+        let starts_identifier = after_base
+            .bytes()
+            .next()
+            .is_some_and(|byte| !byte.is_ascii_digit());
+        if name_len == 0 || !starts_identifier {
+            return None;
+        }
+        let end = text.len() - after_base.len() + name_len;
+        Some((&text[..end], &text[end..]))
+    }
+    let trimmed = statement.trim();
+    let mut rest = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
+    let mut targets = Vec::new();
+    loop {
+        let (target, after) = take_target(rest)?;
+        let after = after.trim_start().strip_prefix('=')?;
+        if after.starts_with(['=', '>']) {
+            return None;
+        }
+        targets.push(target);
+        rest = after.trim_start();
+        if let Some(operand) = rest.strip_prefix("void")
+            && operand.starts_with(char::is_whitespace)
+            && operand.trim() == "0"
+        {
+            return Some(targets);
+        }
+    }
 }
 
 /// `import` begins a declaration when followed by whitespace, `{`, `*` or a

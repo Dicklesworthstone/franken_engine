@@ -136,3 +136,159 @@ fn one_shot_guards_survive_checkpoint_restore() {
     assert!(!restored.record_rejection(1, JsValue::Int(88)));
     assert_eq!(restored.settled_count, 2);
 }
+
+#[test]
+fn native_element_jobs_share_registration_order_and_survive_restore_bd_9vouw_295() {
+    for rejected in [false, true] {
+        for settled_first in [false, true] {
+            let mut store = PromiseStore::new();
+            let mut queue = MicrotaskQueue::new();
+            let source = store.create();
+            let aggregate = store.create();
+            let payload = JsValue::Object(crate::object_model::ObjectHandle(37));
+            let settle = |store: &mut PromiseStore, queue: &mut MicrotaskQueue| {
+                if rejected {
+                    store.reject(source, payload.clone(), Label::Secret, queue)
+                } else {
+                    store.fulfill(source, payload.clone(), Label::Secret, queue)
+                }
+                .unwrap();
+            };
+            if settled_first {
+                settle(&mut store, &mut queue);
+            }
+            let before = store
+                .then(source, None, None, Label::Public, &mut queue)
+                .unwrap();
+            for index in 0..2 {
+                store
+                    .then_for_combinator(
+                        source,
+                        aggregate,
+                        Label::Confidential,
+                        PromiseCombinatorReaction {
+                            combinator_id: 19,
+                            index,
+                        },
+                        &mut queue,
+                    )
+                    .unwrap();
+            }
+            let after = store
+                .then(source, None, None, Label::Public, &mut queue)
+                .unwrap();
+
+            // A checkpoint may contain pending native registrations or
+            // already-enqueued native jobs; both preserve the same sequence.
+            let store_wire = serde_json::to_vec(&store).unwrap();
+            let queue_wire = serde_json::to_vec(&queue).unwrap();
+            store = serde_json::from_slice(&store_wire).unwrap();
+            queue = serde_json::from_slice(&queue_wire).unwrap();
+            if !settled_first {
+                assert!(queue.is_empty());
+                let mut promises = Vec::new();
+                store.for_each_edge(source, |edge| {
+                    if let PromiseEdge::Promise(handle) = edge {
+                        promises.push(handle);
+                    }
+                });
+                assert_eq!(promises.iter().filter(|&&p| p == aggregate).count(), 4);
+                settle(&mut store, &mut queue);
+            }
+            assert!(store.get(source).unwrap().rejection_handled);
+            assert_eq!(store.get(aggregate).unwrap().state, PromiseState::Pending);
+            let mut roots = Vec::new();
+            queue.for_each_promise(|handle| roots.push(handle));
+            assert_eq!(roots, [before, aggregate, aggregate, after]);
+            let mut values = Vec::new();
+            queue.for_each_value(|value| values.push(value.clone()));
+            assert_eq!(values, vec![payload.clone(); 4]);
+            queue.for_each_handler(|_| panic!("native jobs must not fabricate a handler"));
+
+            for (position, expected_result) in roots.into_iter().enumerate() {
+                let task = queue.dequeue().unwrap();
+                if position == 1 || position == 2 {
+                    assert_eq!(
+                        task,
+                        Microtask::PromiseCombinator {
+                            combinator: PromiseCombinatorReaction {
+                                combinator_id: 19,
+                                index: (position - 1) as u32,
+                            },
+                            kind: if rejected {
+                                ReactionKind::Reject
+                            } else {
+                                ReactionKind::Fulfill
+                            },
+                            argument: payload.clone(),
+                            result_promise: expected_result,
+                            label: Label::Secret,
+                        }
+                    );
+                } else {
+                    let expected = if rejected {
+                        Microtask::PromiseRejection {
+                            reason: payload.clone(),
+                            result_promise: expected_result,
+                            label: Label::Secret,
+                        }
+                    } else {
+                        Microtask::PromiseReaction {
+                            handler: None,
+                            argument: payload.clone(),
+                            result_promise: expected_result,
+                            label: Label::Secret,
+                        }
+                    };
+                    assert_eq!(task, expected);
+                }
+            }
+            assert!(queue.is_empty());
+            queue.compact();
+            assert_eq!(
+                queue.estimated_memory_bytes(),
+                queue.estimated_memory_bytes_by_walk()
+            );
+            assert_eq!(
+                store.estimated_memory_bytes(),
+                store.estimated_memory_bytes_by_walk()
+            );
+        }
+    }
+}
+
+#[test]
+fn native_element_dependency_closes_on_terminal_failure_bd_9vouw_295() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+    let source = store.create();
+    let aggregate = store.create();
+    store
+        .then_for_combinator(
+            source,
+            aggregate,
+            Label::Secret,
+            PromiseCombinatorReaction {
+                combinator_id: 8,
+                index: 0,
+            },
+            &mut queue,
+        )
+        .unwrap();
+    let descendant = store
+        .then(aggregate, None, None, Label::Public, &mut queue)
+        .unwrap();
+    let unrelated = store.create();
+    let epoch = store
+        .terminally_reject_without_jobs(source, &Label::Secret)
+        .unwrap();
+    for handle in [source, aggregate, descendant] {
+        assert!(store.was_terminally_rejected_in_epoch(handle, epoch));
+        let record = store.get(handle).unwrap();
+        assert_eq!(record.state, PromiseState::Rejected(JsValue::Undefined));
+        assert_eq!(record.label, Label::Secret);
+        assert!(record.reactions.is_empty());
+    }
+    assert_eq!(store.get(unrelated).unwrap().state, PromiseState::Pending);
+    assert!(queue.is_empty());
+}

@@ -7,6 +7,7 @@ enum Registration {
     Identity,
     Handler,
     Await,
+    Combinator,
 }
 
 fn labels() -> Vec<Label> {
@@ -49,6 +50,21 @@ fn register(
             queue,
         ),
         Registration::Await => store.then_for_await(source, label, queue),
+        Registration::Combinator => {
+            let result = store.create();
+            store
+                .then_for_combinator(
+                    source,
+                    result,
+                    label,
+                    PromiseCombinatorReaction {
+                        combinator_id: 42,
+                        index: 7,
+                    },
+                    queue,
+                )
+                .map(|()| result)
+        }
     }
     .expect("source handle is valid")
 }
@@ -73,6 +89,7 @@ fn reaction_label(task: &Microtask) -> &Label {
     match task {
         Microtask::PromiseReaction { label, .. }
         | Microtask::PromiseRejection { label, .. }
+        | Microtask::PromiseCombinator { label, .. }
         | Microtask::ResolveThenable { label, .. } => label,
     }
 }
@@ -166,7 +183,31 @@ fn registration_result(
         | Microtask::PromiseRejection { result_promise, .. } => {
             assert_eq!(*result_promise, result);
         }
-        Microtask::ResolveThenable { .. } => panic!("not a thenable-resolution job"),
+        Microtask::PromiseCombinator {
+            combinator,
+            kind,
+            result_promise,
+            ..
+        } => {
+            assert!(matches!(registration, Registration::Combinator));
+            assert_eq!(*result_promise, result);
+            assert_eq!(
+                *combinator,
+                PromiseCombinatorReaction {
+                    combinator_id: 42,
+                    index: 7
+                }
+            );
+            assert_eq!(
+                *kind,
+                if rejected {
+                    ReactionKind::Reject
+                } else {
+                    ReactionKind::Fulfill
+                }
+            );
+        }
+        Microtask::ResolveThenable { .. } => panic!("not a reaction job"),
     }
     assert!(queue.is_empty());
     task
@@ -182,6 +223,7 @@ fn labels_and_payloads_do_not_depend_on_registration_timing() {
                     Registration::Identity,
                     Registration::Handler,
                     Registration::Await,
+                    Registration::Combinator,
                 ] {
                     let before =
                         registration_result(source, context, rejected, false, registration);
@@ -285,7 +327,9 @@ fn native_adoption_preserves_both_source_and_registration_labels() {
                 | Microtask::PromiseRejection { result_promise, .. } => {
                     assert_eq!(result_promise, target);
                 }
-                Microtask::ResolveThenable { .. } => panic!("unexpected job kind"),
+                Microtask::ResolveThenable { .. } | Microtask::PromiseCombinator { .. } => {
+                    panic!("unexpected job kind")
+                }
             }
         }
     }

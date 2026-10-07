@@ -102,6 +102,41 @@ fn property_is_enumerable_of_a_proxy_asks_its_target_or_trap() {
     assert_eq!(eval(source), "true false false true false true a []");
 }
 
+/// Array iteration is inherited through the actual prototype chain. Removing
+/// that chain must agree across ordinary, Reflect and transparent Proxy reads.
+#[test]
+fn array_iterator_get_and_has_follow_explicit_prototypes() {
+    let source = r#"
+        const key = Symbol.iterator;
+        function inspect(value) {
+            const proxy = new Proxy(value, {});
+            return [typeof value[key], key in value,
+                    typeof Reflect.get(value, key), Reflect.has(value, key),
+                    typeof proxy[key], key in proxy].join(':');
+        }
+        const missing = Object.setPrototypeOf([1], null);
+        const plain = Object.setPrototypeOf([2], Object.prototype);
+        const custom = Object.setPrototypeOf([3], {});
+        const inherited = Object.setPrototypeOf([4], Object.create(Array.prototype));
+        const before = [inspect(missing), inspect(plain), inspect(custom)];
+        missing[key] = Array.prototype[key];
+        before.push(inspect(missing), inspect(inherited), inspect([5]));
+        before.join('|');
+    "#;
+    assert_eq!(
+        eval(source),
+        [
+            "undefined:false:undefined:false:undefined:false",
+            "undefined:false:undefined:false:undefined:false",
+            "undefined:false:undefined:false:undefined:false",
+            "function:true:function:true:function:true",
+            "function:true:function:true:function:true",
+            "function:true:function:true:function:true",
+        ]
+        .join("|")
+    );
+}
+
 /// bd-9vouw.306: frozen data properties use SameValue, including Symbol
 /// keys, NaN, signed zero and object identity. Configurable or writable
 /// properties remain virtualizable, even on a non-extensible target.
@@ -459,7 +494,11 @@ fn proxy_get_invariant_observations_label_success_and_caught_errors() {
     .unwrap()
     .ir3;
     for reflect in [false, true] {
-        for property_label in [Label::Public, Label::Secret] {
+        for (property_label, key_label) in [
+            (Label::Public, Label::Public),
+            (Label::Secret, Label::Public),
+            (Label::Public, Label::Secret),
+        ] {
             for guess in [7, 8] {
                 for mut config in [
                     InterpreterConfig::quickjs_defaults(),
@@ -488,6 +527,7 @@ fn proxy_get_invariant_observations_label_success_and_caught_errors() {
                         core.seed_register(register, value).unwrap();
                     }
                     core.set_register_label(2, property_label.clone()).unwrap();
+                    core.set_register_label(6, key_label.clone()).unwrap();
                     let mut module = template.clone();
                     module.instructions = vec![
                         Ir3Instruction::HostCall {
@@ -553,8 +593,9 @@ fn proxy_get_invariant_observations_label_success_and_caught_errors() {
                     };
                     assert_eq!(result.value, expected, "reflect={reflect}, guess={guess}");
                     assert_eq!(
-                        result.completion_label, property_label,
-                        "reflect={reflect}, guess={guess}"
+                        result.completion_label,
+                        property_label.join(&key_label),
+                        "reflect={reflect}, guess={guess}, property_label={property_label:?}, key_label={key_label:?}"
                     );
                     assert_eq!(core.get_register_label(5).unwrap(), &Label::Public);
                     assert_eq!(

@@ -439,8 +439,9 @@ for (var Species of [Locked, Sealed, Refusing]) {
 }
 
 /// Species can return an object already reachable through a public alias.
-/// Read that alias in a fresh execution so the copy's return label or its
-/// catch context cannot conceal missing provenance on the stored elements.
+/// Read that untouched alias into a fresh register after the source completes.
+/// A public control register proves that catch or callback context cannot
+/// conceal missing provenance on the stored elements.
 #[test]
 fn generic_species_copies_preserve_public_alias_labels_after_success_and_partial_failure() {
     use frankenengine_engine::baseline_interpreter::Value;
@@ -516,6 +517,53 @@ fn generic_species_copies_preserve_public_alias_labels_after_success_and_partial
                     }
                 }
                 assert_eq!(markers, [1, 1], "each seeded source marker is unique");
+                // Branchless observation after the script's completion; append
+                // it so function entries and all existing jump targets stay valid.
+                let observation = module.instructions.len() as u32;
+                let script_end = module
+                    .instructions
+                    .iter()
+                    .position(|instruction| matches!(instruction, Ir3Instruction::Halt))
+                    .expect("main code precedes its Halt and appended function bodies");
+                let mut returns = 0;
+                for instruction in &mut module.instructions[..script_end] {
+                    if let Ir3Instruction::Return { value } = instruction {
+                        assert_eq!(*value, 0, "script completion is carried by r0");
+                        returns += 1;
+                        *instruction = Ir3Instruction::Jump {
+                            target: observation,
+                        };
+                    }
+                }
+                assert_eq!(
+                    returns, 1,
+                    "one script completion precedes alias observation"
+                );
+                let separator = module.constant_pool.len() as u32;
+                module.constant_pool.push("|".into());
+                module.instructions.extend([
+                    Ir3Instruction::LoadInt { dst: 204, value: 0 },
+                    Ir3Instruction::GetProperty {
+                        obj: 200,
+                        key: 202,
+                        dst: 203,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 205,
+                        pool_index: separator,
+                    },
+                    Ir3Instruction::Add {
+                        dst: 206,
+                        lhs: 0,
+                        rhs: 205,
+                    },
+                    Ir3Instruction::Add {
+                        dst: 207,
+                        lhs: 206,
+                        rhs: 203,
+                    },
+                    Ir3Instruction::Return { value: 207 },
+                ]);
                 for source_label in [Label::Public, Label::Secret] {
                     for mut config in [
                         InterpreterConfig::quickjs_defaults(),
@@ -532,49 +580,31 @@ fn generic_species_copies_preserve_public_alias_labels_after_success_and_partial
                         let output = core.alloc_object_with_prototype(None).unwrap();
                         core.seed_register(200, Value::Object(output)).unwrap();
                         core.seed_register(201, Value::Int(7)).unwrap();
+                        core.seed_register(
+                            202,
+                            Value::str(if length_only { "length" } else { "0" }),
+                        )
+                        .unwrap();
                         core.set_register_label(201, source_label.clone()).unwrap();
                         let result = core.execute(&module).unwrap();
                         assert_eq!(
                             result.value,
-                            Value::str(if partial { "TypeError" } else { "success" }),
-                            "length_only={length_only}, proxied={proxied}, partial={partial}"
-                        );
-                        assert_eq!(
-                            core.estimated_memory_bytes(),
-                            core.recompute_estimated_memory_bytes()
-                        );
-
-                        let mut observation = lower("0;");
-                        observation.instructions = vec![
-                            Ir3Instruction::GetProperty {
-                                obj: 0,
-                                key: 1,
-                                dst: 2,
-                            },
-                            Ir3Instruction::Return { value: 2 },
-                        ];
-                        for (register, value) in [
-                            (0, Value::Object(output)),
-                            (1, Value::str(if length_only { "length" } else { "0" })),
-                            (2, Value::Undefined),
-                        ] {
-                            core.seed_register(register, value).unwrap();
-                            core.set_register_label(register, Label::Public).unwrap();
-                        }
-                        let copied = core.execute(&observation).unwrap();
-                        assert_eq!(
-                            copied.value,
-                            if length_only && partial {
-                                Value::str("locked")
+                            Value::str(if length_only && partial {
+                                "TypeError|locked"
+                            } else if partial {
+                                "TypeError|7"
                             } else {
-                                Value::Int(7)
-                            }
-                        );
-                        assert_eq!(
-                            copied.completion_label, source_label,
+                                "success|7"
+                            }),
                             "length_only={length_only}, proxied={proxied}, partial={partial}"
                         );
-                        assert_eq!(core.get_register_label(0).unwrap(), &Label::Public);
+                        assert_eq!(
+                            core.get_register_label(203).unwrap(),
+                            &source_label,
+                            "length_only={length_only}, proxied={proxied}, partial={partial}"
+                        );
+                        assert_eq!(core.get_register_label(200).unwrap(), &Label::Public);
+                        assert_eq!(core.get_register_label(204).unwrap(), &Label::Public);
                         assert_eq!(
                             core.estimated_memory_bytes(),
                             core.recompute_estimated_memory_bytes()

@@ -250,8 +250,10 @@ fn serde_promise_reaction() {
         handler: Some(ClosureHandle(10)),
         result_promise: PromiseHandle(5),
         label: Label::Confidential,
+        combinator: None,
     };
     let json = serde_json::to_string(&reaction).unwrap();
+    assert!(!json.contains("combinator"));
     let back: PromiseReaction = serde_json::from_str(&json).unwrap();
     assert_eq!(back, reaction);
 }

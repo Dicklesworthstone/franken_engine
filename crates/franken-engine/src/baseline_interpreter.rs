@@ -13017,6 +13017,62 @@ enum PromiseCombinatorState {
     Any(crate::promise_model::PromiseAnyTracker),
 }
 
+impl PromiseCombinatorState {
+    fn result_promise(&self) -> crate::promise_model::PromiseHandle {
+        match self {
+            Self::All(tracker) => tracker.result_promise,
+            Self::AllSettled(tracker) => tracker.result_promise,
+            Self::Race(tracker) => tracker.result_promise,
+            Self::Any(tracker) => tracker.result_promise,
+        }
+    }
+
+    /// Additional retained payload of one still-live element reaction. The
+    /// map/string charges match the model trackers' resident-memory algebra.
+    fn observation_memory_growth(
+        &self,
+        index: u32,
+        kind: crate::promise_model::ReactionKind,
+        value: &crate::object_model::JsValue,
+    ) -> Option<u64> {
+        let entry_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(crate::promise_model::estimate_js_value_memory_bytes(value));
+        let rejected = kind == crate::promise_model::ReactionKind::Reject;
+        match self {
+            Self::All(tracker) if !tracker.settled && index < tracker.total => {
+                if rejected {
+                    Some(0)
+                } else if !tracker.values.contains_key(&index) {
+                    Some(entry_bytes)
+                } else {
+                    None
+                }
+            }
+            Self::AllSettled(tracker)
+                if index < tracker.total && !tracker.outcomes.contains_key(&index) =>
+            {
+                let status = if rejected { "rejected" } else { "fulfilled" };
+                Some(
+                    entry_bytes
+                        .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+                        .saturating_add(status.len() as u64),
+                )
+            }
+            Self::Race(tracker) if !tracker.settled => Some(0),
+            Self::Any(tracker) if !tracker.settled && index < tracker.total => {
+                if !rejected {
+                    Some(0)
+                } else if !tracker.errors.contains_key(&index) {
+                    Some(entry_bytes)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PromiseCombinatorKind {
     All,
@@ -13036,12 +13092,6 @@ enum PromiseReactionKind {
 struct PromiseCombinatorWatcher {
     combinator_id: u64,
     index: u32,
-}
-
-#[derive(Debug, Clone)]
-enum PromiseSettlement {
-    Fulfilled(crate::object_model::JsValue),
-    Rejected(crate::object_model::JsValue),
 }
 
 /// JIT statistics for hot path detection.
@@ -44430,11 +44480,14 @@ impl InterpreterCore {
                 // bd-9vouw.137, bd-9vouw.282: PromiseResolve(C, x) for the
                 // `this` C, which must be an object.
                 let constructor = Self::promise_static_this(receiver.as_ref(), "resolve")?;
-                if Self::is_intrinsic_promise_constructor(&constructor) {
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                if Self::is_intrinsic_promise_constructor(&constructor)
+                    && !matches!(value, Value::Promise(_))
+                {
                     return self.dispatch_promise_hostcall("promise:resolve", args, Some(module));
                 }
-                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                self.promise_resolve_with_constructor(module, constructor, value)
+                let label = self.join_arg_range_with_object_mutation_label(args)?;
+                self.promise_resolve_with_constructor(module, constructor, value, label)
             }
             BuiltinFunctionKind::PromiseReject => {
                 if let Some(handle_id) = builtin.bound_object {
@@ -48677,6 +48730,20 @@ impl InterpreterCore {
                 });
             }
 
+            // Native element reactions carry a direct PromiseStore edge to
+            // their aggregate. The terminal walk may therefore have rejected
+            // that result without traversing a legacy watcher entry (including
+            // results whose inputs already queued their jobs).
+            {
+                let store = &self.promise_store;
+                self.promise_combinators.retain(|_, state| {
+                    let keep = !store
+                        .was_terminally_rejected_in_epoch(state.result_promise(), terminal_epoch);
+                    changed |= !keep;
+                    keep
+                });
+            }
+
             // Every changing round removes at least one await context or
             // combinator owner. Watchers are scanned once per round, so this
             // allocation-free fixed point has a finite owner-removal bound.
@@ -50616,6 +50683,21 @@ impl InterpreterCore {
                     // isolated driver restores the caller and re-arms the
                     // original value and label; route that completion here so
                     // every instruction observes the enclosing catch/finally.
+                    if self.pending_exception.is_some()
+                        && let Ok(Ir3Instruction::GetProperty { obj, key, .. }) =
+                            Self::instruction_with_trampoline(module, trampoline, self.ip)
+                    {
+                        // A sealed Proxy invariant error also reveals the
+                        // selected receiver and key. Their operand labels live
+                        // in dispatch locals, outside the callback's scope.
+                        let operands = self.binary_operation_label(*obj, *key)?;
+                        let bytes = Self::estimate_label_bytes(&operands);
+                        self.json_reserve_temporary(bytes)?;
+                        let joined = self.join_pending_exception_label(&operands);
+                        drop(operands);
+                        self.json_release_temporary(bytes);
+                        joined?;
+                    }
                     if let Some(err) = self.route_isolated_explicit_throw(module, err)? {
                         return Err(err);
                     }
@@ -61098,11 +61180,13 @@ impl InterpreterCore {
             let Some(root) = self.heap.get(object_id.0 as usize) else {
                 return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
             };
-            let (root_is_array, root_is_typed_array) = (root.is_array, root.typed_array.is_some());
+            let root_has_implicit_array_prototype =
+                root.is_array && !root.is_null_prototype && root.prototype.is_none();
+            let root_is_typed_array = root.typed_array.is_some();
             // A deleted %Array.prototype%[@@iterator] (bd-9vouw.93) leaves
             // arrays without one, like every prototype's virtual method below.
             let array_deleted = self.canonical_virtual_property_deleted("Array", key);
-            if root_is_array && !array_deleted {
+            if root_has_implicit_array_prototype && !array_deleted {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
             }
             // %TypedArray%.prototype[@@iterator] is
@@ -63861,11 +63945,14 @@ impl InterpreterCore {
                 key,
                 RuntimePropertyKey::Symbol(symbol) if *symbol == WellKnownSymbol::Iterator.id()
             ) {
-                let root_is_array = self
-                    .heap
-                    .get(object_id.0 as usize)
-                    .is_some_and(|object| object.is_array || object.typed_array.is_some());
-                return Ok(root_is_array
+                let root_has_implicit_iterator =
+                    self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                        object.typed_array.is_some()
+                            || (object.is_array
+                                && !object.is_null_prototype
+                                && object.prototype.is_none())
+                    });
+                return Ok(root_has_implicit_iterator
                     || self.chain_inherits_array_prototype(object_id)
                     || ["Array", "TypedArray", "Map", "Set", "String"]
                         .iter()
@@ -65617,35 +65704,6 @@ impl InterpreterCore {
         Ok(Self::value_to_js_value(&Value::Object(array_id)))
     }
 
-    fn build_promise_all_settled_result(
-        &mut self,
-        outcomes: BTreeMap<u32, crate::promise_model::SettledOutcome>,
-        total: u32,
-    ) -> Result<crate::object_model::JsValue, InterpreterError> {
-        let mut items = Vec::with_capacity(total as usize);
-        for index in 0..total {
-            let outcome =
-                outcomes
-                    .get(&index)
-                    .cloned()
-                    .unwrap_or(crate::promise_model::SettledOutcome {
-                        status: "fulfilled".into(),
-                        value: crate::object_model::JsValue::Undefined,
-                    });
-            let value = self.js_value_to_value(&outcome.value);
-            let mut props = vec![("status", Value::str(outcome.status.as_str()))];
-            if outcome.status == "fulfilled" {
-                props.push(("value", value));
-            } else {
-                props.push(("reason", value));
-            }
-            let obj_id = self.alloc_object_with_properties(&props)?;
-            items.push(Value::Object(obj_id));
-        }
-        let array_id = self.alloc_array_from_values(&items)?;
-        Ok(Self::value_to_js_value(&Value::Object(array_id)))
-    }
-
     fn build_aggregate_error(
         &mut self,
         errors: Vec<crate::object_model::JsValue>,
@@ -65655,6 +65713,13 @@ impl InterpreterCore {
             .map(|value| self.js_value_to_value(value))
             .collect();
         let errors_array = self.alloc_array_from_values(&error_values)?;
+        self.build_aggregate_error_from_array(errors_array)
+    }
+
+    fn build_aggregate_error_from_array(
+        &mut self,
+        errors_array: ObjectId,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
         // bd-9vouw.75: an AggregateError instance, as Promise.any specifies
         // (ES2021 27.2.4.3.1 step 8), not a plain object named like one.
         let prototype = self.ensure_builtin_prototype("AggregateError")?;
@@ -65667,6 +65732,115 @@ impl InterpreterCore {
             NON_ENUMERABLE_DATA_ATTRIBUTES,
         )?;
         Ok(Self::value_to_js_value(&Value::Object(error_id)))
+    }
+
+    /// Count scratch ownership alongside the currently dequeued job, so even
+    /// a nested memory reconciliation retains the reservation. Native result
+    /// construction calls no guest code and releases it on every exit.
+    fn with_promise_temporary_bytes<T>(
+        &mut self,
+        bytes: u64,
+        operation: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        self.apply_memory_component_delta(0, bytes)?;
+        self.promise_in_flight_task_bytes = self.promise_in_flight_task_bytes.saturating_add(bytes);
+        let result = operation(self);
+        self.promise_in_flight_task_bytes = self.promise_in_flight_task_bytes.saturating_sub(bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(bytes);
+        result
+    }
+
+    fn native_combinator_element(
+        &self,
+        combinator_id: u64,
+        index: u32,
+    ) -> Option<(&crate::object_model::JsValue, Option<&str>)> {
+        match self.promise_combinators.get(&combinator_id)? {
+            PromiseCombinatorState::All(tracker) => {
+                tracker.values.get(&index).map(|value| (value, None))
+            }
+            PromiseCombinatorState::AllSettled(tracker) => tracker
+                .outcomes
+                .get(&index)
+                .map(|outcome| (&outcome.value, Some(outcome.status.as_str()))),
+            PromiseCombinatorState::Any(tracker) => {
+                tracker.errors.get(&index).map(|value| (value, None))
+            }
+            PromiseCombinatorState::Race(_) => None,
+        }
+    }
+
+    /// Materialize directly from the retained tracker. There is no cloned
+    /// result map or full-length temporary vector: only one converted value,
+    /// its bounded index key and an optional allSettled status coexist with
+    /// the already-accounted tracker and destination heap objects.
+    fn build_native_combinator_result(
+        &mut self,
+        combinator_id: u64,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
+        let (total, aggregate_error) = match self.promise_combinators.get(&combinator_id) {
+            Some(PromiseCombinatorState::All(tracker)) => (tracker.total, false),
+            Some(PromiseCombinatorState::AllSettled(tracker)) => (tracker.total, false),
+            Some(PromiseCombinatorState::Any(tracker)) => (tracker.total, true),
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: "missing completed native combinator tracker".to_string(),
+                });
+            }
+        };
+        let array = self.alloc_array_with_prototype(None)?;
+        for index in 0..total {
+            let (value, status) = self
+                .native_combinator_element(combinator_id, index)
+                .expect("completed bounded tracker has every element");
+            let value_bytes = match value {
+                crate::object_model::JsValue::Str(text) => Self::estimate_string_bytes(text),
+                crate::object_model::JsValue::Function(id) if *id >= PROMISE_VALUE_CARRIER_BASE => {
+                    self.promise_value_carriers
+                        .get(id)
+                        .map_or(0, Self::estimate_value_bytes)
+                }
+                _ => 0,
+            };
+            let index_digits = u64::from(index.checked_ilog10().unwrap_or(0) + 1);
+            let key_bytes = MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(index_digits.max(6));
+            let status_bytes = status.map_or(0, Self::estimate_string_bytes);
+            self.with_promise_temporary_bytes(
+                value_bytes
+                    .saturating_add(key_bytes)
+                    .saturating_add(status_bytes),
+                |core| {
+                    let (value, status) = core
+                        .native_combinator_element(combinator_id, index)
+                        .expect("native construction invokes no guest code");
+                    let value = core.js_value_to_value(value);
+                    let status = status.map(|status| (Value::str(status), status == "fulfilled"));
+                    let element = if let Some((status, fulfilled)) = status {
+                        let entry = core.alloc_object_with_prototype(None)?;
+                        core.set_object_property(entry, "status".to_string(), status)?;
+                        core.set_object_property(
+                            entry,
+                            if fulfilled { "value" } else { "reason" }.to_string(),
+                            value,
+                        )?;
+                        Value::Object(entry)
+                    } else {
+                        value
+                    };
+                    core.set_object_property(array, index.to_string(), element)
+                },
+            )?;
+        }
+        self.with_promise_temporary_bytes(Self::estimate_string_bytes("length"), |core| {
+            core.set_object_property(array, "length".to_string(), Value::Int(i64::from(total)))
+        })?;
+        if aggregate_error {
+            self.build_aggregate_error_from_array(array)
+        } else {
+            Ok(crate::object_model::JsValue::Object(
+                crate::object_model::ObjectHandle(array.0),
+            ))
+        }
     }
 
     fn register_combinator(
@@ -65713,6 +65887,151 @@ impl InterpreterCore {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Register a native element in the same reaction list as ordinary
+    /// `.then`, so a pending input's later settlement keeps registration order.
+    /// Watchers only retain dependency ownership for fatal cleanup; they no
+    /// longer settle an aggregate synchronously (bd-9vouw.295).
+    fn register_native_combinator_reaction(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        result_promise: crate::promise_model::PromiseHandle,
+        watcher: PromiseCombinatorWatcher,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let pending = !self.promise_is_settled(handle);
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let (next_store_bytes, next_queue_bytes) = self
+            .promise_store
+            .projected_then_into_memory_bytes(handle, &label, &self.event_loop.microtasks)
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid combinator input promise".to_string(),
+                got: error.to_string(),
+            })?;
+        let next_promise_bytes = previous_promise_bytes
+            .saturating_sub(self.promise_store.estimated_memory_bytes())
+            .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+            .saturating_add(next_store_bytes)
+            .saturating_add(next_queue_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        self.promise_store
+            .then_for_combinator(
+                handle,
+                result_promise,
+                label,
+                crate::promise_model::PromiseCombinatorReaction {
+                    combinator_id: watcher.combinator_id,
+                    index: watcher.index,
+                },
+                &mut self.event_loop.microtasks,
+            )
+            .expect("preflighted native combinator reaction remains valid");
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
+        if pending {
+            self.add_combinator_watcher(handle, watcher)?;
+        }
+        Ok(())
+    }
+
+    fn enqueue_native_combinator_job(
+        &mut self,
+        job: crate::promise_model::Microtask,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let previous_queue_bytes = self.event_loop.microtasks.estimated_memory_bytes();
+        let next_queue_bytes = self
+            .event_loop
+            .microtasks
+            .projected_enqueue_memory_bytes(&job);
+        let next_promise_bytes = previous_promise_bytes
+            .saturating_sub(previous_queue_bytes)
+            .saturating_add(next_queue_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        self.event_loop.microtasks.enqueue(job);
+        self.settle_projected_promise_bytes(next_promise_bytes)
+    }
+
+    fn join_combinator_result_label(
+        &mut self,
+        result_promise: crate::promise_model::PromiseHandle,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_store_bytes = self.promise_store.estimated_memory_bytes();
+        let next_store_bytes = self
+            .promise_store
+            .projected_join_label_memory_bytes(result_promise, label)
+            .map_err(|error| InterpreterError::InternalError {
+                details: format!("missing native combinator result: {error}"),
+            })?;
+        self.apply_memory_component_delta(previous_store_bytes, next_store_bytes)?;
+        self.promise_store
+            .join_label(result_promise, label)
+            .expect("preflighted combinator result remains valid");
+        Ok(())
+    }
+
+    /// Admit both the label and the map entry before either owner changes.
+    /// A native job has no guest callback, so its tracker cannot change
+    /// between this preflight and the following record operation.
+    fn prepare_combinator_observation(
+        &mut self,
+        combinator_id: u64,
+        index: u32,
+        kind: crate::promise_model::ReactionKind,
+        value: &crate::object_model::JsValue,
+        label: &Label,
+    ) -> Result<bool, InterpreterError> {
+        let Some(state) = self.promise_combinators.get(&combinator_id) else {
+            return Ok(false);
+        };
+        let Some(entry_bytes) = state.observation_memory_growth(index, kind, value) else {
+            return Ok(false);
+        };
+        let result_promise = state.result_promise();
+        let previous_store_bytes = self.promise_store.estimated_memory_bytes();
+        let next_store_bytes = self
+            .promise_store
+            .projected_join_label_memory_bytes(result_promise, label)
+            .map_err(|error| InterpreterError::InternalError {
+                details: format!("missing native combinator result: {error}"),
+            })?;
+        self.apply_memory_component_delta(
+            previous_store_bytes,
+            next_store_bytes.saturating_add(entry_bytes),
+        )?;
+        self.promise_store
+            .join_label(result_promise, label)
+            .expect("preflighted combinator result remains valid");
+        Ok(true)
+    }
+
+    /// A refused native job must not strand an aggregate or leave a partially
+    /// admitted tracker behind. Reuse the allocation-free fatal Promise walk;
+    /// queued element jobs become inert when their tracker is removed.
+    fn terminally_reject_native_combinator(
+        &mut self,
+        result_promise: crate::promise_model::PromiseHandle,
+        job_label: &Label,
+    ) {
+        let label = self
+            .promise_store
+            .get(result_promise)
+            .map(|record| {
+                if record.label.level() > job_label.level() {
+                    Self::terminal_async_failure_label(&record.label)
+                } else {
+                    Self::terminal_async_failure_label(job_label)
+                }
+            })
+            .unwrap_or_else(|_| Self::terminal_async_failure_label(job_label));
+        if let Ok(epoch) = self
+            .promise_store
+            .terminally_reject_without_jobs(result_promise, &label)
+        {
+            self.close_terminal_async_promise_dependencies(epoch, &label);
+        }
+        self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
     }
 
     fn remove_combinator_and_watchers(
@@ -65935,7 +66254,6 @@ impl InterpreterCore {
         value: crate::object_model::JsValue,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        let previous_estimated_bytes = self.estimated_memory_bytes;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let (next_store_bytes, next_queue_bytes) = self
             .promise_store
@@ -65954,54 +66272,12 @@ impl InterpreterCore {
             .saturating_add(self.promise_combinators_memory_bytes())
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes);
-        // Only watcher-driven combinator cascades need a rollback snapshot.
-        // Admit that physical owner before cloning any attacker-sized payload.
-        let rollback_snapshot = if self.promise_combinator_watchers.contains_key(&handle) {
-            self.apply_memory_component_delta(0, previous_promise_bytes)?;
-            Some((
-                self.promise_store.clone(),
-                self.event_loop.clone(),
-                self.promise_combinators.clone(),
-                self.promise_combinator_watchers.clone(),
-                previous_promise_bytes,
-                self.heap.len(),
-            ))
-        } else {
-            None
-        };
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.promise_store
-            .fulfill(
-                handle,
-                value.clone(),
-                label.clone(),
-                &mut self.event_loop.microtasks,
-            )
+            .fulfill(handle, value, label, &mut self.event_loop.microtasks)
             .expect("preflighted Promise fulfillment must remain valid");
         self.settle_projected_promise_bytes(next_promise_bytes)?;
-        if let Err(error) =
-            self.notify_promise_settled(handle, PromiseSettlement::Fulfilled(value), label)
-        {
-            let (
-                previous_store,
-                previous_event_loop,
-                previous_combinators,
-                previous_watchers,
-                _,
-                previous_heap_len,
-            ) = rollback_snapshot.expect("watcher failure must have a rollback snapshot");
-            self.promise_store = previous_store;
-            self.event_loop = previous_event_loop;
-            self.promise_combinators = previous_combinators;
-            self.promise_combinator_watchers = previous_watchers;
-            self.rollback_heap_to_len(previous_heap_len);
-            self.estimated_memory_bytes = previous_estimated_bytes;
-            return Err(error);
-        }
-        if let Some((_, _, _, _, snapshot_bytes, _)) = rollback_snapshot {
-            self.estimated_memory_bytes =
-                self.estimated_memory_bytes.saturating_sub(snapshot_bytes);
-        }
+        self.release_settled_combinator_watchers(handle);
         Ok(())
     }
 
@@ -66011,7 +66287,6 @@ impl InterpreterCore {
         reason: crate::object_model::JsValue,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        let previous_estimated_bytes = self.estimated_memory_bytes;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let (next_store_bytes, next_queue_bytes) = self
             .promise_store
@@ -66030,165 +66305,101 @@ impl InterpreterCore {
             .saturating_add(self.promise_combinators_memory_bytes())
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes);
-        let rollback_snapshot = if self.promise_combinator_watchers.contains_key(&handle) {
-            self.apply_memory_component_delta(0, previous_promise_bytes)?;
-            Some((
-                self.promise_store.clone(),
-                self.event_loop.clone(),
-                self.promise_combinators.clone(),
-                self.promise_combinator_watchers.clone(),
-                previous_promise_bytes,
-                self.heap.len(),
-            ))
-        } else {
-            None
-        };
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.promise_store
-            .reject(
-                handle,
-                reason.clone(),
-                label.clone(),
-                &mut self.event_loop.microtasks,
-            )
+            .reject(handle, reason, label, &mut self.event_loop.microtasks)
             .expect("preflighted Promise rejection must remain valid");
         self.settle_projected_promise_bytes(next_promise_bytes)?;
-        if let Err(error) =
-            self.notify_promise_settled(handle, PromiseSettlement::Rejected(reason), label)
-        {
-            let (
-                previous_store,
-                previous_event_loop,
-                previous_combinators,
-                previous_watchers,
-                _,
-                previous_heap_len,
-            ) = rollback_snapshot.expect("watcher failure must have a rollback snapshot");
-            self.promise_store = previous_store;
-            self.event_loop = previous_event_loop;
-            self.promise_combinators = previous_combinators;
-            self.promise_combinator_watchers = previous_watchers;
-            self.rollback_heap_to_len(previous_heap_len);
-            self.estimated_memory_bytes = previous_estimated_bytes;
-            return Err(error);
-        }
-        if let Some((_, _, _, _, snapshot_bytes, _)) = rollback_snapshot {
-            self.estimated_memory_bytes =
-                self.estimated_memory_bytes.saturating_sub(snapshot_bytes);
-        }
+        self.release_settled_combinator_watchers(handle);
         Ok(())
     }
 
-    fn notify_promise_settled(
-        &mut self,
-        handle: crate::promise_model::PromiseHandle,
-        settlement: PromiseSettlement,
-        label: crate::ifc_artifacts::Label,
-    ) -> Result<(), InterpreterError> {
-        let previous_promise_bytes = self.promise_runtime_memory_bytes();
-        let watchers = match self.promise_combinator_watchers.remove(&handle) {
-            Some(watchers) => watchers,
-            None => return Ok(()),
-        };
-        let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
-        let outcome = watchers
-            .into_iter()
-            .try_for_each(|watcher| match &settlement {
-                PromiseSettlement::Fulfilled(value) => self.update_combinator_fulfillment(
-                    watcher.combinator_id,
-                    watcher.index,
-                    value.clone(),
-                    label.clone(),
-                ),
-                PromiseSettlement::Rejected(reason) => self.update_combinator_rejection(
-                    watcher.combinator_id,
-                    watcher.index,
-                    reason.clone(),
-                    label.clone(),
-                ),
-            });
-        self.finish_promise_task_transfer(transferred_bytes);
-        outcome
+    /// Settlement already queued native reactions together with `.then`
+    /// callbacks. Transfer dependency ownership to those jobs without running
+    /// the aggregate, allocating result objects, or taking a cascade snapshot.
+    fn release_settled_combinator_watchers(&mut self, handle: crate::promise_model::PromiseHandle) {
+        if let Some(watchers) = self.promise_combinator_watchers.remove(&handle) {
+            let bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                (watchers.len() as u64)
+                    .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
+            );
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(bytes);
+        }
     }
 
     fn update_combinator_fulfillment(
         &mut self,
         combinator_id: u64,
         index: u32,
-        value: crate::object_model::JsValue,
-        label: crate::ifc_artifacts::Label,
+        value: &crate::object_model::JsValue,
+        label: &crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        enum ResolutionData {
-            Fulfill(
-                crate::promise_model::PromiseHandle,
-                crate::object_model::JsValue,
-            ),
-            FulfillAll(
-                crate::promise_model::PromiseHandle,
-                Vec<crate::object_model::JsValue>,
-            ),
-            FulfillAllSettled(
-                crate::promise_model::PromiseHandle,
-                BTreeMap<u32, crate::promise_model::SettledOutcome>,
-                u32,
-            ),
+        if !self.prepare_combinator_observation(
+            combinator_id,
+            index,
+            crate::promise_model::ReactionKind::Fulfill,
+            value,
+            label,
+        )? {
+            return Ok(());
         }
-
-        let mut resolution: Option<ResolutionData> = None;
-        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        // Record only an admitted retained payload. Terminal materialization
+        // borrows this tracker instead of cloning the whole aggregate.
+        let mut resolution = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
             match state {
                 PromiseCombinatorState::All(tracker) => {
-                    if tracker.settled {
-                        return Ok(());
-                    }
-                    if tracker.record_fulfillment(index, value) {
+                    if tracker.record_fulfillment(index, value.clone()) {
                         tracker.mark_settled();
-                        let collected = tracker.collect_values();
-                        resolution = Some(ResolutionData::FulfillAll(
-                            tracker.result_promise,
-                            collected,
-                        ));
+                        resolution = Some((tracker.result_promise, true));
                     }
                 }
                 PromiseCombinatorState::AllSettled(tracker) => {
-                    if tracker.record_fulfillment(index, value) {
-                        resolution = Some(ResolutionData::FulfillAllSettled(
-                            tracker.result_promise,
-                            tracker.outcomes.clone(),
-                            tracker.total,
-                        ));
+                    if tracker.record_fulfillment(index, value.clone()) {
+                        resolution = Some((tracker.result_promise, true));
                     }
                 }
                 PromiseCombinatorState::Race(tracker) => {
                     if tracker.try_settle() {
-                        resolution = Some(ResolutionData::Fulfill(tracker.result_promise, value));
+                        resolution = Some((tracker.result_promise, false));
                     }
                 }
                 PromiseCombinatorState::Any(tracker) => {
-                    if tracker.settled {
-                        return Ok(());
-                    }
                     tracker.mark_settled();
-                    resolution = Some(ResolutionData::Fulfill(tracker.result_promise, value));
+                    resolution = Some((tracker.result_promise, false));
                 }
             }
         }
-        self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
-
-        if let Some(resolution) = resolution {
-            let (handle, value) = match resolution {
-                ResolutionData::Fulfill(handle, value) => (handle, value),
-                ResolutionData::FulfillAll(handle, values) => {
-                    let value = self.build_promise_all_result(values)?;
-                    (handle, value)
-                }
-                ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
-                    let value = self.build_promise_all_settled_result(outcomes, total)?;
-                    (handle, value)
-                }
+        if let Some((handle, materialize)) = resolution {
+            let label_bytes = Self::estimate_label_bytes(
+                &self
+                    .promise_store
+                    .get(handle)
+                    .expect("native result exists")
+                    .label,
+            );
+            let direct_value_bytes = if materialize {
+                0
+            } else {
+                crate::promise_model::estimate_js_value_memory_bytes(value)
             };
-            self.fulfill_promise(handle, value, label)?;
+            self.with_promise_temporary_bytes(
+                label_bytes.saturating_add(direct_value_bytes),
+                |core| {
+                    let label = core
+                        .promise_store
+                        .get(handle)
+                        .expect("native construction invokes no guest code")
+                        .label
+                        .clone();
+                    let value = if materialize {
+                        core.build_native_combinator_result(combinator_id)?
+                    } else {
+                        value.clone()
+                    };
+                    core.fulfill_promise(handle, value, label)
+                },
+            )?;
             self.remove_combinator_and_watchers(combinator_id)?;
         }
         Ok(())
@@ -66198,79 +66409,77 @@ impl InterpreterCore {
         &mut self,
         combinator_id: u64,
         index: u32,
-        reason: crate::object_model::JsValue,
-        label: crate::ifc_artifacts::Label,
+        reason: &crate::object_model::JsValue,
+        label: &crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        enum ResolutionData {
-            FulfillAllSettled(
-                crate::promise_model::PromiseHandle,
-                BTreeMap<u32, crate::promise_model::SettledOutcome>,
-                u32,
-            ),
-            Reject(
-                crate::promise_model::PromiseHandle,
-                crate::object_model::JsValue,
-            ),
-            RejectAny(
-                crate::promise_model::PromiseHandle,
-                Vec<crate::object_model::JsValue>,
-            ),
+        if !self.prepare_combinator_observation(
+            combinator_id,
+            index,
+            crate::promise_model::ReactionKind::Reject,
+            reason,
+            label,
+        )? {
+            return Ok(());
         }
-
-        let mut resolution: Option<ResolutionData> = None;
-        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let mut resolution = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
             match state {
                 PromiseCombinatorState::All(tracker) => {
-                    if tracker.settled {
-                        return Ok(());
-                    }
                     tracker.mark_settled();
-                    resolution = Some(ResolutionData::Reject(tracker.result_promise, reason));
+                    resolution = Some((tracker.result_promise, false, false));
                 }
                 PromiseCombinatorState::AllSettled(tracker) => {
-                    if tracker.record_rejection(index, reason) {
-                        resolution = Some(ResolutionData::FulfillAllSettled(
-                            tracker.result_promise,
-                            tracker.outcomes.clone(),
-                            tracker.total,
-                        ));
+                    if tracker.record_rejection(index, reason.clone()) {
+                        resolution = Some((tracker.result_promise, true, true));
                     }
                 }
                 PromiseCombinatorState::Race(tracker) => {
                     if tracker.try_settle() {
-                        resolution = Some(ResolutionData::Reject(tracker.result_promise, reason));
+                        resolution = Some((tracker.result_promise, false, false));
                     }
                 }
                 PromiseCombinatorState::Any(tracker) => {
-                    if tracker.settled {
-                        return Ok(());
-                    }
-                    if tracker.record_rejection(index, reason) {
+                    if tracker.record_rejection(index, reason.clone()) {
                         tracker.mark_settled();
-                        let errors = tracker.collect_errors();
-                        resolution =
-                            Some(ResolutionData::RejectAny(tracker.result_promise, errors));
+                        resolution = Some((tracker.result_promise, true, false));
                     }
                 }
             }
         }
-        self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
-
-        if let Some(resolution) = resolution {
-            match resolution {
-                ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
-                    let value = self.build_promise_all_settled_result(outcomes, total)?;
-                    self.fulfill_promise(handle, value, label)?;
-                }
-                ResolutionData::Reject(handle, reason) => {
-                    self.reject_promise(handle, reason, label)?;
-                }
-                ResolutionData::RejectAny(handle, errors) => {
-                    let aggregate = self.build_aggregate_error(errors)?;
-                    self.reject_promise(handle, aggregate, label)?;
-                }
-            }
+        if let Some((handle, materialize, fulfill)) = resolution {
+            let label_bytes = Self::estimate_label_bytes(
+                &self
+                    .promise_store
+                    .get(handle)
+                    .expect("native result exists")
+                    .label,
+            );
+            let direct_value_bytes = if materialize {
+                0
+            } else {
+                crate::promise_model::estimate_js_value_memory_bytes(reason)
+            };
+            self.with_promise_temporary_bytes(
+                label_bytes.saturating_add(direct_value_bytes),
+                |core| {
+                    let label = core
+                        .promise_store
+                        .get(handle)
+                        .expect("native construction invokes no guest code")
+                        .label
+                        .clone();
+                    let value = if materialize {
+                        core.build_native_combinator_result(combinator_id)?
+                    } else {
+                        reason.clone()
+                    };
+                    if fulfill {
+                        core.fulfill_promise(handle, value, label)
+                    } else {
+                        core.reject_promise(handle, value, label)
+                    }
+                },
+            )?;
             self.remove_combinator_and_watchers(combinator_id)?;
         }
         Ok(())
@@ -66282,6 +66491,11 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        let label = self.join_arg_range_with_object_mutation_label(args)?.join(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        );
         let mut inputs = match self.collect_promise_combinator_inputs(module, args) {
             Ok(inputs) => inputs,
             Err(error) => return self.reject_promise_combinator_input(error),
@@ -66294,7 +66508,7 @@ impl InterpreterCore {
             if matches!(input, Value::Object(_)) {
                 let handle = self.create_promise()?;
                 let element = std::mem::replace(input, Value::Promise(handle.0));
-                self.resolve_promise_with_value(module, handle, element, Label::Public)?;
+                self.resolve_promise_with_value(module, handle, element, label.clone())?;
             }
         }
         for input in &inputs {
@@ -66321,7 +66535,7 @@ impl InterpreterCore {
         let previous_combinator_id = self.next_promise_combinator_id;
         let previous_heap_len = self.heap.len();
 
-        let result = self.dispatch_promise_combinator_inputs(kind, inputs);
+        let result = self.dispatch_promise_combinator_inputs(kind, inputs, label);
         if result.is_err() {
             self.promise_store = previous_store;
             self.event_loop = previous_event_loop;
@@ -66346,10 +66560,11 @@ impl InterpreterCore {
         &mut self,
         kind: PromiseCombinatorKind,
         inputs: Vec<Value>,
+        label: Label,
     ) -> Result<Value, InterpreterError> {
-        let label = crate::ifc_artifacts::Label::Public;
         let total = inputs.len() as u32;
         let result_promise = self.create_promise()?;
+        self.join_combinator_result_label(result_promise, &label)?;
 
         match kind {
             PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
@@ -66406,54 +66621,33 @@ impl InterpreterCore {
         let combinator_id = self.register_combinator(state)?;
 
         for (index, input) in inputs.into_iter().enumerate() {
-            if !self.promise_combinators.contains_key(&combinator_id) {
-                break;
-            }
             let index = index as u32;
             match input {
                 Value::Promise(handle) => {
                     let promise_handle = crate::promise_model::PromiseHandle(handle);
-                    let record = self.promise_store.get(promise_handle).map_err(|e| {
-                        InterpreterError::TypeError {
-                            expected: "promise".to_string(),
-                            got: e.to_string(),
-                        }
-                    })?;
-                    match &record.state {
-                        crate::promise_model::PromiseState::Pending => {
-                            self.add_combinator_watcher(
-                                promise_handle,
-                                PromiseCombinatorWatcher {
-                                    combinator_id,
-                                    index,
-                                },
-                            )?;
-                        }
-                        crate::promise_model::PromiseState::Fulfilled(value) => {
-                            self.update_combinator_fulfillment(
-                                combinator_id,
-                                index,
-                                value.clone(),
-                                record.label.clone(),
-                            )?;
-                        }
-                        crate::promise_model::PromiseState::Rejected(reason) => {
-                            self.update_combinator_rejection(
-                                combinator_id,
-                                index,
-                                reason.clone(),
-                                record.label.clone(),
-                            )?;
-                        }
-                    }
+                    self.register_native_combinator_reaction(
+                        promise_handle,
+                        result_promise,
+                        PromiseCombinatorWatcher {
+                            combinator_id,
+                            index,
+                        },
+                        label.clone(),
+                    )?;
                 }
                 other => {
                     let js_val = self.promise_value(&other)?;
-                    self.update_combinator_fulfillment(
-                        combinator_id,
-                        index,
-                        js_val,
-                        label.clone(),
+                    self.enqueue_native_combinator_job(
+                        crate::promise_model::Microtask::PromiseCombinator {
+                            combinator: crate::promise_model::PromiseCombinatorReaction {
+                                combinator_id,
+                                index,
+                            },
+                            kind: crate::promise_model::ReactionKind::Fulfill,
+                            argument: js_val,
+                            result_promise,
+                            label: label.clone(),
+                        },
                     )?;
                 }
             }
@@ -66761,7 +66955,11 @@ impl InterpreterCore {
                 });
             }
         };
-        let label = crate::ifc_artifacts::Label::Public;
+        let label = self.join_arg_range_label(args)?.join(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        );
         let (on_fulfilled, on_rejected) = match kind {
             PromiseReactionKind::Then => {
                 let on_fulfilled = match self.builtin_arg(args, 0)? {
@@ -66851,9 +67049,7 @@ impl InterpreterCore {
             promise,
             &RuntimePropertyKey::String(JsString::from("constructor")),
         )?;
-        if matches!(constructor, Value::Undefined)
-            || Self::is_intrinsic_promise_constructor(&constructor)
-        {
+        if matches!(constructor, Value::Undefined) {
             return Ok(None);
         }
         if !constructor.is_object_like() {
@@ -67205,7 +67401,7 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        let label = self.clone_active_execution_context_label()?;
+        let label = self.join_arg_range_with_object_mutation_label(args)?;
         match cap {
             "promise:constructor" => {
                 // Create a new pending promise and return its handle.
@@ -67761,20 +67957,43 @@ impl InterpreterCore {
                 label,
             );
         }
-        let Value::Object(object) = value else {
+        if !matches!(value, Value::Object(_)) {
             let value = self.promise_value(&value)?;
             return self.fulfill_promise(promise, value, label);
-        };
+        }
+        self.resolve_promise_with_observable_then(module, promise, value, label)
+    }
+
+    /// The observable part of Promise Resolve Functions, also used when
+    /// PromiseResolve must wrap a native promise with a different constructor.
+    fn resolve_promise_with_observable_then(
+        &mut self,
+        module: Option<&Ir3Module>,
+        promise: crate::promise_model::PromiseHandle,
+        value: Value,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        // Resolve functions claim their once-only pair before Get(then): an
+        // own getter can re-enter a saved resolver while the promise is still
+        // pending. The eventual thenable job gets a fresh pair for this epoch.
+        self.retire_promise_resolvers(promise)?;
         // The Get may run a getter or a trap; what it reads labels the
         // resolution. The enclosing HostCall's pending result label is set
         // aside so this read neither joins into nor clears it.
         let saved_result_label = self.take_pending_hostcall_result_label();
-        let then = self.iterator_protocol_property(
-            module,
-            object,
-            &RuntimePropertyKey::String(JsString::from("then")),
-            Value::Object(object),
-        );
+        let key = RuntimePropertyKey::String(JsString::from("then"));
+        let then = match &value {
+            Value::Object(object) => {
+                self.iterator_protocol_property(module, *object, &key, value.clone())
+            }
+            _ => match module {
+                Some(module) => self.get_v(module, &value, &key),
+                None => Err(InterpreterError::TypeError {
+                    expected: "module-backed PromiseResolve property read".to_string(),
+                    got: "missing module context".to_string(),
+                }),
+            },
+        };
         let observed = self.take_pending_hostcall_result_label();
         if let Some(saved) = saved_result_label {
             self.replace_pending_hostcall_result_label(Some(saved))?;
@@ -67792,11 +68011,9 @@ impl InterpreterCore {
             }
         };
         match self.promise_reaction_handler_from_value(then, "thenable then")? {
-            Some(handler) => {
-                self.enqueue_resolve_thenable(promise, handler, Value::Object(object), label)
-            }
+            Some(handler) => self.enqueue_resolve_thenable(promise, handler, value, label),
             None => {
-                let value = self.promise_value(&Value::Object(object))?;
+                let value = self.promise_value(&value)?;
                 self.fulfill_promise(promise, value, label)
             }
         }
@@ -67837,10 +68054,7 @@ impl InterpreterCore {
             .saturating_add(self.promise_in_flight_task_bytes);
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.event_loop.microtasks.enqueue(task);
-        self.settle_projected_promise_bytes(next_promise_bytes)?;
-        // The resolving functions that chose the thenable are already
-        // resolved; the job's own pair takes the next epoch (bd-9vouw.174).
-        self.retire_promise_resolvers(promise)
+        self.settle_projected_promise_bytes(next_promise_bytes)
     }
 
     /// Build a single-use resolve/reject capability function bound to
@@ -67913,7 +68127,7 @@ impl InterpreterCore {
         {
             return Ok(Value::Undefined);
         }
-        let label = crate::ifc_artifacts::Label::Public;
+        let label = self.join_arg_range_with_object_mutation_label(args)?;
         if is_resolve {
             self.resolve_promise_with_value(module, promise, argument, label)?;
         } else {
@@ -68074,6 +68288,34 @@ impl InterpreterCore {
             dequeued_since_compaction += 1;
             let task_result = (|| -> Result<(), InterpreterError> {
                 match &task {
+                    crate::promise_model::Microtask::PromiseCombinator {
+                        combinator,
+                        kind,
+                        argument,
+                        result_promise,
+                        label,
+                    } => {
+                        let result = match kind {
+                            crate::promise_model::ReactionKind::Fulfill => self
+                                .update_combinator_fulfillment(
+                                    combinator.combinator_id,
+                                    combinator.index,
+                                    argument,
+                                    label,
+                                ),
+                            crate::promise_model::ReactionKind::Reject => self
+                                .update_combinator_rejection(
+                                    combinator.combinator_id,
+                                    combinator.index,
+                                    argument,
+                                    label,
+                                ),
+                        };
+                        if let Err(error) = result {
+                            self.terminally_reject_native_combinator(*result_promise, label);
+                            return Err(error);
+                        }
+                    }
                     crate::promise_model::Microtask::PromiseReaction {
                         handler,
                         argument,
@@ -161170,12 +161412,211 @@ mod tests {
     }
 
     #[test]
+    fn intrinsic_combinators_keep_native_element_jobs_bd_9vouw_295() {
+        for promise_inputs in [false, true] {
+            let mut core = quickjs_test_core();
+            core.inject_runtime_globals().unwrap();
+            for prototype in ["Array", ARRAY_ITERATOR_PROTOTYPE, "Promise"] {
+                core.ensure_builtin_prototype(prototype).unwrap();
+            }
+            let constructor = core.promise_intrinsic_constructor().unwrap();
+            let module = test_module(vec![Ir3Instruction::Halt]);
+            let mut values = Vec::new();
+            for index in 0..128 {
+                values.push(if promise_inputs {
+                    let promise = core
+                        .create_fulfilled_promise(
+                            crate::object_model::JsValue::Int(index),
+                            Label::Public,
+                        )
+                        .unwrap();
+                    Value::Promise(promise.0)
+                } else {
+                    Value::Int(index)
+                });
+            }
+            let input = core.alloc_array_from_values(&values).unwrap();
+            core.write_reg(0, Value::Object(input)).unwrap();
+            let before = core.promise_store.len();
+            let result = core
+                .promise_combinator_call(
+                    &module,
+                    PromiseCombinatorKind::All,
+                    "promise:all",
+                    "all",
+                    RegRange { start: 0, count: 1 },
+                    Some(&constructor),
+                )
+                .unwrap();
+            let Value::Promise(result) = result else {
+                panic!("Promise.all result")
+            };
+            assert_eq!(
+                core.promise_store.len(),
+                before + 1,
+                "intrinsic elements need no artificial promises or guest capabilities"
+            );
+            assert_eq!(core.promise_combinators.len(), 1);
+            assert_eq!(core.event_loop.microtasks.pending_count(), 128);
+            assert!(matches!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(result))
+                    .unwrap()
+                    .state,
+                crate::promise_model::PromiseState::Pending
+            ));
+            core.drain_microtasks(None).unwrap();
+            assert!(core.promise_combinators.is_empty());
+            assert!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(result))
+                    .unwrap()
+                    .state
+                    .is_fulfilled()
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_combinator_budget_failure_closes_labeled_dependents_bd_9vouw_295() {
+        let mut core = quickjs_test_core();
+        let first = core.create_promise().unwrap();
+        let second = core.create_promise().unwrap();
+        let result = core
+            .dispatch_promise_combinator_inputs(
+                PromiseCombinatorKind::All,
+                vec![
+                    Value::Promise(first.0),
+                    Value::Promise(second.0),
+                    Value::Promise(second.0),
+                ],
+                Label::Internal,
+            )
+            .unwrap();
+        let Value::Promise(result) = result else {
+            panic!("aggregate promise")
+        };
+        let result = crate::promise_model::PromiseHandle(result);
+        let secret = Label::Custom {
+            name: "combinator-secret".repeat(64),
+            level: 7,
+        };
+        core.fulfill_promise(first, crate::object_model::JsValue::Int(1), secret.clone())
+            .unwrap();
+        core.drain_microtasks(None).unwrap();
+        assert_eq!(core.promise_store.get(result).unwrap().label, secret);
+        assert_eq!(
+            core.promise_store.get(result).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        );
+        let descendant = core
+            .register_promise_then(result, None, None, Label::Public)
+            .unwrap();
+        core.fulfill_promise(
+            second,
+            crate::object_model::JsValue::Str("large-element".repeat(128)),
+            Label::Public,
+        )
+        .unwrap();
+        assert_eq!(core.event_loop.microtasks.pending_count(), 2);
+        let ceiling = core.sync_estimated_memory_bytes().unwrap();
+        core.config.max_total_memory_bytes = ceiling;
+        let heap_slots = core.heap.len();
+        assert!(matches!(
+            core.drain_microtasks(None),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        for promise in [result, descendant] {
+            let record = core.promise_store.get(promise).unwrap();
+            assert_eq!(
+                record.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Undefined
+                )
+            );
+            assert_eq!(record.label.level(), 7);
+            assert!(!record.label.can_flow_to(&Label::Public));
+            assert!(record.reactions.is_empty());
+        }
+        assert_eq!(
+            core.heap.len(),
+            heap_slots,
+            "tracker admission failed before result allocation"
+        );
+        assert!(core.promise_combinators.is_empty());
+        assert!(core.promise_combinator_watchers.is_empty());
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert!(core.estimated_memory_bytes() <= ceiling);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        core.drain_microtasks(None)
+            .expect("remaining native jobs for a closed aggregate are inert");
+        assert!(core.promise_combinators.is_empty());
+        assert!(core.event_loop.microtasks.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn native_combinator_terminal_payload_copy_requires_scratch_bd_9vouw_295() {
+        let mut core = quickjs_test_core();
+        let result = core.create_promise().unwrap();
+        let text = "terminal-payload".repeat(1024);
+        let text_len = text.len();
+        let payload_bytes = InterpreterCore::estimate_string_bytes(&text);
+        let combinator = core
+            .register_combinator(PromiseCombinatorState::All(
+                crate::promise_model::PromiseAllTracker {
+                    result_promise: result,
+                    values: BTreeMap::from([(0, crate::object_model::JsValue::Str(text))]),
+                    total: 1,
+                    resolved_count: 1,
+                    settled: true,
+                },
+            ))
+            .unwrap();
+        let before = core.sync_estimated_memory_bytes().unwrap();
+        let heap_slots = core.heap.len();
+        // The empty destination fits, but copying the first retained string
+        // and its bounded key misses admission by exactly one byte. The
+        // tracker must survive unchanged and no result property may appear.
+        let required = before
+            + MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
+            + payload_bytes
+            + MEMORY_ESTIMATE_STRING_BASE_BYTES
+            + 6;
+        core.config.max_total_memory_bytes = required - 1;
+        let error = core.build_native_combinator_result(combinator).unwrap_err();
+        assert!(
+            matches!(error, InterpreterError::MemoryBudgetExceeded { requested_bytes, .. }
+            if requested_bytes == required)
+        );
+        assert_eq!(core.heap.len(), heap_slots + 1);
+        assert!(core.heap[heap_slots].properties.is_empty());
+        assert!(matches!(core.native_combinator_element(combinator, 0),
+            Some((crate::object_model::JsValue::Str(text), None)) if text.len() == text_len));
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn builtin_promise_all_uses_real_aggregate_tracking() {
         let mut core = quickjs_test_core();
         let label = crate::ifc_artifacts::Label::Public;
 
-        let first = core.promise_store.create();
-        let second = core.promise_store.create();
+        let first = core.create_promise().unwrap();
+        let second = core.create_promise().unwrap();
         let input = core
             .alloc_array_from_values(&[Value::Promise(first.0), Value::Promise(second.0)])
             .expect("promise input array should allocate");
@@ -161198,8 +161639,10 @@ mod tests {
             "aggregate should stay pending until all inputs settle"
         );
 
-        core.fulfill_promise(first, crate::object_model::JsValue::Int(7), label.clone())
+        core.fulfill_promise(first, crate::object_model::JsValue::Int(7), Label::Secret)
             .expect("first input promise should fulfill");
+        core.drain_microtasks(None)
+            .expect("first native element job");
         let after_first = core
             .promise_store
             .get(aggregate)
@@ -161214,10 +161657,24 @@ mod tests {
 
         core.fulfill_promise(second, crate::object_model::JsValue::Int(11), label)
             .expect("second input promise should fulfill");
+        assert!(
+            matches!(
+                core.promise_store.get(aggregate).unwrap().state,
+                crate::promise_model::PromiseState::Pending
+            ),
+            "the final input settlement queues its element job before the aggregate settles"
+        );
+        core.drain_microtasks(None)
+            .expect("final native element job");
         let resolved = core
             .promise_store
             .get(aggregate)
             .expect("aggregate promise should resolve after all inputs fulfill");
+        assert_eq!(
+            resolved.label,
+            Label::Secret,
+            "the first input's label survives a later public input"
+        );
         let crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Object(
             values_handle,
         )) = &resolved.state
@@ -161236,6 +161693,10 @@ mod tests {
         assert_eq!(values.properties.get("0"), Some(&Value::Int(7)));
         assert_eq!(values.properties.get("1"), Some(&Value::Int(11)));
         assert_eq!(values.properties.get("length"), Some(&Value::Int(2)));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

@@ -52446,11 +52446,26 @@ impl InterpreterCore {
                                         0,
                                     )?
                                 } else if builtin.kind == BuiltinFunctionKind::StandardConstructor {
-                                    match property_key.as_str() {
+                                    let value = match property_key.as_str() {
                                         Some(key) => {
                                             self.standard_constructor_property(&builtin, key)?
                                         }
                                         None => Value::Undefined,
+                                    };
+                                    let constructor = Value::BuiltinFunction(builtin);
+                                    match Self::native_error_constructor_parent(&constructor) {
+                                        // A NativeError constructor inherits
+                                        // Error's statics (ES2020 19.5.6.2):
+                                        // `TypeError.captureStackTrace`.
+                                        Some(parent) if matches!(value, Value::Undefined) => self
+                                            .get_v_with_receiver(
+                                            module,
+                                            &parent,
+                                            &property_key,
+                                            constructor,
+                                            1,
+                                        )?,
+                                        _ => value,
                                     }
                                 } else {
                                     match property_key.as_str() {

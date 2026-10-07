@@ -12966,6 +12966,9 @@ enum TraceHandoff {
 struct ModuleExecutionSnapshot {
     accounted_bytes: u64,
     registers: Vec<Value>,
+    /// [`InterpreterCore::registers_memory_bytes`] of `registers`, which no
+    /// one writes while they are parked here.
+    register_bytes: u64,
     generator_delegation: Option<GeneratorDelegation>,
     /// IFC labels parallel the logical register file. Inline callback
     /// execution replaces the register values, so its snapshot must preserve
@@ -14534,6 +14537,13 @@ pub struct InterpreterCore {
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     /// Register file (flat, indexed by register number). SEED-SURFACE.
     registers: SeedTrackedField<Vec<Value>>,
+    /// [`Self::registers_memory_bytes`] of the register file as it stands, or
+    /// `None` once a write may have changed it. An isolated callback reads
+    /// the sum for its preflight, its snapshot, its setup and its restore;
+    /// each read walked the whole file (grown with the call depth), about a
+    /// tenth of babel-standalone's run time. Every register write clears it
+    /// in [`Self::mutate_registers`]; installing a whole file sets it.
+    registers_value_bytes: std::cell::Cell<Option<u64>>,
     /// Call stack.
     call_stack: CallStack,
     /// Object heap. SEED-SURFACE.
@@ -15830,6 +15840,7 @@ impl InterpreterCore {
             host_effect_journal: None,
             timer_effect_authority: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
+            registers_value_bytes: std::cell::Cell::new(None),
             call_stack: CallStack::default(),
             heap: SeedTrackedField::new(Heap::new()),
             estimated_memory_bytes,
@@ -33845,7 +33856,16 @@ impl InterpreterCore {
     // ---- THE ONLY WAY to mutate a seed-surface field ----
     pub(crate) fn mutate_registers<R>(&mut self, f: impl FnOnce(&mut Vec<Value>) -> R) -> R {
         self.before_seed_surface_write();
+        self.registers_value_bytes.set(None);
         f(&mut self.registers.value)
+    }
+
+    /// Install a whole register file whose [`Self::registers_memory_bytes`]
+    /// is `value_bytes` when the caller knows it (a fresh file of
+    /// `Undefined` is 0; a restored snapshot carries its own), else `None`.
+    fn install_register_file(&mut self, registers: Vec<Value>, value_bytes: Option<u64>) {
+        self.registers = SeedTrackedField::new(registers);
+        self.registers_value_bytes.set(value_bytes);
     }
 
     pub(crate) fn mutate_heap<R>(&mut self, f: impl FnOnce(&mut Heap) -> R) -> R {
@@ -34076,6 +34096,7 @@ impl InterpreterCore {
         {
             self.before_seed_surface_write();
             self.registers.value = registers;
+            self.registers_value_bytes.set(None);
             self.heap.value = heap;
             self.function_prototypes.value = function_prototypes;
             // A restored map may hold built-in backing objects, and a
@@ -36305,7 +36326,12 @@ impl InterpreterCore {
     }
 
     fn module_execution_snapshot_memory_bytes(&self) -> u64 {
-        Self::estimate_value_vec_bytes(&self.registers)
+        // `estimate_value_vec_bytes(&self.registers)`, with the values' share
+        // from the cached sum.
+        u64::try_from(self.registers.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(std::mem::size_of::<Value>() as u64)
+            .saturating_add(self.registers_memory_bytes())
             .saturating_add(self.generator_delegation_memory_bytes())
             .saturating_add(
                 u64::try_from(self.register_labels.len())
@@ -36548,16 +36574,68 @@ impl InterpreterCore {
     }
 
     fn snapshot_module_execution(&mut self) -> Result<ModuleExecutionSnapshot, InterpreterError> {
+        let accounted_bytes = self.charge_module_execution_snapshot()?;
+        let registers = self.registers.to_vec();
+        let register_bytes = self.registers_memory_bytes();
+        let register_labels = self.register_labels.clone();
+        Ok(self.module_execution_snapshot(
+            accounted_bytes,
+            registers,
+            register_bytes,
+            register_labels,
+        ))
+    }
+
+    /// [`Self::snapshot_module_execution`] for an isolated callback, which
+    /// starts on a fresh register file with every label Public. The caller's
+    /// registers and labels move into the snapshot rather than being cloned
+    /// there and then overwritten in place. What is left is an `Undefined`
+    /// file of `max_registers` slots and a Public label file of the same length
+    /// as before, as the overwrite left them.
+    fn isolate_module_execution(&mut self) -> Result<ModuleExecutionSnapshot, InterpreterError> {
+        let accounted_bytes = self.charge_module_execution_snapshot()?;
+        let fresh_registers = vec![Value::Undefined; self.config.max_registers as usize];
+        let fresh_labels = vec![Label::Public; self.register_labels.len()];
+        let register_bytes = self.registers_memory_bytes();
+        let registers = std::mem::replace(&mut self.registers.value, fresh_registers);
+        // `Undefined` carries no bytes beyond its slot.
+        self.registers_value_bytes.set(Some(0));
+        let register_labels = std::mem::replace(&mut self.register_labels, fresh_labels);
+        Ok(self.module_execution_snapshot(
+            accounted_bytes,
+            registers,
+            register_bytes,
+            register_labels,
+        ))
+    }
+
+    /// Charge a module-execution snapshot of the current state to the budget
+    /// and return its accounted bytes.
+    fn charge_module_execution_snapshot(&mut self) -> Result<u64, InterpreterError> {
         let accounted_bytes = self.module_execution_snapshot_memory_bytes();
         self.apply_memory_component_delta(0, accounted_bytes)?;
         self.module_snapshot_in_flight_bytes = self
             .module_snapshot_in_flight_bytes
             .saturating_add(accounted_bytes);
-        Ok(ModuleExecutionSnapshot {
+        Ok(accounted_bytes)
+    }
+
+    /// The snapshot of the current state with `registers` (whose
+    /// [`Self::registers_memory_bytes`] is `register_bytes`) and
+    /// `register_labels` as its register and label files.
+    fn module_execution_snapshot(
+        &self,
+        accounted_bytes: u64,
+        registers: Vec<Value>,
+        register_bytes: u64,
+        register_labels: Vec<Label>,
+    ) -> ModuleExecutionSnapshot {
+        ModuleExecutionSnapshot {
             accounted_bytes,
-            registers: self.registers.clone(),
+            registers,
+            register_bytes,
             generator_delegation: self.generator_delegation.clone(),
-            register_labels: self.register_labels.clone(),
+            register_labels,
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
             call_stack: self.call_stack.to_vec(),
             ip: self.ip,
@@ -36575,7 +36653,7 @@ impl InterpreterCore {
             pending_captures: self.pending_captures.clone(),
             current_module_specifier: self.current_module_specifier.clone(),
             active_generated_function_artifact: self.active_generated_function_artifact,
-        })
+        }
     }
 
     fn restore_module_execution(
@@ -36589,7 +36667,7 @@ impl InterpreterCore {
         } else {
             0
         };
-        self.registers = SeedTrackedField::new(snapshot.registers);
+        self.install_register_file(snapshot.registers, Some(snapshot.register_bytes));
         self.generator_delegation = snapshot.generator_delegation;
         self.register_labels = snapshot.register_labels;
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
@@ -40313,7 +40391,12 @@ impl InterpreterCore {
         // generated function. The instruction counter is deliberately NOT part
         // of `snapshot_module_execution`, so the post-call delta reflects the
         // generated body's real spend against the one shared budget.
-        let snapshot = match self.snapshot_module_execution() {
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
+        // The snapshot takes the caller's registers and labels, leaving the
+        // fresh files the generated body starts on.
+        let snapshot = match self.isolate_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.estimated_memory_bytes = self
@@ -40333,18 +40416,12 @@ impl InterpreterCore {
         // out and restore ownership after the isolated call instead of cloning
         // its attacker-sized module specifier as an uncharged temporary.
         let saved_active_cjs_context = self.active_cjs_context.take();
-        let setup_previous_register_bytes = self.registers_memory_bytes();
-        let setup_previous_register_context_label_bytes =
-            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
         let previous_granted_capabilities =
             self.replace_with_contained_codegen_grant(Some(effective_generated_grant));
         let result = (|| -> Result<Value, InterpreterError> {
-            self.registers =
-                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
-            self.register_labels.fill(Label::Public);
             self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -48546,6 +48623,7 @@ impl InterpreterCore {
     fn take_generator_execution(&mut self) -> GeneratorExecutionSnapshot {
         self.before_seed_surface_write();
         let registers = std::mem::take(&mut self.registers.value);
+        self.registers_value_bytes.set(Some(0));
         let register_labels = std::mem::take(&mut self.register_labels);
         let mut execution = GeneratorExecutionSnapshot {
             register_len: registers.len(),
@@ -48983,6 +49061,7 @@ impl InterpreterCore {
             register_labels.resize(execution.register_label_len, Label::Public);
         }
         self.registers.value = registers;
+        self.registers_value_bytes.set(None);
         self.register_labels = register_labels;
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
@@ -79364,7 +79443,12 @@ impl InterpreterCore {
         });
         let wrapper_start = module.instructions.len();
 
-        let snapshot = match self.snapshot_module_execution() {
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
+        // The snapshot takes the caller's registers and labels, leaving the
+        // fresh files the callback starts on.
+        let snapshot = match self.isolate_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 drop(wrapper);
@@ -79379,9 +79463,6 @@ impl InterpreterCore {
             None => (None, IsolatedArgumentLabels::Public),
         };
         let saved_active_cjs_context = self.active_cjs_context.clone();
-        let setup_previous_register_bytes = self.registers_memory_bytes();
-        let setup_previous_register_context_label_bytes =
-            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
@@ -79406,9 +79487,6 @@ impl InterpreterCore {
             // In particular, a foreign async callback must not retain its
             // caller's yield* record in the callback's own activation.
             self.take_generator_delegation();
-            self.registers =
-                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
-            self.register_labels.fill(Label::Public);
             self.active_inline_callback_context_label = callback_context_label;
             self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
@@ -79929,7 +80007,12 @@ impl InterpreterCore {
         ];
         let wrapper_start = module.instructions.len();
 
-        let snapshot = match self.snapshot_module_execution() {
+        let setup_previous_register_bytes = self.registers_memory_bytes();
+        let setup_previous_register_context_label_bytes =
+            self.register_context_labels_memory_bytes();
+        // The snapshot takes the caller's registers and labels, leaving the
+        // fresh files the constructor starts on.
+        let snapshot = match self.isolate_module_execution() {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(
@@ -79943,9 +80026,6 @@ impl InterpreterCore {
             None => (None, IsolatedArgumentLabels::Public),
         };
         let saved_active_cjs_context = self.active_cjs_context.clone();
-        let setup_previous_register_bytes = self.registers_memory_bytes();
-        let setup_previous_register_context_label_bytes =
-            self.register_context_labels_memory_bytes();
         let setup_previous_scope_bytes = self.scope_chain_memory_bytes();
         let setup_previous_call_stack_bytes = self.call_stack_memory_bytes();
         let mut wrapper_memory_committed = false;
@@ -79953,9 +80033,6 @@ impl InterpreterCore {
             self.replace_with_contained_codegen_grant(contained_codegen_grant);
         let mut overflow_depth = None;
         let result = (|| -> Result<Value, InterpreterError> {
-            self.registers =
-                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
-            self.register_labels.fill(Label::Public);
             self.call_stack.clear(&mut self.closures.cold_cells);
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -100035,7 +100112,17 @@ impl InterpreterCore {
     }
 
     fn registers_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes))
+        if let Some(bytes) = self.registers_value_bytes.get() {
+            debug_assert_eq!(
+                bytes,
+                Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes)),
+                "cached register-file bytes went stale: a register write bypassed mutate_registers"
+            );
+            return bytes;
+        }
+        let bytes = Self::saturating_sum(self.registers.iter().map(Self::estimate_value_bytes));
+        self.registers_value_bytes.set(Some(bytes));
+        bytes
     }
 
     fn register_labels_memory_bytes(&self) -> u64 {
@@ -124434,6 +124521,99 @@ mod async_runtime_tests_current {
         assert_eq!(
             reaction_exact.estimated_memory_bytes(),
             reaction_exact.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// The register file's cached byte sum follows every write, and an
+    /// isolated callback's snapshot takes the caller's files whole: the
+    /// callback starts on a fresh file, the caller gets its own back, and the
+    /// estimate matches a full walk throughout.
+    #[test]
+    fn register_bytes_cache_follows_writes_and_isolated_callbacks() {
+        let walk = |core: &InterpreterCore| {
+            InterpreterCore::saturating_sum(
+                core.registers
+                    .iter()
+                    .map(InterpreterCore::estimate_value_bytes),
+            )
+        };
+        let payload = Value::BigInt(Arc::from("cached-register-bytes".repeat(16)));
+        let payload_bytes = InterpreterCore::estimate_value_bytes(&payload);
+        assert!(payload_bytes > 0);
+        let caller_label = Label::Custom {
+            name: "caller-register-label".to_string(),
+            level: 2,
+        };
+
+        let mut core = test_interpreter();
+        assert_eq!(core.registers_memory_bytes(), 0);
+        // The sum above is now cached; a write that did not clear it would
+        // leave it at 0.
+        core.write_reg(2, payload.clone()).expect("caller register");
+        assert_eq!(core.registers_memory_bytes(), payload_bytes);
+        assert_eq!(core.registers_memory_bytes(), walk(&core));
+        core.set_register_label(2, caller_label.clone())
+            .expect("caller label");
+        core.sync_estimated_memory_bytes()
+            .expect("caller state baseline");
+        let baseline = core.estimated_memory_bytes();
+        let caller_label_count = core.register_labels.len();
+
+        let previous_register_bytes = core.registers_memory_bytes();
+        let previous_label_bytes = core.register_context_labels_memory_bytes();
+        let snapshot = core
+            .isolate_module_execution()
+            .expect("isolated snapshot fits");
+        assert_eq!(snapshot.register_bytes, payload_bytes);
+        assert_eq!(snapshot.registers[2], payload);
+        assert_eq!(snapshot.register_labels[2], caller_label);
+        assert_eq!(core.registers.len(), core.config.max_registers as usize);
+        assert!(
+            core.registers
+                .iter()
+                .all(|value| *value == Value::Undefined)
+        );
+        assert_eq!(core.register_labels.len(), caller_label_count);
+        assert!(
+            core.register_labels
+                .iter()
+                .all(|label| *label == Label::Public)
+        );
+        assert_eq!(core.registers_memory_bytes(), 0);
+        assert_eq!(walk(&core), 0);
+
+        let previous_scope_bytes = core.scope_chain_memory_bytes();
+        let previous_call_stack_bytes = core.call_stack_memory_bytes();
+        core.apply_register_context_scope_call_stack_memory_delta(
+            previous_register_bytes,
+            previous_label_bytes,
+            previous_scope_bytes,
+            previous_call_stack_bytes,
+        )
+        .expect("callback setup fits");
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+
+        core.write_reg(3, payload.clone())
+            .expect("callback register");
+        assert_eq!(core.registers_memory_bytes(), payload_bytes);
+        assert_eq!(core.registers_memory_bytes(), walk(&core));
+        core.restore_module_execution(snapshot, true);
+        assert_eq!(core.read_reg(2).expect("caller register"), payload);
+        assert_eq!(core.read_reg(3).expect("caller register"), Value::Undefined);
+        assert_eq!(
+            core.get_register_label(2).expect("caller label"),
+            &caller_label
+        );
+        assert_eq!(core.registers_memory_bytes(), payload_bytes);
+        assert_eq!(core.registers_memory_bytes(), walk(&core));
+        assert_eq!(core.module_snapshot_in_flight_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

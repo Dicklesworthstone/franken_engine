@@ -582,6 +582,7 @@ impl GcMarker {
         let ModuleExecutionSnapshot {
             accounted_bytes: _,
             registers,
+            register_bytes: _,
             generator_delegation,
             register_labels: _,
             active_inline_callback_context_label: _,
@@ -1666,6 +1667,8 @@ impl InterpreterCore {
             host_effect_journal: _,
             timer_effect_authority: _,
             registers,
+            // A byte count of the register file.
+            registers_value_bytes: _,
             call_stack,
             heap: _,
             estimated_memory_bytes: _,

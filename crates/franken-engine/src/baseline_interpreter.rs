@@ -33861,6 +33861,25 @@ impl InterpreterCore {
         f(&mut self.registers.value)
     }
 
+    /// [`Self::mutate_registers`] for a write whose effect on
+    /// [`Self::registers_memory_bytes`] the caller has computed: values of
+    /// `released` bytes leave the file and values of `added` bytes enter it
+    /// (growing it with `Undefined` adds none). A cached sum moves by that
+    /// delta instead of being dropped, so the next isolated-callback or
+    /// inline-call preflight does not walk the whole file.
+    fn mutate_registers_by_bytes<R>(
+        &mut self,
+        released: u64,
+        added: u64,
+        f: impl FnOnce(&mut Vec<Value>) -> R,
+    ) -> R {
+        let cached = self.registers_value_bytes.get();
+        let result = self.mutate_registers(f);
+        self.registers_value_bytes
+            .set(cached.map(|bytes| bytes.saturating_sub(released).saturating_add(added)));
+        result
+    }
+
     /// Install a whole register file whose [`Self::registers_memory_bytes`]
     /// is `value_bytes` when the caller knows it (a fresh file of
     /// `Undefined` is 0; a restored snapshot carries its own), else `None`.
@@ -97761,7 +97780,7 @@ impl InterpreterCore {
             // Preserve the sole execution-seed mutation chokepoint before the
             // direct replacement. Eligibility proves the value/label logical
             // byte total is unchanged and no context label can dominate.
-            self.mutate_registers(|registers| registers[actual_reg] = value);
+            self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
             return Ok(());
         }
         self.write_reg_accounted(actual_reg, value)
@@ -97811,7 +97830,7 @@ impl InterpreterCore {
 
         // Refusal above leaves both parallel files and their lengths intact.
         // Resize only after the combined value+effective-label projection fits.
-        self.mutate_registers(|registers| {
+        self.mutate_registers_by_bytes(previous_value_bytes, new_value_bytes, |registers| {
             if actual_reg >= registers.len() {
                 let new_len = actual_reg + 1;
                 let growth_capacity = new_len + (new_len >> 2);
@@ -97854,7 +97873,7 @@ impl InterpreterCore {
             // The existing and replacement value/label pairs own zero dynamic
             // bytes. Keep seed materialization and epoch advancement exact,
             // then replace both parallel register files as one logical write.
-            self.mutate_registers(|registers| registers[actual_reg] = value);
+            self.mutate_registers_by_bytes(0, 0, |registers| registers[actual_reg] = value);
             self.register_labels[actual_reg] = label;
             return Ok(());
         }
@@ -97888,17 +97907,18 @@ impl InterpreterCore {
         } else {
             Self::estimate_label_bytes(&label)
         };
+        let new_value_bytes = Self::estimate_value_bytes(&value);
         let requested_bytes = self
             .estimated_memory_bytes
             .saturating_sub(previous_value_bytes)
             .saturating_sub(previous_label_bytes)
-            .saturating_add(Self::estimate_value_bytes(&value))
+            .saturating_add(new_value_bytes)
             .saturating_add(next_label_bytes);
         if self.memory_request_exceeds_budget(requested_bytes, self.config.max_total_memory_bytes) {
             return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
         }
 
-        self.mutate_registers(|registers| {
+        self.mutate_registers_by_bytes(previous_value_bytes, new_value_bytes, |registers| {
             if actual_reg >= registers.len() {
                 registers.resize(actual_reg + 1, Value::Undefined);
             }
@@ -98038,7 +98058,7 @@ impl InterpreterCore {
             .fold(0u64, |total, value| {
                 total.saturating_add(Self::estimate_value_bytes(value))
             });
-        self.mutate_registers(|registers| {
+        self.mutate_registers_by_bytes(released_value_bytes, 0, |registers| {
             if physical_frame_end > registers.len() {
                 registers.resize(physical_frame_end, Value::Undefined);
             }
@@ -124706,6 +124726,57 @@ mod async_runtime_tests_current {
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
         );
+    }
+
+    /// The hot register writes keep the cached byte sum rather than dropping
+    /// it: an accounted write moves it by the value's delta, a static write
+    /// leaves it, and clearing a frame subtracts what the frame held. Each
+    /// step compares the cache with a full walk; dropping it instead would
+    /// leave `None` behind.
+    #[test]
+    fn register_bytes_cache_survives_hot_register_writes() {
+        let walk = |core: &InterpreterCore| {
+            InterpreterCore::saturating_sum(
+                core.registers
+                    .iter()
+                    .map(InterpreterCore::estimate_value_bytes),
+            )
+        };
+        let cached = |core: &InterpreterCore| {
+            let bytes = core.registers_value_bytes.get();
+            assert_eq!(bytes, Some(walk(core)));
+            bytes.expect("cache kept")
+        };
+        let long = Value::str("register-cache-delta".repeat(8));
+        let short = Value::str("short");
+        let mut core = test_interpreter();
+        assert_eq!(core.registers_memory_bytes(), 0);
+
+        core.write_reg(1, long.clone()).expect("accounted write");
+        let after_long = cached(&core);
+        assert_eq!(after_long, InterpreterCore::estimate_value_bytes(&long));
+        core.write_reg(1, short.clone())
+            .expect("accounted overwrite");
+        assert_eq!(cached(&core), InterpreterCore::estimate_value_bytes(&short));
+        core.write_reg(2, Value::Int(7)).expect("static write");
+        core.write_reg(2, Value::Bool(true))
+            .expect("static overwrite");
+        assert_eq!(cached(&core), InterpreterCore::estimate_value_bytes(&short));
+        core.write_reg_with_label(3, long.clone(), Label::Public)
+            .expect("labelled accounted write");
+        core.write_reg_with_label(4, Value::Null, Label::Public)
+            .expect("labelled static write");
+        let both = cached(&core);
+        assert_eq!(
+            both,
+            InterpreterCore::estimate_value_bytes(&short)
+                + InterpreterCore::estimate_value_bytes(&long)
+        );
+
+        core.clear_current_register_frame_width(4);
+        assert_eq!(cached(&core), InterpreterCore::estimate_value_bytes(&long));
+        core.clear_current_register_frame_width(5);
+        assert_eq!(cached(&core), 0);
     }
 
     #[test]

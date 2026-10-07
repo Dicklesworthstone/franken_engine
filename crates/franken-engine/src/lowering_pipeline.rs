@@ -30064,6 +30064,20 @@ fn infer_function_capture_label(
     )
 }
 
+/// FRANKEN_CAPTURE_DEBUG, read once: the flow analysis checked it for every
+/// function summary and capture (bd-9vouw.153).
+fn capture_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FRANKEN_CAPTURE_DEBUG").is_some())
+}
+
+/// FRANKEN_IFC_DEBUG, read once: the flow analysis checked it for every
+/// method call it simulated (bd-9vouw.153).
+fn ifc_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("FRANKEN_IFC_DEBUG").is_some())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FunctionCaptureOrigin {
     enclosing_id: BindingId,
@@ -30082,7 +30096,7 @@ fn canonical_function_capture_origins(
     free_vars: &[String],
     free_var_ids: &[BindingId],
 ) -> Option<Vec<FunctionCaptureOrigin>> {
-    if std::env::var_os("FRANKEN_CAPTURE_DEBUG").is_some() {
+    if capture_debug_enabled() {
         eprintln!(
             "[capture-debug] canonical_function_capture_origins free_vars={:?} body_ids={:?}",
             free_vars, free_var_ids
@@ -30100,10 +30114,7 @@ fn canonical_function_capture_origins(
         .map(|(runtime_name, body_id)| {
             let parse_cell = parse_capture_cell_name(runtime_name);
             let parse_self = parse_class_expression_self_capture_name(runtime_name);
-            if std::env::var_os("FRANKEN_CAPTURE_DEBUG").is_some()
-                && parse_cell.is_none()
-                && parse_self.is_none()
-            {
+            if capture_debug_enabled() && parse_cell.is_none() && parse_self.is_none() {
                 eprintln!(
                     "[capture-debug] unparseable free_var name={:?}",
                     runtime_name
@@ -30127,6 +30138,119 @@ fn canonical_function_capture_origins(
 /// closure setup, which binds each body-local scoped load to that exact outer
 /// cell rather than treating the body ID as a module binding ID.
 fn summarize_function_body(
+    free_vars: &[String],
+    free_var_ids: &[BindingId],
+    body_ops: &[Ir1Op],
+    enclosing_labels: &BTreeMap<BindingId, Label>,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    summary_depth: usize,
+) -> Label {
+    // bd-9vouw.153: each pass of an enclosing body's fixed point summarized
+    // every nested function again, and each summary ran its own fixed point
+    // over its nested functions, so work grew with the pass count raised to
+    // the nesting depth. A summary is a function of the body, its captures'
+    // enclosing labels, the provenance and the depth; within one analysis
+    // (FunctionSummaryMemoScope) the body's address identifies it.
+    let origin_labels =
+        canonical_function_capture_origins(free_vars, free_var_ids).map(|origins| {
+            origins
+                .iter()
+                .map(|origin| {
+                    enclosing_labels
+                        .get(&origin.enclosing_id)
+                        .cloned()
+                        .unwrap_or(Label::Internal)
+                })
+                .collect::<Vec<_>>()
+        });
+    let key = origin_labels.map(|origin_labels| FunctionSummaryKey {
+        body: (body_ops.as_ptr() as usize, body_ops.len()),
+        free_var_ids: (free_var_ids.as_ptr() as usize, free_var_ids.len()),
+        summary_depth,
+        origin_labels,
+    });
+    if let Some(key) = &key
+        && let Some(label) = FUNCTION_SUMMARY_MEMO.with(|memo| {
+            memo.borrow().as_ref().and_then(|memo| {
+                (memo.provenance == host_io_exception_provenance)
+                    .then(|| memo.entries.get(key).cloned())
+                    .flatten()
+            })
+        })
+    {
+        return label;
+    }
+    let label = summarize_function_body_uncached(
+        free_vars,
+        free_var_ids,
+        body_ops,
+        enclosing_labels,
+        host_io_exception_provenance,
+        summary_depth,
+    );
+    if let Some(key) = key {
+        FUNCTION_SUMMARY_MEMO.with(|memo| {
+            if let Some(memo) = memo.borrow_mut().as_mut()
+                && memo.provenance == host_io_exception_provenance
+            {
+                memo.entries.insert(key, label.clone());
+            }
+        });
+    }
+    label
+}
+
+/// bd-9vouw.153: what a function summary depends on. `body` and
+/// `free_var_ids` are addresses of the analysed module's ops, which do not
+/// move or change while a [`FunctionSummaryMemoScope`] is open.
+#[derive(PartialEq, Eq, Hash)]
+struct FunctionSummaryKey {
+    body: (usize, usize),
+    free_var_ids: (usize, usize),
+    summary_depth: usize,
+    origin_labels: Vec<Label>,
+}
+
+struct FunctionSummaryMemo {
+    provenance: HostIoExceptionProvenance,
+    entries: std::collections::HashMap<FunctionSummaryKey, Label>,
+}
+
+thread_local! {
+    static FUNCTION_SUMMARY_MEMO: std::cell::RefCell<Option<FunctionSummaryMemo>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Function summaries are memoized while this scope is open: one flow
+/// analysis of one module. A nested analysis gets a fresh memo and the
+/// enclosing one is restored when it ends, so no entry outlives the ops
+/// whose addresses key it.
+struct FunctionSummaryMemoScope {
+    saved: Option<FunctionSummaryMemo>,
+}
+
+impl FunctionSummaryMemoScope {
+    fn enter(provenance: HostIoExceptionProvenance) -> Self {
+        let saved = FUNCTION_SUMMARY_MEMO.with(|memo| {
+            memo.replace(Some(FunctionSummaryMemo {
+                provenance,
+                entries: std::collections::HashMap::new(),
+            }))
+        });
+        Self { saved }
+    }
+}
+
+impl Drop for FunctionSummaryMemoScope {
+    fn drop(&mut self) {
+        let saved = self.saved.take();
+        FUNCTION_SUMMARY_MEMO.with(|memo| {
+            memo.replace(saved);
+        });
+    }
+}
+
+fn summarize_function_body_uncached(
     free_vars: &[String],
     free_var_ids: &[BindingId],
     body_ops: &[Ir1Op],
@@ -30158,27 +30282,14 @@ fn summarize_function_body(
         body_binding_labels.insert(origin.body_id, origin_label);
     }
 
-    let body_ir2_ops = body_ops
-        .iter()
-        .map(|inner| {
-            let (effect, required_capability, flow) = classify_ir1_op(inner);
-            Ir2Op {
-                inner: inner.clone(),
-                effect,
-                required_capability,
-                flow,
-                span: None,
-            }
-        })
-        .collect::<Vec<_>>();
-    let Ok(catch_region_events) = ir2_catch_region_events(&body_ir2_ops) else {
+    let Ok(catch_region_events) = ir2_catch_region_events(body_ops) else {
         return Label::TopSecret;
     };
 
     let mut converged = false;
     for _ in 0..MAX_FUNCTION_SUMMARY_PASSES {
         let Ok((_, changed, _)) = simulate_ir2_flow_labels(
-            &body_ir2_ops,
+            body_ops,
             &mut body_binding_labels,
             &catch_region_events,
             host_io_exception_provenance,
@@ -30195,7 +30306,7 @@ fn summarize_function_body(
         return Label::TopSecret;
     }
     let Ok((labels, changed, _)) = simulate_ir2_flow_labels(
-        &body_ir2_ops,
+        body_ops,
         &mut body_binding_labels,
         &catch_region_events,
         host_io_exception_provenance,
@@ -30207,12 +30318,31 @@ fn summarize_function_body(
         return Label::TopSecret;
     }
 
-    let return_label =
-        Label::join_all(body_ir2_ops.iter().zip(labels).filter_map(|(op, label)| {
-            matches!(op.inner, Ir1Op::Return | Ir1Op::Yield { .. }).then_some(label)
-        }))
-        .unwrap_or(Label::Public);
+    let return_label = Label::join_all(body_ops.iter().zip(labels).filter_map(|(op, label)| {
+        matches!(op, Ir1Op::Return | Ir1Op::Yield { .. }).then_some(label)
+    }))
+    .unwrap_or(Label::Public);
     capture_label.join(&return_label)
+}
+
+/// bd-9vouw.153: the IR1 operation a flow-simulation step reads. The
+/// simulation and the catch-region scan read nothing else, so a function
+/// summary runs them over the nested body's IR1 ops in place; it cloned the
+/// whole nested body into IR2 ops on every call.
+trait FlowOp {
+    fn inner(&self) -> &Ir1Op;
+}
+
+impl FlowOp for Ir2Op {
+    fn inner(&self) -> &Ir1Op {
+        &self.inner
+    }
+}
+
+impl FlowOp for Ir1Op {
+    fn inner(&self) -> &Ir1Op {
+        self
+    }
 }
 
 type CatchRegionEvents = (
@@ -30221,10 +30351,12 @@ type CatchRegionEvents = (
     BTreeMap<u32, Label>,
 );
 
-fn ir2_catch_region_events(ops: &[Ir2Op]) -> Result<CatchRegionEvents, LoweringPipelineError> {
+fn ir2_catch_region_events<O: FlowOp>(
+    ops: &[O],
+) -> Result<CatchRegionEvents, LoweringPipelineError> {
     let mut label_positions = BTreeMap::new();
     for (index, op) in ops.iter().enumerate() {
-        let Ir1Op::Label { id } = &op.inner else {
+        let Ir1Op::Label { id } = op.inner() else {
             continue;
         };
         if label_positions.insert(*id, index).is_some() {
@@ -30235,7 +30367,7 @@ fn ir2_catch_region_events(ops: &[Ir2Op]) -> Result<CatchRegionEvents, LoweringP
     }
     let explicit_finally_entry_labels = ops
         .windows(2)
-        .filter_map(|pair| match (&pair[0].inner, &pair[1].inner) {
+        .filter_map(|pair| match (pair[0].inner(), pair[1].inner()) {
             (Ir1Op::Label { id }, Ir1Op::EnterFinally) => Some(*id),
             _ => None,
         })
@@ -30254,7 +30386,7 @@ fn ir2_catch_region_events(ops: &[Ir2Op]) -> Result<CatchRegionEvents, LoweringP
         let Ir1Op::BeginTry {
             catch_label,
             finally_label,
-        } = &op.inner
+        } = op.inner()
         else {
             continue;
         };
@@ -30311,7 +30443,7 @@ fn ir2_catch_region_events(ops: &[Ir2Op]) -> Result<CatchRegionEvents, LoweringP
             active_regions.push(region_id);
         }
 
-        if !matches!(&op.inner, Ir1Op::EndTry) {
+        if !matches!(op.inner(), Ir1Op::EndTry) {
             continue;
         }
         let Some(&region_id) = active_regions.last() else {
@@ -30737,8 +30869,8 @@ fn ir1_exception_flow_label(
     }
 }
 
-fn simulate_ir2_flow_labels(
-    ops: &[Ir2Op],
+fn simulate_ir2_flow_labels<O: FlowOp>(
+    ops: &[O],
     binding_labels: &mut BTreeMap<BindingId, Label>,
     catch_region_events: &CatchRegionEvents,
     host_io_exception_provenance: HostIoExceptionProvenance,
@@ -30786,9 +30918,9 @@ fn simulate_ir2_flow_labels(
         let mut operation_exception_is_operand_derived = false;
         let mut operation_exception_is_event_emitter_error = false;
         let mut operation_exception_label_override = None;
-        let inferred = match &op.inner {
+        let inferred = match op.inner() {
             Ir1Op::LoadLiteral { value } => {
-                let label = infer_data_label_for_op(&op.inner, binding_labels, Label::Public);
+                let label = infer_data_label_for_op(op.inner(), binding_labels, Label::Public);
                 let mut flow_value = fresh_shaped_flow_value(
                     label.clone(),
                     FlowValueShape::Primitive,
@@ -30987,7 +31119,7 @@ fn simulate_ir2_flow_labels(
                 let receiver_shape = receiver.shape;
                 let callee = pop_flow_value(&mut value_stack)?;
                 let callee_shape = callee.shape;
-                if std::env::var_os("FRANKEN_IFC_DEBUG").is_some() {
+                if ifc_debug_enabled() {
                     eprintln!(
                         "[ifc-debug] CallMethod arg_count={arg_count} callee_shape={callee_shape:?} receiver_shape={:?}",
                         receiver_shape
@@ -31094,7 +31226,7 @@ fn simulate_ir2_flow_labels(
                 // pipeline promise with an authenticated rejection summary
                 // bounds what this Await can throw into the enclosing catch;
                 // every other awaited value keeps the fail-high default.
-                if matches!(op.inner, Ir1Op::Await)
+                if matches!(op.inner(), Ir1Op::Await)
                     && let Some(StreamFlowInfo::PipelinePromise { origin }) = &value.stream
                     && let Some(rejection) = pipeline_rejections.get(origin)
                 {
@@ -31597,7 +31729,7 @@ fn simulate_ir2_flow_labels(
                 let lhs = pop_flow_value(&mut value_stack)?;
                 let label = lhs.label.join(&rhs.label);
                 let preserve_identity = matches!(
-                    &op.inner,
+                    op.inner(),
                     Ir1Op::ArrayPush | Ir1Op::SpreadIntoArray | Ir1Op::SpreadIntoObject
                 );
                 invalidate_nonprimitive_flow_shapes(&mut value_stack);
@@ -31718,7 +31850,7 @@ fn simulate_ir2_flow_labels(
                     .entry(*done_label)
                     .or_insert(iterator.identity);
                 let label = iterator.label;
-                let shape = if matches!(op.inner, Ir1Op::ForInNext { .. }) {
+                let shape = if matches!(op.inner(), Ir1Op::ForInNext { .. }) {
                     FlowValueShape::Primitive
                 } else if iterator.shape.is_closed() {
                     FlowValueShape::ClosedResult
@@ -32324,7 +32456,7 @@ fn simulate_ir2_flow_labels(
             .as_ref()
             .unwrap_or(&inferred);
         if let Some(exception_label) = ir1_exception_flow_label(
-            &op.inner,
+            op.inner(),
             exception_input_label,
             operation_exception_is_operand_derived,
             operation_exception_is_event_emitter_error,
@@ -32517,6 +32649,7 @@ fn infer_ir2_flow_annotations_bounded(
 ) -> Result<FlowInferenceMetrics, LoweringPipelineError> {
     const MAX_FLOW_INFERENCE_PASSES: usize = 16;
     let catch_region_events = ir2_catch_region_events(&ir2.ops)?;
+    let memo_scope = FunctionSummaryMemoScope::enter(host_io_exception_provenance);
     let mut converged = false;
     // A reverse binding-dependency chain can otherwise force one complete IR2
     // rescan per binding, making inference quadratic in attacker-controlled
@@ -32549,6 +32682,7 @@ fn infer_ir2_flow_annotations_bounded(
             host_io_exception_provenance,
             0,
         )?;
+    drop(memo_scope);
     if changed_after_convergence {
         return Err(LoweringPipelineError::InvariantViolation {
             detail: "IR2 flow-label binding fixed point changed after convergence",

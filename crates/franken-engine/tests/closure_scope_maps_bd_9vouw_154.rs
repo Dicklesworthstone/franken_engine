@@ -155,3 +155,23 @@ fn closures_reach_outer_names_through_functions_that_never_name_them() {
     );
     assert_eq!(eval(&source), "1 2000 2 mine ss d outer inner-e outer-e");
 }
+
+/// bd-9vouw.223: 16 nested functions, each with a loop and a call of the
+/// next. The flow analysis summarized every nested function again on each
+/// pass of its enclosing body's fixed point, and each summary ran its own
+/// fixed point over the functions inside it, so compiling cost about three
+/// times more per level (the gate25b frankenctl: depth 8 1.3 s, 10 9.5 s,
+/// 12 102 s); a summary is now computed once per analysis for its body and
+/// captures' labels. Node v22.2.0 gives this value.
+#[test]
+fn deeply_nested_functions_compile_once_per_summary() {
+    let mut body = "return s + 1;".to_string();
+    let mut declaration = String::new();
+    for level in (0..16).rev() {
+        declaration = format!(
+            "function n{level}(a) {{ var s = 0; for (var j = 0; j < 2; j++) {{ s += a; }} {body} }}"
+        );
+        body = format!("{declaration} return s + n{level}(a);");
+    }
+    assert_eq!(eval(&format!("{declaration}\nn0(1);")), "33");
+}

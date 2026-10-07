@@ -54078,12 +54078,21 @@ impl InterpreterCore {
                                 args,
                                 Some(module),
                             )?,
-                            Some(name @ ("Proxy" | "WeakRef" | "FinalizationRegistry")) => self
-                                .dispatch_builtin_hostcall(
-                                    &format!("builtin:{name}"),
-                                    args,
-                                    Some(module),
-                                )?,
+                            // The collections construct through their
+                            // hostcalls; called, they throw (ES2020 23.1.1.1).
+                            Some(
+                                name @ ("Proxy"
+                                | "WeakRef"
+                                | "FinalizationRegistry"
+                                | "Map"
+                                | "Set"
+                                | "WeakMap"
+                                | "WeakSet"),
+                            ) => self.dispatch_builtin_hostcall(
+                                &format!("builtin:{name}"),
+                                args,
+                                Some(module),
+                            )?,
                             _ => {
                                 self.dispatch_builtin_function(module, builtin, args, None, None)?
                             }
@@ -102550,6 +102559,12 @@ impl InterpreterCore {
             Some("Blob") => self.construct_blob(module, args)?,
             Some("SharedArrayBuffer") => {
                 self.dispatch_builtin_hostcall("builtin:SharedArrayBuffer", args, Some(module))?
+            }
+            // Constructed rather than called (call_standard_constructor
+            // throws for them): Reflect.construct(Map, ...), a value
+            // `new M()` with M = Map, a derived class's super().
+            Some(name @ ("Map" | "Set" | "WeakMap" | "WeakSet")) => {
+                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?
             }
             _ => self.dispatch_builtin_function(module, builtin, args, None, None)?,
         };

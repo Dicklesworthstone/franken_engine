@@ -201,3 +201,35 @@ fn oversized_spread_list_is_still_refused() {
     .expect_err("a 200,000-element list exceeds MAX_CALL_ARGUMENTS");
     assert!(error.contains("RegisterOutOfBounds"), "{error}");
 }
+
+/// `count` numeric literals `0, 1, ...` as an argument list.
+fn numbers(count: usize) -> String {
+    (0..count)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// bd-9vouw.254: a call with 120 to 128 positional arguments took about
+/// 2N + 2 registers (each argument and its contiguous copy) and overflowed
+/// the frame. 128 arguments needed 258 registers, and from about 120 a
+/// function with live locals failed. Babel standalone's regenerate tables
+/// (`regenerateExports(...125 code points)`) failed at load with "register
+/// 256 out of bounds". Calls, method calls, `new` and a builtin with 120-128
+/// arguments now match Node v22.2.0 ("131,255,126 128 127 120").
+#[test]
+fn calls_with_up_to_128_positional_arguments_fit_the_frame_bd_9vouw_254() {
+    let source = format!(
+        "function count() {{ return arguments.length; }}\nvar o = {{ m: function () {{ return arguments.length + arguments[arguments.length - 1]; }} }};\nfunction C() {{ this.n = arguments.length; }}\nfunction g() {{ var a = 1, b = 2, c = 3; var r = count({}); var s = o.m({}); var t = new C({}).n; return [r + a + b + c, s, t].join(); }}\nconsole.log(g(), count({}), Math.max({}), [].concat({}).length);\n",
+        numbers(125),
+        numbers(128),
+        numbers(126),
+        numbers(128),
+        numbers(128),
+        numbers(120)
+    );
+    assert_eq!(
+        console_output(&source).expect("the program runs"),
+        "131,255,126 128 127 120"
+    );
+}

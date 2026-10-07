@@ -20223,7 +20223,14 @@ fn function_reads_arguments(
 /// passed like a spread, whose arguments past the 256-register frame are
 /// staged out of band (bd-9vouw.50): `f(a0, ..., a299)` failed with
 /// "register 256 out of bounds".
-const POSITIONAL_ARGUMENT_LIMIT: usize = 128;
+///
+/// A register call holds each argument and its contiguous copy, about
+/// 2N + 2 registers, so the limit was too high at 128: 128 arguments
+/// needed 258, and from about 120 a function with live locals overflowed.
+/// babel standalone's regenerate tables (`regenerateExports(...125
+/// code points)`) failed at load (bd-9vouw.254). At 64, a call takes at
+/// most about 130 registers.
+const POSITIONAL_ARGUMENT_LIMIT: usize = 64;
 
 /// Whether a call's argument list goes through the argument-array path: it
 /// has a spread element, or more than [`POSITIONAL_ARGUMENT_LIMIT`]

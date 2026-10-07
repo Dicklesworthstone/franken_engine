@@ -3519,11 +3519,17 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             // A physical newline cannot terminate a try/catch/finally or
             // if/else statement between its clauses. Rejoin only a matching
             // compound statement, preserving the existing source-offset map.
-            let block_clause_continues_previous = result.last().is_some_and(|prev| {
-                let segments = split_statement_segments(&prev.text);
-                let Some((_, _, previous)) = segments.last() else {
-                    return false;
-                };
+            // The previous logical line's last statement segment, split once
+            // per physical line: each check below rescanned the whole
+            // previous line (a bundle's statement grows line by line).
+            let previous_segments = result
+                .last()
+                .map(|prev| split_statement_segments(&prev.text));
+            let previous_last = previous_segments
+                .as_ref()
+                .and_then(|segments| segments.last())
+                .map(|(_, _, previous)| *previous);
+            let block_clause_continues_previous = previous_last.is_some_and(|previous| {
                 let previous = strip_leading_labels(previous).trim_end();
                 previous.ends_with('}')
                     && (((starts_with_keyword(trimmed_line, "catch")
@@ -3536,35 +3542,23 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             // style: `function f(a)\n{`, `if (x)\n{`, `else\n{`) opens that
             // header's body; it is not a new block statement.
             let brace_continues_header = trimmed_line.starts_with('{')
-                && result.last().is_some_and(|prev| {
-                    let segments = split_statement_segments(&prev.text);
-                    let Some((_, _, previous)) = segments.last() else {
-                        return false;
-                    };
+                && previous_last.is_some_and(|previous| {
                     statement_header_awaits_body(strip_leading_labels(previous).trim())
                 });
             // The previous statement's last clause as the splitter sees it.
-            let previous_clause = |prev: &LogicalLine| -> Option<String> {
-                split_statement_segments(&prev.text)
-                    .last()
-                    .map(|(_, _, previous)| strip_leading_labels(previous).trim().to_string())
-            };
+            let previous_clause =
+                previous_last.map(|previous| strip_leading_labels(previous).trim());
             // An unbraced body on the line after its header (`if (x)\n  f();`,
             // `for (...)\n  s += i;`, `else\n  g();`, `do\n  i++;`).
             let body_continues_header = !trimmed_line.starts_with('{')
-                && result.last().is_some_and(|prev| {
-                    previous_clause(prev)
-                        .is_some_and(|clause| statement_header_takes_unbraced_body(&clause))
-                });
+                && previous_clause.is_some_and(statement_header_takes_unbraced_body);
             // `else` on its own line after an unbraced consequent
             // (`if (a) x();\nelse y();`), and a do statement's `while` on its
             // own line (`do\n  i++;\nwhile (c);`).
-            let clause_continues_statement = result.last().is_some_and(|prev| {
-                previous_clause(prev).is_some_and(|clause| {
-                    (starts_with_keyword(trimmed_line, "else") && clause_takes_else(&clause))
-                        || (starts_with_keyword(trimmed_line, "while")
-                            && do_statement_awaits_while(&clause))
-                })
+            let clause_continues_statement = previous_clause.is_some_and(|clause| {
+                (starts_with_keyword(trimmed_line, "else") && clause_takes_else(clause))
+                    || (starts_with_keyword(trimmed_line, "while")
+                        && do_statement_awaits_while(clause))
             });
             // A line STARTING with `(` or `[` continues the expression the
             // previous line ended: no semicolon is inserted before them

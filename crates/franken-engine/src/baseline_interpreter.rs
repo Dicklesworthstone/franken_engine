@@ -91269,11 +91269,14 @@ impl InterpreterCore {
                 // @@toPrimitive); it used the non-calling display string.
                 let description = if args.count > 0 {
                     let value = self.read_reg(args.start)?;
-                    let value = if value.is_object_like() {
-                        Value::Str(self.conversion_to_string(module, value)?)
-                    } else {
-                        value
-                    };
+                    let value =
+                        if value.is_object_like() {
+                            Value::Str(self.scoped_conversion(|this| {
+                                this.conversion_to_string(module, value)
+                            })?)
+                        } else {
+                            value
+                        };
                     self.symbol_description_argument(Some(value))?
                 } else {
                     None
@@ -91287,7 +91290,9 @@ impl InterpreterCore {
                     Value::Undefined
                 };
                 let value = if value.is_object_like() {
-                    Value::Str(self.conversion_to_string(module, value)?)
+                    Value::Str(
+                        self.scoped_conversion(|this| this.conversion_to_string(module, value))?,
+                    )
                 } else {
                     value
                 };
@@ -92219,7 +92224,8 @@ impl InterpreterCore {
                     Value::Object(raw_id),
                     0,
                 )?;
-                let length = self.conversion_to_number(module, length, false)?;
+                let length = self
+                    .scoped_conversion(|this| this.conversion_to_number(module, length, false))?;
                 // ToLength.
                 let length = if length.is_nan() || length <= 0.0 {
                     0
@@ -92235,7 +92241,8 @@ impl InterpreterCore {
                         Value::Object(raw_id),
                         0,
                     )?;
-                    let segment = self.conversion_to_string(module, segment)?;
+                    let segment =
+                        self.scoped_conversion(|this| this.conversion_to_string(module, segment))?;
                     result.push_str(segment.as_ref());
                     self.check_string_limit(result.len())?;
                     if index + 1 == length {
@@ -92246,7 +92253,9 @@ impl InterpreterCore {
                     let slot = u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1);
                     if slot < args.count {
                         let substitution = self.arg_or_undefined(args, slot)?;
-                        let substitution = self.conversion_to_string(module, substitution)?;
+                        let substitution = self.scoped_conversion(|this| {
+                            this.conversion_to_string(module, substitution)
+                        })?;
                         result.push_str(substitution.as_ref());
                     }
                 }
@@ -104618,7 +104627,10 @@ impl InterpreterCore {
         Ok(match self.read_reg(args.start)? {
             Value::Undefined => None,
             Value::Str(s) => Some(s.to_string()),
-            other => Some(self.conversion_to_string(module, other)?.to_string()),
+            other => Some(
+                self.scoped_conversion(|this| this.conversion_to_string(module, other))?
+                    .to_string(),
+            ),
         })
     }
 
@@ -106613,11 +106625,15 @@ impl InterpreterCore {
         // TypeError and a throwing conversion hook propagates.
         let name = match name {
             Value::Undefined => "Error".to_string(),
-            other => self.conversion_to_string(Some(module), other)?.to_string(),
+            other => self
+                .scoped_conversion(|this| this.conversion_to_string(Some(module), other))?
+                .to_string(),
         };
         let message = match message {
             Value::Undefined => String::new(),
-            other => self.conversion_to_string(Some(module), other)?.to_string(),
+            other => self
+                .scoped_conversion(|this| this.conversion_to_string(Some(module), other))?
+                .to_string(),
         };
         let text = if name.is_empty() {
             message

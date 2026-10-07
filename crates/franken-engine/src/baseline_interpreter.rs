@@ -68473,13 +68473,7 @@ impl InterpreterCore {
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
         if let Value::Promise(source_handle) = value {
-            // Resolving with a native promise adopts its state (ES2020
-            // 25.6.3.2); it must never be flattened into a fulfillment value.
-            return self.resolve_promise_to_native(
-                promise,
-                crate::promise_model::PromiseHandle(source_handle),
-                label,
-            );
+            return self.resolve_promise_with_native(module, promise, source_handle, label);
         }
         if !matches!(value, Value::Object(_)) {
             let value = self.promise_value(&value)?;
@@ -68540,6 +68534,113 @@ impl InterpreterCore {
                 let value = self.promise_value(&value)?;
                 self.fulfill_promise(promise, value, label)
             }
+        }
+    }
+
+    /// The Promise Resolve Function with a native promise (ES2020 25.6.1.3.2
+    /// steps 6-12). Resolving with itself is a TypeError at once. Otherwise
+    /// `then` is read now: the intrinsic %Promise.prototype.then% makes the
+    /// PromiseResolveThenableJob an adoption of the native promise, which
+    /// settles `promise` two jobs later, as in Node; adopting at once settled
+    /// it two ticks early (an async function returning a promise, `resolve(p)`
+    /// in an executor, a `then` callback returning a promise). An own or
+    /// patched `then` runs as any thenable's, and a non-callable one
+    /// fulfills `promise` with the source itself (bd-9vouw.323).
+    fn resolve_promise_with_native(
+        &mut self,
+        module: Option<&Ir3Module>,
+        promise: crate::promise_model::PromiseHandle,
+        source_handle: u32,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let source = crate::promise_model::PromiseHandle(source_handle);
+        let Some(module) = module.filter(|_| source != promise) else {
+            return self.resolve_promise_to_native(promise, source, label);
+        };
+        // As for any thenable, what the Get reads labels the resolution, and
+        // the enclosing HostCall's pending result label is set aside.
+        let saved_result_label = self.take_pending_hostcall_result_label();
+        let then = self.get_v(
+            module,
+            &Value::Promise(source_handle),
+            &RuntimePropertyKey::String(JsString::from("then")),
+        );
+        let observed = self.take_pending_hostcall_result_label();
+        if let Some(saved) = saved_result_label {
+            self.replace_pending_hostcall_result_label(Some(saved))?;
+        }
+        let label = match observed {
+            Some(observed) => label.join(&observed),
+            None => label,
+        };
+        let then = match then {
+            Ok(then) => then,
+            Err(error) => {
+                let (reason, reason_label) = self.thrown_completion_value(error, &label)?;
+                let reason = self.promise_value(&reason)?;
+                return self.reject_promise(promise, reason, reason_label);
+            }
+        };
+        if matches!(&then, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::PromiseThen && builtin.bound_object.is_none())
+        {
+            return self.enqueue_adopt_native(promise, source, false, label);
+        }
+        match self.promise_reaction_handler_from_value(then, "thenable then")? {
+            Some(handler) => self.enqueue_resolve_thenable(
+                promise,
+                handler,
+                Value::Promise(source_handle),
+                label,
+            ),
+            None => {
+                let value = self.promise_value(&Value::Promise(source_handle))?;
+                self.fulfill_promise(promise, value, label)
+            }
+        }
+    }
+
+    /// Enqueue an [`crate::promise_model::Microtask::AdoptNative`] job
+    /// (memory-preflighted, as [`Self::enqueue_resolve_thenable`]). The
+    /// first (`settle` false) is the resolving functions' resolution: they
+    /// are already resolved from here on.
+    fn enqueue_adopt_native(
+        &mut self,
+        promise: crate::promise_model::PromiseHandle,
+        source: crate::promise_model::PromiseHandle,
+        settle: bool,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let task = crate::promise_model::Microtask::AdoptNative {
+            promise,
+            source,
+            settle,
+            label,
+        };
+        let next_queue_bytes = self
+            .event_loop
+            .microtasks
+            .projected_enqueue_memory_bytes(&task);
+        let next_promise_bytes = self
+            .promise_store
+            .estimated_memory_bytes()
+            .saturating_add(
+                self.event_loop
+                    .estimated_memory_bytes()
+                    .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+                    .saturating_add(next_queue_bytes),
+            )
+            .saturating_add(self.promise_combinators_memory_bytes())
+            .saturating_add(self.promise_combinator_watchers_memory_bytes())
+            .saturating_add(self.promise_in_flight_task_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        self.event_loop.microtasks.enqueue(task);
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
+        if settle {
+            Ok(())
+        } else {
+            self.retire_promise_resolvers(promise)
         }
     }
 
@@ -69041,6 +69142,27 @@ impl InterpreterCore {
                                 reason.clone(),
                                 task_label.clone(),
                             )?;
+                        }
+                    }
+                    crate::promise_model::Microtask::AdoptNative {
+                        promise,
+                        source,
+                        settle,
+                        label: task_label,
+                    } => {
+                        // The PromiseResolveThenableJob's `then(resolve,
+                        // reject)` on a native promise (bd-9vouw.323): a
+                        // pending source gets the forwarding reaction, which
+                        // settles `promise` when it settles; a settled one
+                        // queues the reaction job, which settles it next.
+                        let pending = matches!(
+                            self.promise_store.get(*source).map(|record| &record.state),
+                            Ok(crate::promise_model::PromiseState::Pending)
+                        );
+                        if *settle || pending {
+                            self.resolve_promise_to_native(*promise, *source, task_label.clone())?;
+                        } else {
+                            self.enqueue_adopt_native(*promise, *source, true, task_label.clone())?;
                         }
                     }
                     crate::promise_model::Microtask::ResolveThenable {

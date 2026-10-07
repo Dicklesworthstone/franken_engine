@@ -79,3 +79,15 @@ r.join(' | ');"#;
         r#"TypeError | [1,2,3] | TypeError | [2,3,3] | TypeError | [2,3,3] | TypeError | [1,2,3] | [1] | [8,2,3] | 9 | 3 | TypeError | [1,2] | TypeError | [1,2,null]"#
     );
 }
+
+/// bd-9vouw.251: Object.freeze of a typed array with elements is a
+/// TypeError (its elements cannot become non-writable, ES2020 9.4.5.3),
+/// and the array stays unfrozen; it was marked frozen while its bytes still
+/// changed. An empty view and Object.seal still succeed. The expected string
+/// is Node v22.2.0's completion value.
+#[test]
+fn freezing_a_typed_array_with_elements_throws_bd_9vouw_251() {
+    let source = r#"function t(f) { try { return JSON.stringify(f()); } catch (e) { return e.constructor.name; } }
+[t(() => Object.freeze(new Uint8Array(2))), t(() => Object.isFrozen(Object.freeze(new Uint8Array(0)))), t(() => Object.seal(new Uint8Array(2)).length), t(() => Object.isSealed(Object.seal(new Uint8Array(2)))), t(() => Object.freeze(new Float64Array(new ArrayBuffer(8), 8))), t(() => { const a = new Uint8Array(2); try { Object.freeze(a); } catch (e) {} a[0] = 7; return [a[0], Object.isFrozen(a)]; })].join(' ');"#;
+    assert_eq!(eval(source), r#"TypeError true 2 true {} [7,false]"#);
+}

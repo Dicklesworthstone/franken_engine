@@ -87337,6 +87337,22 @@ impl InterpreterCore {
                 }
                 match obj_val {
                     Value::Object(obj_id) => {
+                        // ES2020 9.4.5.3: a typed array's elements cannot be
+                        // made non-writable, so freezing one with elements is
+                        // a TypeError (V8: "Cannot freeze array buffer views
+                        // with elements"), not a frozen object whose bytes
+                        // still change (bd-9vouw.251).
+                        if self
+                            .heap
+                            .get(obj_id.0 as usize)
+                            .and_then(|object| object.typed_array.as_ref())
+                            .is_some_and(|view| view.length > 0)
+                        {
+                            return Err(InterpreterError::TypeError {
+                                expected: "an object Object.freeze can freeze".to_string(),
+                                got: "Cannot freeze array buffer views with elements".to_string(),
+                            });
+                        }
                         // Actually freeze the object by setting the is_frozen flag
                         let obj_index = obj_id.0 as usize;
                         let mut object_found = false;

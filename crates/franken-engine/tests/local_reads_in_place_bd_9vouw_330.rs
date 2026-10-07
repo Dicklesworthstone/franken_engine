@@ -43,6 +43,9 @@ console.log(out.join(' '));
     );
 }
 
+/// The instructions of the function bodies: those after the script's own
+/// code, which ends at its `Halt` (it stores the function with a `Move` of
+/// its own registers).
 fn ir3_of(source: &str) -> Vec<Ir3Instruction> {
     let tree = CanonicalEs2020Parser
         .parse(source, ParseGoal::Script)
@@ -54,6 +57,10 @@ fn ir3_of(source: &str) -> Vec<Ir3Instruction> {
         .expect("IR2->IR3")
         .module
         .instructions
+        .into_iter()
+        .skip_while(|instruction| !matches!(instruction, Ir3Instruction::Halt))
+        .skip(1)
+        .collect()
 }
 
 #[test]

@@ -411,6 +411,21 @@ console.log(b.Buffer === Buffer, typeof b.atob, b.btoa('hi'), b.kMaxLength, b.co
     );
 }
 
+/// `require('buffer').Blob` is the global Blob (bd-9vouw.226), as in Node.
+#[test]
+fn require_buffer_has_the_global_blob_bd_9vouw_226() {
+    let lines = run_tree(
+        "fe_run_cjs_buffer_blob",
+        &[(
+            "app.js",
+            r#"const { Blob: B } = require('buffer')
+console.log(B === Blob, new B(['ab']).size, Object.keys(require('buffer')).includes('Blob'))
+"#,
+        )],
+    );
+    assert_eq!(lines, ["true 2 true"]);
+}
+
 /// A class may extend a class or constructor function of another module
 /// (bd-9vouw.203): `super()` and an implicit constructor construct the parent
 /// in its own module with new.target, as Reflect.construct does. The parent's

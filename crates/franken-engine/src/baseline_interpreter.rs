@@ -38151,8 +38151,9 @@ impl InterpreterCore {
     /// engine's own `Buffer`, `atob` and `btoa` values and Node v22's limits.
     /// safe-buffer (under jws, jsonwebtoken and many more) reads
     /// `require('buffer').Buffer` and returns the module itself; the require
-    /// was "Cannot find module 'buffer'". Not provided: `SlowBuffer`, `Blob`,
-    /// `File`, `transcode`, `isUtf8`, `isAscii`, `resolveObjectURL`.
+    /// was "Cannot find module 'buffer'". Its `Blob` is the global one
+    /// (bd-9vouw.226). Not provided: `SlowBuffer`, `File`, `transcode`,
+    /// `isUtf8`, `isAscii`, `resolveObjectURL`.
     fn buffer_core_module(&mut self) -> Result<Value, InterpreterError> {
         if let Some(object) = self.builtin_prototypes.get(BUFFER_MODULE_KEY) {
             return Ok(Value::Object(*object));
@@ -38165,6 +38166,10 @@ impl InterpreterCore {
             (
                 "Buffer",
                 Value::BuiltinFunction(BuiltinFunction::standard_constructor("Buffer")),
+            ),
+            (
+                "Blob",
+                Value::BuiltinFunction(BuiltinFunction::standard_constructor("Blob")),
             ),
             (
                 "atob",

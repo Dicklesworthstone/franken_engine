@@ -63088,10 +63088,16 @@ impl InterpreterCore {
             return Ok(false);
         };
         let repr = Self::collection_key_repr(key);
-        // Live iterators past the removed entry move back (bd-9vouw.131).
-        let position = self
-            .collection_iterators
-            .contains_key(&storage_id)
+        // Live iterators and forEach walks past the removed entry move back
+        // (bd-9vouw.131). A forEach walk has no iterator: counting only
+        // iterators skipped the entry after one its callback deleted
+        // (bd-9vouw.314).
+        let tracked = self.collection_iterators.contains_key(&storage_id)
+            || self
+                .collection_for_each_cursors
+                .iter()
+                .any(|(cursor_storage, _)| *cursor_storage == storage_id);
+        let position = tracked
             .then(|| {
                 self.heap
                     .get(storage_id.0 as usize)

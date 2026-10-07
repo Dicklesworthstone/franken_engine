@@ -108,17 +108,17 @@ fn taxonomy_cases() -> Vec<ParserTaxonomyCase> {
         },
         ParserTaxonomyCase {
             id: "FE-PARSER-SYNTAX-STRAY-OPERATOR",
-            description: "Stray binary operator with no left-hand operand rejected as UnsupportedSyntax",
+            description: "Stray binary operator with no left-hand operand is proven-invalid syntax",
             category: ParserErrorCategory::Syntax,
             source: "* 5",
-            expected_code: Some(ParseErrorCode::UnsupportedSyntax),
+            expected_code: Some(ParseErrorCode::InvalidSyntax),
         },
         ParserTaxonomyCase {
             id: "FE-PARSER-SYNTAX-RESERVED-AS-IDENT",
-            description: "Reserved word `return` used as a binding identifier rejected as UnsupportedSyntax",
+            description: "Reserved word `return` used as a binding identifier is proven-invalid syntax",
             category: ParserErrorCategory::Syntax,
             source: "var return = 1;",
-            expected_code: Some(ParseErrorCode::UnsupportedSyntax),
+            expected_code: Some(ParseErrorCode::InvalidSyntax),
         },
         // ── Syntax — StrictModeWithStatement ──────────────────────────────
         ParserTaxonomyCase {

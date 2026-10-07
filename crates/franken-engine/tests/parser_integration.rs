@@ -56,16 +56,17 @@ fn constants_diagnostic_are_non_empty() {
 // Section 2: ParseErrorCode
 // ---------------------------------------------------------------------------
 
-/// ALL lists every code, including the three added after its count was
+/// ALL lists every code, including the four added after its count was
 /// pinned at 7 (StrictModeWithStatement, AwaitOutsideAsync,
-/// InvalidClassElementName); uniqueness is checked by
+/// InvalidClassElementName, InvalidSyntax); uniqueness is checked by
 /// parse_error_code_stable_diagnostic_codes_are_unique.
 #[test]
 fn parse_error_code_all_lists_every_code() {
-    assert_eq!(ParseErrorCode::ALL.len(), 10);
+    assert_eq!(ParseErrorCode::ALL.len(), 11);
     assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::StrictModeWithStatement));
     assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::AwaitOutsideAsync));
     assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::InvalidClassElementName));
+    assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::InvalidSyntax));
 }
 
 #[test]
@@ -84,6 +85,66 @@ fn parse_error_code_as_str_returns_non_empty_stable_strings() {
     assert_eq!(ParseErrorCode::InvalidUtf8.as_str(), "invalid_utf8");
     assert_eq!(ParseErrorCode::SourceTooLarge.as_str(), "source_too_large");
     assert_eq!(ParseErrorCode::BudgetExceeded.as_str(), "budget_exceeded");
+    assert_eq!(ParseErrorCode::InvalidSyntax.as_str(), "invalid_syntax");
+}
+
+#[test]
+fn proven_invalid_syntax_has_a_distinct_diagnostic_bd_9vouw_290() {
+    let parser = CanonicalEs2020Parser;
+    for source in [
+        "let let = 1",
+        "\"use strict\"; var eval = 1",
+        "function f(a, a) { 'use strict'; }",
+        "function f(a = 1) { 'use strict'; }",
+        "function f(...a, b) {}",
+        "var null = 1",
+        "x =",
+        "x +=",
+        "a => a +",
+        "function f() { return ); }",
+        "class {}",
+        "if (true) const value = 1",
+    ] {
+        let error = parser.parse(source, ParseGoal::Script).expect_err(source);
+        assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source}");
+        assert_eq!(
+            error.code.diagnostic_category(),
+            ParseDiagnosticCategory::Syntax
+        );
+        assert_eq!(
+            error.code.diagnostic_severity(),
+            ParseDiagnosticSeverity::Error
+        );
+        assert!(
+            error.span.is_some(),
+            "{source}: source location must survive"
+        );
+    }
+    for source in [
+        "function f(a, a) { return a; }",
+        "function f(a = 1) { return a; }",
+        "const C = class {};",
+        "function f() { return class {}; }",
+        "var re = /[(){}=+]/;",
+        "var x = 1e-3 + 2e+3;",
+        "var x = ({in: 42}). in;",
+        "var x = ({instanceof: 43}). instanceof;",
+        "var x = ({in: 44}).\u{00a0}in;",
+        "var αin = 45; αin;",
+        "var αinstanceof = 46; αinstanceof;",
+        "for (class {}; false;) {}",
+        "for (class extends Object {}; false;) {}",
+        "for (function () {}; false;) {}",
+    ] {
+        parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|error| {
+                panic!("valid neighboring grammar {source:?} was rejected: {error}")
+            });
+    }
+    parser
+        .parse("export default class {}", ParseGoal::Module)
+        .expect("anonymous default-exported class is still valid");
 }
 
 #[test]

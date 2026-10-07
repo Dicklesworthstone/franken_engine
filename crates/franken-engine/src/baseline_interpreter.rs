@@ -39416,6 +39416,7 @@ impl InterpreterCore {
                         ParseErrorCode::StrictModeWithStatement
                             | ParseErrorCode::AwaitOutsideAsync
                             | ParseErrorCode::InvalidClassElementName
+                            | ParseErrorCode::InvalidSyntax
                     ) =>
                 {
                     return Err(self.throw_js_error("SyntaxError", error.message.clone()));

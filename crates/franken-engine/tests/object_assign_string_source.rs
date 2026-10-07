@@ -39,3 +39,36 @@ console.log(log.join(','));
         ]
     );
 }
+
+/// [[Set]] onto an array index grows the array's length for every caller,
+/// not only the SetProperty instruction: Object.assign from an array or
+/// object source (cli-table3 sizes its columns with
+/// `Object.assign(vals, result, auto)`, so every cell was truncated to
+/// '…'), Reflect.set, and a Proxy over an array. The elements were stored
+/// but length stayed 0. Expected lines are Node v22.2.0's output, captured
+/// programmatically.
+#[test]
+fn set_onto_an_array_index_grows_its_length() {
+    let source = r#"var a = []; Object.assign(a, [4, 4]); var r = []; r[0] = 3; r[1] = 5; var b = Object.assign([], r, {}); var c = [1]; Object.assign(c, { 2: 9 });
+console.log(a.length, JSON.stringify(a), b.length, c.length, JSON.stringify(c), JSON.stringify(Object.assign([], { 0: 'z' })));
+var d = []; console.log(Reflect.set(d, 0, 5), d.length, Reflect.set(d, '3', 6), d.length, JSON.stringify(d));
+var p = new Proxy([], {}); Object.assign(p, [1, 2]); console.log(p.length);
+var widths = []; Object.assign(widths, [4, 4], {}); for (var j = 0; j < widths.length; j++) widths[j] = Math.max(1, widths[j] || 0); console.log(JSON.stringify(widths));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "2 [4,4] 2 3 [1,null,9] [\"z\"]",
+            "true 1 true 4 [5,null,null,6]",
+            "2",
+            "[4,4]",
+        ]
+    );
+}

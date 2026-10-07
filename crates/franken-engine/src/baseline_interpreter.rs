@@ -53010,6 +53010,7 @@ impl InterpreterCore {
                                             object.contains_own_runtime_property(&property_key)
                                         },
                                     );
+                                // ([[Set]] itself grows an array's length.)
                                 if !owns_property {
                                     // Prototype accessors and successful traps
                                     // need not create an own data property.
@@ -53018,11 +53019,6 @@ impl InterpreterCore {
                                         &property_key,
                                         &previous_label,
                                     )?;
-                                } else if let Some(index) = property_key
-                                    .as_str()
-                                    .and_then(Self::canonical_array_index_key)
-                                {
-                                    self.maintain_array_index_assignment(label_owner, index)?;
                                 }
                             }
                         }
@@ -63708,6 +63704,13 @@ impl InterpreterCore {
                 return Ok(false);
             }
             self.set_object_runtime_property(receiver_id, key.clone(), value)?;
+            // An array receiver's length grows with the index written, for
+            // every caller of [[Set]]: the SetProperty instruction,
+            // Object.assign (`Object.assign(vals, [4, 4])`, cli-table3's
+            // column widths) and Reflect.set left it unchanged.
+            if let Some(index) = key.as_str().and_then(Self::canonical_array_index_key) {
+                self.maintain_array_index_assignment(receiver_id, index)?;
+            }
             return Ok(true);
         };
 
@@ -89493,11 +89496,12 @@ impl InterpreterCore {
                     // (`Object.assign({}, 'ab')` gave {}).
                     if let Value::Str(text) = &source_val {
                         for (key, value) in self.string_index_entries(text)? {
-                            let property_key = RuntimePropertyKey::String(key.clone());
+                            // [[Set]] grows an array target's length
+                            // (`Object.assign([], 'hi')`).
                             let committed = self.proxy_aware_set_runtime_property(
                                 module,
                                 target_obj_id,
-                                &property_key,
+                                &RuntimePropertyKey::String(key.clone()),
                                 value,
                                 Value::Object(target_obj_id),
                                 0,
@@ -89508,21 +89512,6 @@ impl InterpreterCore {
                                         .to_string(),
                                     got: format!("Cannot assign to read only property '{key}'"),
                                 });
-                            }
-                            // An array target's length grows as with an
-                            // indexed assignment (`Object.assign([], 'hi')`),
-                            // unless a setter consumed the write.
-                            if let Some(index) = property_key
-                                .as_str()
-                                .and_then(Self::canonical_array_index_key)
-                                && self
-                                    .heap
-                                    .get(target_obj_id.0 as usize)
-                                    .is_some_and(|object| {
-                                        object.contains_own_runtime_property(&property_key)
-                                    })
-                            {
-                                self.maintain_array_index_assignment(target_obj_id, index)?;
                             }
                         }
                         continue;

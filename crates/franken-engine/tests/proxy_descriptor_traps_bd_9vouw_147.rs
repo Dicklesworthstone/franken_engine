@@ -91,3 +91,13 @@ fn has_own_property_of_a_proxy_asks_its_target_or_trap() {
         "true true false true true true false TypeError"
     );
 }
+
+/// bd-9vouw.236: propertyIsEnumerable of a Proxy is its [[GetOwnProperty]]'s
+/// enumerability (the getOwnPropertyDescriptor trap, else the target's own
+/// property); every key read false, as hasOwnProperty did. Node v22.2.0
+/// gives this value.
+#[test]
+fn property_is_enumerable_of_a_proxy_asks_its_target_or_trap() {
+    let source = "var t = { a: 1 }; Object.defineProperty(t, 'h', { value: 2, enumerable: false });\nvar p = new Proxy(t, {}); var v = new Proxy({}, { getOwnPropertyDescriptor(o, k) { return k === 'x' ? { value: 1, enumerable: true, configurable: true } : undefined; } });\nvar pe = Object.prototype.propertyIsEnumerable;\n[pe.call(p, 'a'), pe.call(p, 'h'), pe.call(p, 'zz'), pe.call(v, 'x'), pe.call(v, 'y'), p.propertyIsEnumerable('a'), Object.keys(p).join(), JSON.stringify(Object.entries(v))].join(' ');\n";
+    assert_eq!(eval(source), "true false false true false true a []");
+}

@@ -44006,6 +44006,23 @@ impl InterpreterCore {
                 };
                 if let Value::Object(object_id) = &receiver {
                     self.join_pending_hostcall_stream_label(*object_id)?;
+                    // A Proxy answers through [[GetOwnProperty]] (its
+                    // getOwnPropertyDescriptor trap, else its target's), as
+                    // hasOwnProperty does (bd-9vouw.236); every key read false.
+                    if self.active_proxy_record(*object_id)?.is_some() {
+                        let key = self.executable_property_key_from_value(&property);
+                        let descriptor = self.proxy_aware_own_property_descriptor(
+                            Some(module),
+                            *object_id,
+                            &key,
+                            0,
+                        )?;
+                        if matches!(descriptor, Value::Undefined) {
+                            return Ok(Value::Bool(false));
+                        }
+                        let fields = self.read_property_descriptor(Some(module), &descriptor)?;
+                        return Ok(Value::Bool(fields.enumerable == Some(true)));
+                    }
                 }
                 let enumerable = self.object_own_property_is_enumerable(&receiver, &property)
                     || self
@@ -44035,11 +44052,11 @@ impl InterpreterCore {
                 };
                 Ok(Value::Str(self.symbol_to_string(symbol)))
             }
-            // thisSymbolValue (ES2020 19.4.3.4): a wrapper object arrives here
-            // already unwrapped (`this_primitive_receiver`).
             BuiltinFunctionKind::BlobMethod => {
                 self.blob_method(module, builtin, args, receiver, receiver_register)
             }
+            // thisSymbolValue (ES2020 19.4.3.4): a wrapper object arrives here
+            // already unwrapped (`this_primitive_receiver`).
             BuiltinFunctionKind::SymbolPrototypeValueOf
             | BuiltinFunctionKind::SymbolPrototypeToPrimitive => match receiver {
                 Some(symbol @ Value::Symbol(_)) => Ok(symbol),

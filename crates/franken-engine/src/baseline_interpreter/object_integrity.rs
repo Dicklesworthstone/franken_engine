@@ -508,9 +508,13 @@ impl InterpreterCore {
                 Value::Closure(id) => !self.closure_method_metadata.contains_key(id),
                 _ => false,
             };
+            // A derived class's constructor inherits from its parent; for
+            // `extends null` that is %Function.prototype% (ES2020 14.6.13
+            // step 6.e.ii), the default below (bd-9vouw.325).
             if is_constructor_candidate
                 && let Ok((true, _, parent, _)) =
                     self.derived_constructor_metadata(module, function)
+                && parent != Value::Null
             {
                 return Ok(parent);
             }

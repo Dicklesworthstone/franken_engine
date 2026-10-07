@@ -1581,6 +1581,11 @@ impl InterpreterCore {
                         marker.value(value);
                     }
                 }
+                // Symbol keys are never reclaimed: a reachable map keeps
+                // their values.
+                for value in storage.symbol_entries.values() {
+                    marker.value(value);
+                }
             }
             // A reachable URL keeps its searchParams object, and a reachable
             // URLSearchParams the URL it updates (bd-9vouw.163). Their state

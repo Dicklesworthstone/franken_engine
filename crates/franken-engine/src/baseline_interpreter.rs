@@ -184,6 +184,14 @@ use crate::stdlib::normalize_unicode_string;
 // WeakMap Storage - Weak Reference Implementation
 // ---------------------------------------------------------------------------
 
+/// A WeakMap key: an object (by id) or a symbol outside the global
+/// registry (by symbol id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum WeakMapKey {
+    Object(u32),
+    Symbol(u32),
+}
+
 /// Weak reference storage for WeakMap entries.
 /// Keys are stored as weak references and automatically cleaned up on GC.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -192,6 +200,11 @@ pub struct WeakMapStorage {
     entries: BTreeMap<u32, Value>,
     /// Track which objects are referenced as keys for GC integration
     weak_key_objects: BTreeSet<u32>,
+    /// Entries keyed by a symbol that is not in the global registry (ES2023
+    /// CanBeHeldWeakly, bd-performance-conformance-bridge-tu32j.16.6). The
+    /// engine never reclaims a symbol, so these entries are held strongly.
+    #[serde(default)]
+    symbol_entries: BTreeMap<u32, Value>,
 }
 
 impl WeakMapStorage {
@@ -199,7 +212,23 @@ impl WeakMapStorage {
         Self {
             entries: BTreeMap::new(),
             weak_key_objects: BTreeSet::new(),
+            symbol_entries: BTreeMap::new(),
         }
+    }
+
+    /// The value stored under a symbol key.
+    pub fn get_symbol(&self, symbol: u32) -> Option<&Value> {
+        self.symbol_entries.get(&symbol)
+    }
+
+    /// Store `value` under a symbol key.
+    pub fn set_symbol(&mut self, symbol: u32, value: Value) {
+        self.symbol_entries.insert(symbol, value);
+    }
+
+    /// Remove a symbol key's entry; whether there was one.
+    pub fn delete_symbol(&mut self, symbol: u32) -> bool {
+        self.symbol_entries.remove(&symbol).is_some()
     }
 
     pub fn set(&mut self, key_object_id: u32, value: Value) {
@@ -76274,7 +76303,9 @@ impl InterpreterCore {
             got: receiver.type_name().to_string(),
         })?;
         let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let is_object = value.is_object_like();
+        // An object or a symbol outside the global registry (ES2023
+        // CanBeHeldWeakly).
+        let is_object = self.can_be_held_weakly(&value);
         let repr = Self::collection_key_repr(&value);
         match method {
             "add" => {
@@ -76492,6 +76523,12 @@ impl InterpreterCore {
         } else {
             None
         };
+        // A symbol outside the global registry is a key too (ES2023
+        // CanBeHeldWeakly); `Symbol.for` symbols are refused like primitives.
+        let symbol_key = match &key {
+            Value::Symbol(symbol) if self.can_be_held_weakly(&key) => Some(symbol.0),
+            _ => None,
+        };
         let Some(storage) = self.weakmap_storage.get(&weakmap_id) else {
             return Err(InterpreterError::TypeError {
                 expected: "live WeakMap storage".to_string(),
@@ -76503,6 +76540,42 @@ impl InterpreterCore {
                 .saturating_mul(2)
                 .saturating_add(Self::estimate_value_bytes(value))
         };
+        if let Some(symbol) = symbol_key {
+            return match method {
+                "get" => Ok(storage
+                    .get_symbol(symbol)
+                    .cloned()
+                    .unwrap_or(Value::Undefined)),
+                "has" => Ok(Value::Bool(storage.get_symbol(symbol).is_some())),
+                "delete" => {
+                    let released = storage.get_symbol(symbol).map(entry_bytes).unwrap_or(0);
+                    let deleted = self
+                        .weakmap_storage
+                        .get_mut(&weakmap_id)
+                        .expect("WeakMap storage was checked above")
+                        .delete_symbol(symbol);
+                    if deleted {
+                        self.estimated_memory_bytes =
+                            self.estimated_memory_bytes.saturating_sub(released);
+                    }
+                    Ok(Value::Bool(deleted))
+                }
+                "set" => {
+                    let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                    let previous = storage.get_symbol(symbol).map(entry_bytes).unwrap_or(0);
+                    self.apply_memory_component_delta(previous, entry_bytes(&value))?;
+                    self.weakmap_storage
+                        .get_mut(&weakmap_id)
+                        .expect("WeakMap storage was checked above")
+                        .set_symbol(symbol, value);
+                    Ok(receiver)
+                }
+                _ => Err(InterpreterError::TypeError {
+                    expected: "WeakMap method".to_string(),
+                    got: method.to_string(),
+                }),
+            };
+        }
         match method {
             "get" => Ok(key_id
                 .and_then(|key| storage.get(key).cloned())
@@ -95157,7 +95230,7 @@ impl InterpreterCore {
             // under the key `WeakSet.prototype.add` uses, and a value that
             // cannot be weakly held is a TypeError, as for `add`.
             let (value_str, stored) = if weak_values_only {
-                if !value.is_object_like() {
+                if !self.can_be_held_weakly(&value) {
                     let error = InterpreterError::TypeError {
                         expected: "object WeakSet value".to_string(),
                         got: value.type_name().to_string(),
@@ -95203,16 +95276,22 @@ impl InterpreterCore {
     }
 
     /// A WeakMap seed entry's key and value. As for `WeakMap.prototype.set`,
-    /// the key is an object, or a function keyed by its own-property backing
-    /// object; anything else is a TypeError instead of being skipped.
+    /// the key is an object, a function keyed by its own-property backing
+    /// object, or a symbol outside the global registry; anything else is a
+    /// TypeError instead of being skipped.
     fn weakmap_seed_entry(
         &mut self,
         module: Option<&Ir3Module>,
         entry: &Value,
-    ) -> Result<(ObjectId, Value), InterpreterError> {
+    ) -> Result<(WeakMapKey, Value), InterpreterError> {
         let (key, value) = self.collection_seed_entry(module, entry)?;
         let key_id = if key.is_object_like() {
             self.own_property_holder(module, &key, true)?
+                .map(|id| WeakMapKey::Object(id.0))
+        } else if let Value::Symbol(symbol) = &key
+            && self.can_be_held_weakly(&key)
+        {
+            Some(WeakMapKey::Symbol(symbol.0))
         } else {
             None
         };
@@ -95237,7 +95316,7 @@ impl InterpreterCore {
             self.observe_collection_seed_label(&mut label);
             match self.weakmap_seed_entry(module, &entry) {
                 Ok((key_id, value)) => {
-                    updates.insert(key_id.0, value);
+                    updates.insert(key_id, value);
                 }
                 Err(error) => return self.close_collection_seed(module, source, error),
             }
@@ -95248,7 +95327,11 @@ impl InterpreterCore {
             return Ok(());
         };
         let previous_bytes = Self::saturating_sum(updates.keys().filter_map(|key| {
-            storage.get(*key).map(|previous| {
+            match *key {
+                WeakMapKey::Object(id) => storage.get(id),
+                WeakMapKey::Symbol(symbol) => storage.get_symbol(symbol),
+            }
+            .map(|previous| {
                 MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                     .saturating_mul(2)
                     .saturating_add(Self::estimate_value_bytes(previous))
@@ -95265,7 +95348,10 @@ impl InterpreterCore {
             .get_mut(&weakmap_id)
             .expect("WeakMap storage was validated before aggregate preflight");
         for (key, value) in updates {
-            storage.set(key, value);
+            match key {
+                WeakMapKey::Object(id) => storage.set(id, value),
+                WeakMapKey::Symbol(symbol) => storage.set_symbol(symbol, value),
+            }
         }
 
         self.finish_collection_seed(label)
@@ -98031,11 +98117,15 @@ impl InterpreterCore {
     fn weakmap_storage_memory_bytes(&self) -> u64 {
         Self::saturating_sum(self.weakmap_storage.values().map(|storage| {
             MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(Self::saturating_sum(
-                storage.entries.values().map(|value| {
-                    MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                        .saturating_mul(2)
-                        .saturating_add(Self::estimate_value_bytes(value))
-                }),
+                storage
+                    .entries
+                    .values()
+                    .chain(storage.symbol_entries.values())
+                    .map(|value| {
+                        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                            .saturating_mul(2)
+                            .saturating_add(Self::estimate_value_bytes(value))
+                    }),
             ))
         }))
     }

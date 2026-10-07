@@ -8615,17 +8615,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         })
         .collect::<BTreeSet<_>>();
     // bd-9vouw.255: lowering-internal bindings (short-circuit results,
-    // optional-chain bases, destructuring sources, for-in/of iterators)
-    // written before every read hold a register only while in use, as
-    // function-body temporaries do (bd-9vouw.23). Each pinned a register for
-    // the whole script, and since the stack empties inside such an
-    // expression, every statement's floor rose past its first temporary: a
-    // script with about 250 top-level `a || b`, `o?.p`, `[x] = xs` or
-    // `for (const v of xs)` ran out of the 256-register frame. A closure
-    // copies a captured binding's register by name when it is created, so
-    // captured, compound-assigned, declared-function, per-iteration and
-    // exported bindings keep their pinned register.
-    let closure_capture_ids =
+    // optional-chain bases, destructuring sources, for-in/of iterators) and
+    // the own bindings of for-in/of loops (per-iteration bindings that start
+    // fresh, preserve_state false) written before every read hold a register
+    // only while in use, as function-body ones do (bd-9vouw.23). Each pinned
+    // a register for the whole script, and since the stack empties inside
+    // such an expression, every statement's floor rose past its first
+    // temporary: a script with about 250 top-level `a || b`, `o?.p`,
+    // `[x] = xs` or `for (const v of xs)` ran out of the 256-register frame.
+    // A closure copies a captured binding's register by name when it is
+    // created, so a binding whose name any closure captures keeps its pinned
+    // register, as do compound-assigned, declared-function, exported and
+    // state-preserving per-iteration bindings.
+    let captured_names =
         ir2.ops
             .iter()
             .flat_map(|op| match &op.inner {
@@ -8633,7 +8635,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 | Ir1Op::DeclareFunction { free_vars, .. } => free_vars.as_slice(),
                 _ => &[],
             })
-            .filter_map(|name| name_to_binding_id.get(name).copied())
+            .map(String::as_str)
             .collect::<BTreeSet<_>>();
     let other_reference_ids = ir2
         .ops
@@ -8641,8 +8643,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         .filter_map(|op| match &op.inner {
             Ir1Op::AssignOp { binding_id, .. }
             | Ir1Op::DeclareFunction { binding_id, .. }
-            | Ir1Op::CreatePerIterationBinding { binding_id, .. }
+            | Ir1Op::CreatePerIterationBinding {
+                binding_id,
+                preserve_state: true,
+                ..
+            }
             | Ir1Op::ExportBinding { binding_id, .. } => Some(*binding_id),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let fresh_loop_binding_ids = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::CreatePerIterationBinding {
+                binding_id,
+                preserve_state: false,
+                ..
+            } => Some(*binding_id),
             _ => None,
         })
         .collect::<BTreeSet<_>>();
@@ -8651,11 +8669,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         &binding_id_to_name
             .iter()
             .filter(|(binding_id, name)| {
-                is_internal_lowering_binding(name)
+                (is_internal_lowering_binding(name) || fresh_loop_binding_ids.contains(binding_id))
+                    && !captured_names.contains(name.as_str())
                     && !scoped_runtime_binding_ids.contains(binding_id)
                     && !tdz_binding_ids.contains(binding_id)
                     && !const_assignment_binding_ids.contains(binding_id)
-                    && !closure_capture_ids.contains(binding_id)
                     && !other_reference_ids.contains(binding_id)
             })
             .map(|(binding_id, _)| *binding_id)
@@ -8809,21 +8827,26 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 live_status_registers.remove(register);
             }
         }
-        if value_stack.is_empty() && live_status_registers.is_empty() {
+        if value_stack.is_empty() {
             // bd-9vouw.255: the stack also empties inside a statement, after
             // a jump that consumes its condition (`x ||= y`, `a && b`) and
             // at a for-in/of loop's exit, which drops the iterator. Nothing
-            // above the floor is live there either, so the cursor rewinds as
-            // after a statement's Pop. Taking the cursor as the new floor
+            // above the floor and the live registers (short-lived locals,
+            // name-status slots) is live there either, so the cursor rewinds
+            // as after a statement's Pop. Taking the cursor as the new floor
             // kept those temporaries for the rest of the body, one to three
             // registers per such statement, until a few hundred of them ran
             // out of the 256-register frame.
-            let target = statement_register_floor.max(pinned_register_high);
+            let target = statement_register_floor
+                .max(pinned_register_high)
+                .max(live_status_register_ceiling(&live_status_registers));
             if target < register_cursor {
                 register_high_water = register_high_water.max(register_cursor);
                 register_cursor = target;
             }
-            statement_register_floor = register_cursor;
+            if live_status_registers.is_empty() {
+                statement_register_floor = register_cursor;
+            }
         }
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
             let capability = op
@@ -10977,13 +11000,21 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         // method receivers and `?:` results, and most initialized locals)
         // hold a register only while in use, so they neither count toward
         // the resident budget nor spill. Compound-assigned, declared-function,
-        // per-iteration and exported bindings keep their pinned register.
+        // exported and state-preserving per-iteration bindings keep their
+        // pinned register. A for-in/of loop's own binding starts fresh each
+        // iteration (preserve_state false; its CreatePerIterationBinding is a
+        // no-op for a register), so it qualifies like any other local: each
+        // loop pinned one more register (bd-9vouw.255).
         let other_reference_ids = body_ops
             .iter()
             .filter_map(|op| match op {
                 Ir1Op::AssignOp { binding_id, .. }
                 | Ir1Op::DeclareFunction { binding_id, .. }
-                | Ir1Op::CreatePerIterationBinding { binding_id, .. }
+                | Ir1Op::CreatePerIterationBinding {
+                    binding_id,
+                    preserve_state: true,
+                    ..
+                }
                 | Ir1Op::ExportBinding { binding_id, .. } => Some(*binding_id),
                 _ => None,
             })
@@ -10992,10 +11023,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             body_ops.iter(),
             &register_local_ids
                 .iter()
-                .filter(|binding_id| {
-                    !other_reference_ids.contains(binding_id)
-                        && !per_iteration_binding_ids.contains(binding_id)
-                })
+                .filter(|binding_id| !other_reference_ids.contains(binding_id))
                 .copied()
                 .collect(),
         );
@@ -11009,9 +11037,16 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         // commonmark) were all live at once and ran the frame out of
         // registers. Those past the frame's local budget, which the pinned
         // locals' up-front registers share, take the spill route.
+        // A loop's own binding keeps its register: the spill route gives a
+        // per-iteration binding no fresh scope.
+        let overlap_candidates = fn_short_lived_locals
+            .iter()
+            .filter(|(binding_id, _)| !per_iteration_binding_ids.contains(binding_id))
+            .map(|(binding_id, release)| (*binding_id, *release))
+            .collect::<BTreeMap<_, _>>();
         let overlapping_short_lived_spills = short_lived_overlap_spills(
             body_ops,
-            &fn_short_lived_locals,
+            &overlap_candidates,
             (2 * MAX_REGISTER_RESIDENT_FUNCTION_LOCALS).saturating_sub(
                 register_local_ids
                     .len()
@@ -11153,15 +11188,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     fn_live_status_registers.remove(register);
                 }
             }
-            if fn_value_stack.is_empty() && fn_live_status_registers.is_empty() {
+            if fn_value_stack.is_empty() {
                 // bd-9vouw.255: as at the top level, an empty stack inside a
-                // statement leaves nothing live above the floor.
-                let target = fn_statement_register_floor.max(fn_pinned_register_high);
+                // statement leaves nothing live above the floor and the live
+                // registers.
+                let target = fn_statement_register_floor
+                    .max(fn_pinned_register_high)
+                    .max(live_status_register_ceiling(&fn_live_status_registers));
                 if target < fn_reg {
                     fn_register_high_water = fn_register_high_water.max(fn_reg);
                     fn_reg = target;
                 }
-                fn_statement_register_floor = fn_reg;
+                if fn_live_status_registers.is_empty() {
+                    fn_statement_register_floor = fn_reg;
+                }
             }
             // We handle a core subset of ops that appear in function bodies.
             match &ir2_op.inner {

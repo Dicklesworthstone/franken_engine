@@ -40410,11 +40410,22 @@ impl InterpreterCore {
         // object `this` is ToPrimitive'd with the string hint and its
         // toString runs; `String.prototype.toUpperCase.call({ toString() {
         // return 'ab' } })` read "[object Object]".
+        // The pattern methods (replace, replaceAll, split, match, matchAll,
+        // search) first look up the pattern's own @@replace/@@split/...
+        // method and convert `this` only afterwards (string_pattern_this,
+        // bd-9vouw.275).
         if let Some(object) = receiver.as_ref().filter(|value| value.is_object_like())
             && builtin.spec_owner() == Some("String.prototype")
             && !matches!(
                 builtin.kind,
-                BuiltinFunctionKind::StringToString | BuiltinFunctionKind::StringValueOf
+                BuiltinFunctionKind::StringToString
+                    | BuiltinFunctionKind::StringValueOf
+                    | BuiltinFunctionKind::StringReplace
+                    | BuiltinFunctionKind::StringReplaceAll
+                    | BuiltinFunctionKind::StringSplit
+                    | BuiltinFunctionKind::StringMatch
+                    | BuiltinFunctionKind::StringMatchAll
+                    | BuiltinFunctionKind::StringSearch
             )
         {
             self.gc_nested_request = None;
@@ -40900,7 +40911,7 @@ impl InterpreterCore {
                 )? {
                     return Ok(result);
                 }
-                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                let value = self.string_pattern_this(module, &receiver)?;
                 self.string_replace_all_method(module, &value, args)
             }
             BuiltinFunctionKind::StringCodePointAt => {
@@ -40943,7 +40954,7 @@ impl InterpreterCore {
                 )? {
                     return Ok(result);
                 }
-                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                let value = self.string_pattern_this(module, &receiver)?;
                 self.string_split_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringIndexOf => {
@@ -40985,7 +40996,7 @@ impl InterpreterCore {
                 )? {
                     return Ok(result);
                 }
-                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                let value = self.string_pattern_this(module, &receiver)?;
                 self.string_replace_method(module, &value, args)
             }
             BuiltinFunctionKind::StringMatch => {
@@ -40998,7 +41009,7 @@ impl InterpreterCore {
                 )? {
                     return Ok(result);
                 }
-                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                let value = self.string_pattern_this(module, &receiver)?;
                 self.string_match_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringMatchAll => {
@@ -41017,7 +41028,7 @@ impl InterpreterCore {
                 )? {
                     return Ok(result);
                 }
-                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                let value = self.string_pattern_this(module, &receiver)?;
                 let pattern = self.string_pattern_arg(module, args)?;
                 self.string_match_all_value(&value, &pattern)
             }
@@ -41031,7 +41042,7 @@ impl InterpreterCore {
                 )? {
                     return Ok(result);
                 }
-                let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                let value = self.string_pattern_this(module, &receiver)?;
                 self.string_search_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringRepeat => {
@@ -75647,6 +75658,32 @@ impl InterpreterCore {
         Ok(Value::Object(
             self.alloc_typed_array_from_values(kind, &values)?,
         ))
+    }
+
+    /// ToString(this) for a String.prototype method that takes a pattern
+    /// (replace, replaceAll, split, match, matchAll, search; ES2020
+    /// 21.1.3.11, 21.1.3.19, 21.1.3.10 ...): RequireObjectCoercible, then
+    /// ToString running an object's @@toPrimitive/toString, after the
+    /// pattern's own method was looked up and the replaceAll/matchAll
+    /// flags check ran. An object `this` was converted before both, so
+    /// `''.replaceAll.call(obj, /./, x)` ran obj.toString before the flags
+    /// TypeError (bd-9vouw.275).
+    fn string_pattern_this(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+    ) -> Result<JsString, InterpreterError> {
+        if receiver.is_object_like() {
+            // Guest code runs while native locals hold values: no
+            // collection until this returns.
+            self.gc_nested_request = None;
+            let primitive = self.coerce_runtime_primitive(Some(module), receiver.clone(), true)?;
+            if matches!(primitive, Value::Symbol(_)) {
+                return Err(Self::symbol_to_string_error());
+            }
+            return Self::require_object_coercible_to_js_string(&primitive);
+        }
+        Self::require_object_coercible_to_js_string(receiver)
     }
 
     /// ES2020 21.1.3.11/.12/.17/.18/.19 step 2: a String method whose pattern

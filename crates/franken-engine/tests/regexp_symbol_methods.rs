@@ -148,3 +148,49 @@ fn regex_member_chain_before_a_binary_operator() {
         "ab ab a1 none g x.js",
     );
 }
+
+/// bd-9vouw.275: String.prototype replace, replaceAll, split, match,
+/// matchAll and search take the pattern's own @@replace/@@split/@@match/
+/// @@search method first and call it with `this` itself, and convert `this`
+/// with ToString only afterwards (replaceAll/matchAll's flags TypeError
+/// comes before the conversion). An object `this` was converted first.
+/// Expected lines are Node v22.2.0's output, captured programmatically; Bun
+/// 1.4.2 agrees except for its console array formatting.
+#[test]
+fn string_pattern_methods_convert_this_after_the_pattern_bd_9vouw_275() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name + (typeof e === 'object' ? '' : ':primitive'); } }
+var log = [];
+var poison = { toString: function () { log.push('this.toString'); throw new RangeError('poison'); } };
+var noG = /./;
+console.log(kind(function () { return ''.replaceAll.call(poison, noG, 'x'); }), kind(function () { return ''.matchAll.call(poison, noG); }), log.join());
+log = [];
+var custom = {};
+custom[Symbol.replace] = function (s, r) { log.push('replace:' + (s === obj)); return 'R'; };
+custom[Symbol.split] = function (s) { log.push('split:' + (s === obj)); return ['S']; };
+custom[Symbol.match] = function (s) { log.push('match:' + (s === obj)); return 'M'; };
+custom[Symbol.search] = function (s) { log.push('search:' + (s === obj)); return 7; };
+var obj = { toString: function () { log.push('obj.toString'); return 'abc'; } };
+console.log(''.replace.call(obj, custom, 'x'), ''.split.call(obj, custom), ''.match.call(obj, custom), ''.search.call(obj, custom), log.join());
+log = [];
+console.log(''.replace.call(obj, 'b', 'X'), ''.split.call(obj, 'b').join('|'), ''.replaceAll.call(obj, 'b', 'Y'), ''.search.call(obj, 'c'), log.join());
+console.log(kind(function () { return ''.replace.call(undefined, custom, 'x'); }), kind(function () { return ''.split.call(null, custom); }), kind(function () { return ''.match.call({ toString: function () { return Symbol(); } }, 'a'); }));
+console.log('a-b-c'.replaceAll('-', '+'), 'x1y2'.replace(/\d/g, '#'), 'a,b'.split(','), JSON.stringify('aXbX'.match(/X/g)), 'hello'.search('l'));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "TypeError TypeError ",
+            "R [ 'S' ] M 7 replace:true,split:true,match:true,search:true",
+            "aXc a|c aYc 2 obj.toString,obj.toString,obj.toString,obj.toString",
+            "TypeError TypeError TypeError",
+            "a+b+c x#y# [ 'a', 'b' ] [\"X\",\"X\"] 2",
+        ]
+    );
+}

@@ -5734,9 +5734,13 @@ fn lower_statement_to_ir1_with_flow(
                 control_flow,
                 label_ctx,
             )?;
-            ops.push(Ir1Op::Jump {
-                label_id: end_label,
-            });
+            // Without an else branch the end follows the consequent: no jump
+            // to the next instruction (bd-9vouw.328).
+            if if_stmt.alternate.is_some() {
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+            }
             ops.push(Ir1Op::Label { id: else_label });
             if let Some(alt) = &if_stmt.alternate {
                 lower_statement_to_ir1_with_flow(
@@ -11901,6 +11905,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     operator,
                 } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
+                    // bd-9vouw.328: a postfix update whose value is discarded
+                    // (`n++;`) is the prefix one, with no old value to keep.
+                    // A function body has no completion value to preserve.
+                    let postfix_value_used = operator.is_postfix_update()
+                        && !matches!(
+                            annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                            Some(Ir1Op::Pop | Ir1Op::Discard)
+                        );
                     if let Some(name) = fv_id_to_name
                         .get(binding_id)
                         .or_else(|| runtime_local_id_to_name.get(binding_id))
@@ -11930,7 +11942,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 dst: lhs,
                                 name_pool_index: pool_idx,
                             });
-                            let (result, value) = if operator.is_postfix_update() {
+                            let (result, value) = if postfix_value_used {
                                 lower_postfix_update_to_ir3(
                                     *operator,
                                     lhs,
@@ -11972,7 +11984,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                     if *operator == AssignmentOperator::Assign {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                    } else if operator.is_postfix_update() {
+                    } else if postfix_value_used {
                         // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
                         let (result, value) = lower_postfix_update_to_ir3(
                             *operator,
@@ -11985,11 +11997,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         fn_value_stack.push(value);
                         continue;
                     } else {
-                        let result = alloc_register(&mut fn_reg);
-                        let instr = lower_assign_op_to_ir3(*operator, result, dst, src);
-                        ir3.instructions.push(instr);
+                        // In place, as the top-level loop does (bd-9vouw.328):
+                        // one instruction reads and writes the binding's
+                        // register, which no closure or other code can write
+                        // meanwhile.
                         ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: result });
+                            .push(lower_assign_op_to_ir3(*operator, dst, dst, src));
                     }
                     fn_value_stack.push(dst);
                     // As in the top-level loop: a used assignment value is a

@@ -79487,7 +79487,7 @@ impl InterpreterCore {
             0,
             transient_execution_bytes.saturating_add(remaining_label_transport_bytes),
         )?;
-        if matches!(callee, Value::Closure(_) | Value::Function(_))
+        if Self::callee_runs_nested(&callee)
             && !is_foreign_call
             && contained_codegen_grant.is_none()
             && callee_generated_artifact.is_none()
@@ -79833,6 +79833,25 @@ impl InterpreterCore {
             .as_ref()
             .filter(|(address, _)| *address == Self::module_address(module))
             .map(|(_, program)| program.clone())
+    }
+
+    /// Callees an inline method call runs on the live stack through
+    /// [`Self::invoke_nested_callback`] (when nothing else needs isolation):
+    /// same-module closures, and builtins other than a Function-constructor
+    /// generated function, whose contained codegen grant needs the isolated
+    /// run. The nested trampoline runs the same CallMethod as the isolated
+    /// wrapper. A builtin reached by `fn.call(...)`, `fn.apply(...)` or
+    /// through a bound function used to snapshot and restore the whole
+    /// module execution around one builtin dispatch: 7-9x a closure call
+    /// (bd-9vouw.312).
+    fn callee_runs_nested(callee: &Value) -> bool {
+        match callee {
+            Value::Closure(_) | Value::Function(_) => true,
+            Value::BuiltinFunction(builtin) => {
+                builtin.kind != BuiltinFunctionKind::GeneratedFunction
+            }
+            _ => false,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

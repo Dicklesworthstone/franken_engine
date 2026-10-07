@@ -72,6 +72,7 @@ fn module_with_hostcall(capability_tag: &str) -> Ir3Module {
         specialization: None,
         required_capabilities: vec![capability],
         function_lengths: Default::default(),
+        function_sources: Default::default(),
     }
 }
 

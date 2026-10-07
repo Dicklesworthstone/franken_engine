@@ -1393,6 +1393,7 @@ fn duplicate_function_parameters_detected_in_module() {
             is_async: false,
             is_generator: false,
             span: span(1),
+            source_text: None,
         })],
     );
     let result = analyze(&tree);
@@ -1493,6 +1494,7 @@ fn function_declaration_creates_binding() {
             is_async: false,
             is_generator: false,
             span: span(1),
+            source_text: None,
         })],
     );
     let result = analyze(&tree);
@@ -1520,6 +1522,7 @@ fn return_inside_function_is_valid() {
             is_async: false,
             is_generator: false,
             span: span(1),
+            source_text: None,
         })],
     );
     let result = analyze(&tree);

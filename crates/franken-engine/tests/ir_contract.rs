@@ -596,6 +596,7 @@ fn function_local_lexical_metadata_is_backward_compatible_and_canonical_bd_pimva
                 is_generator: false,
                 is_async: false,
                 rest_param_index: None,
+                source_text: None,
             }
         } else {
             Ir1Op::CreateFunction {
@@ -611,6 +612,7 @@ fn function_local_lexical_metadata_is_backward_compatible_and_canonical_bd_pimva
                 is_async: false,
                 is_arrow: false,
                 rest_param_index: None,
+                source_text: None,
             }
         }
     }
@@ -1424,6 +1426,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             is_generator: false,
             is_async: false,
             rest_param_index: None,
+            source_text: None,
         },
         Ir1Op::BeginTry {
             catch_label: 100,

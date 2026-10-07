@@ -1484,6 +1484,7 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
             params,
             body,
             is_async,
+            ..
         } => {
             // Check for duplicate parameter names in strict mode (module code)
             if state.is_module {
@@ -2660,6 +2661,7 @@ mod tests {
                         "f".to_string(),
                     ))),
                     is_async: false,
+                    source_text: None,
                 }),
                 1,
             )],
@@ -3452,6 +3454,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 span: span(1),
+                source_text: None,
             })],
         );
         let result = analyze(&tree);
@@ -3633,6 +3636,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 span: span(1),
+                source_text: None,
             })],
         );
         let result = analyze(&tree);
@@ -3669,6 +3673,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 span: span(1),
+                source_text: None,
             })],
         );
         let result = analyze(&tree);
@@ -3826,6 +3831,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 span: span(1),
+                source_text: None,
             })],
         );
         let result = analyze(&tree);
@@ -4085,6 +4091,7 @@ mod tests {
                     is_async: false,
                     is_generator: false,
                     span: span(1),
+                    source_text: None,
                 }),
                 // This return is at top-level (outside function)
                 Statement::Return(ReturnStatement {
@@ -4308,6 +4315,7 @@ mod tests {
                     is_async: false,
                     is_generator: false,
                     span: span(2),
+                    source_text: None,
                 }),
             ],
         );
@@ -4986,6 +4994,7 @@ mod tests {
                 "x".to_string(),
             ))),
             is_async: false,
+            source_text: None,
         };
         let mut refs = Vec::new();
         collect_identifier_refs(&expr, &mut refs);
@@ -5138,6 +5147,7 @@ mod tests {
                         Expression::Identifier("p".to_string()),
                     )))),
                     is_async: false,
+                    source_text: None,
                 },
                 1,
             )],
@@ -5207,6 +5217,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 span: span(1),
+                source_text: None,
             })],
         );
         let result = analyze(&tree);
@@ -5449,6 +5460,7 @@ mod tests {
                     ],
                     body: ArrowBody::Expression(Box::new(Expression::Identifier("a".to_string()))),
                     is_async: false,
+                    source_text: None,
                 },
                 1,
             )],
@@ -5484,6 +5496,7 @@ mod tests {
                         span: span(1),
                     }),
                     is_async: false,
+                    source_text: None,
                 },
                 1,
             )],
@@ -5527,6 +5540,7 @@ mod tests {
                         span: span(1),
                     }),
                     is_async: false,
+                    source_text: None,
                 },
                 1,
             )],
@@ -5913,6 +5927,7 @@ mod tests {
                     }],
                     body: ArrowBody::Expression(Box::new(Expression::Identifier("x".to_string()))),
                     is_async: false,
+                    source_text: None,
                 },
                 1,
             )],
@@ -5943,6 +5958,7 @@ mod tests {
                         span: span(1),
                     }),
                     is_async: false,
+                    source_text: None,
                 },
                 1,
             )],
@@ -5980,6 +5996,7 @@ mod tests {
                         span: span(1),
                     }),
                     is_async: false,
+                    source_text: None,
                 },
                 1,
             )],

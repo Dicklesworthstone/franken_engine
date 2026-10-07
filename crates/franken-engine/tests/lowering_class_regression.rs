@@ -24,6 +24,7 @@ fn class_declaration(name: Option<&str>, body: Vec<MethodDefinition>) -> Stateme
         super_class: None,
         body,
         span: span(),
+        source_text: None,
     })
 }
 
@@ -38,6 +39,7 @@ fn static_method(name: &str) -> MethodDefinition {
         span: span(),
         is_async: false,
         is_generator: false,
+        source_text: None,
     }
 }
 
@@ -52,6 +54,7 @@ fn constructor(body: Vec<Statement>) -> MethodDefinition {
         span: span(),
         is_async: false,
         is_generator: false,
+        source_text: None,
     }
 }
 
@@ -150,6 +153,7 @@ fn constructor_with_nested_class_expression_without_constructor_lowers() {
             name: Some("Nested".to_string()),
             super_class: None,
             body: Vec::new(),
+            source_text: None,
         },
         span: span(),
     });

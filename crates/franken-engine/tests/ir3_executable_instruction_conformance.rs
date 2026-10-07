@@ -133,6 +133,7 @@ fn test_module(instructions: Vec<Ir3Instruction>, constant_pool: Vec<String>) ->
         specialization: None,
         required_capabilities: Vec::new(),
         function_lengths: Default::default(),
+        function_sources: Default::default(),
     }
 }
 

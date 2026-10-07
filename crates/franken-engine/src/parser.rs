@@ -20,11 +20,12 @@ use crate::ast::{
     BinaryOperator, BindingPattern, BlockStatement, BreakStatement, CatchClause, ClassDeclaration,
     ContinueStatement, DoWhileStatement, ExportDeclaration, ExportKind, Expression,
     ExpressionStatement, ForInStatement, ForOfStatement, ForStatement, FunctionDeclaration,
-    FunctionParam, IfStatement, ImportClause, ImportDeclaration, ImportSpecifier, LabeledStatement,
-    MethodDefinition, MethodKind, NamedExportClause, ObjectPatternProperty, ObjectProperty,
-    ObjectPropertyKind, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement,
-    SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator, WhileStatement, WithStatement,
+    FunctionParam, FunctionSourceText, IfStatement, ImportClause, ImportDeclaration,
+    ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, NamedExportClause,
+    ObjectPatternProperty, ObjectProperty, ObjectPropertyKind, ReturnStatement, SourceSpan,
+    Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
+    UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    WhileStatement, WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::js_string::JsString;
@@ -2125,6 +2126,121 @@ struct ParseExecutionContext<'a> {
     /// Private-name scopes of the class bodies being parsed, innermost last
     /// (ES2022 15.7.1 AllPrivateIdentifiersValid).
     private_name_scopes: Vec<PrivateNameScope>,
+    /// bd-9vouw.184: where the parse text of each function, arrow, method
+    /// and class comes from in the source, so Function.prototype.toString
+    /// can return that source text.
+    function_sources: FunctionSourceMap,
+}
+
+/// The parse text is the source with its comments blanked to spaces (same
+/// byte offsets), merged into logical lines whose separators are
+/// normalized; function bodies are merged again from slices of those lines.
+/// Each merge's line is a `SourceFrame` while it is parsed, so a slice's
+/// address maps back, frame by frame, to its offset in the source, which
+/// `original` holds as written, comments included (bd-9vouw.184).
+#[derive(Default)]
+struct FunctionSourceMap {
+    original: Option<std::sync::Arc<str>>,
+    /// Address and length of the comment-blanked copy of `original`.
+    blanked: Option<(usize, usize)>,
+    /// The logical lines being parsed, outermost first.
+    frames: Vec<SourceFrame>,
+}
+
+/// One logical line being parsed: its text's address and length, the
+/// address of the text it was merged from, and the map from each byte
+/// boundary of the line to an offset in that text.
+struct SourceFrame {
+    text: (usize, usize),
+    input: usize,
+    boundaries: Vec<usize>,
+}
+
+impl fmt::Debug for FunctionSourceMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FunctionSourceMap")
+            .field(
+                "source_bytes",
+                &self.original.as_ref().map(|source| source.len()),
+            )
+            .field("frames", &self.frames.len())
+            .finish()
+    }
+}
+
+impl FunctionSourceMap {
+    /// The source offset of the parse text at `address`, when every buffer
+    /// it was cut from is a frame (a slice of a string built some other
+    /// way has none).
+    fn offset_of(&self, address: usize) -> Option<usize> {
+        let mut address = address;
+        for frame in self.frames.iter().rev() {
+            let (start, length) = frame.text;
+            if address >= start && address <= start + length {
+                address = frame.input + *frame.boundaries.get(address - start)?;
+            }
+        }
+        let (start, length) = self.blanked?;
+        (address >= start && address <= start + length).then(|| address - start)
+    }
+
+    /// The source text of a function whose parse text runs from `start`
+    /// (an address) to the end of `last` (its final slice, ending with the
+    /// function's last character). The source range must begin and end with
+    /// the same characters as the parse text.
+    fn text(&self, start: usize, first: char, last: &str) -> Option<FunctionSourceText> {
+        let original = self.original.as_ref()?;
+        let last_char = last.chars().next_back()?;
+        if first.is_whitespace() || last_char.is_whitespace() {
+            return None;
+        }
+        let last_address = last.as_ptr() as usize + last.len() - last_char.len_utf8();
+        let begin = self.offset_of(start)?;
+        let end = self.offset_of(last_address)? + last_char.len_utf8();
+        let text = original.get(begin..end)?;
+        (text.starts_with(first) && text.ends_with(last_char))
+            .then(|| FunctionSourceText::new(original.clone(), begin, end))
+            .flatten()
+    }
+
+    /// The source text of a function whose whole parse text is `slice`.
+    fn text_of(&self, slice: &str) -> Option<FunctionSourceText> {
+        let slice = slice.trim();
+        let first = slice.chars().next()?;
+        self.text(slice.as_ptr() as usize, first, slice)
+    }
+
+    /// The source text of a function whose parse text starts at `head` and
+    /// ends with `[*][name](params) { body }` at the start of `tail`.
+    fn text_through_body(&self, head: &str, tail: &str) -> Option<FunctionSourceText> {
+        let head = head.trim_start();
+        let first = head.chars().next()?;
+        self.text(
+            head.as_ptr() as usize,
+            first,
+            function_text_through_body(tail)?,
+        )
+    }
+}
+
+/// The prefix of `text` (`[*][name](params) { body }` followed by anything)
+/// that ends with the body's `}`.
+fn function_text_through_body(text: &str) -> Option<&str> {
+    let paren = text.find('(')?;
+    let (_, after_params) = extract_balanced(&text[paren..], '(', ')')?;
+    let (_, after_body) = extract_balanced(after_params.trim_start(), '{', '}')?;
+    Some(&text[..text.len() - after_body.len()])
+}
+
+/// `value` (a function, arrow or class expression) with its source text.
+fn with_function_source(mut value: Expression, source: Option<FunctionSourceText>) -> Expression {
+    if let Expression::Function { source_text, .. }
+    | Expression::ArrowFunction { source_text, .. }
+    | Expression::ClassExpression { source_text, .. } = &mut value
+    {
+        *source_text = source;
+    }
+    value
 }
 
 /// Where a SuperCall (`super(...)`) may appear (ES2022 15.7.1: a method's,
@@ -3850,6 +3966,7 @@ fn parse_source(
         static_block_await: false,
         formal_parameters: false,
         private_name_scopes: Vec::new(),
+        function_sources: FunctionSourceMap::default(),
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -3879,34 +3996,45 @@ fn parse_source(
     }
 
     let stripped = strip_comments_to_whitespace(text);
-    let logical_lines = merge_logical_lines(&stripped);
+    let mut logical_lines = merge_logical_lines(&stripped);
     let source_line_terminators = source_line_terminator_ranges(text);
     let mut statements = Vec::with_capacity(8);
     context.strict_mode |= has_use_strict_directive(&stripped);
+    context.function_sources.original = Some(std::sync::Arc::from(text));
+    context.function_sources.blanked = Some((stripped.as_ptr() as usize, stripped.len()));
 
-    for logical_line in &logical_lines {
+    for logical_line in &mut logical_lines {
         debug_assert_eq!(
             logical_line.byte_offset,
             logical_line.source_offset_at(0) as u64
         );
         debug_assert!(logical_line.start_line <= logical_line.end_line);
-        for (start_in_line, end_in_line, statement_text) in
-            split_statement_segments(&logical_line.text)
-        {
-            let start_offset = logical_line.source_offset_at(start_in_line);
-            let end_offset = logical_line.source_offset_at(end_in_line);
-            let (start_line, start_column) =
-                source_position_at_offset(start_offset, &source_line_terminators);
-            let (end_line, end_column) =
-                source_position_at_offset(end_offset, &source_line_terminators);
-            let span = SourceSpan::new(
-                start_offset as u64,
-                end_offset as u64,
-                start_line,
-                start_column,
-                end_line,
-                end_column,
-            );
+        let segments = split_statement_segments(&logical_line.text)
+            .into_iter()
+            .map(|(start_in_line, end_in_line, statement_text)| {
+                let start_offset = logical_line.source_offset_at(start_in_line);
+                let end_offset = logical_line.source_offset_at(end_in_line);
+                let (start_line, start_column) =
+                    source_position_at_offset(start_offset, &source_line_terminators);
+                let (end_line, end_column) =
+                    source_position_at_offset(end_offset, &source_line_terminators);
+                let span = SourceSpan::new(
+                    start_offset as u64,
+                    end_offset as u64,
+                    start_line,
+                    start_column,
+                    end_line,
+                    end_column,
+                );
+                (statement_text, span)
+            })
+            .collect::<Vec<_>>();
+        context.function_sources.frames.push(SourceFrame {
+            text: (logical_line.text.as_ptr() as usize, logical_line.text.len()),
+            input: stripped.as_ptr() as usize,
+            boundaries: std::mem::take(&mut logical_line.source_boundaries),
+        });
+        for (statement_text, span) in segments {
             statements.extend(parse_module_statement_segment(
                 statement_text,
                 goal,
@@ -3914,6 +4042,7 @@ fn parse_source(
                 &mut context,
             )?);
         }
+        context.function_sources.frames.pop();
     }
 
     if !context.strict_mode {
@@ -6139,7 +6268,9 @@ fn parse_primary_expression(
             .filter(|r| r.starts_with(['(', '*', ' ', '\t']))
         && function_expression_is_whole(rest)
     {
-        return parse_async_function_expression(rest, span, context, recursion_depth);
+        let source = context.function_sources.text_of(expression);
+        return parse_async_function_expression(rest, span, context, recursion_depth)
+            .map(|value| with_function_source(value, source));
     }
 
     // Function expression: `function(a, b) { ... }`, `function name(a, b) { ... }`,
@@ -6152,7 +6283,9 @@ fn parse_primary_expression(
         .filter(|r| r.starts_with(['(', '*', ' ', '\t']))
         && function_expression_is_whole(rest)
     {
-        return parse_function_expression(rest, span, context, recursion_depth);
+        let source = context.function_sources.text_of(expression);
+        return parse_function_expression(rest, span, context, recursion_depth)
+            .map(|value| with_function_source(value, source));
     }
 
     // Class expression: `class { ... }`, `class Name { ... }`, or
@@ -6422,7 +6555,15 @@ fn try_parse_arrow_function(
                 context.await_context = saved_await_context;
                 let params = params?;
                 reject_duplicate_params(&params, true, span, context)?;
-                parse_arrow_body(body_src, params, is_async, span, context, recursion_depth)
+                parse_arrow_body(
+                    expr,
+                    body_src,
+                    params,
+                    is_async,
+                    span,
+                    context,
+                    recursion_depth,
+                )
             },
         ))
     } else {
@@ -6450,6 +6591,7 @@ fn try_parse_arrow_function(
             span: span.clone(),
         }];
         Some(parse_arrow_body(
+            expr,
             body_src,
             params,
             is_async,
@@ -6592,7 +6734,10 @@ fn reject_accessor_arity(
 }
 
 /// Parse the body of an arrow function — either `{ block }` or expression.
+/// `head` is the arrow's text from its first token (`async`, its parameters),
+/// whose source text the arrow keeps (bd-9vouw.184).
 fn parse_arrow_body(
+    head: &str,
     body_src: &str,
     params: Vec<FunctionParam>,
     is_async: bool,
@@ -6601,8 +6746,10 @@ fn parse_arrow_body(
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
     with_function_context(is_async, false, context, |context| {
+        let mut source_end = body_src.trim_end().trim_end_matches(';').trim_end();
         let body = if body_src.starts_with('{') {
             if let Some((block_src, after_block)) = extract_balanced(body_src, '{', '}') {
+                source_end = &body_src[..body_src.len() - after_block.len()];
                 // An arrow function is a whole AssignmentExpression: nothing
                 // follows its block body (`() => {} = 1`, `() => {}.x`) but
                 // the `;` ending its statement, which some callers keep.
@@ -6637,10 +6784,16 @@ fn parse_arrow_body(
             let expr = parse_expression(body_src, span, context, recursion_depth + 1)?;
             ArrowBody::Expression(Box::new(expr))
         };
+        let source_text = head.chars().next().and_then(|first| {
+            context
+                .function_sources
+                .text(head.as_ptr() as usize, first, source_end)
+        });
         Ok(Expression::ArrowFunction {
             params,
             body,
             is_async,
+            source_text,
         })
     })
 }
@@ -8344,6 +8497,7 @@ fn try_parse_postfix(
                     span: span.clone(),
                 }),
                 is_async: false,
+                source_text: None,
             };
             let strings_with_raw = Expression::Call {
                 callee: Box::new(raw_arrow),
@@ -9316,8 +9470,10 @@ fn try_parse_object_accessor(
                 if after.starts_with('(') {
                     let key =
                         parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
+                    let source = context.function_sources.text_through_body(part, after);
                     let value =
                         parse_function_expression(after, span, context, recursion_depth + 1)?;
+                    let value = with_function_source(value, source);
                     reject_object_accessor_arity(kind, &value, span, context)?;
                     return Ok(Some((key, value, true, kind)));
                 }
@@ -9333,8 +9489,12 @@ fn try_parse_object_accessor(
             return Ok(None);
         }
         let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
+        let source = context
+            .function_sources
+            .text_through_body(part, &rest[paren_idx..]);
         let value =
             parse_function_expression(&rest[paren_idx..], span, context, recursion_depth + 1)?;
+        let value = with_function_source(value, source);
         reject_object_accessor_arity(kind, &value, span, context)?;
         return Ok(Some((key, value, false, kind)));
     }
@@ -9372,6 +9532,8 @@ fn try_parse_object_method(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Option<(Expression, Expression, bool)>> {
+    // The method's source text starts at its modifiers (bd-9vouw.184).
+    let head = part;
     // Method modifiers (ES2020 14.4-14.7): `*name(){}`, `async name(){}`,
     // `async *name(){}`. `async(){}` / `async: v` name a property `async`.
     let (is_async, part) = match part.strip_prefix("async") {
@@ -9392,6 +9554,9 @@ fn try_parse_object_method(
     let method_value = |params_and_body: &str,
                         context: &mut ParseExecutionContext<'_>|
      -> ParseResult<Expression> {
+        let source = context
+            .function_sources
+            .text_through_body(head, params_and_body);
         let value = if !is_async && !is_generator {
             parse_object_method_function_expression(
                 params_and_body,
@@ -9418,7 +9583,7 @@ fn try_parse_object_method(
         if let Expression::Function { params, .. } = &value {
             reject_duplicate_params(params, true, span, context)?;
         }
-        Ok(value)
+        Ok(with_function_source(value, source))
     };
 
     // Computed method: `[expr](params){body}`.
@@ -11452,14 +11617,23 @@ fn parse_body_statements(
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    let logical_lines = merge_logical_lines(trimmed);
+    let mut logical_lines = merge_logical_lines(trimmed);
     let mut stmts = Vec::with_capacity(8);
 
-    for ll in &logical_lines {
-        for (_start, _end, text) in split_statement_segments(&ll.text) {
+    for ll in &mut logical_lines {
+        let segments = split_statement_segments(&ll.text);
+        // The body's lines map back into `trimmed`, a slice of the line
+        // that is the enclosing frame (bd-9vouw.184).
+        context.function_sources.frames.push(SourceFrame {
+            text: (ll.text.as_ptr() as usize, ll.text.len()),
+            input: trimmed.as_ptr() as usize,
+            boundaries: std::mem::take(&mut ll.source_boundaries),
+        });
+        for (_start, _end, text) in segments {
             let inner_span = span.clone();
             stmts.push(parse_statement(text, goal, inner_span, context)?);
         }
+        context.function_sources.frames.pop();
     }
 
     Ok(stmts)
@@ -12377,6 +12551,7 @@ fn sequence_call(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
             params,
             body: ArrowBody::Expression(Box::new(Expression::Identifier(last_param))),
             is_async: false,
+            source_text: None,
         }),
         arguments: operands,
         span: Some(*span),
@@ -13619,6 +13794,7 @@ fn parse_function_expression_with_super(
         },
         is_async,
         is_generator,
+        source_text: None,
     })
 }
 
@@ -13745,6 +13921,8 @@ fn parse_class_declaration(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
+    let source_text =
+        class_text_through_body(statement).and_then(|text| context.function_sources.text_of(text));
     let (name, super_class, body) = parse_class_parts(statement, &span, context)?;
 
     Ok(Statement::ClassDeclaration(ClassDeclaration {
@@ -13752,7 +13930,15 @@ fn parse_class_declaration(
         super_class,
         body,
         span,
+        source_text,
     }))
+}
+
+/// The prefix of a `class ...` source that ends with the body's `}`.
+fn class_text_through_body(source: &str) -> Option<&str> {
+    let brace = class_body_brace(source)?;
+    let (_, after_body) = extract_balanced(&source[brace..], '{', '}')?;
+    Some(&source[..source.len() - after_body.len()])
 }
 
 /// Parse a class **expression** (`class {...}`, `class Name {...}`,
@@ -13765,12 +13951,15 @@ fn parse_class_expression(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Expression> {
+    let source_text =
+        class_text_through_body(statement).and_then(|text| context.function_sources.text_of(text));
     let (name, super_class, body) = parse_class_parts(statement, span, context)?;
 
     Ok(Expression::ClassExpression {
         name,
         super_class,
         body,
+        source_text,
     })
 }
 
@@ -13968,6 +14157,7 @@ fn parse_class_static_block(
                 span: span.clone(),
             }),
             is_async: false,
+            source_text: None,
         })
     });
     if let Some(found) = forbidden {
@@ -13991,6 +14181,7 @@ fn parse_class_static_block(
         span: span.clone(),
         is_async: false,
         is_generator: false,
+        source_text: None,
     })
 }
 
@@ -14147,6 +14338,8 @@ fn parse_class_body_members(
             continue;
         }
 
+        // A method's source text starts after `static` (bd-9vouw.184).
+        let member_head = rest;
         // Method modifiers (ES2020 14.4-14.7): `async m(){}`, `*m(){}`,
         // `async *m(){}`. `async(){}` names a method `async`.
         let (is_async, rest) = match class_element_modifier(rest, "async", true) {
@@ -14264,7 +14457,7 @@ fn parse_class_body_members(
         })?;
         // Parse method body.
         let rest = rest.trim_start();
-        let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+        let (body_src, after_body) = extract_balanced(rest, '{', '}').ok_or_else(|| {
             ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "class method requires a braced body",
@@ -14272,6 +14465,9 @@ fn parse_class_body_members(
                 Some(span.clone()),
             )
         })?;
+        let source_text = context
+            .function_sources
+            .text_of(&member_head[..member_head.len() - after_body.len()]);
         let goal = ParseGoal::Script;
         // Class methods, accessors and constructors have a [[HomeObject]], so
         // `super.x` / `super.m()` are valid in their bodies.
@@ -14312,6 +14508,7 @@ fn parse_class_body_members(
             span: span.clone(),
             is_async,
             is_generator,
+            source_text,
         });
     }
 
@@ -14744,6 +14941,7 @@ fn parse_class_field(
         span: span.clone(),
         is_async: false,
         is_generator: false,
+        source_text: None,
     })
 }
 
@@ -14954,7 +15152,7 @@ fn parse_function_declaration(
 
     // Parse body.
     let rest = rest.trim_start();
-    let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+    let (body_src, after_body) = extract_balanced(rest, '{', '}').ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "function declaration requires a braced body",
@@ -14962,6 +15160,9 @@ fn parse_function_declaration(
             Some(span.clone()),
         )
     })?;
+    let source_text = context
+        .function_sources
+        .text_of(&statement[..statement.len() - after_body.len()]);
     if let Some(name) = name.as_deref() {
         reject_strict_restricted_binding(
             name,
@@ -14997,6 +15198,7 @@ fn parse_function_declaration(
         is_async,
         is_generator,
         span,
+        source_text,
     }))
 }
 
@@ -19917,6 +20119,7 @@ mod tests {
             static_block_await: false,
             formal_parameters: false,
             private_name_scopes: Vec::new(),
+            function_sources: FunctionSourceMap::default(),
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)
     }

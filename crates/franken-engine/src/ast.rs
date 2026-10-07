@@ -116,6 +116,70 @@ impl SourceSpan {
     }
 }
 
+/// The source text of a function, arrow, method or class, as
+/// Function.prototype.toString returns it (ES2024 20.2.3.5: the source
+/// text matched by its definition, comments included): a byte range of
+/// the parsed source, which every function of one parse shares, so nested
+/// functions cost a range each, not a copy (bd-9vouw.184). It is
+/// serialized as its text and compared by text. Provenance only: the
+/// canonical AST encoding leaves it out, so AST and IR hashes do not
+/// depend on comments or layout.
+#[derive(Clone)]
+pub struct FunctionSourceText {
+    source: std::sync::Arc<str>,
+    start: usize,
+    end: usize,
+}
+
+impl FunctionSourceText {
+    /// `source[start..end]`, when that is a non-empty range on character
+    /// boundaries.
+    pub fn new(source: std::sync::Arc<str>, start: usize, end: usize) -> Option<Self> {
+        (start < end && source.get(start..end).is_some()).then_some(Self { source, start, end })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.source[self.start..self.end]
+    }
+}
+
+impl From<&str> for FunctionSourceText {
+    fn from(text: &str) -> Self {
+        Self {
+            source: std::sync::Arc::from(text),
+            start: 0,
+            end: text.len(),
+        }
+    }
+}
+
+impl std::fmt::Debug for FunctionSourceText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl PartialEq for FunctionSourceText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for FunctionSourceText {}
+
+impl Serialize for FunctionSourceText {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for FunctionSourceText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(Self::from(text.as_str()))
+    }
+}
+
 /// Canonical parser output for `IR0`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyntaxTree {
@@ -1303,6 +1367,9 @@ pub struct FunctionDeclaration {
     pub is_async: bool,
     pub is_generator: bool,
     pub span: SourceSpan,
+    /// Its source text, for Function.prototype.toString (bd-9vouw.184).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<FunctionSourceText>,
 }
 
 impl FunctionDeclaration {
@@ -1399,6 +1466,9 @@ pub struct MethodDefinition {
     /// `*m() {}` / `async *m() {}` (ES2020 14.4, 14.5).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_generator: bool,
+    /// Its source text, for Function.prototype.toString (bd-9vouw.184).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<FunctionSourceText>,
 }
 
 impl MethodDefinition {
@@ -1421,6 +1491,9 @@ pub struct ClassDeclaration {
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<MethodDefinition>,
     pub span: SourceSpan,
+    /// Its source text, for Function.prototype.toString (bd-9vouw.184).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<FunctionSourceText>,
 }
 
 impl ClassDeclaration {
@@ -1812,6 +1885,9 @@ pub enum Expression {
         params: Vec<FunctionParam>,
         body: ArrowBody,
         is_async: bool,
+        /// Its source text, for Function.prototype.toString (bd-9vouw.184).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_text: Option<FunctionSourceText>,
     },
     New {
         callee: Box<Expression>,
@@ -1829,6 +1905,9 @@ pub enum Expression {
         body: BlockStatement,
         is_async: bool,
         is_generator: bool,
+        /// Its source text, for Function.prototype.toString (bd-9vouw.184).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_text: Option<FunctionSourceText>,
     },
     Raw(String),
     /// Spread element: `...expr` in array literals, object literals, or
@@ -1844,6 +1923,9 @@ pub enum Expression {
         name: Option<String>,
         super_class: Option<Box<Expression>>,
         body: Vec<MethodDefinition>,
+        /// Its source text, for Function.prototype.toString (bd-9vouw.184).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_text: Option<FunctionSourceText>,
     },
     /// Super keyword for accessing parent class methods and constructor.
     Super,
@@ -2033,6 +2115,7 @@ impl Expression {
                 params,
                 body,
                 is_async,
+                ..
             } => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("arrow_function")),
                 (
@@ -3912,6 +3995,7 @@ mod tests {
                 },
                 is_async: false,
                 is_generator: false,
+                source_text: None,
             },
             computed: false,
             shorthand: false,
@@ -3936,6 +4020,7 @@ mod tests {
             }],
             body: ArrowBody::Expression(Box::new(Expression::Identifier("x".to_string()))),
             is_async: true,
+            source_text: None,
         };
         match expr.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -4480,6 +4565,7 @@ mod tests {
             is_async: false,
             is_generator: true,
             span: make_span(),
+            source_text: None,
         });
         match stmt.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -4501,6 +4587,7 @@ mod tests {
             is_async: true,
             is_generator: true,
             span: make_span(),
+            source_text: None,
         };
         match func.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -4617,6 +4704,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 span: span.clone(),
+                source_text: None,
             }),
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
@@ -4722,6 +4810,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 span: span.clone(),
+                source_text: None,
             }),
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
@@ -5009,6 +5098,7 @@ mod tests {
                 right: Box::new(Expression::NumericLiteral(2)),
             })),
             is_async: true,
+            source_text: None,
         };
         let json = serde_json::to_string(&expr).expect("serialize derived Serialize");
         let restored: Expression =
@@ -5028,6 +5118,7 @@ mod tests {
                 span: make_span(),
             }),
             is_async: false,
+            source_text: None,
         };
         let json = serde_json::to_string(&expr).expect("serialize derived Serialize");
         let restored: Expression =
@@ -5113,6 +5204,7 @@ mod tests {
                 params: vec![],
                 body: ArrowBody::Expression(Box::new(Expression::NullLiteral)),
                 is_async: false,
+                source_text: None,
             },
             Expression::New {
                 callee: Box::new(Expression::Identifier("C".to_string())),
@@ -5234,6 +5326,7 @@ mod tests {
                 is_async: true,
                 is_generator: false,
                 span: make_span(),
+                source_text: None,
             }),
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
@@ -5692,6 +5785,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             span: make_span(),
+            source_text: None,
         };
         if let CanonicalValue::Map(map) = func.canonical_value() {
             assert_eq!(map["name"], CanonicalValue::String("add".to_string()));

@@ -1178,6 +1178,7 @@ fn make_func_decl(name: &str, params: &[&str], body: Vec<Statement>) -> Statemen
         is_async: false,
         is_generator: false,
         span: span(),
+        source_text: None,
     })
 }
 
@@ -2282,6 +2283,7 @@ fn lowering_arrow_function_expression_body() {
                 right: Box::new(Expression::NumericLiteral(1)),
             })),
             is_async: false,
+            source_text: None,
         })],
     );
     let output = run_full(&ir0);
@@ -2314,6 +2316,7 @@ fn lowering_arrow_function_block_body() {
                 span: span(),
             }),
             is_async: false,
+            source_text: None,
         })],
     );
     let output = run_full(&ir0);

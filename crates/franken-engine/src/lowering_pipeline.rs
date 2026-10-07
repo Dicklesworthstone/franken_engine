@@ -3433,6 +3433,7 @@ impl<'a> MentionedNames<'a> {
                 name,
                 super_class,
                 body,
+                ..
             } => self.class(name.as_deref(), super_class.as_deref(), body),
         }
     }
@@ -7326,6 +7327,7 @@ fn lower_statement_to_ir1_with_flow(
                 is_generator: func.is_generator,
                 is_async: func.is_async,
                 rest_param_index,
+                source_text: func.source_text.clone(),
             });
             ops.push(Ir1Op::Pop);
         }
@@ -7507,6 +7509,7 @@ fn lower_statement_to_ir1_with_flow(
                 is_generator: false,
                 is_async: false,
                 rest_param_index,
+                source_text: cls.source_text.clone(),
             });
             // Discard (not Pop): the class binding is in r0 when the class is the
             // first top-level binding, but a SECOND class's DeclareFunction Pop
@@ -7791,6 +7794,7 @@ fn lower_statement_to_ir1_with_flow(
                     is_async: method.is_async,
                     is_arrow: false,
                     rest_param_index: m_rest_param_index,
+                    source_text: method.source_text.clone(),
                 });
 
                 match (class_element_record_kind(method), method.kind) {
@@ -8436,6 +8440,8 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         is_async: bool,
         is_arrow: bool,
         rest_param_index: Option<u32>,
+        /// Function.prototype.toString's text (bd-9vouw.184).
+        source_text: Option<crate::ast::FunctionSourceText>,
     }
     let mut deferred_functions = Vec::<DeferredFunction>::new();
 
@@ -10125,6 +10131,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 is_generator,
                 is_async,
                 rest_param_index,
+                source_text,
             } => {
                 // A scope-routed function binding (captured, or past the
                 // register-resident root budget like any spilled `var`,
@@ -10186,6 +10193,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         is_async: *is_async,
                         is_arrow: false,
                         rest_param_index: *rest_param_index,
+                        source_text: source_text.clone(),
                     });
                     if *is_generator && *is_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10261,6 +10269,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 is_async,
                 is_arrow,
                 rest_param_index,
+                source_text,
             } => {
                 let dst = alloc_register(&mut register_cursor);
                 let self_capture_name = name
@@ -10309,6 +10318,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     is_async: *is_async,
                     is_arrow: *is_arrow,
                     rest_param_index: *rest_param_index,
+                    source_text: source_text.clone(),
                 });
                 if *is_generator && *is_async {
                     ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10763,6 +10773,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             is_async: fn_is_async,
             is_arrow: fn_is_arrow,
             rest_param_index: fn_rest_param_index,
+            source_text: fn_source_text,
         } = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
@@ -12152,6 +12163,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     is_generator: inner_gen,
                     is_async: inner_async,
                     rest_param_index: inner_rest,
+                    source_text: inner_source_text,
                 } => {
                     if inner_body.is_empty() {
                         unreachable!(
@@ -12209,6 +12221,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         is_async: *inner_async,
                         is_arrow: false,
                         rest_param_index: *inner_rest,
+                        source_text: inner_source_text.clone(),
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -12285,6 +12298,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     is_async: inner_async,
                     is_arrow: inner_arrow,
                     rest_param_index: inner_rest,
+                    source_text: inner_source_text,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
                     let available_capture_names: BTreeSet<&str> = fv_id_to_name
@@ -12328,6 +12342,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         is_async: *inner_async,
                         is_arrow: *inner_arrow,
                         rest_param_index: *inner_rest,
+                        source_text: inner_source_text.clone(),
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -12885,6 +12900,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         if expected_length != fn_rest_param_index.unwrap_or(arity) {
             let function_index = u32::try_from(ir3.function_table.len()).unwrap_or(u32::MAX);
             ir3.function_lengths.insert(function_index, expected_length);
+        }
+        // bd-9vouw.184: Function.prototype.toString's text.
+        if let Some(text) = fn_source_text {
+            let function_index = u32::try_from(ir3.function_table.len()).unwrap_or(u32::MAX);
+            ir3.function_sources.insert(function_index, text);
         }
         ir3.function_table.push(Ir3FunctionDesc {
             entry,
@@ -14873,6 +14893,7 @@ fn try_lower_arrow_expression_to_ir1(
         params,
         body,
         is_async,
+        source_text,
     } = expression
     else {
         return Ok(false);
@@ -15030,6 +15051,7 @@ fn try_lower_arrow_expression_to_ir1(
         is_async: *is_async,
         is_arrow: true,
         rest_param_index,
+        source_text: source_text.clone(),
     });
     Ok(true)
 }
@@ -19228,6 +19250,7 @@ fn lower_expression_to_ir1_inner(
             body,
             is_async,
             is_generator,
+            source_text,
         } => {
             // Same as ArrowFunction but with a BlockStatement body and optional name.
             let mut body_ops = Vec::new();
@@ -19414,6 +19437,7 @@ fn lower_expression_to_ir1_inner(
                 is_async: *is_async,
                 is_arrow: false,
                 rest_param_index,
+                source_text: source_text.clone(),
             });
         }
         Expression::New { callee, arguments } => {
@@ -19781,6 +19805,7 @@ fn lower_expression_to_ir1_inner(
             name,
             super_class,
             body,
+            source_text: class_source_text,
         } => {
             // An anonymous class expression's `name` is "" (NamedEvaluation
             // renames it when it is bound: `var C = class {}`).
@@ -19980,6 +20005,7 @@ fn lower_expression_to_ir1_inner(
                 is_generator: false,
                 is_async: false,
                 rest_param_index,
+                source_text: class_source_text.clone(),
             });
             // Discard (not Pop): the class binding is in r0 when the class is the
             // first top-level binding, but a SECOND class's DeclareFunction Pop
@@ -20276,6 +20302,7 @@ fn lower_expression_to_ir1_inner(
                     is_async: method.is_async,
                     is_arrow: false,
                     rest_param_index: m_rest_param_index,
+                    source_text: method.source_text.clone(),
                 });
                 match (class_element_record_kind(method), method.kind) {
                     (Some(element), _) => push_class_element_record(ops, element),
@@ -24486,6 +24513,7 @@ fn module_alias_expr_contains_unshadowed_usage(
             name,
             super_class,
             body,
+            ..
         } => {
             if surface.is_authenticated_object()
                 && name.as_deref() != Some(alias)
@@ -24989,6 +25017,7 @@ fn module_alias_expr_has_rejected_use(
             name,
             super_class,
             body,
+            ..
         } => {
             if surface.is_authenticated_object()
                 && name.as_deref() != Some(alias)
@@ -34944,6 +34973,7 @@ mod tests {
             is_async: false,
             is_arrow: false,
             rest_param_index: None,
+            source_text: None,
         }
     }
 
@@ -36044,6 +36074,7 @@ mod tests {
             is_async: false,
             is_arrow: false,
             rest_param_index: None,
+            source_text: None,
         }
     }
 
@@ -36608,6 +36639,7 @@ mod tests {
             is_async: false,
             is_arrow: false,
             rest_param_index: None,
+            source_text: None,
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "net.write".to_string(),
@@ -36647,6 +36679,7 @@ mod tests {
             is_async: false,
             is_arrow: false,
             rest_param_index: None,
+            source_text: None,
         });
         ir1.ops.push(Ir1Op::Call { arg_count: 0 });
         ir1.ops.push(Ir1Op::HostCall {
@@ -36692,6 +36725,7 @@ mod tests {
             is_generator: false,
             is_async: false,
             rest_param_index: None,
+            source_text: None,
         });
         ir1.ops.push(Ir1Op::Pop);
         ir1.ops.push(Ir1Op::LoadBinding { binding_id: 23 });
@@ -36773,6 +36807,7 @@ mod tests {
             is_async: false,
             is_arrow: false,
             rest_param_index: None,
+            source_text: None,
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "net.write".to_string(),
@@ -36825,6 +36860,7 @@ mod tests {
             is_async: false,
             is_arrow: false,
             rest_param_index: None,
+            source_text: None,
         }
     }
 
@@ -36896,6 +36932,7 @@ mod tests {
                 is_async: false,
                 is_arrow: false,
                 rest_param_index: None,
+                source_text: None,
             },
             Ir1Op::Call { arg_count: 0 },
             Ir1Op::HostCall {
@@ -36935,6 +36972,7 @@ mod tests {
             is_async: true,
             is_arrow: false,
             rest_param_index: None,
+            source_text: None,
         };
         ir1.ops.extend([
             Ir1Op::NewObject { count: 0 },
@@ -37018,6 +37056,7 @@ mod tests {
                     is_async,
                     is_arrow: false,
                     rest_param_index: None,
+                    source_text: None,
                 },
                 Ir1Op::Call { arg_count: 0 },
                 Ir1Op::HostCall {
@@ -45060,6 +45099,7 @@ mod tests {
             },
             is_async: false,
             is_generator: false,
+            source_text: None,
         };
         let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::Identifier("v".into()),
@@ -45097,6 +45137,7 @@ mod tests {
             },
             is_async: false,
             is_generator: false,
+            source_text: None,
         };
         let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::Identifier("value".into()),
@@ -45168,6 +45209,7 @@ mod tests {
             },
             is_async: false,
             is_generator: false,
+            source_text: None,
         };
         let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::StringLiteral(exact.clone()),
@@ -45199,6 +45241,7 @@ mod tests {
             },
             is_async: false,
             is_generator: false,
+            source_text: None,
         };
         let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::StringLiteral(exact.clone()),
@@ -45233,6 +45276,7 @@ mod tests {
             }],
             body: ArrowBody::Expression(Box::new(Expression::Identifier("x".into()))),
             is_async: false,
+            source_text: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("arrow should lower");
         assert!(
@@ -45256,6 +45300,7 @@ mod tests {
                 span: span(),
             }),
             is_async: false,
+            source_text: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("arrow block should lower");
         let return_count = result
@@ -45295,6 +45340,7 @@ mod tests {
                         span: span(),
                     }),
                     is_async: false,
+                    source_text: None,
                 },
                 span: span(),
             }),
@@ -45325,6 +45371,7 @@ mod tests {
                 expressions: vec![Expression::Identifier("name".into())],
             })),
             is_async: false,
+            source_text: None,
         });
         let ctx = LoweringContext::new("trace-gap", "decision-gap", "policy-gap");
         let output =
@@ -45402,6 +45449,7 @@ mod tests {
                 expressions: Vec::new(),
             })),
             is_async: false,
+            source_text: None,
         });
         let ctx = LoweringContext::new("trace-gap", "decision-gap", "policy-gap");
         let output = lower_ir0_to_ir3(&ir0, &ctx)
@@ -45466,6 +45514,7 @@ mod tests {
                 span: span(),
             }),
             is_async: false,
+            source_text: None,
         });
         let ctx = LoweringContext::new("trace-for-of-fn", "decision-for-of-fn", "policy-for-of-fn");
         let output =
@@ -45530,6 +45579,7 @@ mod tests {
                     span: span(),
                     is_async: false,
                     is_generator: false,
+                    source_text: None,
                 },
                 MethodDefinition {
                     key: Expression::Identifier("render".to_string()),
@@ -45547,8 +45597,10 @@ mod tests {
                     span: span(),
                     is_async: false,
                     is_generator: false,
+                    source_text: None,
                 },
             ],
+            source_text: None,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("class expression should lower");
 
@@ -45610,7 +45662,9 @@ mod tests {
                 span: span(),
                 is_async: false,
                 is_generator: false,
+                source_text: None,
             }],
+            source_text: None,
         });
 
         let result = lower_ir0_to_ir1(&ir0).expect("exact class method key should lower");
@@ -46856,6 +46910,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             span: span(),
+            source_text: None,
         })]);
         let result = lower_ir0_to_ir1(&ir0).expect("function should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
@@ -46876,6 +46931,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             span: span(),
+            source_text: None,
         })]);
         let result = lower_ir0_to_ir1(&ir0).expect("anon function should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
@@ -46902,6 +46958,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             span: span(),
+            source_text: None,
         })]);
 
         let ir1 = lower_ir0_to_ir1(&ir0)
@@ -47010,6 +47067,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             span: span(),
+            source_text: None,
         })]);
 
         let context = LoweringContext::new("trace-react-return", "decision-react-return", "policy");
@@ -48836,6 +48894,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             span: span(),
+            source_text: None,
         });
 
         let ir0 = Ir0Module {
@@ -49273,6 +49332,7 @@ mod tests {
                 is_generator: false,
                 is_async: false,
                 span: span(),
+                source_text: None,
             })],
             span: span(),
         };
@@ -49841,6 +49901,7 @@ mod tests {
                     },
                     is_async: false,
                     is_generator: false,
+                    source_text: None,
                 }),
                 span: span(),
             }),

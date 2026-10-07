@@ -39,6 +39,7 @@ fn module_for_console_caps(console_caps: &[&str]) -> Ir3Module {
         specialization: None,
         required_capabilities: Vec::new(),
         function_lengths: Default::default(),
+        function_sources: Default::default(),
     }
 }
 

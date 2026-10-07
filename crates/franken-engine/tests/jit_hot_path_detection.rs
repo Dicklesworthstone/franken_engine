@@ -48,6 +48,7 @@ fn test_module(
         specialization: None,
         required_capabilities: Vec::new(),
         function_lengths: Default::default(),
+        function_sources: Default::default(),
     }
 }
 

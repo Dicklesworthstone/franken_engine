@@ -211,6 +211,7 @@ fn lower_ir2_to_ir3_rejects_deferred_function_value_stack_underflow() {
         is_async: false,
         is_arrow: false,
         rest_param_index: None,
+        source_text: None,
     }));
 
     let err = lower_ir2_to_ir3(&ir2)

@@ -67,6 +67,7 @@ fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
         specialization: None,
         required_capabilities: Vec::new(),
         function_lengths: Default::default(),
+        function_sources: Default::default(),
     }
 }
 
@@ -83,6 +84,7 @@ fn test_module_with_pool_and_functions(
         specialization: None,
         required_capabilities: Vec::new(),
         function_lengths: Default::default(),
+        function_sources: Default::default(),
     }
 }
 

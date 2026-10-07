@@ -108411,6 +108411,7 @@ mod active_builtin_regressions {
             specialization: None,
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
+            function_sources: Default::default(),
         }
     }
 
@@ -111556,6 +111557,7 @@ mod async_runtime_tests_current {
             specialization: None,
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
+            function_sources: Default::default(),
         }
     }
 
@@ -134804,6 +134806,7 @@ mod function_prototype_call_apply_tests_current {
             specialization: None,
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
+            function_sources: Default::default(),
         }
     }
 
@@ -139996,6 +139999,7 @@ mod event_loop_timer_microtask_tests {
             specialization: None,
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
+            function_sources: Default::default(),
         }
     }
 
@@ -140262,6 +140266,7 @@ mod tests {
             specialization: None,
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
+            function_sources: Default::default(),
         }
     }
 
@@ -160384,6 +160389,7 @@ mod string_intrinsic_table_parity_tests {
             specialization: None,
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
+            function_sources: Default::default(),
         }
     }
 

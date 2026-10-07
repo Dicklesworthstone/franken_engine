@@ -40,6 +40,7 @@ fn method(name: &str, is_static: bool, body: Vec<Statement>) -> MethodDefinition
         span: span(),
         is_async: false,
         is_generator: false,
+        source_text: None,
     }
 }
 
@@ -57,6 +58,7 @@ fn constructor_with_param(param: &str, body: Vec<Statement>) -> MethodDefinition
         span: span(),
         is_async: false,
         is_generator: false,
+        source_text: None,
     }
 }
 
@@ -120,6 +122,7 @@ fn class_declaration_lowers_constructor_static_and_prototype_methods() {
             ),
         ],
         span: span(),
+        source_text: None,
     }))
     .expect("class declaration should lower");
 
@@ -188,6 +191,7 @@ fn class_inheritance_lowers_prototype_chain_linkage() {
             vec![return_stmt(Expression::UndefinedLiteral)],
         )],
         span: span(),
+        source_text: None,
     }))
     .expect("derived class should lower");
 
@@ -242,6 +246,7 @@ fn class_expression_lowers_without_leaking_name_to_outer_scope() {
                 ))],
             ),
         ],
+        source_text: None,
     });
     let result = lower_ir0_to_ir1(&ir0).expect("class expression should lower");
 
@@ -317,6 +322,7 @@ fn class_method_super_expression_lowers_to_load_super() {
             vec![return_stmt(Expression::Super)],
         )],
         span: span(),
+        source_text: None,
     }))
     .expect("class with super expression should lower");
 

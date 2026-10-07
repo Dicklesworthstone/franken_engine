@@ -637,6 +637,11 @@ pub enum Ir1Op {
         /// The interpreter binds this slot to an Array of trailing args
         /// instead of a single positional (bd-zs4d5).
         rest_param_index: Option<u32>,
+        /// The function's source text, for Function.prototype.toString
+        /// (bd-9vouw.184). Excluded from the canonical encoding: the IR3
+        /// module's `function_sources` carries it, hashed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_text: Option<crate::ast::FunctionSourceText>,
     },
     /// Create a function value (expression position — arrow functions and
     /// function expressions).  The resulting value is pushed onto the stack.
@@ -675,6 +680,11 @@ pub enum Ir1Op {
         /// Index into `param_names` of the rest parameter (`...xs`), if any
         /// (bd-zs4d5).
         rest_param_index: Option<u32>,
+        /// The function's source text, for Function.prototype.toString
+        /// (bd-9vouw.184). Excluded from the canonical encoding: the IR3
+        /// module's `function_sources` carries it, hashed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_text: Option<crate::ast::FunctionSourceText>,
     },
     /// Begin a try block; on exception, jump to catch_label.
     /// If a finally block exists, `finally_label` points to its entry.
@@ -930,6 +940,7 @@ impl Ir1Op {
                 is_generator,
                 is_async,
                 rest_param_index: _,
+                source_text: _,
             } => {
                 let mut entries = vec![
                     ("op", CanonicalValue::str("declare_function")),
@@ -983,6 +994,7 @@ impl Ir1Op {
                 is_async,
                 is_arrow,
                 rest_param_index: _,
+                source_text: _,
             } => {
                 let mut entries = vec![
                     ("op", CanonicalValue::str("create_function")),
@@ -2675,6 +2687,15 @@ pub struct Ir3Module {
     /// when present, so modules without such functions keep their IR3 bytes.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub function_lengths: std::collections::BTreeMap<u32, u32>,
+    /// The source text of each function, by function_table index, that
+    /// Function.prototype.toString returns (bd-9vouw.184): its definition
+    /// as written, comments included. A function without one (a synthetic
+    /// one, or one whose text the parser could not trace) answers in the
+    /// NativeFunction form. Serialized and hashed only when present; the
+    /// hash binds each text by its digest, so a tampered artifact cannot
+    /// change what toString (and `new Function(f.toString())`) sees.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub function_sources: std::collections::BTreeMap<u32, crate::ast::FunctionSourceText>,
 }
 
 impl Ir3Module {
@@ -2692,10 +2713,31 @@ impl Ir3Module {
             specialization: None,
             required_capabilities: Vec::new(),
             function_lengths: std::collections::BTreeMap::new(),
+            function_sources: std::collections::BTreeMap::new(),
         }
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
+        let function_sources = (!self.function_sources.is_empty()).then(|| {
+            (
+                "function_sources",
+                CanonicalValue::Array(
+                    self.function_sources
+                        .iter()
+                        .map(|(function, text)| {
+                            CanonicalValue::Array(vec![
+                                CanonicalValue::U64(u64::from(*function)),
+                                CanonicalValue::Bytes(
+                                    ContentHash::compute(text.as_str().as_bytes())
+                                        .as_bytes()
+                                        .to_vec(),
+                                ),
+                            ])
+                        })
+                        .collect(),
+                ),
+            )
+        });
         let function_lengths = (!self.function_lengths.is_empty()).then(|| {
             (
                 "function_lengths",
@@ -2760,7 +2802,8 @@ impl Ir3Module {
                 ),
             ]
             .into_iter()
-            .chain(function_lengths),
+            .chain(function_lengths)
+            .chain(function_sources),
         )
     }
 

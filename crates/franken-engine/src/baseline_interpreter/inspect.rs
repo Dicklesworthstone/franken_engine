@@ -1068,16 +1068,19 @@ impl InterpreterCore {
         ))
     }
 
-    /// `Function.prototype.toString` in ES2020 NativeFunction form
-    /// (`function name() { [native code] }`), as for built-ins. User
-    /// functions should return their source text, but the engine does not
-    /// retain it, so they get the same form. Test262's
-    /// `assertToStringOrNativeFunction` accepts that.
+    /// `Function.prototype.toString` (ES2024 20.2.3.5): a user function,
+    /// arrow, method or class answers its source text as written
+    /// (bd-9vouw.184); built-ins, bound functions and a function whose text
+    /// was not recorded answer the NativeFunction form
+    /// (`function name() { [native code] }`).
     pub(super) fn function_native_source_text(
         &self,
         module: Option<&Ir3Module>,
         value: &Value,
     ) -> String {
+        if let Some(text) = self.function_source_text(module, value) {
+            return text;
+        }
         if let Value::BuiltinFunction(builtin) = value
             && builtin.kind == BuiltinFunctionKind::BoundFunction
         {
@@ -1089,6 +1092,29 @@ impl InterpreterCore {
         } else {
             format!("function {name}() {{ [native code] }}")
         }
+    }
+
+    /// The source text the module that compiled `value` recorded for it
+    /// (Ir3Module::function_sources), if `value` is a user function.
+    fn function_source_text(&self, module: Option<&Ir3Module>, value: &Value) -> Option<String> {
+        let module = module?;
+        let (index, owner) = match value {
+            Value::Function(index) => (*index, None),
+            Value::Closure(id)
+            | Value::GeneratorFunction(id)
+            | Value::AsyncFunction(id)
+            | Value::AsyncGeneratorFunction(id) => (
+                self.closure_function_index(*id).ok()?,
+                self.foreign_closure_module(value, module).ok().flatten(),
+            ),
+            _ => return None,
+        };
+        owner
+            .as_deref()
+            .unwrap_or(module)
+            .function_sources
+            .get(&index)
+            .map(|text| text.as_str().to_string())
     }
 
     /// `fn.name` without running guest code.

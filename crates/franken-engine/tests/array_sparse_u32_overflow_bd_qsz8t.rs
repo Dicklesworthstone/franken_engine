@@ -40,6 +40,7 @@ fn test_module_with_pool(instructions: Vec<Ir3Instruction>, pool: Vec<String>) -
         specialization: None,
         required_capabilities: Vec::new(),
         function_lengths: Default::default(),
+        function_sources: Default::default(),
     }
 }
 

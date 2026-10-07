@@ -82,6 +82,7 @@ fn simple_func(name: &str, params: &[&str], body: Vec<Statement>) -> FunctionDec
         is_async: false,
         is_generator: false,
         span: s0(),
+        source_text: None,
     }
 }
 
@@ -659,6 +660,7 @@ fn enrichment_function_declaration_with_destructured_params_serde() {
         is_async: true,
         is_generator: false,
         span: s0(),
+        source_text: None,
     };
     let json = serde_json::to_string(&func).unwrap();
     let restored: FunctionDeclaration = serde_json::from_str(&json).unwrap();
@@ -703,6 +705,7 @@ fn enrichment_arrow_function_async_with_destructured_params() {
             right: Box::new(id("b")),
         })),
         is_async: true,
+        source_text: None,
     };
     let json = serde_json::to_string(&expr).unwrap();
     let restored: Expression = serde_json::from_str(&json).unwrap();
@@ -1214,6 +1217,7 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
             is_async: false,
             is_generator: false,
             span: target,
+            source_text: None,
         }),
         Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
@@ -1323,6 +1327,7 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
             is_async: false,
             is_generator: false,
             span: s0(),
+            source_text: None,
         }),
         Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
@@ -1645,6 +1650,7 @@ fn enrichment_all_expression_canonical_kinds_unique() {
             params: vec![],
             body: ArrowBody::Expression(Box::new(num(0))),
             is_async: false,
+            source_text: None,
         },
         Expression::New {
             callee: Box::new(id("C")),

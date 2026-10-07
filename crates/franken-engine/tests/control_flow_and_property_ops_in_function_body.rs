@@ -28,6 +28,7 @@ fn create_function_with_expression(function_body_expr: Expression) -> FunctionDe
         is_async: false,
         is_generator: false,
         span: span(),
+        source_text: None,
     }
 }
 

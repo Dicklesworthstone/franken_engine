@@ -453,6 +453,7 @@ pub(super) fn walk_expression<W: Walk + ?Sized>(
             name,
             super_class,
             body,
+            ..
         } => walker.class(name.as_deref(), super_class.as_deref_mut(), body),
     }
 }
@@ -858,6 +859,7 @@ fn scope_object(names: &BTreeSet<String>, span: SourceSpan) -> Expression {
                 },
                 is_async: false,
                 is_generator: false,
+                source_text: None,
             },
             computed: false,
             shorthand: false,
@@ -885,6 +887,7 @@ fn scope_object(names: &BTreeSet<String>, span: SourceSpan) -> Expression {
                 },
                 is_async: false,
                 is_generator: false,
+                source_text: None,
             },
             computed: false,
             shorthand: false,

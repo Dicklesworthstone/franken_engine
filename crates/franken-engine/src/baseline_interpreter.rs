@@ -61433,6 +61433,13 @@ impl InterpreterCore {
         }
     }
 
+    /// Whether the callable `function` has an intrinsic own `prototype`
+    /// (ordinary functions, classes, generators, constructors) as opposed to
+    /// one a program defined on it.
+    fn function_has_intrinsic_prototype(&self, function: &Value) -> bool {
+        self.object_own_property_contains(function, &Value::str("prototype"))
+    }
+
     fn object_own_property_contains(&self, receiver: &Value, property: &Value) -> bool {
         let property_key = self.executable_property_key_from_value(property);
         if self
@@ -64556,7 +64563,10 @@ impl InterpreterCore {
         depth: u32,
     ) -> Result<Option<Value>, InterpreterError> {
         let name_or_length = matches!(key.as_str(), Some("name" | "length"));
-        if key.as_str() != Some("prototype")
+        // `prototype` has dedicated storage only on a function that has an
+        // intrinsic one; another function's is an ordinary own property
+        // (bd-9vouw.277).
+        if (key.as_str() != Some("prototype") || !self.function_has_intrinsic_prototype(function))
             && let Some(backing) = self.function_own_property_object(module, function)?
         {
             let own = self
@@ -90780,9 +90790,13 @@ impl InterpreterCore {
                 // (static members in transpiled classes). `prototype` keeps
                 // its dedicated storage: a new value replaces it, attribute-only
                 // changes (Babel's `{ writable: false }`) are accepted as is.
+                // A function without an intrinsic `prototype` (bound,
+                // arrow, method, accessor, async) defines it as an
+                // ordinary own property below (bd-9vouw.277).
                 if !matches!(obj_val, Value::Object(_))
                     && obj_val.is_callable()
                     && prop_name.as_str() == Some("prototype")
+                    && self.function_has_intrinsic_prototype(&obj_val)
                     && let Some(module) = module
                 {
                     let descriptor =
@@ -92102,6 +92116,7 @@ impl InterpreterCore {
                 if !matches!(obj_val, Value::Object(_))
                     && obj_val.is_callable()
                     && prop_name.as_str() == Some("prototype")
+                    && self.function_has_intrinsic_prototype(&obj_val)
                 {
                     return self.function_prototype_descriptor(module, &obj_val);
                 }

@@ -420,3 +420,53 @@ fn function_constructor_to_strings_object_arguments() {
         "21 p,b 4 3 TypeError",
     );
 }
+
+/// bd-9vouw.277: a function without an intrinsic `prototype` (bound, arrow,
+/// method, accessor) takes `prototype` as an ordinary own property:
+/// Object.defineProperty installs a value or an accessor, a read runs the
+/// getter (Reflect.construct's GetPrototypeFromConstructor and
+/// OrdinaryHasInstance throw what it throws), and hasOwnProperty and
+/// getOwnPropertyDescriptor see it. The definition was dropped. A function
+/// with an intrinsic `prototype` keeps its dedicated storage. Expected
+/// lines are Node v22.2.0's output, captured programmatically; Bun 1.4.2
+/// agrees.
+#[test]
+fn own_prototype_on_functions_without_one_bd_9vouw_277() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var bound = function () {}.bind(null);
+Object.defineProperty(bound, 'prototype', { get: function () { throw new EvalError('proto'); }, configurable: true });
+console.log(kind(function () { return Reflect.construct(Uint8Array, [1], bound); }), kind(function () { return Reflect.construct(ArrayBuffer, [1], bound); }), kind(function () { return Reflect.construct(Map, [], bound); }));
+var accessor = Object.getOwnPropertyDescriptor({ get g() { return 1; } }, 'g').get;
+Object.defineProperty(accessor, 'prototype', { get: function () { throw new RangeError('p'); } });
+console.log(kind(function () { return accessor[Symbol.hasInstance]({}); }), kind(function () { return {} instanceof accessor; }));
+var arrow = () => {};
+var proto = { tag: 'arrowproto' };
+Object.defineProperty(arrow, 'prototype', { value: proto, writable: true, configurable: true });
+var b2 = function () {}.bind(null);
+var p2 = {};
+Object.defineProperty(b2, 'prototype', { value: p2 });
+var made = Reflect.construct(Uint8Array, [2], b2);
+console.log(arrow.prototype === proto, arrow.hasOwnProperty('prototype'), JSON.stringify(Object.getOwnPropertyDescriptor(arrow, 'prototype')), Object.getPrototypeOf(made) === p2, b2.prototype === p2, Object.create(proto) instanceof arrow);
+function F() {}
+var fp = {};
+Object.defineProperty(F, 'prototype', { value: fp });
+var d = Object.getOwnPropertyDescriptor(F, 'prototype');
+console.log(F.prototype === fp, new F() instanceof F, d.writable, d.enumerable, d.configurable, typeof (function () {}).prototype, (() => {}).hasOwnProperty('prototype'));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "EvalError EvalError EvalError",
+            "RangeError RangeError",
+            "true true {\"value\":{\"tag\":\"arrowproto\"},\"writable\":true,\"enumerable\":false,\"configurable\":true} true true true",
+            "true true true false false object false",
+        ]
+    );
+}

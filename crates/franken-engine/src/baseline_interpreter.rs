@@ -54403,7 +54403,26 @@ impl InterpreterCore {
                             .heap
                             .get(home_object.0 as usize)
                             .ok_or(InterpreterError::ObjectNotFound { id: home_object.0 })?;
-                        super_value = home.prototype.map(Value::Object).unwrap_or(Value::Null);
+                        // An unset [[Prototype]] link is the implicit one, not
+                        // null: an object literal method's super base is
+                        // Object.prototype, and a base class's static
+                        // method's (its home is the constructor's backing
+                        // object) is Function.prototype. Both read null, so
+                        // `super.x = 1` and `super.toString` threw.
+                        super_value = match (home.prototype, home.is_null_prototype) {
+                            (Some(prototype), _) => Value::Object(prototype),
+                            (None, true) => Value::Null,
+                            (None, false)
+                                if self
+                                    .function_value_for_backing(module, home_object)
+                                    .is_some() =>
+                            {
+                                Value::Object(self.ensure_builtin_prototype("Function")?)
+                            }
+                            (None, false) => self
+                                .ordinary_get_prototype_of(home_object)?
+                                .map_or(Value::Null, Value::Object),
+                        };
                         if let Some(home_label) = self.binary_storage_label_ref(home_object) {
                             super_label = self
                                 .join_owned_label_with_temporary_budget(super_label, home_label)?;

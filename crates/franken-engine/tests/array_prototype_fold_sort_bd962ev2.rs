@@ -166,3 +166,50 @@ console.log(String([10, 9, 1, 100].sort()), String([10, 9, 1, 100].sort(function
         ]
     );
 }
+
+/// bd-9vouw.276: Array.prototype.copyWithin runs the spec steps (ES2020
+/// 23.1.3.3) on a primitive or array-like `this`, an Array with holes,
+/// accessors or read-only elements, and index arguments that are objects:
+/// the length is read first, the indices convert in order (a valueOf may
+/// shrink the array), and each element moves with HasProperty, Get and
+/// Set or DeletePropertyOrThrow, backwards when the ranges overlap. It
+/// accepted only Arrays and read their storage. Expected lines are Node
+/// v22.2.0's output, captured programmatically; Bun 1.4.2 agrees.
+#[test]
+fn array_copy_within_runs_the_spec_steps_bd_9vouw_276() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+console.log(String([1, 2, 3, 4, 5].copyWithin(0, 3)), String([1, 2, 3, 4, 5].copyWithin(1, 0, 3)), String([1, 2, 3, 4, 5].copyWithin(-2, -4, -1)), JSON.stringify(Object.keys([1, , 3, 4].copyWithin(0, 1))), typeof Array.prototype.copyWithin.call(true, 0, 0));
+var arrayLike = { length: 4, 0: 'a', 1: 'b', 3: 'd' };
+Array.prototype.copyWithin.call(arrayLike, 1, 0);
+console.log(JSON.stringify(arrayLike));
+var log = [];
+var arr = [0, 1, 2, 3, 4];
+console.log(String(arr.copyWithin({ valueOf: function () { log.push('target'); arr.length = 3; return 0; } }, { valueOf: function () { log.push('start'); return 1; } })), log.join());
+var frozen = Object.freeze([1, 2, 3]);
+console.log(kind(function () { return frozen.copyWithin(0, 1); }), kind(function () { return Array.prototype.copyWithin.call({ get length() { throw new RangeError('len'); } }, 0, 0); }), kind(function () { return Array.prototype.copyWithin.call({ length: Symbol() }, 0, 0); }));
+var withSetter = [1, 2, 3];
+Object.defineProperty(withSetter, 0, { set: function (v) { throw new EvalError('set ' + v); }, configurable: true });
+var sealedHole = Object.seal([ , 2]);
+console.log(kind(function () { return withSetter.copyWithin(0, 1); }), kind(function () { return Object.defineProperty([1, 2], 0, { configurable: false }).copyWithin(0, 2, 3); }), kind(function () { var a = [ , 1]; Object.defineProperty(a, 1, { value: 1, configurable: false }); return a.copyWithin(1, 0); }));
+var p = new Proxy([1, 2, 3], { has: function (t, k) { if (k === '1') throw new SyntaxError('has'); return Reflect.has(t, k); } });
+console.log(kind(function () { return Array.prototype.copyWithin.call(p, 0, 1); }), String([].copyWithin(0, 0)), String([1, 2].copyWithin(5, 0)));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "4,5,3,4,5 1,1,2,3,5 1,2,3,2,3 [\"1\",\"2\",\"3\"] object",
+            "{\"0\":\"a\",\"1\":\"a\",\"2\":\"b\",\"length\":4}",
+            "1,2, target,start",
+            "TypeError RangeError TypeError",
+            "EvalError 1,2 TypeError",
+            "SyntaxError  1,2",
+        ]
+    );
+}

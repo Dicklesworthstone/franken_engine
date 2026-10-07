@@ -48,6 +48,7 @@ impl InterpreterCore {
                 | K::ArrayToString
                 | K::ArrayReverse
                 | K::ArrayFill
+                | K::ArrayCopyWithin
                 | K::ArrayAt
                 | K::ArrayForEach
                 | K::ArrayMap
@@ -123,7 +124,9 @@ impl InterpreterCore {
                         || self.converts_object_argument(kind, args)?
                         || length_locked
                         || (kind == K::ArraySort
-                            && !self.array_sorts_on_element_storage(object_id, args)?);
+                            && !self.array_sorts_on_element_storage(object_id, args)?)
+                        || (kind == K::ArrayCopyWithin
+                            && !self.array_has_dense_data_elements(object_id));
                     return Ok(generic.then_some(object_id));
                 }
                 Ok((!is_typed_array && !iterator).then_some(object_id))
@@ -156,6 +159,7 @@ impl InterpreterCore {
             K::ArraySliceMethod | K::ArraySplice => &[0, 1],
             K::ArrayAt | K::ArrayWith | K::ArrayJoin => &[0],
             K::ArrayFill => &[1, 2],
+            K::ArrayCopyWithin => &[0, 1, 2],
             K::ArrayIndexOf | K::ArrayLastIndexOf | K::ArrayIncludes => &[1],
             _ => return Ok(false),
         };
@@ -216,6 +220,27 @@ impl InterpreterCore {
             }
         }
         Ok(true)
+    }
+
+    /// Whether every index below the Array `array_id`'s length is an own
+    /// writable data property, so copyWithin's element-storage path moves
+    /// the same values the spec steps would; a hole (deleted at the target),
+    /// an accessor (its getter and setter run) or a read-only element (a
+    /// TypeError) takes the generic path (bd-9vouw.276).
+    fn array_has_dense_data_elements(&self, array_id: ObjectId) -> bool {
+        let Some(object) = self.heap.get(array_id.0 as usize) else {
+            return false;
+        };
+        let Some(Value::Int(length)) = object.properties.get("length") else {
+            return false;
+        };
+        (0..*length).all(|index| {
+            let key = RuntimePropertyKey::String(JsString::from(index.to_string()));
+            !matches!(
+                object.own_runtime_property_value(&key),
+                None | Some(Value::Accessor { .. })
+            ) && object.own_property_attributes(&key).writable
+        })
     }
 
     /// Whether concat on the Array `receiver` must spread generically: an
@@ -563,6 +588,34 @@ impl InterpreterCore {
                             self.generic_set(m, o, &upper_key, lower_value)?;
                         }
                         (false, false) => {}
+                    }
+                }
+                Value::Object(o)
+            }
+            // ES2020 23.1.3.3: the indices convert in order, then each element
+            // moves with HasProperty/Get/Set or DeletePropertyOrThrow,
+            // backwards when the ranges overlap with the target after the
+            // source (bd-9vouw.276).
+            K::ArrayCopyWithin => {
+                let len = self.generic_length(m, o)?;
+                let to = self.generic_relative_index(m, arg(self, 0)?, len, 0)?;
+                let from = self.generic_relative_index(m, arg(self, 1)?, len, 0)?;
+                let end = self.generic_relative_index(m, arg(self, 2)?, len, len)?;
+                let count = end.saturating_sub(from).min(len - to);
+                let backwards = from < to && to < from + count;
+                for step in 0..count {
+                    let (source, target) = if backwards {
+                        (from + count - 1 - step, to + count - 1 - step)
+                    } else {
+                        (from + step, to + step)
+                    };
+                    let source_key = Self::generic_index_key(source);
+                    let target_key = Self::generic_index_key(target);
+                    if self.generic_has(m, o, &source_key)? {
+                        let value = self.generic_get(m, o, &source_key)?;
+                        self.generic_set(m, o, &target_key, value)?;
+                    } else {
+                        self.generic_delete(m, o, &target_key)?;
                     }
                 }
                 Value::Object(o)

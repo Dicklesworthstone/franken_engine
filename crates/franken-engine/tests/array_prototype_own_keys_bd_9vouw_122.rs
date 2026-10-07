@@ -97,3 +97,43 @@ fn array_prototype_own_keys_match_node() {
     }
     assert_eq!(output.lines().count(), NODE_OUTPUT.lines().count());
 }
+
+/// bd-9vouw.249: the other built-in prototypes whose methods are served
+/// virtually list their own names too:
+/// `Object.getOwnPropertyNames(Map.prototype)` was empty, and
+/// `Map.prototype.hasOwnProperty('size')` was false although `'size' in
+/// Map.prototype` was true. OWN_NAMES_PROGRAM compares sorted names (the
+/// engine lists methods alphabetically, not in Node's creation order) for
+/// Map, Set, WeakMap, WeakSet, Promise, RegExp and SharedArrayBuffer, and
+/// checks that the accessors stay non-enumerable.
+const OWN_NAMES_PROGRAM: &str = r#"const names = (proto) => Object.getOwnPropertyNames(proto).sort().join(',');
+console.log(names(Map.prototype));
+console.log(names(Set.prototype));
+console.log(names(WeakMap.prototype), '|', names(WeakSet.prototype));
+console.log(names(Promise.prototype), '|', names(RegExp.prototype));
+console.log(Object.keys(Map.prototype).length, Map.prototype.hasOwnProperty('size'), Object.getOwnPropertyNames(Object.create(Map.prototype)).length);
+console.log(Map.prototype.propertyIsEnumerable('size'), Object.keys(Set.prototype).length, 'size' in Map.prototype, Object.getOwnPropertyNames(SharedArrayBuffer.prototype).sort().join(','));"#;
+
+/// Node v22.2.0's output for `OWN_NAMES_PROGRAM`.
+const OWN_NAMES_NODE_OUTPUT: &str = r#"clear,constructor,delete,entries,forEach,get,has,keys,set,size,values
+add,clear,constructor,delete,difference,entries,forEach,has,intersection,isDisjointFrom,isSubsetOf,isSupersetOf,keys,size,symmetricDifference,union,values
+constructor,delete,get,has,set | add,constructor,delete,has
+catch,constructor,finally,then | compile,constructor,dotAll,exec,flags,global,hasIndices,ignoreCase,multiline,source,sticky,test,toString,unicode,unicodeSets
+0 true 0
+false 0 true byteLength,constructor,grow,growable,maxByteLength,slice"#;
+
+#[test]
+fn other_builtin_prototypes_list_their_own_names_bd_9vouw_249() {
+    let output = console_output(OWN_NAMES_PROGRAM).expect("the program runs");
+    for (index, (actual, expected)) in output
+        .lines()
+        .zip(OWN_NAMES_NODE_OUTPUT.lines())
+        .enumerate()
+    {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(
+        output.lines().count(),
+        OWN_NAMES_NODE_OUTPUT.lines().count()
+    );
+}

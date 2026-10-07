@@ -61025,6 +61025,11 @@ impl InterpreterCore {
             || self
                 .canonical_prototype_virtual_property(*object_id, &property_key)
                 .is_some()
+            // A built-in prototype's accessor (`Map.prototype.size`) is its
+            // own property, as [[HasProperty]] already finds (bd-9vouw.249).
+            || self
+                .prototype_getter_at(*object_id, &property_key)
+                .is_some()
     }
 
     fn object_own_property_is_enumerable(&self, receiver: &Value, property: &Value) -> bool {
@@ -62849,9 +62854,53 @@ impl InterpreterCore {
     /// `Object.getOwnPropertyNames(Array.prototype)` was empty (Node: 40
     /// names). No-claim: @@unscopables is not listed, as Array.prototype has
     /// no @@unscopables object here.
+    ///
+    /// bd-9vouw.249: every other prototype that serves its methods
+    /// virtually (VIRTUAL_METHOD_PROTOTYPES) lists `constructor`, the methods
+    /// this engine serves among those Node v22.2.0 records for it
+    /// (BUILTIN_FUNCTION_LENGTHS, in that table's order), then its accessors
+    /// (PROTOTYPE_GETTERS). `Object.getOwnPropertyNames(Map.prototype)` was
+    /// empty. No-claim: the methods are in alphabetical order, not Node's
+    /// creation order.
     fn canonical_prototype_virtual_own_keys(&self, object_id: ObjectId) -> Vec<Value> {
         if self.builtin_prototypes.get("Array") != Some(&object_id) {
-            return Vec::new();
+            let Some(name) = VIRTUAL_METHOD_PROTOTYPES
+                .iter()
+                .copied()
+                .find(|name| self.builtin_prototypes.get(*name) == Some(&object_id))
+            else {
+                return Vec::new();
+            };
+            let owner = format!("{name}.prototype");
+            let methods = builtin_function_lengths::BUILTIN_FUNCTION_LENGTHS
+                .iter()
+                .filter(|(entry_owner, key, _)| *entry_owner == owner && !key.starts_with('['))
+                .map(|(_, key, _)| *key);
+            let mut names: Vec<&str> = Vec::new();
+            for key in std::iter::once("constructor").chain(methods) {
+                if !names.contains(&key)
+                    && self
+                        .canonical_prototype_own_virtual_value(object_id, key)
+                        .is_some()
+                {
+                    names.push(key);
+                }
+            }
+            for (_, key, _) in prototype_getters::PROTOTYPE_GETTERS
+                .iter()
+                .filter(|(entry_owner, key, _)| *entry_owner == name && !key.starts_with("@@"))
+            {
+                if !names.contains(key)
+                    && !(self.virtual_property_deletions
+                        && self.virtual_own_property_deleted(
+                            object_id,
+                            &RuntimePropertyKey::String(JsString::from(*key)),
+                        ))
+                {
+                    names.push(key);
+                }
+            }
+            return names.into_iter().map(Value::str).collect();
         }
         let mut keys: Vec<Value> = ARRAY_PROTOTYPE_OWN_NAMES
             .iter()

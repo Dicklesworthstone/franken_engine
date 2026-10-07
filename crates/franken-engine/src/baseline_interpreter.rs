@@ -41868,17 +41868,16 @@ impl InterpreterCore {
                 let first = self
                     .array_index_get(Some(module), arr_id, 0)?
                     .unwrap_or(Value::Undefined);
+                // A hole moves as a hole: its target is deleted (step 6.d.iv).
+                let mut moved_hole = false;
                 for i in 1..len {
-                    let moved = self
-                        .array_index_get(Some(module), arr_id, i)?
-                        .unwrap_or(Value::Undefined);
-                    self.set_object_property(arr_id, (i - 1).to_string(), moved)?;
+                    self.array_move_element(module, arr_id, i, i - 1, &mut moved_hole)?;
                 }
                 let last = len - 1;
                 self.array_delete_or_throw(arr_id, &last.to_string())?;
                 let new_len = i64::try_from(last).unwrap_or(i64::MAX);
                 self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
-                self.refresh_dense_length_cache(arr_id, last, was_dense);
+                self.refresh_dense_length_cache(arr_id, last, was_dense && !moved_hole);
                 Ok(first)
             }
             BuiltinFunctionKind::ArrayUnshift => {
@@ -41908,12 +41907,11 @@ impl InterpreterCore {
                 if arg_count > 0 {
                     let was_dense = self.array_cache_is_dense(arr_id);
                     // Move existing elements up, top-down, so a source index is
-                    // read before its destination overwrites a later source.
+                    // read before its destination overwrites a later source. A
+                    // hole moves as a hole (step 4.b.v: delete the target).
+                    let mut moved_hole = false;
                     for i in (0..len).rev() {
-                        let moved = self
-                            .array_index_get(Some(module), arr_id, i)?
-                            .unwrap_or(Value::Undefined);
-                        self.set_object_property(arr_id, (i + arg_count).to_string(), moved)?;
+                        self.array_move_element(module, arr_id, i, i + arg_count, &mut moved_hole)?;
                     }
                     for (offset, item) in items.into_iter().enumerate() {
                         self.set_object_property(arr_id, offset.to_string(), item)?;
@@ -41924,7 +41922,7 @@ impl InterpreterCore {
                         "length".to_string(),
                         Value::Int(new_len_int),
                     )?;
-                    self.refresh_dense_length_cache(arr_id, new_len, was_dense);
+                    self.refresh_dense_length_cache(arr_id, new_len, was_dense && !moved_hole);
                 }
                 Ok(Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)))
             }
@@ -42021,18 +42019,18 @@ impl InterpreterCore {
                 let len = self.array_like_length(arr_id)?;
                 if len > 1 {
                     let was_dense = self.array_cache_is_dense(arr_id);
+                    let mut moved_hole = false;
                     for i in 0..(len / 2) {
                         let j = len - 1 - i;
-                        let lo = self
-                            .array_index_get(Some(module), arr_id, i)?
-                            .unwrap_or(Value::Undefined);
-                        let hi = self
-                            .array_index_get(Some(module), arr_id, j)?
-                            .unwrap_or(Value::Undefined);
-                        self.set_object_property(arr_id, i.to_string(), hi)?;
-                        self.set_object_property(arr_id, j.to_string(), lo)?;
+                        let lo = self.array_index_get(Some(module), arr_id, i)?;
+                        let hi = self.array_index_get(Some(module), arr_id, j)?;
+                        // Step 7.h-k: a present element moves to the other
+                        // index and a hole deletes it, so holes swap too.
+                        moved_hole |= lo.is_none() || hi.is_none();
+                        self.array_store_or_delete(arr_id, i, hi)?;
+                        self.array_store_or_delete(arr_id, j, lo)?;
                     }
-                    self.refresh_dense_length_cache(arr_id, len, was_dense);
+                    self.refresh_dense_length_cache(arr_id, len, was_dense && !moved_hole);
                 }
                 Ok(Value::Object(arr_id))
             }
@@ -42112,7 +42110,7 @@ impl InterpreterCore {
                 };
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
-                self.array_flatten_into(arr_id, depth, result, &mut out)?;
+                self.array_flatten_into(module, arr_id, depth, result, &mut out)?;
                 // An array result keeps its length in step; another
                 // species object gets only the data properties.
                 if self.generic_is_array(result)? {
@@ -42478,7 +42476,7 @@ impl InterpreterCore {
                         if let Value::Object(eid) = mapped {
                             // depth 0 => copy the mapped array's elements one
                             // level without recursing further.
-                            self.array_flatten_into(eid, 0, result, &mut out)?;
+                            self.array_flatten_into(module, eid, 0, result, &mut out)?;
                         }
                     } else {
                         self.create_data_property_or_throw(result, out.to_string(), mapped)?;
@@ -42685,11 +42683,13 @@ impl InterpreterCore {
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 let len = self.array_like_length(arr_id)?;
+                // A hole in a spread array stays a hole in the result (step
+                // 5.c.iv: only a present element is created); `length`
+                // counts it.
                 for i in 0..len {
-                    let element = self
-                        .array_index_get(Some(module), arr_id, i)?
-                        .unwrap_or(Value::Undefined);
-                    self.create_data_property_or_throw(result, out.to_string(), element)?;
+                    if let Some(element) = self.array_index_get(Some(module), arr_id, i)? {
+                        self.create_data_property_or_throw(result, out.to_string(), element)?;
+                    }
                     out += 1;
                 }
                 for k in 0..args.count {
@@ -42704,10 +42704,13 @@ impl InterpreterCore {
                         let arg_id = *arg_id;
                         let arg_len = self.array_like_length(arg_id)?;
                         for i in 0..arg_len {
-                            let element = self
-                                .array_index_get(Some(module), arg_id, i)?
-                                .unwrap_or(Value::Undefined);
-                            self.create_data_property_or_throw(result, out.to_string(), element)?;
+                            if let Some(element) = self.array_index_get(Some(module), arg_id, i)? {
+                                self.create_data_property_or_throw(
+                                    result,
+                                    out.to_string(),
+                                    element,
+                                )?;
+                            }
                             out += 1;
                         }
                     } else {
@@ -42746,10 +42749,11 @@ impl InterpreterCore {
                 let mut out = 0usize;
                 let mut index = start;
                 while index < end {
-                    let element = self
-                        .array_index_get(Some(module), arr_id, index)?
-                        .unwrap_or(Value::Undefined);
-                    self.create_data_property_or_throw(result, out.to_string(), element)?;
+                    // A hole stays a hole in the result (step 10.c: only a
+                    // present element is created); `length` counts it.
+                    if let Some(element) = self.array_index_get(Some(module), arr_id, index)? {
+                        self.create_data_property_or_throw(result, out.to_string(), element)?;
+                    }
                     out += 1;
                     index += 1;
                 }
@@ -42849,15 +42853,17 @@ impl InterpreterCore {
                     items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
                     k += 1;
                 }
-                let mut elements: Vec<Value> = self.element_buffer(len)?;
+                // `None` is a hole: it moves as a hole (steps 15-16 delete
+                // its target) and stays a hole in the removed array (step 11).
+                let mut elements: Vec<Option<Value>> = self.element_buffer(len)?;
+                let mut moved_hole = false;
                 for i in 0..len {
-                    elements.push(
-                        self.array_index_get(Some(module), arr_id, i)?
-                            .unwrap_or(Value::Undefined),
-                    );
+                    let element = self.array_index_get(Some(module), arr_id, i)?;
+                    moved_hole |= element.is_none();
+                    elements.push(element);
                 }
-                let removed: Vec<Value> = elements
-                    .splice(start..start + delete_count, items)
+                let removed: Vec<Option<Value>> = elements
+                    .splice(start..start + delete_count, items.into_iter().map(Some))
                     .collect();
                 let new_len = elements.len();
                 // ES2020 23.1.3.28 step 16: growing the array first writes
@@ -42877,7 +42883,7 @@ impl InterpreterCore {
                 }
                 let was_dense = self.array_cache_is_dense(arr_id);
                 for (i, element) in elements.into_iter().enumerate() {
-                    self.set_object_property(arr_id, i.to_string(), element)?;
+                    self.array_store_or_delete(arr_id, i, element)?;
                 }
                 // Step 18: from the top index down.
                 for i in (new_len..len).rev() {
@@ -42888,10 +42894,12 @@ impl InterpreterCore {
                     "length".to_string(),
                     Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)),
                 )?;
-                self.refresh_dense_length_cache(arr_id, new_len, was_dense);
+                self.refresh_dense_length_cache(arr_id, new_len, was_dense && !moved_hole);
                 let removed_len = removed.len();
                 for (i, element) in removed.into_iter().enumerate() {
-                    self.create_data_property_or_throw(removed_arr, i.to_string(), element)?;
+                    if let Some(element) = element {
+                        self.create_data_property_or_throw(removed_arr, i.to_string(), element)?;
+                    }
                 }
                 self.set_object_property(
                     removed_arr,
@@ -74540,9 +74548,9 @@ impl InterpreterCore {
     /// temporary budget first: the length is guest-chosen (up to 2^53 - 1,
     /// `{ length: 2 ** 53 - 1 }`), and an unchecked `with_capacity` of it
     /// aborted the process ("memory allocation of ... bytes failed").
-    fn element_buffer(&self, len: usize) -> Result<Vec<Value>, InterpreterError> {
+    fn element_buffer<T>(&self, len: usize) -> Result<Vec<T>, InterpreterError> {
         self.check_temporary_memory_budget(
-            (len as u64).saturating_mul(std::mem::size_of::<Value>() as u64),
+            (len as u64).saturating_mul(std::mem::size_of::<T>() as u64),
         )?;
         Ok(Vec::with_capacity(len))
     }
@@ -74634,6 +74642,39 @@ impl InterpreterCore {
                 .map(Some),
             element => Ok(element),
         }
+    }
+
+    /// Write `element` at `index` of an in-place Array method's receiver, or
+    /// delete that index when `element` is `None` (a hole moved there): the
+    /// Set / DeletePropertyOrThrow pair the in-place methods' moves make.
+    fn array_store_or_delete(
+        &mut self,
+        array_id: ObjectId,
+        index: usize,
+        element: Option<Value>,
+    ) -> Result<(), InterpreterError> {
+        match element {
+            Some(element) => self.set_object_property(array_id, index.to_string(), element),
+            None => self
+                .array_delete_or_throw(array_id, &index.to_string())
+                .map(|_| ()),
+        }
+    }
+
+    /// Move the element at `from` to `to` as shift and unshift do: a present
+    /// element is read with [[Get]] and written; a hole deletes `to` and sets
+    /// `moved_hole`.
+    fn array_move_element(
+        &mut self,
+        module: &Ir3Module,
+        array_id: ObjectId,
+        from: usize,
+        to: usize,
+        moved_hole: &mut bool,
+    ) -> Result<(), InterpreterError> {
+        let element = self.array_index_get(Some(module), array_id, from)?;
+        *moved_hole |= element.is_none();
+        self.array_store_or_delete(array_id, to, element)
     }
 
     /// The element a native callback loop visits at `index`, or `None` to
@@ -74815,6 +74856,7 @@ impl InterpreterCore {
 
     fn array_flatten_into(
         &mut self,
+        module: &Ir3Module,
         src_id: ObjectId,
         depth: i64,
         result: ObjectId,
@@ -74822,9 +74864,12 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let len = self.array_like_length(src_id)?;
         for i in 0..len {
-            let element = self
-                .array_index_value(src_id, i)?
-                .unwrap_or(Value::Undefined);
+            // FlattenIntoArray (ES2020 23.1.3.10.1): a hole is skipped and
+            // takes no target index, and an element is read with [[Get]], so
+            // an accessor element's getter runs (its accessor leaked before).
+            let Some(element) = self.array_index_get(Some(module), src_id, i)? else {
+                continue;
+            };
             let nested = if let Value::Object(eid) = &element {
                 self.heap
                     .get(eid.0 as usize)
@@ -74835,7 +74880,7 @@ impl InterpreterCore {
             };
             if depth > 0 && nested {
                 if let Value::Object(eid) = element {
-                    self.array_flatten_into(eid, depth - 1, result, out)?;
+                    self.array_flatten_into(module, eid, depth - 1, result, out)?;
                 }
             } else {
                 self.create_data_property_or_throw(result, out.to_string(), element)?;

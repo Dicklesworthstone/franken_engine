@@ -89314,6 +89314,30 @@ impl InterpreterCore {
                 // Copy properties from each source object to target
                 for i in 1..args.count {
                     let source_val = self.read_reg(args.start + i)?;
+                    // ToObject of a string source has its code units as own
+                    // enumerable index properties (ES2020 9.4.3), copied with
+                    // Set(to, key, value, true); they were skipped
+                    // (`Object.assign({}, 'ab')` gave {}).
+                    if let Value::Str(text) = &source_val {
+                        for (key, value) in self.string_index_entries(text)? {
+                            let committed = self.proxy_aware_set_runtime_property(
+                                module,
+                                target_obj_id,
+                                &RuntimePropertyKey::String(key.clone()),
+                                value,
+                                Value::Object(target_obj_id),
+                                0,
+                            )?;
+                            if !committed {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "writable target property for Object.assign"
+                                        .to_string(),
+                                    got: format!("Cannot assign to read only property '{key}'"),
+                                });
+                            }
+                        }
+                        continue;
+                    }
                     let source_obj_id = match &source_val {
                         Value::Object(source_obj_id) => Some(*source_obj_id),
                         // A function source's own enumerable properties, and

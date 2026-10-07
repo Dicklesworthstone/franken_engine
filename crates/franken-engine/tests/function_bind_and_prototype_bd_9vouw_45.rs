@@ -229,3 +229,62 @@ console.log(sameA, Object.getPrototypeOf(viaA) === A.prototype, sameC, Object.ge
         ]
     );
 }
+
+/// bd-9vouw.268: four built-in conformance gaps. `trim` and its variants
+/// remove ES WhiteSpace and LineTerminator (U+FEFF yes, U+0085 and U+180E
+/// no) over exact code units; `Object.prototype.valueOf` is ToObject(this);
+/// `Date.prototype.toJSON` is generic (ToPrimitive with hint "number", null
+/// when non-finite, then Invoke(O, "toISOString")); and
+/// `Function.prototype[Symbol.hasInstance]` exists (OrdinaryHasInstance,
+/// not writable, enumerable or configurable), which `instanceof` performs
+/// without a guest call. Expected lines are Node v22.2.0's output, captured
+/// programmatically; Bun 1.4.2 agrees except that it throws for
+/// `{} instanceof Object.create(Function.prototype)`, where OrdinaryHasInstance
+/// step 1 answers false.
+#[test]
+fn builtin_prototype_conformance_bd_9vouw_268() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var bom = '﻿';
+console.log(JSON.stringify([(bom + ' a' + bom).trim(), (bom + 'a ').trimStart(), (' a' + bom).trimEnd(), '\u0085a\u0085'.trim().length, '᠎a'.trim().length, ('\uD800' + bom).trim().length, (bom + '\uDC00 ').trim().length]));
+var valueOf = Object.prototype.valueOf;
+console.log(typeof valueOf.call(true), typeof valueOf.call(1), typeof valueOf.call('s'), typeof valueOf.call(Symbol()), valueOf.call(2) instanceof Number, kind(function () { return valueOf.call(undefined); }), kind(function () { return valueOf.call(null); }), kind(function () { return (0, Object.prototype.valueOf)(); }));
+var toJSON = Date.prototype.toJSON;
+var result = {};
+var calls = [];
+var custom = { toISOString: function () { calls.push('iso'); return result; }, valueOf: function () { calls.push('valueOf'); return 'NaN'; } };
+console.log(toJSON.call(custom) === result, calls.join(), toJSON.call({ valueOf: function () { return Infinity; }, toISOString: function () { return 'no'; } }), new Date(0).toJSON(), new Date(NaN).toJSON());
+Number.prototype.toISOString = function () { return 'num:' + typeof this; };
+console.log(toJSON.call(10), kind(function () { return toJSON.call(undefined); }), kind(function () { return toJSON.call({ toISOString: 1 }); }), kind(function () { return toJSON.call({ valueOf: function () { throw new RangeError('v'); } }); }), JSON.stringify({ d: new Date(0), o: custom }));
+delete Number.prototype.toISOString;
+var hasInstance = Function.prototype[Symbol.hasInstance];
+var d = Object.getOwnPropertyDescriptor(Function.prototype, Symbol.hasInstance);
+console.log(typeof hasInstance, hasInstance.name, hasInstance.length, d.writable, d.enumerable, d.configurable);
+function F() {}
+var f = new F();
+var bound = F.bind();
+console.log(hasInstance.call(F, f), hasInstance.call(F, {}), hasInstance.call({}, f), hasInstance.call(F, 1), bound[Symbol.hasInstance](f), F[Symbol.hasInstance](f), f instanceof F, f instanceof bound);
+console.log(kind(function () { return {} instanceof Object.create(Function.prototype); }), kind(function () { return {} instanceof {}; }));
+class WithStatic { static helper() {} }
+console.log(new WithStatic() instanceof WithStatic, {} instanceof WithStatic, Reflect.ownKeys(Function.prototype).indexOf(Symbol.hasInstance) >= 0);
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "[\"a\",\"a \",\" a\",3,2,1,1]",
+            "object object object object true TypeError TypeError TypeError",
+            "true valueOf,iso null 1970-01-01T00:00:00.000Z null",
+            "num:object TypeError TypeError RangeError {\"d\":\"1970-01-01T00:00:00.000Z\",\"o\":{}}",
+            "function [Symbol.hasInstance] 1 false false false",
+            "true false false false true true true true",
+            "false TypeError",
+            "true false true",
+        ]
+    );
+}

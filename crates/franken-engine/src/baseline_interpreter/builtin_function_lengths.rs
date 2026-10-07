@@ -174,6 +174,7 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("EventTarget.prototype", "removeEventListener", 2),
     ("FinalizationRegistry.prototype", "register", 2),
     ("FinalizationRegistry.prototype", "unregister", 1),
+    ("Function.prototype", "[Symbol.hasInstance]", 1),
     ("Function.prototype", "apply", 2),
     ("Function.prototype", "bind", 1),
     ("Function.prototype", "call", 1),

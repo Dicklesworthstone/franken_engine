@@ -3627,6 +3627,9 @@ pub enum BuiltinFunctionKind {
     /// OrdinaryToPrimitive with "default" read as "string"
     /// (bd-9vouw.259). Append only.
     DatePrototypeToPrimitive,
+    /// `Function.prototype[@@hasInstance](V)` (ES2020 19.2.3.6):
+    /// OrdinaryHasInstance(this, V) (bd-9vouw.268). Append only.
+    FunctionPrototypeHasInstance,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5115,6 +5118,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::SymbolPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToPrimitive
             | BuiltinFunctionKind::DatePrototypeToPrimitive => "[Symbol.toPrimitive]",
+            BuiltinFunctionKind::FunctionPrototypeHasInstance => "[Symbol.hasInstance]",
             BuiltinFunctionKind::RegExpPrototypeCompile => "compile",
             BuiltinFunctionKind::SharedArrayBufferMethod => {
                 match self.module_specifier.0.as_deref() {
@@ -5749,7 +5753,8 @@ impl BuiltinFunction {
             K::FunctionPrototypeApply
             | K::FunctionPrototypeBind
             | K::FunctionPrototypeCall
-            | K::FunctionPrototypeToString => "Function.prototype",
+            | K::FunctionPrototypeToString
+            | K::FunctionPrototypeHasInstance => "Function.prototype",
             K::RegExpPrototypeExec
             | K::RegExpTest
             | K::RegExpPrototypeToString
@@ -44317,7 +44322,7 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ObjectPrototypeValueOf => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                Ok(self.object_prototype_value_of_value(receiver))
+                self.object_prototype_value_of_value(receiver)
             }
             BuiltinFunctionKind::ObjectPrototypeToString => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -44345,6 +44350,17 @@ impl InterpreterCore {
                     got: other.as_ref().map_or("undefined", Value::type_name).to_string(),
                 }),
             },
+            // Function.prototype[@@hasInstance](V) (ES2020 19.2.3.6):
+            // OrdinaryHasInstance(this, V), which answers false for a
+            // non-callable `this` instead of throwing as `instanceof` does.
+            BuiltinFunctionKind::FunctionPrototypeHasInstance => {
+                let constructor = receiver.unwrap_or(Value::Undefined);
+                if !constructor.is_callable() {
+                    return Ok(Value::Bool(false));
+                }
+                let candidate = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.ordinary_instanceof(module, candidate, constructor)
+            }
             // Date.prototype[@@toPrimitive](hint) (ES2020 20.3.4.45): any
             // object `this`, a hint of exactly "string", "default" or
             // "number", then OrdinaryToPrimitive (bd-9vouw.259).
@@ -55993,6 +56009,21 @@ impl InterpreterCore {
         // intrinsic Function.prototype[@@hasInstance] is OrdinaryHasInstance,
         // which the code below performs.
         if let Some(handler) = self.user_has_instance_handler(module, &constructor)? {
+            // The intrinsic Function.prototype[@@hasInstance], found along a
+            // backing object's chain, is the OrdinaryHasInstance below; no
+            // guest call is needed, and it answers false for a target that
+            // is not callable (bd-9vouw.268).
+            if matches!(&handler, Value::BuiltinFunction(builtin)
+                if builtin.kind == BuiltinFunctionKind::FunctionPrototypeHasInstance)
+            {
+                if !constructor.is_callable() {
+                    return Ok((Value::Bool(false), None));
+                }
+                return Ok((
+                    self.ordinary_instanceof(module, candidate, constructor)?,
+                    None,
+                ));
+            }
             let call_labels = self.clone_isolated_call_labels_from_registers(
                 Some(rhs),
                 RegRange {
@@ -56383,6 +56414,11 @@ impl InterpreterCore {
             .is_some_and(|name| Self::function_prototype_property(name).is_some())
         {
             return Ok(true);
+        }
+        // Symbol-keyed members of %Function.prototype% exist only once it is
+        // made (see primitive_prototype_get).
+        if matches!(key, RuntimePropertyKey::Symbol(_)) {
+            self.ensure_builtin_prototype("Function")?;
         }
         // A generator, async or async generator function's kind prototype
         // inherits from Function.prototype.
@@ -58060,12 +58096,38 @@ impl InterpreterCore {
         Ok(Value::str(this_str.to_lowercase()))
     }
 
+    /// TrimString (ES2020 21.1.3.29.1): drop leading and/or trailing
+    /// WhiteSpace and LineTerminator code units. Rust's `str::trim` kept
+    /// U+FEFF and dropped U+0085, and its UTF-8 projection replaced a lone
+    /// surrogate; the code units of such a string are trimmed exactly.
+    fn js_trim_string(text: &JsString, start: bool, end: bool) -> JsString {
+        let is_space = primitive_conversion::is_js_whitespace;
+        if let Some(text) = text.as_str() {
+            return JsString::from(match (start, end) {
+                (true, true) => text.trim_matches(is_space),
+                (true, false) => text.trim_start_matches(is_space),
+                _ => text.trim_end_matches(is_space),
+            });
+        }
+        let units = text.code_units_vec();
+        let unit_is_space = |unit: u16| char::from_u32(u32::from(unit)).is_some_and(is_space);
+        let mut from = 0;
+        let mut to = units.len();
+        while start && from < to && unit_is_space(units[from]) {
+            from += 1;
+        }
+        while end && to > from && unit_is_space(units[to - 1]) {
+            to -= 1;
+        }
+        JsString::from_code_units(&units[from..to])
+    }
+
     fn string_trim_impl(
         &mut self,
         this_str: &JsString,
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        Ok(Value::str(this_str.trim()))
+        Ok(Value::Str(Self::js_trim_string(this_str, true, true)))
     }
 
     fn string_trim_start_impl(
@@ -58074,7 +58136,7 @@ impl InterpreterCore {
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2019 21.1.3.27: trim leading whitespace only.
-        Ok(Value::str(this_str.trim_start()))
+        Ok(Value::Str(Self::js_trim_string(this_str, true, false)))
     }
 
     fn string_trim_end_impl(
@@ -58083,7 +58145,7 @@ impl InterpreterCore {
         _args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2019 21.1.3.26: trim trailing whitespace only.
-        Ok(Value::str(this_str.trim_end()))
+        Ok(Value::Str(Self::js_trim_string(this_str, false, true)))
     }
 
     /// Intrinsic-table binding (fixed signature, no module); see
@@ -59775,6 +59837,13 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         receiver: Value,
     ) -> Result<(Value, Option<ObjectId>), InterpreterError> {
+        // %Function.prototype% is made on first use, and its Symbol-keyed
+        // members (@@hasInstance, bd-9vouw.268) exist only on it: a Symbol
+        // read through a function materializes it, or fell through to
+        // %Object.prototype% and read undefined.
+        if type_name == "Function" && matches!(key, RuntimePropertyKey::Symbol(_)) {
+            self.ensure_builtin_prototype("Function")?;
+        }
         if let Some(&prototype) = self.builtin_prototypes.get(type_name) {
             let value =
                 self.proxy_aware_get_runtime_property(Some(module), prototype, key, receiver, 0)?;
@@ -61414,9 +61483,27 @@ impl InterpreterCore {
     }
 
     /// Object.prototype.valueOf (ES2020 19.1.3.7): ToObject(this) — the
-    /// object itself, a wrapper object included.
-    fn object_prototype_value_of_value(&self, receiver: Value) -> Value {
-        receiver
+    /// object itself, a wrapper object included; a new wrapper object for a
+    /// primitive (`typeof Object.prototype.valueOf.call(true)` is "object");
+    /// a TypeError for undefined and null. Primitives came back unwrapped
+    /// and undefined/null did not throw.
+    fn object_prototype_value_of_value(
+        &mut self,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        match receiver {
+            Value::Undefined | Value::Null => Err(InterpreterError::TypeError {
+                expected: "object-coercible this for Object.prototype.valueOf".to_string(),
+                got: receiver.type_name().to_string(),
+            }),
+            Value::Bool(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Str(_)
+            | Value::Symbol(_)
+            | Value::BigInt(_) => Ok(Value::Object(self.alloc_primitive_wrapper(receiver)?)),
+            other => Ok(other),
+        }
     }
 
     fn object_prototype_to_string_value(&self, receiver: &Value) -> Value {
@@ -74448,6 +74535,58 @@ impl InterpreterCore {
         Ok(locale)
     }
 
+    /// Date.prototype.toJSON (ES2020 20.4.4.37) is generic: ToObject(this),
+    /// ToPrimitive with hint "number" (null for a non-finite Number), then
+    /// Invoke(O, "toISOString"). It demanded a Date receiver and formatted
+    /// it directly, so a user `toISOString`, a throwing valueOf and a
+    /// primitive `this` were never seen.
+    fn date_prototype_to_json(
+        &mut self,
+        module: Option<&Ir3Module>,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        let object = match receiver {
+            Value::Undefined | Value::Null => {
+                return Err(InterpreterError::TypeError {
+                    expected: "object-coercible this for Date.prototype.toJSON".to_string(),
+                    got: receiver.type_name().to_string(),
+                });
+            }
+            Value::Bool(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Str(_)
+            | Value::Symbol(_)
+            | Value::BigInt(_) => Value::Object(self.alloc_primitive_wrapper(receiver)?),
+            other => other,
+        };
+        let Some(module) = module else {
+            return Err(InterpreterError::TypeError {
+                expected: "module-backed Date.prototype.toJSON".to_string(),
+                got: "missing module context".to_string(),
+            });
+        };
+        // Guest code runs while native locals hold values: no collection
+        // until this returns.
+        self.gc_nested_request = None;
+        match self.coerce_runtime_primitive_with_hint(Some(module), object.clone(), "number")? {
+            Value::Float(number) if !number.inner().is_finite() => return Ok(Value::Null),
+            _ => {}
+        }
+        let to_iso_string = self.get_v(
+            module,
+            &object,
+            &RuntimePropertyKey::String(JsString::from("toISOString")),
+        )?;
+        if !to_iso_string.is_callable() {
+            return Err(InterpreterError::TypeError {
+                expected: "callable toISOString for Date.prototype.toJSON".to_string(),
+                got: to_iso_string.type_name().to_string(),
+            });
+        }
+        self.invoke_inline_method_call(Some(module), to_iso_string, object, Vec::new())
+    }
+
     fn date_prototype_method(
         &mut self,
         module: Option<&Ir3Module>,
@@ -74456,6 +74595,9 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         use date_math::*;
+        if method == "toJSON" {
+            return self.date_prototype_to_json(module, receiver);
+        }
         let date_id = match &receiver {
             Value::Object(id)
                 if self
@@ -88571,8 +88713,8 @@ impl InterpreterCore {
                     _ => "".to_string(),
                 };
 
-                // Remove whitespace from both ends using Unicode-aware trimming
-                let trimmed = string_val.trim();
+                // Remove WhiteSpace and LineTerminator from both ends.
+                let trimmed = string_val.trim_matches(primitive_conversion::is_js_whitespace);
                 Ok(Value::str(trimmed))
             }
 
@@ -91412,10 +91554,7 @@ impl InterpreterCore {
             "builtin:ObjectPrototypeValueOf" => {
                 // Object.prototype.valueOf() implementation
                 let this_val = self.read_reg(args.start)?;
-
-                // An object (a wrapper object included, ES2020 19.1.3.7) is
-                // returned itself; a primitive as-is.
-                Ok(this_val)
+                self.object_prototype_value_of_value(this_val)
             }
 
             // Removed duplicate ArrayPrototypeFlatMap - implementation at line ~13119 is more complete
@@ -91784,8 +91923,8 @@ impl InterpreterCore {
                     }
                 };
 
-                // Remove leading whitespace
-                let trimmed = string_val.trim_start();
+                // Remove leading WhiteSpace and LineTerminator.
+                let trimmed = string_val.trim_start_matches(primitive_conversion::is_js_whitespace);
                 Ok(Value::str(trimmed))
             }
 
@@ -92869,8 +93008,10 @@ impl InterpreterCore {
                     _ => "[object Object]".to_string(),
                 };
 
-                // Trim whitespace from the end (right side)
-                let trimmed = str_text.trim_end().to_string();
+                // Trim WhiteSpace and LineTerminator from the end.
+                let trimmed = str_text
+                    .trim_end_matches(primitive_conversion::is_js_whitespace)
+                    .to_string();
                 Ok(Value::str(trimmed))
             }
 
@@ -102578,6 +102719,29 @@ impl InterpreterCore {
             "Date" => Some(BuiltinFunctionKind::DatePrototypeToPrimitive),
             _ => None,
         };
+        // Function.prototype[@@hasInstance] (ES2020 19.2.3.6; not writable,
+        // enumerable or configurable). `instanceof` keeps performing
+        // OrdinaryHasInstance itself, which is what this intrinsic does
+        // (bd-9vouw.268).
+        if canonical == "Function" {
+            let key = RuntimePropertyKey::Symbol(WellKnownSymbol::HasInstance.id());
+            self.set_object_runtime_property(
+                prototype,
+                key.clone(),
+                Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::FunctionPrototypeHasInstance,
+                )),
+            )?;
+            self.set_own_property_attributes(
+                prototype,
+                &key,
+                PropertyAttributes {
+                    writable: false,
+                    enumerable: false,
+                    configurable: false,
+                },
+            )?;
+        }
         if let Some(kind) = to_primitive_kind {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToPrimitive.id());
             self.set_object_runtime_property(

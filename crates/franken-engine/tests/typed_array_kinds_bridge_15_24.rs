@@ -419,3 +419,56 @@ console.log(String(t4), String(new Float32Array([1.5, 2.5]).subarray(0)), String
         ]
     );
 }
+
+/// bd-9vouw.273: constructing a builtin through Reflect.construct reads
+/// Get(newTarget, "prototype") first and falls
+/// back to the builtin's own intrinsic prototype when that is not an object;
+/// ArrayBuffer, DataView and the typed array constructors called without
+/// `new` throw a TypeError; and a typed array built from a list, an
+/// iterable, an array-like, `from` or `of` converts each element with
+/// ToNumber/ToBigInt (valueOf runs; a Symbol or a BigInt for a Number array
+/// throws), collecting an iterable's values before converting any, and
+/// allocating an array-like's length (a RangeError when impossible) before
+/// reading its elements. Expected lines are Node v22.2.0's output, captured
+/// programmatically; Bun 1.4.2 agrees.
+#[test]
+fn builtin_construction_reads_new_target_and_converts_elements_bd_9vouw_273() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var log = [];
+var obj = function (n) { return { valueOf: function () { log.push('v' + n); return n; } }; };
+console.log(String(new Float64Array([obj(1), 2, obj(3)])), log.join());
+log = [];
+var values = [0, { valueOf: function () { values.length = 0; return 100; } }, 2];
+console.log(String(new Float64Array(values)), String(new Int8Array(new Set([1, obj(2)]))), log.join());
+log = [];
+var arrayLike = { length: 2, get 0() { log.push('g0'); return obj(5); }, get 1() { log.push('g1'); return 6; } };
+console.log(String(new Uint8Array(arrayLike)), log.join(), kind(function () { return new Uint8Array([{ valueOf: function () { throw new RangeError('x'); } }]); }), kind(function () { return new Uint8Array([Symbol()]); }), kind(function () { return new Uint8Array([1n]); }));
+console.log(kind(function () { return new Uint8Array({ length: Math.pow(2, 53) - 1 }); }), kind(function () { return Uint8Array([1]); }), kind(function () { return Float64Array(2); }), kind(function () { return ArrayBuffer(8); }), kind(function () { return DataView(new ArrayBuffer(1)); }));
+function F() {}
+F.prototype = null;
+var viaNull = Reflect.construct(Float64Array, [2], F);
+var map = Reflect.construct(Map, [], (function () { var G = function () {}; G.prototype = 1; return G; })());
+console.log(Object.getPrototypeOf(viaNull) === Float64Array.prototype, viaNull.length, Object.getPrototypeOf(map) === Map.prototype);
+class Bytes extends Uint8Array { first() { return this[0]; } }
+var b = new Bytes([7, 8]);
+console.log(b.first(), b.length, b instanceof Uint8Array, String(Uint8Array.from([1, obj(2)])), String(Uint8Array.of(3, obj(4))), String(new Uint8Array(3)), String(b.subarray(1)), String(new Uint16Array(new Uint8Array([1, 2]))));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "1,2,3 v1,v3",
+            "0,100,2 1,2 v2",
+            "5,6 g0,v5,g1 RangeError TypeError TypeError",
+            "RangeError TypeError TypeError TypeError TypeError",
+            "true 2 true",
+            "7 2 true 1,2 3,4 0,0,0 8 1,2",
+        ]
+    );
+}

@@ -53703,6 +53703,12 @@ impl InterpreterCore {
                             _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
                                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
                             }
+                            Some(name) if Self::buffer_family_constructor(name) => self
+                                .dispatch_builtin_hostcall(
+                                    &format!("builtin:{name}"),
+                                    args,
+                                    Some(module),
+                                )?,
                             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                                 self.construct_event_target_family(module, name, args)?
                             }
@@ -69520,6 +69526,22 @@ impl InterpreterCore {
         }
     }
 
+    /// `typed_array_element_value` for each value, in order.
+    fn typed_array_element_values(
+        &mut self,
+        module: Option<&Ir3Module>,
+        kind: TypedArrayKind,
+        values: Vec<Value>,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        // Guest code runs while native locals hold values: no collection
+        // until this returns.
+        self.gc_nested_request = None;
+        values
+            .into_iter()
+            .map(|value| self.typed_array_element_value(module, kind, value))
+            .collect()
+    }
+
     /// [[Set]] of a typed array (ES2024 10.4.5.5) for a key that is a
     /// CanonicalNumericIndexString ("0", "-0", "1.1", "-1", "Infinity").
     /// On the typed array itself it is TypedArraySetElement: the value is
@@ -75511,7 +75533,8 @@ impl InterpreterCore {
     /// the `this` constructor's (`Uint8Array.from`), so an unbound call is a
     /// TypeError, as in Node. `from` collects its source exactly as
     /// `Array.from` does (iterables, array-likes, the mapper and its
-    /// `thisArg`), then converts every value to the element type.
+    /// `thisArg`), then converts every value to the element type, in order
+    /// and observably.
     fn typed_array_static_call(
         &mut self,
         module: &Ir3Module,
@@ -75562,6 +75585,9 @@ impl InterpreterCore {
             };
             self.array_like_values(list)?
         };
+        // Each value converts with ToNumber/ToBigInt, running its valueOf
+        // (bd-9vouw.273); objects became NaN without it.
+        let values = self.typed_array_element_values(Some(module), kind, values)?;
         Ok(Value::Object(
             self.alloc_typed_array_from_values(kind, &values)?,
         ))
@@ -100162,14 +100188,48 @@ impl InterpreterCore {
             }
         }
 
+        // ES2024 23.2.5.1.3-5: the values of an iterable are collected
+        // before any is converted; each conversion runs a value's
+        // @@toPrimitive/valueOf and may throw (bd-9vouw.273). They were
+        // converted without running guest code.
         if let Some(values) = self.typed_array_iterable_source(module, &first_arg)? {
+            let values = self.typed_array_element_values(module, kind, values)?;
             return self.alloc_typed_array_from_values(kind, &values);
         }
 
         if let Value::Object(object_id) = first_arg {
             self.typed_array_content_type_check(kind, &first_arg)?;
-            let values = self.observable_array_like_values(module, object_id)?;
-            return self.alloc_typed_array_from_values(kind, &values);
+            let (is_array, is_view) = self
+                .heap
+                .get(object_id.0 as usize)
+                .map_or((false, false), |object| {
+                    (object.is_array, object.typed_array.is_some())
+                });
+            if is_array || is_view {
+                // An Array with the built-in iterator (iterated: its values
+                // are read before any conversion) or a typed array.
+                let values = self.observable_array_like_values(module, object_id)?;
+                let values = self.typed_array_element_values(module, kind, values)?;
+                return self.alloc_typed_array_from_values(kind, &values);
+            }
+            // InitializeTypedArrayFromArrayLike (23.2.5.1.5): its length,
+            // the allocation (a RangeError for an impossible length, before
+            // any element is read), then Get and Set per index in order.
+            let length = self.generic_length(module, object_id)?;
+            let length = usize::try_from(length).map_err(|_| InterpreterError::RangeError {
+                message: format!("{} length {length} is out of range", kind.type_name()),
+            })?;
+            let view = self.alloc_typed_array_with_fresh_buffer(kind, length)?;
+            // Guest code runs while native locals hold values: no
+            // collection until this returns.
+            self.gc_nested_request = None;
+            for index in 0..length {
+                let value =
+                    self.generic_get(module, object_id, &Self::generic_index_key(index as u64))?;
+                let converted = self.typed_array_element_value(module, kind, value)?;
+                self.typed_array_indexed_set_property(view, &index.to_string(), &converted)?;
+            }
+            return Ok(view);
         }
 
         let length = self.typed_array_index_from_value(kind, "length", &first_arg)?;
@@ -101394,7 +101454,23 @@ impl InterpreterCore {
                 got: format!("{name} is not a constructor"),
             });
         }
-        let prototype = self.constructor_prototype_for_value(module, new_target)?;
+        // GetPrototypeFromConstructor(newTarget, default) (ES2024 10.1.14):
+        // Get(newTarget, "prototype") observably (a getter or proxy trap runs
+        // and may throw), before the construction reads its arguments; a
+        // value that is not an object falls back to the builtin's own
+        // intrinsic prototype, not %Object.prototype% (bd-9vouw.273).
+        self.gc_nested_request = None;
+        let prototype = match self.get_v(
+            module,
+            new_target,
+            &RuntimePropertyKey::String(JsString::from("prototype")),
+        )? {
+            Value::Object(prototype) => prototype,
+            _ => self.default_constructor_prototype_for_value(
+                module,
+                &Value::BuiltinFunction(builtin.clone()),
+            )?,
+        };
         // ES2025 27.1.3.1: abstract unless NewTarget is a subclass, whose
         // instance is an ordinary object from NewTarget's prototype.
         if standard_name == Some("Iterator") {
@@ -101411,6 +101487,9 @@ impl InterpreterCore {
         let mut result = match standard_name {
             _ if builtin.kind == BuiltinFunctionKind::DateConstructor => {
                 self.dispatch_builtin_hostcall("builtin:Date", args, Some(module))?
+            }
+            Some(name) if Self::buffer_family_constructor(name) => {
+                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?
             }
             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                 self.construct_event_target_family(module, name, args)?
@@ -104725,6 +104804,13 @@ impl InterpreterCore {
     /// already uses; `new` and plain calls share one path, as for every
     /// builtin constructor here (so `new Number(1)` yields the primitive, the
     /// same documented gap as `builtin:String`: boxed primitives are deferred).
+    /// ArrayBuffer, DataView and the concrete typed array constructors,
+    /// which construct through their `builtin:` hostcalls and throw when
+    /// called without `new`.
+    fn buffer_family_constructor(name: &str) -> bool {
+        matches!(name, "ArrayBuffer" | "DataView") || TypedArrayKind::from_type_name(name).is_some()
+    }
+
     fn call_standard_constructor(
         &mut self,
         module: &Ir3Module,
@@ -104790,12 +104876,14 @@ impl InterpreterCore {
                 };
                 self.dispatch_builtin_hostcall(tag, args, Some(module))
             }
-            "ArrayBuffer" | "DataView" => {
-                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
-            }
-            name if TypedArrayKind::from_type_name(name).is_some() => {
-                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
-            }
+            // ES2024 25.1.4.1, 25.3.2.1, 23.2.5.1: called rather than
+            // constructed (NewTarget undefined), ArrayBuffer, DataView and
+            // the typed array constructors throw; `new` and Reflect.construct
+            // reach their construction directly (bd-9vouw.273).
+            name if Self::buffer_family_constructor(name) => Err(InterpreterError::TypeError {
+                expected: format!("new {name}(...)"),
+                got: format!("Constructor {name} requires 'new'"),
+            }),
             // ES2020 22.2.1.1: %TypedArray% only serves as a superclass.
             TYPED_ARRAY_INTRINSIC => Err(InterpreterError::TypeError {
                 expected: "a concrete typed array constructor".to_string(),

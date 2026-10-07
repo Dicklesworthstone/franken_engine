@@ -8454,7 +8454,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     // silently swapping fields as this execution contract evolves.
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     struct DeferredFunction {
         body_ops: Vec<Ir1Op>,
         param_names: Vec<String>,
@@ -10839,7 +10839,10 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             rest_param_index: fn_rest_param_index,
             source_text: fn_source_text,
             sloppy: fn_sloppy,
-        } = deferred_functions[deferred_idx].clone();
+        } = std::mem::take(&mut deferred_functions[deferred_idx]);
+        // Taken, not cloned: a processed entry is never read again (only the
+        // list's length numbers later bodies), and a body's clone copied
+        // every nested body inside it too.
         deferred_idx += 1;
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
             (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);

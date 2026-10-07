@@ -92173,7 +92173,7 @@ impl InterpreterCore {
                         0,
                     )?;
                     let segment = self.conversion_to_string(module, segment)?;
-                    result.push_str(&segment.to_string());
+                    result.push_str(segment.as_ref());
                     self.check_string_limit(result.len())?;
                     if index + 1 == length {
                         break;
@@ -92184,7 +92184,7 @@ impl InterpreterCore {
                     if slot < args.count {
                         let substitution = self.arg_or_undefined(args, slot)?;
                         let substitution = self.conversion_to_string(module, substitution)?;
-                        result.push_str(&substitution.to_string());
+                        result.push_str(substitution.as_ref());
                     }
                 }
                 Ok(Value::str(result))

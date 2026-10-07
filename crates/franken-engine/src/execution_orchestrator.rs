@@ -2890,7 +2890,7 @@ impl ExecutionOrchestrator {
             // run as successful.
             let ir4_witness = Self::seal_ir4_witness(
                 &lowering_output.ir3,
-                adaptive_routing_context.ir3_content_hash.clone(),
+                adaptive_routing_context.ir3_content_hash,
                 &source_label,
                 &exec_result,
             )?;

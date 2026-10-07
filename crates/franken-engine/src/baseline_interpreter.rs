@@ -3604,6 +3604,10 @@ pub enum BuiltinFunctionKind {
     /// whatever the hint, so ToPrimitive of a Symbol wrapper is its symbol
     /// (bd-9vouw.239). Append only.
     SymbolPrototypeToPrimitive,
+    /// Annex B `RegExp.prototype.compile(pattern, flags)` (ES2020
+    /// B.2.5.1): RegExpInitialize of the receiver in place
+    /// (bd-9vouw.241). Append only.
+    RegExpPrototypeCompile,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5091,6 +5095,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
             BuiltinFunctionKind::SymbolPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToPrimitive => "[Symbol.toPrimitive]",
+            BuiltinFunctionKind::RegExpPrototypeCompile => "compile",
             BuiltinFunctionKind::BlobMethod => blob::BLOB_METHODS
                 .iter()
                 .copied()
@@ -5701,9 +5706,10 @@ impl BuiltinFunction {
             | K::FunctionPrototypeBind
             | K::FunctionPrototypeCall
             | K::FunctionPrototypeToString => "Function.prototype",
-            K::RegExpPrototypeExec | K::RegExpTest | K::RegExpPrototypeToString => {
-                "RegExp.prototype"
-            }
+            K::RegExpPrototypeExec
+            | K::RegExpTest
+            | K::RegExpPrototypeToString
+            | K::RegExpPrototypeCompile => "RegExp.prototype",
             K::DateNow | K::DateParse | K::DateUtc => "Date",
             K::DateGetTime | K::DatePrototypeMethod => "Date.prototype",
             K::SymbolPrototypeToString
@@ -40400,6 +40406,9 @@ impl InterpreterCore {
                 receiver.unwrap_or(Value::Undefined),
                 args,
             ),
+            BuiltinFunctionKind::RegExpPrototypeCompile => {
+                self.regexp_prototype_compile(module, receiver.unwrap_or(Value::Undefined), args)
+            }
             BuiltinFunctionKind::RegExpPrototypeToString => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 match self.regexp_source_flags_from_value(&receiver) {
@@ -58754,6 +58763,32 @@ impl InterpreterCore {
         let regexp_prototype = self.ensure_builtin_prototype("RegExp")?;
         let regexp_id = self.alloc_object_with_prototype(Some(regexp_prototype))?;
         self.set_object_brand(regexp_id, "RegExp")?;
+        self.set_regexp_source_and_flags(regexp_id, source, &flags)?;
+        self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
+        // `lastIndex` is an own writable, non-enumerable, non-configurable
+        // data property (ES2020 21.2.3.2.2 RegExpAlloc); is-regex reads its
+        // descriptor.
+        self.set_own_property_attributes(
+            regexp_id,
+            &RuntimePropertyKey::String(JsString::from("lastIndex")),
+            PropertyAttributes {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+            },
+        )?;
+        Ok(regexp_id)
+    }
+
+    /// The [[OriginalSource]] and [[OriginalFlags]] slots of a RegExp, kept
+    /// as hidden `source` and `flags` properties that stand in for the
+    /// prototype accessors.
+    fn set_regexp_source_and_flags(
+        &mut self,
+        regexp_id: ObjectId,
+        source: String,
+        flags: &str,
+    ) -> Result<(), InterpreterError> {
         self.set_object_property(regexp_id, "source".to_string(), Value::str(source))?;
         // The `flags` getter lists the flags in "dgimsuvy" order whatever
         // order they were written in (ES2025 22.2.6.4): `/a/gd.flags` is
@@ -58768,21 +58803,67 @@ impl InterpreterCore {
             )
             .collect();
         self.set_object_property(regexp_id, "flags".to_string(), Value::str(canonical))?;
-        self.set_object_property(regexp_id, "lastIndex".to_string(), Value::Int(0))?;
-        // `source` and `flags` stand in for prototype accessors. `lastIndex`
-        // is an own writable, non-enumerable, non-configurable data property
-        // (ES2020 21.2.3.2.2 RegExpAlloc); is-regex reads its descriptor.
-        self.hide_internal_slots(regexp_id, &["source", "flags"])?;
-        self.set_own_property_attributes(
-            regexp_id,
-            &RuntimePropertyKey::String(JsString::from("lastIndex")),
-            PropertyAttributes {
-                writable: true,
-                enumerable: false,
-                configurable: false,
-            },
-        )?;
-        Ok(regexp_id)
+        self.hide_internal_slots(regexp_id, &["source", "flags"])
+    }
+
+    /// Annex B `RegExp.prototype.compile(pattern, flags)` (ES2020 B.2.5.1),
+    /// which was missing (bd-9vouw.241): RegExpInitialize of the receiver in
+    /// place, returning it. A RegExp pattern lends its source and flags, and
+    /// `flags` must then be undefined; any other pattern, and the flags, go
+    /// through ToString, with undefined read as "". A pattern or flags that
+    /// does not parse is a SyntaxError that leaves the receiver as it was.
+    /// The new source and flags are in place before `lastIndex` is set to 0,
+    /// so a read-only `lastIndex` is a TypeError after the receiver changed,
+    /// as `Set(obj, "lastIndex", 0, true)` is. No-claim: a subclass instance
+    /// is recompiled as in Node v22.2.0 (the legacy RegExp features proposal
+    /// would make that a TypeError).
+    fn regexp_prototype_compile(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let regexp_id = match receiver {
+            Value::Object(id) if self.regexp_source_flags_from_object(id).is_some() => id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "RegExp receiver for RegExp.prototype.compile".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let flags = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let (source, flags) = match self.regexp_source_flags_from_value(&pattern) {
+            Some(source_and_flags) => {
+                if !matches!(flags, Value::Undefined) {
+                    return Err(InterpreterError::TypeError {
+                        expected:
+                            "undefined flags with a RegExp pattern for RegExp.prototype.compile"
+                                .to_string(),
+                        got: flags.type_name().to_string(),
+                    });
+                }
+                source_and_flags
+            }
+            None => {
+                let source = match pattern {
+                    Value::Undefined => String::new(),
+                    _ => self.builtin_arg_text(Some(module), args, 0)?,
+                };
+                let flags = match flags {
+                    Value::Undefined => String::new(),
+                    _ => self.builtin_arg_text(Some(module), args, 1)?,
+                };
+                (source, flags)
+            }
+        };
+        if let Some(message) = regexp_literal_early_error(&source, &flags) {
+            return Err(self.throw_syntax_error(message));
+        }
+        self.set_regexp_source_and_flags(regexp_id, source, &flags)?;
+        self.set_regexp_last_index(regexp_id, 0)?;
+        Ok(Value::Object(regexp_id))
     }
 
     /// ES2020 21.1.3.12 String.prototype.matchAll: an iterator over every
@@ -60604,6 +60685,9 @@ impl InterpreterCore {
             )),
             ("RegExp", "toString") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::RegExpPrototypeToString,
+            )),
+            ("RegExp", "compile") => Some(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::RegExpPrototypeCompile,
             )),
             ("WeakRef", "deref") => {
                 Some(BuiltinFunction::new_kind(BuiltinFunctionKind::WeakRefDeref))

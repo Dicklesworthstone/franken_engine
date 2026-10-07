@@ -11,6 +11,14 @@
 //!
 //! No-claim: the statics are served as reads of the RegExp constructor, not
 //! as accessor properties (Object.getOwnPropertyDescriptor shows no getter).
+//!
+//! bd-9vouw.241: Annex B `RegExp.prototype.compile` was missing.
+//! COMPILE_PROGRAM recompiles a RegExp from strings, from another RegExp
+//! (whose lastIndex stays), with no arguments, with patterns and flags that
+//! do not parse (the receiver keeps its old source), with throwing and
+//! Symbol arguments, on non-RegExp receivers, on a RegExp whose lastIndex is
+//! read-only (the source changes, then the TypeError), on a subclass
+//! instance (accepted, as in Node), and with the `u` flag.
 
 #![forbid(unsafe_code)]
 
@@ -61,6 +69,46 @@ z
 "z"
 7 y 7y"#;
 
+/// bd-9vouw.241: RegExp.prototype.compile.
+const COMPILE_PROGRAM: &str = r#"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var re = /abc/gi;
+re.lastIndex = 3;
+var same = re.compile('d(e)f', 'm') === re;
+console.log(same, String(re), re.flags, re.lastIndex, re.test('xDEF'), re.test('def'), re.exec('ddef')[1]);
+var donor = /q+/y;
+donor.lastIndex = 9;
+re.compile(donor);
+console.log(String(re), re.sticky, donor.lastIndex, re.test('qq'), attempt(() => re.compile(donor, 'g')), String(re));
+console.log(String(re.compile()), re.test(''), String(re.compile(undefined, undefined)), String(re.compile(null, 1 === 1 ? 'g' : '')));
+console.log(attempt(() => re.compile('?')), attempt(() => re.compile('a', 'gg')), attempt(() => re.compile('a', 'z')), String(re));
+console.log(attempt(() => re.compile({ toString() { throw new RangeError('p'); } })), attempt(() => re.compile('a', Symbol('f'))), String(re));
+console.log(String(re.compile({ toString() { return 'x|y'; } }, { toString() { return 'i'; } })), re.test('Y'));
+console.log(attempt(() => RegExp.prototype.compile.call({})), attempt(() => RegExp.prototype.compile.call('/a/')), attempt(() => RegExp.prototype.compile.call(undefined)));
+var frozen = /old/;
+Object.defineProperty(frozen, 'lastIndex', { value: 7, writable: false });
+console.log(attempt(() => frozen.compile('new', 'g')), String(frozen), frozen.lastIndex);
+var d = Object.getOwnPropertyDescriptor(RegExp.prototype, 'compile');
+console.log(typeof d.value, d.writable, d.enumerable, d.configurable, RegExp.prototype.compile.length, RegExp.prototype.compile.name);
+class Sub extends RegExp {}
+var sub = new Sub('a');
+console.log(attempt(() => String(sub.compile('b', 'g'))), sub instanceof Sub);
+var u = /x/;
+u.compile('[𝌆]', 'u');
+console.log(u.test('\ud834'), u.test('𝌆'), u.unicode);"#;
+
+/// Node v22.2.0's output for `COMPILE_PROGRAM`.
+const COMPILE_NODE_OUTPUT: &str = r#"true /d(e)f/m m 0 false true e
+/q+/y true 9 true TypeError /q+/y
+/(?:)/ true /(?:)/ /null/g
+SyntaxError SyntaxError SyntaxError /null/g
+RangeError TypeError /null/g
+/x|y/i true
+TypeError TypeError TypeError
+TypeError /new/g 7
+function true false true 2 compile
+/b/g true
+false true true"#;
+
 fn console_output(source: &str) -> Result<String, String> {
     let tree = CanonicalEs2020Parser
         .parse_with_options(
@@ -110,4 +158,13 @@ fn legacy_regexp_statics_match_node() {
         assert_eq!(actual, expected, "line {}", index + 1);
     }
     assert_eq!(output.lines().count(), NODE_OUTPUT.lines().count());
+}
+
+#[test]
+fn regexp_prototype_compile_matches_node_bd_9vouw_241() {
+    let output = console_output(COMPILE_PROGRAM).expect("the program runs");
+    for (index, (actual, expected)) in output.lines().zip(COMPILE_NODE_OUTPUT.lines()).enumerate() {
+        assert_eq!(actual, expected, "line {}", index + 1);
+    }
+    assert_eq!(output.lines().count(), COMPILE_NODE_OUTPUT.lines().count());
 }

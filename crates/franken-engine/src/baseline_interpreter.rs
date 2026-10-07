@@ -79,6 +79,7 @@ use zeroize::Zeroizing;
 mod array_from;
 mod array_generic;
 mod async_generator;
+mod atomics;
 mod bigint_ops;
 mod blob;
 mod builtin_function_lengths;
@@ -3612,6 +3613,9 @@ pub enum BuiltinFunctionKind {
     /// `SharedArrayBuffer.prototype.slice` / `grow` (ES2020 24.2.4,
     /// bd-9vouw.244), named by the specifier. Append only.
     SharedArrayBufferMethod,
+    /// An `Atomics` namespace method (ES2020 24.4, bd-9vouw.245), named by
+    /// the specifier, one of [`atomics::ATOMICS_METHODS`]. Append only.
+    AtomicsMethod,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5106,6 +5110,11 @@ impl BuiltinFunction {
                     _ => "slice",
                 }
             }
+            BuiltinFunctionKind::AtomicsMethod => atomics::ATOMICS_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or(""),
             BuiltinFunctionKind::BlobMethod => blob::BLOB_METHODS
                 .iter()
                 .copied()
@@ -5727,6 +5736,7 @@ impl BuiltinFunction {
             | K::SymbolPrototypeToPrimitive => "Symbol.prototype",
             K::BlobMethod => "Blob.prototype",
             K::SharedArrayBufferMethod => "SharedArrayBuffer.prototype",
+            K::AtomicsMethod => "Atomics",
             K::BigIntAsIntN | K::BigIntAsUintN => "BigInt",
             K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
             K::ErrorPrototypeToString => "Error.prototype",
@@ -5960,7 +5970,7 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 50] = [
 /// functions that the global object carries. `process` is deliberately
 /// absent: it is a host-authority surface reachable only through its gated
 /// identifier.
-const GLOBAL_OBJECT_MEMBERS: [&str; 16] = [
+const GLOBAL_OBJECT_MEMBERS: [&str; 17] = [
     "console",
     "performance",
     "Promise",
@@ -5969,6 +5979,7 @@ const GLOBAL_OBJECT_MEMBERS: [&str; 16] = [
     "Function",
     "JSON",
     "Reflect",
+    "Atomics",
     "Symbol",
     "setTimeout",
     "clearTimeout",
@@ -36732,6 +36743,7 @@ impl InterpreterCore {
             // write through it stays in this realm.
             let json = self.alloc_json_global()?;
             let reflect = self.alloc_reflect_global()?;
+            let atomics = self.alloc_atomics_global()?;
             let mut entries = vec![
                 ("console", console),
                 ("performance", performance),
@@ -36740,6 +36752,7 @@ impl InterpreterCore {
                 ("Date", date),
                 ("JSON", Value::Object(json)),
                 ("Reflect", Value::Object(reflect)),
+                ("Atomics", Value::Object(atomics)),
             ];
             entries.extend(Self::generated_realm_stateless_values());
             let global = self.alloc_object_with_properties(&entries)?;
@@ -36998,6 +37011,8 @@ impl InterpreterCore {
         self.inject_runtime_global_binding("JSON", Value::Object(json))?;
         let reflect = self.alloc_reflect_global()?;
         self.inject_runtime_global_binding("Reflect", Value::Object(reflect))?;
+        let atomics = self.alloc_atomics_global()?;
+        self.inject_runtime_global_binding("Atomics", Value::Object(atomics))?;
         self.seed_global_object()
     }
 
@@ -42459,6 +42474,7 @@ impl InterpreterCore {
             BuiltinFunctionKind::ArrayBufferSlice => {
                 self.array_buffer_slice(module, receiver.unwrap_or(Value::Undefined), args, false)
             }
+            BuiltinFunctionKind::AtomicsMethod => self.atomics_method_call(module, builtin, args),
             BuiltinFunctionKind::SharedArrayBufferMethod => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 if builtin.module_specifier.0.as_deref() == Some("grow") {
@@ -108576,6 +108592,52 @@ mod active_builtin_regressions {
             core.binary_storage_label(target),
             Label::Secret,
             "copying Secret bytes must taint the destination backing"
+        );
+    }
+
+    /// bd-9vouw.245: an Atomics write joins its arguments' labels into the
+    /// backing bytes, and an Atomics read answers with the bytes' label, as
+    /// the typed array element paths do.
+    #[test]
+    fn atomics_writes_taint_and_reads_carry_the_backing_label_bd_9vouw_245() {
+        let mut core = test_core();
+        let module = halted_test_module();
+        core.write_reg(0, Value::Int(4)).expect("length register");
+        let view = expect_object_id(
+            core.dispatch_builtin_hostcall(
+                "builtin:Int32Array",
+                RegRange { start: 0, count: 1 },
+                None,
+            )
+            .expect("Int32Array allocates"),
+        );
+        core.write_reg(0, Value::Object(view))
+            .expect("view register");
+        core.write_reg(1, Value::Int(0)).expect("index register");
+        core.write_reg_with_label(2, Value::Int(7), Label::Secret)
+            .expect("Secret value register");
+        let store = BuiltinFunction::atomics_method("store").expect("store is an Atomics method");
+        core.clear_pending_hostcall_result_label();
+        core.atomics_method_call(&module, &store, RegRange { start: 0, count: 3 })
+            .expect("store succeeds");
+        assert_eq!(
+            core.binary_storage_label(view),
+            Label::Secret,
+            "a Secret store must taint the backing bytes"
+        );
+
+        core.write_reg_with_label(2, Value::Undefined, Label::Public)
+            .expect("Public register");
+        core.clear_pending_hostcall_result_label();
+        let load = BuiltinFunction::atomics_method("load").expect("load is an Atomics method");
+        let value = core
+            .atomics_method_call(&module, &load, RegRange { start: 0, count: 2 })
+            .expect("load succeeds");
+        assert_eq!(value, Value::Int(7));
+        assert_eq!(
+            core.take_pending_hostcall_result_label(),
+            Some(Label::Secret),
+            "a load from Secret bytes must answer Secret"
         );
     }
 

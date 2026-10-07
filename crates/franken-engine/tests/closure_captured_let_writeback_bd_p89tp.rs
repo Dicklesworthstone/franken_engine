@@ -287,3 +287,58 @@ fn function_local_class_declaration_initializes_its_capture_cell() {
         "ReferenceError,function"
     );
 }
+
+/// bd-9vouw.271: a script's top-level `let`/`const` (and class) captured by
+/// a closure keeps its lexical semantics: assigning a `const` from a
+/// function, arrow or destructuring pattern is a TypeError and leaves it
+/// unchanged, and reading or writing a binding before its declaration ran
+/// is a ReferenceError (`typeof` included). The shared capture cell was
+/// declared mutable and already initialized, so `c = 2` overwrote a const
+/// and an early read gave undefined. Loop bindings keep their per-iteration
+/// values. Expected lines are Node v22.2.0's output, captured
+/// programmatically (Bun 1.4.2 rejects the const assignments statically).
+#[test]
+fn top_level_lexicals_captured_by_closures_keep_tdz_and_const_bd_9vouw_271() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+const c = 1;
+console.log(kind(function () { c = 2; }), kind(() => { c += 1; }), kind(function () { c++; }), kind(function () { [c] = [3]; }), kind(function () { ({ c } = { c: 4 }); }), c);
+console.log(kind(function () { return early; }), kind(function () { early = 1; }), kind(function () { return typeof early; }));
+let early = 'init';
+console.log(kind(function () { return early; }), kind(function () { early = 'set'; return early; }), early);
+let noInit;
+var readNoInit = function () { return noInit; };
+console.log(String(readNoInit()), kind(function () { noInit = 5; return noInit; }), noInit);
+{ const blockConst = 'bc'; console.log(kind(function () { blockConst = 'x'; }), kind(function () { return blockConst; })); }
+console.log(kind(function () { return new Later().v; }));
+class Later { constructor() { this.v = 'later'; } }
+console.log(kind(function () { return new Later().v; }));
+let counter = 0;
+function bump() { counter += 1; return counter; }
+bump(); bump();
+var fs = [];
+for (let j = 0; j < 3; j++) fs.push(() => j);
+for (var i = 0; i < 2; i++) { let v = i; fs.push(() => v); }
+console.log(counter, fs.map(function (f) { return f(); }).join(), kind(hoisted));
+function hoisted() { return typeof c + ':' + c; }
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "TypeError TypeError TypeError TypeError TypeError 1",
+            "ReferenceError ReferenceError ReferenceError",
+            "init set set",
+            "undefined 5 5",
+            "TypeError bc",
+            "ReferenceError",
+            "later",
+            "2 0,1,2,0,1 number:1",
+        ]
+    );
+}

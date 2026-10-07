@@ -8716,10 +8716,27 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         .into_iter()
         .skip(MAX_REGISTER_RESIDENT_ROOT_LEXICALS)
         .collect();
+    // A top-level `let`/`const` a closure captures as a shared cell keeps its
+    // lexical kind too (bd-9vouw.271): the closure's reads and writes are in
+    // another function's ops, so the TDZ and const-assignment scans above
+    // never see them, and the cell was declared as a mutable, initialized
+    // binding — `const c = 1; (() => { c = 2; })()` overwrote c, and a
+    // closure read a `let` in its TDZ as undefined.
+    let captured_lexical_binding_ids = shared_top_level_capture_names_by_id
+        .keys()
+        .filter(|id| {
+            matches!(
+                binding_kind_by_id.get(*id),
+                Some(BindingKind::Let | BindingKind::Const)
+            )
+        })
+        .copied()
+        .collect::<Vec<_>>();
     let runtime_lexical_binding_ids = tdz_binding_ids
         .union(&const_assignment_binding_ids)
         .copied()
         .chain(spilled_lexical_binding_ids)
+        .chain(captured_lexical_binding_ids)
         .collect::<BTreeSet<_>>();
     for id in &runtime_lexical_binding_ids {
         scoped_runtime_binding_ids.insert(*id);
@@ -10223,10 +10240,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     if let Some(runtime_name) = shared_top_level_capture_names_by_id.get(binding_id)
                     {
                         let pool_idx = push_constant_optimized(&mut constant_pool, runtime_name);
-                        ir3.instructions.push(Ir3Instruction::StoreScoped {
-                            src: dst,
-                            name_pool_index: pool_idx,
-                        });
+                        // A class declaration's binding is lexical: its cell
+                        // is declared uninitialized and the declaration
+                        // initializes it here (bd-9vouw.271). A function
+                        // declaration's cell is an initialized var.
+                        ir3.instructions.push(
+                            if runtime_lexical_binding_ids.contains(binding_id) {
+                                Ir3Instruction::InitBinding {
+                                    name_pool_index: pool_idx,
+                                    src: dst,
+                                }
+                            } else {
+                                Ir3Instruction::StoreScoped {
+                                    src: dst,
+                                    name_pool_index: pool_idx,
+                                }
+                            },
+                        );
                     }
                     if !temp_free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PopScope);

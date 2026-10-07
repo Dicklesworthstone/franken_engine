@@ -79,10 +79,14 @@ pub enum ParseErrorCode {
     StrictModeWithStatement,
     /// `await` expression used outside a module top-level or async function body.
     AwaitOutsideAsync,
+    /// A class element whose name its kind may not have (ES2022 15.7.1): a
+    /// getter, setter, generator or async method named `constructor`, a
+    /// field named `constructor`, a static member named `prototype`.
+    InvalidClassElementName,
 }
 
 impl ParseErrorCode {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::EmptySource,
         Self::InvalidGoal,
         Self::UnsupportedSyntax,
@@ -92,6 +96,7 @@ impl ParseErrorCode {
         Self::BudgetExceeded,
         Self::StrictModeWithStatement,
         Self::AwaitOutsideAsync,
+        Self::InvalidClassElementName,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -105,6 +110,7 @@ impl ParseErrorCode {
             Self::BudgetExceeded => "budget_exceeded",
             Self::StrictModeWithStatement => "strict_mode_with_statement",
             Self::AwaitOutsideAsync => "await_outside_async",
+            Self::InvalidClassElementName => "invalid_class_element_name",
         }
     }
 
@@ -119,6 +125,7 @@ impl ParseErrorCode {
             Self::BudgetExceeded => "FE-PARSER-DIAG-BUDGET-EXCEEDED-0001",
             Self::StrictModeWithStatement => "FE-PARSER-DIAG-STRICT-MODE-WITH-STATEMENT-0001",
             Self::AwaitOutsideAsync => "FE-PARSER-DIAG-AWAIT-OUTSIDE-ASYNC-0001",
+            Self::InvalidClassElementName => "FE-PARSER-DIAG-INVALID-CLASS-ELEMENT-NAME-0001",
         }
     }
 
@@ -126,9 +133,10 @@ impl ParseErrorCode {
         match self {
             Self::EmptySource => ParseDiagnosticCategory::Input,
             Self::InvalidGoal => ParseDiagnosticCategory::Goal,
-            Self::UnsupportedSyntax | Self::StrictModeWithStatement | Self::AwaitOutsideAsync => {
-                ParseDiagnosticCategory::Syntax
-            }
+            Self::UnsupportedSyntax
+            | Self::StrictModeWithStatement
+            | Self::AwaitOutsideAsync
+            | Self::InvalidClassElementName => ParseDiagnosticCategory::Syntax,
             Self::IoReadFailed => ParseDiagnosticCategory::System,
             Self::InvalidUtf8 => ParseDiagnosticCategory::Encoding,
             Self::SourceTooLarge | Self::BudgetExceeded => ParseDiagnosticCategory::Resource,
@@ -145,7 +153,8 @@ impl ParseErrorCode {
             | Self::UnsupportedSyntax
             | Self::InvalidUtf8
             | Self::StrictModeWithStatement
-            | Self::AwaitOutsideAsync => ParseDiagnosticSeverity::Error,
+            | Self::AwaitOutsideAsync
+            | Self::InvalidClassElementName => ParseDiagnosticSeverity::Error,
         }
     }
 
@@ -164,6 +173,7 @@ impl ParseErrorCode {
             Self::AwaitOutsideAsync => {
                 "await expressions require module top-level or an async function"
             }
+            Self::InvalidClassElementName => "class element name is not allowed for its kind",
             Self::BudgetExceeded => match budget_kind {
                 Some(ParseBudgetKind::SourceBytes) => "source byte budget exceeded",
                 Some(ParseBudgetKind::TokenCount) => "token budget exceeded",
@@ -14482,7 +14492,7 @@ fn parse_class_body_members(
             Some("constructor") if !is_static => {
                 if kind != MethodKind::Method || is_async || is_generator {
                     return Err(ParseError::new(
-                        ParseErrorCode::UnsupportedSyntax,
+                        ParseErrorCode::InvalidClassElementName,
                         "a class constructor may not be a getter, setter, generator or async method",
                         context.source_label.to_string(),
                         Some(span.clone()),
@@ -14492,7 +14502,7 @@ fn parse_class_body_members(
             }
             Some("prototype") if is_static => {
                 return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidClassElementName,
                     "classes may not have a static method named 'prototype'",
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -14967,7 +14977,7 @@ fn parse_class_field(
         && (name == "constructor" || (is_static && name == "prototype"))
     {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidClassElementName,
             format!(
                 "classes may not have a {}field named '{name}'",
                 if is_static { "static " } else { "" }

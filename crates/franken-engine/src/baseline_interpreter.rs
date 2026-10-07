@@ -39275,10 +39275,10 @@ impl InterpreterCore {
             // ES2020 19.2.1.1.1 CreateDynamicFunction steps 18-20: a body or
             // parameter list that is not valid source is a SyntaxError the
             // caller can catch, as is an early error in it (`break` outside a
-            // loop, a duplicate `let`, a strict `with`). They aborted the whole
-            // program. Syntax the parser or lowering does not support
-            // (`UnsupportedSyntax`) stays a refusal: it says nothing about the
-            // source being invalid.
+            // loop, a duplicate `let`, a strict `with`, `get constructor()` in
+            // a class). They aborted the whole program. Syntax the parser or
+            // lowering does not support (`UnsupportedSyntax`) stays a refusal:
+            // it says nothing about the source being invalid.
             let syntax_tree = match CanonicalEs2020Parser.parse_with_options(
                 parser_source,
                 ParseGoal::Script,
@@ -39288,7 +39288,9 @@ impl InterpreterCore {
                 Err(error)
                     if matches!(
                         error.code,
-                        ParseErrorCode::StrictModeWithStatement | ParseErrorCode::AwaitOutsideAsync
+                        ParseErrorCode::StrictModeWithStatement
+                            | ParseErrorCode::AwaitOutsideAsync
+                            | ParseErrorCode::InvalidClassElementName
                     ) =>
                 {
                     return Err(self.throw_js_error("SyntaxError", error.message.clone()));

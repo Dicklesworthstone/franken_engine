@@ -10,10 +10,11 @@ use frankenengine_engine::HybridRouter;
 /// Static `constructor` methods, accessors and generators are own members
 /// of the class beside its real constructor; a quoted `'constructor'`
 /// method is the constructor; a non-static getter, setter, generator or
-/// async method named `constructor` and a static member named `prototype`
-/// are SyntaxErrors, a computed `["constructor"]` getter is not. Expected
-/// lines are Node v22.2.0's output, captured programmatically (Bun 1.4.2
-/// agrees).
+/// async method named `constructor`, a field named `constructor` and a
+/// static member named `prototype` are SyntaxErrors a `new Function` caller
+/// catches (they aborted the program), a computed `["constructor"]` getter
+/// or field is not. Expected lines are Node v22.2.0's output, captured
+/// programmatically (Bun 1.4.2 agrees).
 #[test]
 fn class_constructor_names_match_node_bd_9vouw_288() {
     let source = r#"class C {
@@ -36,6 +37,7 @@ console.log(D.hasOwnProperty('constructor'), D.constructor, typeof Object.getOwn
 console.log(E.hasOwnProperty('constructor'), E.constructor().next().value, E.prototype.constructor === E, new Q().quoted, Q.prototype.constructor === Q);
 function syntax(source) { try { new Function(source); return 'ok'; } catch (e) { return e.constructor.name; } }
 console.log(syntax('class A { get constructor() {} }'), syntax('class A { set constructor(v) {} }'), syntax('class A { *constructor() {} }'), syntax('class A { async constructor() {} }'), syntax('class A { static prototype() {} }'), syntax('class A { static get prototype() {} }'), syntax('class A { prototype() {} }'), syntax('class A { static constructor() {} constructor() {} }'), syntax('class A { ["constructor"]() {} get ["constructor"]() {} }'));
+console.log(syntax('class A { constructor = 1 }'), syntax('class A { static prototype = 1 }'), syntax('class A { static constructor = 1 }'), syntax('class A { prototype = 1 }'), syntax('class A { "constructor" = 1 }'), syntax('class A { ["constructor"] = 1 }'));
 "#;
     let lines: Vec<String> = HybridRouter::default()
         .eval(source)
@@ -51,6 +53,7 @@ console.log(syntax('class A { get constructor() {} }'), syntax('class A { set co
             "true getter function true",
             "true 1 true 1 true",
             "SyntaxError SyntaxError SyntaxError SyntaxError SyntaxError SyntaxError ok ok ok",
+            "SyntaxError SyntaxError SyntaxError ok SyntaxError ok",
         ]
     );
 }

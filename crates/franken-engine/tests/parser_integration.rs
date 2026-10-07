@@ -56,14 +56,16 @@ fn constants_diagnostic_are_non_empty() {
 // Section 2: ParseErrorCode
 // ---------------------------------------------------------------------------
 
-/// ALL lists every code, including the two added after its count was
-/// pinned at 7 (StrictModeWithStatement, AwaitOutsideAsync); uniqueness is
-/// checked by parse_error_code_stable_diagnostic_codes_are_unique.
+/// ALL lists every code, including the three added after its count was
+/// pinned at 7 (StrictModeWithStatement, AwaitOutsideAsync,
+/// InvalidClassElementName); uniqueness is checked by
+/// parse_error_code_stable_diagnostic_codes_are_unique.
 #[test]
 fn parse_error_code_all_lists_every_code() {
-    assert_eq!(ParseErrorCode::ALL.len(), 9);
+    assert_eq!(ParseErrorCode::ALL.len(), 10);
     assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::StrictModeWithStatement));
     assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::AwaitOutsideAsync));
+    assert!(ParseErrorCode::ALL.contains(&ParseErrorCode::InvalidClassElementName));
 }
 
 #[test]

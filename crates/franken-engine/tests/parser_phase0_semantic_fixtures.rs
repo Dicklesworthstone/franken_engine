@@ -203,7 +203,7 @@ fn parse_error_code_all_lists_every_variant() {
     // Pin the current count so adding a variant without updating ParseErrorCode::ALL
     // fails this test. Add the new variant to the explicit `expected` list below
     // when you bump this count.
-    assert_eq!(ParseErrorCode::ALL.len(), 9);
+    assert_eq!(ParseErrorCode::ALL.len(), 10);
 
     // Every listed variant must have a distinct `as_str` representation; this
     // catches "added a variant but reused an existing identifier" mistakes that
@@ -227,6 +227,7 @@ fn parse_error_code_all_lists_every_variant() {
         "budget_exceeded",
         "strict_mode_with_statement",
         "await_outside_async",
+        "invalid_class_element_name",
     ]
     .into_iter()
     .collect();

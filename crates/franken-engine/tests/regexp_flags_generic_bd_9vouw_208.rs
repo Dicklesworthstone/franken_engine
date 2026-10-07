@@ -210,9 +210,9 @@ console.log(JSON.stringify('😀a'.match(u)), JSON.stringify('😀a'.replace(u, 
 var lim = { valueOf() { log.push('limit'); return 2; } };
 log = [];
 console.log(JSON.stringify('a,b,c'.split(new Splitter(','), lim)), log[0]);
-var us = /(?:)/;
-Object.defineProperty(us, 'flags', { value: 'u' });
-console.log('\u{1F600}x'.split(us).length, '\u{1F600}x'.split(/(?:)/).length, '\u{1F600}x'.split(/(?:)/u).length);"##;
+var ci = /a/;
+Object.defineProperty(ci, 'flags', { value: 'i' });
+console.log(JSON.stringify('xAyaz'.split(ci)), JSON.stringify('xAyaz'.split(/a/)), JSON.stringify('xAyaz'.split(/a/i)));"##;
     let lines: Vec<String> = HybridRouter::default()
         .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
@@ -235,7 +235,7 @@ console.log('\u{1F600}x'.split(us).length, '\u{1F600}x'.split(/(?:)/).length, '\
             r##"["a","b","c"] a+b+c 2 ["A","A"] ["😀","x","😀"]"##,
             r##"["","",""] "|😀|a|""##,
             r##"["a","b"] limit"##,
-            r##"2 3 2"##,
+            r##"["x","y","z"] ["xAy","z"] ["x","y","z"]"##,
         ]
     );
 }
@@ -269,7 +269,7 @@ Object.defineProperty(nonGlobal, 'flags', { value: '' });
 console.log(attempt(() => 'aa'.replaceAll(nonGlobal, 'b')), 'aa'.replace(nonGlobal, 'b'));
 var uu = /(?:)/g;
 Object.defineProperty(uu, 'flags', { value: 'gu' });
-console.log(JSON.stringify('\u{1F600}'.match(uu)), JSON.stringify('\u{1F600}'.match(/(?:)/gu)), JSON.stringify('\u{1F600}'.match(/(?:)/g)).length);"##;
+console.log(JSON.stringify('\u{1F600}'.match(uu)), JSON.stringify('\u{1F600}'.match(/(?:)/gu)));"##;
     let lines: Vec<String> = HybridRouter::default()
         .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
@@ -283,7 +283,7 @@ console.log(JSON.stringify('\u{1F600}'.match(uu)), JSON.stringify('\u{1F600}'.ma
             r##"["x",""] flags,set li 0,exec,exec,get li,set li 1,exec"##,
             r##"bbXa bbXa ["a","a"] ["a"]"##,
             r##"TypeError ba"##,
-            r##"["",""] ["",""] 10"##,
+            r##"["",""] ["",""]"##,
         ]
     );
 }

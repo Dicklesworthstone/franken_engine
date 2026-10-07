@@ -8981,12 +8981,17 @@ fn assignment_target_has_optional_chain(target: &Expression) -> bool {
     }
 }
 
-/// Find the first top-level backtick that begins a trailing template literal.
+/// Find the top-level backtick that begins the last (trailing) template
+/// literal. In `tag`a``b`` the trailing `b` template's tag is the tagged
+/// template `tag`a`` (ES2020 12.3: MemberExpression TemplateLiteral), so
+/// the split is before the last template; splitting before the first read
+/// `a``b` as one template.
 fn find_top_level_template_start(s: &str) -> Option<usize> {
     let mut quotes = QuoteState::default();
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
+    let mut last = None;
 
     for (index, ch) in s.char_indices() {
         if quotes.active() {
@@ -9007,19 +9012,19 @@ fn find_top_level_template_start(s: &str) -> Option<usize> {
             ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
             '}' => brace_depth = brace_depth.saturating_sub(1),
-            '`' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                return Some(index);
-            }
-            // A template nested in an argument or index is opaque
-            // (bd-9vouw.41); its text must not move the bracket depths.
+            // A top-level template is a candidate; its text, like a nested
+            // template's (bd-9vouw.41), must not move the bracket depths.
             '`' => {
+                if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                    last = Some(index);
+                }
                 quotes.open_char(ch);
             }
             _ => {}
         }
     }
 
-    None
+    last
 }
 
 /// Find the first top-level `(`…`)` pair in `s` — the open `(` that appears at
@@ -22988,6 +22993,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         );
         assert_eq!(find_matching_open_paren("f(`)${`(`}`)"), Some(1));
         assert_eq!(find_top_level_template_start("tag(`)`)`x`"), Some(8));
+        // bd-9vouw.342: the last of chained templates.
+        assert_eq!(find_top_level_template_start("rec`x``y``z`"), Some(9));
+        assert_eq!(find_top_level_template_start("t`${`a`}``b`"), Some(9));
         let segments: Vec<&str> = split_statement_segments("a(`;${`;`}`); b;")
             .into_iter()
             .map(|(_, _, text)| text)

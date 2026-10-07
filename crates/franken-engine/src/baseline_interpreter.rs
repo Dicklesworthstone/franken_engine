@@ -77303,12 +77303,16 @@ impl InterpreterCore {
     }
 
     /// `%TypedArray%.from(source[, mapFn[, thisArg]])` and
-    /// `%TypedArray%.of(...items)` (ES2020 22.2.2.1-2). The element type is
-    /// the `this` constructor's (`Uint8Array.from`), so an unbound call is a
-    /// TypeError, as in Node. `from` collects its source exactly as
-    /// `Array.from` does (iterables, array-likes, the mapper and its
-    /// `thisArg`), then converts every value to the element type, in order
-    /// and observably.
+    /// `%TypedArray%.of(...items)` (ES2020 22.2.2.1-2). `this` is the
+    /// constructor: an intrinsic typed array constructor (`Uint8Array.from`)
+    /// allocates directly; any other constructor (a subclass, or a function
+    /// returning a typed array) goes through TypedArrayCreate (bd-9vouw.344).
+    /// A non-constructor `this`, an unbound call included, is a TypeError.
+    /// `from` collects its source as `Array.from` does (iterables,
+    /// array-likes), then maps and converts each value in order, so a
+    /// throwing conversion stops the mapper there. No-claim: an array-like
+    /// source's elements are all read before the first mapper call (the
+    /// specification interleaves each read with its mapping).
     fn typed_array_static_call(
         &mut self,
         module: &Ir3Module,
@@ -77316,7 +77320,7 @@ impl InterpreterCore {
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let kind = match &receiver {
+        let intrinsic_kind = match &receiver {
             Value::BuiltinFunction(constructor)
                 if constructor.kind == BuiltinFunctionKind::StandardConstructor =>
             {
@@ -77326,7 +77330,7 @@ impl InterpreterCore {
             }
             _ => None,
         };
-        let Some(kind) = kind else {
+        if intrinsic_kind.is_none() && !self.is_constructible_value(&receiver) {
             return Err(InterpreterError::TypeError {
                 expected: format!(
                     "typed array constructor as this of %TypedArray%.{}",
@@ -77334,37 +77338,145 @@ impl InterpreterCore {
                 ),
                 got: receiver.type_name().to_string(),
             });
-        };
-        let values = if builtin.display_name() == "of" {
+        }
+        let (values, mapper, this_arg) = if builtin.display_name() == "of" {
             let mut items = Vec::with_capacity(args.count as usize);
             for index in 0..args.count {
                 items.push(self.builtin_arg(args, index)?.unwrap_or(Value::Undefined));
             }
-            items
+            (items, Value::Undefined, Value::Undefined)
         } else {
-            if let Some(mapper) = self.builtin_arg(args, 1)?
-                && !matches!(mapper, Value::Undefined)
-                && !mapper.is_callable()
-            {
+            let mapper = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+            if !matches!(mapper, Value::Undefined) && !mapper.is_callable() {
                 return Err(InterpreterError::TypeError {
                     expected: "callable %TypedArray%.from mapper".to_string(),
                     got: mapper.type_name().to_string(),
                 });
             }
-            let Value::Object(list) = self.array_from_builtin(Some(module), args)? else {
+            let this_arg = self.builtin_arg(args, 2)?.unwrap_or(Value::Undefined);
+            let source_only = RegRange {
+                start: args.start,
+                count: args.count.min(1),
+            };
+            let Value::Object(list) = self.array_from_builtin(Some(module), source_only)? else {
                 return Err(InterpreterError::TypeError {
                     expected: "array from %TypedArray%.from source".to_string(),
                     got: "non-array".to_string(),
                 });
             };
-            self.array_like_values(list)?
+            (self.array_like_values(list)?, mapper, this_arg)
         };
-        // Each value converts with ToNumber/ToBigInt, running its valueOf
-        // (bd-9vouw.273); objects became NaN without it.
-        let values = self.typed_array_element_values(Some(module), kind, values)?;
-        Ok(Value::Object(
-            self.alloc_typed_array_from_values(kind, &values)?,
-        ))
+        // Guest code (the constructor, the mapper, valueOf) runs while
+        // native locals hold values: no collection until this returns.
+        self.gc_nested_request = None;
+        let target = match intrinsic_kind {
+            Some(_) => None,
+            None => Some(self.typed_array_create(module, receiver, values.len())?),
+        };
+        let kind = match (intrinsic_kind, target) {
+            (Some(kind), _) => kind,
+            (None, Some(target)) => self
+                .typed_array_view_for_object(target)?
+                .map(|view| view.kind)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "typed array from the %TypedArray%.from constructor".to_string(),
+                    got: "object".to_string(),
+                })?,
+            (None, None) => unreachable!("a non-intrinsic constructor creates its target"),
+        };
+        let argument_label = self.join_arg_range_label(args)?;
+        let mut converted = Vec::with_capacity(values.len());
+        for (index, value) in values.into_iter().enumerate() {
+            let mapped = if matches!(mapper, Value::Undefined) {
+                value
+            } else {
+                let (mapped, label) = self.invoke_inline_method_call_with_argument_label(
+                    Some(module),
+                    mapper.clone(),
+                    this_arg.clone(),
+                    vec![value, Value::Int(index as i64)],
+                    Some(argument_label.clone()),
+                )?;
+                let joined = self
+                    .pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public)
+                    .join(&label);
+                self.replace_pending_hostcall_result_label(Some(joined))?;
+                mapped
+            };
+            // ToNumber/ToBigInt runs the value's valueOf (bd-9vouw.273).
+            let element = self
+                .typed_array_element_values(Some(module), kind, vec![mapped])?
+                .pop()
+                .unwrap_or(Value::Undefined);
+            match target {
+                Some(target) => {
+                    self.typed_array_indexed_set_property(target, &index.to_string(), &element)?;
+                }
+                None => converted.push(element),
+            }
+        }
+        match target {
+            Some(target) => {
+                // The constructed target's bytes take what was written into
+                // them: the source's and the mapper's labels.
+                let label = self
+                    .pending_hostcall_result_label
+                    .clone()
+                    .unwrap_or(Label::Public);
+                self.join_binary_storage_label(target, &label)?;
+                Ok(Value::Object(target))
+            }
+            None => Ok(Value::Object(
+                self.alloc_typed_array_from_values(kind, &converted)?,
+            )),
+        }
+    }
+
+    /// ES2020 22.2.4.6 TypedArrayCreate(constructor, «length»): construct
+    /// it with the length and require a typed array of at least that length
+    /// (22.2.3.5.1 ValidateTypedArray), whatever its element type.
+    fn typed_array_create(
+        &mut self,
+        module: &Ir3Module,
+        constructor: Value,
+        length: usize,
+    ) -> Result<ObjectId, InterpreterError> {
+        let (result, label) = self.invoke_inline_construct_with_labels(
+            Some(module),
+            constructor,
+            vec![Value::Int(i64::try_from(length).unwrap_or(i64::MAX))],
+            None,
+            None,
+        )?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        let created_length = match &result {
+            Value::Object(object_id) => self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.typed_array.as_ref())
+                .map(|view| view.length),
+            _ => None,
+        };
+        let (Value::Object(created), Some(created_length)) = (&result, created_length) else {
+            return Err(InterpreterError::TypeError {
+                expected: "typed array from the %TypedArray% constructor".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        if created_length < length {
+            return Err(InterpreterError::TypeError {
+                expected: format!("typed array of length {length} or more from the constructor"),
+                got: format!("length {created_length}"),
+            });
+        }
+        Ok(*created)
     }
 
     /// ToString(this) for a String.prototype method that takes a pattern

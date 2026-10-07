@@ -14986,6 +14986,9 @@ pub struct InterpreterCore {
     /// cancelled) timer, matching Node's "unref'd timers don't keep the
     /// process alive" semantics.
     unref_timer_ids: BTreeSet<u32>,
+    /// bd-9vouw.286: pending `Atomics.waitAsync` waiters, in arrival order
+    /// (the order `Atomics.notify` wakes them in).
+    atomics_async_waiters: Vec<atomics::AtomicsAsyncWaiter>,
     /// Containment state: whether execution is suspended due to guardplane action.
     #[allow(dead_code)]
     suspended: bool,
@@ -15875,6 +15878,7 @@ impl InterpreterCore {
             active_timers: BTreeMap::new(),
             pending_timer_tasks: BTreeMap::new(),
             unref_timer_ids: BTreeSet::new(),
+            atomics_async_waiters: Vec::new(),
             suspended: false,
             sandboxed: false,
             quarantined: false,
@@ -35908,6 +35912,7 @@ impl InterpreterCore {
         self.active_timers.clear();
         self.pending_timer_tasks.clear();
         self.unref_timer_ids.clear();
+        self.atomics_async_waiters.clear();
         self.pending_stream_emissions.clear();
 
         // Heap-ObjectId-keyed tables not covered by the seed surfaces or by
@@ -99507,6 +99512,7 @@ impl InterpreterCore {
             .saturating_add(self.completed_child_processes_memory_bytes())
             .saturating_add(self.child_process_streams_memory_bytes())
             .saturating_add(self.pending_timer_tasks_memory_bytes())
+            .saturating_add(self.atomics_async_waiters_memory_bytes())
             .saturating_add(promise_runtime_bytes)
             .saturating_add(self.promise_reaction_callables_memory_bytes())
             .saturating_add(self.promise_value_carriers_memory_bytes())

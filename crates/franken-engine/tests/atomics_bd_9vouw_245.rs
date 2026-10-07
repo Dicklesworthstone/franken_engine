@@ -22,8 +22,8 @@
 //!
 //! No-claim: one agent runs. A finite wait advances the deterministic clock
 //! instead of blocking; an infinite one (no agent can notify) is refused
-//! with a TypeError where Node would block forever. waitAsync is not
-//! provided.
+//! with a TypeError where Node would block forever. waitAsync is checked
+//! by atomics_wait_async_matches_node_bd_9vouw_286 below.
 
 use frankenengine_engine::HybridRouter;
 
@@ -71,6 +71,74 @@ console.log(new Function('return typeof Atomics + Atomics.add.length')());"#;
             r#"not-equal timed-out TypeError TypeError"#,
             r#"timed-out true timed-out"#,
             r#"object3"#,
+        ]
+    );
+}
+
+/// bd-9vouw.286: Atomics.waitAsync was not defined (33 Node-passing
+/// Test262 tests), and Atomics.notify could wake no waiter. The program
+/// checks the member (length, name, place in Atomics' own names), the
+/// synchronous answers ("not-equal"; "timed-out" for 0, null and negative
+/// timeouts; BigInt64Array), TypeErrors and RangeErrors, that the array
+/// type is checked before any argument is coerced, the async result
+/// objects, notify waking waiters in FIFO order with its count (also
+/// through another view of the same buffer), a notified waiter's timeout
+/// never firing, and a 10 ms timeout fulfilling "timed-out" while a 50 ms
+/// timer keeps the loop alive. Expected lines are Node v22.2.0's output,
+/// captured programmatically (Bun 1.4.2 agrees apart from Atomics' member
+/// order).
+///
+/// No-claim: no other agent exists, so only this agent's own notify calls
+/// wake its waiters.
+#[test]
+fn atomics_wait_async_matches_node_bd_9vouw_286() {
+    let source = r#"var i32 = new Int32Array(new SharedArrayBuffer(16));
+function show(r) { return r.async + ':' + (typeof r.value === 'string' ? r.value : Object.prototype.toString.call(r.value)) + ':' + Object.keys(r).join('/'); }
+function k(f) { try { f(); return 'ok'; } catch (e) { return e.constructor.name; } }
+console.log(typeof Atomics.waitAsync, Atomics.waitAsync.length, Atomics.waitAsync.name, Object.getOwnPropertyNames(Atomics).join());
+console.log(show(Atomics.waitAsync(i32, 0, 1)), show(Atomics.waitAsync(i32, 0, 0, 0)), show(Atomics.waitAsync(i32, 0, 0, null)), show(Atomics.waitAsync(i32, 0, 0, -5)));
+var i64 = new BigInt64Array(new SharedArrayBuffer(16));
+console.log(show(Atomics.waitAsync(i64, 0, 0n, 0)), show(Atomics.waitAsync(i64, 1, 1n)), k(function () { Atomics.waitAsync(i64, 0, 0, 0); }));
+console.log(k(function () { Atomics.waitAsync(new Int32Array(4), 0, 0, 0); }), k(function () { Atomics.waitAsync(new Int16Array(new SharedArrayBuffer(8)), 0, 0, 0); }), k(function () { Atomics.waitAsync(i32, 4, 0, 0); }), k(function () { Atomics.waitAsync(i32, -1, 0, 0); }), k(function () { Atomics.waitAsync({}, 0, 0, 0); }), k(function () { Atomics.waitAsync(i32, 0, Symbol(), 0); }), k(function () { Atomics.waitAsync(i32, 0, 0, Symbol()); }));
+var log = [];
+var poison = { valueOf: function () { log.push('coerced'); return 0; } };
+console.log(k(function () { Atomics.waitAsync(new Float64Array(new SharedArrayBuffer(8)), poison, poison, poison); }), log.length, k(function () { Atomics.waitAsync(i32, poison, 1, poison); }), log.join());
+var events = [];
+var a = Atomics.waitAsync(i32, 1, 0);
+var b = Atomics.waitAsync(i32, 1, 0, 1000);
+var c = Atomics.waitAsync(i32, 2, 0);
+console.log(show(a), show(b), a.value === b.value, a.value instanceof Promise);
+a.value.then(function (v) { events.push('a ' + v); });
+b.value.then(function (v) { events.push('b ' + v); });
+c.value.then(function (v) { events.push('c ' + v); });
+var other = new Int32Array(i32.buffer, 4, 2);
+console.log(Atomics.notify(i32, 1, 1), Atomics.notify(other, 0), Atomics.notify(i32, 1), Atomics.notify(i32, 3), Atomics.notify(new Int32Array(4), 0), events.length);
+var t = Atomics.waitAsync(i32, 3, 0, 10);
+t.value.then(function (v) { events.push('t ' + v); });
+setTimeout(function () {
+  console.log(events.join(', '), Atomics.notify(i32, 3), Atomics.notify(i32, 2, 0), Atomics.notify(i32, 2));
+  c.value.then(function () { console.log(events.join(', ')); });
+}, 50);
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "function 4 waitAsync load,store,add,sub,and,or,xor,exchange,compareExchange,isLockFree,wait,waitAsync,notify",
+            "false:not-equal:async/value false:timed-out:async/value false:timed-out:async/value false:timed-out:async/value",
+            "false:timed-out:async/value false:not-equal:async/value TypeError",
+            "TypeError TypeError RangeError RangeError TypeError TypeError TypeError",
+            "TypeError 0 ok coerced,coerced",
+            "true:[object Promise]:async/value true:[object Promise]:async/value false true",
+            "1 1 0 0 0 0",
+            "a ok, b ok, t timed-out 0 0 1",
+            "a ok, b ok, t timed-out, c ok",
         ]
     );
 }

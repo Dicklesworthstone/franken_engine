@@ -12,15 +12,24 @@
 //! a finite timeout advances the deterministic clock by that many
 //! milliseconds and answers "timed-out" (Node blocks that long), and an
 //! infinite one is refused with a TypeError instead of waiting forever.
-//! `notify` finds no waiters and answers 0.
+//! `notify` wakes `Atomics.waitAsync` waiters (bd-9vouw.286); a
+//! synchronous `wait` never leaves one behind.
 //!
-//! No-claim: `Atomics.waitAsync` is not provided.
+//! `waitAsync` (ES2024 25.4.14) answers `{ async: false, value:
+//! "not-equal" }` or, for a zero timeout, `"timed-out"`; otherwise it
+//! records a waiter and answers `{ async: true, value: promise }`. The
+//! promise fulfills with "ok" when `notify` reaches the waiter (in FIFO
+//! order per buffer byte index) and with "timed-out" when a finite timeout
+//! passes on the deterministic clock. As in Node, a waiter's timeout does
+//! not keep the event loop alive.
+//!
+//! No-claim: other agents ($262.agent) do not exist, so only this agent's
+//! own `notify` calls wake its waiters.
 
 use super::*;
 
-/// The members of the `Atomics` namespace (Node v22.2.0 also has
-/// `waitAsync`).
-pub(super) const ATOMICS_METHODS: [&str; 12] = [
+/// The members of the `Atomics` namespace, in Node v22.2.0's order.
+pub(super) const ATOMICS_METHODS: [&str; 13] = [
     "load",
     "store",
     "add",
@@ -32,8 +41,27 @@ pub(super) const ATOMICS_METHODS: [&str; 12] = [
     "compareExchange",
     "isLockFree",
     "wait",
+    "waitAsync",
     "notify",
 ];
+
+/// The memory charged for one recorded `waitAsync` waiter.
+const ATOMICS_WAITER_BYTES: u64 = 64;
+
+/// The longest timer a `waitAsync` timeout schedules (about 285,000
+/// years), so the deadline cannot overflow the clock.
+const ATOMICS_MAX_TIMEOUT_MS: u64 = 1 << 53;
+
+/// A pending `Atomics.waitAsync` waiter (ES2024 25.4.3.14 DoWait, async
+/// mode): the shared buffer and byte index it waits on, its promise, and
+/// the timer of a finite timeout.
+#[derive(Debug, Clone)]
+pub(super) struct AtomicsAsyncWaiter {
+    pub(super) buffer: ObjectId,
+    byte_index: usize,
+    pub(super) promise: crate::promise_model::PromiseHandle,
+    timer_id: Option<u32>,
+}
 
 impl BuiltinFunction {
     /// The `Atomics` member `name`.
@@ -92,11 +120,11 @@ impl InterpreterCore {
             let size = self.atomics_integer_arg(module, args, 0)?;
             return Ok(Value::Bool(matches!(size, 1.0 | 2.0 | 4.0 | 8.0)));
         }
-        let waitable = matches!(method.as_str(), "wait" | "notify");
+        let waitable = matches!(method.as_str(), "wait" | "waitAsync" | "notify");
         let (view, shared) = self.atomics_typed_array(args, waitable)?;
-        if method == "wait" && !shared {
+        if matches!(method.as_str(), "wait" | "waitAsync") && !shared {
             return Err(InterpreterError::TypeError {
-                expected: "a shared typed array for Atomics.wait".to_string(),
+                expected: format!("a shared typed array for Atomics.{method}"),
                 got: format!(
                     "[object {}] is not a shared typed array.",
                     view.kind.type_name()
@@ -109,7 +137,7 @@ impl InterpreterCore {
         // argument's label into the bytes, and an answer read from (or
         // compared against) the element carries the bytes' label, as the
         // typed array element paths do.
-        if !matches!(method.as_str(), "load" | "wait" | "notify") {
+        if !matches!(method.as_str(), "load" | "wait" | "waitAsync" | "notify") {
             let written = self.join_arg_range_label(args)?;
             self.join_binary_storage_label(view.buffer, &written)?;
         }
@@ -169,15 +197,7 @@ impl InterpreterCore {
             }
             "wait" => {
                 let expected = self.atomics_value_arg(module, args, 2, view.kind)?;
-                let timeout = match self.builtin_number_arg(module, args, 3)? {
-                    None | Some(Value::Undefined) => f64::INFINITY,
-                    Some(value) => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
-                };
-                let timeout = if timeout.is_nan() {
-                    f64::INFINITY
-                } else {
-                    timeout.max(0.0)
-                };
+                let timeout = self.atomics_timeout_arg(module, args)?;
                 let current = self.atomics_read(view, index)?;
                 if Self::atomics_bits(view.kind, &current)?
                     != Self::atomics_bits(view.kind, &expected)?
@@ -199,13 +219,67 @@ impl InterpreterCore {
                     .advance_to(now.saturating_add(timeout.ceil() as u64));
                 Ok(Value::str("timed-out"))
             }
+            "waitAsync" => {
+                let expected = self.atomics_value_arg(module, args, 2, view.kind)?;
+                let timeout = self.atomics_timeout_arg(module, args)?;
+                let current = self.atomics_read(view, index)?;
+                let settled = if Self::atomics_bits(view.kind, &current)?
+                    != Self::atomics_bits(view.kind, &expected)?
+                {
+                    Some("not-equal")
+                } else if timeout == 0.0 {
+                    Some("timed-out")
+                } else {
+                    None
+                };
+                let (is_async, value) = match settled {
+                    Some(outcome) => (false, Value::str(outcome)),
+                    None => {
+                        let promise = self.atomics_add_async_waiter(view, index, timeout)?;
+                        (true, Value::Promise(promise.0))
+                    }
+                };
+                let result = self.alloc_object_with_properties(&[
+                    ("async", Value::Bool(is_async)),
+                    ("value", value),
+                ])?;
+                Ok(Value::Object(result))
+            }
             "notify" => {
-                // ES2020 24.4.12 step 3: the count converts (undefined is
-                // +Infinity) even though no agent waits.
-                if !matches!(self.builtin_arg(args, 2)?, None | Some(Value::Undefined)) {
-                    self.atomics_integer_arg(module, args, 2)?;
+                // ES2024 25.4.15 step 3: undefined is +Infinity, else
+                // ToIntegerOrInfinity clamped at 0.
+                let count = if matches!(self.builtin_arg(args, 2)?, None | Some(Value::Undefined)) {
+                    f64::INFINITY
+                } else {
+                    self.atomics_integer_arg(module, args, 2)?.max(0.0)
+                };
+                let byte_index = Self::atomics_byte_index(view, index);
+                let label = self.join_arg_range_label(args)?;
+                self.prune_settled_atomics_waiters();
+                let mut woken: i64 = 0;
+                let mut position = 0;
+                while position < self.atomics_async_waiters.len() && (woken as f64) < count {
+                    let waiter = &self.atomics_async_waiters[position];
+                    if waiter.buffer != view.buffer || waiter.byte_index != byte_index {
+                        position += 1;
+                        continue;
+                    }
+                    let waiter = self.atomics_async_waiters.remove(position);
+                    self.estimated_memory_bytes = self
+                        .estimated_memory_bytes
+                        .saturating_sub(ATOMICS_WAITER_BYTES);
+                    if let Some(timer_id) = waiter.timer_id {
+                        // Its timeout macrotask is now inert.
+                        self.active_timers.remove(&timer_id);
+                    }
+                    self.fulfill_promise(
+                        waiter.promise,
+                        crate::object_model::JsValue::Str("ok".to_string()),
+                        label.clone(),
+                    )?;
+                    woken += 1;
                 }
-                Ok(Value::Int(0))
+                Ok(Value::Int(woken))
             }
             _ => Err(InterpreterError::TypeError {
                 expected: "an Atomics method".to_string(),
@@ -367,6 +441,110 @@ impl InterpreterCore {
                 message: "Invalid atomic access index".to_string(),
             }),
         })?
+    }
+
+    /// The timeout argument of `wait` and `waitAsync` (ES2024 25.4.3.14
+    /// DoWait steps 6-7): undefined, NaN and +Infinity wait forever; any
+    /// other number at least 0 milliseconds.
+    fn atomics_timeout_arg(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+    ) -> Result<f64, InterpreterError> {
+        let timeout = match self.builtin_number_arg(module, args, 3)? {
+            None | Some(Value::Undefined) => f64::INFINITY,
+            Some(value) => Self::coerce_to_float(&value).unwrap_or(f64::NAN),
+        };
+        Ok(if timeout.is_nan() {
+            f64::INFINITY
+        } else {
+            timeout.max(0.0)
+        })
+    }
+
+    /// The byte index of element `index` in the view's buffer, which is
+    /// what waiters wait on: views over one buffer share them.
+    fn atomics_byte_index(view: &TypedArrayView, index: usize) -> usize {
+        view.byte_offset
+            .saturating_add(index.saturating_mul(view.kind.element_size()))
+    }
+
+    /// Record a `waitAsync` waiter on element `index` of `view` and answer
+    /// its pending promise. A finite `timeout` schedules an unref'd timer
+    /// that fulfills the promise with "timed-out".
+    fn atomics_add_async_waiter(
+        &mut self,
+        view: &TypedArrayView,
+        index: usize,
+        timeout: f64,
+    ) -> Result<crate::promise_model::PromiseHandle, InterpreterError> {
+        self.prune_settled_atomics_waiters();
+        let promise = self.create_promise()?;
+        if let Err(error) = self.apply_memory_component_delta(0, ATOMICS_WAITER_BYTES) {
+            self.rollback_fresh_promise(promise);
+            return Err(error);
+        }
+        let timer_id = if timeout.is_finite() {
+            let timer_id = self.next_timer_id;
+            let delay_ms = (timeout.ceil() as u64).min(ATOMICS_MAX_TIMEOUT_MS);
+            let task = PendingTimerTask {
+                timer_id,
+                kind: PendingTimerTaskKind::PromiseResolve {
+                    promise,
+                    value: crate::object_model::JsValue::Str("timed-out".to_string()),
+                },
+            };
+            self.active_timers.insert(
+                timer_id,
+                ActiveTimer {
+                    handler: None,
+                    delay_ms,
+                    repeating: false,
+                },
+            );
+            self.unref_timer_ids.insert(timer_id);
+            if let Err(error) = self.schedule_pending_timer_task(task, false, delay_ms) {
+                self.active_timers.remove(&timer_id);
+                self.unref_timer_ids.remove(&timer_id);
+                self.estimated_memory_bytes = self
+                    .estimated_memory_bytes
+                    .saturating_sub(ATOMICS_WAITER_BYTES);
+                self.rollback_fresh_promise(promise);
+                return Err(error);
+            }
+            self.next_timer_id = self.next_timer_id.wrapping_add(1);
+            Some(timer_id)
+        } else {
+            None
+        };
+        self.atomics_async_waiters.push(AtomicsAsyncWaiter {
+            buffer: view.buffer,
+            byte_index: Self::atomics_byte_index(view, index),
+            promise,
+            timer_id,
+        });
+        Ok(promise)
+    }
+
+    /// Drop the waiters whose promise has settled (a timeout fired), so
+    /// `notify` neither counts nor wakes them.
+    fn prune_settled_atomics_waiters(&mut self) {
+        let before = self.atomics_async_waiters.len();
+        let store = &self.promise_store;
+        self.atomics_async_waiters.retain(|waiter| {
+            store
+                .get(waiter.promise)
+                .is_ok_and(|record| record.state == crate::promise_model::PromiseState::Pending)
+        });
+        let removed = (before - self.atomics_async_waiters.len()) as u64;
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(removed.saturating_mul(ATOMICS_WAITER_BYTES));
+    }
+
+    /// The memory the recorded `waitAsync` waiters account for.
+    pub(super) fn atomics_async_waiters_memory_bytes(&self) -> u64 {
+        (self.atomics_async_waiters.len() as u64).saturating_mul(ATOMICS_WAITER_BYTES)
     }
 
     fn atomics_width_mask(kind: TypedArrayKind) -> u64 {

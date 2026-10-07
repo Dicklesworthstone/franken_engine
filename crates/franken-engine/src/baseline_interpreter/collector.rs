@@ -1819,6 +1819,7 @@ impl InterpreterCore {
             active_timers,
             pending_timer_tasks,
             unref_timer_ids: _,
+            atomics_async_waiters,
             suspended: _,
             sandboxed: _,
             quarantined: _,
@@ -2030,6 +2031,10 @@ impl InterpreterCore {
         promise_combinators
             .values()
             .for_each(|state| m.combinator(state));
+        for waiter in atomics_async_waiters {
+            m.object(waiter.buffer);
+            m.promise(waiter.promise.0);
+        }
         for task in pending_timer_tasks.values() {
             match &task.kind {
                 PendingTimerTaskKind::Callback { callback, args, .. } => {

@@ -10028,7 +10028,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::NewArray { dst });
 
-                // One key register serves every element: each SetProperty
+                // One key register serves every element: each definition
                 // consumes its key before the next is loaded (bd-9vouw.86).
                 let mut element_key_reg = None;
                 for (i, val_reg) in elements.into_iter().enumerate() {
@@ -10040,7 +10040,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         dst: key_reg,
                         pool_index,
                     });
-                    ir3.instructions.push(Ir3Instruction::SetProperty {
+                    ir3.instructions.push(Ir3Instruction::CreateDataProperty {
                         obj: dst,
                         key: key_reg,
                         val: val_reg,
@@ -10091,7 +10091,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 ir3.instructions.push(Ir3Instruction::NewObject { dst });
 
                 for (key_reg, val_reg) in properties {
-                    ir3.instructions.push(Ir3Instruction::SetProperty {
+                    ir3.instructions.push(Ir3Instruction::CreateDataProperty {
                         obj: dst,
                         key: key_reg,
                         val: val_reg,
@@ -12138,7 +12138,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             dst: key_reg,
                             pool_index,
                         });
-                        ir3.instructions.push(Ir3Instruction::SetProperty {
+                        ir3.instructions.push(Ir3Instruction::CreateDataProperty {
                             obj: dst,
                             key: key_reg,
                             val: val_reg,
@@ -12186,7 +12186,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::NewObject { dst });
                     for (key_reg, val_reg) in properties {
-                        ir3.instructions.push(Ir3Instruction::SetProperty {
+                        ir3.instructions.push(Ir3Instruction::CreateDataProperty {
                             obj: dst,
                             key: key_reg,
                             val: val_reg,
@@ -19460,8 +19460,20 @@ fn lower_expression_to_ir1_inner(
                     && prop.computed
                     && is_anonymous_function_definition(&prop.value)
             });
-            let needs_incremental =
-                has_spread || has_incremental_definition || large_plain || names_by_computed_key;
+            // Annex B's prototype entry is separate from CreateDataProperty.
+            // Computed/shorthand `__proto__` keys remain ordinary own data.
+            let has_prototype_entry = properties.iter().any(|prop| {
+                prop.kind == ObjectPropertyKind::Data
+                    && !prop.computed
+                    && !prop.shorthand
+                    && canonical_static_object_property_key(&prop.key)
+                        .is_ok_and(|key| key == "__proto__")
+            });
+            let needs_incremental = has_spread
+                || has_incremental_definition
+                || large_plain
+                || names_by_computed_key
+                || has_prototype_entry;
 
             if needs_incremental {
                 // With spreads/accessors, use incremental approach:

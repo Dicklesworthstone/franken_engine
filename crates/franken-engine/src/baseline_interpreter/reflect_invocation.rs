@@ -144,24 +144,9 @@ impl InterpreterCore {
                     {
                         self.reflect_admit_mutation_label(receiver_object)?;
                     }
-                    // A plain function receiver (`Reflect.set(fn, k, v)`
-                    // defaults it to fn) stores on its own-property storage,
-                    // as `fn.k = v` does; so does a promise, generator or
-                    // iterator receiver.
-                    let receiver = match module {
-                        Some(module)
-                            if (receiver.is_callable()
-                                && !matches!(&receiver, Value::BuiltinFunction(builtin)
-                                    if Self::builtin_function_property_object(builtin).is_some()))
-                                || Self::has_exotic_backing_object(&receiver) =>
-                        {
-                            match self.own_property_holder(Some(module), &receiver, true)? {
-                                Some(storage) => Value::Object(storage),
-                                None => receiver,
-                            }
-                        }
-                        _ => receiver,
-                    };
+                    // A setter or Proxy trap must receive the original
+                    // callable/exotic identity. OrdinarySet resolves storage
+                    // only after descriptor selection reaches a data write.
                     let receiver = self.reflect_data_property_receiver(target, &key, receiver)?;
                     Value::Bool(self.proxy_aware_set_runtime_property(
                         module, target, &key, value, receiver, 0,
@@ -300,7 +285,9 @@ impl InterpreterCore {
             match own_accessor {
                 Some(true) => return Ok(receiver),
                 Some(false) => return Ok(Value::Object(backing)),
-                None => match object.prototype {
+                // OrdinarySet also follows the implicit Object/Array link.
+                // An inherited setter must retain the callable receiver.
+                None => match self.observable_prototype_link(object, current) {
                     Some(prototype) => current = prototype,
                     None => return Ok(Value::Object(backing)),
                 },
@@ -393,7 +380,9 @@ impl InterpreterCore {
                         self.json_observe_label(label)?;
                         return Ok(());
                     }
-                    match object.prototype {
+                    // Descriptor selection follows the same observable chain
+                    // as the internal method, including implicit prototypes.
+                    match self.observable_prototype_link(object, current) {
                         Some(prototype) => current = prototype,
                         None => return Ok(()),
                     }
@@ -1134,6 +1123,87 @@ mod constructor_property_tests {
                 Reflect.deleteProperty(Date, 'value') && parent.value === 17;
             "#,
         );
+    }
+
+    #[test]
+    fn reflect_set_observes_implicit_prototype_descriptor_labels_bd_9vouw_280() {
+        for config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            for (shape_label, null_prototype) in [
+                (Label::Public, false),
+                (Label::Secret, false),
+                (Label::Secret, true),
+            ] {
+                let mut config = config.clone();
+                config.granted_capabilities = [
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::HeapAllocate,
+                    RuntimeCapability::Builtin,
+                ]
+                .into_iter()
+                .collect();
+                let mut core = InterpreterCore::new(config, "implicit-prototype-ifc");
+                let prototype = core.ensure_builtin_prototype("Object").unwrap();
+                let key = RuntimePropertyKey::String("locked".into());
+                core.set_object_runtime_property(prototype, key.clone(), Value::Int(1))
+                    .unwrap();
+                core.set_own_property_attributes(
+                    prototype,
+                    &key,
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: true,
+                        configurable: true,
+                    },
+                )
+                .unwrap();
+                core.join_direct_object_mutation_label(prototype, &shape_label)
+                    .unwrap();
+                let target = core.alloc_object_with_properties(&[]).unwrap();
+                if null_prototype {
+                    core.store_prototype_link(target, None);
+                }
+                core.write_reg_with_label(0, Value::Object(target), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(1, Value::str("locked"), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(2, Value::Int(9), Label::Public)
+                    .unwrap();
+
+                let result = core
+                    .dispatch_builtin_hostcall(
+                        "builtin:ReflectSet",
+                        RegRange { start: 0, count: 3 },
+                        None,
+                    )
+                    .unwrap();
+                assert_eq!(result, Value::Bool(null_prototype));
+                let expected_label = if null_prototype {
+                    Label::Public
+                } else {
+                    shape_label
+                };
+                assert_eq!(
+                    core.pending_hostcall_result_label
+                        .as_ref()
+                        .unwrap_or(&Label::Public),
+                    &expected_label,
+                    "the selected prototype descriptor controls the Set result"
+                );
+                assert_eq!(
+                    core.heap[target.0 as usize].contains_own_runtime_property(&key),
+                    null_prototype,
+                );
+                assert!(core.active_inline_callback_context_label.is_none());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "inherited descriptor observations must release reservations"
+                );
+            }
+        }
     }
 
     #[test]

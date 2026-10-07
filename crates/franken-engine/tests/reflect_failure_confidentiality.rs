@@ -329,3 +329,99 @@ fn oversized_reflection_lists_still_escape_guest_catch_as_resource_failures() {
         }
     }
 }
+
+fn implicit_prototype_write(
+    config: InterpreterConfig,
+    definition_label: Label,
+    null_prototype: bool,
+    leak: bool,
+) -> (InterpreterCore, Ir3Module) {
+    let mut core = InterpreterCore::new(config, "implicit-prototype-reflect-set");
+    let target = core.alloc_object_with_prototype(None).unwrap();
+    let descriptor = core.alloc_object_with_prototype(None).unwrap();
+    for (key, value) in [
+        ("value", Value::Int(1)),
+        ("writable", Value::Bool(false)),
+        ("enumerable", Value::Bool(true)),
+        ("configurable", Value::Bool(true)),
+    ] {
+        core.set_object_property(descriptor, key.into(), value)
+            .unwrap();
+    }
+    for (register, value) in [
+        (0, Value::Object(target)),
+        (1, Value::str("locked")),
+        (2, Value::Int(9)),
+        (4, Value::str("locked")),
+        (5, Value::Object(descriptor)),
+        (8, Value::Null),
+    ] {
+        core.seed_register(register, value).unwrap();
+    }
+    // Only the definition key is confidential. The later Reflect.set uses
+    // separate Public aliases for its target, lookup key and assigned value.
+    core.set_register_label(4, definition_label).unwrap();
+    let mut module = lower("0;");
+    module.instructions = vec![call("builtin:ObjectGetPrototypeOf", 0, 1, 3)];
+    if null_prototype {
+        module
+            .instructions
+            .push(call("builtin:ObjectCreate", 8, 1, 0));
+    }
+    module.instructions.extend([
+        call("builtin:ObjectDefineProperty", 3, 3, 6),
+        call("builtin:ReflectSet", 0, 3, 7),
+    ]);
+    return_or_leak(&mut module, 7, leak);
+    (core, module)
+}
+
+#[test]
+fn implicit_prototype_reflect_set_retains_descriptor_confidentiality_bd_9vouw_280() {
+    for (definition_label, null_prototype) in [
+        (Label::Public, false),
+        (Label::Secret, false),
+        (Label::Secret, true),
+    ] {
+        for leak in [false, true] {
+            for config in configs() {
+                let (mut core, module) = implicit_prototype_write(
+                    config,
+                    definition_label.clone(),
+                    null_prototype,
+                    leak,
+                );
+                let expected_label = if null_prototype {
+                    Label::Public
+                } else {
+                    definition_label.clone()
+                };
+                if leak && expected_label == Label::Secret {
+                    assert_sink_denied(core, &module);
+                    continue;
+                }
+                let result = core
+                    .execute(&module)
+                    .expect("a refused ordinary write returns false without throwing");
+                assert_eq!(result.value, Value::Bool(null_prototype));
+                assert_eq!(
+                    result.completion_label, expected_label,
+                    "the selected implicit prototype descriptor controls the Set result"
+                );
+                for register in [0, 1, 2] {
+                    assert_eq!(
+                        core.get_register_label(register).unwrap(),
+                        &Label::Public,
+                        "Reflect.set's input aliases must remain Public"
+                    );
+                }
+                assert_eq!(result.console_output.len(), usize::from(leak));
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "prototype observations must release reflection reservations"
+                );
+            }
+        }
+    }
+}

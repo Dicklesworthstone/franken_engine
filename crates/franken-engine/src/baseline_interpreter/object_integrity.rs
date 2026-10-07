@@ -773,10 +773,13 @@ impl InterpreterCore {
             }
             return Ok(true);
         }
-        let object = &self.heap[id.0 as usize];
         let unchanged = match prototype {
-            Some(_) => self.observable_prototype_link(object, id) == prototype,
+            // The non-allocating lookup may temporarily skip an unmaterialized
+            // Array.prototype and return Object.prototype. Compare with the
+            // actual default before deciding that a requested change is a no-op.
+            Some(_) => self.ordinary_get_prototype_of(id)? == prototype,
             None => {
+                let object = &self.heap[id.0 as usize];
                 object.prototype.is_none()
                     && (object.is_null_prototype
                         || self.builtin_prototypes.get("Object") == Some(&id))

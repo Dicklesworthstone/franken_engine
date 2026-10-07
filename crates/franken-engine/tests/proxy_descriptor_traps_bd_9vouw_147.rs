@@ -137,6 +137,39 @@ fn array_iterator_get_and_has_follow_explicit_prototypes() {
     );
 }
 
+/// Prototype replacement must not depend on whether Array.prototype has
+/// already been observed. Non-extensible arrays may keep their actual parent,
+/// but cannot replace it with the non-allocating lookup's temporary fallback.
+#[test]
+fn array_prototype_changes_respect_intrinsic_materialization_and_extensibility() {
+    let source = r#"
+        const objectPrototype = Object.prototype;
+        const locked = Object.preventExtensions([0]);
+        const refused = Reflect.setPrototypeOf(locked, objectPrototype);
+        let thrown = 'none';
+        try { Object.setPrototypeOf(locked, objectPrototype); }
+        catch (error) { thrown = error.name; }
+        const early = [1];
+        const earlyChanged = Reflect.setPrototypeOf(early, objectPrototype);
+        const arrayPrototype = Array.prototype;
+        const late = [2];
+        const lateChanged = Reflect.setPrototypeOf(late, objectPrototype);
+        Object.preventExtensions(late);
+        [refused, thrown, earlyChanged, lateChanged,
+         Object.getPrototypeOf(early) === objectPrototype,
+         Object.getPrototypeOf(late) === objectPrototype,
+         typeof early[Symbol.iterator], typeof late[Symbol.iterator],
+         Object.getPrototypeOf(locked) === arrayPrototype,
+         Reflect.setPrototypeOf(locked, arrayPrototype),
+         Object.setPrototypeOf(locked, arrayPrototype) === locked,
+         Reflect.setPrototypeOf(late, objectPrototype)].join(':');
+    "#;
+    assert_eq!(
+        eval(source),
+        "false:TypeError:true:true:true:true:undefined:undefined:true:true:true:true"
+    );
+}
+
 /// bd-9vouw.306: frozen data properties use SameValue, including Symbol
 /// keys, NaN, signed zero and object identity. Configurable or writable
 /// properties remain virtualizable, even on a non-extensible target.

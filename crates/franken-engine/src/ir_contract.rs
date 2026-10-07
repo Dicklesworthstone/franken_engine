@@ -1664,6 +1664,11 @@ pub enum Ir3Instruction {
     /// frozen or non-extensible receiver, a primitive base) is ignored, as
     /// PutValue (ES2020 6.2.4.9) does in sloppy code.
     SetPropertySloppy { obj: Reg, key: Reg, val: Reg },
+    /// Create an own writable, enumerable, configurable data property on an
+    /// ordinary object or array produced by literal allocation.
+    /// Literal initialization uses [[DefineOwnProperty]], never [[Set]], so
+    /// inherited setters and read-only properties cannot intercept it.
+    CreateDataProperty { obj: Reg, key: Reg, val: Reg },
     /// Object accessor definition: define get/set function for obj[key].
     DefineAccessor {
         obj: Reg,
@@ -2035,6 +2040,12 @@ impl Ir3Instruction {
             ]),
             Self::SetPropertySloppy { obj, key, val } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("set_property_sloppy")),
+                ("key", CanonicalValue::U64(u64::from(*key))),
+                ("obj", CanonicalValue::U64(u64::from(*obj))),
+                ("val", CanonicalValue::U64(u64::from(*val))),
+            ]),
+            Self::CreateDataProperty { obj, key, val } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_data_property")),
                 ("key", CanonicalValue::U64(u64::from(*key))),
                 ("obj", CanonicalValue::U64(u64::from(*obj))),
                 ("val", CanonicalValue::U64(u64::from(*val))),
@@ -4313,6 +4324,11 @@ mod tests {
                 key: 1,
                 val: 2,
             },
+            Ir3Instruction::CreateDataProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
             Ir3Instruction::DefineAccessor {
                 obj: 0,
                 key: 1,
@@ -4372,6 +4388,16 @@ mod tests {
             val: 2,
         };
         assert_ne!(strict.canonical_value(), sloppy.canonical_value());
+        let definition = Ir3Instruction::CreateDataProperty {
+            obj: 0,
+            key: 1,
+            val: 2,
+        };
+        assert_ne!(strict.canonical_value(), definition.canonical_value());
+        assert_ne!(sloppy.canonical_value(), definition.canonical_value());
+        let json = serde_json::to_string(&definition).expect("serialize definition");
+        let restored: Ir3Instruction = serde_json::from_str(&json).expect("deserialize definition");
+        assert_eq!(restored, definition);
         let json = serde_json::to_string(&sloppy).expect("serialize instruction");
         let restored: Ir3Instruction =
             serde_json::from_str(&json).expect("deserialize instruction");

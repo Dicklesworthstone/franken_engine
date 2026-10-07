@@ -156,6 +156,7 @@ pub fn op_family_for_mnemonic(mnemonic: &str) -> OpFamily {
         "get_property"
         | "set_property"
         | "set_property_sloppy"
+        | "create_data_property"
         | "define_accessor"
         | "delete_property" => OpFamily::PropertyAccess,
         "new_object" | "new_array" | "array_push" | "array_slice" | "spread_into_array"

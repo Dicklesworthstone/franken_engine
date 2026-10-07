@@ -12669,7 +12669,8 @@ impl CompactTier1Program {
                 requirement(&[*obj, *key, *dst], &[])
             }
             Ir3Instruction::SetProperty { obj, key, val }
-            | Ir3Instruction::SetPropertySloppy { obj, key, val } => {
+            | Ir3Instruction::SetPropertySloppy { obj, key, val }
+            | Ir3Instruction::CreateDataProperty { obj, key, val } => {
                 requirement(&[*obj, *key, *val], &[])
             }
             Ir3Instruction::DefineAccessor { obj, key, func, .. }
@@ -52480,7 +52481,10 @@ impl InterpreterCore {
                                     oid,
                                     &property_key,
                                 )?;
-                                if property_key.as_str() == Some("__proto__") {
+                                if property_key.as_str() == Some("__proto__")
+                                    && !self.heap[oid.0 as usize]
+                                        .contains_own_runtime_property(&property_key)
+                                {
                                     // `__proto__` reads the internal prototype link
                                     // (set by class `extends` and `o.__proto__ = p`),
                                     // not a data property (bd-ppfds). A function's
@@ -52999,6 +53003,76 @@ impl InterpreterCore {
                         });
                     self.ip += 1;
                 }
+                Ir3Instruction::CreateDataProperty { obj, key, val } => {
+                    let target = self.read_reg(obj)?;
+                    let Value::Object(object_id) = target else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object for CreateDataProperty".to_string(),
+                            got: target.type_name().to_string(),
+                        });
+                    };
+                    // This opcode initializes ordinary literal allocations.
+                    // Exotic definitions use the existing Reflect/Object
+                    // intrinsic path, which owns trap and buffer IFC context.
+                    if self.proxy_record(object_id)?.is_some()
+                        || self.heap[object_id.0 as usize].typed_array.is_some()
+                    {
+                        return Err(InterpreterError::TypeError {
+                            expected: "ordinary object or array literal target".to_string(),
+                            got: "exotic object in CreateDataProperty".to_string(),
+                        });
+                    }
+                    // Literal keys have already completed ToPropertyKey before
+                    // their value expression runs. Defining them must not run
+                    // that conversion again or invoke an inherited setter.
+                    let key_value = self.read_reg(key)?;
+                    let property_key = self.executable_property_key_from_value(&key_value);
+                    self.run_pre_runtime_property_access_hook(module, object_id, &property_key)?;
+                    let value = self.read_reg(val)?;
+                    let value_label = self.get_register_label(val)?.clone();
+                    let mutation_label = self
+                        .get_register_label(obj)?
+                        .join(self.get_register_label(key)?)
+                        .join(&value_label);
+                    self.join_object_mutation_label(object_id, &mutation_label)?;
+                    let previous_label =
+                        self.own_stored_runtime_property_label(object_id, &property_key);
+                    self.set_own_runtime_property_label(object_id, &property_key, &value_label)?;
+                    let fields = PropertyDescriptorFields {
+                        value: Some(value),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        ..PropertyDescriptorFields::default()
+                    };
+                    let result = self.define_own_property_from_descriptor(
+                        object_id,
+                        property_key.clone(),
+                        fields,
+                    );
+                    match result {
+                        Ok(true) => {}
+                        refused => {
+                            self.set_own_runtime_property_label(
+                                object_id,
+                                &property_key,
+                                &previous_label,
+                            )?;
+                            match refused {
+                                Err(error) => return Err(error),
+                                Ok(false) => {
+                                    return Err(InterpreterError::TypeError {
+                                        expected: "permitted own data property definition"
+                                            .to_string(),
+                                        got: property_key.diagnostic(),
+                                    });
+                                }
+                                Ok(true) => unreachable!(),
+                            }
+                        }
+                    }
+                    self.ip += 1;
+                }
                 set_instruction @ (Ir3Instruction::SetProperty { obj, key, val }
                 | Ir3Instruction::SetPropertySloppy { obj, key, val }) => {
                     // bd-9vouw.146: PutValue throws for a write that [[Set]]
@@ -53063,7 +53137,10 @@ impl InterpreterCore {
                                 // Native URL setter committed through its
                                 // authenticated side table; no guest-writable
                                 // mirror property is created.
-                            } else if property_key.as_str() == Some("__proto__") {
+                            } else if property_key.as_str() == Some("__proto__")
+                                && !self.heap[oid.0 as usize]
+                                    .contains_own_runtime_property(&property_key)
+                            {
                                 // `__proto__` sets the internal prototype link so
                                 // prototype-chain lookups (incl. class `extends`,
                                 // which lowers to `Child.prototype.__proto__ =
@@ -53195,12 +53272,17 @@ impl InterpreterCore {
                                             got: builtin.display_name().to_string(),
                                         })?,
                                 };
+                            let mutation_label = self
+                                .get_register_label(obj)?
+                                .join(self.get_register_label(key)?)
+                                .join(self.get_register_label(val)?);
+                            self.join_object_mutation_label(property_object, &mutation_label)?;
                             self.set_backing_object_property(
                                 module,
                                 property_object,
                                 &property_key,
                                 val,
-                                set_val,
+                                Value::BuiltinFunction(builtin),
                                 strict,
                             )?;
                         }
@@ -53292,7 +53374,7 @@ impl InterpreterCore {
                                 property_object,
                                 &property_key,
                                 val,
-                                set_val,
+                                function.clone(),
                                 strict,
                             )?;
                         }
@@ -53313,7 +53395,7 @@ impl InterpreterCore {
                                 property_object,
                                 &property_key,
                                 val,
-                                set_val,
+                                exotic.clone(),
                                 strict,
                             )?;
                         }
@@ -63761,14 +63843,11 @@ impl InterpreterCore {
                     {
                         return Ok(false);
                     }
-                    // Only stored links (bd-9vouw.34): array and object literals
-                    // still initialize through [[Set]] (NewArray/NewObject plus
-                    // SetProperty), so following the implicit Object.prototype /
-                    // Array.prototype link here would let an inherited setter or
-                    // read-only property there intercept or reject literal
-                    // construction. Until literals lower to CreateDataProperty,
-                    // [[Set]] keeps the pre-.34 behavior for the implicit link.
-                    match object.prototype {
+                    // OrdinarySet follows the same observable prototype chain
+                    // as [[Get]], including implicit Object/Array prototypes.
+                    // Literal initialization uses CreateDataProperty and is
+                    // independent of these inherited descriptors (bd-9vouw.280).
+                    match self.observable_prototype_link(object, owner) {
                         Some(prototype) => {
                             owner = prototype;
                             owner_depth += 1;
@@ -63777,21 +63856,21 @@ impl InterpreterCore {
                     }
                 }
             }
-            // A function receiver's own properties live on its backing object
-            // (bd-9vouw.17): an Array.prototype method writing to a function
-            // `this` (bd-9vouw.285) creates or replaces them there. A function
-            // without a backing object still refuses.
-            let receiver_id = match (&receiver, module) {
-                (function, Some(module))
-                    if function.is_callable() && !Self::is_callable_proxy(function) =>
-                {
-                    self.function_own_property_object(module, function)?
-                }
-                _ => self.proxy_set_receiver_object(&receiver)?,
+            // Resolve backing storage only after the descriptor walk has ruled
+            // out an inherited setter: setters and Proxy traps must receive
+            // the original callable, promise or iterator identity. A data
+            // write may materialize that receiver's own storage (bd-9vouw.280).
+            let receiver_id = if Self::stores_own_properties_on_backing(&receiver) {
+                self.own_property_holder(module, &receiver, true)?
+            } else {
+                self.proxy_set_receiver_object(&receiver)?
             };
             let Some(receiver_id) = receiver_id else {
                 return Ok(false);
             };
+            if self.active_inline_callback_context_label.is_some() {
+                self.reflect_admit_mutation_label(receiver_id)?;
+            }
             let Some(receiver_object) = self.heap.get(receiver_id.0 as usize) else {
                 return Err(InterpreterError::ObjectNotFound { id: receiver_id.0 });
             };
@@ -78398,7 +78477,9 @@ impl InterpreterCore {
         self.preflight_legacy_property_key_for_hook(&key)?;
         match object_value {
             Value::Object(object_id) => {
-                if key.as_str() == Some("__proto__") {
+                if key.as_str() == Some("__proto__")
+                    && !self.heap[object_id.0 as usize].contains_own_runtime_property(&key)
+                {
                     let link = self.ordinary_get_prototype_of(object_id)?;
                     return Ok(self.prototype_value_for_link(module, link));
                 }
@@ -80541,12 +80622,26 @@ impl InterpreterCore {
     ) -> Result<bool, InterpreterError> {
         match value {
             Value::Accessor { set: Some(set), .. } => {
+                // A property write already joined the assigned scalar's
+                // label into its receiver. Carry that context into the setter
+                // frame, where the value-only callback arguments otherwise
+                // start Public (including inherited setters, bd-9vouw.280).
+                // Reflect.set may supply any receiver, including a primitive
+                // or null: an inherited setter still receives that exact this.
+                let receiver_object = self.own_property_holder(module, &receiver, false)?;
+                let argument_label = receiver_object
+                    .and_then(|object| self.object_mutation_labels.get(&object))
+                    .map(|label| {
+                        self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
+                        Ok::<_, InterpreterError>(label.clone())
+                    })
+                    .transpose()?;
                 let (_, label) = self.invoke_inline_method_call_with_argument_label(
                     module,
                     set.as_ref().clone(),
                     receiver,
                     vec![assigned],
-                    None,
+                    argument_label,
                 )?;
                 let label = self
                     .pending_hostcall_result_label
@@ -107341,30 +107436,24 @@ impl InterpreterCore {
         .then(|| constructor("Object"))
     }
 
-    /// Write `set_val` to `property_key` on an ordinary-property backing
-    /// object (builtin or user function), carrying the value register's label
-    /// exactly like a plain object write and restoring the prior label if the
-    /// write does not commit an own property.
+    /// Write register `val` to `property_key` on ordinary backing storage,
+    /// preserving the original receiver for inherited setters and Proxy traps.
+    /// The caller admits the receiver/key/value mutation label before entering;
+    /// stage the own value label here and restore it if no own write commits.
     fn set_backing_object_property(
         &mut self,
         module: &Ir3Module,
         property_object: ObjectId,
         property_key: &RuntimePropertyKey,
         val: u32,
-        set_val: Value,
+        receiver: Value,
         strict: bool,
     ) -> Result<(), InterpreterError> {
         self.run_pre_runtime_property_access_hook(module, property_object, property_key)?;
+        let set_val = self.read_reg(val)?;
         let value_label = self.get_register_label(val)?.clone();
         let previous_label = self.own_stored_runtime_property_label(property_object, property_key);
         self.set_own_runtime_property_label(property_object, property_key, &value_label)?;
-        // A callable proxy is its own receiver (a `set` trap sees the value
-        // the program holds, not the record).
-        let receiver = if self.proxy_call_target(property_object).is_some() {
-            Self::callable_proxy_value(property_object)
-        } else {
-            Value::Object(property_object)
-        };
         let set_result = self.proxy_aware_set_runtime_property(
             Some(module),
             property_object,
@@ -135205,6 +135294,256 @@ mod async_runtime_tests_current {
             &crate::ifc_artifacts::Label::Secret,
             "a Secret value written to a Public object property must read back Secret (bd-ojvo1)"
         );
+    }
+
+    #[test]
+    fn create_data_property_keeps_ifc_labels_and_rejection_accounting_bd_9vouw_280() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateDataProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        for frozen in [false, true] {
+            let mut core = test_interpreter();
+            let object = core
+                .alloc_object_with_properties(&[("data", Value::Int(1))])
+                .expect("object allocation");
+            if frozen {
+                core.mutate_heap(|heap| heap[object.0 as usize].is_frozen = true);
+            }
+            core.write_reg_with_label(0, Value::Object(object), Label::Public)
+                .expect("target register");
+            core.write_reg_with_label(1, Value::str("data"), Label::Public)
+                .expect("key register");
+            core.write_reg_with_label(2, Value::Int(42), Label::Secret)
+                .expect("value register");
+            let result = core.execute(&module);
+            if frozen {
+                assert!(matches!(result, Err(InterpreterError::TypeError { .. })));
+                assert_eq!(
+                    core.heap[object.0 as usize].properties.get("data"),
+                    Some(&Value::Int(1))
+                );
+                assert_eq!(core.own_property_label(object, "data"), Label::Public);
+            } else {
+                result.expect("own definition and read");
+                assert_eq!(core.read_reg(3).unwrap(), Value::Int(42));
+                assert_eq!(core.get_register_label(3).unwrap(), &Label::Secret);
+                assert_eq!(core.own_property_label(object, "data"), Label::Secret);
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_setter_receives_the_assigned_scalar_label_bd_9vouw_280() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SetPropertySloppy {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::CreateDataProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 3,
+                name: Some("capture_assigned_value".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("captured".into());
+        let mut core = test_interpreter();
+        let prototype = core
+            .ensure_builtin_prototype("Object")
+            .expect("Object prototype");
+        core.set_object_runtime_property(
+            prototype,
+            RuntimePropertyKey::String("slot".into()),
+            Value::Accessor {
+                get: None,
+                set: Some(Arc::new(Value::Function(0))),
+            },
+        )
+        .expect("inherited setter");
+        let object = core
+            .alloc_object_with_properties(&[])
+            .expect("ordinary object");
+        core.write_reg_with_label(0, Value::Object(object), Label::Public)
+            .unwrap();
+        core.write_reg_with_label(1, Value::str("slot"), Label::Public)
+            .unwrap();
+        core.write_reg_with_label(2, Value::Int(42), Label::Secret)
+            .unwrap();
+        core.execute(&module).expect("inherited setter executes");
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get("captured"),
+            Some(&Value::Int(42))
+        );
+        assert_eq!(core.own_property_label(object, "captured"), Label::Secret);
+        assert!(!core.heap[object.0 as usize].properties.contains_key("slot"));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn inherited_setters_keep_backed_receiver_identity_and_labels_bd_9vouw_280() {
+        for throws in [false, true] {
+            let mut module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::SetPropertySloppy {
+                        obj: 0,
+                        key: 1,
+                        val: 2,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 1 },
+                    Ir3Instruction::LoadStr {
+                        dst: 2,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::SetPropertySloppy {
+                        obj: 1,
+                        key: 2,
+                        val: 0,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 2,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::SetPropertySloppy {
+                        obj: 1,
+                        key: 2,
+                        val: 1,
+                    },
+                    if throws {
+                        Ir3Instruction::Throw { value: 0 }
+                    } else {
+                        Ir3Instruction::Return { value: 0 }
+                    },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 2,
+                        arity: 1,
+                        frame_size: 3,
+                        name: Some("capture_backed_receiver".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 8,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("ordinary_receiver".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            );
+            module.constant_pool = vec!["captured".into(), "seenThis".into()];
+            for kind in 0..4 {
+                let mut core = test_interpreter();
+                let prototype = core
+                    .ensure_builtin_prototype("Object")
+                    .expect("Object prototype");
+                let key = RuntimePropertyKey::String("slot".into());
+                core.set_object_runtime_property(
+                    prototype,
+                    key.clone(),
+                    Value::Accessor {
+                        get: None,
+                        set: Some(Arc::new(Value::Function(0))),
+                    },
+                )
+                .expect("inherited setter");
+                let receiver = match kind {
+                    0 => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::ArrayIsArray,
+                    )),
+                    1 => Value::Function(1),
+                    2 => Value::Promise(core.create_promise().expect("promise receiver").0),
+                    _ => {
+                        let emitter = core
+                            .alloc_branded_object("EventEmitter", &[])
+                            .expect("wrapper emitter");
+                        core.create_event_once_wrapper(emitter, "tick", Value::Function(1), None)
+                            .expect("callable once wrapper")
+                            .0
+                    }
+                };
+                core.write_reg_with_label(0, receiver.clone(), Label::Public)
+                    .expect("original receiver register");
+                core.write_reg_with_label(1, key.value(), Label::Public)
+                    .expect("key register");
+                core.write_reg_with_label(2, Value::Int(42), Label::Secret)
+                    .expect("classified assigned value");
+                let outcome = core.execute(&module);
+                if throws {
+                    assert!(matches!(
+                        outcome,
+                        Err(InterpreterError::UncaughtException { .. })
+                    ));
+                    assert_eq!(core.pending_exception_label, Label::Secret);
+                } else {
+                    outcome.expect("setter completed");
+                }
+                let backing = core
+                    .own_property_holder(Some(&module), &receiver, false)
+                    .expect("receiver lookup")
+                    .expect("receiver backing");
+                assert_eq!(
+                    core.heap[backing.0 as usize].properties.get("seenThis"),
+                    Some(&receiver),
+                    "kind {kind}: setter must receive the original JavaScript identity"
+                );
+                assert_eq!(
+                    core.heap[backing.0 as usize].properties.get("captured"),
+                    Some(&Value::Int(42))
+                );
+                assert_eq!(core.own_property_label(backing, "captured"), Label::Secret);
+                assert!(!core.heap[backing.0 as usize].contains_own_runtime_property(&key));
+                assert_eq!(
+                    core.own_stored_runtime_property_label(backing, &key),
+                    Label::Public
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
     }
 
     /// A promise's own properties live on a backing object; a Secret value

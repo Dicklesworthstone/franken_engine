@@ -48136,7 +48136,7 @@ impl InterpreterCore {
                 _ => ArgumentsCallee::ThrowTypeError,
             };
             Some((
-                self.alloc_arguments_object(Some(module), &invocation.arguments, callee)?,
+                self.alloc_arguments_object(&invocation.arguments, callee)?,
                 label,
             ))
         } else {
@@ -52863,6 +52863,21 @@ impl InterpreterCore {
                                 return Err(Self::read_only_property_error(&property_key));
                             }
                         }
+                        // bd-9vouw.272: a built-in or bound function inherits
+                        // Function.prototype's `caller` / `arguments`.
+                        Value::BuiltinFunction(ref builtin)
+                            if builtin.kind != BuiltinFunctionKind::CallableProxy
+                                && matches!(
+                                    property_key.as_str(),
+                                    Some("caller" | "arguments")
+                                )
+                                && self.restricted_function_property_set(
+                                    module,
+                                    &Value::BuiltinFunction(builtin.clone()),
+                                    &property_key,
+                                    &set_val,
+                                    strict,
+                                )? => {}
                         Value::BuiltinFunction(builtin) => {
                             let property_object =
                                 match Self::builtin_function_property_object(&builtin) {
@@ -52940,6 +52955,21 @@ impl InterpreterCore {
                                 });
                             }
                         }
+                        // bd-9vouw.272: `caller` / `arguments` the function
+                        // does not define (Function.prototype's accessors, or
+                        // a sloppy function's read-only own ones).
+                        ref function @ (Value::Function(_)
+                        | Value::Closure(_)
+                        | Value::GeneratorFunction(_)
+                        | Value::AsyncFunction(_)
+                        | Value::AsyncGeneratorFunction(_))
+                            if self.restricted_function_property_set(
+                                module,
+                                function,
+                                &property_key,
+                                &set_val,
+                                strict,
+                            )? => {}
                         // Other own properties (`F.x = 1`,
                         // `Test262Error.thrower = ...`) live on the function's
                         // backing object.
@@ -60093,7 +60123,11 @@ impl InterpreterCore {
         // read through a primitive or function materializes it, or fell
         // through to %Object.prototype% and read undefined
         // (`Object.prototype.toString.call(1n)` was "[object Object]").
-        if matches!(key, RuntimePropertyKey::Symbol(_))
+        // So are %Function.prototype%'s `caller` and `arguments` accessors
+        // (bd-9vouw.272).
+        let restricted_function_property =
+            type_name == "Function" && matches!(key.as_str(), Some("caller" | "arguments"));
+        if (matches!(key, RuntimePropertyKey::Symbol(_)) || restricted_function_property)
             && canonical_builtin_prototype_name(type_name).is_some()
         {
             self.ensure_builtin_prototype(type_name)?;
@@ -64822,6 +64856,14 @@ impl InterpreterCore {
         let Some(name) = key.as_str() else {
             return Ok(None);
         };
+        // bd-9vouw.272: Node's sloppy ordinary functions answer null for
+        // their own `caller` and `arguments`; every other function reads
+        // Function.prototype's %ThrowTypeError% accessors.
+        if matches!(name, "caller" | "arguments")
+            && self.is_sloppy_ordinary_function(module, function)?
+        {
+            return Ok(Some(Value::Null));
+        }
         let value = match function {
             Value::Function(index) => self.function_property_value(module, *index, name)?,
             Value::Closure(closure_id) => {
@@ -87678,11 +87720,9 @@ impl InterpreterCore {
                         self.replace_pending_hostcall_result_label(Some(label))?;
                         Ok(value)
                     }
-                    _ => Ok(Value::Object(self.alloc_arguments_object(
-                        module,
-                        &[],
-                        ArgumentsCallee::Omitted,
-                    )?)),
+                    _ => Ok(Value::Object(
+                        self.alloc_arguments_object(&[], ArgumentsCallee::Omitted)?,
+                    )),
                 }
             }
             "builtin:ClassPrototypeLink" => {
@@ -103616,6 +103656,27 @@ impl InterpreterCore {
                     configurable: false,
                 },
             )?;
+            // AddRestrictedFunctionProperties (ES2020 9.2.7): `arguments`
+            // and `caller` are accessors whose get and set are
+            // %ThrowTypeError%, not enumerable, configurable. A strict,
+            // arrow, method, class, generator, async, bound or built-in
+            // function has no own ones and inherits these (bd-9vouw.272).
+            let thrower = self.throw_type_error_intrinsic()?;
+            for name in ["arguments", "caller"] {
+                let key = RuntimePropertyKey::String(JsString::from(name));
+                for kind in [AccessorKind::Get, AccessorKind::Set] {
+                    self.define_accessor_property(prototype, key.clone(), thrower.clone(), kind)?;
+                }
+                self.set_own_property_attributes(
+                    prototype,
+                    &key,
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: false,
+                        configurable: true,
+                    },
+                )?;
+            }
         }
         if let Some(kind) = to_primitive_kind {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToPrimitive.id());
@@ -104084,7 +104145,7 @@ impl InterpreterCore {
             Some(true) => ArgumentsCallee::Function(callee.clone()),
             _ => ArgumentsCallee::ThrowTypeError,
         };
-        let object = self.alloc_arguments_object(Some(module), &values, callee)?;
+        let object = self.alloc_arguments_object(&values, callee)?;
         self.pending_arguments_object = Some((
             self.call_stack.len().saturating_add(1),
             Value::Object(object),
@@ -104101,7 +104162,6 @@ impl InterpreterCore {
     /// parameters (bd-9vouw.281).
     fn alloc_arguments_object(
         &mut self,
-        module: Option<&Ir3Module>,
         values: &[Value],
         callee: ArgumentsCallee,
     ) -> Result<ObjectId, InterpreterError> {
@@ -104145,10 +104205,7 @@ impl InterpreterCore {
             // ES2020 9.4.4.6 step 8: get and set are %ThrowTypeError%, not
             // enumerable or configurable.
             ArgumentsCallee::ThrowTypeError => {
-                let module = module.ok_or_else(|| InterpreterError::InternalError {
-                    details: "a strict arguments object is made with its module".to_string(),
-                })?;
-                let thrower = self.throw_type_error_intrinsic(module)?;
+                let thrower = self.throw_type_error_intrinsic()?;
                 for kind in [AccessorKind::Get, AccessorKind::Set] {
                     self.define_accessor_property(
                         object,
@@ -104176,19 +104233,28 @@ impl InterpreterCore {
     /// value of the kind is the same function), whose `length` (0) and
     /// `name` ("") are neither writable nor configurable and which is not
     /// extensible, so it is frozen. Its own-property object is made so the
-    /// first time it is handed out.
-    fn throw_type_error_intrinsic(
-        &mut self,
-        module: &Ir3Module,
-    ) -> Result<Value, InterpreterError> {
-        let thrower = Value::BuiltinFunction(BuiltinFunction::new_kind(
-            BuiltinFunctionKind::ThrowTypeError,
-        ));
-        if let Some(backing) = self.ensure_function_own_property_object(module, &thrower)?
-            && self
-                .heap
-                .get(backing.0 as usize)
-                .is_some_and(HeapObject::extensible)
+    /// first time it is handed out (to a strict arguments object's `callee`,
+    /// or to Function.prototype's `caller` and `arguments`, bd-9vouw.272).
+    fn throw_type_error_intrinsic(&mut self) -> Result<Value, InterpreterError> {
+        let builtin = BuiltinFunction::new_kind(BuiltinFunctionKind::ThrowTypeError);
+        let key = Self::builtin_function_own_property_key(&builtin)?;
+        let backing = match self.function_prototypes.get(&key) {
+            Some(existing) => *existing,
+            None => {
+                let backing = self.alloc_object_with_prototype(None)?;
+                self.mutate_function_prototypes(|entries| entries.insert(key, backing));
+                self.builtin_function_backings = true;
+                for (name, value) in [("length", Value::Int(0)), ("name", Value::str(""))] {
+                    let name = RuntimePropertyKey::String(JsString::from(name));
+                    self.set_object_runtime_property(backing, name, value)?;
+                }
+                backing
+            }
+        };
+        if self
+            .heap
+            .get(backing.0 as usize)
+            .is_some_and(HeapObject::extensible)
         {
             for key in ["length", "name"] {
                 self.set_own_property_attributes(
@@ -104207,7 +104273,7 @@ impl InterpreterCore {
                 }
             });
         }
-        Ok(thrower)
+        Ok(Value::BuiltinFunction(builtin))
     }
 
     fn apply_rest_param(
@@ -104786,13 +104852,11 @@ impl InterpreterCore {
         module: &Ir3Module,
         function: &Value,
     ) -> Result<Option<(ContentHash, u32)>, InterpreterError> {
-        let (kind, base_owner, id) = match function {
-            Value::Function(index) => {
-                return Ok(Some((
-                    self.prototype_owner_ids(module).own_property[0],
-                    *index,
-                )));
-            }
+        match function {
+            Value::Function(index) => Ok(Some((
+                self.prototype_owner_ids(module).own_property[0],
+                *index,
+            ))),
             Value::Closure(id)
             | Value::GeneratorFunction(id)
             | Value::AsyncFunction(id)
@@ -104805,7 +104869,7 @@ impl InterpreterCore {
                 };
                 let owner_module = self.foreign_closure_module(function, module)?;
                 let ids = self.prototype_owner_ids(owner_module.as_deref().unwrap_or(module));
-                return Ok(Some((ids.own_property[kind], *id)));
+                Ok(Some((ids.own_property[kind], *id)))
             }
             // A built-in value carries no storage of its own; its backing
             // object is keyed by the built-in's identity (kind, specifier,
@@ -104814,15 +104878,7 @@ impl InterpreterCore {
             Value::BuiltinFunction(builtin)
                 if Self::builtin_function_property_object(builtin).is_none() =>
             {
-                let identity =
-                    serde_json::to_vec(builtin).map_err(|error| InterpreterError::TypeError {
-                        expected: "serializable built-in function identity".to_string(),
-                        got: error.to_string(),
-                    })?;
-                let mut digest = Sha256::new();
-                digest.update(b"FrankenEngine.BuiltinFunctionIdentity.v1");
-                digest.update(&identity);
-                (5u8, ContentHash::from_bytes(digest.finalize().into()), 0)
+                Self::builtin_function_own_property_key(builtin).map(Some)
             }
             // A promise, generator, async generator or iterator object has no
             // heap storage of its own either: its own properties (`p.cancel =
@@ -104847,14 +104903,111 @@ impl InterpreterCore {
                     Value::AsyncGeneratorObject(_) => 2,
                     _ => 3,
                 };
-                return Ok(Some((owners[slot], *id)));
+                Ok(Some((owners[slot], *id)))
             }
-            _ => return Ok(None),
+            _ => Ok(None),
+        }
+    }
+
+    /// bd-9vouw.272: whether `function` is an ordinary function whose code is
+    /// not strict mode code (not an arrow, method, class, generator or async
+    /// function): the functions with own `caller` and `arguments` in Node.
+    fn is_sloppy_ordinary_function(
+        &self,
+        module: &Ir3Module,
+        function: &Value,
+    ) -> Result<bool, InterpreterError> {
+        let (owner, function_index) = match function {
+            Value::Function(index) => (None, *index),
+            Value::Closure(closure_id)
+                if !self.closure_method_metadata.contains_key(closure_id)
+                    && !self.arrow_lexical_this.contains_key(closure_id) =>
+            {
+                (
+                    self.foreign_closure_module(function, module)?,
+                    self.closure_function_index(*closure_id)?,
+                )
+            }
+            _ => return Ok(false),
         };
-        Ok(Some((
-            Self::function_own_property_owner(kind, &base_owner),
-            id,
-        )))
+        let owner = owner.as_deref().unwrap_or(module);
+        Ok(owner.sloppy_functions.contains_key(&function_index)
+            && owner
+                .function_table
+                .get(function_index as usize)
+                .is_some_and(|descriptor| !descriptor.is_generator))
+    }
+
+    /// bd-9vouw.272: [[Set]] of `caller` or `arguments` on a user function
+    /// that defines neither (its backing objects never received them). A
+    /// sloppy ordinary function's own ones are read-only (null): a sloppy
+    /// write is ignored and a strict one throws. Any other function inherits
+    /// Function.prototype's accessors, so their setter (%ThrowTypeError%)
+    /// runs; a write after the program deleted them, or replaced them with
+    /// a data property, is an ordinary own-property write. Whether the write
+    /// was handled here.
+    fn restricted_function_property_set(
+        &mut self,
+        module: &Ir3Module,
+        function: &Value,
+        key: &RuntimePropertyKey,
+        value: &Value,
+        strict: bool,
+    ) -> Result<bool, InterpreterError> {
+        if !matches!(key.as_str(), Some("caller" | "arguments")) {
+            return Ok(false);
+        }
+        let own_object = match function {
+            Value::BuiltinFunction(builtin) => {
+                match Self::builtin_function_property_object(builtin) {
+                    Some(property_object) => Some(property_object),
+                    None => self.function_own_property_object(module, function)?,
+                }
+            }
+            _ => self.function_own_property_object(module, function)?,
+        };
+        if own_object.is_some_and(|object| self.chain_contains_runtime_property(object, key)) {
+            return Ok(false);
+        }
+        if self.is_sloppy_ordinary_function(module, function)? {
+            return if strict {
+                Err(Self::read_only_property_error(key))
+            } else {
+                Ok(true)
+            };
+        }
+        let prototype = self.ensure_builtin_prototype("Function")?;
+        let inherited = self
+            .heap
+            .get(prototype.0 as usize)
+            .and_then(|object| object.own_runtime_property_value(key));
+        let Some(accessor @ Value::Accessor { .. }) = inherited else {
+            return Ok(false);
+        };
+        if !self.resolve_accessor_set(Some(module), accessor, function.clone(), value.clone())?
+            && strict
+        {
+            return Err(Self::read_only_property_error(key));
+        }
+        Ok(true)
+    }
+
+    /// The backing-object key of a built-in function: a built-in value
+    /// carries no storage of its own, so its backing object is keyed by the
+    /// built-in's identity (kind, specifier, bound state). Needs no module.
+    fn builtin_function_own_property_key(
+        builtin: &BuiltinFunction,
+    ) -> Result<(ContentHash, u32), InterpreterError> {
+        let identity =
+            serde_json::to_vec(builtin).map_err(|error| InterpreterError::TypeError {
+                expected: "serializable built-in function identity".to_string(),
+                got: error.to_string(),
+            })?;
+        let mut digest = Sha256::new();
+        digest.update(b"FrankenEngine.BuiltinFunctionIdentity.v1");
+        digest.update(&identity);
+        let base_owner = ContentHash::from_bytes(digest.finalize().into());
+        Ok((Self::function_own_property_owner(5, &base_owner), 0))
     }
 
     /// Owner id of the backing objects of one function kind (0 = IR3

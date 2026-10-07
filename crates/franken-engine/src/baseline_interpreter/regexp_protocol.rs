@@ -191,6 +191,21 @@ impl InterpreterCore {
         let Some(search) = self.builtin_arg(args, 0)? else {
             return Ok(());
         };
+        // A pristine RegExp's flags are its slot, read with no observable
+        // step; the non-global TypeError must still precede ToString(this)
+        // (a throwing `this` toString ran first on the matcher path).
+        if search.is_object_like()
+            && self.regexp_is_pristine(&search)
+            && let Some((_, flags)) = self.regexp_source_flags_from_value(&search)
+        {
+            if !flags.contains('g') {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("global RegExp for String.prototype.{method}"),
+                    got: "non-global RegExp".to_string(),
+                });
+            }
+            return Ok(());
+        }
         if !search.is_object_like()
             || self.regexp_is_pristine(&search)
             || !self.is_regexp_observable(module, &search)?

@@ -9161,6 +9161,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         register_high_water = register_high_water.max(register_cursor);
                         register_cursor = target;
                     }
+                    if store_result_needs_copy(
+                        ir2.ops.get(op_index + 1).map(|next| &next.inner),
+                        dst,
+                        &iterator_cleanup_labels,
+                    ) {
+                        let copy = alloc_register(&mut register_cursor);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: copy,
+                            src: dst,
+                        });
+                        pop_lowering_value(&mut value_stack)?;
+                        value_stack.push(copy);
+                    }
                 }
             }
             Ir1Op::PutName { name, strict } => {
@@ -11523,6 +11536,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     {
                         fn_register_high_water = fn_register_high_water.max(fn_reg);
                         fn_reg = target;
+                    }
+                    if store_result_needs_copy(
+                        annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                        dst,
+                        &fn_iterator_cleanup_labels,
+                    ) {
+                        let copy = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: copy,
+                            src: dst,
+                        });
+                        pop_lowering_value(&mut fn_value_stack)?;
+                        fn_value_stack.push(copy);
                     }
                 }
                 Ir1Op::PutName { name, strict } => {
@@ -34486,6 +34512,40 @@ fn expression_rewind_target(
 }
 
 /// bd-9vouw.23: forget loops whose iterator has left the value stack.
+/// Whether the value a store into a register-resident binding leaves on the
+/// value stack must be read from a copy of the binding's register. The
+/// stack entry was the binding's register itself, so when the expression
+/// went on to use the value, a later write to the same binding inside that
+/// expression changed it: `[i = 2, i = 3]` was [3, 3], `f(++i, ++i)` passed
+/// i's final value twice and `(j = 1) + (j = 2)` was 4. A value the next op
+/// discards or stores again needs no copy (the statement form, and the
+/// method-call chains of bd-9vouw.246, keep their register reuse), and one
+/// carried into a jump or label, or expected at an iterator-cleanup label,
+/// keeps its register because join points name it.
+fn store_result_needs_copy(
+    next: Option<&Ir1Op>,
+    stored: Reg,
+    iterator_cleanup_labels: &BTreeMap<u32, Reg>,
+) -> bool {
+    !matches!(
+        next,
+        None | Some(
+            Ir1Op::Pop
+                | Ir1Op::Discard
+                | Ir1Op::StoreBinding { .. }
+                | Ir1Op::InitializeBinding { .. }
+                | Ir1Op::Label { .. }
+                | Ir1Op::Jump { .. }
+                | Ir1Op::JumpIfFalsy { .. }
+                | Ir1Op::JumpIfFalsyConsume { .. }
+                | Ir1Op::JumpIfTruthy { .. }
+                | Ir1Op::JumpIfNullish { .. }
+        )
+    ) && !iterator_cleanup_labels
+        .values()
+        .any(|register| *register == stored)
+}
+
 fn prune_iterator_anchors(anchors: &mut Vec<IteratorAnchor>, value_stack: &[Reg]) {
     while anchors
         .last()

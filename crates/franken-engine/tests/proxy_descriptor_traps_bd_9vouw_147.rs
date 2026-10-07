@@ -76,3 +76,18 @@ fn proxy_descriptor_callable() {
         "{\"value\":2,\"writable\":false,\"enumerable\":false,\"configurable\":true} t {\"value\":\"t\",\"writable\":false,\"enumerable\":true,\"configurable\":false}"
     );
 }
+
+/// bd-9vouw.236: HasOwnProperty of a Proxy is its [[GetOwnProperty]]: the
+/// getOwnPropertyDescriptor trap, else the target's own property (string or
+/// symbol key), and a revoked Proxy throws. Every key read false, so mobx's
+/// `hasOwnProperty.call(proxy, $mobx)` made a second administration and
+/// recursed until the stack overflowed on `observable({ a: 1 })`. Node v22.2.0
+/// gives this value; Bun 1.4.2 agrees.
+#[test]
+fn has_own_property_of_a_proxy_asks_its_target_or_trap() {
+    let source = "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\nvar sym = Symbol('adm');\nvar target = {};\nObject.defineProperty(target, sym, { value: 1, enumerable: false, writable: true, configurable: true });\ntarget.s = 2;\nvar plain = new Proxy(target, {});\nvar virtual = new Proxy({}, { getOwnPropertyDescriptor(t, k) { return k === 'virt' ? { value: 1, configurable: true } : undefined; } });\nvar revocable = Proxy.revocable({ a: 1 }, {}); revocable.revoke();\nvar hop = Object.prototype.hasOwnProperty;\n[hop.call(plain, sym), hop.call(plain, 's'), hop.call(plain, 'missing'), plain.hasOwnProperty(sym), Object.hasOwn(plain, 's'),\n hop.call(virtual, 'virt'), hop.call(virtual, 'other'), attempt(() => hop.call(revocable.proxy, 'a'))].join(' ');\n";
+    assert_eq!(
+        eval(source),
+        "true true false true true true false TypeError"
+    );
+}

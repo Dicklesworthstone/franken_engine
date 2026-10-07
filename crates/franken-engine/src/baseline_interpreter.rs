@@ -74224,6 +74224,17 @@ impl InterpreterCore {
     ) -> Result<bool, InterpreterError> {
         if let Value::Object(object_id) = receiver {
             self.join_pending_hostcall_stream_label(*object_id)?;
+            // A Proxy answers through [[GetOwnProperty]]: its
+            // getOwnPropertyDescriptor trap, else its target's (ES2020
+            // 9.5.5). Its own record has none of the target's keys, so every
+            // key read false; mobx's `hasOwnProperty.call(proxy, $mobx)`
+            // then made a second administration and recursed (bd-9vouw.236).
+            if self.active_proxy_record(*object_id)?.is_some() {
+                let key = self.executable_property_key_from_value(property);
+                let descriptor =
+                    self.proxy_aware_own_property_descriptor(module, *object_id, &key, 0)?;
+                return Ok(!matches!(descriptor, Value::Undefined));
+            }
         }
         let Some(module) = module else {
             return Ok(self.object_own_property_contains(receiver, property));

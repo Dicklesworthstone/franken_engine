@@ -4,8 +4,8 @@
 //! Uint8Array, allocated as `new Uint8Array(n)` is; lone surrogates encode as
 //! U+FFFD. The decoder supports utf-8 (with BOM handling and U+FFFD
 //! replacement of maximal ill-formed subparts, or a TypeError when `fatal`),
-//! utf-16le, and windows-1252 (which the `latin1`, `ascii` and `iso-8859-1`
-//! labels name). Other labels are a RangeError, as in Node. The `stream`
+//! utf-16le/be, and windows-1252 (which the `latin1`, `ascii` and `iso-8859-1`
+//! labels name). Unsupported labels are a RangeError. The `stream`
 //! option of `decode` is not supported: every call decodes a complete input.
 
 use super::*;
@@ -25,6 +25,7 @@ fn canonical_decoder_encoding(label: &str) -> Option<&'static str> {
         | "x-unicode20utf8" => Some("utf-8"),
         "csunicode" | "iso-10646-ucs-2" | "ucs-2" | "unicode" | "unicodefeff" | "utf-16"
         | "utf-16le" => Some("utf-16le"),
+        "unicodefffe" | "utf-16be" => Some("utf-16be"),
         "ansi_x3.4-1968" | "ascii" | "cp1252" | "cp819" | "csisolatin1" | "ibm819"
         | "iso-8859-1" | "iso-ir-100" | "iso8859-1" | "iso88591" | "iso_8859-1"
         | "iso_8859-1:1987" | "l1" | "latin1" | "us-ascii" | "windows-1252" | "x-cp1252" => {
@@ -211,7 +212,7 @@ impl InterpreterCore {
                     decode_bytes(&encoding, &bytes, fatal, ignore_bom).ok_or_else(|| {
                         InterpreterError::TypeError {
                             expected: format!("valid {encoding} data"),
-                            got: "The encoded data was not valid for encoding utf-8".to_string(),
+                            got: format!("The encoded data was not valid for encoding {encoding}"),
                         }
                     })?;
                 Ok(Value::Str(JsString::from_code_units(&units)))
@@ -287,22 +288,65 @@ impl InterpreterCore {
 }
 
 /// UTF-16 code units of `bytes` decoded as `encoding`, or `None` when `fatal`
-/// and the utf-8 data is invalid.
+/// and the input is invalid. UTF-16 decoding returns scalar values, never
+/// unpaired surrogate code units. An unmatched high surrogate plus one trailing
+/// byte is a single end-of-queue error (WHATWG shared UTF-16 decoder).
 fn decode_bytes(encoding: &str, bytes: &[u8], fatal: bool, ignore_bom: bool) -> Option<Vec<u16>> {
     match encoding {
-        "utf-16le" => {
-            let bytes = match bytes {
-                [0xFF, 0xFE, rest @ ..] if !ignore_bom => rest,
-                _ => bytes,
+        "utf-16le" | "utf-16be" => {
+            let big_endian = encoding == "utf-16be";
+            let read = |offset| {
+                let pair = [bytes[offset], bytes[offset + 1]];
+                if big_endian {
+                    u16::from_be_bytes(pair)
+                } else {
+                    u16::from_le_bytes(pair)
+                }
             };
-            let mut units: Vec<u16> = bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| u16::from_le_bytes(*pair))
-                .collect();
-            if bytes.len() % 2 == 1 {
-                units.push(0xFFFD);
+            let mut units = Vec::new();
+            let mut offset = 0;
+            while offset < bytes.len() {
+                let remaining = bytes.len() - offset;
+                if remaining < 2 {
+                    if fatal {
+                        return None;
+                    }
+                    units.push(0xFFFD);
+                    break;
+                }
+                let unit = read(offset);
+                if offset == 0 && unit == 0xFEFF && !ignore_bom {
+                    offset += 2;
+                    continue;
+                }
+                if (0xD800..=0xDBFF).contains(&unit) {
+                    if remaining < 4 {
+                        if fatal {
+                            return None;
+                        }
+                        units.push(0xFFFD);
+                        break;
+                    }
+                    let low = read(offset + 2);
+                    if (0xDC00..=0xDFFF).contains(&low) {
+                        units.extend_from_slice(&[unit, low]);
+                        offset += 4;
+                        continue;
+                    }
+                    if fatal {
+                        return None;
+                    }
+                    units.push(0xFFFD);
+                    // Reprocess the following unit: it may start another pair.
+                } else if (0xDC00..=0xDFFF).contains(&unit) {
+                    if fatal {
+                        return None;
+                    }
+                    units.push(0xFFFD);
+                } else {
+                    units.push(unit);
+                }
+                offset += 2;
             }
             Some(units)
         }
@@ -379,5 +423,54 @@ mod tests {
             utf8_of_code_units([0xD800, 0x78]).as_bytes(),
             [0xEF, 0xBF, 0xBD, 0x78]
         );
+    }
+}
+
+#[cfg(test)]
+mod utf16_decoder_tests {
+    use super::*;
+
+    #[test]
+    fn big_endian_labels_are_canonicalized_without_accepting_unrelated_encodings() {
+        for label in ["utf-16be", "\tUTF-16BE\r", "unicodefffe"] {
+            assert_eq!(canonical_decoder_encoding(label), Some("utf-16be"));
+        }
+        assert_eq!(canonical_decoder_encoding("utf-32be"), None);
+    }
+
+    #[test]
+    fn utf16_invalid_subparts_are_scalar_replacements_in_both_byte_orders() {
+        for encoding in ["utf-16le", "utf-16be"] {
+            let bytes = |units: &[u16]| {
+                units.iter().flat_map(|unit| {
+                    if encoding == "utf-16be" { unit.to_be_bytes() } else { unit.to_le_bytes() }
+                }).collect::<Vec<_>>()
+            };
+            for (input, expected) in [
+                (&[0xD800][..], &[0xFFFD][..]),
+                (&[0xDC00][..], &[0xFFFD][..]),
+                (&[0xD800, 0x41][..], &[0xFFFD, 0x41][..]),
+                (&[0xD800, 0xD801, 0xDC00][..], &[0xFFFD, 0xD801, 0xDC00][..]),
+                (&[0xDC00, 0xD800, 0xDC00][..], &[0xFFFD, 0xD800, 0xDC00][..]),
+            ] {
+                assert_eq!(decode_bytes(encoding, &bytes(input), false, false).as_deref(), Some(expected));
+                assert_eq!(decode_bytes(encoding, &bytes(input), true, false), None);
+            }
+            let mut unmatched = bytes(&[0xD800]);
+            unmatched.push(0x41);
+            assert_eq!(decode_bytes(encoding, &unmatched, false, false), Some(vec![0xFFFD]));
+            assert_eq!(decode_bytes(encoding, &unmatched, true, false), None);
+        }
+    }
+
+    #[test]
+    fn utf16_bom_and_surrogate_pair_are_not_lossily_flattened_by_tests() {
+        for (encoding, bytes) in [
+            ("utf-16le", [0xFF, 0xFE, 0x3D, 0xD8, 0x00, 0xDE, 0xFF, 0xFE]),
+            ("utf-16be", [0xFE, 0xFF, 0xD8, 0x3D, 0xDE, 0x00, 0xFE, 0xFF]),
+        ] {
+            assert_eq!(decode_bytes(encoding, &bytes, true, false), Some(vec![0xD83D, 0xDE00, 0xFEFF]));
+            assert_eq!(decode_bytes(encoding, &bytes, true, true), Some(vec![0xFEFF, 0xD83D, 0xDE00, 0xFEFF]));
+        }
     }
 }

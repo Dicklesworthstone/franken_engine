@@ -11,7 +11,7 @@ const programs = new Map([...file.matchAll(/const ([A-Z_]+): &str = r#"([\s\S]*?
   .map(match => [match[1], match[2]]));
 const expectations = [...file.matchAll(/check\(([A-Z_]+), &(\[[^\n]+\])\);/g)]
   .map(match => [match[1], JSON.parse(match[2])]);
-assert.equal(programs.size, 10, 'fixture discovery');
+assert.equal(programs.size, 12, 'fixture discovery');
 assert.equal(expectations.length, programs.size, 'every fixture has expected output');
 for (const [name, expected] of expectations) {
   assert.ok(programs.has(name), name);

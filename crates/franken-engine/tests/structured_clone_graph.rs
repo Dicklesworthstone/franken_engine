@@ -252,3 +252,37 @@ console.log(reads, JSON.stringify(structuredClone({ good: [1, 2] })));
 fn abrupt_getters_preserve_identity_stop_the_walk_and_allow_later_clones() {
     check(ABRUPT, &["true", "0 {\"good\":[1,2]}"]);
 }
+
+const REENTRANT_CLONE: &str = r#"
+const inner = { value: [1, 2] };
+const source = {
+  get first() { return structuredClone(inner); },
+  get second() { return JSON.parse('{"other":3}'); },
+  third: inner
+};
+const clone = structuredClone(source);
+console.log(JSON.stringify(clone));
+console.log(clone.first !== clone.third, clone.third !== inner);
+"#;
+
+#[test]
+fn nested_clone_and_json_calls_preserve_outer_snapshot_ownership() {
+    check(REENTRANT_CLONE, &["{\"first\":{\"value\":[1,2]},\"second\":{\"other\":3},\"third\":{\"value\":[1,2]}}", "true true"]);
+}
+
+const BINARY_GRAPH: &str = r#"
+const buffer = new ArrayBuffer(8);
+const bytes = new Uint8Array(buffer);
+bytes[2] = 42;
+const source = { buffer, first: new Uint8Array(buffer, 2, 3), second: new DataView(buffer, 1, 4) };
+const clone = structuredClone(source);
+console.log(clone.buffer !== buffer, clone.first.buffer === clone.buffer, clone.second.buffer === clone.buffer);
+console.log(clone.first.byteOffset, clone.first.length, clone.first[0], clone.second.byteOffset, clone.second.byteLength);
+clone.first[0] = 99;
+console.log(bytes[2], new Uint8Array(clone.buffer)[2]);
+"#;
+
+#[test]
+fn binary_scratch_does_not_break_shared_backing_buffer_identity() {
+    check(BINARY_GRAPH, &["true true true", "2 3 42 1 4", "42 99"]);
+}

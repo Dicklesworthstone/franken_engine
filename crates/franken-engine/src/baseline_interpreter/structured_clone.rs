@@ -48,10 +48,36 @@ struct CloneState {
     memory: BTreeMap<ObjectId, ObjectId>,
     /// Join of every object and property label read, carried to the result.
     label: Label,
-    /// Bytes of key snapshots charged to the memory budget, released at the
-    /// end of the walk.
+    /// Live snapshot/binary-copy charges and conservative memo-entry charges.
+    /// The shared native scratch counter survives reentrant accounting syncs.
     charged: u64,
 }
+
+impl CloneState {
+    fn reserve(&mut self, core: &mut InterpreterCore, bytes: u64) -> Result<(), InterpreterError> {
+        let total = self.charged.checked_add(bytes).ok_or_else(|| {
+            core.memory_budget_error(u64::MAX, core.heap_object_count_u32())
+        })?;
+        core.json_reserve_temporary(bytes)?;
+        self.charged = total;
+        Ok(())
+    }
+
+    fn release(&mut self, core: &mut InterpreterCore, bytes: u64) {
+        debug_assert!(bytes <= self.charged);
+        core.json_release_temporary(bytes);
+        self.charged = self.charged.saturating_sub(bytes);
+    }
+}
+
+/// A traversal snapshot owns its scratch charge until its last entry is used.
+struct CloneSnapshot<T> {
+    values: Vec<T>,
+    charged: u64,
+}
+
+// Use the existing reachable-walk estimate for a BTree node, not a new quota.
+const CLONE_MEMO_ENTRY_BYTES: u64 = 64;
 
 /// One step of the walk. `Clone` pushes exactly one value onto the results
 /// stack; the steps after it pop what they need.
@@ -61,7 +87,7 @@ enum CloneTask {
     Properties {
         source: ObjectId,
         target: ObjectId,
-        keys: Vec<Value>,
+        keys: CloneSnapshot<Value>,
         next: usize,
     },
     /// Pop a cloned value and define it on `target`.
@@ -72,7 +98,7 @@ enum CloneTask {
     },
     MapEntries {
         target: ObjectId,
-        entries: Vec<(Value, Value)>,
+        entries: CloneSnapshot<(Value, Value)>,
         next: usize,
     },
     /// Pop a cloned value, then its cloned key, into the Map.
@@ -81,7 +107,7 @@ enum CloneTask {
     },
     SetValues {
         target: ObjectId,
-        values: Vec<Value>,
+        values: CloneSnapshot<(Value, Value)>,
         next: usize,
     },
     SetAdd {
@@ -117,7 +143,11 @@ impl InterpreterCore {
             charged: 0,
         };
         let outcome = self.structured_clone_walk(module, value, &mut state);
-        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(state.charged);
+        // Tasks and their snapshots have dropped on either return path. Drop
+        // memo nodes too before releasing this invocation's remaining charge;
+        // a caller's reentrant scratch reservation must remain untouched.
+        state.memory.clear();
+        self.json_release_temporary(state.charged);
         let clone = outcome?;
         // The clone holds everything reachable from the argument: its label
         // is the join of what the walk read, on top of the argument's own.
@@ -139,6 +169,12 @@ impl InterpreterCore {
         let mut tasks = vec![CloneTask::Clone(value)];
         let mut results: Vec<Value> = Vec::new();
         while let Some(task) = tasks.pop() {
+            // Every edge costs work, including primitive values and references
+            // already in memory. A large Map/Set must not hide an unbounded
+            // native loop behind a single guest instruction. This shared check
+            // also observes host cancellation; neither refusal becomes a guest
+            // DataCloneError.
+            self.json_charge_work()?;
             match task {
                 CloneTask::Clone(value) => {
                     let clone = self.structured_clone_step(module, value, state, &mut tasks)?;
@@ -152,7 +188,10 @@ impl InterpreterCore {
                     keys,
                     next,
                 } => {
-                    let Some(key_value) = keys.get(next).cloned() else {
+                    let Some(key_value) = keys.values.get(next).cloned() else {
+                        let charged = keys.charged;
+                        drop(keys);
+                        state.release(self, charged);
                         continue;
                     };
                     tasks.push(CloneTask::Properties {
@@ -197,7 +236,10 @@ impl InterpreterCore {
                     entries,
                     next,
                 } => {
-                    let Some((key, value)) = entries.get(next).cloned() else {
+                    let Some((key, value)) = entries.values.get(next).cloned() else {
+                        let charged = entries.charged;
+                        drop(entries);
+                        state.release(self, charged);
                         continue;
                     };
                     tasks.push(CloneTask::MapEntries {
@@ -219,7 +261,10 @@ impl InterpreterCore {
                     values,
                     next,
                 } => {
-                    let Some(value) = values.get(next).cloned() else {
+                    let Some((_, value)) = values.values.get(next).cloned() else {
+                        let charged = values.charged;
+                        drop(values);
+                        state.release(self, charged);
                         continue;
                     };
                     tasks.push(CloneTask::SetValues {
@@ -348,6 +393,7 @@ impl InterpreterCore {
             return Err(self.throw_data_clone_error("#<Object>", &state.label));
         }
         state.label = state.label.join(&self.structured_clone_object_label(id));
+        state.reserve(self, CLONE_MEMO_ENTRY_BYTES)?;
         let object = self
             .heap
             .get(id.0 as usize)
@@ -382,11 +428,23 @@ impl InterpreterCore {
             return Ok(None);
         }
         if array_buffer {
-            let bytes = self.with_array_buffer_bytes(id, <[u8]>::to_vec)?;
-            let label = self.binary_storage_label(id);
-            let clone = self.alloc_array_buffer_object(bytes.len())?;
-            self.with_array_buffer_bytes_mut(clone, |target| target.copy_from_slice(&bytes))?;
-            self.join_binary_storage_label(clone, &label)?;
+            let length = self.with_array_buffer_bytes(id, <[u8]>::len)?;
+            let charged = length as u64;
+            state.reserve(self, charged)?;
+            let outcome = (|| -> Result<ObjectId, InterpreterError> {
+                let mut bytes = Vec::new();
+                bytes.try_reserve_exact(length).map_err(|_| {
+                    self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+                })?;
+                self.with_array_buffer_bytes(id, |source| bytes.extend_from_slice(source))?;
+                let label = self.binary_storage_label(id);
+                let clone = self.alloc_array_buffer_object(length)?;
+                self.with_array_buffer_bytes_mut(clone, |target| target.copy_from_slice(&bytes))?;
+                self.join_binary_storage_label(clone, &label)?;
+                Ok(clone)
+            })();
+            state.release(self, charged);
+            let clone = outcome?;
             state.memory.insert(id, clone);
             return Ok(Some(Value::Object(clone)));
         }
@@ -423,7 +481,7 @@ impl InterpreterCore {
                 let (clone, _) = self.alloc_empty_map()?;
                 state.memory.insert(id, clone);
                 let entries =
-                    self.structured_clone_collection_entries(id, "Map", "__entries", state);
+                    self.structured_clone_collection_entries(id, "Map", "__entries", state)?;
                 tasks.push(CloneTask::MapEntries {
                     target: clone,
                     entries,
@@ -434,11 +492,8 @@ impl InterpreterCore {
             Some("Set") => {
                 let clone = self.alloc_empty_set()?;
                 state.memory.insert(id, clone);
-                let values = self
-                    .structured_clone_collection_entries(id, "Set", "__values", state)
-                    .into_iter()
-                    .map(|(_, value)| value)
-                    .collect();
+                let values =
+                    self.structured_clone_collection_entries(id, "Set", "__values", state)?;
                 tasks.push(CloneTask::SetValues {
                     target: clone,
                     values,
@@ -471,13 +526,12 @@ impl InterpreterCore {
         state.memory.insert(id, clone);
         let mut keys = self.proxy_aware_own_property_keys(module, id, 0)?;
         let key_bytes = Self::estimate_value_vec_bytes(&keys);
-        self.apply_memory_component_delta(0, key_bytes)?;
-        state.charged = state.charged.saturating_add(key_bytes);
+        state.reserve(self, key_bytes)?;
         // Snapshot enumerable string keys, without reading their values. Use
         // the existing vector so filtering does not allocate a second list.
         let mut kept = 0;
         for index in 0..keys.len() {
-            self.charge_property_copy_work()?;
+            self.json_charge_work()?;
             let key = self.executable_property_key_from_value(&keys[index]);
             if !matches!(key, RuntimePropertyKey::Symbol(_))
                 && self.copy_own_key_is_enumerable(module, id, &key, 0)?
@@ -490,7 +544,10 @@ impl InterpreterCore {
         tasks.push(CloneTask::Properties {
             source: id,
             target: clone,
-            keys,
+            keys: CloneSnapshot {
+                values: keys,
+                charged: key_bytes,
+            },
             next: 0,
         });
         Ok(Some(Value::Object(clone)))
@@ -506,31 +563,66 @@ impl InterpreterCore {
             .join(&self.binary_storage_label(id))
     }
 
-    /// A Map's or Set's entries in insertion order, keys decoded from their
-    /// storage representation. The storage object's label joins the walk's.
+    /// Snapshot collection entries before visiting getters. Admission precedes
+    /// decoding storage keys or copying values; sizing itself consumes work.
+    /// Set keys are unused and need not be decoded or copied a second time.
     fn structured_clone_collection_entries(
-        &self,
+        &mut self,
         id: ObjectId,
         type_tag: &str,
         storage_prop: &str,
         state: &mut CloneState,
-    ) -> Vec<(Value, Value)> {
+    ) -> Result<CloneSnapshot<(Value, Value)>, InterpreterError> {
         let Some(storage_id) = self.collection_storage_id(id, type_tag, storage_prop) else {
-            return Vec::new();
+            return Ok(CloneSnapshot {
+                values: Vec::new(),
+                charged: 0,
+            });
         };
         state.label = state
             .label
             .join(&self.structured_clone_object_label(storage_id));
-        self.heap
+        let count = self
+            .heap
             .get(storage_id.0 as usize)
-            .map(|storage| {
-                storage
-                    .properties
-                    .iter()
-                    .map(|(repr, value)| (Self::collection_key_from_repr(repr), value.clone()))
-                    .collect()
+            .map_or(0, |storage| storage.properties.len());
+        for _ in 0..count {
+            self.json_charge_work()?;
+        }
+        let is_map = type_tag == "Map";
+        let charged = self.heap.get(storage_id.0 as usize).map_or(0, |storage| {
+            storage.properties.iter().fold(0_u64, |bytes, (repr, value)| {
+                // A decoded key's UTF-16 payload fits within twice its stored
+                // representation length. The pair includes its Value headers.
+                let key_bytes = if is_map {
+                    (repr.len() as u64).saturating_mul(2)
+                } else {
+                    0
+                };
+                bytes.saturating_add(std::mem::size_of::<(Value, Value)>() as u64)
+                    .saturating_add(key_bytes)
+                    .saturating_add(Self::estimate_value_bytes(value))
             })
-            .unwrap_or_default()
+        });
+        state.reserve(self, charged)?;
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(count).map_err(|_| {
+            self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
+        })?;
+        if let Some(storage) = self.heap.get(storage_id.0 as usize) {
+            for (repr, value) in storage.properties.iter() {
+                let key = if is_map {
+                    Self::collection_key_from_repr(repr)
+                } else {
+                    Value::Undefined
+                };
+                entries.push((key, value.clone()));
+            }
+        }
+        Ok(CloneSnapshot {
+            values: entries,
+            charged,
+        })
     }
 
     /// V8's error serialization: the prototype of the standard constructor
@@ -615,5 +707,199 @@ impl InterpreterCore {
         InterpreterError::UncaughtException {
             value: self.uncaught_exception_description(&thrown),
         }
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    fn runtime() -> InterpreterCore {
+        InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "clone-resource")
+    }
+
+    fn state() -> CloneState {
+        CloneState {
+            memory: BTreeMap::new(),
+            label: Label::Public,
+            charged: 0,
+        }
+    }
+
+    fn collection(core: &mut InterpreterCore, is_map: bool, count: i64) -> ObjectId {
+        let target = if is_map {
+            core.alloc_empty_map().unwrap().0
+        } else {
+            core.alloc_empty_set().unwrap()
+        };
+        for value in 0..count {
+            if is_map {
+                core.map_collection_set(target, Value::Int(value), Value::Int(value + 1))
+                    .unwrap();
+            } else {
+                core.set_collection_add(target, Value::Int(value)).unwrap();
+            }
+        }
+        target
+    }
+
+    fn clone_value(core: &mut InterpreterCore, value: Value) -> Result<Value, InterpreterError> {
+        core.set_register(0, value).unwrap();
+        core.structured_clone_builtin(None, RegRange { start: 0, count: 1 })
+    }
+
+    #[test]
+    fn primitive_collections_cannot_bypass_the_instruction_budget() {
+        for is_map in [false, true] {
+            let mut core = runtime();
+            let source = collection(&mut core, is_map, 128);
+            // Construction is not part of the budget under test. The native
+            // clone gets only eight more work units, far less than 128 edges.
+            core.config.instruction_budget = core.instructions_executed + 8;
+            assert!(matches!(
+                clone_value(&mut core, Value::Object(source)),
+                Err(InterpreterError::BudgetExhausted { .. })
+            ));
+            assert!(core.pending_exception.is_none(), "not a guest clone error");
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+            core.config.instruction_budget = 1_000_000;
+            assert!(matches!(
+                clone_value(&mut core, Value::Object(source)),
+                Ok(Value::Object(_))
+            ));
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+        }
+    }
+
+    #[test]
+    fn collection_snapshot_is_admitted_before_allocation() {
+        for is_map in [false, true] {
+            let mut core = runtime();
+            let source = collection(&mut core, is_map, 32);
+            let before = core.estimated_memory_bytes();
+            core.config.max_total_memory_bytes = before;
+            let mut state = state();
+            let (tag, slot) = if is_map { ("Map", "__entries") } else { ("Set", "__values") };
+            let result = core.structured_clone_collection_entries(source, tag, slot, &mut state);
+            assert!(matches!(result, Err(InterpreterError::MemoryBudgetExceeded { .. })));
+            assert_eq!(state.charged, 0, "a refused snapshot owns no charge");
+            assert_eq!(core.json_parse_temporary_bytes, 0);
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        }
+    }
+
+    #[test]
+    fn snapshot_charge_survives_resynchronization_and_preserves_caller_scratch() {
+        let mut core = runtime();
+        let source = collection(&mut core, true, 16);
+        core.json_reserve_temporary(37).unwrap();
+        let mut state = state();
+        let snapshot = core
+            .structured_clone_collection_entries(source, "Map", "__entries", &mut state)
+            .unwrap();
+        assert_eq!(snapshot.values.len(), 16);
+        assert!(snapshot.charged >= 16 * std::mem::size_of::<(Value, Value)>() as u64);
+        assert_eq!(core.json_parse_temporary_bytes, snapshot.charged + 37);
+        let expected_memory = core.estimated_memory_bytes();
+        assert_eq!(core.sync_estimated_memory_bytes().unwrap(), expected_memory);
+        let charged = snapshot.charged;
+        drop(snapshot);
+        state.release(&mut core, charged);
+        assert_eq!(state.charged, 0);
+        assert_eq!(core.json_parse_temporary_bytes, 37);
+        assert!(clone_value(&mut core, Value::Object(source)).is_ok());
+        assert_eq!(core.json_parse_temporary_bytes, 37);
+        core.json_release_temporary(37);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn completed_snapshots_are_released_before_memo_entries() {
+        let mut core = runtime();
+        let map = collection(&mut core, true, 64);
+        let set = collection(&mut core, false, 64);
+        let source = core.alloc_array_from_values(&[Value::Object(map), Value::Object(set)]).unwrap();
+        let mut state = state();
+        assert!(core.structured_clone_walk(None, Value::Object(source), &mut state).is_ok());
+        assert_eq!(state.memory.len(), 3);
+        assert_eq!(state.charged, 3 * CLONE_MEMO_ENTRY_BYTES);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+        state.memory.clear();
+        let charged = state.charged;
+        state.release(&mut core, charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn shared_objects_are_memoized_and_charged_once() {
+        let mut core = runtime();
+        let shared = core.alloc_object_with_properties(&[("n", Value::Int(7))]).unwrap();
+        let source = core.alloc_empty_map().unwrap().0;
+        for n in 0..32 {
+            core.map_collection_set(source, Value::Int(n), Value::Object(shared)).unwrap();
+        }
+        let mut state = state();
+        assert!(core.structured_clone_walk(None, Value::Object(source), &mut state).is_ok());
+        assert_eq!(state.memory.len(), 2);
+        assert_eq!(state.charged, 2 * CLONE_MEMO_ENTRY_BYTES);
+        state.memory.clear();
+        let charged = state.charged;
+        state.release(&mut core, charged);
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+    }
+
+    #[test]
+    fn binary_copy_refusal_does_not_allocate_an_unbudgeted_payload() {
+        let mut core = runtime();
+        let source = core.alloc_array_buffer_object(1024).unwrap();
+        core.with_array_buffer_bytes_mut(source, |bytes| bytes.fill(0xA5)).unwrap();
+        core.set_register(0, Value::Object(source)).unwrap();
+        let heap_before = core.heap_size();
+        let before = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before + CLONE_MEMO_ENTRY_BYTES + 1023;
+        assert!(matches!(
+            core.structured_clone_builtin(None, RegRange { start: 0, count: 1 }),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.heap_size(), heap_before);
+        assert!(core.with_array_buffer_bytes(source, |bytes| bytes.iter().all(|byte| *byte == 0xA5)).unwrap());
+        assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), before);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn failed_clone_drops_snapshots_without_releasing_an_outer_reservation() {
+        let mut core = runtime();
+        let source = core.alloc_empty_map().unwrap().0;
+        core.map_collection_set(source, Value::Int(1), Value::Symbol(SymbolId(1))).unwrap();
+        core.json_reserve_temporary(37).unwrap();
+        assert!(matches!(
+            clone_value(&mut core, Value::Object(source)),
+            Err(InterpreterError::UncaughtException { .. })
+        ));
+        assert!(core.pending_exception.is_some());
+        assert_eq!(core.json_parse_temporary_bytes, 37);
+        core.json_release_temporary(37);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
+    }
+
+    #[test]
+    fn cancellation_stops_native_clone_before_allocating_output() {
+        let mut core = runtime();
+        let source = collection(&mut core, true, 32);
+        let token = CancellationToken::new();
+        token.cancel();
+        core.config.cancellation_token = Some(token);
+        let before = core.heap_size();
+        assert_eq!(clone_value(&mut core, Value::Object(source)), Err(InterpreterError::Cancelled));
+        assert_eq!(core.heap_size(), before);
+        assert!(core.pending_exception.is_none());
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), core.recompute_estimated_memory_bytes());
     }
 }

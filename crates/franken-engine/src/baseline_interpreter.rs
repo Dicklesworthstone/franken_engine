@@ -1024,6 +1024,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         SET_ITERATOR_PROTOTYPE => Some(SET_ITERATOR_PROTOTYPE),
         GENERATOR_PROTOTYPE => Some(GENERATOR_PROTOTYPE),
         ASYNC_GENERATOR_PROTOTYPE => Some(ASYNC_GENERATOR_PROTOTYPE),
+        ASYNC_ITERATOR_PROTOTYPE => Some(ASYNC_ITERATOR_PROTOTYPE),
         _ => None,
     }
 }
@@ -5953,6 +5954,9 @@ const MAP_ITERATOR_PROTOTYPE: &str = "%MapIteratorPrototype%";
 const SET_ITERATOR_PROTOTYPE: &str = "%SetIteratorPrototype%";
 const GENERATOR_PROTOTYPE: &str = "%GeneratorPrototype%";
 const ASYNC_GENERATOR_PROTOTYPE: &str = "%AsyncGeneratorPrototype%";
+/// %AsyncIteratorPrototype% (ES2018 25.1.3): %AsyncGeneratorPrototype%'s
+/// [[Prototype]], whose @@asyncIterator returns its receiver.
+const ASYNC_ITERATOR_PROTOTYPE: &str = "%AsyncIteratorPrototype%";
 /// %GeneratorFunction%, %AsyncFunction% and %AsyncGeneratorFunction% (ES2020
 /// 25.2, 25.7; ES2018 25.3): standard constructors that are not global
 /// bindings, reached as the `constructor` of their prototypes, which are the
@@ -105317,10 +105321,13 @@ impl InterpreterCore {
             }
             // ES2020 25.1.2, 22.1.5.2, 25.4.1: %IteratorPrototype% inherits
             // from Object.prototype, the array iterator and generator
-            // prototypes from it. %AsyncGeneratorPrototype%'s
-            // %AsyncIteratorPrototype% is not modeled (Object.prototype).
-            ITERATOR_PROTOTYPE | ASYNC_GENERATOR_PROTOTYPE => {
+            // prototypes from it; ES2018 25.1.3, 25.5.1: so does
+            // %AsyncIteratorPrototype%, %AsyncGeneratorPrototype% from it.
+            ITERATOR_PROTOTYPE | ASYNC_ITERATOR_PROTOTYPE => {
                 Some(self.ensure_builtin_prototype("Object")?)
+            }
+            ASYNC_GENERATOR_PROTOTYPE => {
+                Some(self.ensure_builtin_prototype(ASYNC_ITERATOR_PROTOTYPE)?)
             }
             ARRAY_ITERATOR_PROTOTYPE
             | MAP_ITERATOR_PROTOTYPE
@@ -105635,6 +105642,16 @@ impl InterpreterCore {
                 }
                 return Ok(());
             }
+            // ES2018 25.1.3.1: its only own member, no @@toStringTag.
+            ASYNC_ITERATOR_PROTOTYPE => {
+                let key = RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id());
+                let value = Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
+                ));
+                self.set_object_runtime_property(prototype, key.clone(), value)?;
+                self.set_own_property_attributes(prototype, &key, NON_ENUMERABLE_DATA_ATTRIBUTES)?;
+                return Ok(());
+            }
             iterator_helpers::ITERATOR_HELPER_PROTOTYPE
             | iterator_helpers::WRAP_FOR_VALID_ITERATOR_PROTOTYPE => {
                 let members = iterator_helpers::ITERATOR_HELPER_METHODS
@@ -105691,12 +105708,6 @@ impl InterpreterCore {
                     method("next", BuiltinFunctionKind::AsyncGeneratorNext),
                     method("return", BuiltinFunctionKind::AsyncGeneratorReturn),
                     method("throw", BuiltinFunctionKind::AsyncGeneratorThrow),
-                    (
-                        RuntimePropertyKey::Symbol(WellKnownSymbol::AsyncIterator.id()),
-                        Value::BuiltinFunction(BuiltinFunction::new_kind(
-                            BuiltinFunctionKind::AsyncGeneratorIteratorSelf,
-                        )),
-                    ),
                 ],
                 Some("AsyncGeneratorFunction"),
             ),

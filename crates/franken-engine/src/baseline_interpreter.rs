@@ -2629,31 +2629,10 @@ impl RuntimeSymbolState {
         (1..FIRST_DYNAMIC_SYMBOL_ID).contains(&id.0) || self.symbols.contains_key(&id)
     }
 
-    fn allocate_private(
-        &mut self,
-        description: Option<JsString>,
-    ) -> Result<SymbolId, InterpreterError> {
-        self.allocate(RuntimeSymbolKind::Private, description, None)
-    }
-
-    fn allocate_class_private_name(
-        &mut self,
-        description: JsString,
-    ) -> Result<SymbolId, InterpreterError> {
-        self.allocate(RuntimeSymbolKind::ClassPrivateName, Some(description), None)
-    }
-
     fn is_class_private_name(&self, id: SymbolId) -> bool {
         self.symbols
             .get(&id)
             .is_some_and(|record| matches!(record.kind, RuntimeSymbolKind::ClassPrivateName))
-    }
-
-    fn intern_global(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
-        if let Some(symbol) = self.global_symbol(&key) {
-            return Ok(symbol);
-        }
-        self.allocate(RuntimeSymbolKind::Global, Some(key.clone()), Some(key))
     }
 
     fn global_symbol(&self, key: &JsString) -> Option<SymbolId> {
@@ -70264,7 +70243,7 @@ impl InterpreterCore {
         &mut self,
         description: Option<JsString>,
     ) -> Result<SymbolId, InterpreterError> {
-        self.allocate_charged_symbol(|state| state.allocate_private(description))
+        self.allocate_charged_symbol(RuntimeSymbolKind::Private, description, None)
     }
 
     /// A class evaluation's Private Name `#x`, charged like any symbol.
@@ -70272,59 +70251,39 @@ impl InterpreterCore {
         &mut self,
         description: JsString,
     ) -> Result<SymbolId, InterpreterError> {
-        self.allocate_charged_symbol(|state| state.allocate_class_private_name(description))
+        self.allocate_charged_symbol(RuntimeSymbolKind::ClassPrivateName, Some(description), None)
     }
 
-    /// Runs `allocate` on a copy of the symbol state, within the memory
-    /// budget, and charges the state's growth.
+    /// Adds one symbol record within the memory budget and charges it. The
+    /// record's bytes are known before it exists, so the budget is checked
+    /// and charged first and the state changes only on success. This used to
+    /// copy the whole symbol state and estimate it twice per allocation:
+    /// O(symbols) for every Symbol(), Symbol.for and class private name, so
+    /// a class with N private fields took O(N^2) to define (bd-9vouw.332).
     fn allocate_charged_symbol(
         &mut self,
-        allocate: impl FnOnce(&mut RuntimeSymbolState) -> Result<SymbolId, InterpreterError>,
+        kind: RuntimeSymbolKind,
+        description: Option<JsString>,
+        registry_key: Option<JsString>,
     ) -> Result<SymbolId, InterpreterError> {
-        let previous_symbol_bytes = Self::estimate_symbol_state_bytes(&self.symbol_state);
-        let temporary_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(previous_symbol_bytes);
-        if self.memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
+        let record_bytes =
+            Self::estimate_symbol_record_bytes(description.as_ref(), registry_key.as_ref());
+        self.apply_memory_component_delta(0, record_bytes)?;
+        match self.mutate_symbol_state(|state| state.allocate(kind, description, registry_key)) {
+            Ok(symbol) => Ok(symbol),
+            Err(error) => {
+                self.estimated_memory_bytes =
+                    self.estimated_memory_bytes.saturating_sub(record_bytes);
+                Err(error)
+            }
         }
-        let mut projected = self.symbol_state.value.clone();
-        let symbol = allocate(&mut projected)?;
-        let next_symbol_bytes = Self::estimate_symbol_state_bytes(&projected);
-        let peak_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(next_symbol_bytes);
-        if self.memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
-        }
-        self.apply_memory_component_delta(previous_symbol_bytes, next_symbol_bytes)?;
-        self.mutate_symbol_state(|state| *state = projected);
-        Ok(symbol)
     }
 
     fn intern_global_symbol(&mut self, key: JsString) -> Result<SymbolId, InterpreterError> {
         if let Some(symbol) = self.symbol_state.global_symbol(&key) {
             return Ok(symbol);
         }
-        let previous_symbol_bytes = Self::estimate_symbol_state_bytes(&self.symbol_state);
-        let temporary_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(previous_symbol_bytes);
-        if self.memory_request_exceeds_budget(temporary_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(temporary_bytes, self.heap_object_count_u32()));
-        }
-        let mut projected = self.symbol_state.value.clone();
-        let symbol = projected.intern_global(key)?;
-        let next_symbol_bytes = Self::estimate_symbol_state_bytes(&projected);
-        let peak_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(next_symbol_bytes);
-        if self.memory_request_exceeds_budget(peak_bytes, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(peak_bytes, self.heap_object_count_u32()));
-        }
-        self.apply_memory_component_delta(previous_symbol_bytes, next_symbol_bytes)?;
-        self.mutate_symbol_state(|state| *state = projected);
-        Ok(symbol)
+        self.allocate_charged_symbol(RuntimeSymbolKind::Global, Some(key.clone()), Some(key))
     }
 
     fn symbol_description(&self, id: SymbolId) -> Option<JsString> {
@@ -99154,22 +99113,25 @@ impl InterpreterCore {
 
     fn estimate_symbol_state_bytes(state: &RuntimeSymbolState) -> u64 {
         Self::saturating_sum(state.symbols.values().map(|record| {
-            MEMORY_ESTIMATE_MAP_ENTRY_BYTES
-                .saturating_add(
-                    record
-                        .description
-                        .as_ref()
-                        .map(Self::estimate_js_string_bytes)
-                        .unwrap_or(0),
-                )
-                .saturating_add(
-                    record
-                        .registry_key
-                        .as_ref()
-                        .map(Self::estimate_js_string_bytes)
-                        .unwrap_or(0),
-                )
+            Self::estimate_symbol_record_bytes(
+                record.description.as_ref(),
+                record.registry_key.as_ref(),
+            )
         }))
+    }
+
+    /// One dynamic symbol record's term of [`Self::estimate_symbol_state_bytes`].
+    fn estimate_symbol_record_bytes(
+        description: Option<&JsString>,
+        registry_key: Option<&JsString>,
+    ) -> u64 {
+        MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(description.map(Self::estimate_js_string_bytes).unwrap_or(0))
+            .saturating_add(
+                registry_key
+                    .map(Self::estimate_js_string_bytes)
+                    .unwrap_or(0),
+            )
     }
 
     fn symbol_state_memory_bytes(&self) -> u64 {
@@ -151837,6 +151799,38 @@ mod tests {
                 .expect("native array iterator should finish"),
             None
         );
+    }
+
+    #[test]
+    fn symbol_allocations_charge_their_own_record_bd_9vouw_332() {
+        let mut core = quickjs_test_core();
+        let first = core
+            .allocate_class_private_name_symbol(JsString::from("#f0"))
+            .unwrap();
+        for index in 1..300u32 {
+            let symbol = match index % 3 {
+                0 => core.allocate_private_symbol(None),
+                1 => core.allocate_class_private_name_symbol(JsString::from(format!("#f{index}"))),
+                _ => core.intern_global_symbol(JsString::from(format!("key{index}"))),
+            }
+            .unwrap();
+            assert_eq!(symbol, SymbolId(first.0 + index));
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes(),
+            "the per-record charges sum to the symbol state's estimate"
+        );
+        // A symbol that does not fit changes neither the state nor the charge.
+        let before_state = core.symbol_state.value.clone();
+        let before_memory = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = before_memory;
+        assert!(matches!(
+            core.intern_global_symbol(JsString::from("new key")),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.symbol_state.value, before_state);
+        assert_eq!(core.estimated_memory_bytes(), before_memory);
     }
 
     #[test]

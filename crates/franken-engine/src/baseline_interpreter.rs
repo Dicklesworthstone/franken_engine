@@ -60829,6 +60829,23 @@ impl InterpreterCore {
     /// or RegExp search value. A callable replacer receives (match, ...groups,
     /// offset, string) with the UTF-16 offset; otherwise the replacement is a
     /// GetSubstitution template.
+    /// ToString of a replace value or a replacer's result: observable for an
+    /// object (its toString or valueOf runs) and a TypeError for a Symbol;
+    /// any other primitive converts without guest code (bd-9vouw.358).
+    fn replacement_to_string(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: &Value,
+    ) -> Result<String, InterpreterError> {
+        if value.is_object_like() || matches!(value, Value::Symbol(_)) {
+            let value = value.clone();
+            return Ok(self
+                .scoped_conversion(|this| this.conversion_to_string(module, value))?
+                .to_string());
+        }
+        Ok(self.value_to_string(value))
+    }
+
     fn string_replace_js(
         &mut self,
         module: Option<&Ir3Module>,
@@ -60843,6 +60860,17 @@ impl InterpreterCore {
         // Every match is held natively until the output is built, so the
         // match list is charged to the guest's memory headroom
         // (franken_engine#2).
+        // A replaceValue that is not callable is ToString'd before anything
+        // is matched (ES2020 21.2.5.8 step 6, 21.1.3.17 step 5): an object's
+        // own toString or valueOf runs, and its throw is the call's; a direct
+        // `re[Symbol.replace](s, obj)` read it as "[object Object]"
+        // (bd-9vouw.358).
+        let callable = replace.is_callable();
+        let template = if callable {
+            String::new()
+        } else {
+            self.replacement_to_string(module, replace)?
+        };
         let mut budget = self.regexp_retention_budget();
         let match_entry_bytes = std::mem::size_of::<(usize, usize, Vec<Option<String>>)>();
         if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
@@ -60925,12 +60953,6 @@ impl InterpreterCore {
                 }
             }
         }
-        let callable = replace.is_callable();
-        let template = if callable {
-            String::new()
-        } else {
-            self.value_to_string(replace)
-        };
         let mut output = String::with_capacity(input.len());
         let mut last = 0usize;
         for (start, end, groups) in matches {
@@ -60972,7 +60994,10 @@ impl InterpreterCore {
                     arguments,
                     Some(label.clone()),
                 )?;
-                self.value_to_string(&result)
+                // ToString of the replacer's result (ES2020 21.1.3.17 step
+                // 6.e, 21.2.5.8 step 14.l.iii): an object's own toString
+                // runs, and a Symbol is a TypeError (bd-9vouw.358).
+                self.replacement_to_string(module, &result)?
             } else {
                 // A template can expand far beyond its own length (`$'`
                 // repeated), so the expansion is bounded while it is built.

@@ -46,7 +46,7 @@ use crate::ast::{
     ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
     BlockStatement, ExportKind, Expression, FunctionParam, ImportClause, MethodDefinition,
     MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement,
-    UnaryOperator, VariableDeclarationKind,
+    UnaryOperator, VariableDeclarationKind, annex_b_function_var_copy,
 };
 use crate::capability::{APPLY_HOSTCALL_TARGET_PREFIX, hostcall_result_contract};
 use crate::effect_set::{EffectKind, EffectSet};
@@ -2710,6 +2710,19 @@ fn reserve_hoisted_var_bindings(
             Statement::Labeled(labeled) => {
                 visit(&labeled.body, binding_lookup, binding_index, declared);
             }
+            // ES2020 B.3.3 (bd-9vouw.242): the parser's copy of a block
+            // function to this scope's `var` of the same name. Its target
+            // name is bound here, before any block shadows the name, to the
+            // binding that `var` (or a parameter-free top-level function or
+            // var of that name) has in this scope.
+            Statement::Expression(expression_statement) => {
+                if let Some((target, name)) =
+                    annex_b_function_var_copy(&expression_statement.expression)
+                    && let Some(&binding_id) = binding_lookup.get(name)
+                {
+                    binding_lookup.insert(target.to_string(), binding_id);
+                }
+            }
             Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {}
             _ => {}
         }
@@ -5190,6 +5203,36 @@ fn lower_statement_to_ir1_with_flow(
     label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
     match statement {
+        // ES2020 B.3.3 (bd-9vouw.242): when a non-strict block function
+        // declaration is evaluated, the block's binding of its name is
+        // copied to the function-level `var` of that name, which the parser
+        // added and `reserve_hoisted_var_bindings` bound to the copy's target
+        // name. The statement has no completion value.
+        Statement::Expression(stmt) if annex_b_function_var_copy(&stmt.expression).is_some() => {
+            let Some((target, name)) = annex_b_function_var_copy(&stmt.expression) else {
+                unreachable!("guarded by the match arm");
+            };
+            let Some(&var_binding) = binding_lookup.get(target) else {
+                return Err(LoweringPipelineError::InvariantViolation {
+                    detail: "B.3.3 block function copy without its function-level var binding",
+                });
+            };
+            lower_expression_to_ir1(
+                &Expression::Identifier(name.to_string()),
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+                span_table,
+            )?;
+            ops.push(Ir1Op::AssignOp {
+                binding_id: var_binding,
+                operator: AssignmentOperator::Assign,
+            });
+            ops.push(Ir1Op::Discard);
+        }
         Statement::Expression(stmt) => {
             lower_expression_to_ir1(
                 &stmt.expression,
@@ -5620,7 +5663,10 @@ fn lower_statement_to_ir1_with_flow(
                     }
                 }
             }
-            for inner in &block.body {
+            // ES2020 13.2.14 BlockDeclarationInstantiation creates a block's
+            // function objects on entry, so a call that precedes the
+            // declaration in the block works (bd-9vouw.242).
+            for inner in hoisted_statement_order(&block.body) {
                 lower_statement_to_ir1_with_flow(
                     inner,
                     ops,

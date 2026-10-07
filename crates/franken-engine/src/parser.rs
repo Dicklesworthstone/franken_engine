@@ -16,15 +16,15 @@ use sha2::{Digest, Sha256};
 
 pub use crate::ast::ParseGoal;
 use crate::ast::{
-    ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
-    BlockStatement, BreakStatement, CatchClause, ClassDeclaration, ContinueStatement,
-    DoWhileStatement, ExportDeclaration, ExportKind, Expression, ExpressionStatement,
-    ForInStatement, ForOfStatement, ForStatement, FunctionDeclaration, FunctionParam, IfStatement,
-    ImportClause, ImportDeclaration, ImportSpecifier, LabeledStatement, MethodDefinition,
-    MethodKind, NamedExportClause, ObjectPatternProperty, ObjectProperty, ObjectPropertyKind,
-    ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
-    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator, WhileStatement, WithStatement,
+    ANNEX_B_FUNCTION_VAR_PREFIX, ArrowBody, AssignmentOperator, AssignmentStrictness,
+    BinaryOperator, BindingPattern, BlockStatement, BreakStatement, CatchClause, ClassDeclaration,
+    ContinueStatement, DoWhileStatement, ExportDeclaration, ExportKind, Expression,
+    ExpressionStatement, ForInStatement, ForOfStatement, ForStatement, FunctionDeclaration,
+    FunctionParam, IfStatement, ImportClause, ImportDeclaration, ImportSpecifier, LabeledStatement,
+    MethodDefinition, MethodKind, NamedExportClause, ObjectPatternProperty, ObjectProperty,
+    ObjectPropertyKind, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement,
+    SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator, WhileStatement, WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 use crate::js_string::JsString;
@@ -3916,6 +3916,9 @@ fn parse_source(
         }
     }
 
+    if !context.strict_mode {
+        apply_annex_b_block_functions(&mut statements, &[]);
+    }
     let source_len = to_u64(text.len(), source_label, None)?;
     let (end_line, end_column) = source_end_position(text, source_label)?;
     let span = SourceSpan::new(0, source_len, 1, 1, end_line, end_column);
@@ -6611,7 +6614,7 @@ fn parse_arrow_body(
                     ParseGoal::Script,
                     span,
                     context,
-                    false,
+                    &params,
                 )?;
                 ArrowBody::Block(BlockStatement {
                     body: stmts,
@@ -11457,15 +11460,20 @@ fn parse_body_statements(
     Ok(stmts)
 }
 
+/// An arrow function's block body, with its parameters for B.3.3.
 fn parse_function_body_statements(
     body_src: &str,
     goal: ParseGoal,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
-    force_strict: bool,
+    params: &[FunctionParam],
 ) -> ParseResult<Vec<Statement>> {
-    with_function_strict_mode(body_src, force_strict, context, |context| {
-        parse_body_statements(body_src, goal, span, context)
+    with_function_strict_mode(body_src, false, context, |context| {
+        let mut body = parse_body_statements(body_src, goal, span, context)?;
+        if !context.strict_mode {
+            apply_annex_b_block_functions(&mut body, params);
+        }
+        Ok(body)
     })
 }
 
@@ -11480,6 +11488,274 @@ fn with_function_strict_mode<T>(
     let result = operation(context);
     context.strict_mode = saved_strict_mode;
     result
+}
+
+/// ES2020 B.3.3 FunctionDeclarations in blocks (the web-compatibility
+/// semantics) for one non-strict function body or script `body` whose
+/// parameters are `params` (bd-9vouw.242). A plain function declared
+/// directly in a block, in a switch's case clauses or as an if clause (B.3.4
+/// makes that a block) also gets a var binding in the body's scope,
+/// initialized to undefined, which takes the function object when the
+/// declaration is evaluated, so `if (x) { function f() {} } f();` calls `f`
+/// as Node does. That applies only when a `var f` in the declaration's place
+/// would not be an early error: no let/const/class, block function, loop
+/// head or destructured catch binding named `f` in an enclosing block or at
+/// the top of the body (a plain catch parameter is allowed, B.3.5), and `f`
+/// is not a parameter or `arguments`. Generator and async declarations stay
+/// block-scoped.
+///
+/// The rewrite puts `var f;` after the body's directive prologue and, after
+/// each such declaration, `ANNEX_B_FUNCTION_VAR_PREFIX + f = f`, which the
+/// lowering stores into the body's `f`. A var without an initializer lowers
+/// to no operation, so `var f;` never resets a parameter, var or function of
+/// that name. No-claim: two declarations of one name in one block are both
+/// copied, as in Node, where the spec makes the name ineligible; a script's
+/// function becomes a script var, not a global object property.
+fn apply_annex_b_block_functions(body: &mut Vec<Statement>, params: &[FunctionParam]) {
+    let mut excluded: BTreeSet<String> = params
+        .iter()
+        .flat_map(|param| param.pattern.binding_names())
+        .map(str::to_string)
+        .collect();
+    excluded.insert("arguments".to_string());
+    let mut scopes = vec![annex_b_lexical_names(body.iter(), false)];
+    let mut hoisted: Vec<(String, SourceSpan)> = Vec::new();
+    for statement in body.iter_mut() {
+        annex_b_visit_statement(statement, &excluded, &mut scopes, &mut hoisted);
+    }
+    let Some((_, first_span)) = hoisted.first() else {
+        return;
+    };
+    let declaration = Statement::VariableDeclaration(VariableDeclaration {
+        kind: VariableDeclarationKind::Var,
+        span: first_span.clone(),
+        declarations: hoisted
+            .into_iter()
+            .map(|(name, span)| VariableDeclarator {
+                pattern: BindingPattern::Identifier(name),
+                initializer: None,
+                span,
+            })
+            .collect(),
+    });
+    let prologue = body
+        .iter()
+        .take_while(|statement| {
+            matches!(
+                statement,
+                Statement::Expression(ExpressionStatement {
+                    expression: Expression::StringLiteral(_),
+                    ..
+                })
+            )
+        })
+        .count();
+    body.insert(prologue, declaration);
+}
+
+/// The names a statement list declares in its own scope that a `var` of the
+/// same name in a nested block would conflict with: let/const/class, and,
+/// for a block (`block_functions`), its function declarations, which are
+/// lexical there.
+fn annex_b_lexical_names<'a>(
+    statements: impl Iterator<Item = &'a Statement>,
+    block_functions: bool,
+) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for statement in statements {
+        match statement {
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind != VariableDeclarationKind::Var =>
+            {
+                for declarator in &declaration.declarations {
+                    names.extend(
+                        declarator
+                            .pattern
+                            .binding_names()
+                            .into_iter()
+                            .map(str::to_string),
+                    );
+                }
+            }
+            Statement::ClassDeclaration(ClassDeclaration {
+                name: Some(name), ..
+            }) => {
+                names.insert(name.clone());
+            }
+            Statement::FunctionDeclaration(FunctionDeclaration {
+                name: Some(name), ..
+            }) if block_functions => {
+                names.insert(name.clone());
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// One statement of a function body (not a nested function or class) for
+/// `apply_annex_b_block_functions`; `scopes` holds the lexical names of the
+/// body and of each enclosing block.
+fn annex_b_visit_statement(
+    statement: &mut Statement,
+    excluded: &BTreeSet<String>,
+    scopes: &mut Vec<BTreeSet<String>>,
+    hoisted: &mut Vec<(String, SourceSpan)>,
+) {
+    match statement {
+        Statement::Block(block) => {
+            annex_b_visit_scope(vec![&mut block.body], excluded, scopes, hoisted)
+        }
+        Statement::If(if_statement) => {
+            annex_b_visit_statement(&mut if_statement.consequent, excluded, scopes, hoisted);
+            if let Some(alternate) = &mut if_statement.alternate {
+                annex_b_visit_statement(alternate, excluded, scopes, hoisted);
+            }
+        }
+        Statement::For(for_statement) => {
+            let names = for_statement
+                .init
+                .as_deref()
+                .map(|init| annex_b_lexical_names(std::iter::once(init), false))
+                .unwrap_or_default();
+            scopes.push(names);
+            annex_b_visit_statement(&mut for_statement.body, excluded, scopes, hoisted);
+            scopes.pop();
+        }
+        Statement::ForIn(ForInStatement {
+            binding,
+            binding_kind,
+            body,
+            ..
+        })
+        | Statement::ForOf(ForOfStatement {
+            binding,
+            binding_kind,
+            body,
+            ..
+        }) => {
+            let names = match binding_kind {
+                Some(VariableDeclarationKind::Let | VariableDeclarationKind::Const) => binding
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                _ => BTreeSet::new(),
+            };
+            scopes.push(names);
+            annex_b_visit_statement(body, excluded, scopes, hoisted);
+            scopes.pop();
+        }
+        Statement::While(WhileStatement { body, .. })
+        | Statement::DoWhile(DoWhileStatement { body, .. })
+        | Statement::With(WithStatement { body, .. })
+        | Statement::Labeled(LabeledStatement { body, .. }) => {
+            annex_b_visit_statement(body, excluded, scopes, hoisted);
+        }
+        Statement::TryCatch(try_statement) => {
+            annex_b_visit_scope(
+                vec![&mut try_statement.block.body],
+                excluded,
+                scopes,
+                hoisted,
+            );
+            if let Some(handler) = &mut try_statement.handler {
+                annex_b_visit_scope(vec![&mut handler.body.body], excluded, scopes, hoisted);
+            }
+            if let Some(finalizer) = &mut try_statement.finalizer {
+                annex_b_visit_scope(vec![&mut finalizer.body], excluded, scopes, hoisted);
+            }
+        }
+        Statement::Switch(switch_statement) => {
+            let lists = switch_statement
+                .cases
+                .iter_mut()
+                .map(|case| &mut case.consequent)
+                .collect();
+            annex_b_visit_scope(lists, excluded, scopes, hoisted);
+        }
+        _ => {}
+    }
+}
+
+/// A block's statements (or a switch's case clauses, which share one scope):
+/// visit nested statements, then follow each eligible plain function
+/// declaration with its B.3.3 copy.
+fn annex_b_visit_scope(
+    lists: Vec<&mut Vec<Statement>>,
+    excluded: &BTreeSet<String>,
+    scopes: &mut Vec<BTreeSet<String>>,
+    hoisted: &mut Vec<(String, SourceSpan)>,
+) {
+    let lexical = annex_b_lexical_names(lists.iter().flat_map(|list| list.iter()), false);
+    let block_names = annex_b_lexical_names(lists.iter().flat_map(|list| list.iter()), true);
+    scopes.push(block_names);
+    let enclosing = scopes.len() - 1;
+    for list in lists {
+        for statement in list.iter_mut() {
+            annex_b_visit_statement(statement, excluded, scopes, hoisted);
+        }
+        let mut index = 0;
+        while index < list.len() {
+            let eligible = match &list[index] {
+                Statement::FunctionDeclaration(FunctionDeclaration {
+                    name: Some(name),
+                    is_async: false,
+                    is_generator: false,
+                    span,
+                    ..
+                }) if !excluded.contains(name)
+                    && !lexical.contains(name)
+                    && !scopes[..enclosing].iter().any(|scope| scope.contains(name)) =>
+                {
+                    Some((name.clone(), span.clone()))
+                }
+                _ => None,
+            };
+            index += 1;
+            if let Some((name, span)) = eligible {
+                let copy = Expression::Assignment {
+                    operator: AssignmentOperator::Assign,
+                    left: Box::new(Expression::Identifier(format!(
+                        "{ANNEX_B_FUNCTION_VAR_PREFIX}{name}"
+                    ))),
+                    right: Box::new(Expression::Identifier(name.clone())),
+                    assignment_strictness: AssignmentStrictness::Sloppy,
+                };
+                list.insert(
+                    index,
+                    Statement::Expression(ExpressionStatement {
+                        expression: copy,
+                        span: span.clone(),
+                    }),
+                );
+                index += 1;
+                if !hoisted
+                    .iter()
+                    .any(|(hoisted_name, _)| *hoisted_name == name)
+                {
+                    hoisted.push((name, span));
+                }
+            }
+        }
+    }
+    scopes.pop();
+}
+
+/// ES2020 B.3.4: a function declaration as an if clause (non-strict code;
+/// strict code rejects it) is evaluated as if it were the only statement of
+/// a block, so it is block-scoped like any other block function.
+fn if_clause_function_in_block(statement: Statement) -> Statement {
+    match statement {
+        Statement::FunctionDeclaration(function) => {
+            let span = function.span.clone();
+            Statement::Block(BlockStatement {
+                body: vec![Statement::FunctionDeclaration(function)],
+                span,
+            })
+        }
+        other => other,
+    }
 }
 
 /// Run `operation` with the `await` / `yield` contexts of a function body:
@@ -11921,7 +12197,12 @@ fn parse_if_statement(
         &span,
         context,
     )?;
-    let consequent_stmt = parse_statement(consequent_src.trim(), goal, span.clone(), context)?;
+    let consequent_stmt = if_clause_function_in_block(parse_statement(
+        consequent_src.trim(),
+        goal,
+        span.clone(),
+        context,
+    )?);
 
     let alternate = if let Some(alt_src) = alternate_src {
         if !alt_src.is_empty() {
@@ -11931,12 +12212,12 @@ fn parse_if_statement(
                 &span,
                 context,
             )?;
-            Some(Box::new(parse_statement(
+            Some(Box::new(if_clause_function_in_block(parse_statement(
                 alt_src.trim(),
                 goal,
                 span.clone(),
                 context,
-            )?))
+            )?)))
         } else {
             None
         }
@@ -13302,7 +13583,10 @@ fn parse_function_expression_with_super(
             let params = parse_arrow_params(params_src, span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, span, context)?;
             reject_duplicate_params(&params, false, span, context)?;
-            let body = parse_body_statements(body_src, goal, span, context)?;
+            let mut body = parse_body_statements(body_src, goal, span, context)?;
+            if !context.strict_mode {
+                apply_annex_b_block_functions(&mut body, &params);
+            }
             Ok((params, body))
         })
     });
@@ -14677,7 +14961,10 @@ fn parse_function_declaration(
             let params = parse_arrow_params(params_src, &span, context)?;
             reject_use_strict_with_non_simple_params(body_src, &params, &span, context)?;
             reject_duplicate_params(&params, false, &span, context)?;
-            let body = parse_body_statements(body_src, goal, &span, context)?;
+            let mut body = parse_body_statements(body_src, goal, &span, context)?;
+            if !context.strict_mode {
+                apply_annex_b_block_functions(&mut body, &params);
+            }
             Ok((params, body))
         })
     });

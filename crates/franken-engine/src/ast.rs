@@ -20,6 +20,36 @@ pub const CANONICAL_AST_HASH_ALGORITHM: &str = "sha256";
 /// Prefix used in canonical AST hash strings.
 pub const CANONICAL_AST_HASH_PREFIX: &str = "sha256:";
 
+/// ES2020 B.3.3 (bd-9vouw.242): the name prefix of the assignment target the
+/// parser places after a non-strict block-level function declaration `f` that
+/// also has a var binding in its function or script. The lowering binds
+/// `ANNEX_B_FUNCTION_VAR_PREFIX + f` to the function-level `f`, which the
+/// block's own `f` shadows where the declaration is evaluated. The NUL keeps
+/// it apart from every source identifier.
+pub const ANNEX_B_FUNCTION_VAR_PREFIX: &str = "\0annexB.3.3\0";
+
+/// The target name and the function name `f` when `expression` is the B.3.3
+/// evaluation step `ANNEX_B_FUNCTION_VAR_PREFIX + f = f`: the block's `f` is
+/// copied to the function-level `f`.
+pub fn annex_b_function_var_copy(expression: &Expression) -> Option<(&str, &str)> {
+    let Expression::Assignment {
+        operator: AssignmentOperator::Assign,
+        left,
+        right,
+        ..
+    } = expression
+    else {
+        return None;
+    };
+    let (Expression::Identifier(target), Expression::Identifier(name)) =
+        (left.as_ref(), right.as_ref())
+    else {
+        return None;
+    };
+    (target.strip_prefix(ANNEX_B_FUNCTION_VAR_PREFIX)? == name)
+        .then_some((target.as_str(), name.as_str()))
+}
+
 /// Parse-goal marker for ES2020 sources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParseGoal {

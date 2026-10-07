@@ -62795,6 +62795,22 @@ impl InterpreterCore {
                 if !self.virtual_property_is_writable(owner, key) {
                     return Ok(false);
                 }
+                // A built-in prototype's getter-only accessor
+                // (`RegExp.prototype.source`, `Map.prototype.size`) has no
+                // setter, so OrdinarySet fails (ES2020 9.1.9.2 step 3.e): a
+                // sloppy `re.source = 'x'` does nothing and a strict one
+                // throws. The write created an own property that then
+                // answered reads (bd-9vouw.150). Event's returnValue and
+                // cancelBubble have setters in the DOM and keep the old
+                // behavior.
+                if let Some(getter) = self.prototype_getter_at(owner, key)
+                    && !matches!(
+                        getter.module_specifier.0.as_deref(),
+                        Some("Event.returnValue" | "Event.cancelBubble")
+                    )
+                {
+                    return Ok(false);
+                }
                 // Only stored links (bd-9vouw.34): array and object literals
                 // still initialize through [[Set]] (NewArray/NewObject plus
                 // SetProperty), so following the implicit Object.prototype /

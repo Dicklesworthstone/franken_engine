@@ -353,3 +353,18 @@ fn formatted_text_carries_the_label_of_what_it_shows() {
         assert_eq!(label, Label::Public, "{capability}");
     }
 }
+
+/// The engine's own module functions print as native code, as they did
+/// before bd-9vouw.184 gave every function its source text: theirs is the
+/// engine-owned module source, which spells the placeholder names lowering
+/// renames (`return __franken_util_format(args)`). Expected: the main
+/// 71918379f frankenctl's output for the same program.
+#[test]
+fn engine_module_functions_print_as_native_code() {
+    let output = console_output(
+        "const util = require('util'); console.log(String(util.format)); \
+         console.log([util.inspect, util.format].map(String).some((text) => text.includes('__franken')));",
+    )
+    .expect("the program runs");
+    assert_eq!(output, "function format() { [native code] }\nfalse");
+}

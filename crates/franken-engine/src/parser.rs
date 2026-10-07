@@ -4000,8 +4000,14 @@ fn parse_source(
     let source_line_terminators = source_line_terminator_ranges(text);
     let mut statements = Vec::with_capacity(8);
     context.strict_mode |= has_use_strict_directive(&stripped);
-    context.function_sources.original = Some(std::sync::Arc::from(text));
-    context.function_sources.blanked = Some((stripped.as_ptr() as usize, stripped.len()));
+    // The engine's own module sources (`franken:util`, `franken:fs`, ...)
+    // record no function source text: their functions stand in for
+    // built-ins, which print as native code, and their text spells the
+    // placeholder names lowering renames (`__franken_util_format`).
+    if !source_label.starts_with("franken:") {
+        context.function_sources.original = Some(std::sync::Arc::from(text));
+        context.function_sources.blanked = Some((stripped.as_ptr() as usize, stripped.len()));
+    }
 
     for logical_line in &mut logical_lines {
         debug_assert_eq!(

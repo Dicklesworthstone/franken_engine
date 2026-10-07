@@ -30986,9 +30986,12 @@ fn summarize_function_body_uncached(
         return Label::TopSecret;
     };
 
-    let mut converged = false;
+    // The pass that changes no binding label read the fixed point
+    // throughout, so its labels are the converged ones: a further pass
+    // recomputed exactly them (debug builds still check that).
+    let mut fixed_point = None;
     for _ in 0..MAX_FUNCTION_SUMMARY_PASSES {
-        let Ok((_, changed, _)) = simulate_ir2_flow_labels(
+        let Ok((labels, changed, _)) = simulate_ir2_flow_labels(
             body_ops,
             &mut body_binding_labels,
             &catch_region_events,
@@ -30998,24 +31001,26 @@ fn summarize_function_body_uncached(
             return Label::TopSecret;
         };
         if !changed {
-            converged = true;
+            fixed_point = Some(labels);
             break;
         }
     }
-    if !converged {
-        return Label::TopSecret;
-    }
-    let Ok((labels, changed, _)) = simulate_ir2_flow_labels(
-        body_ops,
-        &mut body_binding_labels,
-        &catch_region_events,
-        host_io_exception_provenance,
-        summary_depth,
-    ) else {
+    let Some(labels) = fixed_point else {
         return Label::TopSecret;
     };
-    if changed {
-        return Label::TopSecret;
+    #[cfg(debug_assertions)]
+    {
+        let again = simulate_ir2_flow_labels(
+            body_ops,
+            &mut body_binding_labels,
+            &catch_region_events,
+            host_io_exception_provenance,
+            summary_depth,
+        );
+        debug_assert!(
+            matches!(&again, Ok((again_labels, false, _)) if *again_labels == labels),
+            "a function's flow summary changed after its fixed point"
+        );
     }
 
     let return_label = Label::join_all(body_ops.iter().zip(labels).filter_map(|(op, label)| {
@@ -33350,13 +33355,16 @@ fn infer_ir2_flow_annotations_bounded(
     const MAX_FLOW_INFERENCE_PASSES: usize = 16;
     let catch_region_events = ir2_catch_region_events(&ir2.ops)?;
     let memo_scope = FunctionSummaryMemoScope::enter(host_io_exception_provenance);
-    let mut converged = false;
     // A reverse binding-dependency chain can otherwise force one complete IR2
     // rescan per binding, making inference quadratic in attacker-controlled
     // source size. The strict pass budget bounds work to O(n) and fails closed
     // when exact propagation would require a dedicated dependency worklist.
+    // The pass that changes no binding label read the fixed point throughout,
+    // so its labels are the converged ones: a further pass recomputed exactly
+    // them (debug builds still check that).
+    let mut fixed_point = None;
     for _ in 0..MAX_FLOW_INFERENCE_PASSES {
-        let (_, changed, _) = simulate_ir2_flow_labels(
+        let (labels, changed, catch_entry_store_indexes) = simulate_ir2_flow_labels(
             &ir2.ops,
             &mut binding_labels,
             &catch_region_events,
@@ -33364,30 +33372,30 @@ fn infer_ir2_flow_annotations_bounded(
             0,
         )?;
         if !changed {
-            converged = true;
+            fixed_point = Some((labels, catch_entry_store_indexes));
             break;
         }
     }
-    if !converged {
+    let Some((inferred_labels, catch_entry_store_indexes)) = fixed_point else {
         return Err(LoweringPipelineError::InvariantViolation {
             detail: "IR2 flow-label inference exceeded its pass budget",
         });
-    }
-
-    let (inferred_labels, changed_after_convergence, catch_entry_store_indexes) =
-        simulate_ir2_flow_labels(
+    };
+    #[cfg(debug_assertions)]
+    {
+        let again = simulate_ir2_flow_labels(
             &ir2.ops,
             &mut binding_labels,
             &catch_region_events,
             host_io_exception_provenance,
             0,
         )?;
-    drop(memo_scope);
-    if changed_after_convergence {
-        return Err(LoweringPipelineError::InvariantViolation {
-            detail: "IR2 flow-label binding fixed point changed after convergence",
-        });
+        debug_assert!(
+            !again.1 && again.0 == inferred_labels && again.2 == catch_entry_store_indexes,
+            "IR2 flow-label binding fixed point changed after convergence"
+        );
     }
+    drop(memo_scope);
 
     let mut metrics = FlowInferenceMetrics {
         total_flow_ops: 0,

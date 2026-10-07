@@ -73923,26 +73923,50 @@ impl InterpreterCore {
         Ok(())
     }
 
+    /// One step of AddEntriesFromIterable (ES2020 19.1.2.7 / 23.1.1.2): an
+    /// entry that is not an object is a TypeError; its key and value are
+    /// Get(entry, "0") and Get(entry, "1") (getters run; a String object is
+    /// an entry), then the key goes through ToPropertyKey (its toString
+    /// runs). They were read as array elements, so a String object entry or
+    /// an accessor entry gave undefined, and an object key read
+    /// "[object Object]".
     fn set_object_from_entry_pair(
         &mut self,
+        module: Option<&Ir3Module>,
         target_id: ObjectId,
         entry: Value,
     ) -> Result<(), InterpreterError> {
-        let entry_id = match entry {
-            Value::Object(entry_id) => entry_id,
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "Object.fromEntries entry object".to_string(),
-                    got: other.type_name().to_string(),
-                });
+        if !entry.is_object_like() {
+            return Err(InterpreterError::TypeError {
+                expected: "Object.fromEntries entry object".to_string(),
+                got: format!(
+                    "Iterator value {} is not an entry object",
+                    entry.type_name()
+                ),
+            });
+        }
+        let (key_value, value) = match (module, &entry) {
+            (Some(module), _) => {
+                let key = self.get_v(
+                    module,
+                    &entry,
+                    &RuntimePropertyKey::String(JsString::from("0")),
+                )?;
+                let value = self.get_v(
+                    module,
+                    &entry,
+                    &RuntimePropertyKey::String(JsString::from("1")),
+                )?;
+                (self.property_key_primitive(module, key)?, value)
             }
+            (None, Value::Object(entry_id)) => (
+                self.array_index_value(*entry_id, 0)?
+                    .unwrap_or(Value::Undefined),
+                self.array_index_value(*entry_id, 1)?
+                    .unwrap_or(Value::Undefined),
+            ),
+            (None, _) => (Value::Undefined, Value::Undefined),
         };
-        let key_value = self
-            .array_index_value(entry_id, 0)?
-            .unwrap_or(Value::Undefined);
-        let value = self
-            .array_index_value(entry_id, 1)?
-            .unwrap_or(Value::Undefined);
         let key = self.executable_property_key_from_value(&key_value);
         self.set_object_runtime_property(target_id, key, value)
     }
@@ -73969,7 +73993,11 @@ impl InterpreterCore {
         };
         let target_id = self.alloc_object_with_prototype(None)?;
         while let Some(entry) = self.advance_for_of_iterator(module, iterator.clone())? {
-            self.set_object_from_entry_pair(target_id, entry)?;
+            // IfAbruptCloseIterator: a bad entry, a throwing getter or key
+            // conversion closes the iterator (its error wins over return's).
+            if let Err(error) = self.set_object_from_entry_pair(module, target_id, entry) {
+                return self.array_from_close_after_error(module, iterator, error);
+            }
         }
         Ok(Value::Object(target_id))
     }

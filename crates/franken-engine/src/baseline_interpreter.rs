@@ -40940,18 +40940,43 @@ impl InterpreterCore {
                 Ok(value)
             }
             BuiltinFunctionKind::IteratorNext => {
-                // A bound `it.next`, or %ArrayIteratorPrototype%.next called
-                // on an iterator (`proto.next.call(it)`).
-                let iterator_handle = builtin
-                    .iterator_handle
-                    .or(match &receiver {
-                        Some(Value::Iterator(handle)) => Some(*handle),
-                        _ => None,
-                    })
-                    .ok_or_else(|| InterpreterError::TypeError {
-                        expected: "array iterator receiver for next".to_string(),
-                        got: "missing iterator handle".to_string(),
-                    })?;
+                // %ArrayIteratorPrototype%, %MapIteratorPrototype% and
+                // %SetIteratorPrototype% next (ES2020 22.1.5.2.1, 23.1.5.2.1,
+                // 23.2.5.2.1 steps 1-3): `this` must be an iterator of the
+                // method's kind. A bound `it.next` used its own iterator
+                // whatever the receiver, so `next.call({})` and a Map
+                // iterator's next on a Set iterator advanced it; now they are
+                // TypeErrors and an iterator receiver is the one advanced. A
+                // bound next called with no receiver still steps its own.
+                let incompatible = |name: &str| {
+                    let tag = match name {
+                        MAP_ITERATOR_PROTOTYPE => "Map Iterator",
+                        SET_ITERATOR_PROTOTYPE => "Set Iterator",
+                        _ => "Array Iterator",
+                    };
+                    format!("Method {tag}.prototype.next called on incompatible receiver")
+                };
+                let iterator_handle = match (&receiver, builtin.iterator_handle) {
+                    (Some(Value::Iterator(handle)), Some(bound)) => {
+                        let method_kind = self.iterator_intrinsic_prototype_name(bound);
+                        if self.iterator_intrinsic_prototype_name(*handle) != method_kind {
+                            return Err(self.throw_js_error("TypeError", incompatible(method_kind)));
+                        }
+                        *handle
+                    }
+                    (Some(Value::Iterator(handle)), None) => *handle,
+                    (None | Some(Value::Undefined), Some(bound)) => bound,
+                    (Some(_), Some(bound)) => {
+                        let method_kind = self.iterator_intrinsic_prototype_name(bound);
+                        return Err(self.throw_js_error("TypeError", incompatible(method_kind)));
+                    }
+                    (_, None) => {
+                        return Err(self.throw_js_error(
+                            "TypeError",
+                            incompatible(ARRAY_ITERATOR_PROTOTYPE),
+                        ));
+                    }
+                };
                 let next_value =
                     self.advance_for_of_iterator(Some(module), Value::Iterator(iterator_handle))?;
                 self.alloc_iterator_result_object(next_value)
@@ -58054,7 +58079,7 @@ impl InterpreterCore {
             start: args.start.saturating_add(1),
             count: args.count.saturating_sub(1),
         };
-        let message = self.error_message_from_args(message_args)?;
+        let message = self.error_message_from_args(module, message_args)?;
         self.initialize_error_object(error_id, message)?;
         self.install_error_cause(error_id, message_args)?;
         let errors = self.iterable_to_array(
@@ -58081,10 +58106,11 @@ impl InterpreterCore {
     /// `builtin:Error` / `builtin:TypeError` / … hostcall arms (bd-bg9l1.27.10).
     fn construct_error_object(
         &mut self,
+        module: Option<&Ir3Module>,
         name: &str,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let message = self.error_message_from_args(args)?;
+        let message = self.error_message_from_args(module, args)?;
         let prototype = self.ensure_builtin_prototype(name)?;
         let error_id = self.alloc_object_with_prototype(Some(prototype))?;
         self.initialize_error_object(error_id, message)?;
@@ -77815,6 +77841,15 @@ impl InterpreterCore {
         receiver: Value,
         kind: &'static str,
     ) -> Result<Value, InterpreterError> {
+        // ToObject(this value) (ES2020 22.1.3.4, 22.1.3.14, 22.1.3.30 step
+        // 1): an undefined or null receiver is a TypeError, not an empty
+        // iterator.
+        if matches!(receiver, Value::Undefined | Value::Null) {
+            return Err(self.throw_js_error(
+                "TypeError",
+                format!("Array.prototype.{kind} called on null or undefined"),
+            ));
+        }
         let array_id = match receiver {
             Value::Object(object_id) => Some(object_id),
             _ => None,
@@ -90897,17 +90932,17 @@ impl InterpreterCore {
 
                 Ok(this_val)
             }
-            "builtin:Error" => self.construct_error_object("Error", args),
+            "builtin:Error" => self.construct_error_object(module, "Error", args),
             // Error subclasses (bd-bg9l1.27.10). Same shape as Error, with the
             // correct `name`. These are reached only via the `new <Name>(...)`
             // lowering interception (error_constructor_capability) since there is
             // no global binding for them on the eval scope path.
-            "builtin:TypeError" => self.construct_error_object("TypeError", args),
-            "builtin:RangeError" => self.construct_error_object("RangeError", args),
-            "builtin:ReferenceError" => self.construct_error_object("ReferenceError", args),
-            "builtin:SyntaxError" => self.construct_error_object("SyntaxError", args),
-            "builtin:EvalError" => self.construct_error_object("EvalError", args),
-            "builtin:URIError" => self.construct_error_object("URIError", args),
+            "builtin:TypeError" => self.construct_error_object(module, "TypeError", args),
+            "builtin:RangeError" => self.construct_error_object(module, "RangeError", args),
+            "builtin:ReferenceError" => self.construct_error_object(module, "ReferenceError", args),
+            "builtin:SyntaxError" => self.construct_error_object(module, "SyntaxError", args),
+            "builtin:EvalError" => self.construct_error_object(module, "EvalError", args),
+            "builtin:URIError" => self.construct_error_object(module, "URIError", args),
             "builtin:AggregateError" => self.construct_aggregate_error(module, args),
             "builtin:StringPrototypePadEnd" => {
                 // String.prototype.padEnd(targetLength[, padString]) implementation
@@ -91604,14 +91639,19 @@ impl InterpreterCore {
                 // Map([iterable]) constructor implementation
                 let (map_id, entries_id) = self.alloc_empty_map()?;
 
-                if args.count > 0 {
-                    let iterable = self.read_reg(args.start)?;
-                    self.seed_map_entries_from_iterable(
-                        module,
-                        entries_id,
-                        Some(map_id),
-                        iterable,
-                    )?;
+                let iterable = self.arg_or_undefined(args, 0)?;
+                if !matches!(iterable, Value::Undefined | Value::Null) {
+                    match self.collection_seed_adder(module, map_id, "Map")? {
+                        None => self.seed_map_entries_from_iterable(
+                            module,
+                            entries_id,
+                            Some(map_id),
+                            iterable,
+                        )?,
+                        Some(adder) => {
+                            self.seed_collection_with_adder(module, map_id, adder, true, iterable)?
+                        }
+                    }
                 }
 
                 Ok(Value::Object(map_id))
@@ -91623,15 +91663,20 @@ impl InterpreterCore {
                     .collection_storage_id(set_id, "Set", "__values")
                     .expect("a new Set has its value storage");
 
-                if args.count > 0 {
-                    let iterable = self.read_reg(args.start)?;
-                    self.seed_set_values_from_iterable(
-                        module,
-                        values_id,
-                        Some(set_id),
-                        iterable,
-                        false,
-                    )?;
+                let iterable = self.arg_or_undefined(args, 0)?;
+                if !matches!(iterable, Value::Undefined | Value::Null) {
+                    match self.collection_seed_adder(module, set_id, "Set")? {
+                        None => self.seed_set_values_from_iterable(
+                            module,
+                            values_id,
+                            Some(set_id),
+                            iterable,
+                            false,
+                        )?,
+                        Some(adder) => {
+                            self.seed_collection_with_adder(module, set_id, adder, false, iterable)?
+                        }
+                    }
                 }
 
                 Ok(Value::Object(set_id))
@@ -91665,9 +91710,14 @@ impl InterpreterCore {
                 // code (a user iterator, an entry getter) whose allocations
                 // the program may keep, so a seeding error must not roll the
                 // heap back. The seed's own application is atomic.
-                if args.count > 0 {
-                    let iterable = self.read_reg(args.start)?;
-                    self.seed_weakmap_from_iterable(module, weakmap_id, iterable)?;
+                let iterable = self.arg_or_undefined(args, 0)?;
+                if !matches!(iterable, Value::Undefined | Value::Null) {
+                    match self.collection_seed_adder(module, weakmap_id, "WeakMap")? {
+                        None => self.seed_weakmap_from_iterable(module, weakmap_id, iterable)?,
+                        Some(adder) => self.seed_collection_with_adder(
+                            module, weakmap_id, adder, true, iterable,
+                        )?,
+                    }
                 }
                 Ok(Value::Object(weakmap_id))
             }
@@ -91688,9 +91738,16 @@ impl InterpreterCore {
                 self.hide_internal_slots(weakset_id, &["__values"])?;
 
                 // Note: In a full implementation, WeakSet would use weak references
-                if args.count > 0 {
-                    let iterable = self.read_reg(args.start)?;
-                    self.seed_set_values_from_iterable(module, values_id, None, iterable, true)?;
+                let iterable = self.arg_or_undefined(args, 0)?;
+                if !matches!(iterable, Value::Undefined | Value::Null) {
+                    match self.collection_seed_adder(module, weakset_id, "WeakSet")? {
+                        None => self.seed_set_values_from_iterable(
+                            module, values_id, None, iterable, true,
+                        )?,
+                        Some(adder) => self.seed_collection_with_adder(
+                            module, weakset_id, adder, false, iterable,
+                        )?,
+                    }
                 }
 
                 Ok(Value::Object(weakset_id))
@@ -92046,43 +92103,88 @@ impl InterpreterCore {
             }
 
             "builtin:StringRaw" => {
-                // String.raw(template, ...substitutions) (bd-bl591, ES2015 §21.1.2.4).
-                // `template` is the cooked-strings object carrying a `.raw` array
-                // (the tagged-template desugar in parser.rs attaches it; a direct
-                // call passes any object with a `.raw` array-like). The result
-                // interleaves raw[i] with String(substitutions[i]) and ends with the
-                // final raw segment: raw[0] sub[0] raw[1] sub[1] ... raw[n-1].
-                if args.count == 0 {
-                    return Ok(Value::str(String::new()));
-                }
-                let template = self.read_reg(args.start)?;
-                let raw_id = match template {
-                    Value::Object(obj_id) => {
-                        match self
-                            .heap
-                            .get(obj_id.0 as usize)
-                            .and_then(|obj| obj.properties.get("raw").cloned())
-                        {
-                            Some(Value::Object(raw_id)) => raw_id,
-                            // No usable `.raw` array → spec coerces ToObject/ToLength
-                            // of `undefined.length` to 0, yielding the empty string.
-                            _ => return Ok(Value::str(String::new())),
-                        }
+                // String.raw(template, ...substitutions) (bd-bl591, ES2020
+                // 21.1.2.4): raw = ToObject(Get(ToObject(template), "raw")),
+                // LengthOfArrayLike(raw) segments, each ToString(Get(raw, i)),
+                // with ToString(substitutions[i]) between consecutive ones.
+                // Every step is observable: an undefined / null template or
+                // raw is a TypeError, as is a Symbol length, segment or
+                // substitution, and getters and conversion hooks run in that
+                // order. It returned "" for a missing template or raw and
+                // stringified Symbols.
+                let template = self.arg_or_undefined(args, 0)?;
+                let raw = match template {
+                    Value::Undefined | Value::Null => {
+                        return Err(self.throw_js_error(
+                            "TypeError",
+                            "Cannot convert undefined or null to object".to_string(),
+                        ));
                     }
+                    Value::Object(template_id) => self.proxy_aware_get_property(
+                        module,
+                        template_id,
+                        "raw",
+                        template.clone(),
+                        0,
+                    )?,
+                    _ => Value::Undefined,
+                };
+                let raw_id = match raw {
+                    Value::Object(raw_id) => raw_id,
+                    // A string's code units are a String wrapper's elements.
+                    Value::Str(text) => {
+                        let units = self
+                            .string_index_entries(&text)?
+                            .into_iter()
+                            .map(|(_, unit)| unit)
+                            .collect::<Vec<_>>();
+                        self.alloc_array_from_values(&units)?
+                    }
+                    Value::Undefined | Value::Null => {
+                        return Err(self.throw_js_error(
+                            "TypeError",
+                            "Cannot convert undefined or null to object".to_string(),
+                        ));
+                    }
+                    // Other primitives' wrappers have no length: no segments.
                     _ => return Ok(Value::str(String::new())),
                 };
-                let raw_len = self.array_like_length(raw_id)?;
+                let length = self.proxy_aware_get_property(
+                    module,
+                    raw_id,
+                    "length",
+                    Value::Object(raw_id),
+                    0,
+                )?;
+                let length = self.conversion_to_number(module, length, false)?;
+                // ToLength.
+                let length = if length.is_nan() || length <= 0.0 {
+                    0
+                } else {
+                    length.min(9_007_199_254_740_991.0).floor() as u64
+                };
                 let mut result = String::new();
-                for i in 0..raw_len {
-                    let segment = self
-                        .array_index_get(module, raw_id, i)?
-                        .unwrap_or(Value::Undefined);
-                    result.push_str(&self.value_to_string(&segment));
-                    // A substitution sits between consecutive raw segments only.
-                    // Substitutions live in slots args.start+1.. (slot 0 is template).
-                    if i + 1 < raw_len && (i as u32) + 1 < args.count {
-                        let sub = self.read_reg(args.start + 1 + i as u32)?;
-                        result.push_str(&self.value_to_string(&sub));
+                for index in 0..length {
+                    let segment = self.proxy_aware_get_property(
+                        module,
+                        raw_id,
+                        &index.to_string(),
+                        Value::Object(raw_id),
+                        0,
+                    )?;
+                    let segment = self.conversion_to_string(module, segment)?;
+                    result.push_str(&segment.to_string());
+                    self.check_string_limit(result.len())?;
+                    if index + 1 == length {
+                        break;
+                    }
+                    // Substitutions occupy argument slots 1.. (slot 0 is the
+                    // template); past the last one the separator is "".
+                    let slot = u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1);
+                    if slot < args.count {
+                        let substitution = self.arg_or_undefined(args, slot)?;
+                        let substitution = self.conversion_to_string(module, substitution)?;
+                        result.push_str(&substitution.to_string());
                     }
                 }
                 Ok(Value::str(result))
@@ -92090,12 +92192,23 @@ impl InterpreterCore {
 
             "builtin:ObjectGetOwnPropertyNames" => {
                 // Object.getOwnPropertyNames(obj) implementation
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-
-                let obj_val = self.read_reg(args.start)?;
+                let obj_val = self.arg_or_undefined(args, 0)?;
                 match obj_val {
+                    // ToObject (ES2020 19.1.2.10 GetOwnPropertyKeys step 1).
+                    Value::Undefined | Value::Null => Err(self.throw_js_error(
+                        "TypeError",
+                        "Cannot convert undefined or null to object".to_string(),
+                    )),
+                    // A String wrapper's own names: its indices, then length.
+                    Value::Str(ref text) => {
+                        let mut names = self
+                            .string_index_entries(text)?
+                            .into_iter()
+                            .map(|(key, _)| Value::Str(key))
+                            .collect::<Vec<_>>();
+                        names.push(Value::str("length"));
+                        Ok(Value::Object(self.alloc_array_from_values(&names)?))
+                    }
                     Value::Object(obj_id) if self.active_proxy_record(obj_id)?.is_some() => {
                         // bd-9trje: getOwnPropertyNames returns EVERY own String key
                         // (enumerable or not) surfaced by the ownKeys trap — no
@@ -92159,10 +92272,14 @@ impl InterpreterCore {
             }
 
             "builtin:ObjectGetOwnPropertySymbols" => {
-                if args.count == 0 {
-                    return Ok(Value::Undefined);
-                }
-                let values = match self.read_reg(args.start)? {
+                let values = match self.arg_or_undefined(args, 0)? {
+                    // ToObject (ES2020 19.1.2.11 GetOwnPropertyKeys step 1).
+                    Value::Undefined | Value::Null => {
+                        return Err(self.throw_js_error(
+                            "TypeError",
+                            "Cannot convert undefined or null to object".to_string(),
+                        ));
+                    }
                     Value::Object(object_id) => self
                         .proxy_aware_own_property_keys(module, object_id, 0)?
                         .into_iter()
@@ -95446,6 +95563,82 @@ impl InterpreterCore {
         let key = self.proxy_aware_get_property(module, *entry_id, "0", entry.clone(), 0)?;
         let value = self.proxy_aware_get_property(module, *entry_id, "1", entry.clone(), 0)?;
         Ok((key, value))
+    }
+
+    /// The adder a Map, Set, WeakMap or WeakSet constructor (`type_tag`)
+    /// calls for each element of its iterable (ES2020 23.1.1.1, 23.2.1.1,
+    /// 23.3.1.1, 23.4.1.1 step 5): Get(collection, "set" / "add"), read
+    /// before the iterable is touched, and a TypeError unless callable.
+    /// `None` while it is the intrinsic method, which the native seeds
+    /// implement; `Some` for a replaced prototype method or a subclass
+    /// override, which seed_collection_with_adder calls. The constructors
+    /// inserted every element directly, so `class M extends Map { set(k, v)
+    /// {...} }` never saw its constructor's entries and a non-callable
+    /// `Map.prototype.set` went unnoticed.
+    fn collection_seed_adder(
+        &mut self,
+        module: Option<&Ir3Module>,
+        collection_id: ObjectId,
+        type_tag: &'static str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let key = if matches!(type_tag, "Map" | "WeakMap") {
+            "set"
+        } else {
+            "add"
+        };
+        let adder = self.proxy_aware_get_property(
+            module,
+            collection_id,
+            key,
+            Value::Object(collection_id),
+            0,
+        )?;
+        if !adder.is_callable() {
+            let shown = self.value_to_string(&adder);
+            return Err(self.throw_js_error(
+                "TypeError",
+                format!(
+                    "'{shown}' returned for property '{key}' of object '#<{type_tag}>' is not a function"
+                ),
+            ));
+        }
+        let intrinsic =
+            Self::collection_prototype_method(type_tag, key).map(Value::BuiltinFunction);
+        Ok((intrinsic.as_ref() != Some(&adder)).then_some(adder))
+    }
+
+    /// AddEntriesFromIterable (ES2020 23.1.1.2) and the Set / WeakSet loops
+    /// with a guest adder: Call(adder, collection, «key, value») for a Map
+    /// or WeakMap entry (`pairs`), «element» otherwise, closing the iterator
+    /// when that call or the entry's Get is abrupt.
+    fn seed_collection_with_adder(
+        &mut self,
+        module: Option<&Ir3Module>,
+        collection_id: ObjectId,
+        adder: Value,
+        pairs: bool,
+        iterable: Value,
+    ) -> Result<(), InterpreterError> {
+        let receiver = Value::Object(collection_id);
+        let mut label = Label::Public;
+        let mut source = self.collection_seed_source(module, iterable)?;
+        while let Some(element) = self.next_collection_seed(module, &mut source)? {
+            self.observe_collection_seed_label(&mut label);
+            let arguments = if pairs {
+                match self.collection_seed_entry(module, &element) {
+                    Ok((key, value)) => vec![key, value],
+                    Err(error) => return self.close_collection_seed(module, source, error),
+                }
+            } else {
+                vec![element]
+            };
+            if let Err(error) =
+                self.invoke_inline_method_call(module, adder.clone(), receiver.clone(), arguments)
+            {
+                return self.close_collection_seed(module, source, error);
+            }
+        }
+        self.finish_collection_seed(label)
     }
 
     fn seed_map_entries_from_iterable(
@@ -104264,7 +104457,7 @@ impl InterpreterCore {
             "AggregateError" => self.initialize_aggregate_error(module, object_id, args)?,
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
             | "EvalError" | "URIError" => {
-                let message = self.error_message_from_args(args)?;
+                let message = self.error_message_from_args(module, args)?;
                 self.initialize_error_object(object_id, message)?;
                 self.install_error_cause(object_id, args)?;
             }
@@ -104282,14 +104475,18 @@ impl InterpreterCore {
                     Value::Int(0),
                 )?;
                 self.hide_internal_slots(object_id, &["__entries", COLLECTION_SIZE_SLOT])?;
-                if args.count > 0 {
-                    let iterable = self.read_reg(args.start)?;
-                    self.seed_map_entries_from_iterable(
-                        module,
-                        entries_id,
-                        Some(object_id),
-                        iterable,
-                    )?;
+                let iterable = self.arg_or_undefined(args, 0)?;
+                if !matches!(iterable, Value::Undefined | Value::Null) {
+                    match self.collection_seed_adder(module, object_id, "Map")? {
+                        None => self.seed_map_entries_from_iterable(
+                            module,
+                            entries_id,
+                            Some(object_id),
+                            iterable,
+                        )?,
+                        Some(adder) => self
+                            .seed_collection_with_adder(module, object_id, adder, true, iterable)?,
+                    }
                 }
             }
             "Set" => {
@@ -104306,15 +104503,20 @@ impl InterpreterCore {
                     Value::Int(0),
                 )?;
                 self.hide_internal_slots(object_id, &["__values", COLLECTION_SIZE_SLOT])?;
-                if args.count > 0 {
-                    let iterable = self.read_reg(args.start)?;
-                    self.seed_set_values_from_iterable(
-                        module,
-                        values_id,
-                        Some(object_id),
-                        iterable,
-                        false,
-                    )?;
+                let iterable = self.arg_or_undefined(args, 0)?;
+                if !matches!(iterable, Value::Undefined | Value::Null) {
+                    match self.collection_seed_adder(module, object_id, "Set")? {
+                        None => self.seed_set_values_from_iterable(
+                            module,
+                            values_id,
+                            Some(object_id),
+                            iterable,
+                            false,
+                        )?,
+                        Some(adder) => self.seed_collection_with_adder(
+                            module, object_id, adder, false, iterable,
+                        )?,
+                    }
                 }
             }
             _ => {}
@@ -104323,18 +104525,22 @@ impl InterpreterCore {
     }
 
     /// The `message` argument of an Error constructor: `None` when absent or
-    /// `undefined` (ES2020 19.5.1.1 step 3), else its string form. Objects
-    /// use the engine's own conversion (`[object Object]`, an array's join)
-    /// rather than running a guest `toString`.
-    fn error_message_from_args(&self, args: RegRange) -> Result<Option<String>, InterpreterError> {
+    /// `undefined` (ES2020 19.5.1.1 step 3), else ToString(message), so a
+    /// Symbol is a TypeError and a throwing toString / valueOf /
+    /// @@toPrimitive propagates. Objects used the engine's own non-calling
+    /// conversion (`new Error(Symbol())` succeeded).
+    fn error_message_from_args(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Option<String>, InterpreterError> {
         if args.count == 0 {
             return Ok(None);
         }
         Ok(match self.read_reg(args.start)? {
             Value::Undefined => None,
             Value::Str(s) => Some(s.to_string()),
-            Value::Object(id) => Some(self.object_to_coerced_string(id)),
-            other => Some(self.value_to_string(&other)),
+            other => Some(self.conversion_to_string(module, other)?.to_string()),
         })
     }
 
@@ -105970,13 +106176,19 @@ impl InterpreterCore {
         let name = Self::standard_constructor_name(builtin)?;
         match name {
             "Error" | "TypeError" | "RangeError" | "ReferenceError" | "SyntaxError"
-            | "EvalError" | "URIError" => self.construct_error_object(name, args),
+            | "EvalError" | "URIError" => self.construct_error_object(Some(module), name, args),
             "AggregateError" => self.construct_aggregate_error(Some(module), args),
             "Number" => self.dispatch_builtin_hostcall("builtin:Number", args, Some(module)),
             "String" => self.dispatch_builtin_hostcall("builtin:String", args, Some(module)),
             "Boolean" => self.dispatch_builtin_hostcall("builtin:Boolean", args, Some(module)),
-            "Map" => self.dispatch_builtin_hostcall("builtin:Map", args, Some(module)),
-            "Set" => self.dispatch_builtin_hostcall("builtin:Set", args, Some(module)),
+            // ES2020 23.1.1.1, 23.2.1.1, 23.3.1.1, 23.4.1.1: called rather
+            // than constructed (NewTarget undefined), the collection
+            // constructors throw; construction reaches builtin:Map and the
+            // like (and initialize_builtin_subclass_instance), never this
+            // call path. `Map()` returned a map.
+            "Map" | "Set" | "WeakMap" | "WeakSet" => {
+                Err(self.throw_js_error("TypeError", format!("Constructor {name} requires 'new'")))
+            }
             // ES2020 26.2.1.1: Proxy called without `new` throws; the
             // Construct arm builds proxies. So do WeakRef and
             // FinalizationRegistry (ES2021 26.1.1.1, 26.2.1.1).
@@ -106008,9 +106220,6 @@ impl InterpreterCore {
                 let pattern_value = self.arg_or_undefined(args, 0)?;
                 let flags_value = self.arg_or_undefined(args, 1)?;
                 self.construct_regexp(Some(module), pattern_value, flags_value, true)
-            }
-            "WeakMap" | "WeakSet" => {
-                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))
             }
             "TextEncoder" => self.construct_text_encoder(),
             "TextDecoder" => self.construct_text_decoder(Some(module), args),
@@ -106310,13 +106519,15 @@ impl InterpreterCore {
             self.proxy_aware_get_property(Some(module), object_id, "name", receiver.clone(), 0)?;
         let message =
             self.proxy_aware_get_property(Some(module), object_id, "message", receiver.clone(), 0)?;
+        // Steps 4 and 6: ToString, so a Symbol name or message is a
+        // TypeError and a throwing conversion hook propagates.
         let name = match name {
             Value::Undefined => "Error".to_string(),
-            other => self.value_to_string(&other),
+            other => self.conversion_to_string(Some(module), other)?.to_string(),
         };
         let message = match message {
             Value::Undefined => String::new(),
-            other => self.value_to_string(&other),
+            other => self.conversion_to_string(Some(module), other)?.to_string(),
         };
         let text = if name.is_empty() {
             message

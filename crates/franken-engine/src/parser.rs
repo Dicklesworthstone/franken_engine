@@ -12407,6 +12407,11 @@ fn try_parse_for_in_of(
                 Some(span.clone()),
             ));
         }
+    } else if let BindingPattern::Identifier(name) = &binding {
+        // A bare name is an IdentifierReference, so a word reserved here
+        // (strict `let`, which `for (let in o)` reaches) is an early error
+        // (bd-9vouw.233).
+        reject_reserved_identifier_reference(name, span, context)?;
     }
 
     let body_src = rest.trim();
@@ -12527,7 +12532,9 @@ fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
 /// minified heads (`for(const[k,v]of m)`, `for(const{a}of xs)`,
 /// `for(const c of"abc")`, ts-pattern, terser output) were read as C-style
 /// headers. A word with nothing but a declaration keyword before it is the
-/// bound name (`for (const of of xs)`).
+/// bound name (`for (const of of xs)`), except an `in` after a bare `let`:
+/// for-in only excludes `let [`, so sloppy `for (let in o)` assigns the
+/// variable `let` (bd-9vouw.233).
 fn find_for_in_of_keyword(header: &str) -> Option<(&'static str, usize)> {
     let bytes = header.as_bytes();
     let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
@@ -12554,7 +12561,11 @@ fn find_for_in_of_keyword(header: &str) -> Option<(&'static str, usize)> {
                 && bytes.get(i + 2).is_none_or(|next| !is_word(*next))
             {
                 let lhs = header[..i].trim();
-                if !lhs.is_empty() && !matches!(lhs, "let" | "const" | "var") {
+                let declaration_keyword = match keyword {
+                    "in" => matches!(lhs, "const" | "var"),
+                    _ => matches!(lhs, "let" | "const" | "var"),
+                };
+                if !lhs.is_empty() && !declaration_keyword {
                     return Some((keyword, i));
                 }
             }
@@ -21081,6 +21092,31 @@ mod tests {
             "for ([...x = 1] of []) ;",
             "var o = {}; for ([...o.x = 1] of []) ;",
             "var o = {}; for ([o.a, ...o.b,] of []) ;",
+        ] {
+            assert!(
+                CanonicalEs2020Parser
+                    .parse(source, ParseGoal::Script)
+                    .is_err(),
+                "{source} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn a_for_in_head_may_assign_let_in_sloppy_code_only() {
+        // bd-9vouw.233: for-in excludes only `let [`, so sloppy
+        // `for (let in o)` assigns the variable `let`; strict code reserves
+        // `let`, and for-of excludes it outright (Node: SyntaxError for each
+        // rejected source).
+        for source in ["var let; for (let in {}) ;", "for (const of of []) ;"] {
+            CanonicalEs2020Parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "\"use strict\"; for (let in {}) ;",
+            "for (let of []) ;",
+            "function* g() { for (yield in {}) ; }",
         ] {
             assert!(
                 CanonicalEs2020Parser

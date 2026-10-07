@@ -166,3 +166,14 @@ fn long_export_void_chains_run_bd_9vouw_232() {
         ]
     );
 }
+
+/// bd-9vouw.233: a for-in head excludes only `let [`, so sloppy
+/// `for (let in o)` assigns the variable `let` each iteration (the
+/// whole-word `in` / `of` finder of bd-9vouw.219 skipped an `in` after a bare
+/// `let` and refused the header). Node v22.2.0 prints these lines; Bun 1.4.2
+/// agrees.
+#[test]
+fn a_for_in_head_assigns_the_variable_let_bd_9vouw_233() {
+    let source = "var let;\nfor (let in { a: 1, b: 2 }) {}\nconsole.log(let);\nvar o = { p: 0 };\nfor (let in o) { o.p += 1; }\nconsole.log(o.p, let);\n";
+    assert_eq!(run(source), ["b", "1 p"]);
+}

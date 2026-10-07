@@ -218,3 +218,26 @@ console.log(tag(proxy), calls, String({}), String([1, 2]), '' + Object.create(nu
         ]
     );
 }
+
+/// bd-9vouw.270: Object.prototype.toString of a BigInt or Symbol primitive
+/// reads @@toStringTag from its prototype, which a Symbol-keyed read made
+/// before the prototype existed missed: "[object Object]" when nothing had
+/// touched BigInt.prototype or Symbol.prototype yet (a loss of bd-9vouw.270
+/// in the rc-next31 Test262 census). Expected line: Node v22.2.0's output,
+/// captured programmatically.
+#[test]
+fn primitive_receivers_read_their_prototype_tag_bd_9vouw_270() {
+    let source = r#"console.log(Object.prototype.toString.call(1n), Object.prototype.toString.call(Symbol('s')), Object.prototype.toString.call(Object(Symbol())), Object.prototype.toString.call(Object(2n)));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        ["[object BigInt] [object Symbol] [object Symbol] [object BigInt]",]
+    );
+}

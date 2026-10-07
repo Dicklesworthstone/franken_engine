@@ -59888,12 +59888,16 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         receiver: Value,
     ) -> Result<(Value, Option<ObjectId>), InterpreterError> {
-        // %Function.prototype% is made on first use, and its Symbol-keyed
-        // members (@@hasInstance, bd-9vouw.268) exist only on it: a Symbol
-        // read through a function materializes it, or fell through to
-        // %Object.prototype% and read undefined.
-        if type_name == "Function" && matches!(key, RuntimePropertyKey::Symbol(_)) {
-            self.ensure_builtin_prototype("Function")?;
+        // A prototype is made on first use, and its Symbol-keyed members
+        // (%Function.prototype%[@@hasInstance], bd-9vouw.268; BigInt's and
+        // Symbol's @@toStringTag, bd-9vouw.270) exist only on it: a Symbol
+        // read through a primitive or function materializes it, or fell
+        // through to %Object.prototype% and read undefined
+        // (`Object.prototype.toString.call(1n)` was "[object Object]").
+        if matches!(key, RuntimePropertyKey::Symbol(_))
+            && canonical_builtin_prototype_name(type_name).is_some()
+        {
+            self.ensure_builtin_prototype(type_name)?;
         }
         if let Some(&prototype) = self.builtin_prototypes.get(type_name) {
             let value =

@@ -89333,10 +89333,11 @@ impl InterpreterCore {
                     // (`Object.assign({}, 'ab')` gave {}).
                     if let Value::Str(text) = &source_val {
                         for (key, value) in self.string_index_entries(text)? {
+                            let property_key = RuntimePropertyKey::String(key.clone());
                             let committed = self.proxy_aware_set_runtime_property(
                                 module,
                                 target_obj_id,
-                                &RuntimePropertyKey::String(key.clone()),
+                                &property_key,
                                 value,
                                 Value::Object(target_obj_id),
                                 0,
@@ -89347,6 +89348,21 @@ impl InterpreterCore {
                                         .to_string(),
                                     got: format!("Cannot assign to read only property '{key}'"),
                                 });
+                            }
+                            // An array target's length grows as with an
+                            // indexed assignment (`Object.assign([], 'hi')`),
+                            // unless a setter consumed the write.
+                            if let Some(index) = property_key
+                                .as_str()
+                                .and_then(Self::canonical_array_index_key)
+                                && self
+                                    .heap
+                                    .get(target_obj_id.0 as usize)
+                                    .is_some_and(|object| {
+                                        object.contains_own_runtime_property(&property_key)
+                                    })
+                            {
+                                self.maintain_array_index_assignment(target_obj_id, index)?;
                             }
                         }
                         continue;

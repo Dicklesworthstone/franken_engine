@@ -13077,7 +13077,10 @@ fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
 /// headers. A word with nothing but a declaration keyword before it is the
 /// bound name (`for (const of of xs)`), except an `in` after a bare `let`:
 /// for-in only excludes `let [`, so sloppy `for (let in o)` assigns the
-/// variable `let` (bd-9vouw.233).
+/// variable `let` (bd-9vouw.233). A head with a top-level `;` is C-style: an
+/// `in` after it is the operator in its test or update
+/// (`for (var i = n; i in list; i++)`, @xmldom/xmldom), and the initializer
+/// before it cannot hold an unparenthesized `in` (ES2020 13.7.4 [~In]).
 fn find_for_in_of_keyword(header: &str) -> Option<(&'static str, usize)> {
     let bytes = header.as_bytes();
     let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
@@ -13094,6 +13097,7 @@ fn find_for_in_of_keyword(header: &str) -> Option<(&'static str, usize)> {
         match b {
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth -= 1,
+            b';' if depth == 0 => return None,
             _ => {}
         }
         if depth != 0 || i > 0 && (is_word(bytes[i - 1]) || bytes[i - 1] == b'.') {

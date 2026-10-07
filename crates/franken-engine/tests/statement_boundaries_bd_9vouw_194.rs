@@ -211,6 +211,19 @@ fn a_for_in_head_assigns_the_variable_let_bd_9vouw_233() {
     assert_eq!(run(source), ["b", "1 p"]);
 }
 
+/// A C-style `for` whose test uses the `in` operator
+/// (`for (var i = n; i in list; i++)`, @xmldom/xmldom's dom.js), one whose
+/// clauses read a variable named `of`, and one with an empty initializer
+/// before an `in` test: the whole-word `in` / `of` finder found the operator
+/// after the first `;` and read the head as a for-in / for-of ("loop
+/// variable declaration may not have an initializer"). Node v22.2.0 prints
+/// this line.
+#[test]
+fn an_in_operator_in_a_c_style_for_head_is_not_a_for_in() {
+    let source = "var list = [5, 6, 7]; var seen = [];\nfor (var i = 0; i in list; i++) seen.push(list[i]);\nvar of = [1, 2]; var n = 0;\nfor (var j = 0; j < of.length; j++) n += of[j];\nvar o = { a: 1 }; var k = 'a'; var hits = 0;\nfor (; k in o; k = 'b') hits++;\nconsole.log(seen.join(), n, hits);\n";
+    assert_eq!(run(source), ["5,6,7 3 1"]);
+}
+
 /// bd-9vouw.219 (follow-up): a declaration keyword followed directly by a
 /// pattern (`for(let{a}of xs)`, `for(var[c]in o)`, `for await(const[k,v]of
 /// xs)`) declares it; the head was read as `let` / `const` / `var`

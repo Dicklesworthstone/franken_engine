@@ -780,3 +780,35 @@ console.log(u.href);
         ]
     );
 }
+
+/// `require('timers')` (bd-9vouw.231) is Node's timers module, whose timer
+/// functions are the realm's own: xml2js reads
+/// `require('timers').setImmediate`, which found no module. The alias also
+/// has calls the timers facade recognizes. Expected lines are Node
+/// v22.2.0's output for the test's source; Bun 1.4.2 agrees.
+#[test]
+fn require_timers_is_the_timers_module_bd_9vouw_231() {
+    let lines = run_tree(
+        "fe_run_cjs_timers_module",
+        &[(
+            "app.js",
+            r#"const timers = require('timers');
+const T = require('node:timers');
+const si = require('timers').setImmediate;
+console.log(typeof timers, timers === T, timers.setTimeout === setTimeout, si === setImmediate, Object.keys(timers).filter((k) => /^(set|clear)/.test(k)).sort().join());
+const order = [];
+si(() => order.push('immediate'));
+let ticks = 0;
+const h = timers.setInterval(() => { ticks += 1; if (ticks === 2) timers.clearInterval(h); }, 1);
+timers.setTimeout(() => console.log(order.join(), ticks), 30);
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        [
+            "object true true true clearImmediate,clearInterval,clearTimeout,setImmediate,setInterval,setTimeout",
+            "immediate 2"
+        ]
+    );
+}

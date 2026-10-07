@@ -5146,9 +5146,13 @@ fn lower_statement_to_ir1_with_flow(
                             // bd-suwvw: confirmed timers / timers-promises
                             // aliases join the same elision (their operations
                             // are recognized at the member call/read sites).
+                            // Under the CommonJS wrapper `require('timers')`
+                            // runs and returns the engine's timers module
+                            // (bd-9vouw.231), as for os.
                             || (is_require_timers_module_initializer(init, binding_lookup)
                                 && binding_lookup
-                                    .contains_key(&timers_module_alias_sentinel(alias)))
+                                    .contains_key(&timers_module_alias_sentinel(alias))
+                                && !require_is_commonjs_wrapper(binding_lookup))
                             || (is_require_timers_promises_module_initializer(
                                 init,
                                 binding_lookup,

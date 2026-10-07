@@ -5975,6 +5975,9 @@ const OS_MODULE_KEY: &str = "<module os>";
 /// Seed-tracked slot of the `require('url')` module object (bd-9vouw.224).
 const URL_MODULE_KEY: &str = "<module url>";
 
+/// Seed-tracked slot of the `require('timers')` module object (bd-9vouw.231).
+const TIMERS_MODULE_KEY: &str = "<module timers>";
+
 /// Seed-tracked slot marking that `require('events')`'s statics are on the
 /// EventEmitter constructor's backing object (bd-9vouw.210); it holds that
 /// backing object.
@@ -38147,6 +38150,33 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// `require('timers')` (bd-9vouw.231): Node's timers module, whose six
+    /// timer functions are the realm's own. xml2js reads
+    /// `require('timers').setImmediate`; the timers facade lowers only the
+    /// calls it recognizes on a confirmed alias, so the require reached the
+    /// runtime and found no module. Not provided: `promises`, `active`,
+    /// `unenroll`, `enroll`.
+    fn timers_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(TIMERS_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let members = Self::timer_global_kinds()
+            .into_iter()
+            .filter(|(name, _)| *name != "queueMicrotask")
+            .map(|(name, kind)| {
+                (
+                    name,
+                    Value::BuiltinFunction(BuiltinFunction::new_kind(kind)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(TIMERS_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('url')` (bd-9vouw.224): Node's url module with the realm's
     /// `URL` and `URLSearchParams` and the legacy `fileURLToPath`, `format`
     /// and `parse` over the url facade's own HostCalls. The facade lowers only
@@ -38296,6 +38326,9 @@ impl InterpreterCore {
         }
         if matches!(specifier, "url" | "node:url") {
             return self.url_core_module();
+        }
+        if matches!(specifier, "timers" | "node:timers") {
+            return self.timers_core_module();
         }
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)

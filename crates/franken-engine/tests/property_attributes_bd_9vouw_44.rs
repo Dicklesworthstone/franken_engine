@@ -178,3 +178,18 @@ fn frozen_properties_report_frozen_attributes() {
         "false:false:true",
     );
 }
+
+/// bd-9vouw.235: ObjectDefineProperties (Object.create, Object.defineProperties)
+/// takes ToObject of a primitive properties argument, so a non-empty string's
+/// index properties (strings, not descriptors) are a TypeError while other
+/// primitives define nothing; and ToPropertyDescriptor takes any object,
+/// a function included (its own `value` / `enumerable` are read; an empty one
+/// defines an undefined, non-writable property). Node v22.2.0 gives this
+/// value; Bun 1.4.2 agrees.
+#[test]
+fn properties_arguments_and_function_descriptors_bd_9vouw_235() {
+    check(
+        "function attempt(f) { try { var r = f(); return 'ok:' + Object.keys(r).join('+'); } catch (e) { return e.constructor.name; } }\nvar fd = function () {}; fd.value = 7; fd.enumerable = true;\nvar viaFn = Object.create({}, { a: fd, b: function () {} });\n[attempt(() => Object.create({}, 'abc')), attempt(() => Object.create({}, '')), attempt(() => Object.create({}, 5)),\n attempt(() => Object.defineProperties({}, 'x')), attempt(() => Object.defineProperties({}, true)),\n attempt(() => Object.create({}, { a: 1 })), attempt(() => Object.create({}, { a: null })),\n Object.keys(viaFn).join('+'), viaFn.a, 'b' in viaFn, viaFn.b, Object.getOwnPropertyDescriptor(viaFn, 'b').writable,\n attempt(() => Object.defineProperty({}, 'k', function () {})), attempt(() => Object.create({}, { a: { get: 5 } }))].join(' ');\n",
+        "TypeError ok: ok: TypeError ok: TypeError TypeError a 7 true  false ok: TypeError",
+    );
+}

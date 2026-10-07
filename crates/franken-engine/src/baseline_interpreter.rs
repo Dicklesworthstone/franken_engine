@@ -61520,7 +61520,16 @@ impl InterpreterCore {
                     got: properties_arg.type_name().to_string(),
                 });
             }
-            // A primitive has no own enumerable data keys to define.
+            // ToObject(string) has an enumerable own index property per
+            // code unit, a string, which ToPropertyDescriptor rejects
+            // (bd-9vouw.235); the other primitives have no enumerable own
+            // keys to define.
+            Value::Str(text) if text.utf16_len() > 0 => {
+                return Err(InterpreterError::TypeError {
+                    expected: format!("object property descriptors for {caller}"),
+                    got: "string".to_string(),
+                });
+            }
             _ => return Ok(()),
         };
         let keys = self
@@ -77977,13 +77986,24 @@ impl InterpreterCore {
 
     /// `Get(descriptor, name)` when `HasProperty(descriptor, name)`, so
     /// inherited fields and getter-backed fields count (ES2020 6.2.5.5).
+    /// A function descriptor is an object too (bd-9vouw.235): its own and
+    /// inherited properties are read as `in` and member reads see them.
     fn descriptor_field(
         &mut self,
         module: Option<&Ir3Module>,
-        descriptor_id: ObjectId,
+        descriptor: &Value,
         name: &str,
     ) -> Result<Option<Value>, InterpreterError> {
         let key = RuntimePropertyKey::String(JsString::from(name));
+        let Value::Object(descriptor_id) = *descriptor else {
+            let Some(module) = module else {
+                return Ok(None);
+            };
+            if !self.function_has_property(module, descriptor, &key)? {
+                return Ok(None);
+            }
+            return self.get_v(module, descriptor, &key).map(Some);
+        };
         if !self.prototype_chain_has_runtime_key(descriptor_id, &key)? {
             return Ok(None);
         }
@@ -77997,24 +78017,24 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         descriptor_val: &Value,
     ) -> Result<PropertyDescriptorFields, InterpreterError> {
-        let Value::Object(descriptor_id) = *descriptor_val else {
+        if !matches!(descriptor_val, Value::Object(_)) && !descriptor_val.is_callable() {
             return Err(InterpreterError::TypeError {
                 expected: "object property descriptor".to_string(),
                 got: descriptor_val.type_name().to_string(),
             });
-        };
+        }
         let enumerable = self
-            .descriptor_field(module, descriptor_id, "enumerable")?
+            .descriptor_field(module, descriptor_val, "enumerable")?
             .map(|value| value.is_truthy());
         let configurable = self
-            .descriptor_field(module, descriptor_id, "configurable")?
+            .descriptor_field(module, descriptor_val, "configurable")?
             .map(|value| value.is_truthy());
-        let value = self.descriptor_field(module, descriptor_id, "value")?;
+        let value = self.descriptor_field(module, descriptor_val, "value")?;
         let writable = self
-            .descriptor_field(module, descriptor_id, "writable")?
+            .descriptor_field(module, descriptor_val, "writable")?
             .map(|value| value.is_truthy());
         let mut endpoint = |name: &str| -> Result<Option<Value>, InterpreterError> {
-            match self.descriptor_field(module, descriptor_id, name)? {
+            match self.descriptor_field(module, descriptor_val, name)? {
                 Some(value) if !value.is_callable() && !matches!(value, Value::Undefined) => {
                     Err(InterpreterError::TypeError {
                         expected: format!("callable or undefined descriptor.{name}"),

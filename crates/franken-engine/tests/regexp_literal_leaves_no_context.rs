@@ -32,6 +32,8 @@ fn execute_source(label: &str, source: &str) -> ExecutionResult {
     let lowering = lower_ir0_to_ir3(&ir0, &ctx)
         .unwrap_or_else(|err| panic!("program `{label}` should lower to IR3: {err:?}"));
     let mut config = InterpreterConfig::quickjs_defaults();
+    // The default 100,000-instruction budget is below the 20,000-write loop.
+    config.instruction_budget = 100_000_000;
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,

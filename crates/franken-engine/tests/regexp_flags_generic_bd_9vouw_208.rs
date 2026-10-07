@@ -52,3 +52,39 @@ fn regexp_exec_and_test_convert_their_argument_bd_9vouw_213() {
         ]
     );
 }
+
+/// bd-9vouw.243: a RegExp's `source` is its pattern escaped as a literal
+/// body (ES2020 21.2.3.2.4 EscapeRegExpPattern): `(?:)` for an empty
+/// pattern, `\/` for a `/` outside a class, escape sequences for line
+/// terminators. `new RegExp('a/b').source` was `a/b`, so
+/// `String(new RegExp('a/b'))` was the unparsable `/a/b/`. The escaped
+/// pattern still matches what the original did. Expected lines are Node
+/// v22.2.0's output, captured programmatically.
+#[test]
+fn regexp_source_is_escaped_like_a_literal_body_bd_9vouw_243() {
+    let source = r#"var cases = ['', 'a/b', 'a\\/b', '[/]', '[a/]b/c', '\n', 'a\r\u2028\u2029b', '\\\n', '[\n]', '/', 'a\\\\/b', '(?:)', '[\\]/]/'];
+console.log(cases.map(function (c) { return JSON.stringify(new RegExp(c).source); }).join(' '));
+console.log(cases.map(function (c) { var r = new RegExp(c); return String(new RegExp(r.source).source === r.source); }).join(' '));
+console.log(String(new RegExp('a/b')), String(new RegExp('')), JSON.stringify(String(new RegExp('x\ny', 'g'))), /a\/b/.source, /[/]/.source);
+console.log(new RegExp('a/b').test('xa/b'), new RegExp('\n').test('\n'), new RegExp('[\n]').test('\n'), new RegExp('\\\n').test('\n'), new RegExp('').test('q'), new RegExp('a/b').exec('a/b')[0]);
+var re = /x/g;
+re.compile('p/q', 'i');
+console.log(re.source, String(re), re.test('P/Q'));"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#""(?:)" "a\\/b" "a\\/b" "[/]" "[a/]b\\/c" "\\n" "a\\r\\u2028\\u2029b" "\\n" "[\\n]" "\\/" "a\\\\\\/b" "(?:)" "[\\]/]\\/""#,
+            r#"true true true true true true true true true true true true true"#,
+            r#"/a\/b/ /(?:)/ "/x\\ny/g" a\/b [/]"#,
+            r#"true true true true true a/b"#,
+            r#"p\/q /p\/q/i true"#,
+        ]
+    );
+}

@@ -58485,6 +58485,63 @@ impl InterpreterCore {
         format!("/{source}/{flags}")
     }
 
+    /// ES2020 21.2.3.2.4 EscapeRegExpPattern, as V8 applies it, so a
+    /// RegExp's `source` reads back as a literal body (bd-9vouw.243): an
+    /// empty pattern is `(?:)`, a `/` outside a character class is escaped,
+    /// and a line terminator (or a backslash before one) becomes its escape
+    /// sequence. `new RegExp('a/b').source` was `a/b` and
+    /// `String(new RegExp('a/b'))` the unparsable `/a/b/`; Node gives `a\/b`
+    /// and `/a\/b/`. The escaped pattern matches what the original did.
+    /// No-claim: a `v`-flag class nested inside another ends the class
+    /// scan at its first `]`.
+    fn escape_regexp_pattern(source: String) -> String {
+        if source.is_empty() {
+            return "(?:)".to_string();
+        }
+        let line_terminator_escape = |c: char| match c {
+            '\n' => Some("\\n"),
+            '\r' => Some("\\r"),
+            '\u{2028}' => Some("\\u2028"),
+            '\u{2029}' => Some("\\u2029"),
+            _ => None,
+        };
+        if !source.contains(|c: char| c == '/' || line_terminator_escape(c).is_some()) {
+            return source;
+        }
+        let mut escaped = String::with_capacity(source.len() + 4);
+        let mut in_class = false;
+        let mut chars = source.chars();
+        while let Some(c) = chars.next() {
+            if let Some(escape) = line_terminator_escape(c) {
+                escaped.push_str(escape);
+                continue;
+            }
+            match c {
+                '\\' => match chars.next() {
+                    Some(next) => match line_terminator_escape(next) {
+                        Some(escape) => escaped.push_str(escape),
+                        None => {
+                            escaped.push('\\');
+                            escaped.push(next);
+                        }
+                    },
+                    None => escaped.push('\\'),
+                },
+                '/' if !in_class => escaped.push_str("\\/"),
+                '[' => {
+                    in_class = true;
+                    escaped.push(c);
+                }
+                ']' => {
+                    in_class = false;
+                    escaped.push(c);
+                }
+                _ => escaped.push(c),
+            }
+        }
+        escaped
+    }
+
     fn regexp_source_flags_from_object(&self, object_id: ObjectId) -> Option<(String, String)> {
         let object = self.heap.get(object_id.0 as usize)?;
         if object.brand() != Some("RegExp") {
@@ -58789,7 +58846,11 @@ impl InterpreterCore {
         source: String,
         flags: &str,
     ) -> Result<(), InterpreterError> {
-        self.set_object_property(regexp_id, "source".to_string(), Value::str(source))?;
+        self.set_object_property(
+            regexp_id,
+            "source".to_string(),
+            Value::str(Self::escape_regexp_pattern(source)),
+        )?;
         // The `flags` getter lists the flags in "dgimsuvy" order whatever
         // order they were written in (ES2025 22.2.6.4): `/a/gd.flags` is
         // "dg". A letter outside that set stays, after them.

@@ -11748,25 +11748,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 }
                 Ir1Op::Return => {
                     let value = pop_lowering_value(&mut fn_value_stack)?;
-                    // Async-generator ReturnStatement awaits its operand
-                    // BEFORE creating the return completion. In particular,
-                    // rejection must still enter this frame's catch/finally;
-                    // awaiting only the finished generator's result is too late.
-                    // AwaitValue overwrites its register, so never await in a
-                    // register that may still back a live local binding.
-                    let value = if fn_is_async && fn_is_generator {
-                        let awaited = alloc_register(&mut fn_reg);
-                        ir3.instructions.push(Ir3Instruction::Move {
-                            dst: awaited,
-                            src: value,
-                        });
-                        ir3.instructions.push(Ir3Instruction::AwaitValue {
-                            promise_reg: awaited,
-                        });
-                        awaited
-                    } else {
-                        value
-                    };
+                    // An async generator's `return expr` already awaits its
+                    // operand in the body: the parser writes it as
+                    // `return await expr`, so a rejection still enters this
+                    // frame's catch/finally. `return;` and the implicit
+                    // return do not await (bd-9vouw.351); they were awaited
+                    // here, with every other return.
                     ir3.instructions.push(Ir3Instruction::Return { value });
                     // A return or throw ends its statement as a Pop does: its
                     // operand and temporaries are dead.

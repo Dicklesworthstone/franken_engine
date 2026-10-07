@@ -383,17 +383,16 @@ impl InterpreterCore {
                     .get("value")
                     .cloned()
                     .unwrap_or(Value::Undefined);
-                let done = self.generators[backing as usize].phase == GeneratorPhase::Completed;
-                self.await_async_generator_value(
-                    id,
-                    if done {
-                        AwaitKind::ReturnResult
-                    } else {
-                        AwaitKind::Yield
-                    },
-                    value,
-                    result_label,
-                )
+                if self.generators[backing as usize].phase == GeneratorPhase::Completed {
+                    // ES2024 27.6.3.2 AsyncGeneratorStart steps 4.e-h: the
+                    // body's completion settles the request at once; a
+                    // `return expr` already awaited its operand in the body
+                    // (bd-9vouw.351). Awaiting the result again took one more
+                    // job than Node, and `return;` two.
+                    self.complete_async_generator_activation(id);
+                    return self.settle_async_generator_request(id, Ok(value), true, result_label);
+                }
+                self.await_async_generator_value(id, AwaitKind::Yield, value, result_label)
             }
             Err(error)
                 if matches!(error, InterpreterError::UncaughtException { .. })

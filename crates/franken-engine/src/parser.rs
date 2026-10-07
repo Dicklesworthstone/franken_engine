@@ -13443,6 +13443,18 @@ fn parse_return_statement(
         // (bd-h5m8u; mirrors bd-qxkli/bd-j4l7k).
         Some(parse_expression_allowing_sequence(body, &span, context, 1)?)
     };
+    // ES2020 13.10.1: in an async generator, `return expr` awaits expr
+    // before the return completion exists (a rejection still reaches this
+    // frame's catch and finally); `return;` and falling off the end do not
+    // await (bd-9vouw.351). The lowering and the runtime settle the
+    // completion at once.
+    let argument = argument.map(|argument| {
+        if context.await_context && context.yield_context {
+            Expression::Await(Box::new(argument))
+        } else {
+            argument
+        }
+    });
     Ok(Statement::Return(ReturnStatement { argument, span }))
 }
 

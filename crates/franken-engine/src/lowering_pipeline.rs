@@ -16055,6 +16055,18 @@ fn lower_expression_to_ir1_inner(
                         // literal `true` that would leave the global resident.
                         ops.push(Ir1Op::DeleteName { name: name.clone() });
                     }
+                    // A declared binding (var, function, class, let/const,
+                    // parameter, catch parameter, arguments) is not
+                    // deletable: `delete x` is false and does not read x
+                    // (ES2020 12.5.3.2 step 5: a declarative environment's
+                    // and a var-created global's DeleteBinding answer
+                    // false). It evaluated x and answered true. A `with`
+                    // body reaches here only for names its object lacks.
+                    Expression::Identifier(_) => {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Boolean(false),
+                        });
+                    }
                     _ => {
                         lower_expression_to_ir1(
                             argument,

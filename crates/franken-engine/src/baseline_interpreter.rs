@@ -15549,6 +15549,11 @@ impl InterpreterCore {
             {
                 return self.proxy_aware_delete_runtime_property(None, global, &key, 0);
             }
+            // The global object's NaN, Infinity and undefined are
+            // non-configurable (ES2020 18.1): `delete NaN` is false.
+            if matches!(name, "NaN" | "Infinity" | "undefined") {
+                return Ok(false);
+            }
             // Genuinely missing name: `delete` of an unresolvable Reference is
             // `true` with no side effect.
             return Ok(true);

@@ -107,3 +107,49 @@ console.log(ArrayBuffer.prototype.resize.length, ArrayBuffer.prototype.transfer.
         ]
     );
 }
+
+/// A length-tracking typed array whose buffer shrinks inside an
+/// Array.prototype callback loop: the loop's length was read once, so
+/// reduce, forEach, map, every and filter visited the index past the new
+/// length (HasProperty is false there, ES2024 23.1.3 loops skip it).
+/// Test262's Array/prototype/reduce/callbackfn-resize-arraybuffer.js and
+/// reduceRight's went red when `resize` started to work. Expected lines are
+/// Node v22.2.0's output, captured programmatically.
+#[test]
+fn array_callback_loops_skip_indices_a_shrink_removed_bd_9vouw_256() {
+    let source = r#"function run(method, init) {
+  var buffer = new ArrayBuffer(3, { maxByteLength: 3 });
+  var sample = new Uint8Array(buffer);
+  var seen = [];
+  var reducing = method === 'reduce' || method === 'reduceRight';
+  var callback = function () {
+    var index = arguments[reducing ? 2 : 1];
+    if (seen.length === 0) buffer.resize(2);
+    seen.push(index);
+    return reducing ? index : true;
+  };
+  var args = [callback];
+  if (init !== undefined) args.push(init);
+  var result = Array.prototype[method].apply(sample, args);
+  return method + ':' + seen.join(',') + '=' + String(result);
+}
+console.log(run('reduce', 262), run('reduceRight', 262), run('reduce'));
+console.log(run('forEach'), run('map'), run('every'), run('filter'), run('find'), run('findIndex'), run('findLast'), run('findLastIndex'));
+var arr = [1, 2, 3, 4];
+console.log(arr.reduce(function (a, b, i, o) { if (i === 1) o.length = 2; return a + b; }), [1, , 3].reduce(function (a, b) { return a + b; }));"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"reduce:0,1=1 reduceRight:2,1,0=0 reduce:1=1"#,
+            r#"forEach:0,1=undefined map:0,1=true,true, every:0,1=true filter:0,1=0,0 find:0=0 findIndex:0=0 findLast:2=0 findLastIndex:2=2"#,
+            r#"3 4"#,
+        ]
+    );
+}

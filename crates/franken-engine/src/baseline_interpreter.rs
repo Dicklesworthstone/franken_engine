@@ -72822,7 +72822,11 @@ impl InterpreterCore {
     ) -> Result<Option<Value>, InterpreterError> {
         let key = element_index.to_string();
         if let Some(value) = self.typed_array_indexed_get_property(array_id, &key)? {
-            return Ok(Some(value));
+            // A typed array element is never undefined: undefined is an index
+            // past its current length (its resizable buffer shrank, or was
+            // detached, while the loop ran). HasProperty is false there, so
+            // the loop skips it (bd-9vouw.256).
+            return Ok((!matches!(value, Value::Undefined)).then_some(value));
         }
         if self.heap.get(array_id.0 as usize).is_none() {
             return Err(InterpreterError::ObjectNotFound { id: array_id.0 });

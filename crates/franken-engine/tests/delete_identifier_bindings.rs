@@ -26,6 +26,7 @@ console.log(delete implicitGlobal, typeof implicitGlobal, delete NaN, delete Inf
 var o = { x: 1 };
 with (o) { var dw = delete x; }
 console.log(dw, Object.keys(o).length, x);
+console.log(delete (NaN), delete ((Infinity)), NaN + 1, Infinity > 1, (function () { var NaN = 2; return delete NaN; })());
 "#;
     let lines: Vec<String> = HybridRouter::default()
         .eval(source)
@@ -41,6 +42,7 @@ console.log(dw, Object.keys(o).length, x);
             "[false,false,false,5,1]",
             "true undefined false false false number",
             "true 0 1",
+            "false false NaN true false",
         ]
     );
 }

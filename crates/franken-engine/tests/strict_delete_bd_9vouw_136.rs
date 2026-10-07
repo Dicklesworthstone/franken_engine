@@ -101,7 +101,8 @@ fn strict_mode_delete_throws_where_sloppy_answers_false() {
 }
 
 /// Node: "SyntaxError: Delete of an unqualified identifier in strict mode."
-/// before anything runs, in a strict script and in a strict function.
+/// before anything runs, in a strict script and in a strict function; also
+/// for `NaN` and `Infinity`, which parse as number literals elsewhere.
 #[test]
 fn strict_mode_delete_of_an_identifier_is_an_early_error() {
     let dir = scratch_dir();
@@ -113,6 +114,11 @@ fn strict_mode_delete_of_an_identifier_is_an_early_error() {
         (
             "function",
             "console.log('ran'); (function () { 'use strict'; var y = 1; return delete (y); })();",
+        ),
+        ("nan", "'use strict'; console.log('ran'); delete NaN;"),
+        (
+            "infinity",
+            "console.log('ran'); (function () { 'use strict'; return delete (Infinity); })();",
         ),
     ] {
         let output = run(&dir, name, source);

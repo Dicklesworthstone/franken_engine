@@ -8096,10 +8096,24 @@ fn try_parse_unary_prefix(
                 .next()
                 .is_some_and(|next| !is_identifier_continue(next))
         {
-            let arg = match parse_expression(rest.trim(), span, context, recursion_depth + 1) {
-                Ok(e) => e,
-                Err(e) => return Some(Err(e)),
-            };
+            // `NaN` and `Infinity` parse as number literals everywhere else,
+            // but the operand of `delete NaN` / `delete (Infinity)` is a
+            // reference to the global object's non-configurable property:
+            // false, and an early error in strict code. As literals they
+            // deleted a value and answered true.
+            let mut operand = rest.trim();
+            while let Some(inner) = operand.strip_prefix('(').and_then(|o| o.strip_suffix(')')) {
+                operand = inner.trim();
+            }
+            let arg =
+                if matches!(op, UnaryOperator::Delete) && matches!(operand, "NaN" | "Infinity") {
+                    Expression::Identifier(operand.to_string())
+                } else {
+                    match parse_expression(rest.trim(), span, context, recursion_depth + 1) {
+                        Ok(e) => e,
+                        Err(e) => return Some(Err(e)),
+                    }
+                };
             // bd-9vouw.136: a strict-mode delete throws where a sloppy one
             // answers false, and of a bare identifier it is an early error
             // (ES2020 12.5.3.1).

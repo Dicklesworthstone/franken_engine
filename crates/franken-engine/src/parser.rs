@@ -4217,7 +4217,7 @@ fn source_end_position(source: &str, source_label: &str) -> ParseResult<(u64, u6
 fn strip_leading_labels(segment: &str) -> &str {
     let mut seg = segment.trim_start();
     loop {
-        let Some(colon_idx) = find_top_level_colon(seg) else {
+        let Some(colon_idx) = leading_label_colon(seg) else {
             return seg;
         };
         let label = seg[..colon_idx].trim();
@@ -4681,7 +4681,7 @@ fn parse_statement_inner(
     // statement position (handled above), and conditional expressions place
     // a `?` before the `:`, so an identifier-only prefix is unambiguous. The
     // label must be a real IdentifierReference — reserved words are rejected.
-    if let Some(colon_idx) = find_top_level_colon(statement) {
+    if let Some(colon_idx) = leading_label_colon(statement) {
         let label = statement[..colon_idx].trim();
         if is_identifier(label) && !is_unconditional_reserved_keyword(label) {
             // ES2020 13.1.1: `yield` is not a label inside a generator or in
@@ -7478,6 +7478,19 @@ fn try_parse_conditional(
 }
 
 /// Find the index of a top-level `:` (not inside nested delimiters or quotes).
+/// The index of the `:` ending a leading `label:` of `statement`: the first
+/// `:` in the text, when the text before it is an identifier (escapes
+/// allowed). An identifier holds no quote, bracket, brace, slash or colon,
+/// so when the text before the first `:` is one, that colon is also the
+/// first top-level colon [`find_top_level_colon`] finds, and when it is not,
+/// neither is the text before the first top-level colon. The label checks
+/// used that quote-aware scan of the whole statement, which every statement
+/// and every nested one paid (5% of compiling cytoscape, release).
+fn leading_label_colon(statement: &str) -> Option<usize> {
+    let colon = statement.find(':')?;
+    is_identifier(statement[..colon].trim()).then_some(colon)
+}
+
 fn find_top_level_colon(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut depth_paren: i64 = 0;
@@ -21944,6 +21957,36 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     #[test]
     fn find_top_level_colon_none() {
         assert_eq!(find_top_level_colon("abc"), None);
+    }
+
+    /// `leading_label_colon` answers what the label checks asked of
+    /// `find_top_level_colon`: the first top-level colon, when the text
+    /// before it is an identifier.
+    #[test]
+    fn leading_label_colon_matches_the_top_level_scan() {
+        let cases = [
+            "a: b",
+            "outer : for (;;) { break outer; }",
+            "\\u0061: x",
+            "a ? b : c",
+            "f(a: b): c",
+            "x = { a: 1 }",
+            "'s:t'; u: v",
+            "`a:${b}`: c",
+            "/a:b/.test(s) ? 1 : 2",
+            "[a, b]: c",
+            "abc",
+            "",
+            "a.b: c",
+            "  spaced  :  stmt",
+        ];
+        for statement in cases {
+            let expected = find_top_level_colon(statement)
+                .filter(|&colon| is_identifier(statement[..colon].trim()));
+            assert_eq!(leading_label_colon(statement), expected, "{statement:?}");
+        }
+        assert_eq!(leading_label_colon("label: x"), Some(5));
+        assert_eq!(leading_label_colon("a ? b : c"), None);
     }
 
     #[test]

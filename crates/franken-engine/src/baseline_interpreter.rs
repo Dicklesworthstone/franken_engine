@@ -45098,6 +45098,18 @@ impl InterpreterCore {
                         return Ok(Value::Bool(fields.enumerable == Some(true)));
                     }
                 }
+                // A function's own `prototype` is never enumerable (ES2020
+                // 9.2.10 MakeConstructor, and the built-in constructors'
+                // non-configurable `prototype`); getOwnPropertyDescriptor
+                // answers it on its own path, which this now agrees with
+                // (`String.propertyIsEnumerable('prototype')` was true).
+                if !matches!(receiver, Value::Object(_))
+                    && receiver.is_callable()
+                    && matches!(&property, Value::Str(name) if name.as_str() == Some("prototype"))
+                    && self.function_has_intrinsic_prototype(&receiver)
+                {
+                    return Ok(Value::Bool(false));
+                }
                 let enumerable = self.object_own_property_is_enumerable(&receiver, &property)
                     || self
                         .function_own_property_object(module, &receiver)?

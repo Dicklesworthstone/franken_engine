@@ -9494,7 +9494,14 @@ fn try_parse_object_accessor(
         if key_src.is_empty() {
             return Ok(None);
         }
-        let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
+        // An IdentifierName key names itself, as a method's does: inside a
+        // generator `get yield() {}` is the property "yield", which parsed
+        // as a yield expression and was refused by lowering (bd-9vouw.289).
+        let key = if is_identifier(key_src) {
+            Expression::Identifier(canonicalize_identifier(key_src))
+        } else {
+            parse_expression(key_src, span, context, recursion_depth + 1)?
+        };
         let source = context
             .function_sources
             .text_through_body(part, &rest[paren_idx..]);

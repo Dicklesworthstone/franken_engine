@@ -12637,6 +12637,16 @@ fn try_parse_for_in_of(
                     Ok(assign) if destructuring_assignment_has_member_target(&assign) => assign,
                     _ => return Err(error),
                 }
+            } else if lhs
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$')
+            {
+                // A bare name that is no binding identifier here (strict
+                // `let`, `yield` in a generator) is no member target either:
+                // its binding error is the early error. Read as an
+                // assignment target, strict `for (let in o)` was accepted
+                // (bd-9vouw.233).
+                return Err(error);
             } else {
                 parse_expression(&target, span, context, 1)?
             };

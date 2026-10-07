@@ -88,3 +88,17 @@ fn brand_brand_is_not_a_property() {
         "0 false false undefined -1 -1 true [object RegExp] 2 [object Map] 5 Object true 1"
     );
 }
+
+/// bd-9vouw.234: a DataView inherits from DataView.prototype (instanceof,
+/// constructor, added members, @@toStringTag), a Symbol wrapper's valueOf is
+/// Symbol.prototype.valueOf (the symbol, as is-symbol checks), and an
+/// arguments object's builtinTag is Arguments (is-arguments), strict or not.
+/// Node v22.2.0 gives this value; Bun 1.4.2 agrees.
+#[test]
+fn data_view_symbol_wrapper_and_arguments_brands() {
+    let source = "function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }\nvar ts = Object.prototype.toString;\nvar dv = new DataView(new ArrayBuffer(2));\nDataView.prototype.extra = function () { return 'x' + this.byteLength; };\nvar sym = Symbol('q');\nvar boxed = Object(sym);\nvar args = (function () { return arguments; })(1, 'b');\nvar strictArgs = (function () { 'use strict'; return arguments; })();\n[dv instanceof DataView, Object.getPrototypeOf(dv) === DataView.prototype, dv.constructor === DataView, dv.extra(), ts.call(dv), dv[Symbol.toStringTag],\n typeof boxed.valueOf(), boxed.valueOf() === sym, Symbol.prototype.valueOf.call(boxed) === sym, Symbol.prototype.hasOwnProperty('valueOf'),\n Symbol.prototype.valueOf.name + Symbol.prototype.valueOf.length, attempt(() => Symbol.prototype.valueOf.call({})), sym.valueOf() === sym,\n ts.call(args), ts.call(strictArgs), JSON.stringify(args), args.length, Array.prototype.slice.call(args).join('-')].join(' ');\n";
+    assert_eq!(
+        eval(source),
+        "true true true x2 [object DataView] DataView symbol true true true valueOf0 TypeError true [object Arguments] [object Arguments] {\"0\":1,\"1\":\"b\"} 2 1-b"
+    );
+}

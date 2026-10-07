@@ -3592,6 +3592,9 @@ pub enum BuiltinFunctionKind {
     /// `require.resolve` of the module named by the specifier (bd-9vouw.199).
     /// Append only.
     RequireResolve,
+    /// `Symbol.prototype.valueOf` (ES2020 19.4.3.4): thisSymbolValue, so a
+    /// Symbol wrapper object answers its symbol (bd-9vouw.234). Append only.
+    SymbolPrototypeValueOf,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5077,6 +5080,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::BooleanPrototypeToString => "toString",
             BuiltinFunctionKind::BooleanPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
+            BuiltinFunctionKind::SymbolPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::StringIterator | BuiltinFunctionKind::GeneratorIteratorSelf => {
                 "@@iterator"
             }
@@ -5687,7 +5691,7 @@ impl BuiltinFunction {
             }
             K::DateNow | K::DateParse | K::DateUtc => "Date",
             K::DateGetTime | K::DatePrototypeMethod => "Date.prototype",
-            K::SymbolPrototypeToString => "Symbol.prototype",
+            K::SymbolPrototypeToString | K::SymbolPrototypeValueOf => "Symbol.prototype",
             K::BigIntAsIntN | K::BigIntAsUintN => "BigInt",
             K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
             K::ErrorPrototypeToString => "Error.prototype",
@@ -43983,6 +43987,15 @@ impl InterpreterCore {
                 };
                 Ok(Value::Str(self.symbol_to_string(symbol)))
             }
+            // thisSymbolValue (ES2020 19.4.3.4): a wrapper object arrives here
+            // already unwrapped (`this_primitive_receiver`).
+            BuiltinFunctionKind::SymbolPrototypeValueOf => match receiver {
+                Some(symbol @ Value::Symbol(_)) => Ok(symbol),
+                other => Err(InterpreterError::TypeError {
+                    expected: "Symbol receiver for Symbol.prototype.valueOf".to_string(),
+                    got: other.as_ref().map_or("undefined", Value::type_name).to_string(),
+                }),
+            },
             // String.prototype[@@iterator] (ES2020 21.1.3.29) iterates
             // ToString(RequireObjectCoercible(this)): a String wrapper (core-js
             // feature detection calls it on `new String`, which aborted
@@ -60864,7 +60877,7 @@ impl InterpreterCore {
     /// no [[ErrorData]] brand here, so an Error is an object whose prototype
     /// chain reaches a built-in Error prototype. A data @@toStringTag takes
     /// precedence ([`Self::data_to_string_tag`]). Not modelled: a guest-defined
-    /// @@toStringTag getter and Arguments.
+    /// @@toStringTag getter.
     fn object_to_string_tag(&self, object_id: ObjectId) -> &'static str {
         let Some(object) = self.heap.get(object_id.0 as usize) else {
             return "Object";
@@ -60910,6 +60923,7 @@ impl InterpreterCore {
             match type_tag {
                 "Date" => return "Date",
                 "RegExp" => return "RegExp",
+                "Arguments" => return "Arguments",
                 "Map" => return prototype_tag("Map"),
                 "Set" => return prototype_tag("Set"),
                 "WeakMap" => return prototype_tag("WeakMap"),
@@ -98340,6 +98354,12 @@ impl InterpreterCore {
                 message: format!("DataView byteOffset {byte_offset} exceeds JS integer storage"),
             })?;
 
+        // A DataView inherits from %DataView.prototype% (ES2020 24.3.2.1),
+        // as an ArrayBuffer does from its own: `dv instanceof DataView`,
+        // `dv.constructor` and members a program adds to the prototype
+        // (bd-9vouw.234). Materialized before the view's id is taken, since
+        // the first call allocates the prototype object.
+        let prototype = self.ensure_builtin_prototype("DataView")?;
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
             return Err(
@@ -98356,6 +98376,7 @@ impl InterpreterCore {
             );
 
         let mut object = HeapObject::new();
+        object.prototype = Some(prototype);
         object.brand = Some(JsString::from("DataView"));
         object
             .properties
@@ -101432,6 +101453,10 @@ impl InterpreterCore {
     /// and `for (const a of arguments)` iterate it.
     fn alloc_arguments_object(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
         let object = self.alloc_object_with_prototype(None)?;
+        // Its builtinTag is "Arguments" (ES2020 19.1.3.6 step 7):
+        // is-arguments and deep-equal tell it apart by
+        // `Object.prototype.toString` (bd-9vouw.234).
+        self.set_object_brand(object, "Arguments")?;
         for (index, value) in values.iter().enumerate() {
             self.set_object_property(object, index.to_string(), value.clone())?;
         }
@@ -103090,8 +103115,13 @@ impl InterpreterCore {
             "Number" => defined(Self::number_property_value(key)),
             "Boolean" => Self::boolean_prototype_method(key),
             "BigInt" => defined(Self::bigint_property_value(key)),
-            "Symbol" => (key == "toString")
-                .then(|| Value::BuiltinFunction(BuiltinFunction::symbol_to_string())),
+            "Symbol" => match key {
+                "toString" => Some(Value::BuiltinFunction(BuiltinFunction::symbol_to_string())),
+                "valueOf" => Some(Value::BuiltinFunction(BuiltinFunction::new_kind(
+                    BuiltinFunctionKind::SymbolPrototypeValueOf,
+                ))),
+                _ => None,
+            },
             // %Function.prototype% is itself a function with length 0 and
             // the empty name (ES2020 19.2.3), bd-9vouw.17.
             "Function" if key == "length" => Some(Value::Int(0)),

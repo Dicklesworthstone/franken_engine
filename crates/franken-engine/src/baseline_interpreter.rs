@@ -102,6 +102,7 @@ mod primitive_conversion;
 mod prototype_getters;
 mod reflect_invocation;
 mod regexp_backtrack;
+mod regexp_protocol;
 mod regexp_syntax;
 mod resizable_buffers;
 mod set_algebra;
@@ -40869,6 +40870,7 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::StringReplaceAll => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
+                self.string_replace_all_observable_flags_check(module, &receiver, args)?;
                 if let Some(result) = self.string_pattern_protocol_call(
                     module,
                     &receiver,
@@ -44119,7 +44121,9 @@ impl InterpreterCore {
                 }
                 let input = Value::str(self.builtin_arg_text(Some(module), args, 0)?);
                 if let Some(exec) = self.regexp_user_exec(module, &receiver)? {
-                    let result = self.regexp_call_user_exec(module, exec, &receiver, &input)?;
+                    let label = self.join_arg_range_label(args)?;
+                    let result =
+                        self.regexp_call_user_exec(module, exec, &receiver, &input, Some(label))?;
                     return Ok(Value::Bool(!matches!(result, Value::Null)));
                 }
                 if self.regexp_source_flags_from_value(&receiver).is_none() {
@@ -59131,9 +59135,8 @@ impl InterpreterCore {
         Ok(regexp_id)
     }
 
-    /// The [[OriginalSource]] and [[OriginalFlags]] slots of a RegExp, kept
-    /// as hidden `source` and `flags` properties that stand in for the
-    /// prototype accessors.
+    /// Write the [[OriginalSource]] and [[OriginalFlags]] slots of a RegExp
+    /// ([`HeapObject::regexp`]), charging the change to the heap estimate.
     fn set_regexp_source_and_flags(
         &mut self,
         regexp_id: ObjectId,
@@ -74760,6 +74763,19 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         let method = builtin.display_name();
+        // bd-9vouw.257: a receiver whose reads are observable (a user exec,
+        // an overridden flags getter, a subclass, a plain object) runs the
+        // ES2024 22.2.6 algorithms instead of the matcher.
+        if method != "@@matchAll" && !self.regexp_is_pristine(&receiver) {
+            let string = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let extra = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+            let label = self.join_arg_range_label(args)?;
+            if let Some(result) =
+                self.regexp_symbol_method_generic(module, method, &receiver, string, extra, &label)?
+            {
+                return Ok(result);
+            }
+        }
         let Some((source, flags)) = self.regexp_source_flags_from_value(&receiver) else {
             return Err(InterpreterError::TypeError {
                 expected: format!(
@@ -74900,7 +74916,8 @@ impl InterpreterCore {
         };
         let key = RuntimePropertyKey::Symbol(symbol.id());
         if self.regexp_uses_builtin_symbol_method(pattern_id, &key) {
-            return Ok(None);
+            return self
+                .string_pattern_builtin_symbol_call(module, receiver, args, symbol, &pattern);
         }
         let method = self.prototype_chain_get_with_receiver_runtime(
             Some(module),
@@ -74914,7 +74931,8 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::RegExpSymbolMethod
                     && regexp_symbol_method_key(symbol.id()) == Some(builtin.display_name()) =>
             {
-                return Ok(None);
+                return self
+                    .string_pattern_builtin_symbol_call(module, receiver, args, symbol, &pattern);
             }
             callable if callable.is_callable() => {}
             other => {
@@ -74938,6 +74956,29 @@ impl InterpreterCore {
         )?;
         self.replace_pending_hostcall_result_label(Some(label.join(&result_label)))?;
         Ok(Some(result))
+    }
+
+    /// A String method's pattern whose `symbol` method is this realm's
+    /// RegExp.prototype builtin: `None` (the caller's matcher algorithm)
+    /// for a pristine RegExp or @@matchAll, otherwise the builtin's
+    /// specification algorithm with `this` the pattern (bd-9vouw.257).
+    fn string_pattern_builtin_symbol_call(
+        &mut self,
+        module: &Ir3Module,
+        receiver: &Value,
+        args: RegRange,
+        symbol: WellKnownSymbol,
+        pattern: &Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(method) = regexp_symbol_method_key(symbol.id()) else {
+            return Ok(None);
+        };
+        if method == "@@matchAll" || self.regexp_is_pristine(pattern) {
+            return Ok(None);
+        }
+        let extra = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let label = self.join_arg_range_label(args)?;
+        self.regexp_symbol_method_generic(module, method, pattern, receiver.clone(), extra, &label)
     }
 
     /// Whether `object_id` is a RegExp whose `key` method is certainly the
@@ -75102,21 +75143,23 @@ impl InterpreterCore {
         Ok((!intrinsic && exec.is_callable()).then_some(exec))
     }
 
-    /// Call a user `exec` with `receiver` as `this`; its result must be an
-    /// object or null (ES2020 21.2.5.2.1 step 4.b).
+    /// Call a user `exec` with `receiver` as `this` and `input` (carrying
+    /// `argument_label`); its result must be an object or null (ES2020
+    /// 21.2.5.2.1 step 4.b).
     fn regexp_call_user_exec(
         &mut self,
         module: &Ir3Module,
         exec: Value,
         receiver: &Value,
         input: &Value,
+        argument_label: Option<Label>,
     ) -> Result<Value, InterpreterError> {
         let (result, label) = self.invoke_inline_method_call_with_argument_label(
             Some(module),
             exec,
             receiver.clone(),
             vec![input.clone()],
-            None,
+            argument_label,
         )?;
         let label = self
             .pending_hostcall_result_label

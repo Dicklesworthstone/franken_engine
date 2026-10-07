@@ -100,8 +100,8 @@ console.log(re.source, String(re), re.test('P/Q'));"#;
 /// object. Expected lines are Node v22.2.0's output, captured
 /// programmatically.
 ///
-/// No-claim: @@match, @@replace, @@search, @@split and @@matchAll do not yet
-/// call a user exec or read its result generically.
+/// The symbol methods are covered by
+/// regexp_symbol_methods_run_regexp_exec_bd_9vouw_257 below.
 #[test]
 fn regexp_test_runs_regexp_exec_bd_9vouw_257() {
     let source = r#"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
@@ -149,6 +149,141 @@ console.log(gt.test('abcb'), gt.lastIndex, /a/.test('a'), /a/g.test('ba'));"#;
             r#"true 2"#,
             r#"SyntaxError SyntaxError"#,
             r#"true 4 true true"#,
+        ]
+    );
+}
+
+/// bd-9vouw.257 (second part): RegExp.prototype[@@match], [@@search],
+/// [@@replace] and [@@split] run their ES2024 22.2.6 algorithms for any
+/// receiver that is not a pristine RegExp: RegExpExec calls a user `exec`
+/// (own, or a subclass method) and checks its result, the exec result's
+/// `0`, `index`, `length`, captures and `groups` are read and coerced, a
+/// global match or replace sets and steps `lastIndex` (a read-only one is
+/// a TypeError), @@search restores `lastIndex`, @@split constructs its
+/// splitter through @@species (with the limit coerced after), and a plain
+/// object borrowing the methods works through its `exec`. The String
+/// methods reach them through the pattern's builtin @@method. A pristine
+/// RegExp keeps the matcher (last lines). Expected lines are Node v22.2.0's
+/// output, captured programmatically.
+///
+/// No-claim: @@matchAll keeps the matcher path.
+#[test]
+fn regexp_symbol_methods_run_regexp_exec_bd_9vouw_257() {
+    let source = r##"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var log = [];
+var r = /a/g;
+r.exec = function (s) { return this.lastIndex++ < 2 ? { 0: 'Q' + this.lastIndex, index: 0, length: 1 } : null; };
+console.log(JSON.stringify('aaa'.match(r)), r.lastIndex);
+var s1 = /b/;
+s1.lastIndex = 7;
+s1.exec = function () { this.lastIndex = 3; return { index: 42 }; };
+console.log('abc'.search(s1), s1.lastIndex, 'abc'.search({ [Symbol.search]: RegExp.prototype[Symbol.search], exec() { return null; }, lastIndex: 0 }));
+var rep = /x/;
+rep.exec = function () { return { 0: 'bc', 1: 'C', 2: undefined, index: 1, length: 3, groups: { n: 'N' } }; };
+console.log('abcd'.replace(rep, '[$&|$1|$2|$<n>|$`|$\'|$$|$3]'), 'abcd'.replace(rep, function () { return JSON.stringify([].slice.call(arguments)); }));
+var many = 0;
+var rg = /./g;
+rg.exec = function (s) { return many++ < 3 ? { 0: '', index: many, length: 1 } : null; };
+console.log('wxyz'.replace(rg, '-'), rg.lastIndex);
+class Splitter extends RegExp {
+  static get [Symbol.species]() { return Splitter; }
+  exec(s) { var m = super.exec(s); log.push('sx' + this.lastIndex); return m; }
+}
+log = [];
+console.log(JSON.stringify('a1b22c'.split(new Splitter('\\d+'))), log.length > 0, JSON.stringify('a,b,,c'.split(new Splitter(','), 2)));
+var plain = { exec(s) { return s === 'hit' ? { 0: 'hit', index: 0, length: 1 } : null; }, flags: '' };
+console.log(JSON.stringify(RegExp.prototype[Symbol.match].call(plain, 'hit')), RegExp.prototype[Symbol.replace].call(plain, 'hit', 'X'), attempt(() => RegExp.prototype[Symbol.match].call(1, 'a')), attempt(() => RegExp.prototype[Symbol.split].call({}, 'a')));
+var throwing = /a/;
+throwing.exec = function () { throw new RangeError('boom'); };
+console.log(attempt(() => 'a'.match(throwing)), attempt(() => 'a'.replace(throwing, 'b')), attempt(() => 'a'.search(throwing)));
+var badResult = /a/;
+badResult.exec = function () { return 5; };
+console.log(attempt(() => 'a'.match(badResult)), attempt(() => 'a'.split(badResult)));
+var frozen = /a/g;
+frozen.exec = function () { return null; };
+Object.defineProperty(frozen, 'lastIndex', { writable: false, value: 0 });
+console.log(attempt(() => 'a'.match(frozen)), attempt(() => 'a'.replace(frozen, 'b')));
+console.log(JSON.stringify('a-b-c'.split(/-/)), 'a-b-c'.replace(/-/g, '+'), 'abc'.search(/c/), JSON.stringify('xAyA'.match(/A/g)), JSON.stringify('😀x😀'.split(/(?:)/u)));
+var u = /(?:)/gu;
+u.exec = function (s) { var m = RegExp.prototype.exec.call(this, s); return m; };
+console.log(JSON.stringify('😀a'.match(u)), JSON.stringify('😀a'.replace(u, '|')));
+var lim = { valueOf() { log.push('limit'); return 2; } };
+log = [];
+console.log(JSON.stringify('a,b,c'.split(new Splitter(','), lim)), log[0]);
+var us = /(?:)/;
+Object.defineProperty(us, 'flags', { value: 'u' });
+console.log('\u{1F600}x'.split(us).length, '\u{1F600}x'.split(/(?:)/).length, '\u{1F600}x'.split(/(?:)/u).length);"##;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r##"["Q1","Q2"] 3"##,
+            r##"42 7 -1"##,
+            r##"a[bc|C||N|a|d|$|$3]d a["bc","C",null,1,"abcd",{"n":"N"}]d"##,
+            r##"w-x-y-z 3"##,
+            r##"["a","b","c"] true ["a","b"]"##,
+            r##"{"0":"hit","index":0,"length":1} X TypeError SyntaxError"##,
+            r##"RangeError RangeError RangeError"##,
+            r##"TypeError ,"##,
+            r##"TypeError TypeError"##,
+            r##"["a","b","c"] a+b+c 2 ["A","A"] ["😀","x","😀"]"##,
+            r##"["","",""] "|😀|a|""##,
+            r##"["a","b"] limit"##,
+            r##"2 3 2"##,
+        ]
+    );
+}
+
+/// bd-9vouw.257 (second part): @@match, @@replace and @@split read
+/// ToString(Get(rx, "flags")) (ES2024 22.2.6.8 step 4, 22.2.6.11 step 6,
+/// 22.2.6.14 step 4), so an own `flags` decides global and full-Unicode
+/// matching, and String.prototype.replaceAll checks the observable flags
+/// of a RegExp that is not pristine. Node v22.2.0 (V8 12.4) still reads
+/// `global` and `unicode` there (ES2020 21.2.5.6 step 4) and fails
+/// Test262's Symbol.match/get-flags-err.js and flags-tostring-error.js;
+/// expected lines are Bun 1.4.2's (JavaScriptCore) output, captured
+/// programmatically.
+#[test]
+fn regexp_symbol_methods_read_flags_bd_9vouw_257() {
+    let source = r##"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var log = [];
+var traced = {
+  n: 0,
+  get flags() { log.push('flags'); return 'g'; },
+  get lastIndex() { log.push('get li'); return this._li || 0; },
+  set lastIndex(v) { log.push('set li ' + v); this._li = v; },
+  exec(s) { log.push('exec'); return this.n++ < 2 ? { 0: this.n === 2 ? '' : 'x', index: 0, length: 1 } : null; },
+};
+console.log(JSON.stringify(RegExp.prototype[Symbol.match].call(traced, 'abc')), log.join());
+var sticky = /a/y;
+Object.defineProperty(sticky, 'flags', { value: 'gy' });
+console.log('aaXa'.replace(sticky, 'b'), 'aaXa'.replaceAll(sticky, 'b'), JSON.stringify('aaXa'.match(sticky)), JSON.stringify('aaXa'.match(/a/y)));
+var nonGlobal = /a/g;
+Object.defineProperty(nonGlobal, 'flags', { value: '' });
+console.log(attempt(() => 'aa'.replaceAll(nonGlobal, 'b')), 'aa'.replace(nonGlobal, 'b'));
+var uu = /(?:)/g;
+Object.defineProperty(uu, 'flags', { value: 'gu' });
+console.log(JSON.stringify('\u{1F600}'.match(uu)), JSON.stringify('\u{1F600}'.match(/(?:)/gu)), JSON.stringify('\u{1F600}'.match(/(?:)/g)).length);"##;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r##"["x",""] flags,set li 0,exec,exec,get li,set li 1,exec"##,
+            r##"bbXa bbXa ["a","a"] ["a"]"##,
+            r##"TypeError ba"##,
+            r##"["",""] ["",""] 10"##,
         ]
     );
 }

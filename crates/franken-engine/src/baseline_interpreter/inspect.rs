@@ -1855,8 +1855,13 @@ impl InterpreterCore {
             .and_then(|object| object.array_buffer.as_ref())
             .map(|backing| backing.bytes.clone())
             .unwrap_or_default();
+        // A SharedArrayBuffer prints under its own name (bd-9vouw.244).
+        let name = match self.heap.get(id.0 as usize).and_then(HeapObject::brand) {
+            Some("SharedArrayBuffer") => "SharedArrayBuffer",
+            _ => "ArrayBuffer",
+        };
         if recurse_times > state.depth {
-            return Ok("[ArrayBuffer]".to_string());
+            return Ok(format!("[{name}]"));
         }
         let mut contents = String::from("<");
         for (index, byte) in bytes.iter().take(INSPECT_MAX_BUFFER_BYTES).enumerate() {
@@ -1881,7 +1886,7 @@ impl InterpreterCore {
             state,
             entries,
             "",
-            ("ArrayBuffer {".to_string(), "}"),
+            (format!("{name} {{"), "}"),
             EntryKind::Object,
             recurse_times + 1,
             &[],

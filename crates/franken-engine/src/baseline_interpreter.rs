@@ -936,6 +936,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "AggregateError" => Some("AggregateError"),
         "EventEmitter" => Some("EventEmitter"),
         "ArrayBuffer" => Some("ArrayBuffer"),
+        "SharedArrayBuffer" => Some("SharedArrayBuffer"),
         "DataView" => Some("DataView"),
         "Int8Array" => Some("Int8Array"),
         "Uint8Array" => Some("Uint8Array"),
@@ -3608,6 +3609,9 @@ pub enum BuiltinFunctionKind {
     /// B.2.5.1): RegExpInitialize of the receiver in place
     /// (bd-9vouw.241). Append only.
     RegExpPrototypeCompile,
+    /// `SharedArrayBuffer.prototype.slice` / `grow` (ES2020 24.2.4,
+    /// bd-9vouw.244), named by the specifier. Append only.
+    SharedArrayBufferMethod,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5096,6 +5100,12 @@ impl BuiltinFunction {
             BuiltinFunctionKind::SymbolPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToPrimitive => "[Symbol.toPrimitive]",
             BuiltinFunctionKind::RegExpPrototypeCompile => "compile",
+            BuiltinFunctionKind::SharedArrayBufferMethod => {
+                match self.module_specifier.0.as_deref() {
+                    Some("grow") => "grow",
+                    _ => "slice",
+                }
+            }
             BuiltinFunctionKind::BlobMethod => blob::BLOB_METHODS
                 .iter()
                 .copied()
@@ -5716,6 +5726,7 @@ impl BuiltinFunction {
             | K::SymbolPrototypeValueOf
             | K::SymbolPrototypeToPrimitive => "Symbol.prototype",
             K::BlobMethod => "Blob.prototype",
+            K::SharedArrayBufferMethod => "SharedArrayBuffer.prototype",
             K::BigIntAsIntN | K::BigIntAsUintN => "BigInt",
             K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
             K::ErrorPrototypeToString => "Error.prototype",
@@ -5871,7 +5882,7 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 49] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 50] = [
     "Object",
     "Array",
     "Number",
@@ -5938,6 +5949,8 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 49] = [
     "DOMException",
     // WHATWG File API Blob (bd-9vouw.226): a Node global since v18.
     "Blob",
+    // ES2020 24.2 (bd-9vouw.244).
+    "SharedArrayBuffer",
     // ES2025 Iterator (bd-9vouw.179): abstract; its prototype is
     // %IteratorPrototype%, which holds the helpers.
     "Iterator",
@@ -6101,7 +6114,7 @@ const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 28] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 29] = [
     "Array",
     "String",
     "Number",
@@ -6130,6 +6143,7 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 28] = [
     "AbortController",
     "AbortSignal",
     "Blob",
+    "SharedArrayBuffer",
 ];
 
 /// `console` methods besides log/error/warn/info (bd-9vouw.158), as Node
@@ -42443,7 +42457,21 @@ impl InterpreterCore {
                 self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::ArrayBufferSlice => {
-                self.array_buffer_slice(module, receiver.unwrap_or(Value::Undefined), args)
+                self.array_buffer_slice(module, receiver.unwrap_or(Value::Undefined), args, false)
+            }
+            BuiltinFunctionKind::SharedArrayBufferMethod => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                if builtin.module_specifier.0.as_deref() == Some("grow") {
+                    // ES2024 25.2.5.3: only a growable SharedArrayBuffer
+                    // grows, and this engine makes none.
+                    self.plain_buffer_receiver(&receiver, true, "grow")?;
+                    return Err(InterpreterError::TypeError {
+                        expected: "a growable SharedArrayBuffer for SharedArrayBuffer.prototype.grow"
+                            .to_string(),
+                        got: "a fixed-length SharedArrayBuffer".to_string(),
+                    });
+                }
+                self.array_buffer_slice(module, receiver, args, true)
             }
             BuiltinFunctionKind::WeakRefDeref => {
                 self.weak_ref_deref(&receiver.unwrap_or(Value::Undefined))
@@ -53290,6 +53318,11 @@ impl InterpreterCore {
                                 self.construct_event_target_family(module, name, args)?
                             }
                             Some("Blob") => self.construct_blob(module, args)?,
+                            Some("SharedArrayBuffer") => self.dispatch_builtin_hostcall(
+                                "builtin:SharedArrayBuffer",
+                                args,
+                                Some(module),
+                            )?,
                             Some(name @ ("Proxy" | "WeakRef" | "FinalizationRegistry")) => self
                                 .dispatch_builtin_hostcall(
                                     &format!("builtin:{name}"),
@@ -60780,6 +60813,12 @@ impl InterpreterCore {
                 iterator_handle: None,
                 bound_object: None,
             }),
+            ("SharedArrayBuffer", method @ ("slice" | "grow")) => Some(BuiltinFunction {
+                kind: BuiltinFunctionKind::SharedArrayBufferMethod,
+                module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                iterator_handle: None,
+                bound_object: None,
+            }),
             ("ArrayBuffer", "slice") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::ArrayBufferSlice,
             )),
@@ -61143,7 +61182,11 @@ impl InterpreterCore {
             return prototype_tag("DataView");
         }
         if object.array_buffer.is_some() {
-            return prototype_tag("ArrayBuffer");
+            return prototype_tag(if object.brand() == Some("SharedArrayBuffer") {
+                "SharedArrayBuffer"
+            } else {
+                "ArrayBuffer"
+            });
         }
         if let Some(type_tag) = object.brand() {
             match type_tag {
@@ -69182,7 +69225,13 @@ impl InterpreterCore {
         module: &Ir3Module,
         source: ObjectId,
         new_length: usize,
+        shared: bool,
     ) -> Result<Option<ObjectId>, InterpreterError> {
+        let intrinsic = if shared {
+            "SharedArrayBuffer"
+        } else {
+            "ArrayBuffer"
+        };
         let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
         let constructor = self.proxy_aware_get_runtime_property(
             Some(module),
@@ -69195,7 +69244,7 @@ impl InterpreterCore {
             matches!(value, Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::StandardConstructor
                     && Self::standard_constructor_name(builtin)
-                        .is_ok_and(|name| name == "ArrayBuffer"))
+                        .is_ok_and(|name| name == intrinsic))
         };
         if matches!(constructor, Value::Undefined) || is_intrinsic(&constructor) {
             return Ok(None);
@@ -69235,17 +69284,16 @@ impl InterpreterCore {
         self.replace_pending_hostcall_result_label(Some(label))?;
         let created = match result {
             Value::Object(object_id)
-                if self.heap.get(object_id.0 as usize).is_some_and(|object| {
-                    object.array_buffer.is_some()
-                        && object.typed_array.is_none()
-                        && object.data_view.is_none()
-                }) =>
+                if self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| Self::is_plain_buffer(object, shared)) =>
             {
                 object_id
             }
             other => {
                 return Err(InterpreterError::TypeError {
-                    expected: "ArrayBuffer from the @@species constructor".to_string(),
+                    expected: format!("{intrinsic} from the @@species constructor"),
                     got: other.type_name().to_string(),
                 });
             }
@@ -69270,28 +69318,13 @@ impl InterpreterCore {
         module: &Ir3Module,
         receiver: Value,
         args: RegRange,
+        shared: bool,
     ) -> Result<Value, InterpreterError> {
-        let source = match receiver {
-            Value::Object(object_id)
-                if self.heap.get(object_id.0 as usize).is_some_and(|object| {
-                    object.array_buffer.is_some()
-                        && object.typed_array.is_none()
-                        && object.data_view.is_none()
-                }) =>
-            {
-                object_id
-            }
-            other => {
-                return Err(InterpreterError::TypeError {
-                    expected: "ArrayBuffer receiver for ArrayBuffer.prototype.slice".to_string(),
-                    got: other.type_name().to_string(),
-                });
-            }
-        };
+        let source = self.plain_buffer_receiver(&receiver, shared, "slice")?;
         let length = self.with_array_buffer_bytes(source, <[u8]>::len)?;
         let (first, last) = self.typed_array_method_range(module, args, 0, 1, length)?;
         let species =
-            self.array_buffer_species_result(module, source, last.saturating_sub(first))?;
+            self.array_buffer_species_result(module, source, last.saturating_sub(first), shared)?;
         let copied =
             self.with_array_buffer_bytes(source, |bytes| bytes[first..last.max(first)].to_vec())?;
         if let Some(created) = species {
@@ -69315,10 +69348,50 @@ impl InterpreterCore {
             .and_then(|object| object.array_buffer.as_ref())
             .map(|backing| backing.label.clone())
             .unwrap_or(Label::Public);
-        let created = self.alloc_array_buffer_object(copied.len())?;
+        let created = self.alloc_buffer_object(copied.len(), shared)?;
         self.with_array_buffer_bytes_mut(created, |bytes| bytes.copy_from_slice(&copied))?;
         self.join_binary_storage_label(created, &label)?;
         Ok(Value::Object(created))
+    }
+
+    /// The receiver of an ArrayBuffer (`shared` false) or SharedArrayBuffer
+    /// (`shared` true) prototype method: a buffer of that kind, not a view.
+    /// Each kind's methods refuse the other's buffers (ES2020 24.1.4.3 step
+    /// 3, 24.2.4.3 step 3).
+    fn plain_buffer_receiver(
+        &self,
+        receiver: &Value,
+        shared: bool,
+        method: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        let constructor = if shared {
+            "SharedArrayBuffer"
+        } else {
+            "ArrayBuffer"
+        };
+        match receiver {
+            Value::Object(object_id)
+                if self
+                    .heap
+                    .get(object_id.0 as usize)
+                    .is_some_and(|object| Self::is_plain_buffer(object, shared)) =>
+            {
+                Ok(*object_id)
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: format!("{constructor} receiver for {constructor}.prototype.{method}"),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    /// An ArrayBuffer (`shared` false) or a SharedArrayBuffer (`shared`
+    /// true), not a typed array or DataView over one.
+    fn is_plain_buffer(object: &HeapObject, shared: bool) -> bool {
+        object.array_buffer.is_some()
+            && object.typed_array.is_none()
+            && object.data_view.is_none()
+            && (object.brand() == Some("SharedArrayBuffer")) == shared
     }
 
     fn typed_array_fill(
@@ -87909,6 +87982,10 @@ impl InterpreterCore {
                 let buffer_id = self.alloc_array_buffer_object(byte_length)?;
                 Ok(Value::Object(buffer_id))
             }
+            "builtin:SharedArrayBuffer" => {
+                let byte_length = self.array_buffer_byte_length_from_args(module, args)?;
+                Ok(Value::Object(self.alloc_buffer_object(byte_length, true)?))
+            }
             "builtin:Uint8Array"
             | "builtin:Int32Array"
             | "builtin:Uint32Array"
@@ -98073,6 +98150,24 @@ impl InterpreterCore {
         &mut self,
         byte_length: usize,
     ) -> Result<ObjectId, InterpreterError> {
+        self.alloc_buffer_object(byte_length, false)
+    }
+
+    /// A zeroed ArrayBuffer, or with `shared` a SharedArrayBuffer (ES2020
+    /// 24.2.1.1 AllocateSharedArrayBuffer, bd-9vouw.244). Both hold their
+    /// bytes in `array_buffer`, so typed arrays and DataViews view either;
+    /// the brand and prototype tell them apart. One agent runs, so a
+    /// SharedArrayBuffer's bytes are never shared with another thread.
+    fn alloc_buffer_object(
+        &mut self,
+        byte_length: usize,
+        shared: bool,
+    ) -> Result<ObjectId, InterpreterError> {
+        let constructor = if shared {
+            "SharedArrayBuffer"
+        } else {
+            "ArrayBuffer"
+        };
         if !self
             .config
             .granted_capabilities
@@ -98104,7 +98199,7 @@ impl InterpreterCore {
         // from %ArrayBuffer.prototype%: `instanceof ArrayBuffer`, `constructor`
         // and the prototype's methods. Materialized before the buffer's id is
         // taken, since the first call allocates the prototype object.
-        let prototype = self.ensure_builtin_prototype("ArrayBuffer")?;
+        let prototype = self.ensure_builtin_prototype(constructor)?;
         let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
         if requested_heap_objects > self.config.max_heap_objects {
             return Err(
@@ -98122,7 +98217,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = Some(prototype);
-        object.brand = Some(JsString::from("ArrayBuffer"));
+        object.brand = Some(JsString::from(constructor));
         object
             .properties
             .insert("byteLength".to_string(), Value::Int(byte_length_i64));
@@ -99842,6 +99937,9 @@ impl InterpreterCore {
                 self.construct_event_target_family(module, name, args)?
             }
             Some("Blob") => self.construct_blob(module, args)?,
+            Some("SharedArrayBuffer") => {
+                self.dispatch_builtin_hostcall("builtin:SharedArrayBuffer", args, Some(module))?
+            }
             _ => self.dispatch_builtin_function(module, builtin, args, None, None)?,
         };
         if matches!(standard_name, Some("Number" | "String" | "Boolean"))
@@ -101335,6 +101433,7 @@ impl InterpreterCore {
                 | "WeakSet"
                 | "Promise"
                 | "ArrayBuffer"
+                | "SharedArrayBuffer"
                 | "DataView"
                 | "Symbol"
                 | "BigInt"
@@ -103136,10 +103235,12 @@ impl InterpreterCore {
                 expected: "new Proxy(target, handler)".to_string(),
                 got: "Proxy called without new".to_string(),
             }),
-            "WeakRef" | "FinalizationRegistry" => Err(InterpreterError::TypeError {
-                expected: format!("new {name}(...)"),
-                got: format!("Constructor {name} requires 'new'"),
-            }),
+            "WeakRef" | "FinalizationRegistry" | "SharedArrayBuffer" => {
+                Err(InterpreterError::TypeError {
+                    expected: format!("new {name}(...)"),
+                    got: format!("Constructor {name} requires 'new'"),
+                })
+            }
             "Iterator" => Err(self.throw_js_error(
                 "TypeError",
                 "Constructor Iterator requires 'new'".to_string(),
@@ -103512,6 +103613,7 @@ impl InterpreterCore {
             | "WeakSet"
             | "DataView"
             | "ArrayBuffer"
+            | "SharedArrayBuffer"
             | "WeakRef"
             | "FinalizationRegistry" => {
                 Self::collection_prototype_method(name, key).map(Value::BuiltinFunction)

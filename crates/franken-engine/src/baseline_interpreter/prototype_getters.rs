@@ -17,10 +17,20 @@ use super::*;
 /// (prototype owner, property key, getter name). A key starting with `@@`
 /// names a well-known symbol ([`TYPED_ARRAY_TO_STRING_TAG`]); those accessors
 /// are real own properties of the prototype, installed when it is created.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 40] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 46] = [
     ("Map", "size", "get size"),
     ("Set", "size", "get size"),
     ("ArrayBuffer", "byteLength", "get byteLength"),
+    // ES2024 25.1.6: this engine has no resizable or detached buffers, so
+    // these answer false and byteLength (bd-9vouw.244); webidl-conversions
+    // (under whatwg-url) reads `resizable` when it loads.
+    ("ArrayBuffer", "detached", "get detached"),
+    ("ArrayBuffer", "maxByteLength", "get maxByteLength"),
+    ("ArrayBuffer", "resizable", "get resizable"),
+    // ES2020 24.2.4.1, ES2024 25.2.5 (bd-9vouw.244).
+    ("SharedArrayBuffer", "byteLength", "get byteLength"),
+    ("SharedArrayBuffer", "growable", "get growable"),
+    ("SharedArrayBuffer", "maxByteLength", "get maxByteLength"),
     ("DataView", "buffer", "get buffer"),
     ("DataView", "byteLength", "get byteLength"),
     ("DataView", "byteOffset", "get byteOffset"),
@@ -282,6 +292,16 @@ impl InterpreterCore {
         {
             return Ok(value);
         }
+        // No buffer here is resizable, growable or detachable.
+        if matches!(owner, "ArrayBuffer" | "SharedArrayBuffer") {
+            match key {
+                "detached" | "resizable" | "growable" => return Ok(Value::Bool(false)),
+                "maxByteLength" => {
+                    return self.prototype_getter_own_slot(module, id, "byteLength", receiver);
+                }
+                _ => {}
+            }
+        }
         self.prototype_getter_own_slot(module, id, key, receiver)
     }
 
@@ -314,7 +334,11 @@ impl InterpreterCore {
         match owner {
             "Map" => self.collection_storage_id(id, "Map", "__entries").is_some(),
             "Set" => self.collection_storage_id(id, "Set", "__values").is_some(),
-            "ArrayBuffer" => object.array_buffer.is_some(),
+            "ArrayBuffer" | "SharedArrayBuffer" => {
+                object.array_buffer.is_some()
+                    && (object.brand() == Some("SharedArrayBuffer"))
+                        == (owner == "SharedArrayBuffer")
+            }
             "DataView" => object.data_view.is_some(),
             "TypedArray" => object.typed_array.is_some(),
             "RegExp" => self.inspect_internal_type(id).as_deref() == Some("RegExp"),

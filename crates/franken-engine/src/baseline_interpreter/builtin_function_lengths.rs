@@ -340,6 +340,8 @@ pub(super) const BUILTIN_FUNCTION_LENGTHS: &[(&str, &str, u8)] = &[
     ("Set.prototype", "symmetricDifference", 1),
     ("Set.prototype", "union", 1),
     ("Set.prototype", "values", 0),
+    ("SharedArrayBuffer.prototype", "grow", 1),
+    ("SharedArrayBuffer.prototype", "slice", 2),
     ("String", "fromCharCode", 1),
     ("String", "fromCodePoint", 1),
     ("String", "raw", 1),

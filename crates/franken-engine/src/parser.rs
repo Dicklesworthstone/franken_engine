@@ -15142,10 +15142,17 @@ fn class_member_is_field(member: &str) -> bool {
         _ => skip_identifier_name(member),
     };
     // `get`, `set` and `static` continue across a line break (`get <LF> x()
-    // {}` is a getter); `async` does not (no LineTerminator after it).
+    // {}` is a getter); `async` does not (no LineTerminator after it). An
+    // accessor cannot be a generator, so `get <LF> *m() {}` is a field `get`
+    // and a generator method, while `static <LF> *m() {}` is one static
+    // generator (bd-9vouw.334).
     let key = &member[..member.len() - after_key.len()];
-    if !matches!(key, "get" | "set" | "static") && !key.is_empty() && ends_at_line_break(after_key)
-    {
+    let continues_across_line_break = match key {
+        "static" => true,
+        "get" | "set" => !after_key.trim_start().starts_with('*'),
+        _ => false,
+    };
+    if !continues_across_line_break && !key.is_empty() && ends_at_line_break(after_key) {
         return true;
     }
     // Look past a computed key: in `get [x = 1]() {}` or `[k = 'm']() {}` the

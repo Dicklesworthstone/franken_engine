@@ -105409,10 +105409,11 @@ impl InterpreterCore {
     /// bd-9vouw.278: Get(C, @@species) for a built-in constructor `builtin`
     /// with no own-property object answering it, `receiver` being the
     /// constructor the lookup started at (a subclass reaching the built-in).
-    /// The getter lives on the backing object of its owner (`builtin`, or
-    /// %TypedArray% for a concrete typed array constructor) from the moment
-    /// that object exists: then it is called, and a deleted one gives
-    /// undefined. Before, the getter's `return this` is the answer. `None`
+    /// Promise's getter lives on its property object; any other's on the
+    /// backing object of its owner (`builtin`, or %TypedArray% for a
+    /// concrete typed array constructor) from the moment that object exists.
+    /// A present getter is called and a deleted one gives undefined; with no
+    /// backing object yet, the getter's `return this` is the answer. `None`
     /// for a built-in without @@species.
     fn builtin_species_value(
         &mut self,
@@ -105423,6 +105424,17 @@ impl InterpreterCore {
         if !Self::builtin_has_default_species(builtin) {
             return Ok(None);
         }
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Species.id());
+        // `delete Promise[Symbol.species]` removes the getter from Promise's
+        // property object; the read answered `return this` regardless.
+        if let Some(properties) = Self::builtin_function_property_object(builtin) {
+            return if self.chain_contains_runtime_property(properties, &key) {
+                self.proxy_aware_get_runtime_property(Some(module), properties, &key, receiver, 0)
+                    .map(Some)
+            } else {
+                Ok(Some(Value::Undefined))
+            };
+        }
         let owner = if builtin.kind == BuiltinFunctionKind::StandardConstructor
             && Self::standard_constructor_name(builtin)
                 .is_ok_and(|name| TypedArrayKind::from_type_name(name).is_some())
@@ -105431,7 +105443,6 @@ impl InterpreterCore {
         } else {
             Value::BuiltinFunction(builtin.clone())
         };
-        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Species.id());
         match self.function_own_property_object(module, &owner)? {
             None => Ok(Some(receiver)),
             Some(object) if self.chain_contains_runtime_property(object, &key) => self

@@ -44304,16 +44304,18 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ObjectHasOwnProperty => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                // ES2020 19.1.3.2 step 2: ToObject(this value).
+                // ES2020 19.1.3.2 step 1: ToPropertyKey(V), whose object
+                // hooks run before the receiver check (bd-9vouw.279); a
+                // missing V is the key "undefined".
+                let property = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let property = self.to_property_key_value(Some(module), property)?;
+                // Step 2: ToObject(this value).
                 if matches!(receiver, Value::Undefined | Value::Null) {
                     return Err(InterpreterError::TypeError {
                         expected: "object receiver for Object.prototype.hasOwnProperty".to_string(),
                         got: receiver.type_name().to_string(),
                     });
                 }
-                let Some(property) = self.builtin_arg(args, 0)? else {
-                    return Ok(Value::Bool(false));
-                };
                 Ok(Value::Bool(self.value_has_own_property(
                     Some(module),
                     &receiver,
@@ -44322,9 +44324,18 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                let Some(property) = self.builtin_arg(args, 0)? else {
-                    return Ok(Value::Bool(false));
-                };
+                // ES2020 19.1.3.4 step 1: ToPropertyKey(V) (bd-9vouw.279); a
+                // missing V is the key "undefined".
+                let property = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let property = self.to_property_key_value(Some(module), property)?;
+                // Step 2: ToObject(this value).
+                if matches!(receiver, Value::Undefined | Value::Null) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object receiver for Object.prototype.propertyIsEnumerable"
+                            .to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                }
                 if let Value::Object(object_id) = &receiver {
                     self.join_pending_hostcall_stream_label(*object_id)?;
                     // A Proxy answers through [[GetOwnProperty]] (its
@@ -63118,6 +63129,11 @@ impl InterpreterCore {
                 // an accessor on a distinct receiver of a data-property write.
                 return Ok(false);
             }
+            // CreateDataProperty of an index past a non-writable `length`
+            // is rejected (bd-9vouw.279).
+            if Self::array_index_past_fixed_length(receiver_object, key) {
+                return Ok(false);
+            }
             if let Some(kept_length) =
                 self.array_length_kept_by_nonconfigurable(receiver_id, key, &value)?
             {
@@ -64200,6 +64216,24 @@ impl InterpreterCore {
             Value::AsyncFunctionObject(_) => JsString::from("function"),
             Value::AsyncGeneratorObject(_) => JsString::from("object"),
         })
+    }
+
+    /// bd-9vouw.279: ToPropertyKey(value) for a built-in's key argument
+    /// (Object.defineProperty, getOwnPropertyDescriptor, hasOwn,
+    /// hasOwnProperty, propertyIsEnumerable): an object key converts through
+    /// its @@toPrimitive / toString / valueOf, which may throw. It was read
+    /// with the engine's internal representation, so `[1, 2]` defined
+    /// "[object#15]" instead of "1,2". Primitives come back unchanged.
+    fn to_property_key_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if value.is_object_like() && module.is_some() {
+            self.coerce_runtime_property_key(module, value)
+        } else {
+            Ok(value)
+        }
     }
 
     /// Resolve observable ToPrimitive(string) hooks once. Source property names
@@ -77381,14 +77415,8 @@ impl InterpreterCore {
             Value::Float(f) => Some(f.inner()),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             Value::Null => Some(0.0),
-            Value::Str(s) => {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    Some(0.0)
-                } else {
-                    trimmed.parse::<f64>().ok()
-                }
-            }
+            // StringToNumber: "0x0B" is 11, "1e1" 10, "" 0 (bd-9vouw.279).
+            Value::Str(s) => Some(primitive_conversion::string_number(s)),
             _ => None,
         };
 
@@ -79992,15 +80020,17 @@ impl InterpreterCore {
             .heap
             .get(obj_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?;
-        // ES2020 9.4.2.4 ArraySetLength: an array's new length is validated
-        // (RangeError) before the descriptor is, so `{ value: -1,
-        // configurable: true }` is a RangeError, not the TypeError of
-        // redefining the non-configurable `length`.
+        // ES2020 9.4.2.1 [[DefineOwnProperty]] of an Array (bd-9vouw.279):
+        // `length` with a value is ArraySetLength, and an index at or past a
+        // non-writable `length` cannot be added.
         if object.is_array
-            && matches!(&key, RuntimePropertyKey::String(name) if name.as_str() == Some("length"))
-            && let Some(value) = &descriptor.value
+            && key.as_str() == Some("length")
+            && let Some(value) = descriptor.value.clone()
         {
-            Self::normalize_array_length_assignment(value)?;
+            return self.array_set_length_by_definition(obj_id, &key, &value, &descriptor);
+        }
+        if Self::array_index_past_fixed_length(object, &key) {
+            return Ok(false);
         }
         let Some(current) = object.own_runtime_property_descriptor(&key) else {
             if !object.extensible() {
@@ -80109,6 +80139,106 @@ impl InterpreterCore {
         }
         self.set_own_property_attributes(obj_id, &key, attributes)?;
         Ok(true)
+    }
+
+    /// ES2020 9.4.2.1 step 3.b (bd-9vouw.279): whether `key` is an index an
+    /// array does not have yet, at or past its non-writable `length`, which
+    /// neither a definition nor an assignment may add (`length` cannot grow).
+    fn array_index_past_fixed_length(object: &HeapObject, key: &RuntimePropertyKey) -> bool {
+        if !object.is_array || object.contains_own_runtime_property(key) {
+            return false;
+        }
+        let Some(index) = key.as_str().and_then(Self::canonical_array_index_key) else {
+            return false;
+        };
+        let length_key = RuntimePropertyKey::String(JsString::from("length"));
+        !object.own_property_attributes(&length_key).writable
+            && matches!(object.own_runtime_property_value(&length_key),
+                Some(Value::Int(length)) if i64::from(index) >= length)
+    }
+
+    /// ToNumber(value) for ArraySetLength steps 3-4 (bd-9vouw.279): an
+    /// object converts through its @@toPrimitive / valueOf / toString, a
+    /// string by StringToNumber ("0x0B" is 11); a Symbol or BigInt is a
+    /// TypeError.
+    fn array_length_number(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<f64, InterpreterError> {
+        Ok(match self.coerce_runtime_primitive(module, value, false)? {
+            Value::Int(number) => number as f64,
+            Value::Float(number) => number.inner(),
+            Value::Str(text) => primitive_conversion::string_number(&text),
+            Value::Bool(flag) => f64::from(u8::from(flag)),
+            Value::Null => 0.0,
+            Value::Undefined => f64::NAN,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "Number-convertible array length".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        })
+    }
+
+    /// ES2020 9.4.2.4 ArraySetLength for a definition of an array's
+    /// `length` with a value (bd-9vouw.279). The new length is validated
+    /// (RangeError) before the descriptor is, so `{ value: -1, configurable:
+    /// true }` is a RangeError, not a rejected redefinition. `length` is
+    /// never configurable, enumerable or an accessor. Keeping or growing it
+    /// is an ordinary definition (a non-writable one accepts only its own
+    /// value). Shrinking needs a writable `length`: elements are deleted
+    /// from the end, the deletion stops past a non-configurable one, whose
+    /// index + 1 becomes the length, and the definition is rejected;
+    /// `writable: false` applies after the deletions. A rejected shrink
+    /// used to delete the non-configurable elements too.
+    fn array_set_length_by_definition(
+        &mut self,
+        array_id: ObjectId,
+        key: &RuntimePropertyKey,
+        value: &Value,
+        descriptor: &PropertyDescriptorFields,
+    ) -> Result<bool, InterpreterError> {
+        let new_length = Self::normalize_array_length_assignment(value)?;
+        let object = self
+            .heap
+            .get(array_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
+        let attributes = object.own_property_attributes(key);
+        let old_length = match object.own_runtime_property_value(key) {
+            Some(Value::Int(length)) => length,
+            _ => 0,
+        };
+        if descriptor.configurable == Some(true)
+            || descriptor.enumerable == Some(true)
+            || descriptor.is_accessor()
+        {
+            return Ok(false);
+        }
+        if !attributes.writable {
+            return Ok(new_length == old_length && descriptor.writable != Some(true));
+        }
+        let kept = if new_length < old_length {
+            self.array_length_kept_by_nonconfigurable(array_id, key, &Value::Int(new_length))?
+        } else {
+            None
+        };
+        let final_length = kept.unwrap_or(new_length);
+        if final_length != old_length {
+            self.set_object_runtime_property(array_id, key.clone(), Value::Int(final_length))?;
+        }
+        if descriptor.writable == Some(false) {
+            self.set_own_property_attributes(
+                array_id,
+                key,
+                PropertyAttributes {
+                    writable: false,
+                    ..attributes
+                },
+            )?;
+        }
+        Ok(kept.is_none())
     }
 
     /// ES2020 7.3.14 SetIntegrityLevel(O, sealed).
@@ -88681,7 +88811,9 @@ impl InterpreterCore {
                         got: object.type_name().to_string(),
                     });
                 }
+                // Then ToPropertyKey(P) (bd-9vouw.279).
                 let property = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let property = self.to_property_key_value(module, property)?;
                 let own = self.value_has_own_property(module, &object, &property)?;
                 Ok(Value::Bool(own))
             }
@@ -90804,6 +90936,13 @@ impl InterpreterCore {
                 // TypeError unless O and Attributes are objects.
                 let obj_val = self.arg_or_undefined(args, 0)?;
                 let prop_val = self.arg_or_undefined(args, 1)?;
+                // Step 2, ToPropertyKey(P), runs an object key's hooks after
+                // step 1's type check (bd-9vouw.279).
+                let prop_val = if obj_val.is_object_like() {
+                    self.to_property_key_value(module, prop_val)?
+                } else {
+                    prop_val
+                };
                 let prop_name = self.executable_property_key_from_value(&prop_val);
                 let descriptor_val = self.arg_or_undefined(args, 2)?;
                 // bd-9vouw.17: a function target defines on its backing object
@@ -90841,7 +90980,29 @@ impl InterpreterCore {
                         got: obj_val.type_name().to_string(),
                     });
                 };
-                let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
+                let mut descriptor = self.read_property_descriptor(module, &descriptor_val)?;
+                // ES2020 9.4.2.4 steps 3-5 for an array's `length`:
+                // ToUint32(value), then ToNumber(value), each observable (an
+                // object's valueOf runs twice); a RangeError when they differ
+                // (bd-9vouw.279).
+                if prop_name.as_str() == Some("length")
+                    && self
+                        .heap
+                        .get(obj_id.0 as usize)
+                        .is_some_and(|object| object.is_array)
+                    && let Some(value) = descriptor.value.clone()
+                    && !matches!(value, Value::Int(_) | Value::Float(_))
+                {
+                    let as_uint32 =
+                        Self::js_to_uint32(self.array_length_number(module, value.clone())?);
+                    let as_number = self.array_length_number(module, value)?;
+                    if f64::from(as_uint32) != as_number {
+                        return Err(InterpreterError::RangeError {
+                            message: format!("invalid array length {as_number}"),
+                        });
+                    }
+                    descriptor.value = Some(Value::Int(i64::from(as_uint32)));
+                }
                 // A Proxy defines through its defineProperty trap or its
                 // target (bd-9vouw.147).
                 if !self
@@ -92128,7 +92289,17 @@ impl InterpreterCore {
                 }
 
                 let obj_val = self.read_reg(args.start)?;
+                // ES2020 19.1.2.8: ToObject(O), a TypeError for undefined and
+                // null, then ToPropertyKey(P), whose object hooks run
+                // (bd-9vouw.279).
+                if matches!(obj_val, Value::Undefined | Value::Null) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object for Object.getOwnPropertyDescriptor".to_string(),
+                        got: obj_val.type_name().to_string(),
+                    });
+                }
                 let prop_val = self.read_reg(args.start + 1)?;
+                let prop_val = self.to_property_key_value(module, prop_val)?;
                 let prop_name = self.executable_property_key_from_value(&prop_val);
                 // bd-9vouw.17: a function's own properties (its `length` and
                 // `name` included) are on its backing object. `prototype`

@@ -26,3 +26,52 @@ fn array_length_writes_stop_at_non_configurable_elements() {
         .collect();
     assert_eq!(lines, ["3 u", "3 [0,1,\"x\"]", "1 [1]", "TypeError 2"]);
 }
+
+/// bd-9vouw.279: Object.defineProperty(array, 'length', { value }) is
+/// ArraySetLength: the value goes through ToUint32 and ToNumber (an
+/// object's valueOf twice, a string by StringToNumber), a shrink stops past
+/// a non-configurable element and is rejected, and writable: false applies
+/// after the deletions. An index at or past a non-writable length can be
+/// neither defined nor assigned. Expected lines: Node v22.2.0's output,
+/// captured programmatically.
+#[test]
+fn define_array_length_is_array_set_length_bd_9vouw_279() {
+    let source = r#"function k(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+function d(a) { var x = Object.getOwnPropertyDescriptor(a, 'length'); return x.value + (x.writable ? 'w' : 'r'); }
+var a = [0, 1];
+Object.defineProperty(a, '1', { value: 1, configurable: false });
+console.log(k(function () { Object.defineProperty(a, 'length', { value: 1 }); }), d(a), a.join());
+var b = [0, 1, 2];
+Object.defineProperty(b, '1', { configurable: false });
+console.log(k(function () { Object.defineProperty(b, 'length', { value: 0, writable: false }); }), d(b), b.join(), k(function () { return Reflect.defineProperty(b, 'length', { value: 0 }); }));
+var c = [];
+Object.defineProperty(c, 'length', { value: '0x00B' });
+var calls = 0;
+var e = [1, 2, 3];
+Object.defineProperty(e, 'length', { value: { valueOf: function () { calls++; return 2; } } });
+console.log(d(c), d(e), calls, k(function () { Object.defineProperty([], 'length', { value: '1.5' }); }), k(function () { Object.defineProperty([], 'length', { value: { valueOf: function () { return -1; } } }); }));
+var f = [1, 2];
+Object.defineProperty(f, 'length', { writable: false });
+console.log(k(function () { Object.defineProperty(f, '5', { value: 1 }); }), k(function () { return Reflect.defineProperty(f, '2', { value: 1 }); }), k(function () { f[3] = 1; return f[3]; }), k(function () { 'use strict'; f[4] = 1; }), d(f), k(function () { return Reflect.defineProperty(f, 'length', { value: 2 }); }), k(function () { return Reflect.defineProperty(f, 'length', { value: 2, writable: true }); }), k(function () { return Reflect.defineProperty(f, '1', { value: 9 }); }), f.join());
+var g = [1, 2, 3, 4];
+Object.defineProperty(g, 'length', { value: 2, writable: false });
+console.log(d(g), g.join(), k(function () { return Reflect.defineProperty(g, 'length', { value: 4 }); }), k(function () { return Reflect.defineProperty(g, 'length', { value: 2, enumerable: true }); }));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "TypeError 2w 0,1",
+            "TypeError 2r 0,1 false",
+            "11w 2w 2 RangeError RangeError",
+            "TypeError false undefined TypeError 2r true false true 1,9",
+            "2r 1,2 false false",
+        ]
+    );
+}

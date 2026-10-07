@@ -193,3 +193,42 @@ fn properties_arguments_and_function_descriptors_bd_9vouw_235() {
         "TypeError ok: ok: TypeError ok: TypeError TypeError a 7 true  false ok: TypeError",
     );
 }
+
+/// bd-9vouw.279: a key argument goes through ToPropertyKey: an object key
+/// converts through its toString / valueOf (which may throw), after the
+/// target's own type check for defineProperty / getOwnPropertyDescriptor /
+/// hasOwn and before the receiver check for hasOwnProperty /
+/// propertyIsEnumerable; a missing key is "undefined". Expected lines:
+/// Node v22.2.0's output, captured programmatically.
+#[test]
+fn builtin_key_arguments_go_through_to_property_key_bd_9vouw_279() {
+    let source = r#"function k(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var key = { toString: function () { return 'abc'; } };
+var o = { abc: 1, undefined: 0 };
+console.log(k(function () { return o.hasOwnProperty(key); }), k(function () { return o.propertyIsEnumerable(key); }), k(function () { return Object.hasOwn(o, key); }), k(function () { return JSON.stringify(Object.getOwnPropertyDescriptor(o, key)); }), k(function () { return JSON.stringify(Reflect.getOwnPropertyDescriptor(o, key)); }), k(function () { return o.hasOwnProperty(); }));
+var d = {};
+Object.defineProperty(d, [1, 2], { value: 1, enumerable: true });
+Object.defineProperty(d, { toString: function () { return 'xyz'; } }, { value: 2, enumerable: true });
+Object.defineProperty(d, { valueOf: function () { return 9; }, toString: null }, { value: 3, enumerable: true });
+console.log(Object.keys(d).join(), k(function () { return Reflect.defineProperty(d, key, { value: 4 }); }), d.abc);
+var order = [];
+var k2 = { toString: function () { order.push('key'); return 'z'; } };
+[function () { Object.defineProperty(1, k2, {}); }, function () { Object.getOwnPropertyDescriptor(null, k2); }, function () { Object.prototype.hasOwnProperty.call(null, k2); }, function () { Object.prototype.propertyIsEnumerable.call(undefined, k2); }, function () { Object.hasOwn(null, k2); }, function () { Object.defineProperty({}, { toString: function () { throw new RangeError('k'); } }, {}); }].forEach(function (f) { try { f(); order.push('none'); } catch (e) { order.push(e.constructor.name); } });
+console.log(order.join());
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "true true true {\"value\":1,\"writable\":true,\"enumerable\":true,\"configurable\":true} {\"value\":1,\"writable\":true,\"enumerable\":true,\"configurable\":true} true",
+            "9,1,2,xyz true 4",
+            "TypeError,TypeError,key,TypeError,key,TypeError,TypeError,RangeError",
+        ]
+    );
+}

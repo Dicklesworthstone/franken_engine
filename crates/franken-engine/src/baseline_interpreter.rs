@@ -41681,6 +41681,14 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
+                // %TypedArray%.prototype.join validates and converts its
+                // separator first; Array.prototype.join called on a typed
+                // array stays generic (an out-of-bounds view has length 0).
+                if Self::is_typed_array_prototype_builtin(builtin)
+                    && let Some(view) = self.typed_array_view_for_object(arr_id)?
+                {
+                    return self.typed_array_join(module, arr_id, &view, args);
+                }
                 let separator = match self.builtin_arg(args, 0)? {
                     None | Some(Value::Undefined) => ",".to_string(),
                     Some(value) => self.value_to_string(&value),
@@ -69276,7 +69284,9 @@ impl InterpreterCore {
     /// ES2020 22.2 IntegerIndexedElementSet: a BigInt array converts the
     /// value with ToBigInt (a TypeError for a Number, a SyntaxError for a
     /// string that is not a BigInt literal) before anything is written; a
-    /// Number array converts in the byte writer.
+    /// Number array converts in the byte writer, after ToNumber's TypeError
+    /// for a BigInt or a Symbol (`new Int8Array(1).set([1n])` wrote 1,
+    /// bd-9vouw.269).
     fn typed_array_prepare_value(
         &mut self,
         kind: TypedArrayKind,
@@ -69285,6 +69295,12 @@ impl InterpreterCore {
         if kind.is_bigint() && !matches!(value, Value::BigInt(_)) {
             let digits = self.bigint_digits_of(value)?;
             return Ok(Value::BigInt(Arc::from(digits.as_str())));
+        }
+        if !kind.is_bigint() && matches!(value, Value::BigInt(_) | Value::Symbol(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: format!("value convertible to a Number for {}", kind.type_name()),
+                got: value.type_name().to_string(),
+            });
         }
         Ok(value)
     }
@@ -69411,6 +69427,50 @@ impl InterpreterCore {
             )
         })??;
         Ok(Some(true))
+    }
+
+    /// %TypedArray%.prototype.join (ES2024 23.2.3.18): ValidateTypedArray,
+    /// the length taken before the separator's ToString (which runs a
+    /// separator object's toString or valueOf, may resize the buffer, and
+    /// makes a Symbol a TypeError), then each element read again: one past a
+    /// shrink is undefined and joins as "". The separator was rendered
+    /// without its conversion ("[object Object]").
+    fn typed_array_join(
+        &mut self,
+        module: &Ir3Module,
+        array_id: ObjectId,
+        view: &TypedArrayView,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        Self::reject_out_of_bounds_typed_array(view, "join")?;
+        let length = view.length;
+        let separator = match self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined) {
+            Value::Undefined => vec![u16::from(b',')],
+            value => {
+                // Guest code runs while native locals hold values: no
+                // collection until this returns.
+                self.gc_nested_request = None;
+                match self.object_to_string_primitive(Some(module), value)? {
+                    Value::Symbol(_) => return Err(Self::symbol_to_string_error()),
+                    Value::Str(text) => text.code_units_vec(),
+                    other => self.value_to_string(&other).encode_utf16().collect(),
+                }
+            }
+        };
+        let mut joined: Vec<u16> = Vec::new();
+        for index in 0..length {
+            if index > 0 {
+                joined.extend_from_slice(&separator);
+            }
+            if let Some(element) =
+                self.typed_array_indexed_get_property(array_id, &index.to_string())?
+                && !matches!(element, Value::Undefined)
+            {
+                joined.extend(self.value_to_string(&element).encode_utf16());
+            }
+            self.check_string_limit(joined.len())?;
+        }
+        Ok(Value::Str(JsString::from_code_units(&joined)))
     }
 
     /// TypedArraySetElement steps 1-2 (ES2024 10.4.5.16): ToBigInt for a
@@ -69740,10 +69800,19 @@ impl InterpreterCore {
         receiver: Value,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        let (_, target_view) = self.typed_array_receiver_view(receiver, "set")?;
+        let (target_id, target_view) = self.typed_array_receiver_view(receiver, "set")?;
         let offset = self.typed_array_offset_arg(module, target_view.kind, args, 1, "offset")?;
         let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         self.typed_array_content_type_check(target_view.kind, &source)?;
+        if let Some(source_id) = self.typed_array_set_array_like_source(&source)? {
+            return self.typed_array_set_from_array_like(
+                module,
+                target_id,
+                &target_view,
+                offset,
+                source_id,
+            );
+        }
         let values = self.typed_array_source_values(module, source)?;
         let values = self.typed_array_prepare_values(target_view.kind, values)?;
         let end = offset
@@ -69777,6 +69846,115 @@ impl InterpreterCore {
             }
             Ok(())
         })??;
+        Ok(Value::Undefined)
+    }
+
+    /// The array-like source `set` reads with Get and converts element by
+    /// element (ES2024 23.2.3.26.2 SetTypedArrayFromArrayLike): ToObject of
+    /// a primitive source (a string's characters, a number's nothing), or
+    /// an object that is not a typed array and not an Array whose elements
+    /// are all plain primitives (those keep the bulk read, which observes
+    /// nothing). `None` for those, and for undefined and null, which keep
+    /// their TypeError.
+    fn typed_array_set_array_like_source(
+        &mut self,
+        source: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        Ok(match source {
+            Value::Object(source_id) => {
+                let bulk = self.heap.get(source_id.0 as usize).is_some_and(|object| {
+                    object.typed_array.is_some()
+                        || (object.is_array && self.array_holds_plain_primitives(*source_id))
+                });
+                (!bulk).then_some(*source_id)
+            }
+            Value::Bool(_)
+            | Value::Int(_)
+            | Value::Float(_)
+            | Value::Str(_)
+            | Value::Symbol(_)
+            | Value::BigInt(_) => Some(self.alloc_primitive_wrapper(source.clone())?),
+            _ => None,
+        })
+    }
+
+    /// Whether every index below the Array `array_id`'s length is an own
+    /// data property holding a primitive other than a Symbol, so reading and
+    /// converting its elements runs no guest code.
+    fn array_holds_plain_primitives(&self, array_id: ObjectId) -> bool {
+        let Some(object) = self.heap.get(array_id.0 as usize) else {
+            return false;
+        };
+        let Some(Value::Int(length)) = object.properties.get("length") else {
+            return false;
+        };
+        (0..*length).all(|index| {
+            matches!(
+                object.own_runtime_property_value(&RuntimePropertyKey::String(JsString::from(
+                    index.to_string()
+                ))),
+                Some(
+                    Value::Undefined
+                        | Value::Null
+                        | Value::Bool(_)
+                        | Value::Int(_)
+                        | Value::Float(_)
+                        | Value::Str(_)
+                        | Value::BigInt(_)
+                )
+            )
+        })
+    }
+
+    /// SetTypedArrayFromArrayLike (ES2024 23.2.3.26.2): LengthOfArrayLike
+    /// of the source, the range check against the target's length, then for
+    /// each index Get, conversion (ToNumber/ToBigInt, running valueOf) and
+    /// TypedArraySetElement in order, so an abrupt Get or conversion leaves
+    /// the earlier elements written, and an element past a shrink the
+    /// conversions caused is skipped. All values were read first and
+    /// converted without running guest code.
+    fn typed_array_set_from_array_like(
+        &mut self,
+        module: &Ir3Module,
+        target_id: ObjectId,
+        target_view: &TypedArrayView,
+        offset: usize,
+        source_id: ObjectId,
+    ) -> Result<Value, InterpreterError> {
+        // Guest code runs while native locals hold values: no collection
+        // until this returns.
+        self.gc_nested_request = None;
+        let source_length = self.generic_length(Some(module), source_id)?;
+        let source_length =
+            usize::try_from(source_length).map_err(|_| InterpreterError::RangeError {
+                message: format!("array-like length {source_length} exceeds host addressable size"),
+            })?;
+        if offset
+            .checked_add(source_length)
+            .is_none_or(|end| end > target_view.length)
+        {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{}.prototype.set source length {source_length} at offset {offset} exceeds target length {}",
+                    target_view.kind.type_name(),
+                    target_view.length,
+                ),
+            });
+        }
+        for index in 0..source_length {
+            let value = self.generic_get(
+                Some(module),
+                source_id,
+                &Self::generic_index_key(index as u64),
+            )?;
+            let converted =
+                self.typed_array_element_value(Some(module), target_view.kind, value)?;
+            self.typed_array_indexed_set_property(
+                target_id,
+                &(offset + index).to_string(),
+                &converted,
+            )?;
+        }
         Ok(Value::Undefined)
     }
 

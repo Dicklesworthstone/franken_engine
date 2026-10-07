@@ -356,3 +356,66 @@ console.log(Reflect.deleteProperty(d, '0'), d.propertyIsEnumerable(0), JSON.stri
         ]
     );
 }
+
+/// bd-9vouw.269: `%TypedArray%.prototype.join` converts its separator with
+/// ToString (a separator object's toString runs once; a Symbol throws) after
+/// taking the length, so elements past a shrink the conversion caused join
+/// as "" (ES2024 23.2.3.18). `%TypedArray%.prototype.set` from an
+/// array-like (SetTypedArrayFromArrayLike, 23.2.3.26.2) is ToObject of the
+/// source, LengthOfArrayLike, the range check, then Get, conversion and
+/// write per element in order: a string source sets its characters, an
+/// abrupt Get or valueOf leaves the earlier elements written, a hole reads
+/// undefined. Expected lines are Node v22.2.0's output, captured
+/// programmatically; Bun 1.4.2 agrees.
+#[test]
+fn typed_array_join_and_set_convert_observably_bd_9vouw_269() {
+    let source = r#"function kind(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var calls = [];
+var sep = { toString: function () { calls.push('sep'); return '|'; } };
+var ta = new Float64Array([1, -0, 2.5, NaN]);
+console.log(ta.join(sep), calls.join(), ta.join(), ta.join(''), ta.join(undefined), ta.join(null), new BigInt64Array([1n, -2n]).join(sep));
+console.log(kind(function () { return ta.join(Symbol()); }), kind(function () { return ta.join({ toString: function () { throw new RangeError('s'); } }); }), JSON.stringify(new Uint8Array(0).join(sep)));
+var rab = new ArrayBuffer(4, { maxByteLength: 8 });
+var tracking = new Uint8Array(rab);
+console.log(JSON.stringify(tracking.join({ toString: function () { rab.resize(2); return '.'; } })), JSON.stringify(new Uint8Array(new ArrayBuffer(4, { maxByteLength: 8 })).join({ toString: function () { return '-'; } })));
+var rab2 = new ArrayBuffer(3, { maxByteLength: 8 });
+var grow = new Uint8Array(rab2);
+console.log(JSON.stringify(grow.join({ toString: function () { rab2.resize(6); return ','; } })));
+var order = [];
+var target = new Float64Array(4);
+var source = { length: 3, get 0() { order.push('get0'); return { valueOf: function () { order.push('conv0'); return 7; } }; }, get 1() { order.push('get1'); return '8'; }, get 2() { order.push('get2'); throw new RangeError('g'); } };
+console.log(kind(function () { target.set(source); }), order.join(), String(target));
+var t2 = new Int8Array(4);
+console.log(kind(function () { t2.set([1, { valueOf: function () { throw new TypeError('c'); } }, 3]); }), String(t2), kind(function () { t2.set([Symbol()]); }), kind(function () { t2.set([1n]); }));
+var t3 = new Uint8Array(5);
+t3.set('123', 1); t3.set(42); t3.set(true);
+console.log(String(t3), kind(function () { t3.set('123456'); }), kind(function () { t3.set({ length: 2, 0: 5, 1: 6 }, 4); }), kind(function () { t3.set(undefined); }));
+var big = new BigInt64Array(3);
+big.set([1n, { valueOf: function () { return 2n; } }, '3']);
+console.log(String(big), kind(function () { big.set([1]); }), kind(function () { big.set(new Uint8Array(1)); }));
+var t4 = new Uint8Array([9, 9, 9]);
+t4.set([1, 2]); t4.set(new Uint16Array([300]), 2);
+console.log(String(t4), String(new Float32Array([1.5, 2.5]).subarray(0)), String((function () { var a = new Int16Array(4); a.set([1, , 3]); return a; })()));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "1|0|2.5|NaN sep 1,0,2.5,NaN 102.5NaN 1,0,2.5,NaN 1null0null2.5nullNaN 1|-2",
+            "TypeError RangeError \"\"",
+            "\"0.0..\" \"0-0-0-0\"",
+            "\"0,0,0\"",
+            "RangeError get0,conv0,get1,get2 7,8,0,0",
+            "TypeError 1,0,0,0 TypeError TypeError",
+            "0,1,2,3,0 RangeError RangeError TypeError",
+            "1,2,3 TypeError TypeError",
+            "1,2,44 1.5,2.5 1,0,3,0",
+        ]
+    );
+}

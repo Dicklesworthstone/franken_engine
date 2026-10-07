@@ -95,6 +95,39 @@ fn path_default_and_namespace_imports() {
     );
 }
 
+/// bd-9vouw.300: a module-level `const path = require('path')` that a
+/// function, an arrow or a method reads (picomatch, every package that uses
+/// `path` inside its functions). With no use outside functions the alias
+/// stayed a runtime `require('path')`, which finds no module; with one, the
+/// facade claimed the alias and the function read an unbound `path`.
+#[test]
+fn path_alias_read_inside_functions() {
+    assert_output(
+        &[
+            (
+                "lib.cjs",
+                r#"'use strict';
+const path = require('path');
+const SEP = path.sep;
+function base(x) { return path.basename(x, '.js'); }
+const isWin = () => path.sep === '\\';
+class P { dir(x) { return path.dirname(x); } }
+module.exports = { SEP, base, isWin, dir: (x) => new P().dir(x) };
+"#,
+            ),
+            (
+                "app.cjs",
+                r#"const lib = require('./lib.cjs');
+const path = require('path');
+function joined(a, b) { return path.join(a, '..', b); }
+console.log(lib.SEP, lib.base('/a/b.js'), lib.isWin(), lib.dir('/q/r/s.txt'), joined('x/y', 'z'));
+"#,
+            ),
+        ],
+        &["/ b false /q/r x/z"],
+    );
+}
+
 /// EventEmitter as the default export and as a named import, including a subclass.
 #[test]
 fn events_default_and_named_imports() {

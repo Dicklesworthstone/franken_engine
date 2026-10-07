@@ -5,8 +5,10 @@
 //! inline `require('path').join(...)` to `builtin:Path*` HostCalls. Every
 //! other form found no module: a destructured `const { join } =
 //! require('path')` (and so `import { join } from 'node:path'`), a
-//! `require('path')` inside a function, one passed as a value, or an inline
-//! read of a function (`require('path').parse`). For those, the rewrite puts
+//! `require('path')` inside a function, one passed as a value, an inline
+//! read of a function (`require('path').parse`), or a program-level alias a
+//! function reads (the facade lowers the alias's uses in the program body
+//! only; bd-9vouw.300). For those, the rewrite puts
 //!
 //! ```text
 //! const %path_module = <PATH_SOURCE>;
@@ -281,6 +283,7 @@ pub(super) fn rewrite_path_requires(
     let mut rewriter = PathRewriter {
         scopes: vec![root],
         replaced: 0,
+        function_aliases: aliases_read_in_functions(&tree.body)?,
     };
     for statement in &mut rewritten.body {
         rewriter.program_statement(statement)?;
@@ -351,10 +354,72 @@ fn module_source() -> Result<Expression, LoweringPipelineError> {
     Ok(expression)
 }
 
+/// The program's facade aliases (`const path = require('path')` in the
+/// program body) that a function, arrow or method reads. The facade lowers an
+/// alias's uses in the program body only: a function's `path.basename(x)`
+/// read an unbound `path` (or, with no use in the program body, the alias
+/// stayed a runtime `require('path')`, which finds no module), bd-9vouw.300.
+/// A local of the same name in the function counts too; the rewrite it
+/// causes is correct either way.
+fn aliases_read_in_functions(
+    body: &[Statement],
+) -> Result<BTreeSet<String>, LoweringPipelineError> {
+    struct FunctionReads<'a> {
+        aliases: &'a BTreeSet<String>,
+        depth: usize,
+        read: BTreeSet<String>,
+    }
+
+    impl Walk for FunctionReads<'_> {
+        fn function(&mut self, function: FunctionParts<'_>) -> Outcome {
+            self.depth += 1;
+            let outcome = walk_function(self, function);
+            self.depth -= 1;
+            outcome
+        }
+
+        fn expression(&mut self, expression: &mut Expression) -> Outcome {
+            if self.depth > 0
+                && let Expression::Identifier(name) = expression
+                && self.aliases.contains(name)
+            {
+                self.read.insert(name.clone());
+            }
+            walk_expression(self, expression)
+        }
+    }
+
+    let mut aliases = BTreeSet::new();
+    for statement in body {
+        if let Statement::VariableDeclaration(declaration) = statement {
+            for declarator in &declaration.declarations {
+                if let (BindingPattern::Identifier(name), Some(initializer)) =
+                    (&declarator.pattern, &declarator.initializer)
+                    && is_facade_require_call(initializer)
+                {
+                    aliases.insert(name.clone());
+                }
+            }
+        }
+    }
+    if aliases.is_empty() {
+        return Ok(aliases);
+    }
+    let mut walker = FunctionReads {
+        aliases: &aliases,
+        depth: 0,
+        read: BTreeSet::new(),
+    };
+    walker.statements(&mut body.to_vec())?;
+    Ok(walker.read)
+}
+
 struct PathRewriter {
     /// Names declared in each enclosing scope, innermost last.
     scopes: Vec<BTreeSet<String>>,
     replaced: usize,
+    /// Facade aliases a function reads: they get the module instead.
+    function_aliases: BTreeSet<String>,
 }
 
 impl PathRewriter {
@@ -378,7 +443,8 @@ impl PathRewriter {
 
 impl PathRewriter {
     /// A statement of the program body. The facade's alias, a declaration
-    /// there binding a name to `require('path')`, keeps its call.
+    /// there binding a name to `require('path')`, keeps its call unless a
+    /// function reads it.
     fn program_statement(&mut self, statement: &mut Statement) -> Outcome {
         let Statement::VariableDeclaration(declaration) = statement else {
             return self.statement(statement);
@@ -387,7 +453,8 @@ impl PathRewriter {
             self.pattern(&mut declarator.pattern)?;
             match &mut declarator.initializer {
                 Some(initializer)
-                    if matches!(declarator.pattern, BindingPattern::Identifier(_))
+                    if matches!(&declarator.pattern, BindingPattern::Identifier(name)
+                        if !self.function_aliases.contains(name))
                         && is_facade_require_call(initializer) => {}
                 Some(initializer) => self.expression(initializer)?,
                 None => {}

@@ -7096,7 +7096,16 @@ enum DataViewIntegerKind {
 /// read-only and callback methods (join, indexOf, forEach, reduce, ...) are
 /// the generic `Array.prototype` builtins, which read typed arrays through
 /// `array_like_length` / `array_index_value`.
-const TYPED_ARRAY_METHODS: [&str; 4] = ["map", "filter", "reverse", "sort"];
+const TYPED_ARRAY_METHODS: [&str; 7] = [
+    "map",
+    "filter",
+    "reverse",
+    "sort",
+    // ES2023 change array by copy (bd-9vouw.258).
+    "toReversed",
+    "toSorted",
+    "with",
+];
 
 /// DataView accessors served by [`BuiltinFunctionKind::DataViewMethod`].
 const DATA_VIEW_METHODS: [&str; 14] = [
@@ -69772,22 +69781,22 @@ impl InterpreterCore {
                 values.reverse();
                 values
             }
-            "sort" => {
-                let comparator = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                if matches!(comparator, Value::Undefined) {
-                    let mut values = values;
-                    values.sort_by(Self::typed_array_default_order);
-                    values
-                } else if comparator.is_callable() {
-                    self.merge_sort_with_comparator(module, &comparator, values)?
+            "sort" => self.typed_array_sorted_values(module, args, values, method)?,
+            // ES2023 23.2.3.32 toReversed and 23.2.3.33 toSorted: the
+            // reordered elements in a new array of the receiver's type
+            // (TypedArrayCreateSameType, never the species), the receiver
+            // unchanged (bd-9vouw.258).
+            "toReversed" | "toSorted" => {
+                let values = if method == "toSorted" {
+                    self.typed_array_sorted_values(module, args, values, method)?
                 } else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "comparator function or undefined for TypedArray.prototype.sort"
-                            .to_string(),
-                        got: comparator.type_name().to_string(),
-                    });
-                }
+                    values.into_iter().rev().collect()
+                };
+                return Ok(Value::Object(
+                    self.alloc_typed_array_from_values(view.kind, &values)?,
+                ));
             }
+            "with" => return self.typed_array_with(module, target_id, &view, args),
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "TypedArray.prototype method".to_string(),
@@ -69812,6 +69821,93 @@ impl InterpreterCore {
             Ok(())
         })??;
         Ok(Value::Object(target_id))
+    }
+
+    /// `values` sorted for %TypedArray%.prototype.sort / toSorted: by the
+    /// comparator argument, or numerically without one.
+    fn typed_array_sorted_values(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        mut values: Vec<Value>,
+        method: &str,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        let comparator = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        if matches!(comparator, Value::Undefined) {
+            values.sort_by(Self::typed_array_default_order);
+            Ok(values)
+        } else if comparator.is_callable() {
+            self.merge_sort_with_comparator(module, &comparator, values)
+        } else {
+            Err(InterpreterError::TypeError {
+                expected: format!(
+                    "comparator function or undefined for TypedArray.prototype.{method}"
+                ),
+                got: comparator.type_name().to_string(),
+            })
+        }
+    }
+
+    /// ES2023 23.2.3.36 %TypedArray%.prototype.with(index, value): a copy
+    /// with one element replaced. The index is relative to the end when
+    /// negative, the value converts (ToNumber or ToBigInt) before the
+    /// index is checked against the current length (a RangeError past it),
+    /// and the other elements are read after that conversion
+    /// (bd-9vouw.258).
+    fn typed_array_with(
+        &mut self,
+        module: &Ir3Module,
+        target_id: ObjectId,
+        view: &TypedArrayView,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let len = view.length;
+        let relative = match self.builtin_number_arg(module, args, 0)? {
+            Some(index) => Self::value_as_integer(&index) as f64,
+            None => 0.0,
+        };
+        let actual = if relative < 0.0 {
+            len as f64 + relative
+        } else {
+            relative
+        };
+        let value = if view.kind.is_bigint() {
+            let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+            self.object_to_number_primitive(Some(module), value)?
+        } else {
+            self.builtin_number_arg(module, args, 1)?
+                .unwrap_or(Value::Undefined)
+        };
+        let value = self.typed_array_prepare_value(view.kind, value)?;
+        let current = self
+            .typed_array_view_for_object(target_id)?
+            .unwrap_or_else(|| view.clone());
+        let in_bounds = !current.bounds.is_some_and(|bounds| bounds.out_of_bounds);
+        if !in_bounds || actual < 0.0 || actual >= current.length as f64 {
+            return Err(InterpreterError::RangeError {
+                message: format!(
+                    "{}.prototype.with: index {relative} is out of range for length {}",
+                    view.kind.type_name(),
+                    current.length
+                ),
+            });
+        }
+        let actual = actual as usize;
+        let mut values = Vec::with_capacity(len);
+        for index in 0..len {
+            values.push(if index == actual {
+                value.clone()
+            } else if index < current.length {
+                self.with_array_buffer_bytes(current.buffer, |bytes| {
+                    Self::read_typed_array_element_bytes(&current, bytes, index)
+                })??
+            } else {
+                Value::Undefined
+            });
+        }
+        Ok(Value::Object(
+            self.alloc_typed_array_from_values(view.kind, &values)?,
+        ))
     }
 
     /// ES2020 22.2.3.26 step 2 (TypedArray SortCompare without a comparator).

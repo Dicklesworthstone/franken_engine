@@ -80,6 +80,7 @@ mod array_from;
 mod array_generic;
 mod async_generator;
 mod bigint_ops;
+mod blob;
 mod builtin_function_lengths;
 mod collation;
 mod collector;
@@ -967,6 +968,7 @@ fn canonical_builtin_prototype_name(name: &str) -> Option<&'static str> {
         "AbortController" => Some("AbortController"),
         "AbortSignal" => Some("AbortSignal"),
         "DOMException" => Some("DOMException"),
+        "Blob" => Some("Blob"),
         // %GeneratorFunction%, %AsyncFunction%, %AsyncGeneratorFunction%:
         // not global bindings (FUNCTION_KIND_INTRINSICS).
         "GeneratorFunction" => Some("GeneratorFunction"),
@@ -3595,6 +3597,9 @@ pub enum BuiltinFunctionKind {
     /// `Symbol.prototype.valueOf` (ES2020 19.4.3.4): thisSymbolValue, so a
     /// Symbol wrapper object answers its symbol (bd-9vouw.234). Append only.
     SymbolPrototypeValueOf,
+    /// Blob.prototype.slice / text / arrayBuffer (bd-9vouw.226), named by
+    /// the specifier, one of [`blob::BLOB_METHODS`]. Append only.
+    BlobMethod,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5081,6 +5086,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::BooleanPrototypeValueOf => "valueOf",
             BuiltinFunctionKind::SymbolPrototypeToString => "toString",
             BuiltinFunctionKind::SymbolPrototypeValueOf => "valueOf",
+            BuiltinFunctionKind::BlobMethod => blob::BLOB_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or(""),
             BuiltinFunctionKind::StringIterator | BuiltinFunctionKind::GeneratorIteratorSelf => {
                 "@@iterator"
             }
@@ -5692,6 +5702,7 @@ impl BuiltinFunction {
             K::DateNow | K::DateParse | K::DateUtc => "Date",
             K::DateGetTime | K::DatePrototypeMethod => "Date.prototype",
             K::SymbolPrototypeToString | K::SymbolPrototypeValueOf => "Symbol.prototype",
+            K::BlobMethod => "Blob.prototype",
             K::BigIntAsIntN | K::BigIntAsUintN => "BigInt",
             K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
             K::ErrorPrototypeToString => "Error.prototype",
@@ -5847,7 +5858,7 @@ const FUNCTION_KIND_INTRINSICS: [&str; 3] = [
 /// Every name has a canonical builtin prototype (`ensure_builtin_prototype`),
 /// which is also the prototype engine-created instances use, so `instanceof`,
 /// `x.constructor === X` and `class E extends X` agree with the instances.
-const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 48] = [
+const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 49] = [
     "Object",
     "Array",
     "Number",
@@ -5912,6 +5923,8 @@ const STANDARD_CONSTRUCTOR_GLOBALS: [&str; 48] = [
     "AbortController",
     "AbortSignal",
     "DOMException",
+    // WHATWG File API Blob (bd-9vouw.226): a Node global since v18.
+    "Blob",
     // ES2025 Iterator (bd-9vouw.179): abstract; its prototype is
     // %IteratorPrototype%, which holds the helpers.
     "Iterator",
@@ -6075,7 +6088,7 @@ const ARRAY_UNSCOPABLE_NAMES: [&str; 16] = [
 /// Canonical prototypes (`builtin_prototypes` keys) whose methods are served
 /// virtually by [`InterpreterCore::canonical_prototype_method`] instead of
 /// being stored as own heap properties (bd-9vouw.17).
-const VIRTUAL_METHOD_PROTOTYPES: [&str; 27] = [
+const VIRTUAL_METHOD_PROTOTYPES: [&str; 28] = [
     "Array",
     "String",
     "Number",
@@ -6103,6 +6116,7 @@ const VIRTUAL_METHOD_PROTOTYPES: [&str; 27] = [
     "Event",
     "AbortController",
     "AbortSignal",
+    "Blob",
 ];
 
 /// `console` methods besides log/error/warn/info (bd-9vouw.158), as Node
@@ -7892,6 +7906,9 @@ pub struct HeapObject {
     /// the virtual lookups skip a key listed here. Empty on every other
     /// object.
     deleted_virtual_keys: BTreeSet<RuntimePropertyKey>,
+    /// The bytes and type of a WHATWG Blob (bd-9vouw.226); `None` on every
+    /// other object.
+    blob: Option<blob::BlobData>,
 }
 
 /// One ES2022 PrivateElement (6.2.10).
@@ -8141,6 +8158,7 @@ impl Serialize for HeapObject {
                 + usize::from(self.brand.is_some())
                 + usize::from(!self.private_elements.is_empty())
                 + usize::from(!self.deleted_virtual_keys.is_empty())
+                + usize::from(self.blob.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -8182,6 +8200,9 @@ impl Serialize for HeapObject {
         }
         if let Some(brand) = &self.brand {
             object.serialize_field("brand", brand)?;
+        }
+        if let Some(blob) = &self.blob {
+            object.serialize_field("blob", blob)?;
         }
         if !self.private_elements.is_empty() {
             let elements = self
@@ -8286,6 +8307,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             symbol_properties: Vec<HeapSymbolPropertyWire>,
             #[serde(default)]
             deleted_virtual_keys: Vec<PropertyKeyWire>,
+            #[serde(default)]
+            blob: Option<blob::BlobData>,
         }
 
         #[derive(Deserialize)]
@@ -8406,6 +8429,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             brand: wire.brand,
             private_elements,
             deleted_virtual_keys,
+            blob: wire.blob,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -43989,6 +44013,9 @@ impl InterpreterCore {
             }
             // thisSymbolValue (ES2020 19.4.3.4): a wrapper object arrives here
             // already unwrapped (`this_primitive_receiver`).
+            BuiltinFunctionKind::BlobMethod => {
+                self.blob_method(module, builtin, args, receiver, receiver_register)
+            }
             BuiltinFunctionKind::SymbolPrototypeValueOf => match receiver {
                 Some(symbol @ Value::Symbol(_)) => Ok(symbol),
                 other => Err(InterpreterError::TypeError {
@@ -53208,6 +53235,7 @@ impl InterpreterCore {
                             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                                 self.construct_event_target_family(module, name, args)?
                             }
+                            Some("Blob") => self.construct_blob(module, args)?,
                             Some(name @ ("Proxy" | "WeakRef" | "FinalizationRegistry")) => self
                                 .dispatch_builtin_hostcall(
                                     &format!("builtin:{name}"),
@@ -96395,6 +96423,11 @@ impl InterpreterCore {
             .as_ref()
             .map(|_| MEMORY_ESTIMATE_DATA_VIEW_BYTES)
             .unwrap_or(0);
+        let blob_bytes = object
+            .blob
+            .as_ref()
+            .map(|blob| (blob.bytes.len() as u64).saturating_add(blob.content_type.len() as u64))
+            .unwrap_or(0);
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
             .saturating_add(property_labels)
@@ -96402,6 +96435,7 @@ impl InterpreterCore {
             .saturating_add(array_buffer_bytes)
             .saturating_add(typed_array_bytes)
             .saturating_add(data_view_bytes)
+            .saturating_add(blob_bytes)
             .saturating_add(
                 object
                     .derived_constructor_parent
@@ -99590,6 +99624,7 @@ impl InterpreterCore {
             Some(name) if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
                 self.construct_event_target_family(module, name, args)?
             }
+            Some("Blob") => self.construct_blob(module, args)?,
             _ => self.dispatch_builtin_function(module, builtin, args, None, None)?,
         };
         if matches!(standard_name, Some("Number" | "String" | "Boolean"))
@@ -101099,6 +101134,7 @@ impl InterpreterCore {
                 | "AbortController"
                 | "AbortSignal"
                 | "DOMException"
+                | "Blob"
         ) {
             let key = RuntimePropertyKey::Symbol(WellKnownSymbol::ToStringTag.id());
             self.set_object_runtime_property(prototype, key.clone(), Value::str(canonical))?;
@@ -102735,6 +102771,7 @@ impl InterpreterCore {
                 | "AbortController"
                 | "AbortSignal"
                 | "DOMException"
+                | "Blob"
                 | "Iterator"
                 | TYPED_ARRAY_INTRINSIC => 0,
                 "RegExp" | "AggregateError" | "Proxy" => 2,
@@ -102867,7 +102904,7 @@ impl InterpreterCore {
                 "TypeError",
                 "Constructor Iterator requires 'new'".to_string(),
             )),
-            name if event_target::EVENT_TARGET_FAMILY.contains(&name) => {
+            name if event_target::EVENT_TARGET_FAMILY.contains(&name) || name == "Blob" => {
                 Err(InterpreterError::TypeError {
                     expected: format!("new {name}(...)"),
                     got: format!("Class constructor {name} cannot be invoked without 'new'"),
@@ -103259,6 +103296,7 @@ impl InterpreterCore {
                     bound_object: None,
                 }))
             }
+            "Blob" => BuiltinFunction::blob_method(key).map(Value::BuiltinFunction),
             _ => None,
         }
     }

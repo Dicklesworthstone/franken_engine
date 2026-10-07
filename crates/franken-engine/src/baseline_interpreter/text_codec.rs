@@ -51,7 +51,7 @@ const WINDOWS_1252_HIGH: [u16; 32] = [
 ];
 
 /// UTF-8 of a string's UTF-16 code units, lone surrogates as U+FFFD.
-fn utf8_of_code_units(units: impl IntoIterator<Item = u16>) -> String {
+pub(super) fn utf8_of_code_units(units: impl IntoIterator<Item = u16>) -> String {
     char::decode_utf16(units)
         .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
         .collect()
@@ -273,7 +273,10 @@ impl InterpreterCore {
 
     /// The bytes of a decode input: an ArrayBuffer, a typed array or a
     /// DataView (their viewed range). `undefined` is empty.
-    fn text_codec_input_bytes(&self, input: &Value) -> Result<Vec<u8>, InterpreterError> {
+    pub(super) fn text_codec_input_bytes(
+        &self,
+        input: &Value,
+    ) -> Result<Vec<u8>, InterpreterError> {
         let not_a_buffer = || InterpreterError::TypeError {
             expected: "ArrayBuffer, TypedArray or DataView to decode".to_string(),
             got: input.type_name().to_string(),

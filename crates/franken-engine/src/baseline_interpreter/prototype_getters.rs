@@ -17,7 +17,7 @@ use super::*;
 /// (prototype owner, property key, getter name). A key starting with `@@`
 /// names a well-known symbol ([`TYPED_ARRAY_TO_STRING_TAG`]); those accessors
 /// are real own properties of the prototype, installed when it is created.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 38] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 40] = [
     ("Map", "size", "get size"),
     ("Set", "size", "get size"),
     ("ArrayBuffer", "byteLength", "get byteLength"),
@@ -62,6 +62,9 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 38] = [
     ("AbortController", "signal", "get signal"),
     ("AbortSignal", "aborted", "get aborted"),
     ("AbortSignal", "reason", "get reason"),
+    // WHATWG File API (bd-9vouw.226).
+    ("Blob", "size", "get size"),
+    ("Blob", "type", "get type"),
 ];
 
 /// The key of %TypedArray%.prototype[@@toStringTag] in [`PROTOTYPE_GETTERS`].
@@ -274,6 +277,11 @@ impl InterpreterCore {
         if let Some(value) = self.event_family_getter(owner, key, id) {
             return Ok(value);
         }
+        if owner == "Blob"
+            && let Some(value) = self.blob_getter(id, key)
+        {
+            return Ok(value);
+        }
         self.prototype_getter_own_slot(module, id, key, receiver)
     }
 
@@ -313,6 +321,7 @@ impl InterpreterCore {
             "Event" | "CustomEvent" | "AbortController" | "AbortSignal" => {
                 self.has_event_family_brand(id, owner)
             }
+            "Blob" => object.blob.is_some(),
             _ => false,
         }
     }

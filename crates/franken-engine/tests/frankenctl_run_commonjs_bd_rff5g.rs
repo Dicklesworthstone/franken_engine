@@ -848,3 +848,32 @@ console.log(typeof ph, ph === P, ph.performance === globalThis.performance, type
     );
     assert_eq!(lines, ["object true true function true"]);
 }
+
+/// `require('vm')` (bd-9vouw.303) is a module of Node's shape, so a package
+/// that loads vm for an optional feature (jsonpath-plus's eval 'native')
+/// loads; the module found none. The first line is Node v22.2.0's output.
+/// The engine has no vm contexts: every entry point that would run code
+/// refuses with an EvalError when called (Node runs them: "ran ran ran"),
+/// as eval does without the runtime.eval grant.
+#[test]
+fn require_vm_loads_and_refuses_to_run_code_bd_9vouw_303() {
+    let lines = run_tree(
+        "fe_run_cjs_vm_module",
+        &[(
+            "app.js",
+            r#"const vm = require('vm');
+const V = require('node:vm');
+function k(f) { try { f(); return 'ran'; } catch (e) { return e.constructor.name; } }
+console.log(typeof vm, vm === V, typeof vm.Script, typeof vm.runInNewContext, vm.isContext({}), k(() => vm.isContext(1)));
+console.log(k(() => vm.runInNewContext('1 + 1', {})), k(() => new vm.Script('1')), k(() => vm.runInThisContext('2')));
+"#,
+        )],
+    );
+    assert_eq!(
+        lines,
+        [
+            "object true function function false TypeError",
+            "EvalError EvalError EvalError"
+        ]
+    );
+}

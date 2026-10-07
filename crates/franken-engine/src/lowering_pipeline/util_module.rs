@@ -24,7 +24,10 @@
 //! A `require` the program declares in an enclosing scope (a parameter, a
 //! local function) is its own and is called as written. The same pure-module
 //! lowering hook also materializes `events` over the native EventEmitter
-//! constructor and EventsOnce hostcall (bd-305gi). No filesystem/module-load
+//! constructor and EventsOnce hostcall (bd-305gi), and `vm` (bd-9vouw.303):
+//! Node's shape, whose every code-running entry point refuses with an
+//! EvalError when called, so a package that loads `vm` for an optional
+//! feature loads (jsonpath-plus). No filesystem/module-load
 //! authority is introduced. The filesystem facade shares these hooks through
 //! `fs_module`; its methods retain their native fs:read/fs:write checks.
 //! Other specifiers and `require` as a value keep their existing authority checks.
@@ -63,6 +66,7 @@ const EVENTS_MODULE_BINDING: &str = "%events_module";
 const ASSERT_MODULE_BINDING: &str = "%assert_module";
 const TIMERS_MODULE_BINDING: &str = "%timers_module";
 const STRING_DECODER_MODULE_BINDING: &str = "%string_decoder_module";
+const VM_MODULE_BINDING: &str = "%vm_module";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PureModule {
@@ -71,6 +75,7 @@ enum PureModule {
     Assert,
     Timers,
     StringDecoder,
+    Vm,
 }
 
 impl PureModule {
@@ -81,6 +86,7 @@ impl PureModule {
             Self::Assert => ASSERT_MODULE_BINDING,
             Self::Timers => TIMERS_MODULE_BINDING,
             Self::StringDecoder => STRING_DECODER_MODULE_BINDING,
+            Self::Vm => VM_MODULE_BINDING,
         }
     }
 }
@@ -121,6 +127,35 @@ const TIMERS_PLACEHOLDERS: [(&str, &str); 3] = [
     ("__franken_timers_interval", "%TimersPromisesSetInterval"),
 ];
 
+/// `vm`: Node's members, but the engine has no vm contexts, so every entry
+/// point that would run code refuses when called, as `eval` does without the
+/// runtime.eval grant. Loading the module runs nothing.
+const VM_SOURCE: &str = r#"(function () {
+  'use strict';
+  function refuse() {
+    throw new EvalError('code generation from strings is not permitted: the vm module has no contexts in this engine');
+  }
+  function Script() {
+    refuse();
+  }
+  function isContext(object) {
+    if (object === null || (typeof object !== 'object' && typeof object !== 'function')) {
+      throw new TypeError('The "object" argument must be of type object');
+    }
+    return false;
+  }
+  return {
+    Script: Script,
+    createContext: refuse,
+    isContext: isContext,
+    runInContext: refuse,
+    runInNewContext: refuse,
+    runInThisContext: refuse,
+    compileFunction: refuse,
+    createScript: refuse
+  };
+})()"#;
+
 // A private dependency, not an ambient HostCall or a public util property.
 const ASSERT_PLACEHOLDERS: [(&str, &str); 1] = [("__franken_assert_util", MODULE_BINDING)];
 
@@ -160,6 +195,8 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::Timers, Some("promises")))
     } else if *specifier == "string_decoder" || *specifier == "node:string_decoder" {
         Some((PureModule::StringDecoder, None))
+    } else if *specifier == "vm" || *specifier == "node:vm" {
+        Some((PureModule::Vm, None))
     } else {
         None
     }
@@ -243,6 +280,8 @@ const ASSERT_GLOBALS: [&str; 10] = [
     "Uint8Array",
 ];
 
+const VM_GLOBALS: [&str; 2] = ["EvalError", "TypeError"];
+
 /// `const %util_module = <module>;`, which the rewrite puts first in the
 /// program. Its initializer runs only engine-owned code.
 pub(super) fn is_module_declaration(statement: &Statement) -> bool {
@@ -259,7 +298,7 @@ pub(super) fn is_module_declaration(statement: &Statement) -> bool {
                     ..
                 }] if name == MODULE_BINDING || name == EVENTS_MODULE_BINDING
                     || name == ASSERT_MODULE_BINDING || name == TIMERS_MODULE_BINDING
-                    || name == STRING_DECODER_MODULE_BINDING
+                    || name == STRING_DECODER_MODULE_BINDING || name == VM_MODULE_BINDING
             )
     )
 }
@@ -335,6 +374,7 @@ fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelin
         PureModule::Assert => ("franken:assert", ASSERT_SOURCE),
         PureModule::Timers => ("franken:timers", TIMERS_SOURCE),
         PureModule::StringDecoder => ("franken:string_decoder", STRING_DECODER_SOURCE),
+        PureModule::Vm => ("franken:vm", VM_SOURCE),
     };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
         detail: "the engine's pure builtin module source failed to parse",
@@ -368,6 +408,7 @@ fn module_source(
         PureModule::Assert => &ASSERT_GLOBALS,
         PureModule::Timers => &TIMERS_GLOBALS,
         PureModule::StringDecoder => &STRING_DECODER_GLOBALS,
+        PureModule::Vm => &VM_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
         through_global_object: globals
@@ -632,6 +673,18 @@ mod tests {
             "{free:?}"
         );
         assert!(free.contains("%UtilInspect"), "{free:?}");
+    }
+
+    /// VM_SOURCE reads only VM_GLOBALS (bd-9vouw.303), and with all of them
+    /// declared by the program it reads them through `globalThis`: no other
+    /// ambient name, no intrinsic, no HostCall.
+    #[test]
+    fn vm_source_reads_only_its_globals() {
+        let expected: BTreeSet<String> = VM_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let free = free_names(&mut parse_module_source(PureModule::Vm).expect("parses"));
+        assert_eq!(free, expected);
+        let protected = free_names(&mut module_source(&expected, PureModule::Vm).expect("builds"));
+        assert_eq!(protected, BTreeSet::from(["globalThis".to_string()]));
     }
 }
 

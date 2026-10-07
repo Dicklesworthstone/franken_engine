@@ -104156,9 +104156,12 @@ impl InterpreterCore {
             // Constructed rather than called (call_standard_constructor
             // throws for them): Reflect.construct(Map, ...), a value
             // `new M()` with M = Map, a derived class's super().
-            Some(name @ ("Map" | "Set" | "WeakMap" | "WeakSet")) => {
-                self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?
-            }
+            // WeakRef and FinalizationRegistry too (ES2021 26.1.1.1,
+            // 26.2.1.1): a subclass's super() threw "requires 'new'"
+            // (bd-9vouw.357).
+            Some(
+                name @ ("Map" | "Set" | "WeakMap" | "WeakSet" | "WeakRef" | "FinalizationRegistry"),
+            ) => self.dispatch_builtin_hostcall(&format!("builtin:{name}"), args, Some(module))?,
             _ => self.dispatch_builtin_function(module, builtin, args, None, None)?,
         };
         if matches!(standard_name, Some("Number" | "String" | "Boolean"))

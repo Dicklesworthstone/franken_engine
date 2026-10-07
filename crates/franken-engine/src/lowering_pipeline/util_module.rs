@@ -516,7 +516,10 @@ fn facade_claimed_stream_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
 /// not) is one of the facade's forms for `export`, and none is inside a
 /// function declaration. A declaration is hoisted and lowered before the
 /// `const` that switches the facade on, so a form inside one constructed the
-/// elided binding: undefined (split2's `new Transform(options)`).
+/// elided binding: undefined (split2's `new Transform(options)`). A
+/// declaration that binds `local` itself (a parameter, or a declaration in
+/// its body) reads its own binding there, which the facade leaves alone
+/// (`function f(Readable) { new Readable(); }`, bd-fw7zd).
 fn every_reference_is_a_facade_form(body: &[Statement], local: &str, export: &str) -> bool {
     let mut counter = FacadeFormCounter {
         local,
@@ -524,6 +527,7 @@ fn every_reference_is_a_facade_form(body: &[Statement], local: &str, export: &st
         references: 0,
         forms: 0,
         function_declaration_depth: 0,
+        shadowing_declaration_depth: 0,
         in_function_declaration: false,
     };
     let mut body = body.to_vec();
@@ -540,23 +544,42 @@ struct FacadeFormCounter<'a> {
     forms: usize,
     /// How many function declarations enclose the walk's position.
     function_declaration_depth: usize,
-    /// Whether a reference or form appeared inside a function declaration.
+    /// How many of them bind `local` themselves.
+    shadowing_declaration_depth: usize,
+    /// Whether a reference to the module's `local` appeared inside a function
+    /// declaration.
     in_function_declaration: bool,
 }
 
 impl Walk for FacadeFormCounter<'_> {
     fn statement(&mut self, statement: &mut Statement) -> Outcome {
-        let declaration = matches!(statement, Statement::FunctionDeclaration(_));
+        let (declaration, shadowing) = match &*statement {
+            Statement::FunctionDeclaration(function) => {
+                let mut names = BTreeSet::new();
+                lexical_names(&function.body.body, &mut names);
+                var_names(&function.body.body, &mut names);
+                let shadowing = names.contains(self.local)
+                    || function
+                        .params
+                        .iter()
+                        .any(|param| param.pattern.binding_names().contains(&self.local));
+                (true, shadowing)
+            }
+            _ => (false, false),
+        };
         self.function_declaration_depth += usize::from(declaration);
+        self.shadowing_declaration_depth += usize::from(shadowing);
         let outcome = walk_statement(self, statement);
         self.function_declaration_depth -= usize::from(declaration);
+        self.shadowing_declaration_depth -= usize::from(shadowing);
         outcome
     }
 
     fn expression(&mut self, expression: &mut Expression) -> Outcome {
         if matches!(expression, Expression::Identifier(name) if name == self.local) {
             self.references += 1;
-            self.in_function_declaration |= self.function_declaration_depth > 0;
+            self.in_function_declaration |=
+                self.function_declaration_depth > 0 && self.shadowing_declaration_depth == 0;
             return Ok(());
         }
         let form = match self.export {
@@ -1013,13 +1036,19 @@ mod events_tests {
     }
 
     /// A top-level destructure whose every name and use the stream facade
-    /// serves keeps its `require('stream')` for the facade (bd-305gi.1).
+    /// serves keeps its `require('stream')` for the facade (bd-305gi.1),
+    /// also when a function declaration has its own binding of the name
+    /// (a parameter or a declaration in its body, bd-fw7zd).
     #[test]
     fn stream_facade_keeps_the_declarations_it_claims() {
         for source in [
             "const { Readable } = require('stream'); Readable.from(['a']);",
             "const { Writable, PassThrough: P } = require('stream'); new Writable({}); new P();",
             "const { pipeline, Transform } = require('stream'); pipeline(a, new Transform({}), done);",
+            "const { Writable } = require('stream'); new Writable({}); \
+             function f(Writable) { return new Writable(); }",
+            "const { Writable } = require('stream'); new Writable({}); \
+             function f() { const Writable = g(); return new Writable(); }",
         ] {
             let tree = parse(source, ParseGoal::Script);
             assert!(

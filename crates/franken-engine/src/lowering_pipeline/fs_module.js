@@ -121,11 +121,14 @@
     });
   }
   // Matches the engine's existing platform-neutral access-constant contract.
-  // Like Node's, the object has a null prototype and is not frozen. A literal
-  // calls no builtin, so building the module needs no authority beyond the
-  // program's own; Object.freeze here made every fs program require the
-  // builtin capability.
-  var constants = { __proto__: null, F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 };
+  // Like Node's, the object is not frozen. A plain literal calls no builtin,
+  // so building the module needs no authority beyond the program's own
+  // (Object.freeze here made every fs program require the builtin
+  // capability), and it touches no `__proto__` key, which the agent-sandbox
+  // guardplane scores as prototype pollution (a `{ __proto__: null }`
+  // literal suspended every sandboxed fs program). Node's has a null
+  // prototype; this one inherits from Object.prototype.
+  var constants = { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 };
   // Metadata operations use the engine's existing synchronous host effect and
   // Promise completion model. Executor throws become rejections, not fabricated
   // success values. This does not introduce an off-thread I/O implementation.

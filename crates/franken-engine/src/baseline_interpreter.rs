@@ -10262,14 +10262,16 @@ struct ColdBindingCell {
 struct ColdBindingCells {
     cells: BTreeMap<usize, ColdBindingCell>,
     payload_bytes: u64,
-    /// Registered bindings maps, by address: how many registrations hold
-    /// each, the map itself, and the key bytes charged for it. A map's cells
-    /// are registered by its first registration and released by its last,
-    /// so re-registering a scope that is already held (the global scope, at
-    /// every call) costs O(1), not O(bindings). Holding the `Rc` makes every
-    /// structural write elsewhere copy the map first (`Rc::make_mut`), so a
-    /// registered map's bindings cannot change while it is held.
-    maps: BTreeMap<usize, (usize, Rc<FrameBindings>, u64)>,
+    /// Registered bindings maps, by address: the map itself and the key
+    /// bytes charged for it. How many registrations hold a map is its
+    /// `ledger_holds`. A map's cells are registered by its first
+    /// registration and released by its last, so re-registering a scope that
+    /// is already held (the global scope, at every call) costs O(1), not
+    /// O(bindings), and does not search this map. Holding the `Rc` makes
+    /// every structural write elsewhere copy the map first
+    /// (`Rc::make_mut`), so a registered map's bindings cannot change while
+    /// it is held.
+    maps: BTreeMap<usize, (Rc<FrameBindings>, u64)>,
     /// Key bytes of the registered maps, each map once.
     map_key_bytes: u64,
 }
@@ -10334,39 +10336,48 @@ impl ColdBindingCells {
     fn register_frames(&mut self, frames: &[ScopeFrame]) {
         for frame in frames {
             let holds = &frame.bindings.ledger_holds;
-            holds.set(holds.get() + 1);
-            match self.maps.entry(Self::map_key(frame)) {
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().0 += 1;
-                }
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert((1, Rc::clone(&frame.bindings), frame.key_bytes));
-                    self.map_key_bytes = self.map_key_bytes.saturating_add(frame.key_bytes);
-                    for binding in frame.bindings.values() {
-                        self.register_cell(&binding.state);
-                    }
-                }
+            let previous = holds.get();
+            holds.set(previous + 1);
+            if previous > 0 {
+                continue;
+            }
+            let replaced = self.maps.insert(
+                Self::map_key(frame),
+                (Rc::clone(&frame.bindings), frame.key_bytes),
+            );
+            debug_assert!(
+                replaced.is_none(),
+                "an unheld scope map was in the ledger (bd-9vouw.154)"
+            );
+            self.map_key_bytes = self.map_key_bytes.saturating_add(frame.key_bytes);
+            for binding in frame.bindings.values() {
+                self.register_cell(&binding.state);
             }
         }
     }
 
     fn release_frames(&mut self, frames: &[ScopeFrame]) {
         for frame in frames {
-            let std::collections::btree_map::Entry::Occupied(mut entry) =
-                self.maps.entry(Self::map_key(frame))
-            else {
+            let holds = &frame.bindings.ledger_holds;
+            let previous = holds.get();
+            if previous == 0 {
                 debug_assert!(false, "released a scope map the ledger does not hold");
                 continue;
+            }
+            holds.set(previous - 1);
+            if previous > 1 {
+                continue;
+            }
+            let Some((bindings, key_bytes)) = self.maps.remove(&Self::map_key(frame)) else {
+                debug_assert!(
+                    false,
+                    "a held scope map was not in the ledger (bd-9vouw.154)"
+                );
+                continue;
             };
-            let holds = &frame.bindings.ledger_holds;
-            holds.set(holds.get().saturating_sub(1));
-            entry.get_mut().0 -= 1;
-            if entry.get().0 == 0 {
-                let (_, bindings, key_bytes) = entry.remove();
-                self.map_key_bytes = self.map_key_bytes.saturating_sub(key_bytes);
-                for binding in bindings.values() {
-                    self.release_cell(&binding.state);
-                }
+            self.map_key_bytes = self.map_key_bytes.saturating_sub(key_bytes);
+            for binding in bindings.values() {
+                self.release_cell(&binding.state);
             }
         }
     }

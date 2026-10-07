@@ -48,11 +48,9 @@ impl InterpreterCore {
             Some(id) => id,
             None => self.alloc_primitive_wrapper(receiver)?,
         };
-        let key_value = self.arg_or_undefined(args, 0)?;
-        let key_value = self.property_key_primitive(module, key_value)?;
-        let key = self.executable_property_key_from_value(&key_value);
-        let getter = method.ends_with("Getter__");
-        if method.starts_with("__define") {
+        // Annex B.2.2.2-3 step 2: a non-callable function is a TypeError
+        // before ToPropertyKey(P) runs the key's toString (bd-9vouw.316).
+        let defined_function = if method.starts_with("__define") {
             let function = self.arg_or_undefined(args, 1)?;
             if !function.is_callable() {
                 return Err(InterpreterError::TypeError {
@@ -60,6 +58,15 @@ impl InterpreterCore {
                     got: function.type_name().to_string(),
                 });
             }
+            Some(function)
+        } else {
+            None
+        };
+        let key_value = self.arg_or_undefined(args, 0)?;
+        let key_value = self.property_key_primitive(module, key_value)?;
+        let key = self.executable_property_key_from_value(&key_value);
+        let getter = method.ends_with("Getter__");
+        if let Some(function) = defined_function {
             let fields = PropertyDescriptorFields {
                 value: None,
                 writable: None,

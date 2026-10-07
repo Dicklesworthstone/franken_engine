@@ -4874,8 +4874,12 @@ fn push_param_slot<'a>(
     }
 
     match param.name() {
-        Some(name) => param_names.push(name.to_string()),
-        None => {
+        // A plain parameter after a destructuring or defaulted one takes the
+        // prologue too, so parameters are initialized left to right: a
+        // default reading a later parameter finds it in its temporal dead
+        // zone (bd-9vouw.74, ES2020 9.2.10 step 27).
+        Some(name) if destructure_params.is_empty() => param_names.push(name.to_string()),
+        _ => {
             let synthetic = if matches!(param.pattern, BindingPattern::AssignmentPattern { .. }) {
                 format!("{DEFAULTED_PARAM_SLOT_PREFIX}{index}")
             } else {
@@ -4963,6 +4967,18 @@ fn lower_function_parameter_prologue(
         let source_bid = *prologue_lookup
             .get(synthetic_name.as_str())
             .expect("synthetic param binding allocated before parameter prologue");
+        if let Some(name) = pattern.as_identifier() {
+            // A plain parameter routed through the prologue (push_param_slot).
+            let target = *prologue_lookup
+                .get(name)
+                .expect("parameter binding allocated before parameter prologue");
+            body_ops.push(Ir1Op::LoadBinding {
+                binding_id: source_bid,
+            });
+            body_ops.push(Ir1Op::StoreBinding { binding_id: target });
+            body_ops.push(Ir1Op::Pop);
+            continue;
+        }
         lower_destructuring_to_ir1(
             pattern,
             source_bid,
@@ -7317,6 +7333,7 @@ fn lower_statement_to_ir1_with_flow(
                 &body_bindings,
                 &free_var_ids,
                 &runtime_global_loads,
+                &destructure_params,
             );
 
             ops.push(Ir1Op::DeclareFunction {
@@ -7501,6 +7518,7 @@ fn lower_statement_to_ir1_with_flow(
                 &body_bindings,
                 &ctor_free_var_ids,
                 &ctor_runtime_global_loads,
+                &destructure_params,
             );
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
@@ -7787,6 +7805,7 @@ fn lower_statement_to_ir1_with_flow(
                     &m_bindings,
                     &method_free_var_ids,
                     &method_runtime_global_loads,
+                    &m_destructure_params,
                 );
                 ops.push(Ir1Op::CreateFunction {
                     name: Some(method_name.clone()),
@@ -13718,10 +13737,18 @@ fn collect_child_captured_locals(
 /// carriers and must not be redeclared as locals. Ordinary `var`, parameter,
 /// and function bindings remain register-backed unless a child captures them;
 /// the existing child-capture metadata already supplies the required cell.
+///
+/// The bindings the parameter prologue initializes (`destructure_params`) are
+/// listed as `let` (bd-9vouw.74): a parameter read or assigned before the
+/// prologue initializes it (`function f(a = b, b)`, `function g(a = a)`)
+/// gets the uninitialized runtime cell a read-before-initializer `let` gets,
+/// so the read throws a ReferenceError. The binding itself stays `var`, so a
+/// body `var a` still redeclares it.
 fn collect_function_local_lexical_bindings(
     bindings: &[ResolvedBinding],
     free_var_ids: &[BindingId],
     runtime_global_loads: &[(String, BindingId)],
+    destructure_params: &[(String, &BindingPattern)],
 ) -> Vec<ResolvedBinding> {
     let excluded_ids = free_var_ids
         .iter()
@@ -13732,15 +13759,32 @@ fn collect_function_local_lexical_bindings(
                 .map(|(_, binding_id)| *binding_id),
         )
         .collect::<BTreeSet<_>>();
+    // allocate_destructure_param_bindings allocates these before the body,
+    // so each name's first `var` binding is the parameter's.
+    let mut parameter_names = destructure_params
+        .iter()
+        .flat_map(|(_, pattern)| pattern.binding_names())
+        .collect::<BTreeSet<_>>();
 
     bindings
         .iter()
-        .filter(|binding| {
-            matches!(binding.kind, BindingKind::Let | BindingKind::Const)
-                && !is_internal_lowering_binding(&binding.name)
-                && !excluded_ids.contains(&binding.binding_id)
+        .filter_map(|binding| {
+            if is_internal_lowering_binding(&binding.name)
+                || excluded_ids.contains(&binding.binding_id)
+            {
+                return None;
+            }
+            match binding.kind {
+                BindingKind::Let | BindingKind::Const => Some(binding.clone()),
+                BindingKind::Var if parameter_names.remove(binding.name.as_str()) => {
+                    Some(ResolvedBinding {
+                        kind: BindingKind::Let,
+                        ..binding.clone()
+                    })
+                }
+                _ => None,
+            }
         })
-        .cloned()
         .collect()
 }
 
@@ -15098,6 +15142,7 @@ fn try_lower_arrow_expression_to_ir1(
         &body_bindings,
         &arrow_free_var_ids,
         &arrow_runtime_global_loads,
+        &destructure_params,
     );
     ops.push(Ir1Op::CreateFunction {
         name: None,
@@ -19486,6 +19531,7 @@ fn lower_expression_to_ir1_inner(
                 &body_bindings,
                 &fn_free_var_ids,
                 &fn_runtime_global_loads,
+                &destructure_params,
             );
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
@@ -20055,6 +20101,7 @@ fn lower_expression_to_ir1_inner(
                 &body_bindings,
                 &ctor_free_var_ids,
                 &ctor_runtime_global_loads,
+                &destructure_params,
             );
             ops.push(Ir1Op::DeclareFunction {
                 name: class_name,
@@ -20353,6 +20400,7 @@ fn lower_expression_to_ir1_inner(
                     &m_bindings,
                     &method_free_var_ids,
                     &method_runtime_global_loads,
+                    &m_destructure_params,
                 );
                 ops.push(Ir1Op::CreateFunction {
                     name: Some(method_name.clone()),

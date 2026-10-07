@@ -137377,6 +137377,9 @@ mod function_prototype_call_apply_tests_current {
             "Symbol",
             "parseInt",
             "structuredClone",
+            "Atomics",
+            "Blob",
+            "SharedArrayBuffer",
         ] {
             assert!(
                 globals.contains_key(safe_name),
@@ -137389,11 +137392,12 @@ mod function_prototype_call_apply_tests_current {
                 "ambient or recursive authority leaked through {forbidden_name}"
             );
         }
-        // 7 realm objects, Date and Promise, 7 timers, 48 standard
-        // constructors (EventTarget, Event, CustomEvent, AbortController,
-        // AbortSignal and DOMException since bd-9vouw.170, Iterator since
-        // bd-9vouw.179), 13 global functions.
-        assert_eq!(globals.len(), 77);
+        // 8 realm objects (Atomics since bd-9vouw.245), Date and Promise, 7
+        // timers, 50 standard constructors (EventTarget, Event, CustomEvent,
+        // AbortController, AbortSignal and DOMException since bd-9vouw.170,
+        // Iterator since bd-9vouw.179, Blob since bd-9vouw.226,
+        // SharedArrayBuffer since bd-9vouw.244), 13 global functions.
+        assert_eq!(globals.len(), 80);
         assert_eq!(
             InterpreterCore::projected_generated_function_realm_registry_bytes(),
             InterpreterCore::estimate_generated_function_realm_globals_bytes(globals),

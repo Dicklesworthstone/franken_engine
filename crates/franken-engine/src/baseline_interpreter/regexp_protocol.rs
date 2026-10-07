@@ -127,11 +127,57 @@ impl InterpreterCore {
         Ok(Some(result))
     }
 
-    /// String.prototype.replaceAll / matchAll step 2.b (ES2021 22.1.3.19,
-    /// ES2020 21.1.3.12) for a RegExp argument that is not pristine:
-    /// ToString(Get(regexp, "flags")) must contain "g" (undefined or null
-    /// flags are a TypeError). A pristine RegExp's flags are checked from
-    /// its slot by the matcher path.
+    /// ES2020 7.2.8 IsRegExp(argument) (bd-9vouw.283): an object's @@match,
+    /// when not undefined, decides by ToBoolean (a getter runs and may
+    /// throw); otherwise whether it is a RegExp.
+    pub(super) fn is_regexp_observable(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+    ) -> Result<bool, InterpreterError> {
+        if !value.is_object_like() {
+            return Ok(false);
+        }
+        self.gc_nested_request = None;
+        let matcher = self.get_v(
+            module,
+            value,
+            &RuntimePropertyKey::Symbol(WellKnownSymbol::Match.id()),
+        )?;
+        if !matches!(matcher, Value::Undefined) {
+            return Ok(matcher.is_truthy());
+        }
+        Ok(self.regexp_source_flags_from_value(value).is_some())
+    }
+
+    /// String.prototype.includes / startsWith / endsWith step 4 (ES2020
+    /// 21.1.3.7, 21.1.3.20, 21.1.3.6): a search string that IsRegExp is a
+    /// TypeError (bd-9vouw.283); it was converted to its source text.
+    pub(super) fn string_search_rejects_regexp(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        method: &str,
+    ) -> Result<(), InterpreterError> {
+        let Some(search) = self.builtin_arg(args, 0)? else {
+            return Ok(());
+        };
+        if self.is_regexp_observable(module, &search)? {
+            return Err(InterpreterError::TypeError {
+                expected: format!("a search string for String.prototype.{method}"),
+                got: "RegExp".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// String.prototype.replaceAll / matchAll step 2 (ES2021 22.1.3.19,
+    /// ES2020 21.1.3.12) for an argument that IsRegExp and is not a
+    /// pristine RegExp: ToString(Get(regexp, "flags")) must contain "g"
+    /// (undefined or null flags are a TypeError). IsRegExp asks @@match
+    /// first (bd-9vouw.283), so an object with a true @@match is checked
+    /// and a RegExp with a false one is not. A pristine RegExp's flags are
+    /// checked from its slot by the matcher path.
     pub(super) fn string_global_regexp_observable_flags_check(
         &mut self,
         module: &Ir3Module,
@@ -145,8 +191,9 @@ impl InterpreterCore {
         let Some(search) = self.builtin_arg(args, 0)? else {
             return Ok(());
         };
-        if self.regexp_source_flags_from_value(&search).is_none()
+        if !search.is_object_like()
             || self.regexp_is_pristine(&search)
+            || !self.is_regexp_observable(module, &search)?
         {
             return Ok(());
         }

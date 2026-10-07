@@ -194,3 +194,43 @@ console.log('a-b-c'.replaceAll('-', '+'), 'x1y2'.replace(/\d/g, '#'), 'a,b'.spli
         ]
     );
 }
+
+/// bd-9vouw.283: IsRegExp asks @@match first: includes, startsWith and
+/// endsWith reject a RegExp search string (or any object whose @@match is
+/// truthy, while a RegExp with a false one is searched as text), a throwing
+/// @@match getter propagates, and replaceAll / matchAll check the flags of
+/// any object IsRegExp accepts. Expected lines: Node v22.2.0's output,
+/// captured programmatically (Bun 1.4.2 agrees).
+#[test]
+fn string_methods_ask_is_regexp_bd_9vouw_283() {
+    let source = r#"function k(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var re = /a/;
+console.log(k(function () { return 'abc'.startsWith(re); }), k(function () { return 'abc'.endsWith(re); }), k(function () { return 'abc'.includes(re); }));
+var notRe = /a/; notRe[Symbol.match] = false;
+console.log(k(function () { return '/a/'.startsWith(notRe); }), k(function () { return 'x/a/'.endsWith(notRe); }), k(function () { return 'x/a/x'.includes(notRe); }));
+var fake = { toString: function () { return 'b'; } }; fake[Symbol.match] = true;
+console.log(k(function () { return 'abc'.includes(fake); }), k(function () { return 'abc'.includes({ toString: function () { return 'b'; } }); }));
+var poisoned = {}; Object.defineProperty(poisoned, Symbol.match, { get: function () { throw new RangeError(); } });
+console.log(k(function () { return 'abc'.startsWith(poisoned); }), k(function () { return 'abc'.endsWith(poisoned); }), k(function () { return 'abc'.includes(poisoned); }));
+var fakeFlags = { flags: '', toString: function () { return 'a'; } }; fakeFlags[Symbol.match] = true;
+var fakeGlobal = { flags: 'g', toString: function () { return 'a'; } }; fakeGlobal[Symbol.match] = true;
+console.log(k(function () { return 'aa'.replaceAll(fakeFlags, 'b'); }), k(function () { return 'aa'.replaceAll(fakeGlobal, 'b'); }), k(function () { return 'aa'.matchAll(fakeFlags).next().value; }), k(function () { return 'aa'.replaceAll(poisoned, 'b'); }));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "TypeError TypeError TypeError",
+            "true true true",
+            "TypeError true",
+            "RangeError RangeError RangeError",
+            "TypeError bb TypeError RangeError",
+        ]
+    );
+}

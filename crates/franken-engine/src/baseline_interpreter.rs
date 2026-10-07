@@ -40947,16 +40947,19 @@ impl InterpreterCore {
             BuiltinFunctionKind::StringIncludes => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                self.string_search_rejects_regexp(module, args, "includes")?;
                 self.string_includes_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringStartsWith => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                self.string_search_rejects_regexp(module, args, "startsWith")?;
                 self.string_starts_with_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringEndsWith => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_js_string(&receiver)?;
+                self.string_search_rejects_regexp(module, args, "endsWith")?;
                 self.string_ends_with_impl(module, &value, args)
             }
             BuiltinFunctionKind::StringSplit => {

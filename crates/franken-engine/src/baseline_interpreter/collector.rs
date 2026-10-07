@@ -1492,6 +1492,8 @@ impl InterpreterCore {
                 deleted_virtual_keys: _,
                 // Bytes and a type: no references.
                 blob: _,
+                // A pattern and flags: no references.
+                regexp: _,
             } = object;
             for value in private_elements.values().flat_map(PrivateElement::values) {
                 marker.value(value);

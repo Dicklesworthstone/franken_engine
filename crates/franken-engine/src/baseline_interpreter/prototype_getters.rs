@@ -226,8 +226,9 @@ impl InterpreterCore {
         // its boolean flag properties, read in this order; the
         // regexp.prototype.flags polyfill (under deep-equal) feature-tests
         // the native getter on a plain object and checks the order
-        // (bd-9vouw.208).
-        if owner == "RegExp" && key == "flags" && unbranded {
+        // (bd-9vouw.208). A RegExp too: an own or prototype override of a
+        // flag getter shows in `flags` (bd-9vouw.150 phase 2).
+        if owner == "RegExp" && key == "flags" {
             let mut flags = String::new();
             for (letter, name) in [
                 ('d', "hasIndices"),
@@ -266,13 +267,16 @@ impl InterpreterCore {
             "unicodeSets" => Some('v'),
             _ => None,
         };
-        if owner == "RegExp"
-            && let Some(flag) = flag
-        {
-            let flags = self.prototype_getter_own_slot(module, id, "flags", receiver)?;
-            return Ok(Value::Bool(
-                matches!(flags, Value::Str(flags) if flags.to_string().contains(flag)),
-            ));
+        // The pattern and flags are engine-private slots (bd-9vouw.150 phase
+        // 2).
+        if owner == "RegExp" {
+            let (source, flags) = self.regexp_source_flags_from_object(id).unwrap_or_default();
+            if let Some(flag) = flag {
+                return Ok(Value::Bool(flags.contains(flag)));
+            }
+            if key == "source" {
+                return Ok(Value::str(source));
+            }
         }
         // A Map's or Set's count is an internal slot (bd-9vouw.140); reading
         // `size` through [[Get]] would come back to this getter.

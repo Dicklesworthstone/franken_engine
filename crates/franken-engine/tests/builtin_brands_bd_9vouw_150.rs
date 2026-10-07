@@ -102,3 +102,51 @@ fn data_view_symbol_wrapper_and_arguments_brands() {
         "true true true x2 [object DataView] DataView symbol true true true valueOf0 TypeError true [object Arguments] [object Arguments] {\"0\":1,\"1\":\"b\"} 2 1-b"
     );
 }
+
+/// bd-9vouw.150 phase 2 (RegExp): a RegExp's pattern and flags are
+/// engine-private slots. They were the own properties `source` and `flags`:
+/// reflection listed them (Node: only `lastIndex`), a guest assignment
+/// rewrote the pattern (`r.source = 'x'` made `/a/g` test as `/x/y`), and
+/// `flags` read that property, so an own `global` getter or a
+/// RegExp.prototype flag getter override did not show. `flags` is now the
+/// generic getter for every receiver, and RegExp.prototype.toString reads
+/// `source` and `flags` through [[Get]] on any object. Expected lines are
+/// Node v22.2.0's output, captured programmatically.
+#[test]
+fn regexp_source_and_flags_are_internal_slots_bd_9vouw_150() {
+    let source = r#"var r = /a/g;
+console.log(Object.getOwnPropertyNames(r).join(), r.hasOwnProperty('source'), r.hasOwnProperty('flags'), Reflect.ownKeys(r).join(), 'source' in r);
+r.source = 'x';
+r.flags = 'y';
+console.log(r.source, r.flags, r.test('ba'), String(r), r.lastIndex);
+Object.defineProperty(r, 'source', { value: 'own', configurable: true });
+console.log(r.source, String(r), r.test('ba'), Object.getOwnPropertyNames(r).join());
+var q = /b/i;
+Object.defineProperty(q, 'global', { get() { return true; } });
+console.log(q.flags, q.global, /c/.flags, /c/dgimsuy.flags, String(q));
+console.log(structuredClone(/e\/f/gi).source, structuredClone(/e/gi).flags, new RegExp(/x/y).flags, new RegExp(/x/y, 'g').flags, JSON.stringify(/z/), Object.keys(/z/g).length);
+var saved = Object.getOwnPropertyDescriptor(RegExp.prototype, 'sticky');
+Object.defineProperty(RegExp.prototype, 'sticky', { get() { return true; }, configurable: true });
+console.log(/d/m.flags, String(/d/m), RegExp.prototype.toString.call({ source: 's', flags: 'f' }));
+Object.defineProperty(RegExp.prototype, 'sticky', saved);
+console.log(/d/m.flags, /d/y.sticky, String(/d/m));"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            r#"lastIndex false false lastIndex true"#,
+            r#"a g true /a/g 2"#,
+            r#"own /own/g false lastIndex,source"#,
+            r#"gi true  dgimsuy /b/gi"#,
+            r#"e\/f gi y g {} 0"#,
+            r#"my /d/my /s/f"#,
+            r#"m true /d/m"#,
+        ]
+    );
+}

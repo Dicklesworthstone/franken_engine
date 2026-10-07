@@ -8050,6 +8050,19 @@ pub struct HeapObject {
     /// The bytes and type of a WHATWG Blob (bd-9vouw.226); `None` on every
     /// other object.
     blob: Option<blob::BlobData>,
+    /// A RegExp's [[OriginalSource]] and [[OriginalFlags]] (bd-9vouw.150
+    /// phase 2): engine-private, so guest properties named `source` or
+    /// `flags` neither change nor reveal them, and reflection lists only
+    /// `lastIndex`.
+    regexp: Option<RegExpSlots>,
+}
+
+/// A RegExp's pattern, escaped as `source` reads it back (bd-9vouw.243),
+/// and its flags in canonical order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegExpSlots {
+    pub source: String,
+    pub flags: String,
 }
 
 /// One ES2022 PrivateElement (6.2.10).
@@ -8300,6 +8313,7 @@ impl Serialize for HeapObject {
                 + usize::from(!self.private_elements.is_empty())
                 + usize::from(!self.deleted_virtual_keys.is_empty())
                 + usize::from(self.blob.is_some())
+                + usize::from(self.regexp.is_some())
                 + if has_constructor_metadata { 4 } else { 0 },
         )?;
         object.serialize_field("properties", &self.properties)?;
@@ -8344,6 +8358,9 @@ impl Serialize for HeapObject {
         }
         if let Some(blob) = &self.blob {
             object.serialize_field("blob", blob)?;
+        }
+        if let Some(regexp) = &self.regexp {
+            object.serialize_field("regexp", regexp)?;
         }
         if !self.private_elements.is_empty() {
             let elements = self
@@ -8450,6 +8467,8 @@ impl<'de> Deserialize<'de> for HeapObject {
             deleted_virtual_keys: Vec<PropertyKeyWire>,
             #[serde(default)]
             blob: Option<blob::BlobData>,
+            #[serde(default)]
+            regexp: Option<RegExpSlots>,
         }
 
         #[derive(Deserialize)]
@@ -8571,6 +8590,7 @@ impl<'de> Deserialize<'de> for HeapObject {
             private_elements,
             deleted_virtual_keys,
             blob: wire.blob,
+            regexp: wire.regexp,
         };
         for record in wire.symbol_properties {
             let symbol = SymbolId(record.symbol_id);
@@ -40551,14 +40571,31 @@ impl InterpreterCore {
                 self.regexp_prototype_compile(module, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::RegExpPrototypeToString => {
+                // ES2020 21.2.5.14: generic over any object, through
+                // ToString(Get(R, "source")) and ToString(Get(R, "flags")),
+                // so an own `source` or a flag getter override shows
+                // (bd-9vouw.150 phase 2).
                 let receiver = receiver.unwrap_or(Value::Undefined);
-                match self.regexp_source_flags_from_value(&receiver) {
-                    Some((source, flags)) => Ok(Value::str(Self::regexp_display(&source, &flags))),
-                    None => Err(InterpreterError::TypeError {
-                        expected: "RegExp receiver for RegExp.prototype.toString".to_string(),
+                if !receiver.is_object_like() {
+                    return Err(InterpreterError::TypeError {
+                        expected: "object receiver for RegExp.prototype.toString".to_string(),
                         got: receiver.type_name().to_string(),
-                    }),
+                    });
                 }
+                let mut parts = Vec::with_capacity(2);
+                for key in ["source", "flags"] {
+                    let value = self.get_v(
+                        module,
+                        &receiver,
+                        &RuntimePropertyKey::String(JsString::from(key)),
+                    )?;
+                    let primitive = self.object_to_string_primitive(Some(module), value)?;
+                    if matches!(primitive, Value::Symbol(_)) {
+                        return Err(Self::symbol_to_string_error());
+                    }
+                    parts.push(self.value_to_string(&primitive));
+                }
+                Ok(Value::str(format!("/{}/{}", parts[0], parts[1])))
             }
             BuiltinFunctionKind::WeakMapMethod => {
                 let method = builtin
@@ -58799,15 +58836,10 @@ impl InterpreterCore {
             return None;
         }
 
-        let source = match object.properties.get("source") {
-            Some(Value::Str(source)) => source.to_string(),
-            _ => String::new(),
-        };
-        let flags = match object.properties.get("flags") {
-            Some(Value::Str(flags)) => flags.to_string(),
-            _ => String::new(),
-        };
-        Some((source, flags))
+        Some(object.regexp.as_ref().map_or_else(
+            || (String::new(), String::new()),
+            |slots| (slots.source.clone(), slots.flags.clone()),
+        ))
     }
 
     /// Compile a RegExp pattern, reusing this interpreter's recent
@@ -59108,11 +59140,7 @@ impl InterpreterCore {
         source: String,
         flags: &str,
     ) -> Result<(), InterpreterError> {
-        self.set_object_property(
-            regexp_id,
-            "source".to_string(),
-            Value::str(Self::escape_regexp_pattern(source)),
-        )?;
+        let source = Self::escape_regexp_pattern(source);
         // The `flags` getter lists the flags in "dgimsuvy" order whatever
         // order they were written in (ES2025 22.2.6.4): `/a/gd.flags` is
         // "dg". A letter outside that set stays, after them.
@@ -59125,8 +59153,21 @@ impl InterpreterCore {
                     .filter(|flag| !REGEXP_FLAG_ORDER.contains(*flag)),
             )
             .collect();
-        self.set_object_property(regexp_id, "flags".to_string(), Value::str(canonical))?;
-        self.hide_internal_slots(regexp_id, &["source", "flags"])
+        let index = regexp_id.0 as usize;
+        let previous = self
+            .heap
+            .get(index)
+            .ok_or(InterpreterError::ObjectNotFound { id: regexp_id.0 })?;
+        let previous_bytes = Self::estimate_heap_object_bytes(previous);
+        let mut projected = previous.clone();
+        projected.regexp = Some(RegExpSlots {
+            source,
+            flags: canonical,
+        });
+        let projected_bytes = Self::estimate_heap_object_bytes(&projected);
+        self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
+        self.mutate_heap(|heap| heap[index] = projected);
+        Ok(())
     }
 
     /// Annex B `RegExp.prototype.compile(pattern, flags)` (ES2020 B.2.5.1),
@@ -90688,15 +90729,7 @@ impl InterpreterCore {
                 let pattern_value = self.arg_or_undefined(args, 0)?;
                 let flags_value = self.arg_or_undefined(args, 1)?;
                 let regexp_source = match &pattern_value {
-                    Value::Object(id) => self.heap.get(id.0 as usize).and_then(|object| {
-                        (object.brand() == Some("RegExp")).then(|| {
-                            let text = |key: &str| match object.properties.get(key) {
-                                Some(Value::Str(text)) => text.to_string(),
-                                _ => String::new(),
-                            };
-                            (text("source"), text("flags"))
-                        })
-                    }),
+                    Value::Object(id) => self.regexp_source_flags_from_object(*id),
                     _ => None,
                 };
                 let pattern = match (&regexp_source, &pattern_value) {
@@ -97362,7 +97395,13 @@ impl InterpreterCore {
             .blob
             .as_ref()
             .map(|blob| (blob.bytes.len() as u64).saturating_add(blob.content_type.len() as u64))
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .saturating_add(
+                object
+                    .regexp
+                    .as_ref()
+                    .map_or(0, |slots| (slots.source.len() + slots.flags.len()) as u64),
+            );
         MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
             .saturating_add(properties)
             .saturating_add(property_labels)
@@ -155194,7 +155233,7 @@ mod tests {
                 .set_object_brand(regexp_obj_id, "RegExp")
                 .expect("operation should succeed for valid inputs");
             interpreter
-                .set_object_property(regexp_obj_id, "source".to_string(), Value::str("foo"))
+                .set_regexp_source_and_flags(regexp_obj_id, "foo".to_string(), "")
                 .expect("operation should succeed for valid inputs");
 
             let math_id_groups = [

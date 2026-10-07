@@ -464,15 +464,7 @@ impl InterpreterCore {
                 return Ok(Some(Value::Object(clone)));
             }
             Some("RegExp") => {
-                let text = |core: &Self, key: &str| match core
-                    .heap
-                    .get(id.0 as usize)
-                    .and_then(|object| object.properties.get(key))
-                {
-                    Some(Value::Str(text)) => text.to_string(),
-                    _ => String::new(),
-                };
-                let (source, flags) = (text(self, "source"), text(self, "flags"));
+                let (source, flags) = self.regexp_source_flags_from_object(id).unwrap_or_default();
                 let clone = self.alloc_regexp_object(source, flags)?;
                 state.memory.insert(id, clone);
                 return Ok(Some(Value::Object(clone)));

@@ -1198,7 +1198,7 @@ impl InterpreterCore {
                 "buffer",
                 "BYTES_PER_ELEMENT",
             ],
-            Some("RegExp") => &["source", "flags", "lastIndex"],
+            Some("RegExp") => &["lastIndex"],
             _ => &[],
         };
         object
@@ -1742,14 +1742,8 @@ impl InterpreterCore {
     }
 
     fn inspect_regexp_source(&self, id: ObjectId) -> String {
-        let read = |key: &str| {
-            self.heap
-                .get(id.0 as usize)
-                .and_then(|object| object.properties.get(key))
-                .map(|value| self.value_to_string(value))
-                .unwrap_or_default()
-        };
-        format!("/{}/{}", read("source"), read("flags"))
+        let (source, flags) = self.regexp_source_flags_from_object(id).unwrap_or_default();
+        format!("/{source}/{flags}")
     }
 
     /// Node's `formatError`: the stack (or `Name: message`), with the

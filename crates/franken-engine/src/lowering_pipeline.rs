@@ -18701,7 +18701,15 @@ fn lower_expression_to_ir1_inner(
             // bd-9vouw.23: as for arrays, a large literal is built one entry
             // at a time so its entries' registers are reused.
             let large_plain = properties.len() > MAX_BATCH_LITERAL_ENTRIES;
-            let needs_incremental = has_spread || has_incremental_definition || large_plain;
+            // A computed key names an anonymous function value at run time
+            // (bd-9vouw.237), which the entry-by-entry path does.
+            let names_by_computed_key = properties.iter().any(|prop| {
+                prop.kind == ObjectPropertyKind::Data
+                    && prop.computed
+                    && is_anonymous_function_definition(&prop.value)
+            });
+            let needs_incremental =
+                has_spread || has_incremental_definition || large_plain || names_by_computed_key;
 
             if needs_incremental {
                 // With spreads/accessors, use incremental approach:
@@ -18809,7 +18817,23 @@ fn lower_expression_to_ir1_inner(
                                 // (it pops source+target and pushes the target back, like
                                 // the spread arm above), and ES2018 override ordering is
                                 // preserved because temp objects merge in source order.
-                                ops.push(Ir1Op::NewObject { count: 1 });
+                                // ES2020 12.2.6.8: an anonymous function
+                                // definition under a computed key is named by
+                                // the key's value (`[sym]: () => {}` is
+                                // "[desc]"), which only the run time knows;
+                                // the entry object is built with it named
+                                // (bd-9vouw.237).
+                                if static_key.is_none()
+                                    && is_anonymous_function_definition(&prop.value)
+                                {
+                                    ops.push(Ir1Op::HostCall {
+                                        capability: OBJECT_LITERAL_NAMED_ENTRY_CAPABILITY
+                                            .to_string(),
+                                        arg_count: 2,
+                                    });
+                                } else {
+                                    ops.push(Ir1Op::NewObject { count: 1 });
+                                }
                                 ops.push(Ir1Op::SpreadIntoObject);
                             }
                             ObjectPropertyKind::Method => {
@@ -20148,11 +20172,19 @@ pub(crate) const CLASS_ELEMENT_PRIVATE_METHOD: i64 = 1;
 pub(crate) const CLASS_ELEMENT_PRIVATE_GETTER: i64 = 2;
 pub(crate) const CLASS_ELEMENT_PRIVATE_SETTER: i64 = 3;
 pub(crate) const CLASS_ELEMENT_STATIC_BLOCK: i64 = 4;
+/// A public field with a computed key whose initializer is an anonymous
+/// function, arrow or class definition: the value is named by the key's value
+/// when the field is defined (ES2022 15.7.10 NamedEvaluation; bd-9vouw.237).
+/// `name_class_field_initializer` names the non-computed ones at lowering.
+pub(crate) const CLASS_ELEMENT_NAMED_FIELD: i64 = 5;
 
 /// The `builtin:ClassDefineField` kind of a class element that is recorded
 /// rather than defined as a property when the class body is evaluated.
 fn class_element_record_kind(method: &crate::ast::MethodDefinition) -> Option<i64> {
     match method.kind {
+        MethodKind::Field if field_initializer_named_at_run_time(method) => {
+            Some(CLASS_ELEMENT_NAMED_FIELD)
+        }
         MethodKind::Field => Some(CLASS_ELEMENT_FIELD),
         MethodKind::StaticBlock => Some(CLASS_ELEMENT_STATIC_BLOCK),
         _ if method.private_name().is_none() => None,
@@ -20160,6 +20192,20 @@ fn class_element_record_kind(method: &crate::ast::MethodDefinition) -> Option<i6
         MethodKind::Set => Some(CLASS_ELEMENT_PRIVATE_SETTER),
         _ => Some(CLASS_ELEMENT_PRIVATE_METHOD),
     }
+}
+
+/// Whether `field` is a public field with a computed key whose initializer
+/// (its body is `return <initializer>;`) is an anonymous function definition.
+fn field_initializer_named_at_run_time(field: &crate::ast::MethodDefinition) -> bool {
+    field.computed
+        && field.private_name().is_none()
+        && matches!(
+            field.body.body.as_slice(),
+            [crate::ast::Statement::Return(crate::ast::ReturnStatement {
+                argument: Some(initializer),
+                ..
+            })] if is_anonymous_function_definition(initializer)
+        )
 }
 
 /// Record the element whose [target, key, function] are on the stack.
@@ -33207,6 +33253,12 @@ const MAX_BATCH_LITERAL_ENTRIES: usize = 64;
 /// Sets an incrementally built object literal's prototype for its
 /// `__proto__: v` entry and returns the literal (Annex B.3.1).
 const OBJECT_LITERAL_PROTOTYPE_CAPABILITY: &str = "builtin:ObjectLiteralPrototype";
+
+/// An object literal entry `[key]: <anonymous function definition>`:
+/// `(key, value)` to the one-entry object `{ [key]: value }` with the
+/// function named by the key (ES2020 12.2.6.8, 9.2.11 SetFunctionName;
+/// bd-9vouw.237). The literal spreads it in as any other entry.
+const OBJECT_LITERAL_NAMED_ENTRY_CAPABILITY: &str = "builtin:ObjectLiteralNamedEntry";
 /// `export * from m` (bd-332pq): one argument, m's namespace object.
 pub(crate) const MODULE_EXPORT_STAR_HOSTCALL: &str = "builtin:ModuleExportStar";
 

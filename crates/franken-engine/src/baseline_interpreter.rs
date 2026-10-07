@@ -85568,10 +85568,10 @@ impl InterpreterCore {
                     let key = self.arg_or_undefined(args, 1)?;
                     let initializer = self.arg_or_undefined(args, 2)?;
                     let kind = match self.arg_or_undefined(args, 3)? {
-                        Value::Int(kind @ 0..=4) => kind,
+                        Value::Int(kind @ 0..=5) => kind,
                         other => {
                             return Err(InterpreterError::TypeError {
-                                expected: "class element kind 0..=4".to_string(),
+                                expected: "class element kind 0..=5".to_string(),
                                 got: format!("{other:?}"),
                             });
                         }
@@ -85612,6 +85612,27 @@ impl InterpreterCore {
                     self.store_prototype_link(*object_id, link);
                 }
                 Ok(object)
+            }
+            "builtin:ObjectLiteralNamedEntry" => {
+                // An object literal entry `[key]: <anonymous function
+                // definition>` (ES2020 12.2.6.8; bd-9vouw.237): args = (key,
+                // value), the key already ToPropertyKey'd. The fresh function
+                // is named by the key, and the one-entry object is returned
+                // for the literal to spread in; it carries both labels as its
+                // mutation label.
+                let key_value = self.arg_or_undefined(args, 0)?;
+                let value = self.arg_or_undefined(args, 1)?;
+                let key = self.executable_property_key_from_value(&key_value);
+                if let Some(module) = module {
+                    self.name_anonymous_function_value(module, &value, &key)?;
+                }
+                let entry = self.alloc_object_with_prototype(None)?;
+                let label = self
+                    .get_register_label(args.start)?
+                    .join(self.get_register_label(args.start + 1)?);
+                self.join_object_mutation_label(entry, &label)?;
+                self.set_object_runtime_property(entry, key, value)?;
+                Ok(Value::Object(entry))
             }
             // The `with` statement rewrite (lowering_pipeline/with_statement.rs).
             "builtin:WithObject" => match self.arg_or_undefined(args, 0)? {
@@ -100493,8 +100514,8 @@ impl InterpreterCore {
         fields: &Value,
     ) -> Result<(), InterpreterError> {
         use crate::lowering_pipeline::{
-            CLASS_ELEMENT_FIELD, CLASS_ELEMENT_PRIVATE_GETTER, CLASS_ELEMENT_PRIVATE_METHOD,
-            CLASS_ELEMENT_PRIVATE_SETTER, CLASS_ELEMENT_STATIC_BLOCK,
+            CLASS_ELEMENT_FIELD, CLASS_ELEMENT_NAMED_FIELD, CLASS_ELEMENT_PRIVATE_GETTER,
+            CLASS_ELEMENT_PRIVATE_METHOD, CLASS_ELEMENT_PRIVATE_SETTER, CLASS_ELEMENT_STATIC_BLOCK,
         };
         let Value::Object(list) = fields else {
             return Ok(());
@@ -100546,7 +100567,10 @@ impl InterpreterCore {
             let Value::Int(kind) = kind else {
                 continue;
             };
-            if !matches!(*kind, CLASS_ELEMENT_FIELD | CLASS_ELEMENT_STATIC_BLOCK) {
+            if !matches!(
+                *kind,
+                CLASS_ELEMENT_FIELD | CLASS_ELEMENT_NAMED_FIELD | CLASS_ELEMENT_STATIC_BLOCK
+            ) {
                 continue;
             }
             let (value, label) = self.invoke_inline_method_call_with_argument_label(
@@ -100566,10 +100590,52 @@ impl InterpreterCore {
                 continue;
             }
             let key = self.executable_property_key_from_value(key);
+            if *kind == CLASS_ELEMENT_NAMED_FIELD {
+                self.name_anonymous_function_value(module, &value, &key)?;
+            }
             self.run_pre_runtime_property_access_hook(module, target, &key)?;
             self.set_own_runtime_property_label(target, &key, &label)?;
             self.set_object_runtime_property(target, key.clone(), value)?;
             self.set_own_property_attributes(target, &key, PropertyAttributes::DEFAULT)?;
+        }
+        Ok(())
+    }
+
+    /// SetFunctionName (ES2020 9.2.11) of a fresh anonymous function value
+    /// by a property key ("[desc]" for a symbol), through its own-property
+    /// backing: an object literal entry or a class field whose computed key
+    /// names it (bd-9vouw.237). A function whose own name is no longer ""
+    /// (a class with a `static name` member) keeps it; a value that is not a
+    /// user function is left alone.
+    fn name_anonymous_function_value(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        if !matches!(
+            value,
+            Value::Closure(_)
+                | Value::GeneratorFunction(_)
+                | Value::AsyncFunction(_)
+                | Value::AsyncGeneratorFunction(_)
+        ) {
+            return Ok(());
+        }
+        let Some(backing) = self.ensure_function_own_property_object(module, value)? else {
+            return Ok(());
+        };
+        let anonymous = matches!(
+            self.heap
+                .get(backing.0 as usize)
+                .and_then(|object| object.properties.get("name")),
+            Some(Value::Str(name)) if name.utf16_len() == 0
+        );
+        if anonymous {
+            let name_key = RuntimePropertyKey::String(JsString::from("name"));
+            let name = Value::Str(self.inferred_method_name(key));
+            self.set_object_runtime_property(backing, name_key.clone(), name)?;
+            self.set_own_property_attributes(backing, &name_key, FUNCTION_NAME_LENGTH_ATTRIBUTES)?;
         }
         Ok(())
     }

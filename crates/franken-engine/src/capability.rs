@@ -271,6 +271,7 @@ pub fn is_language_operation_tag(tag: &str) -> bool {
                 | "builtin:ClassInitStaticFields"
                 | "builtin:PrivateNameCreate"
                 | "builtin:ObjectLiteralPrototype"
+                | "builtin:ObjectLiteralNamedEntry"
                 | "builtin:WithObject"
                 | "builtin:WithHas"
                 | "builtin:WithBase"

@@ -82,6 +82,15 @@ fn refresh_view_object(
     } else if let Some(view) = object.data_view.as_mut() {
         view.byte_length = length;
         view.bounds = bounds;
+        // ES2024 25.3.4.2-3: an out-of-bounds DataView's byteLength and
+        // byteOffset are TypeErrors, which the prototype getters raise; its
+        // slots are dropped so a read reaches them, and come back with the
+        // bounds.
+        if current.is_none() {
+            object.properties.remove("byteLength");
+            object.properties.remove("byteOffset");
+            return true;
+        }
     }
     object
         .properties
@@ -273,11 +282,17 @@ impl InterpreterCore {
         };
         let mut live = Vec::with_capacity(candidates.len());
         for view_id in candidates {
-            let kept = self.mutate_heap(|heap| {
-                heap.get_mut(view_id.0 as usize)
-                    .is_some_and(|object| refresh_view_object(object, buffer, buffer_len, detached))
+            // A DataView's dropped or restored slots change its estimate.
+            let sizes = self.mutate_heap(|heap| {
+                let object = heap.get_mut(view_id.0 as usize)?;
+                let before = Self::estimate_heap_object_bytes(object);
+                refresh_view_object(object, buffer, buffer_len, detached)
+                    .then(|| (before, Self::estimate_heap_object_bytes(object)))
             });
-            if kept {
+            if let Some((before, after)) = sizes {
+                if before != after {
+                    self.apply_memory_component_delta(before, after)?;
+                }
                 live.push(view_id);
             }
         }

@@ -4251,6 +4251,11 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         || starts_with_keyword(seg_body, "if")
                         || starts_with_keyword(seg_body, "for")
                         || starts_with_keyword(seg_body, "while")
+                        // `with (o) { .. } next();` on one line: the body's
+                        // brace ends the statement, as for `while`
+                        // (bd-9vouw.248). The next statement was glued onto
+                        // the with body and failed as an expression.
+                        || starts_with_keyword(seg_body, "with")
                         || starts_with_keyword(seg_body, "do")
                         || starts_with_keyword(seg_body, "try")
                         || starts_with_keyword(seg_body, "switch")

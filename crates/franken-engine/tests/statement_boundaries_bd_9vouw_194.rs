@@ -189,3 +189,13 @@ fn declaration_keywords_glued_to_patterns_declare_them_bd_9vouw_219() {
     let source = "var out=[];for(let{a}of[{a:1}])out.push(a);for(let[b]of[[2]])out.push(b);var let_=3;for(var[c]in{x:1})out.push(c);(async()=>{for await(const[k,v]of[[4,5]])out.push(k+v);for await(let{z}of[{z:6}])out.push(z);console.log(out.join());})();\n";
     assert_eq!(run(source), ["1,2,x,9,6"]);
 }
+
+/// bd-9vouw.248: a with statement's braced body ends the statement, so a
+/// statement after it on the same line runs on its own. It was glued onto
+/// the body and failed as an expression ("unsupported expression syntax:
+/// { var q = a; } console"). Node v22.2.0 prints these lines.
+#[test]
+fn a_statement_after_a_with_body_on_the_same_line_runs_bd_9vouw_248() {
+    let source = "var o = { a: 1 }; with (o) { var q = a; } console.log(q);\nfunction f() { with ({ b: 2 }) { var r = b; } return r; } console.log(f());\nvar withdrawn = 3; console.log(withdrawn);\n";
+    assert_eq!(run(source), ["1", "2", "3"]);
+}

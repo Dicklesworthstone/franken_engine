@@ -613,6 +613,7 @@ impl GcMarker {
                 }
                 if let Some(typed_array) = typed_array {
                     self.object(typed_array.view.buffer);
+                    self.object(typed_array.object);
                 }
                 if let Some(value) = iterator_receiver {
                     self.value(value);

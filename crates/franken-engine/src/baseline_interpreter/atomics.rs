@@ -236,6 +236,8 @@ impl InterpreterCore {
                 got: target.type_name().to_string(),
             });
         };
+        // ValidateTypedArray: out of bounds is a TypeError (bd-9vouw.256).
+        Self::reject_out_of_bounds_typed_array(&view, "Atomics")?;
         let allowed = if waitable {
             matches!(view.kind, TypedArrayKind::Int32 | TypedArrayKind::BigInt64)
         } else {

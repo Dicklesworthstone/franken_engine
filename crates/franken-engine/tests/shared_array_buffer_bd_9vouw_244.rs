@@ -20,9 +20,9 @@
 //!
 //! Expected lines are Node v22.2.0's output, captured programmatically.
 //!
-//! No-claim: no buffer is growable or resizable (a maxByteLength option is
-//! ignored) and nothing detaches. One agent runs, so no bytes are shared
-//! with another thread. Atomics is not part of this.
+//! No-claim: the buffers here are fixed-length (growable and resizable ones
+//! are bd-9vouw.256's). One agent runs, so no bytes are shared with another
+//! thread. Atomics is not part of this.
 
 use frankenengine_engine::HybridRouter;
 

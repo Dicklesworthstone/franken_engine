@@ -103,6 +103,7 @@ mod prototype_getters;
 mod reflect_invocation;
 mod regexp_backtrack;
 mod regexp_syntax;
+mod resizable_buffers;
 mod set_algebra;
 mod structured_clone;
 mod text_codec;
@@ -3617,6 +3618,10 @@ pub enum BuiltinFunctionKind {
     /// An `Atomics` namespace method (ES2020 24.4, bd-9vouw.245), named by
     /// the specifier, one of [`atomics::ATOMICS_METHODS`]. Append only.
     AtomicsMethod,
+    /// `ArrayBuffer.prototype.resize` / `transfer` / `transferToFixedLength`
+    /// (ES2024 25.1.6, bd-9vouw.256), named by the specifier, one of
+    /// [`resizable_buffers::ARRAY_BUFFER_METHODS`]. Append only.
+    ArrayBufferMethod,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5111,6 +5116,11 @@ impl BuiltinFunction {
                     _ => "slice",
                 }
             }
+            BuiltinFunctionKind::ArrayBufferMethod => resizable_buffers::ARRAY_BUFFER_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("resize"),
             BuiltinFunctionKind::AtomicsMethod => atomics::ATOMICS_METHODS
                 .iter()
                 .copied()
@@ -5745,6 +5755,7 @@ impl BuiltinFunction {
             | K::SymbolPrototypeToPrimitive => "Symbol.prototype",
             K::BlobMethod => "Blob.prototype",
             K::SharedArrayBufferMethod => "SharedArrayBuffer.prototype",
+            K::ArrayBufferMethod => "ArrayBuffer.prototype",
             K::AtomicsMethod => "Atomics",
             K::BigIntAsIntN | K::BigIntAsUintN => "BigInt",
             K::BigIntToString | K::BigIntValueOf => "BigInt.prototype",
@@ -6865,6 +6876,19 @@ pub struct ArrayBufferBacking {
     /// alias of the same backing store.
     #[serde(default = "public_ifc_label")]
     pub label: Label,
+    /// ES2024 25.1.3.1 [[ArrayBufferMaxByteLength]]: present for a resizable
+    /// ArrayBuffer or a growable SharedArrayBuffer (bd-9vouw.256).
+    #[serde(default)]
+    pub max_byte_length: Option<usize>,
+    /// ES2024 25.1.3.5 IsDetachedBuffer: `transfer` moved the bytes out, so
+    /// `bytes` is empty and every view is out of bounds (bd-9vouw.256).
+    #[serde(default)]
+    pub detached: bool,
+    /// The typed arrays and DataViews over a resizable buffer, whose cached
+    /// lengths `resize`/`grow` refresh. Weak: object ids are never reused,
+    /// so a collected view's id reads as absent and is dropped then.
+    #[serde(default)]
+    pub views: Vec<ObjectId>,
 }
 
 fn public_ifc_label() -> Label {
@@ -6877,18 +6901,23 @@ fn default_max_console_bytes() -> usize {
 
 impl Default for ArrayBufferBacking {
     fn default() -> Self {
-        Self {
-            bytes: Vec::new(),
-            label: Label::Public,
-        }
+        Self::with_bytes(Vec::new())
     }
 }
 
 impl ArrayBufferBacking {
     pub fn new_zeroed(byte_length: usize) -> Self {
+        Self::with_bytes(vec![0; byte_length])
+    }
+
+    /// A fixed-length, attached backing that owns `bytes`.
+    pub fn with_bytes(bytes: Vec<u8>) -> Self {
         Self {
-            bytes: vec![0; byte_length],
+            bytes,
             label: Label::Public,
+            max_byte_length: None,
+            detached: false,
+            views: Vec::new(),
         }
     }
 
@@ -6981,7 +7010,8 @@ impl TypedArrayKind {
     }
 }
 
-/// Fixed-length view over an ArrayBuffer backing store.
+/// View over an ArrayBuffer backing store. `byte_length` and `length` are
+/// the view's current lengths: 0 while it is out of bounds (bd-9vouw.256).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypedArrayView {
     pub kind: TypedArrayKind,
@@ -6993,14 +7023,55 @@ pub struct TypedArrayView {
     /// guest writes must not be able to forge or erase Buffer identity.
     #[serde(default)]
     pub is_buffer: bool,
+    /// Present for a view over a resizable or detached buffer.
+    #[serde(default)]
+    pub bounds: Option<ViewBounds>,
 }
 
-/// Fixed-length byte-addressed view over an ArrayBuffer backing store.
+/// Byte-addressed view over an ArrayBuffer backing store; `byte_length` is
+/// its current length, as for [`TypedArrayView`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataViewView {
     pub buffer: ObjectId,
     pub byte_offset: usize,
     pub byte_length: usize,
+    #[serde(default)]
+    pub bounds: Option<ViewBounds>,
+}
+
+/// bd-9vouw.256: how a view over a resizable buffer (or one detached by
+/// `transfer`) relates to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewBounds {
+    /// [[ArrayLength]] in elements (typed array) or [[ByteLength]] in bytes
+    /// (DataView); `None` is auto: the view tracks the buffer's length.
+    pub fixed_length: Option<usize>,
+    /// ES2024 10.4.5.12 IsTypedArrayOutOfBounds / 25.3.1.3 IsViewOutOfBounds.
+    pub out_of_bounds: bool,
+}
+
+impl ViewBounds {
+    /// The view's element count over `buffer_len` bytes (ES2024 10.4.5.14
+    /// TypedArrayLength, 25.3.1.2 GetViewByteLength with 1-byte elements),
+    /// or `None` when it is out of bounds.
+    fn current_length(
+        self,
+        byte_offset: usize,
+        element_size: usize,
+        buffer_len: usize,
+        detached: bool,
+    ) -> Option<usize> {
+        if detached {
+            return None;
+        }
+        match self.fixed_length {
+            None => (byte_offset <= buffer_len).then(|| (buffer_len - byte_offset) / element_size),
+            Some(length) => {
+                let end = length.checked_mul(element_size)?.checked_add(byte_offset)?;
+                (end <= buffer_len).then_some(length)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8924,6 +8995,8 @@ enum RuntimeTypedArrayIteratorKind {
 struct RuntimeTypedArrayIterator {
     view: TypedArrayView,
     kind: RuntimeTypedArrayIteratorKind,
+    /// The typed array, whose current view each step reads (bd-9vouw.256).
+    object: ObjectId,
 }
 
 /// The prototype and own-property owner ids of one module's functions,
@@ -40271,6 +40344,15 @@ impl InterpreterCore {
                     .to_string(),
             });
         }
+        if &*builtin.module_specifier == TYPED_ARRAY_PROTOTYPE_SPECIFIER
+            && let Some(Value::Object(object_id)) = receiver
+            && let Some(view) = self
+                .heap
+                .get(object_id.0 as usize)
+                .and_then(|object| object.typed_array.as_ref())
+        {
+            Self::reject_out_of_bounds_typed_array(view, builtin.spec_name())?;
+        }
         // ES2020 21.1.3: a String.prototype method (but toString/valueOf,
         // which require a String) starts with ToString(this), so another
         // object `this` is ToPrimitive'd with the string hint and its
@@ -42507,16 +42589,18 @@ impl InterpreterCore {
             BuiltinFunctionKind::SharedArrayBufferMethod => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 if builtin.module_specifier.0.as_deref() == Some("grow") {
-                    // ES2024 25.2.5.3: only a growable SharedArrayBuffer
-                    // grows, and this engine makes none.
-                    self.plain_buffer_receiver(&receiver, true, "grow")?;
-                    return Err(InterpreterError::TypeError {
-                        expected: "a growable SharedArrayBuffer for SharedArrayBuffer.prototype.grow"
-                            .to_string(),
-                        got: "a fixed-length SharedArrayBuffer".to_string(),
-                    });
+                    return self.shared_array_buffer_grow(module, receiver, args);
                 }
                 self.array_buffer_slice(module, receiver, args, true)
+            }
+            BuiltinFunctionKind::ArrayBufferMethod => {
+                let method = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.array_buffer_method(module, &method, receiver.unwrap_or(Value::Undefined), args)
             }
             BuiltinFunctionKind::WeakRefDeref => {
                 self.weak_ref_deref(&receiver.unwrap_or(Value::Undefined))
@@ -56876,6 +56960,20 @@ impl InterpreterCore {
         }
 
         let handle = self.expect_iterator_handle(iterator)?;
+        // ES2024 23.1.5.1 %ArrayIteratorPrototype%.next: a typed array
+        // iterator reads its array's current view each step, so it sees a
+        // resize, and an array out of bounds is a TypeError (bd-9vouw.256).
+        let fresh_typed_view = match self.iterators.get(handle as usize) {
+            Some(RuntimeIteratorState::ForOf(state)) if !state.closed && !state.done => state
+                .typed_array
+                .as_ref()
+                .and_then(|iterator| self.heap.get(iterator.object.0 as usize))
+                .and_then(|object| object.typed_array.clone()),
+            _ => None,
+        };
+        if let Some(view) = &fresh_typed_view {
+            Self::reject_out_of_bounds_typed_array(view, "next")?;
+        }
         let (trace_index, step) = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForOf(state) => {
                 if state.closed || state.done {
@@ -56916,7 +57014,10 @@ impl InterpreterCore {
                             index: state.next_index,
                         },
                     )
-                } else if let Some(iterator) = state.typed_array.clone() {
+                } else if let Some(mut iterator) = state.typed_array.clone() {
+                    if let Some(view) = fresh_typed_view {
+                        iterator.view = view;
+                    }
                     if state.next_index >= iterator.view.length {
                         state.done = true;
                         (state.trace_index, ForOfStep::Done)
@@ -60867,6 +60968,16 @@ impl InterpreterCore {
             ("ArrayBuffer", "slice") => Some(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::ArrayBufferSlice,
             )),
+            ("ArrayBuffer", method)
+                if resizable_buffers::ARRAY_BUFFER_METHODS.contains(&method) =>
+            {
+                Some(BuiltinFunction {
+                    kind: BuiltinFunctionKind::ArrayBufferMethod,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(method),
+                    iterator_handle: None,
+                    bound_object: None,
+                })
+            }
             ("DataView", "getUint8") => Some(BuiltinFunction::data_view_get_uint8()),
             ("DataView", "setUint8") => Some(BuiltinFunction::data_view_set_uint8()),
             ("DataView", "getInt32") => Some(BuiltinFunction::data_view_get_int32()),
@@ -68442,14 +68553,18 @@ impl InterpreterCore {
         self.with_array_buffer_bytes(object_id, |bytes| bytes.len())
     }
 
+    /// ES2024 23.2.5.1.3 InitializeTypedArrayFromArrayBuffer's checks, in
+    /// order: byteOffset, its alignment, length, a detached buffer, then
+    /// the bounds against the buffer's byte length after those coercions
+    /// (which may have resized it). Over a resizable buffer the view also
+    /// takes bounds: without a length it tracks the buffer (bd-9vouw.256).
     fn typed_array_buffer_view_shape(
         &mut self,
         module: Option<&Ir3Module>,
         kind: TypedArrayKind,
         buffer_id: ObjectId,
         args: RegRange,
-    ) -> Result<(usize, usize, usize), InterpreterError> {
-        let buffer_len = self.array_buffer_byte_length(buffer_id)?;
+    ) -> Result<(usize, usize, usize, Option<ViewBounds>), InterpreterError> {
         let byte_offset = self
             .typed_array_optional_index_arg(module, kind, args, 1, "byteOffset")?
             .unwrap_or(0);
@@ -68463,6 +68578,31 @@ impl InterpreterCore {
                 ),
             });
         }
+        let explicit_length =
+            self.typed_array_optional_index_arg(module, kind, args, 2, "length")?;
+        self.typed_array_view_shape_over(kind, buffer_id, byte_offset, explicit_length)
+    }
+
+    /// The shape of a `kind` view at `byte_offset` over `buffer_id`, with an
+    /// explicit element count or none (the rest of the buffer, or tracking
+    /// it when the buffer is resizable): the coercion-free tail of
+    /// InitializeTypedArrayFromArrayBuffer, also used by `subarray`.
+    fn typed_array_view_shape_over(
+        &self,
+        kind: TypedArrayKind,
+        buffer_id: ObjectId,
+        byte_offset: usize,
+        explicit_length: Option<usize>,
+    ) -> Result<(usize, usize, usize, Option<ViewBounds>), InterpreterError> {
+        let element_size = kind.element_size();
+        let (resizable, detached) = self.buffer_resizability(buffer_id)?;
+        if detached {
+            return Err(InterpreterError::TypeError {
+                expected: format!("an attached ArrayBuffer for a {}", kind.type_name()),
+                got: "a detached ArrayBuffer".to_string(),
+            });
+        }
+        let buffer_len = self.array_buffer_byte_length(buffer_id)?;
         if byte_offset > buffer_len {
             return Err(InterpreterError::RangeError {
                 message: format!(
@@ -68473,8 +68613,9 @@ impl InterpreterCore {
         }
 
         let remaining = buffer_len - byte_offset;
-        let length = match self.typed_array_optional_index_arg(module, kind, args, 2, "length")? {
+        let length = match explicit_length {
             Some(length) => length,
+            None if resizable => remaining / element_size,
             None => {
                 if remaining % element_size != 0 {
                     return Err(InterpreterError::RangeError {
@@ -68506,7 +68647,8 @@ impl InterpreterCore {
             });
         }
 
-        Ok((byte_offset, byte_length, length))
+        let bounds = self.new_view_bounds(buffer_id, explicit_length)?;
+        Ok((byte_offset, byte_length, length, bounds))
     }
 
     /// ES2020 7.1.21 CanonicalNumericIndexString: "-0", or a string that
@@ -68923,6 +69065,11 @@ impl InterpreterCore {
                 got,
             }
         })?;
+        // ValidateTypedArray (bd-9vouw.256); subarray takes an
+        // out-of-bounds receiver as one of length 0.
+        if method_name != "subarray" {
+            Self::reject_out_of_bounds_typed_array(&view, method_name)?;
+        }
         Ok((object_id, view))
     }
 
@@ -69131,27 +69278,29 @@ impl InterpreterCore {
                     view.kind.type_name()
                 ),
             })?;
-        let byte_length =
-            length
-                .checked_mul(element_size)
-                .ok_or_else(|| InterpreterError::RangeError {
-                    message: format!(
-                        "{}.prototype.subarray byteLength overflows",
-                        view.kind.type_name()
-                    ),
-                })?;
-        // ES2020 22.2.3.27 step 17: TypedArraySpeciesCreate(O, «buffer,
-        // beginByteOffset, newLength»).
-        let species_args = vec![
+        // ES2024 23.2.3.29 steps 14-16: TypedArraySpeciesCreate(O, «buffer,
+        // beginByteOffset, newLength»), without newLength when O tracks its
+        // buffer's length and `end` is undefined, so the result tracks it
+        // too (bd-9vouw.256).
+        let tracking = view
+            .bounds
+            .is_some_and(|bounds| bounds.fixed_length.is_none())
+            && matches!(self.builtin_arg(args, 1)?, None | Some(Value::Undefined));
+        let mut species_args = vec![
             Value::Object(view.buffer),
             Value::Int(i64::try_from(byte_offset).unwrap_or(i64::MAX)),
-            Value::Int(i64::try_from(length).unwrap_or(i64::MAX)),
         ];
+        if !tracking {
+            species_args.push(Value::Int(i64::try_from(length).unwrap_or(i64::MAX)));
+        }
         if let Some(created) =
             self.typed_array_species_result(module, target_id, view.kind, species_args)?
         {
             return Ok(Value::Object(created));
         }
+        let explicit_length = (!tracking).then_some(length);
+        let (byte_offset, byte_length, length, bounds) =
+            self.typed_array_view_shape_over(view.kind, view.buffer, byte_offset, explicit_length)?;
         let result = self.alloc_typed_array_view_object(
             view.kind,
             view.buffer,
@@ -69159,6 +69308,7 @@ impl InterpreterCore {
             byte_length,
             length,
         )?;
+        self.register_buffer_view(result, bounds)?;
         Ok(Value::Object(result))
     }
 
@@ -69415,12 +69565,30 @@ impl InterpreterCore {
         shared: bool,
     ) -> Result<Value, InterpreterError> {
         let source = self.plain_buffer_receiver(&receiver, shared, "slice")?;
+        // ES2024 25.1.6.7 step 4 (bd-9vouw.256).
+        if self.buffer_resizability(source)?.1 {
+            return Err(InterpreterError::TypeError {
+                expected: "an attached ArrayBuffer for ArrayBuffer.prototype.slice".to_string(),
+                got: "a detached ArrayBuffer".to_string(),
+            });
+        }
         let length = self.with_array_buffer_bytes(source, <[u8]>::len)?;
         let (first, last) = self.typed_array_method_range(module, args, 0, 1, length)?;
         let species =
             self.array_buffer_species_result(module, source, last.saturating_sub(first), shared)?;
-        let copied =
-            self.with_array_buffer_bytes(source, |bytes| bytes[first..last.max(first)].to_vec())?;
+        // ES2024 25.1.6.7 steps 20-23: the species constructor may have
+        // detached or shrunk the source; copy what is still there
+        // (bd-9vouw.256).
+        if self.buffer_resizability(source)?.1 {
+            return Err(InterpreterError::TypeError {
+                expected: "an attached ArrayBuffer for ArrayBuffer.prototype.slice".to_string(),
+                got: "a detached ArrayBuffer".to_string(),
+            });
+        }
+        let copied = self.with_array_buffer_bytes(source, |bytes| {
+            let end = last.min(bytes.len());
+            bytes[first.min(end)..end].to_vec()
+        })?;
         if let Some(created) = species {
             self.with_array_buffer_bytes_mut(created, |bytes| {
                 bytes[..copied.len()].copy_from_slice(&copied);
@@ -69442,8 +69610,10 @@ impl InterpreterCore {
             .and_then(|object| object.array_buffer.as_ref())
             .map(|backing| backing.label.clone())
             .unwrap_or(Label::Public);
-        let created = self.alloc_buffer_object(copied.len(), shared)?;
-        self.with_array_buffer_bytes_mut(created, |bytes| bytes.copy_from_slice(&copied))?;
+        let created = self.alloc_buffer_object(last.saturating_sub(first), shared)?;
+        self.with_array_buffer_bytes_mut(created, |bytes| {
+            bytes[..copied.len()].copy_from_slice(&copied);
+        })?;
         self.join_binary_storage_label(created, &label)?;
         Ok(Value::Object(created))
     }
@@ -69507,6 +69677,11 @@ impl InterpreterCore {
         let value = self.typed_array_prepare_value(view.kind, value)?;
         let start = self.typed_array_relative_index_arg(module, args, 1, view.length, 0)?;
         let end = self.typed_array_relative_index_arg(module, args, 2, view.length, view.length)?;
+        // ES2024 23.2.3.9 steps 15-17: the coercions may have resized or
+        // detached the buffer (bd-9vouw.256).
+        let view = self.typed_array_view_for_object(target_id)?.unwrap_or(view);
+        Self::reject_out_of_bounds_typed_array(&view, "fill")?;
+        let end = end.min(view.length);
         if start < end {
             self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
                 for index in start..end {
@@ -69620,6 +69795,10 @@ impl InterpreterCore {
                 });
             }
         };
+        // A comparator may have shrunk the buffer: a write past the current
+        // length is a no-op Set (bd-9vouw.256).
+        let view = self.typed_array_view_for_object(target_id)?.unwrap_or(view);
+        let reordered = &reordered[..reordered.len().min(view.length)];
         self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
             for (index, value) in reordered.iter().enumerate() {
                 Self::write_typed_array_element_bytes_at_offset(
@@ -69661,7 +69840,18 @@ impl InterpreterCore {
         let to = self.typed_array_relative_index_arg(module, args, 0, view.length, 0)?;
         let from = self.typed_array_relative_index_arg(module, args, 1, view.length, 0)?;
         let end = self.typed_array_relative_index_arg(module, args, 2, view.length, view.length)?;
-        let count = end.saturating_sub(from).min(view.length.saturating_sub(to));
+        let mut count = end.saturating_sub(from).min(view.length.saturating_sub(to));
+        if count > 0 {
+            // ES2024 23.2.3.6 step 17: after the coercions, the current
+            // length bounds the copy (bd-9vouw.256).
+            let view = self
+                .typed_array_view_for_object(target_id)?
+                .unwrap_or_else(|| view.clone());
+            Self::reject_out_of_bounds_typed_array(&view, "copyWithin")?;
+            count = count
+                .min(view.length.saturating_sub(from))
+                .min(view.length.saturating_sub(to));
+        }
         if count > 0 {
             let values = self.typed_array_values_in_range(&view, from, from + count)?;
             self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
@@ -69716,7 +69906,11 @@ impl InterpreterCore {
             values: Vec::new(),
             next_index: 0,
             array: None,
-            typed_array: Some(RuntimeTypedArrayIterator { view, kind }),
+            typed_array: Some(RuntimeTypedArrayIterator {
+                view,
+                kind,
+                object: object_id,
+            }),
             collection: None,
             iterator_receiver: None,
             next_method: None,
@@ -70510,17 +70704,18 @@ impl InterpreterCore {
                     .get(object_id.0 as usize)
                     .is_some_and(|object| object.array_buffer.is_some()) =>
             {
-                let (byte_offset, byte_length, _) = self.typed_array_buffer_view_shape(
+                let (byte_offset, byte_length, _, _) = self.typed_array_buffer_view_shape(
                     None,
                     TypedArrayKind::Uint8,
                     object_id,
                     args,
                 )?;
-                Ok(Value::Object(self.alloc_buffer_view_object(
-                    object_id,
-                    byte_offset,
-                    byte_length,
-                )?))
+                // Node gives the view an explicit length, so over a
+                // resizable buffer it is fixed-length (bd-9vouw.256).
+                let bounds = self.new_view_bounds(object_id, Some(byte_length))?;
+                let view = self.alloc_buffer_view_object(object_id, byte_offset, byte_length)?;
+                self.register_buffer_view(view, bounds)?;
+                Ok(Value::Object(view))
             }
             Value::Object(object_id) => {
                 let bytes = if let Some(view) = self.typed_array_view_for_object(object_id)? {
@@ -71458,11 +71653,22 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         buffer_id: ObjectId,
         args: RegRange,
-    ) -> Result<(usize, usize), InterpreterError> {
-        let buffer_len = self.array_buffer_byte_length(buffer_id)?;
+    ) -> Result<(usize, usize, Option<ViewBounds>), InterpreterError> {
+        // ES2024 25.3.2.1 steps 3-9: byteOffset, a detached buffer, the
+        // offset against the buffer's length, then byteLength. Over a
+        // resizable buffer a view without byteLength tracks the buffer
+        // (bd-9vouw.256).
         let byte_offset = self
             .data_view_optional_index_arg(module, args, 1, "byteOffset")?
             .unwrap_or(0);
+        let (_, detached) = self.buffer_resizability(buffer_id)?;
+        if detached {
+            return Err(InterpreterError::TypeError {
+                expected: "an attached ArrayBuffer for DataView".to_string(),
+                got: "a detached ArrayBuffer".to_string(),
+            });
+        }
+        let buffer_len = self.array_buffer_byte_length(buffer_id)?;
         if byte_offset > buffer_len {
             return Err(InterpreterError::RangeError {
                 message: format!(
@@ -71472,9 +71678,9 @@ impl InterpreterCore {
         }
 
         let remaining = buffer_len - byte_offset;
-        let byte_length = self
-            .data_view_optional_index_arg(module, args, 2, "byteLength")?
-            .unwrap_or(remaining);
+        let explicit_length = self.data_view_optional_index_arg(module, args, 2, "byteLength")?;
+        let bounds = self.new_view_bounds(buffer_id, explicit_length)?;
+        let byte_length = explicit_length.unwrap_or(remaining);
         let end =
             byte_offset
                 .checked_add(byte_length)
@@ -71491,7 +71697,7 @@ impl InterpreterCore {
             });
         }
 
-        Ok((byte_offset, byte_length))
+        Ok((byte_offset, byte_length, bounds))
     }
 
     fn data_view_byte_offset_arg(
@@ -71586,13 +71792,18 @@ impl InterpreterCore {
         kind: DataViewIntegerKind,
     ) -> Result<Value, InterpreterError> {
         let method_name = kind.method_name(false);
-        let view = self.data_view_receiver_view(receiver, method_name)?;
+        // RequireInternalSlot before the arguments are coerced.
+        self.data_view_receiver_view(receiver.clone(), method_name)?;
         let byte_offset = self.data_view_byte_offset_arg(module, args, method_name)?;
         let little_endian = if kind.byte_width() == 1 {
             false
         } else {
             self.data_view_little_endian_arg(args, 1)?
         };
+        // ES2024 25.3.1.5-6 steps 7-8: the view's bounds after the coercions,
+        // which may have resized or detached its buffer (bd-9vouw.256).
+        let view = self.data_view_receiver_view(receiver, method_name)?;
+        Self::reject_out_of_bounds_data_view(&view, method_name)?;
         let (start, end) =
             Self::data_view_absolute_range(&view, method_name, byte_offset, kind.byte_width())?;
         self.with_array_buffer_bytes(view.buffer, |bytes| {
@@ -71662,7 +71873,8 @@ impl InterpreterCore {
         kind: DataViewIntegerKind,
     ) -> Result<Value, InterpreterError> {
         let method_name = kind.method_name(true);
-        let view = self.data_view_receiver_view(receiver, method_name)?;
+        // RequireInternalSlot before the arguments are coerced.
+        self.data_view_receiver_view(receiver.clone(), method_name)?;
         let byte_offset = self.data_view_byte_offset_arg(module, args, method_name)?;
         let value = match kind {
             DataViewIntegerKind::BigInt64 | DataViewIntegerKind::BigUint64 => {
@@ -71721,6 +71933,10 @@ impl InterpreterCore {
         if !little_endian {
             bytes[..width].reverse();
         }
+        // ES2024 25.3.1.5-6 steps 7-8: the view's bounds after the coercions,
+        // which may have resized or detached its buffer (bd-9vouw.256).
+        let view = self.data_view_receiver_view(receiver, method_name)?;
+        Self::reject_out_of_bounds_data_view(&view, method_name)?;
         let (start, end) = Self::data_view_absolute_range(&view, method_name, byte_offset, width)?;
         self.with_array_buffer_bytes_mut(view.buffer, |buffer| {
             let slot = buffer
@@ -88087,14 +88303,11 @@ impl InterpreterCore {
                 self.hide_internal_slots(date_id, &["__timestamp"])?;
                 Ok(Value::Object(date_id))
             }
-            "builtin:ArrayBuffer" => {
-                let byte_length = self.array_buffer_byte_length_from_args(module, args)?;
-                let buffer_id = self.alloc_array_buffer_object(byte_length)?;
-                Ok(Value::Object(buffer_id))
-            }
-            "builtin:SharedArrayBuffer" => {
-                let byte_length = self.array_buffer_byte_length_from_args(module, args)?;
-                Ok(Value::Object(self.alloc_buffer_object(byte_length, true)?))
+            "builtin:ArrayBuffer" | "builtin:SharedArrayBuffer" => {
+                let shared = cap == "builtin:SharedArrayBuffer";
+                Ok(Value::Object(
+                    self.construct_array_buffer(module, args, shared)?,
+                ))
             }
             "builtin:Uint8Array"
             | "builtin:Int32Array"
@@ -96815,6 +97028,8 @@ impl InterpreterCore {
             .map(|backing| {
                 (backing.bytes.len() as u64)
                     .saturating_add(Self::estimate_label_bytes(&backing.label))
+                    // bd-9vouw.256: a resizable buffer's view registry.
+                    .saturating_add((backing.views.len() * std::mem::size_of::<ObjectId>()) as u64)
             })
             .unwrap_or(0);
         let typed_array_bytes = object
@@ -98506,6 +98721,7 @@ impl InterpreterCore {
             byte_length,
             length,
             is_buffer,
+            bounds: None,
         });
 
         let object_size = Self::estimate_heap_object_bytes(&object);
@@ -98649,6 +98865,7 @@ impl InterpreterCore {
             byte_length,
             length: byte_length,
             is_buffer: true,
+            bounds: None,
         });
 
         let backing_bytes =
@@ -98674,10 +98891,7 @@ impl InterpreterCore {
         }
 
         buffer_object.array_buffer = Some(match contents {
-            Some(bytes) => ArrayBufferBacking {
-                bytes: bytes.to_vec(),
-                label: Label::Public,
-            },
+            Some(bytes) => ArrayBufferBacking::with_bytes(bytes.to_vec()),
             None => ArrayBufferBacking::new_zeroed(byte_length),
         });
         self.mutate_heap(|heap| {
@@ -98811,15 +99025,17 @@ impl InterpreterCore {
                 .get(object_id.0 as usize)
                 .is_some_and(|object| object.array_buffer.is_some())
             {
-                let (byte_offset, byte_length, length) =
+                let (byte_offset, byte_length, length, bounds) =
                     self.typed_array_buffer_view_shape(module, kind, object_id, args)?;
-                return self.alloc_typed_array_view_object(
+                let view = self.alloc_typed_array_view_object(
                     kind,
                     object_id,
                     byte_offset,
                     byte_length,
                     length,
-                );
+                )?;
+                self.register_buffer_view(view, bounds)?;
+                return Ok(view);
             }
         }
 
@@ -98899,6 +99115,7 @@ impl InterpreterCore {
             buffer,
             byte_offset,
             byte_length,
+            bounds: None,
         });
 
         let object_size = Self::estimate_heap_object_bytes(&object);
@@ -98951,9 +99168,11 @@ impl InterpreterCore {
             });
         }
 
-        let (byte_offset, byte_length) =
+        let (byte_offset, byte_length, bounds) =
             self.data_view_buffer_view_shape(module, buffer_id, args)?;
-        self.alloc_data_view_object(buffer_id, byte_offset, byte_length)
+        let view = self.alloc_data_view_object(buffer_id, byte_offset, byte_length)?;
+        self.register_buffer_view(view, bounds)?;
+        Ok(view)
     }
 
     /// Allocate a new object with an explicit prototype link.
@@ -159502,8 +159721,8 @@ mod lazy_seed_tests {
             },
         );
         object.array_buffer = Some(ArrayBufferBacking {
-            bytes: vec![0xA5; 257],
             label: Label::Secret,
+            ..ArrayBufferBacking::with_bytes(vec![0xA5; 257])
         });
         core.mutate_heap(|heap| heap.push(object));
         core.mutate_function_prototypes(|prototypes| {

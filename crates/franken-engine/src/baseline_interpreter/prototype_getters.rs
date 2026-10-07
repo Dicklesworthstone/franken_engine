@@ -21,9 +21,8 @@ pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 46] = [
     ("Map", "size", "get size"),
     ("Set", "size", "get size"),
     ("ArrayBuffer", "byteLength", "get byteLength"),
-    // ES2024 25.1.6: this engine has no resizable or detached buffers, so
-    // these answer false and byteLength (bd-9vouw.244); webidl-conversions
-    // (under whatwg-url) reads `resizable` when it loads.
+    // ES2024 25.1.6 (bd-9vouw.244, bd-9vouw.256); webidl-conversions (under
+    // whatwg-url) reads `resizable` when it loads.
     ("ArrayBuffer", "detached", "get detached"),
     ("ArrayBuffer", "maxByteLength", "get maxByteLength"),
     ("ArrayBuffer", "resizable", "get resizable"),
@@ -292,15 +291,37 @@ impl InterpreterCore {
         {
             return Ok(value);
         }
-        // No buffer here is resizable, growable or detachable.
+        // ES2024 25.1.6.2-4, 25.2.5.2-5 (bd-9vouw.256). A detached buffer's
+        // byteLength slot reads 0, which maxByteLength then answers too.
         if matches!(owner, "ArrayBuffer" | "SharedArrayBuffer") {
+            let backing = self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.array_buffer.as_ref());
+            let detached = backing.is_some_and(|backing| backing.detached);
+            let max_byte_length = backing.and_then(|backing| backing.max_byte_length);
             match key {
-                "detached" | "resizable" | "growable" => return Ok(Value::Bool(false)),
+                "detached" => return Ok(Value::Bool(detached)),
+                "resizable" | "growable" => return Ok(Value::Bool(max_byte_length.is_some())),
                 "maxByteLength" => {
+                    if let Some(max) = max_byte_length.filter(|_| !detached) {
+                        return Ok(Value::Int(i64::try_from(max).unwrap_or(i64::MAX)));
+                    }
                     return self.prototype_getter_own_slot(module, id, "byteLength", receiver);
                 }
                 _ => {}
             }
+        }
+        // ES2024 25.3.4.2-3: an out-of-bounds DataView's byteLength and
+        // byteOffset are a TypeError (a typed array's read 0).
+        if owner == "DataView"
+            && matches!(key, "byteLength" | "byteOffset")
+            && let Some(view) = self
+                .heap
+                .get(id.0 as usize)
+                .and_then(|object| object.data_view.as_ref())
+        {
+            Self::reject_out_of_bounds_data_view(view, key)?;
         }
         self.prototype_getter_own_slot(module, id, key, receiver)
     }

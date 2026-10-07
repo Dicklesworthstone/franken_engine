@@ -53299,11 +53299,26 @@ impl InterpreterCore {
                                     // Parent.prototype`) traverse it — not a data
                                     // property (bd-ppfds). A non-object, non-null value
                                     // is a no-op per spec; a function links to its
-                                    // own-property backing (bd-9vouw.98).
+                                    // own-property backing (bd-9vouw.98). The link
+                                    // changes through [[SetPrototypeOf]] (Annex B
+                                    // 2.2.1.2 steps 4-5), so a cycle, a
+                                    // non-extensible object, Object.prototype and a
+                                    // refusing proxy trap throw a TypeError; the
+                                    // link was stored unconditionally (bd-9vouw.311).
                                     let proto_update =
                                         self.prototype_link_for_value(Some(module), &set_val)?;
-                                    if let Some(new_proto) = proto_update {
-                                        self.store_prototype_link(oid, new_proto);
+                                    if let Some(new_proto) = proto_update
+                                        && !self.object_set_prototype(
+                                            Some(module),
+                                            oid,
+                                            new_proto,
+                                            0,
+                                        )?
+                                    {
+                                        return Err(InterpreterError::TypeError {
+                                            expected: "a permitted __proto__ change".to_string(),
+                                            got: "a cyclic or refused prototype".to_string(),
+                                        });
                                     }
                                 } else {
                                     // Precharge and stage the label before the value

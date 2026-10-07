@@ -736,7 +736,7 @@ impl InterpreterCore {
         Ok(result)
     }
 
-    fn object_set_prototype(
+    pub(super) fn object_set_prototype(
         &mut self,
         module: Option<&Ir3Module>,
         id: ObjectId,

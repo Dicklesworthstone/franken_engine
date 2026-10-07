@@ -6011,14 +6011,16 @@ const GLOBAL_FUNCTION_VALUES: [&str; 13] = crate::lowering_pipeline::GLOBAL_FUNC
 const REGEXP_FLAG_ORDER: &str = "dgimsuvy";
 
 /// The generated Function realm's bindings to objects of its own
-/// (bd-fw7zd.8.3, bd-9vouw.133): its console, performance, Math, JSON and
-/// Reflect, and its global object under both names.
-const GENERATED_REALM_OBJECT_GLOBALS: [&str; 7] = [
+/// (bd-fw7zd.8.3, bd-9vouw.133): its console, performance, Math, JSON,
+/// Reflect and Atomics (bd-9vouw.245), and its global object under both
+/// names. The registry's memory projection counts these.
+const GENERATED_REALM_OBJECT_GLOBALS: [&str; 8] = [
     "console",
     "performance",
     "Math",
     "JSON",
     "Reflect",
+    "Atomics",
     "globalThis",
     "global",
 ];

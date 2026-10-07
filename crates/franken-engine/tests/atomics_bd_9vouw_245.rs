@@ -46,7 +46,8 @@ console.log(attempt(() => Atomics.add(new Float64Array(2), 0, 1)), attempt(() =>
 console.log(Atomics.notify(i32, 0), Atomics.notify(i32, 0, 2), attempt(() => Atomics.notify(new Int16Array(new SharedArrayBuffer(4)), 0)), Atomics.notify(new Int32Array(4), 0));
 console.log(Atomics.wait(i32, 0, 1, 0), Atomics.wait(i32, 0, Atomics.load(i32, 0), 0), attempt(() => Atomics.wait(new Int32Array(4), 0, 0, 0)), attempt(() => Atomics.wait(new Uint32Array(new SharedArrayBuffer(4)), 0, 0, 0)));
 var t0 = Date.now();
-console.log(Atomics.wait(i32, 3, 0, 40), Date.now() - t0 >= 40, Atomics.wait(big, 1, -1n, 1));"#;
+console.log(Atomics.wait(i32, 3, 0, 40), Date.now() - t0 >= 40, Atomics.wait(big, 1, -1n, 1));
+console.log(new Function('return typeof Atomics + Atomics.add.length')());"#;
     let lines: Vec<String> = HybridRouter::default()
         .eval(source)
         .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
@@ -69,6 +70,7 @@ console.log(Atomics.wait(i32, 3, 0, 40), Date.now() - t0 >= 40, Atomics.wait(big
             r#"0 0 TypeError 0"#,
             r#"not-equal timed-out TypeError TypeError"#,
             r#"timed-out true timed-out"#,
+            r#"object3"#,
         ]
     );
 }

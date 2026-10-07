@@ -55,3 +55,25 @@ fn instanceof_non_constructor_targets() {
         "TypeError false TypeError TypeError TypeError true TypeError"
     );
 }
+
+/// bd-9vouw.268: %Function.prototype% is a function in the spec (an object
+/// here), so OrdinaryHasInstance with it as C reads its `prototype`: a
+/// TypeError when that is not an object, false for a primitive candidate.
+/// The bd-9vouw.268 path answered false for any non-callable C. Expected
+/// lines: Node v22.2.0's output, captured programmatically.
+#[test]
+fn function_prototype_reads_its_prototype_for_instanceof_bd_9vouw_268() {
+    let source = r#"function k(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+console.log(k(function () { return [] instanceof Function.prototype; }), k(function () { return Function.prototype[Symbol.hasInstance].call(Function.prototype, {}); }));
+Function.prototype.prototype = '';
+console.log(k(function () { return [] instanceof Function.prototype; }), k(function () { return 1 instanceof Function.prototype; }), k(function () { return ({}) instanceof Object; }));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(lines, ["TypeError TypeError", "TypeError false true",]);
+}

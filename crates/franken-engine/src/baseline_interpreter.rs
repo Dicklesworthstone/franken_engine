@@ -44389,7 +44389,7 @@ impl InterpreterCore {
             // non-callable `this` instead of throwing as `instanceof` does.
             BuiltinFunctionKind::FunctionPrototypeHasInstance => {
                 let constructor = receiver.unwrap_or(Value::Undefined);
-                if !constructor.is_callable() {
+                if !self.is_callable_for_has_instance(&constructor) {
                     return Ok(Value::Bool(false));
                 }
                 let candidate = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
@@ -56067,7 +56067,7 @@ impl InterpreterCore {
             if matches!(&handler, Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::FunctionPrototypeHasInstance)
             {
-                if !constructor.is_callable() {
+                if !self.is_callable_for_has_instance(&constructor) {
                     return Ok((Value::Bool(false), None));
                 }
                 return Ok((
@@ -56096,6 +56096,16 @@ impl InterpreterCore {
             self.ordinary_instanceof(module, candidate, constructor)?,
             None,
         ))
+    }
+
+    /// IsCallable(C) for OrdinaryHasInstance: a callable value, or
+    /// %Function.prototype%, which is a function in the spec but an ordinary
+    /// object here. `[] instanceof Function.prototype` therefore reads its
+    /// `prototype`, a TypeError when that is not an object (bd-9vouw.268).
+    fn is_callable_for_has_instance(&self, value: &Value) -> bool {
+        value.is_callable()
+            || matches!(value, Value::Object(id)
+                if self.builtin_prototypes.get("Function") == Some(id))
     }
 
     /// A callable `Symbol.hasInstance` on an object target, or among a user
@@ -56139,7 +56149,7 @@ impl InterpreterCore {
         // ES2020 12.10.4 InstanceofOperator step 4: the target must be
         // callable, not constructible; a generator function has an object
         // `prototype` its generators inherit from (bd-9vouw.120).
-        if !constructor.is_callable() {
+        if !self.is_callable_for_has_instance(&constructor) {
             return Err(InterpreterError::TypeError {
                 expected: "callable instanceof target".to_string(),
                 got: constructor.type_name().to_string(),

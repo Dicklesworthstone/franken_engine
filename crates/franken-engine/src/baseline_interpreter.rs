@@ -53477,6 +53477,26 @@ impl InterpreterCore {
                             _ => None,
                         };
                         let set_val = self.read_reg(val)?;
+                        // An Array's writable `length` set to an object runs
+                        // ArraySetLength's ToUint32 / ToNumber (its valueOf
+                        // twice) before the write (bd-9vouw.338); a read-only
+                        // `length` rejects the write without converting.
+                        let set_val = match &obj_val {
+                            Value::Object(oid)
+                                if set_val.is_object_like()
+                                    && property_key.as_str() == Some("length")
+                                    && self.heap.get(oid.0 as usize).is_some_and(|object| {
+                                        object.is_array
+                                            && !object.is_frozen
+                                            && object
+                                                .own_property_attributes(&property_key)
+                                                .writable
+                                    }) =>
+                            {
+                                self.array_length_definition_value(Some(module), set_val)?
+                            }
+                            _ => set_val,
+                        };
 
                         match obj_val {
                             Value::Object(oid) => {
@@ -63621,8 +63641,19 @@ impl InterpreterCore {
             let descriptor = self.read_property_descriptor(module, &descriptor_val)?;
             definitions.push((key, descriptor));
         }
-        for (key, descriptor) in definitions {
+        for (key, mut descriptor) in definitions {
             let prop_name = self.executable_property_key_from_value(&Value::Str(key));
+            // ArraySetLength converts a `length` value as defineProperty
+            // does (bd-9vouw.338).
+            if prop_name.as_str() == Some("length")
+                && self
+                    .heap
+                    .get(target_id.0 as usize)
+                    .is_some_and(|object| object.is_array)
+                && let Some(value) = descriptor.value.take()
+            {
+                descriptor.value = Some(self.array_length_definition_value(module, value)?);
+            }
             if !self.define_own_property_from_descriptor(target_id, prop_name, descriptor)? {
                 return Err(InterpreterError::TypeError {
                     expected: format!("definable property for {caller}"),
@@ -81891,6 +81922,28 @@ impl InterpreterCore {
                 Some(Value::Int(length)) if i64::from(index) >= length)
     }
 
+    /// ES2020 9.4.2.4 ArraySetLength steps 3-5 for the value an array's
+    /// `length` is set or defined to: ToUint32(value), then ToNumber(value),
+    /// each observable (an object's valueOf runs twice); a RangeError when
+    /// they differ (bd-9vouw.279). A Number passes through unconverted.
+    fn array_length_definition_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(value, Value::Int(_) | Value::Float(_)) {
+            return Ok(value);
+        }
+        let as_uint32 = Self::js_to_uint32(self.array_length_number(module, value.clone())?);
+        let as_number = self.array_length_number(module, value)?;
+        if f64::from(as_uint32) != as_number {
+            return Err(InterpreterError::RangeError {
+                message: format!("invalid array length {as_number}"),
+            });
+        }
+        Ok(Value::Int(i64::from(as_uint32)))
+    }
+
     /// ToNumber(value) for ArraySetLength steps 3-4 (bd-9vouw.279): an
     /// object converts through its @@toPrimitive / valueOf / toString, a
     /// string by StringToNumber ("0x0B" is 11); a Symbol or BigInt is a
@@ -92727,18 +92780,9 @@ impl InterpreterCore {
                         .heap
                         .get(obj_id.0 as usize)
                         .is_some_and(|object| object.is_array)
-                    && let Some(value) = descriptor.value.clone()
-                    && !matches!(value, Value::Int(_) | Value::Float(_))
+                    && let Some(value) = descriptor.value.take()
                 {
-                    let as_uint32 =
-                        Self::js_to_uint32(self.array_length_number(module, value.clone())?);
-                    let as_number = self.array_length_number(module, value)?;
-                    if f64::from(as_uint32) != as_number {
-                        return Err(InterpreterError::RangeError {
-                            message: format!("invalid array length {as_number}"),
-                        });
-                    }
-                    descriptor.value = Some(Value::Int(i64::from(as_uint32)));
+                    descriptor.value = Some(self.array_length_definition_value(module, value)?);
                 }
                 // A Proxy defines through its defineProperty trap or its
                 // target (bd-9vouw.147).

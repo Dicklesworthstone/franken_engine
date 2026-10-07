@@ -14704,6 +14704,11 @@ pub struct InterpreterCore {
     /// call it is about to make (bd-9vouw.77): the values its Rust frames hold
     /// across that call. The next `invoke_inline_method_call_*` consumes it.
     gc_nested_request: Option<Vec<Value>>,
+    /// A function `this` an Array.prototype method runs on generically
+    /// (bd-9vouw.285): its own-property object and the function, which is
+    /// what the algorithm's O is wherever it is observable (a callback's
+    /// third argument, a getter's receiver, a returned O).
+    generic_function_receiver: Option<(ObjectId, Value)>,
     /// Pending capture names for the next `CreateClosure` instruction.
     pending_captures: Vec<u32>,
     /// Generator object store.
@@ -15773,6 +15778,7 @@ impl InterpreterCore {
             active_foreign_module_call_depth: 0,
             isolated_async_entry_pending: false,
             gc_nested_request: None,
+            generic_function_receiver: None,
             pending_captures: Vec::new(),
             generators: ReclaimableTable::new("generator", Self::estimate_generator_bytes),
             generator_yielded: false,
@@ -40471,11 +40477,19 @@ impl InterpreterCore {
         // that spreads a Proxy or an @@isConcatSpreadable object.
         if Self::has_generic_array_path(builtin.kind)
             && let Some(object_id) =
-                self.generic_array_receiver(builtin.kind, receiver.as_ref(), args)?
-            && let Some(result) =
-                self.array_method_generic(module, builtin.kind, object_id, args)?
+                self.generic_array_receiver(module, builtin.kind, receiver.as_ref(), args)?
         {
-            return Ok(result);
+            // A function `this` stays the method's observable O (bd-9vouw.285).
+            let function = receiver
+                .as_ref()
+                .filter(|value| value.is_callable())
+                .map(|function| (object_id, function.clone()));
+            let outer = std::mem::replace(&mut self.generic_function_receiver, function);
+            let result = self.array_method_generic(module, builtin.kind, object_id, args);
+            self.generic_function_receiver = outer;
+            if let Some(result) = result? {
+                return Ok(result);
+            }
         }
         match builtin.kind {
             BuiltinFunctionKind::AsyncGeneratorNext

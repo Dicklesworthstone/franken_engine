@@ -213,3 +213,39 @@ console.log(kind(function () { return Array.prototype.copyWithin.call(p, 0, 1); 
         ]
     );
 }
+
+/// bd-9vouw.285: an Array.prototype method called on a function runs over
+/// the function's own properties (its indices and its `length`, the
+/// parameter count), and the function itself is the O a callback sees and
+/// reverse / fill return; it was a TypeError ("expected array receiver").
+/// Expected lines: Node v22.2.0's output, captured programmatically (Bun
+/// 1.4.2 agrees).
+#[test]
+fn array_methods_run_on_function_receivers_bd_9vouw_285() {
+    let source = r#"function k(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var fun = function (a, b) { return a + b; };
+fun[0] = 12; fun[1] = 11; fun[2] = 9;
+console.log(k(function () { return Array.prototype.every.call(fun, function (v) { return v > 10; }); }), k(function () { return Array.prototype.some.call(fun, function (v) { return v > 11; }); }), k(function () { return Array.prototype.map.call(fun, function (v) { return v * 2; }).join(); }), k(function () { return Array.prototype.filter.call(fun, function (v) { return v > 10; }).join(); }), k(function () { return Array.prototype.indexOf.call(fun, 11); }), k(function () { return Array.prototype.lastIndexOf.call(fun, 12); }), k(function () { return Array.prototype.reduce.call(fun, function (a, b) { return a + b; }); }), k(function () { return Array.prototype.reduceRight.call(fun, function (a, b) { return a + '' + b; }); }));
+var seen = [];
+Array.prototype.forEach.call(fun, function (v, i, o) { seen.push(i + ':' + v + ':' + (o === fun)); });
+console.log(seen.join(), k(function () { return Array.prototype.every.call(fun, function (v, i, o) { return !(o instanceof Function); }); }), k(function () { return Array.prototype.join.call(fun); }), k(function () { return Array.prototype.slice.call(fun).join(); }));
+var g = function (a, b) {};
+g[0] = 'x'; g[1] = 'y';
+console.log(Array.prototype.reverse.call(g) === g, g[0], g[1], Array.prototype.fill.call(function (x) {}, 7)[0], Array.prototype.concat.call(fun, [1]).length, typeof Array.prototype.concat.call(fun, [1])[0], k(function () { return Array.prototype.includes.call(fun, 9); }));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "true true 24,22 12,11 1 0 23 1112",
+            "0:12:true,1:11:true false 12,11 12,11",
+            "true y x 7 2 function false",
+        ]
+    );
+}

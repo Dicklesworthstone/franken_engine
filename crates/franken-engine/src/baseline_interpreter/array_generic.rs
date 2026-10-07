@@ -18,9 +18,9 @@
 //! No-claim: on a proxy `values`/`keys`/`entries` (and so for-of) read the
 //! elements when the iterator is created, not lazily (an array-like keeps the
 //! ordinary lazy iterator); results are ordinary arrays (the species
-//! constructor is not consulted); `flat`, `flatMap`, `copyWithin` and
-//! `toSpliced` keep the ordinary paths, as do functions and typed arrays used
-//! as array-likes.
+//! constructor is not consulted); `flat`, `flatMap` and `toSpliced` keep the
+//! ordinary paths, as do typed arrays used as array-likes. A function `this`
+//! runs here over its own properties (bd-9vouw.285).
 
 use super::*;
 
@@ -75,11 +75,14 @@ impl InterpreterCore {
     /// `None` for the ordinary path: a Proxy; an object that is not an
     /// Array (an arguments object, `{ length: 2, 0: 'a' }`, a String
     /// wrapper), except for the iterator methods, which stay lazy; a
-    /// primitive `this`, boxed (ToObject); and an Array receiver of a concat
-    /// that must spread generically. Arrays read their element storage, and
-    /// typed arrays and functions keep their own paths.
+    /// primitive `this`, boxed (ToObject); a function `this`, through the
+    /// object holding its own properties (its indices and `length`,
+    /// bd-9vouw.285; a callable proxy's record); and an Array receiver of a
+    /// concat that must spread generically. Arrays read their element
+    /// storage, and typed arrays keep their own paths.
     pub(super) fn generic_array_receiver(
         &mut self,
+        module: &Ir3Module,
         kind: BuiltinFunctionKind,
         receiver: Option<&Value>,
         args: RegRange,
@@ -87,6 +90,14 @@ impl InterpreterCore {
         use BuiltinFunctionKind as K;
         let iterator = matches!(kind, K::ArrayKeys | K::ArrayValues | K::ArrayEntries);
         match receiver {
+            Some(function) if function.is_callable() && !iterator => {
+                if let Value::BuiltinFunction(builtin) = function
+                    && let Some(object) = Self::builtin_function_property_object(builtin)
+                {
+                    return Ok(Some(object));
+                }
+                self.ensure_function_own_property_object(module, function)
+            }
             Some(Value::Object(object_id)) => {
                 let object_id = *object_id;
                 if self.active_proxy_record(object_id)?.is_some() {
@@ -389,7 +400,7 @@ impl InterpreterCore {
                 Value::Object(result)
             }
             K::ArrayConcat => {
-                let mut items = vec![Value::Object(o)];
+                let mut items = vec![self.generic_object_value(o)];
                 for index in 0..args.count {
                     items.push(arg(self, index)?);
                 }
@@ -546,11 +557,16 @@ impl InterpreterCore {
                 let join =
                     self.generic_get(m, o, &RuntimePropertyKey::String(JsString::from("join")))?;
                 if join.is_callable() {
-                    self.invoke_inline_method_call(m, join, Value::Object(o), Vec::new())?
+                    self.invoke_inline_method_call(
+                        m,
+                        join,
+                        self.generic_object_value(o),
+                        Vec::new(),
+                    )?
                 } else if self.generic_is_array(o)? {
                     Value::str("[object Array]")
                 } else {
-                    self.object_prototype_to_string_value(&Value::Object(o))
+                    self.object_prototype_to_string_value(&self.generic_object_value(o))
                 }
             }
             K::ArrayReverse => {
@@ -590,7 +606,7 @@ impl InterpreterCore {
                         (false, false) => {}
                     }
                 }
-                Value::Object(o)
+                self.generic_object_value(o)
             }
             // ES2020 23.1.3.3: the indices convert in order, then each element
             // moves with HasProperty/Get/Set or DeletePropertyOrThrow,
@@ -618,7 +634,7 @@ impl InterpreterCore {
                         self.generic_delete(m, o, &target_key)?;
                     }
                 }
-                Value::Object(o)
+                self.generic_object_value(o)
             }
             K::ArrayFill => {
                 let len = self.generic_length(m, o)?;
@@ -628,7 +644,7 @@ impl InterpreterCore {
                 for k in start..end.max(start) {
                     self.generic_set(m, o, &Self::generic_index_key(k), value.clone())?;
                 }
-                Value::Object(o)
+                self.generic_object_value(o)
             }
             K::ArrayAt => {
                 let len = self.generic_length(m, o)?;
@@ -714,7 +730,7 @@ impl InterpreterCore {
                                 accumulator,
                                 element,
                                 Self::generic_length_value(k),
-                                Value::Object(o),
+                                self.generic_object_value(o),
                             ],
                         )?;
                     }
@@ -748,7 +764,7 @@ impl InterpreterCore {
                     for k in count..len {
                         self.generic_delete(m, o, &Self::generic_index_key(k))?;
                     }
-                    Value::Object(o)
+                    self.generic_object_value(o)
                 } else {
                     Value::Object(self.alloc_array_from_values(&sorted)?)
                 }
@@ -932,7 +948,7 @@ impl InterpreterCore {
                 vec![
                     element.clone(),
                     Self::generic_length_value(k),
-                    Value::Object(o),
+                    self.generic_object_value(o),
                 ],
             )?;
             match kind {
@@ -1151,6 +1167,16 @@ impl InterpreterCore {
 
     /// [[Get]](O, P). IFC: the stored label of the property read joins the
     /// pending result label, as GetProperty's does (bd-ojvo1).
+    /// The algorithm's O for the generic receiver `o`: the function whose
+    /// own-property object `o` is, when the method runs on a function
+    /// (bd-9vouw.285), else `o` itself.
+    fn generic_object_value(&self, o: ObjectId) -> Value {
+        match &self.generic_function_receiver {
+            Some((object, function)) if *object == o => function.clone(),
+            _ => Value::Object(o),
+        }
+    }
+
     pub(super) fn generic_get(
         &mut self,
         m: Option<&Ir3Module>,
@@ -1166,7 +1192,7 @@ impl InterpreterCore {
                 .join(&stored);
             self.replace_pending_hostcall_result_label(Some(joined))?;
         }
-        self.proxy_aware_get_runtime_property(m, o, key, Value::Object(o), 0)
+        self.proxy_aware_get_runtime_property(m, o, key, self.generic_object_value(o), 0)
     }
 
     /// Set(O, P, V, true): a refused write is a TypeError.
@@ -1177,7 +1203,14 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        if self.proxy_aware_set_runtime_property(m, o, key, value, Value::Object(o), 0)? {
+        if self.proxy_aware_set_runtime_property(
+            m,
+            o,
+            key,
+            value,
+            self.generic_object_value(o),
+            0,
+        )? {
             Ok(())
         } else {
             Err(InterpreterError::TypeError {

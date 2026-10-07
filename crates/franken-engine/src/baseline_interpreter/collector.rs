@@ -1719,6 +1719,7 @@ impl InterpreterCore {
             active_foreign_module_call_depth: _,
             isolated_async_entry_pending: _,
             gc_nested_request,
+            generic_function_receiver,
             pending_captures: _,
             // Traced from the values that name them.
             generators: _,
@@ -1929,6 +1930,11 @@ impl InterpreterCore {
             .iter()
             .flat_map(|pins| pins.values.iter())
             .chain(gc_nested_request.iter().flatten())
+            .chain(
+                generic_function_receiver
+                    .iter()
+                    .map(|(_, function)| function),
+            )
             .for_each(|value| m.value(value));
         if let Some(from) = self
             .gc

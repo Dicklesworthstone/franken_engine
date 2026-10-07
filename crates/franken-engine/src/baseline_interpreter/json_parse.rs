@@ -282,9 +282,12 @@ impl InterpreterCore {
             _ => None,
         };
         match edges {
+            // The walk visits each reachable object once and joins labels,
+            // so child order does not matter: no per-key lookup for creation
+            // order (bd-9vouw.333).
             ReachableEdges::Data => heap_object
                 .properties
-                .values()
+                .values_unordered()
                 .filter_map(object_id)
                 .collect(),
             ReachableEdges::Inspect => {

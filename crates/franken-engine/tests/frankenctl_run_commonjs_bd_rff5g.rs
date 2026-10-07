@@ -827,3 +827,24 @@ timers.setTimeout(() => console.log(order.join(), ticks), 30);
         ]
     );
 }
+
+/// `require('perf_hooks')` (bd-9vouw.302) is Node's perf_hooks module, whose
+/// `performance` is the realm's global: cannon-es reads
+/// `require('perf_hooks') && require('perf_hooks').performance || {}`,
+/// which found no module. Expected line is Node v22.2.0's output for the
+/// test's source.
+#[test]
+fn require_perf_hooks_is_the_perf_hooks_module_bd_9vouw_302() {
+    let lines = run_tree(
+        "fe_run_cjs_perf_hooks_module",
+        &[(
+            "app.js",
+            r#"const ph = require('perf_hooks');
+const P = require('node:perf_hooks');
+const performance = require('perf_hooks') && require('perf_hooks').performance || {};
+console.log(typeof ph, ph === P, ph.performance === globalThis.performance, typeof performance.now, performance.now() >= 0);
+"#,
+        )],
+    );
+    assert_eq!(lines, ["object true true function true"]);
+}

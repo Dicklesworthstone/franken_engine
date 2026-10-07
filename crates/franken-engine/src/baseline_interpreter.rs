@@ -6130,6 +6130,10 @@ const URL_MODULE_KEY: &str = "<module url>";
 /// Seed-tracked slot of the `require('timers')` module object (bd-9vouw.231).
 const TIMERS_MODULE_KEY: &str = "<module timers>";
 
+/// Seed-tracked slot of the `require('perf_hooks')` module object
+/// (bd-9vouw.302).
+const PERF_HOOKS_MODULE_KEY: &str = "<module perf_hooks>";
+
 /// Seed-tracked slot marking that `require('events')`'s statics are on the
 /// EventEmitter constructor's backing object (bd-9vouw.210); it holds that
 /// backing object.
@@ -38562,6 +38566,27 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// `require('perf_hooks')` (bd-9vouw.302): Node's perf_hooks module with
+    /// the realm's `performance`, the same object as the global (no further
+    /// authority). cannon-es reads `require('perf_hooks').performance`; the
+    /// require reached the runtime and found no module. Not provided:
+    /// `PerformanceObserver`, `monitorEventLoopDelay`, `createHistogram`,
+    /// `constants`.
+    fn perf_hooks_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(PERF_HOOKS_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let performance = match self.resolve_runtime_name_binding("performance") {
+            Some(binding) => binding.state()?.value.clone(),
+            None => Value::Undefined,
+        };
+        let object = self.alloc_object_with_properties(&[("performance", performance)])?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(PERF_HOOKS_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('url')` (bd-9vouw.224): Node's url module with the realm's
     /// `URL` and `URLSearchParams` and the legacy `fileURLToPath`, `format`
     /// and `parse` over the url facade's own HostCalls. The facade lowers only
@@ -38714,6 +38739,9 @@ impl InterpreterCore {
         }
         if matches!(specifier, "timers" | "node:timers") {
             return self.timers_core_module();
+        }
+        if matches!(specifier, "perf_hooks" | "node:perf_hooks") {
+            return self.perf_hooks_core_module();
         }
         let resolved = self.resolve_require_specifier(specifier)?;
         let is_cjs = match Path::new(&resolved)

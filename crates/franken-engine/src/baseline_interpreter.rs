@@ -35032,7 +35032,9 @@ impl InterpreterCore {
     ) -> Result<String, InterpreterError> {
         match value {
             None | Some(Value::Undefined) => Ok("default".to_string()),
-            Some(value) => Ok(self.conversion_to_string(module, value)?.to_string()),
+            Some(value) => Ok(self
+                .scoped_conversion(|this| this.conversion_to_string(module, value))?
+                .to_string()),
         }
     }
 
@@ -35199,7 +35201,10 @@ impl InterpreterCore {
             Some(Value::Object(id)) if self.heap.get(id.0 as usize).is_some_and(|o| o.is_array) => {
                 let mut names = Vec::new();
                 for value in self.array_like_values(id)? {
-                    names.push(self.conversion_to_string(module, value)?.to_string());
+                    names.push(
+                        self.scoped_conversion(|this| this.conversion_to_string(module, value))?
+                            .to_string(),
+                    );
                 }
                 Some(names)
             }
@@ -41054,8 +41059,9 @@ impl InterpreterCore {
                         &RuntimePropertyKey::Symbol(WellKnownSymbol::Replace.id()),
                     )
                 {
-                    let search =
-                        self.conversion_to_string(Some(module), Value::Object(pattern_id))?;
+                    let search = self.scoped_conversion(|this| {
+                        this.conversion_to_string(Some(module), Value::Object(pattern_id))
+                    })?;
                     let (_, replacement) = self.string_replace_args(Some(module), args)?;
                     let label = self.join_arg_range_label(args)?;
                     return self.string_replace_js(
@@ -73532,11 +73538,13 @@ impl InterpreterCore {
                 ),
             ));
         }
-        let text = self.conversion_to_string(Some(module), receiver)?;
+        let text =
+            self.scoped_conversion(|this| this.conversion_to_string(Some(module), receiver))?;
         let mut units: Vec<u16> = format!("<{tag}").encode_utf16().collect();
         if let Some(attribute) = attribute {
             let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-            let value = self.conversion_to_string(Some(module), value)?;
+            let value =
+                self.scoped_conversion(|this| this.conversion_to_string(Some(module), value))?;
             units.extend(format!(" {attribute}=\"").encode_utf16());
             for unit in value.encode_utf16() {
                 if unit == u16::from(b'"') {

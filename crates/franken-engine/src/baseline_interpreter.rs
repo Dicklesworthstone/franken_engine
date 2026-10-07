@@ -88028,6 +88028,26 @@ impl InterpreterCore {
                             });
                         }
                     };
+                    // A static field whose computed key is "prototype" would
+                    // redefine the class's non-configurable `prototype`
+                    // (DefineField is CreateDataPropertyOrThrow): a
+                    // TypeError, raised as Node raises it, when the field is
+                    // defined, before any initializer runs.
+                    if target.is_callable()
+                        && matches!(
+                            kind,
+                            crate::lowering_pipeline::CLASS_ELEMENT_FIELD
+                                | crate::lowering_pipeline::CLASS_ELEMENT_NAMED_FIELD
+                        )
+                        && self.executable_property_key_from_value(&key).as_str()
+                            == Some("prototype")
+                    {
+                        return Err(InterpreterError::TypeError {
+                            expected: "a static class field not named prototype".to_string(),
+                            got: "Classes may not have a static property named 'prototype'"
+                                .to_string(),
+                        });
+                    }
                     let label = self
                         .get_register_label(args.start)?
                         .join(self.get_register_label(args.start + 1)?)

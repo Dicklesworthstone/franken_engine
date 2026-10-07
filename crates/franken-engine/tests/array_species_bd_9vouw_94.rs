@@ -266,3 +266,322 @@ fn builtin_constructors_own_species_getters_bd_9vouw_278() {
     let output = console_output(PROGRAM_SPECIES_GETTERS).expect("the program runs");
     assert_eq!(output, NODE_OUTPUT_SPECIES_GETTERS);
 }
+
+/// ArrayCreate rejects an impossible array length before visiting any
+/// element. The throwing first element makes the pre-fix failure bounded:
+/// it reports Error instead of walking billions of indices.
+#[test]
+fn array_species_rejects_oversized_default_results_before_elements() {
+    let source = r#"
+function attempt(f) { try { f(); return 'ok'; } catch (e) { return e.constructor.name; } }
+var reads = 0;
+var callbacks = 0;
+function plain() {
+    return { length: 4294967296,
+        get 0() { reads++; throw new Error('element'); },
+        get constructor() { throw new Error('non-array constructor'); }
+    };
+}
+function proxied(constructor) {
+    var target = [];
+    target.constructor = constructor;
+    return new Proxy(target, {
+        get(t, key) { return key === 'length' ? 4294967296 : Reflect.get(t, key); },
+        has() { reads++; throw new Error('element'); }
+    });
+}
+function callback(value) { callbacks++; return value; }
+var slice = Array.prototype.slice;
+var splice = Array.prototype.splice;
+var map = Array.prototype.map;
+console.log(attempt(() => slice.call(plain())), attempt(() => splice.call(plain(), 0)), attempt(() => map.call(plain(), callback)));
+for (var constructor of [undefined, Array, {}, { [Symbol.species]: null }, { [Symbol.species]: Array }]) {
+    console.log(attempt(() => slice.call(proxied(constructor))), attempt(() => splice.call(proxied(constructor), 0)), attempt(() => map.call(proxied(constructor), callback)));
+}
+console.log(reads, callbacks, attempt(() => map.call(plain(), null)));
+"#;
+    let output = console_output(source).expect("oversized results throw catchable RangeErrors");
+    assert_eq!(
+        output,
+        "RangeError RangeError RangeError\nRangeError RangeError RangeError\nRangeError RangeError RangeError\nRangeError RangeError RangeError\nRangeError RangeError RangeError\nRangeError RangeError RangeError\n0 0 TypeError"
+    );
+}
+
+/// The length limit belongs to ArrayCreate, after constructor/species
+/// lookup. It must not preempt a custom species or reject 2^32 - 1.
+#[test]
+fn array_species_length_validation_preserves_constructor_and_element_order() {
+    let source = r#"
+function attempt(f) { try { f(); return 'ok'; } catch (e) { return e.message; } }
+function input(length, constructor) {
+    var target = [];
+    target.constructor = constructor;
+    return new Proxy(target, {
+        get(t, key) { return key === 'length' ? length : Reflect.get(t, key); },
+        has() { throw new Error('first element'); }
+    });
+}
+function Species(length) { throw new Error('species:' + length); }
+var custom = { [Symbol.species]: Species };
+var slice = Array.prototype.slice;
+var splice = Array.prototype.splice;
+var map = Array.prototype.map;
+console.log(attempt(() => slice.call(input(4294967296, custom))), attempt(() => splice.call(input(4294967296, custom), 0)), attempt(() => map.call(input(4294967296, custom), x => x)));
+console.log(attempt(() => slice.call(input(4294967295, undefined))), attempt(() => splice.call(input(4294967295, undefined), 0)), attempt(() => map.call(input(4294967295, undefined), x => x)));
+var order = [];
+var source = new Proxy([], {
+    get(t, key) {
+        order.push(String(key));
+        if (key === 'length') return 4294967296;
+        if (key === 'constructor') return { get [Symbol.species]() { order.push('species'); return undefined; } };
+        return Reflect.get(t, key);
+    }
+});
+try { slice.call(source, { valueOf() { order.push('start'); return 0; } }); } catch (e) { order.push(e.constructor.name); }
+console.log(order.join(','));
+"#;
+    let output = console_output(source).expect("species and element exceptions remain observable");
+    assert_eq!(
+        output,
+        "species:4294967296 species:4294967296 species:4294967296\nfirst element first element first element\nlength,start,constructor,species,RangeError"
+    );
+}
+
+/// Generic array methods must share ArraySpeciesCreate with ordinary
+/// arrays. Arbitrary species objects get CreateDataPropertyOrThrow; map
+/// and filter do not set their length, while slice/splice/concat do.
+#[test]
+fn generic_array_methods_use_species_and_create_data_properties() {
+    let source = r#"
+function Species(length) {
+    this.requested = length;
+    Object.defineProperty(this, '0', { value: 'old', writable: false, configurable: true });
+}
+function input() {
+    var target = [4, 5];
+    target.constructor = { [Symbol.species]: Species };
+    return new Proxy(target, {});
+}
+for (var method of ['map', 'filter', 'slice', 'splice', 'concat']) {
+    var source = input();
+    var result;
+    if (method === 'map') result = source.map(x => x * 2);
+    else if (method === 'filter') result = source.filter(x => x > 4);
+    else if (method === 'slice') result = source.slice(0, 1);
+    else if (method === 'splice') result = source.splice(0, 1);
+    else result = source.concat([6]);
+    var descriptor = Object.getOwnPropertyDescriptor(result, '0');
+    console.log(method, result instanceof Species, result.requested, result.length, result[0], descriptor.writable, descriptor.enumerable, descriptor.configurable);
+}
+Object.defineProperty(Array, Symbol.species, { value: Species, configurable: true });
+var ordinary = [1, 2].map(x => x + 1);
+console.log(ordinary instanceof Species, ordinary.requested, ordinary.length, ordinary[0]);
+"#;
+    let output = console_output(source).expect("generic and ordinary species results run");
+    assert_eq!(
+        output,
+        "map true 2 undefined 8 true true true\nfilter true 0 undefined 5 true true true\nslice true 1 1 4 true true true\nsplice true 1 1 4 true true true\nconcat true 0 3 4 true true true\ntrue 2 undefined 2"
+    );
+}
+
+#[test]
+fn generic_array_species_proxy_observes_definitions_and_length_sets() {
+    let source = r#"
+var events = [];
+function Species(length) {
+    events.push('species:' + length);
+    return new Proxy({}, {
+        defineProperty(target, key, descriptor) {
+            events.push('define:' + key + ':' + descriptor.writable + ':' + descriptor.enumerable + ':' + descriptor.configurable);
+            return Reflect.defineProperty(target, key, descriptor);
+        },
+        set(target, key, value) { events.push('set:' + key + ':' + value); return Reflect.set(target, key, value); }
+    });
+}
+for (var method of ['map', 'filter', 'slice', 'splice', 'concat']) {
+    events = [];
+    var target = [7];
+    target.constructor = { [Symbol.species]: Species };
+    var source = new Proxy(target, {});
+    if (method === 'map') source.map(x => x);
+    else if (method === 'filter') source.filter(x => true);
+    else if (method === 'slice') source.slice();
+    else if (method === 'splice') source.splice(0);
+    else source.concat();
+    console.log(method, events.join(','));
+}
+"#;
+    let output = console_output(source).expect("species proxy traps run in specification order");
+    assert_eq!(
+        output,
+        "map species:1,define:0:true:true:true\nfilter species:0,define:0:true:true:true\nslice species:1,define:0:true:true:true,set:length:1\nsplice species:1,define:0:true:true:true,set:length:1\nconcat species:0,define:0:true:true:true,set:length:1"
+    );
+}
+
+#[test]
+fn generic_array_species_refusals_stop_before_splice_mutates_the_source() {
+    let source = r#"
+function Locked() {
+    Object.defineProperty(this, '0', { value: 'locked', configurable: false });
+}
+function Sealed() { return Object.preventExtensions({}); }
+function Refusing() { return new Proxy({}, { defineProperty() { return false; } }); }
+for (var Species of [Locked, Sealed, Refusing]) {
+    var target = [7, 8];
+    target.constructor = { [Symbol.species]: Species };
+    var source = new Proxy(target, {});
+    try { source.splice(0, 1); console.log('unexpected success'); }
+    catch (e) { console.log(e.constructor.name, target.join(',')); }
+}
+"#;
+    let output = console_output(source).expect("species refusals are catchable TypeErrors");
+    assert_eq!(output, "TypeError 7,8\nTypeError 7,8\nTypeError 7,8");
+}
+
+/// Species can return an object already reachable through a public alias.
+/// Read that alias in a fresh execution so the copy's return label or its
+/// catch context cannot conceal missing provenance on the stored elements.
+#[test]
+fn generic_species_copies_preserve_public_alias_labels_after_success_and_partial_failure() {
+    use frankenengine_engine::baseline_interpreter::Value;
+    use frankenengine_engine::ifc_artifacts::Label;
+    use frankenengine_engine::ir_contract::{Ir3Instruction, Ir3Module};
+
+    fn lower(source: &str) -> Ir3Module {
+        let tree = CanonicalEs2020Parser
+            .parse_with_options(
+                ParserSource {
+                    label: "species-alias-labels.js".into(),
+                    text: source.into(),
+                },
+                ParseGoal::Script,
+                &ParserOptions::default(),
+            )
+            .unwrap();
+        lower_ir0_to_ir3(
+            &Ir0Module::from_syntax_tree(tree, "species-alias-labels.js"),
+            &LoweringContext::new("species-trace", "species-decision", "species-policy"),
+        )
+        .unwrap()
+        .ir3
+    }
+
+    let source = r#"
+        const output = 424241;
+        if (PARTIAL) Object.defineProperty(output, BLOCKED_KEY, { value: 'locked' });
+        const destination = PROXIED ? new Proxy(output, {
+            defineProperty(target, key, descriptor) {
+                JSON.parse('0');
+                return Reflect.defineProperty(target, key, descriptor);
+            },
+            set(target, key, value) {
+                JSON.parse('0');
+                return Reflect.set(target, key, value);
+            }
+        }) : output;
+        function Species() { return destination; }
+        const source = INITIAL_SOURCE;
+        source.constructor = { [Symbol.species]: Species };
+        source[SECRET_KEY] = 424242;
+        let state = 'success';
+        try { source.slice({ valueOf() { return 0; } }); }
+        catch (error) { state = error.name; }
+        state;
+    "#;
+    for length_only in [false, true] {
+        for proxied in [false, true] {
+            for partial in [false, true] {
+                let source = source
+                    .replace("PROXIED", if proxied { "true" } else { "false" })
+                    .replace("PARTIAL", if partial { "true" } else { "false" })
+                    .replace("BLOCKED_KEY", if length_only { "'length'" } else { "'1'" })
+                    .replace("INITIAL_SOURCE", if length_only { "[]" } else { "[0, 8]" })
+                    .replace("SECRET_KEY", if length_only { "'length'" } else { "'0'" });
+                let mut module = lower(&source);
+                let mut markers = [0, 0];
+                for instruction in &mut module.instructions {
+                    if let Ir3Instruction::LoadInt { dst, value } = instruction {
+                        let marker = match *value {
+                            424241 => Some((0, 200)),
+                            424242 => Some((1, 201)),
+                            _ => None,
+                        };
+                        if let Some((index, seed)) = marker {
+                            markers[index] += 1;
+                            *instruction = Ir3Instruction::Move {
+                                dst: *dst,
+                                src: seed,
+                            };
+                        }
+                    }
+                }
+                assert_eq!(markers, [1, 1], "each seeded source marker is unique");
+                for source_label in [Label::Public, Label::Secret] {
+                    for mut config in [
+                        InterpreterConfig::quickjs_defaults(),
+                        InterpreterConfig::v8_defaults(),
+                    ] {
+                        config.granted_capabilities = [
+                            RuntimeCapability::VmDispatch,
+                            RuntimeCapability::HeapAllocate,
+                            RuntimeCapability::Builtin,
+                        ]
+                        .into_iter()
+                        .collect();
+                        let mut core = InterpreterCore::new(config, "species-alias-labels");
+                        let output = core.alloc_object_with_prototype(None).unwrap();
+                        core.seed_register(200, Value::Object(output)).unwrap();
+                        core.seed_register(201, Value::Int(7)).unwrap();
+                        core.set_register_label(201, source_label.clone()).unwrap();
+                        let result = core.execute(&module).unwrap();
+                        assert_eq!(
+                            result.value,
+                            Value::str(if partial { "TypeError" } else { "success" }),
+                            "length_only={length_only}, proxied={proxied}, partial={partial}"
+                        );
+                        assert_eq!(
+                            core.estimated_memory_bytes(),
+                            core.recompute_estimated_memory_bytes()
+                        );
+
+                        let mut observation = lower("0;");
+                        observation.instructions = vec![
+                            Ir3Instruction::GetProperty {
+                                obj: 0,
+                                key: 1,
+                                dst: 2,
+                            },
+                            Ir3Instruction::Return { value: 2 },
+                        ];
+                        for (register, value) in [
+                            (0, Value::Object(output)),
+                            (1, Value::str(if length_only { "length" } else { "0" })),
+                            (2, Value::Undefined),
+                        ] {
+                            core.seed_register(register, value).unwrap();
+                            core.set_register_label(register, Label::Public).unwrap();
+                        }
+                        let copied = core.execute(&observation).unwrap();
+                        assert_eq!(
+                            copied.value,
+                            if length_only && partial {
+                                Value::str("locked")
+                            } else {
+                                Value::Int(7)
+                            }
+                        );
+                        assert_eq!(
+                            copied.completion_label, source_label,
+                            "length_only={length_only}, proxied={proxied}, partial={partial}"
+                        );
+                        assert_eq!(core.get_register_label(0).unwrap(), &Label::Public);
+                        assert_eq!(
+                            core.estimated_memory_bytes(),
+                            core.recompute_estimated_memory_bytes()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

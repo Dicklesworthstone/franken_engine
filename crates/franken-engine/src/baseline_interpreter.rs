@@ -42092,7 +42092,7 @@ impl InterpreterCore {
                         Self::is_typed_array_prototype_builtin(builtin),
                         "Array.prototype.map",
                     )?;
-                let result = self.array_species_result(module, arr_id, len)?;
+                let result = self.array_species_result(module, arr_id, len as u64)?;
                 for index in 0..len {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
@@ -42579,7 +42579,7 @@ impl InterpreterCore {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
                 let result =
-                    self.array_species_result(module, arr_id, end.saturating_sub(start))?;
+                    self.array_species_result(module, arr_id, end.saturating_sub(start) as u64)?;
                 let mut out = 0usize;
                 let mut index = start;
                 while index < end {
@@ -42679,7 +42679,7 @@ impl InterpreterCore {
                         }
                     }
                 };
-                let removed_arr = self.array_species_result(module, arr_id, delete_count)?;
+                let removed_arr = self.array_species_result(module, arr_id, delete_count as u64)?;
                 let mut items = Vec::new();
                 let mut k = 2u32;
                 while k < args.count {
@@ -52227,6 +52227,7 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
+                    self.clear_pending_hostcall_result_label();
                     let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let object_id = match &obj_val {
@@ -52897,6 +52898,12 @@ impl InterpreterCore {
                     let prior_dst_label = self.get_register_label(dst)?;
                     result_label =
                         self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
+                    if let Some(observed_label) = self.take_pending_hostcall_result_label() {
+                        result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            &observed_label,
+                        )?;
+                    }
                     self.write_reg_with_label(dst, prop, result_label)?;
                     self.pending_cyclic_import_binding =
                         pending_cyclic_import.map(|(module_specifier, export_name)| {
@@ -63475,6 +63482,7 @@ impl InterpreterCore {
                 receiver.clone(),
             ],
         )? {
+            self.validate_proxy_get_trap_result(module, target, key, &value, depth + 1)?;
             return Ok(value);
         }
 
@@ -63753,7 +63761,11 @@ impl InterpreterCore {
                 receiver.clone(),
             ],
         )? {
-            return Ok(result.is_truthy());
+            if !result.is_truthy() {
+                return Ok(false);
+            }
+            self.validate_proxy_set_trap_result(module, target, key, &value, depth + 1)?;
+            return Ok(true);
         }
 
         self.proxy_aware_set_runtime_property(module, target, key, value, receiver, depth + 1)
@@ -63870,7 +63882,11 @@ impl InterpreterCore {
             "has",
             vec![self.proxy_trap_target(object_id, target), key.value()],
         )? {
-            return Ok(result.is_truthy());
+            if result.is_truthy() {
+                return Ok(true);
+            }
+            self.validate_proxy_property_absence(module, target, key, "has", depth + 1)?;
+            return Ok(false);
         }
 
         // A callable proxy without the trap asks its function target.
@@ -63964,7 +63980,11 @@ impl InterpreterCore {
             "deleteProperty",
             vec![self.proxy_trap_target(object_id, target), key.value()],
         )? {
-            return Ok(result.is_truthy());
+            if !result.is_truthy() {
+                return Ok(false);
+            }
+            self.validate_proxy_property_absence(module, target, key, "deleteProperty", depth + 1)?;
+            return Ok(true);
         }
 
         self.proxy_aware_delete_runtime_property(module, target, key, depth + 1)
@@ -64123,6 +64143,7 @@ impl InterpreterCore {
                     });
                 }
             }
+            self.validate_proxy_own_keys_trap_result(module, target, seen, depth + 1)?;
             return Ok(key_values);
         }
 
@@ -80935,13 +80956,15 @@ impl InterpreterCore {
         }))
     }
 
-    /// ES2020 6.2.5.4 FromPropertyDescriptor for the own property `key` of
-    /// `object_id`, or `undefined` when there is no such property.
-    fn own_property_descriptor_value(
-        &mut self,
+    /// The ordinary own descriptor, including virtual data properties, as
+    /// internal fields. Invariant checks must not allocate a guest object just
+    /// to inspect a target property. Public reflection materializes these same
+    /// fields through FromPropertyDescriptor below.
+    fn ordinary_own_property_descriptor_fields(
+        &self,
         object_id: ObjectId,
         key: &RuntimePropertyKey,
-    ) -> Result<Value, InterpreterError> {
+    ) -> Option<PropertyDescriptorFields> {
         let visible = match key {
             RuntimePropertyKey::String(key) => self.own_runtime_property_visible(object_id, key),
             RuntimePropertyKey::Symbol(_) => true,
@@ -80972,43 +80995,37 @@ impl InterpreterCore {
                 };
                 Some((BaselineSymbolProperty::Data(virtual_value), attributes))
             });
-        let Some((property, attributes)) = source else {
+        let (property, attributes) = source?;
+        let fields = PropertyDescriptorFields {
+            enumerable: Some(attributes.enumerable),
+            configurable: Some(attributes.configurable),
+            ..PropertyDescriptorFields::default()
+        };
+        Some(match property {
+            BaselineSymbolProperty::Data(value) => PropertyDescriptorFields {
+                value: Some(value),
+                writable: Some(attributes.writable),
+                ..fields
+            },
+            BaselineSymbolProperty::Accessor { get, set } => PropertyDescriptorFields {
+                get: Some(get.unwrap_or(Value::Undefined)),
+                set: Some(set.unwrap_or(Value::Undefined)),
+                ..fields
+            },
+        })
+    }
+
+    /// ES2020 6.2.5.4 FromPropertyDescriptor for the own property `key` of
+    /// `object_id`, or `undefined` when there is no such property.
+    fn own_property_descriptor_value(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        let Some(fields) = self.ordinary_own_property_descriptor_fields(object_id, key) else {
             return Ok(Value::Undefined);
         };
-        let descriptor_id = self.alloc_object_with_prototype(None)?;
-        match property {
-            BaselineSymbolProperty::Data(value) => {
-                self.set_object_property(descriptor_id, "value".to_string(), value)?;
-                self.set_object_property(
-                    descriptor_id,
-                    "writable".to_string(),
-                    Value::Bool(attributes.writable),
-                )?;
-            }
-            BaselineSymbolProperty::Accessor { get, set } => {
-                self.set_object_property(
-                    descriptor_id,
-                    "get".to_string(),
-                    get.unwrap_or(Value::Undefined),
-                )?;
-                self.set_object_property(
-                    descriptor_id,
-                    "set".to_string(),
-                    set.unwrap_or(Value::Undefined),
-                )?;
-            }
-        }
-        self.set_object_property(
-            descriptor_id,
-            "enumerable".to_string(),
-            Value::Bool(attributes.enumerable),
-        )?;
-        self.set_object_property(
-            descriptor_id,
-            "configurable".to_string(),
-            Value::Bool(attributes.configurable),
-        )?;
-        Ok(Value::Object(descriptor_id))
+        self.descriptor_object_from_fields(&fields, false)
     }
 
     /// Install an own property from a validated descriptor value, keeping
@@ -105270,10 +105287,25 @@ impl InterpreterCore {
         Ok(Value::Object(instance_id))
     }
 
-    /// bd-9vouw.94: ES2020 22.1.3 ArraySpeciesCreate(original, length): the
+    /// ES2020 9.4.2.2 ArrayCreate(length). Validate before allocating or
+    /// visiting source elements; a length is metadata, not a request to
+    /// allocate that many slots. Keep this check in the ArrayCreate branch
+    /// so custom species constructors can accept larger array-like lengths.
+    fn alloc_array_with_length(&mut self, length: u64) -> Result<ObjectId, InterpreterError> {
+        if length > u64::from(u32::MAX) {
+            return Err(InterpreterError::RangeError {
+                message: "Invalid array length".to_string(),
+            });
+        }
+        let result = self.alloc_array_with_prototype(None)?;
+        self.set_object_property(result, "length".to_string(), Value::Int(length as i64))?;
+        Ok(result)
+    }
+
+    /// bd-9vouw.94: ES2020 9.4.2.3 ArraySpeciesCreate(original, length): the
     /// result object an Array method fills. A plain array (ArrayCreate) when
-    /// `original` is not an array, or its `constructor` is undefined or
-    /// %Array%, or that constructor's @@species is undefined, null or
+    /// `original` is not an array, or its `constructor` is undefined,
+    /// or that constructor's @@species is undefined, null or
     /// %Array%. Otherwise the species is constructed with `length`. A
     /// `constructor` that is not an object, a species that is not a
     /// constructor, or a construct result that is not an object is a
@@ -105282,10 +105314,10 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         original: ObjectId,
-        length: usize,
+        length: u64,
     ) -> Result<ObjectId, InterpreterError> {
         if !self.generic_is_array(original)? {
-            return self.alloc_array_with_prototype(None);
+            return self.alloc_array_with_length(length);
         }
         let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
         let constructor = self.proxy_aware_get_runtime_property(
@@ -105300,8 +105332,8 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::StandardConstructor
                     && Self::standard_constructor_name(builtin).is_ok_and(|name| name == "Array"))
         };
-        if matches!(constructor, Value::Undefined) || is_intrinsic_array(&constructor) {
-            return self.alloc_array_with_prototype(None);
+        if matches!(constructor, Value::Undefined) {
+            return self.alloc_array_with_length(length);
         }
         if !constructor.is_object_like() {
             return Err(InterpreterError::TypeError {
@@ -105311,7 +105343,7 @@ impl InterpreterCore {
         }
         let species = self.species_of_constructor(module, &constructor)?;
         if matches!(species, Value::Undefined | Value::Null) || is_intrinsic_array(&species) {
-            return self.alloc_array_with_prototype(None);
+            return self.alloc_array_with_length(length);
         }
         if !self.is_constructible_value(&species) {
             return Err(InterpreterError::TypeError {

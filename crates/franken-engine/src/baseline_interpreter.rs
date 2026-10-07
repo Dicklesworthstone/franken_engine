@@ -41552,7 +41552,13 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let len = self.array_like_length(arr_id)?;
+                let len =
+                    self.array_method_length(arr_id, Self::is_typed_array_prototype_builtin(builtin))?;
+                // Step 3: an empty receiver answers -1 before fromIndex
+                // converts.
+                if len == 0 {
+                    return Ok(Value::Int(-1));
+                }
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let from = match self.builtin_number_arg(module, args, 1)? {
                     Some(value) => {
@@ -41587,7 +41593,13 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let len = self.array_like_length(arr_id)?;
+                let len =
+                    self.array_method_length(arr_id, Self::is_typed_array_prototype_builtin(builtin))?;
+                // Step 3: an empty receiver answers false before fromIndex
+                // converts.
+                if len == 0 {
+                    return Ok(Value::Bool(false));
+                }
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let from = match self.builtin_number_arg(module, args, 1)? {
                     Some(value) => {
@@ -41677,7 +41689,9 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let len = self.array_like_length(arr_id)? as i64;
+                let len = self
+                    .array_method_length(arr_id, Self::is_typed_array_prototype_builtin(builtin))?
+                    as i64;
                 let raw = match self.builtin_number_arg(module, args, 0)? {
                     Some(value) => Self::value_as_integer(&value),
                     None => 0,
@@ -41818,7 +41832,12 @@ impl InterpreterCore {
                 // skipped); returns undefined. Callback receives
                 // (element, index, array) with the optional thisArg.
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.forEach")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.forEach",
+                    )?;
                 let typed_array_method = Self::is_typed_array_prototype_builtin(builtin);
                 for index in 0..len {
                     let Some(element) =
@@ -41841,7 +41860,12 @@ impl InterpreterCore {
                 // ES2020 23.1.3.18: new array of callback results, one per
                 // element (holes skipped).
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.map")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.map",
+                    )?;
                 let result = self.array_species_result(module, arr_id, len)?;
                 for index in 0..len {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
@@ -41875,7 +41899,12 @@ impl InterpreterCore {
                 // ES2020 23.1.3.7: new array of elements for which the callback
                 // is truthy, with compacted indices.
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.filter")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.filter",
+                    )?;
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 for index in 0..len {
@@ -41912,7 +41941,12 @@ impl InterpreterCore {
                 // ES2020 23.1.3.8: first element for which the callback is
                 // truthy (holes visited as undefined), else undefined.
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.find")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.find",
+                    )?;
                 for index in 0..len {
                     let element = self
                         .array_index_get(Some(module), arr_id, index)?
@@ -41935,7 +41969,12 @@ impl InterpreterCore {
                 // ES2020 23.1.3.9: index of the first element for which the
                 // callback is truthy, else -1.
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.findIndex")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.findIndex",
+                    )?;
                 for index in 0..len {
                     let element = self
                         .array_index_get(Some(module), arr_id, index)?
@@ -41958,7 +41997,12 @@ impl InterpreterCore {
                 // ES2023 23.1.3.9: the LAST element for which the callback is
                 // truthy (iterating in reverse), else undefined.
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.findLast")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.findLast",
+                    )?;
                 for index in (0..len).rev() {
                     let element = self
                         .array_index_get(Some(module), arr_id, index)?
@@ -41981,7 +42025,12 @@ impl InterpreterCore {
                 // ES2023 23.1.3.10: index of the last element for which the
                 // callback is truthy (reverse), else -1.
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.findLastIndex")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.findLastIndex",
+                    )?;
                 for index in (0..len).rev() {
                     let element = self
                         .array_index_get(Some(module), arr_id, index)?
@@ -42005,7 +42054,12 @@ impl InterpreterCore {
                 // flatten the result one level (a returned array's elements are
                 // spread; a non-array result is appended as-is).
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.flatMap")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.flatMap",
+                    )?;
                 let result = self.array_species_result(module, arr_id, 0)?;
                 let mut out = 0usize;
                 for index in 0..len {
@@ -42100,7 +42154,12 @@ impl InterpreterCore {
                 // ES2020 23.1.3.24: true if the callback is truthy for any
                 // element (holes skipped).
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.some")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.some",
+                    )?;
                 let typed_array_method = Self::is_typed_array_prototype_builtin(builtin);
                 for index in 0..len {
                     let Some(element) =
@@ -42126,7 +42185,12 @@ impl InterpreterCore {
                 // ES2020 23.1.3.6: true if the callback is truthy for every
                 // element (holes skipped); short-circuits on the first falsy.
                 let (arr_id, callback, this_arg, len) =
-                    self.array_callback_receiver(receiver, args, "Array.prototype.every")?;
+                    self.array_callback_receiver(
+                        receiver,
+                        args,
+                        Self::is_typed_array_prototype_builtin(builtin),
+                        "Array.prototype.every",
+                    )?;
                 let typed_array_method = Self::is_typed_array_prototype_builtin(builtin);
                 for index in 0..len {
                     let Some(element) =
@@ -42321,7 +42385,15 @@ impl InterpreterCore {
                         got: receiver.type_name().to_string(),
                     });
                 };
-                let len = i64::try_from(self.array_like_length(arr_id)?).unwrap_or(i64::MAX);
+                let len = i64::try_from(
+                    self.array_method_length(arr_id, Self::is_typed_array_prototype_builtin(builtin))?,
+                )
+                .unwrap_or(i64::MAX);
+                // Step 3: an empty receiver answers -1 before fromIndex
+                // converts.
+                if len == 0 {
+                    return Ok(Value::Int(-1));
+                }
                 let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let start = match self.builtin_number_arg(module, args, 1)? {
                     Some(value) => {
@@ -73474,6 +73546,28 @@ impl InterpreterCore {
         Ok(Vec::with_capacity(len))
     }
 
+    /// The length an Array-kind method iterates. A %TypedArray%.prototype
+    /// method reads the view's [[ArrayLength]] (ES2024 23.2.4.4
+    /// TypedArrayLength), never a `length` property: a typed array whose
+    /// own or inherited `length` the program redefined still iterates every
+    /// element, and that getter is not called (bd-9vouw.287). An
+    /// Array.prototype method reads LengthOfArrayLike.
+    fn array_method_length(
+        &self,
+        array_id: ObjectId,
+        typed_array_method: bool,
+    ) -> Result<usize, InterpreterError> {
+        if typed_array_method
+            && let Some(view) = self
+                .heap
+                .get(array_id.0 as usize)
+                .and_then(|object| object.typed_array.as_ref())
+        {
+            return Ok(view.length);
+        }
+        self.array_like_length(array_id)
+    }
+
     fn array_like_length(&self, array_id: ObjectId) -> Result<usize, InterpreterError> {
         if self.heap.get(array_id.0 as usize).is_none() {
             return Err(InterpreterError::ObjectNotFound { id: array_id.0 });
@@ -74263,6 +74357,7 @@ impl InterpreterCore {
         &self,
         receiver: Option<Value>,
         args: RegRange,
+        typed_array_method: bool,
         method: &str,
     ) -> Result<(ObjectId, Value, Value, usize), InterpreterError> {
         let receiver = receiver.unwrap_or(Value::Undefined);
@@ -74274,7 +74369,7 @@ impl InterpreterCore {
         };
         let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-        let len = self.array_like_length(arr_id)?;
+        let len = self.array_method_length(arr_id, typed_array_method)?;
         // IsCallable(callbackfn) before the first element, so an empty or
         // all-holes array still throws.
         if !callback.is_callable() {
@@ -74307,7 +74402,7 @@ impl InterpreterCore {
             });
         };
         let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-        let length = self.array_like_length(arr_id)?;
+        let length = self.array_method_length(arr_id, typed_array_method)?;
         if !callback.is_callable() {
             return Err(InterpreterError::TypeError {
                 expected: format!("a callable callback for {method}"),

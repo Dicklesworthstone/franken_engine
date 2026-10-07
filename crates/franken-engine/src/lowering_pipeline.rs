@@ -8220,6 +8220,26 @@ fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Inst
 /// compound-assignment lowering (bd-cwfiv) to build the read-modify-write
 /// `object[key] = object[key] <op> rhs`. `Assign` and the logical compound ops
 /// (`&&=`/`||=`/`??=`) are handled on dedicated paths and must not reach here.
+/// Whether evaluating `expression` runs no code that could write a binding:
+/// a literal or a read of a resolved source binding (bd-9vouw.327). Any other
+/// form can call a function, a getter or a conversion.
+fn right_side_runs_no_code(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expression {
+        Expression::NumericLiteral(_)
+        | Expression::FloatLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral
+        | Expression::UndefinedLiteral => true,
+        Expression::Identifier(name) => has_source_lexical_binding(binding_lookup, name),
+        _ => false,
+    }
+}
+
 fn compound_assignment_binary_operator(
     operator: AssignmentOperator,
 ) -> Result<BinaryOperator, LoweringPipelineError> {
@@ -16447,6 +16467,17 @@ fn lower_expression_to_ir1_inner(
                 }
 
                 if let Some(binding_id) = resolved_binding_id {
+                    // ES2020 12.15.4 step 2.b: `x op= rhs` reads x before
+                    // evaluating rhs, which may write x (`x += (x = 5)`, a call
+                    // that updates a captured x). AssignOp reads its binding
+                    // when it runs, after rhs; it stays for a right side that
+                    // runs no code, so `i += 1` still steps in place
+                    // (bd-9vouw.327).
+                    let read_first = compound_assignment_binary_operator(*operator).is_ok()
+                        && !right_side_runs_no_code(right, binding_lookup);
+                    if read_first {
+                        ops.push(Ir1Op::LoadBinding { binding_id });
+                    }
                     let start = ops.len();
                     lower_expression_to_ir1(
                         right,
@@ -16461,10 +16492,20 @@ fn lower_expression_to_ir1_inner(
                     if *operator == AssignmentOperator::Assign {
                         name_anonymous_function_definition(ops, start, right, name);
                     }
-                    ops.push(Ir1Op::AssignOp {
-                        binding_id,
-                        operator: *operator,
-                    });
+                    if read_first {
+                        ops.push(Ir1Op::BinaryOp {
+                            operator: compound_assignment_binary_operator(*operator)?,
+                        });
+                        ops.push(Ir1Op::AssignOp {
+                            binding_id,
+                            operator: AssignmentOperator::Assign,
+                        });
+                    } else {
+                        ops.push(Ir1Op::AssignOp {
+                            binding_id,
+                            operator: *operator,
+                        });
+                    }
                 } else if *operator == AssignmentOperator::Assign {
                     // ResolveBinding precedes RHS evaluation even though
                     // PutValue occurs afterward. The status register prevents

@@ -96313,11 +96313,16 @@ impl InterpreterCore {
             // builtin:ArrayPrototypeFindIndex - Duplicate removed, consolidated to line 10807
             "builtin:EncodeURIComponent" => {
                 // encodeURIComponent(value): slot-0 convention, shared by direct
-                // calls and the first-class value.
-                let input_str = self.builtin_arg_text(module, args, 0)?;
-                let encoded = percent_encode_utf8(&input_str, should_encode_uri_component);
-
-                Ok(Value::str(encoded))
+                // calls and the first-class value. A lone surrogate is a
+                // URIError (ES2020 18.2.6.1.1 step 3.e).
+                let input = self.builtin_arg_js_text(module, args, 0)?;
+                match input.as_str() {
+                    Some(text) => Ok(Value::str(percent_encode_utf8(
+                        text,
+                        should_encode_uri_component,
+                    ))),
+                    None => Err(self.throw_uri_malformed(None)),
+                }
             }
 
             "builtin:DecodeURIComponent" => {
@@ -96333,11 +96338,13 @@ impl InterpreterCore {
 
             "builtin:EncodeURI" => {
                 // encodeURI(value): slot-0 convention, shared by direct
-                // calls and the first-class value.
-                let input_str = self.builtin_arg_text(module, args, 0)?;
-                let encoded = percent_encode_utf8(&input_str, should_encode_uri);
-
-                Ok(Value::str(encoded))
+                // calls and the first-class value. A lone surrogate is a
+                // URIError (ES2020 18.2.6.1.1 step 3.e).
+                let input = self.builtin_arg_js_text(module, args, 0)?;
+                match input.as_str() {
+                    Some(text) => Ok(Value::str(percent_encode_utf8(text, should_encode_uri))),
+                    None => Err(self.throw_uri_malformed(None)),
+                }
             }
 
             "builtin:DecodeURI" => {
@@ -111099,10 +111106,14 @@ fn unescape_code_units(units: &[u16]) -> Vec<u16> {
 // Shared UTF-8 Percent Codec
 // ---------------------------------------------------------------------------
 
-/// Check if a character should be encoded in a URI context.
-/// Based on RFC 3986 unreserved characters: ALPHA / DIGIT / "-" / "." / "_" / "~"
+/// ES2020 18.2.6.1 uriUnescaped: uriAlpha, DecimalDigit and uriMark
+/// (`- _ . ! ~ * ' ( )`), which both encoders leave as written. RFC 3986's
+/// unreserved set lacks `! * ' ( )`, which were escaped.
 fn is_uri_unreserved(c: char) -> bool {
-    matches!(c, 'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~')
+    matches!(
+        c,
+        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')'
+    )
 }
 
 /// Check if a character should be encoded in a URI component context (encodeURIComponent).

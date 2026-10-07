@@ -41819,9 +41819,11 @@ impl InterpreterCore {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => 0,
                 };
+                // An undefined end is the length (ES2020 22.1.3.6 step 7):
+                // `a.fill(v, 0, undefined)` filled nothing.
                 let end = match self.builtin_number_arg(module, args, 2)? {
+                    Some(Value::Undefined) | None => len,
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
-                    None => len,
                 };
                 if start < end {
                     let was_dense = self.array_cache_is_dense(arr_id);
@@ -42807,14 +42809,20 @@ impl InterpreterCore {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                     None => 0,
                 };
-                let delete_count = match self.builtin_number_arg(module, args, 1)? {
-                    None => len - start,
-                    Some(value) => {
-                        let raw = Self::value_as_integer(&value);
-                        if raw < 0 {
-                            0
-                        } else {
-                            (raw as usize).min(len - start)
+                // Steps 8-10: no start skips nothing (`a.toSpliced()` is a
+                // copy; it returned []), a start alone skips to the end.
+                let delete_count = if args.count == 0 {
+                    0
+                } else {
+                    match self.builtin_number_arg(module, args, 1)? {
+                        None => len - start,
+                        Some(value) => {
+                            let raw = Self::value_as_integer(&value);
+                            if raw < 0 {
+                                0
+                            } else {
+                                (raw as usize).min(len - start)
+                            }
                         }
                     }
                 };
@@ -74719,17 +74727,10 @@ impl InterpreterCore {
             Value::Int(n) => *n,
             Value::Float(f) => Self::f64_as_integer(f.inner()),
             Value::Bool(true) => 1,
-            Value::Str(s) => {
-                let trimmed = s.trim();
-                if trimmed.is_empty() {
-                    0
-                } else {
-                    trimmed
-                        .parse::<f64>()
-                        .map(Self::f64_as_integer)
-                        .unwrap_or(0)
-                }
-            }
+            // StringToNumber (ES2020 7.1.4.1.1): "0x0003" is 3, "Infinity"
+            // saturates, "inf" is NaN (0). Rust's float parser read "0x0003"
+            // as 0 and accepted spellings JavaScript does not.
+            Value::Str(s) => Self::f64_as_integer(primitive_conversion::string_number(s)),
             _ => 0,
         }
     }

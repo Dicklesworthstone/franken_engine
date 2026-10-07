@@ -513,19 +513,24 @@ fn facade_claimed_stream_declarators(body: &[Statement]) -> BTreeSet<(usize, usi
 }
 
 /// Whether each reference to `local` in `body` (at any depth, shadowed or
-/// not) is one of the facade's forms for `export`.
+/// not) is one of the facade's forms for `export`, and none is inside a
+/// function declaration. A declaration is hoisted and lowered before the
+/// `const` that switches the facade on, so a form inside one constructed the
+/// elided binding: undefined (split2's `new Transform(options)`).
 fn every_reference_is_a_facade_form(body: &[Statement], local: &str, export: &str) -> bool {
     let mut counter = FacadeFormCounter {
         local,
         export,
         references: 0,
         forms: 0,
+        function_declaration_depth: 0,
+        in_function_declaration: false,
     };
     let mut body = body.to_vec();
     if counter.statements(&mut body).is_err() {
         return false;
     }
-    counter.forms > 0 && counter.forms == counter.references
+    counter.forms > 0 && counter.forms == counter.references && !counter.in_function_declaration
 }
 
 struct FacadeFormCounter<'a> {
@@ -533,12 +538,25 @@ struct FacadeFormCounter<'a> {
     export: &'a str,
     references: usize,
     forms: usize,
+    /// How many function declarations enclose the walk's position.
+    function_declaration_depth: usize,
+    /// Whether a reference or form appeared inside a function declaration.
+    in_function_declaration: bool,
 }
 
 impl Walk for FacadeFormCounter<'_> {
+    fn statement(&mut self, statement: &mut Statement) -> Outcome {
+        let declaration = matches!(statement, Statement::FunctionDeclaration(_));
+        self.function_declaration_depth += usize::from(declaration);
+        let outcome = walk_statement(self, statement);
+        self.function_declaration_depth -= usize::from(declaration);
+        outcome
+    }
+
     fn expression(&mut self, expression: &mut Expression) -> Outcome {
         if matches!(expression, Expression::Identifier(name) if name == self.local) {
             self.references += 1;
+            self.in_function_declaration |= self.function_declaration_depth > 0;
             return Ok(());
         }
         let form = match self.export {
@@ -1006,6 +1024,7 @@ mod events_tests {
             "const { Readable } = require('stream'); Readable.from(['a']); class X extends Readable {}",
             "const { Duplex } = require('node:stream'); new Duplex();",
             "let { Readable } = require('stream'); new Readable();",
+            "const { Transform } = require('stream'); function f() { return new Transform({}); }",
             "function f() { return require('stream').Transform; }",
             "const { pipeline } = require('stream/promises');",
         ] {

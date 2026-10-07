@@ -2365,3 +2365,26 @@ fn unsupported_esm_namespace_possession_and_dynamic_import_fail_closed() {
         );
     }
 }
+
+/// A facade form inside a function declaration: the declaration is hoisted
+/// and lowered before the `const` that switches the facade on, so the
+/// facade elided the binding and `new Transform(...)` constructed undefined
+/// ("expected constructor function, got undefined"; split2 builds its
+/// stream this way). Such a program runs the stream module. Node v22.2.0
+/// gives this line; Bun 1.4.2 agrees.
+#[test]
+fn constructors_inside_function_declarations_run_the_stream_module() {
+    let source = "const { Transform, Writable } = require('stream');
+function upper() { return new Transform({ transform(chunk, enc, cb) { cb(null, String(chunk).toUpperCase()); } }); }
+function sink(log) { return new Writable({ write(chunk, enc, cb) { log.push('w:' + chunk); cb(); } }); }
+const log = [];
+const t = upper();
+const w = sink(log);
+t.on('data', (d) => log.push('data:' + d));
+t.on('end', () => log.push('end'));
+w.on('finish', () => log.push('finish'));
+t.write('ab'); t.end('cd');
+w.write('x'); w.end();
+setTimeout(() => console.log(log.join(' ')), 20);";
+    assert_eq!(eval_console(source), "data:AB data:CD w:x end finish");
+}

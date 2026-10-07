@@ -50844,6 +50844,24 @@ impl InterpreterCore {
                     Ok(value) => value,
                     Err(error) => return self.route_reentrant_guest_error(module, error),
                 };
+                // ES2020 12.15.3 ApplyStringOrNumericBinaryOperator: ToNumeric
+                // of the left operand completes, throwing for a Symbol, before
+                // the right one converts. A relational comparison converts both
+                // operands to primitives first (7.2.13).
+                let relational = matches!(
+                    numeric,
+                    Ir3Instruction::Lt { .. }
+                        | Ir3Instruction::Lte { .. }
+                        | Ir3Instruction::Gt { .. }
+                        | Ir3Instruction::Gte { .. }
+                );
+                if rhs.is_some() && !relational && matches!(left, Value::Symbol(_)) {
+                    self.clear_pending_hostcall_result_label();
+                    return Err(InterpreterError::TypeError {
+                        expected: "value convertible to a number".to_string(),
+                        got: "Symbol (Cannot convert a Symbol value to a number)".to_string(),
+                    });
+                }
                 let right = match rhs {
                     Some(rhs) => match self.observable_to_numeric_primitive_operand(module, rhs) {
                         Ok(value) => Some(value),

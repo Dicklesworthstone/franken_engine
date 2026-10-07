@@ -2468,16 +2468,17 @@ fn eval_lane_router_for_ir3(
     Ok(LaneRouter::with_configs(quickjs_config, v8_config))
 }
 
-/// Source eval owns its lane configuration and knows the compiled frame widths.
-/// Accommodate those widths without increasing the caller's memory budget or
-/// changing raw-interpreter limits. The runtime already accounts register
+/// Source eval owns its lane configuration and knows the compiled frame widths;
+/// so does the execution orchestrator for the entry module it runs
+/// (bd-9vouw.262). Accommodate those widths without increasing the caller's
+/// memory budget or changing raw-interpreter limits. The runtime already accounts register
 /// payloads, but not the shallow stacked value/label carriers, so reserve all
 /// *additional* carriers for the deepest full-width register file the core
 /// admits (`max_call_depth + 1` windows, capped by `register_file_slot_limit`,
 /// bd-9vouw.72) before allocating any core. This conservative reservation
 /// prevents wide recursive functions from turning automatic frame sizing into
 /// an unaccounted allocation channel.
-fn reserve_eval_register_capacity(
+pub(crate) fn reserve_eval_register_capacity(
     config: &mut InterpreterConfig,
     required_registers: u32,
 ) -> Result<(), InterpreterError> {

@@ -3548,12 +3548,19 @@ impl ExecutionOrchestrator {
         self.config.commonjs_entry && self.config.parse_goal == ParseGoal::Script
     }
 
+    /// The two lane configurations for one execution. `widest_frame` is the
+    /// entry module's widest verified IR3 frame: each lane's register window
+    /// is widened to it, with the extra register carriers charged to the
+    /// memory budget as source eval does (bd-9vouw.262). The deterministic
+    /// lane's 256 registers otherwise refused a module whose functions the
+    /// lowering had sized wider (@babel/standalone failed at load).
     fn lane_router_for_execution(
         &self,
         package: &ExtensionPackage,
         cancellation_token: Option<&CancellationToken>,
         instruction_budget: u64,
         memory_budget_bytes: u64,
+        widest_frame: u32,
     ) -> Result<LaneRouter, OrchestratorError> {
         // Console is granted by default because orchestrated console output is
         // capture-only: it lands in `OrchestratorResult::console_output` and the
@@ -3599,6 +3606,8 @@ impl ExecutionOrchestrator {
             v8_config.module_root = Some(root);
             v8_config.canonical_module_root = canonical_root;
         }
+        crate::reserve_eval_register_capacity(&mut quickjs_config, widest_frame)?;
+        crate::reserve_eval_register_capacity(&mut v8_config, widest_frame)?;
 
         Ok(LaneRouter::with_configs(quickjs_config, v8_config))
     }
@@ -3707,11 +3716,18 @@ impl ExecutionOrchestrator {
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the minimal VM capabilities needed to run the already-lowered module.
+        let widest_frame = ir3
+            .function_table
+            .iter()
+            .map(|function| function.frame_size)
+            .max()
+            .unwrap_or(0);
         let mut lane_router = self.lane_router_for_execution(
             package,
             Some(cancellation_token),
             instruction_budget,
             memory_budget_bytes,
+            widest_frame,
         )?;
         // bd-f5b04.2.7: thread the installed sandboxed host-I/O provider (+ recorder)
         // into whichever lane runs, so authorized `fs:` hostcalls perform and record
@@ -5728,6 +5744,7 @@ mod tests {
                     Some(&cancellation),
                     defaults.instruction_budget,
                     defaults.max_total_memory_bytes,
+                    0,
                 )
                 .expect("lane router should build for the cancel-loop package");
             let error = router
@@ -5747,7 +5764,7 @@ mod tests {
 
         for lane in [LaneChoice::QuickJs, LaneChoice::V8] {
             let router = ExecutionOrchestrator::with_defaults()
-                .lane_router_for_execution(&package, None, 3, 64 * 1024 * 1024)
+                .lane_router_for_execution(&package, None, 3, 64 * 1024 * 1024, 0)
                 .expect("authority-limited lane router should build");
             let instruction_limited = router
                 .execute(&module, "cell-budget-trace", Some(lane))
@@ -5762,7 +5779,7 @@ mod tests {
             );
 
             let memory_limited = ExecutionOrchestrator::with_defaults()
-                .lane_router_for_execution(&package, None, 10_000, 1)
+                .lane_router_for_execution(&package, None, 10_000, 1, 0)
                 .expect("memory-limited lane router should build")
                 .execute(&module, "cell-memory-trace", Some(lane))
                 .expect_err("one-byte authority limit must refuse interpreter memory admission");

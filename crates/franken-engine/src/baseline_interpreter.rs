@@ -41766,8 +41766,11 @@ impl InterpreterCore {
                 // (element, index, array) with the optional thisArg.
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.forEach")?;
+                let typed_array_method = Self::is_typed_array_prototype_builtin(builtin);
                 for index in 0..len {
-                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
+                    let Some(element) =
+                        self.array_loop_element(Some(module), arr_id, index, typed_array_method)?
+                    else {
                         continue;
                     };
                     self.invoke_array_callback(
@@ -42045,8 +42048,11 @@ impl InterpreterCore {
                 // element (holes skipped).
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.some")?;
+                let typed_array_method = Self::is_typed_array_prototype_builtin(builtin);
                 for index in 0..len {
-                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
+                    let Some(element) =
+                        self.array_loop_element(Some(module), arr_id, index, typed_array_method)?
+                    else {
                         continue;
                     };
                     let result = self.invoke_array_callback(
@@ -42068,8 +42074,11 @@ impl InterpreterCore {
                 // element (holes skipped); short-circuits on the first falsy.
                 let (arr_id, callback, this_arg, len) =
                     self.array_callback_receiver(receiver, args, "Array.prototype.every")?;
+                let typed_array_method = Self::is_typed_array_prototype_builtin(builtin);
                 for index in 0..len {
-                    let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
+                    let Some(element) =
+                        self.array_loop_element(Some(module), arr_id, index, typed_array_method)?
+                    else {
                         continue;
                     };
                     let result = self.invoke_array_callback(
@@ -42086,14 +42095,20 @@ impl InterpreterCore {
                 }
                 Ok(Value::Bool(true))
             }
-            BuiltinFunctionKind::ArrayReduce => {
-                self.array_reduce_receiver(module, receiver, args, false, "Array.prototype.reduce")
-            }
+            BuiltinFunctionKind::ArrayReduce => self.array_reduce_receiver(
+                module,
+                receiver,
+                args,
+                false,
+                Self::is_typed_array_prototype_builtin(builtin),
+                "Array.prototype.reduce",
+            ),
             BuiltinFunctionKind::ArrayReduceRight => self.array_reduce_receiver(
                 module,
                 receiver,
                 args,
                 true,
+                Self::is_typed_array_prototype_builtin(builtin),
                 "Array.prototype.reduceRight",
             ),
             BuiltinFunctionKind::ArraySort => {
@@ -73396,6 +73411,33 @@ impl InterpreterCore {
         }
     }
 
+    /// The element a native callback loop visits at `index`, or `None` to
+    /// skip a hole. A %TypedArray%.prototype method sharing the Array loop
+    /// reads with Get alone (ES2024 23.2.3.12 every, .15 forEach, .23
+    /// reduce, .24 reduceRight, .28 some: no HasProperty), so an index a
+    /// buffer shrink removed during the loop is visited as undefined, where
+    /// the Array.prototype method skips it (bd-9vouw.256 made both skip).
+    fn array_loop_element(
+        &mut self,
+        module: Option<&Ir3Module>,
+        array_id: ObjectId,
+        index: usize,
+        typed_array_method: bool,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let element = self.array_index_get(module, array_id, index)?;
+        Ok(if typed_array_method {
+            Some(element.unwrap_or(Value::Undefined))
+        } else {
+            element
+        })
+    }
+
+    /// Whether `builtin` is a %TypedArray%.prototype method that shares an
+    /// Array.prototype algorithm (`typed_array_prototype_method`).
+    fn is_typed_array_prototype_builtin(builtin: &BuiltinFunction) -> bool {
+        &*builtin.module_specifier == TYPED_ARRAY_PROTOTYPE_SPECIFIER
+    }
+
     /// One hole visited by a native element loop (bd-9vouw.112).
     fn charge_native_hole_read(&self) -> Result<(), InterpreterError> {
         let reads = self.native_hole_reads.get().saturating_add(1);
@@ -74124,6 +74166,7 @@ impl InterpreterCore {
         receiver: Option<Value>,
         args: RegRange,
         reverse: bool,
+        typed_array_method: bool,
         method: &str,
     ) -> Result<Value, InterpreterError> {
         let receiver = receiver.unwrap_or(Value::Undefined);
@@ -74153,7 +74196,9 @@ impl InterpreterCore {
         } else {
             let mut seed = None;
             for idx in iter.by_ref() {
-                if let Some(value) = self.array_index_get(Some(module), arr_id, idx)? {
+                if let Some(value) =
+                    self.array_loop_element(Some(module), arr_id, idx, typed_array_method)?
+                {
                     seed = Some(value);
                     break;
                 }
@@ -74169,7 +74214,9 @@ impl InterpreterCore {
             }
         };
         for idx in iter {
-            let Some(current) = self.array_index_get(Some(module), arr_id, idx)? else {
+            let Some(current) =
+                self.array_loop_element(Some(module), arr_id, idx, typed_array_method)?
+            else {
                 continue;
             };
             accumulator = self.invoke_simple_reduce_callback(

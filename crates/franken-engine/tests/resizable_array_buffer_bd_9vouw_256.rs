@@ -153,3 +153,49 @@ console.log(arr.reduce(function (a, b, i, o) { if (i === 1) o.length = 2; return
         ]
     );
 }
+
+/// bd-9vouw.256: %TypedArray%.prototype forEach, every, some, reduce and
+/// reduceRight read each index below the starting length with Get alone
+/// (ES2024 23.2.3), so an index a buffer shrink removed mid-loop is visited
+/// as undefined; Array.prototype.forEach over the same typed array checks
+/// HasProperty and skips it. The shared native loops skipped for both after
+/// the first .256 fix (10 Test262 TypedArray tests lost in the gate29
+/// census) and visited for both before it. Expected lines are Node v22.2.0's
+/// output, captured programmatically; Bun 1.4.2 agrees.
+#[test]
+fn typed_array_methods_visit_shrunk_indices_as_undefined_bd_9vouw_256() {
+    let source = r#"function run(method, args) {
+  var rab = new ArrayBuffer(4, { maxByteLength: 8 });
+  var ta = new Uint8Array(rab);
+  for (var i = 0; i < 4; i++) ta[i] = i * 2;
+  var seen = [];
+  var callback = function (a, b) {
+    seen.push(method.indexOf('reduce') === 0 ? String(b) : String(a));
+    if (seen.length === 2) rab.resize(2);
+    return method === 'every' ? true : method === 'some' ? false : a;
+  };
+  ta[method].apply(ta, [callback].concat(args));
+  return method + ':' + seen.join('/');
+}
+console.log([run('forEach', []), run('every', []), run('some', []), run('reduce', [100]), run('reduceRight', [100])].join(' '));
+var rab = new ArrayBuffer(4, { maxByteLength: 8 });
+var ta = new Uint8Array(rab);
+var arraySeen = [];
+Array.prototype.forEach.call(ta, function (v, i) { arraySeen.push(i); if (i === 1) rab.resize(2); });
+console.log(arraySeen.join(','));
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "forEach:0/2/undefined/undefined every:0/2/undefined/undefined some:0/2/undefined/undefined reduce:0/2/undefined/undefined reduceRight:6/4/2/0",
+            "0,1",
+        ]
+    );
+}

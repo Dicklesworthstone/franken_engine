@@ -83,6 +83,7 @@ fn simple_func(name: &str, params: &[&str], body: Vec<Statement>) -> FunctionDec
         is_generator: false,
         span: s0(),
         source_text: None,
+        strict: false,
     }
 }
 
@@ -661,6 +662,7 @@ fn enrichment_function_declaration_with_destructured_params_serde() {
         is_generator: false,
         span: s0(),
         source_text: None,
+        strict: false,
     };
     let json = serde_json::to_string(&func).unwrap();
     let restored: FunctionDeclaration = serde_json::from_str(&json).unwrap();
@@ -1218,6 +1220,7 @@ fn enrichment_statement_span_returns_correct_for_all_18_variants() {
             is_generator: false,
             span: target,
             source_text: None,
+            strict: false,
         }),
         Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),
@@ -1328,6 +1331,7 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
             is_generator: false,
             span: s0(),
             source_text: None,
+            strict: false,
         }),
         Statement::ForIn(ForInStatement {
             binding: BindingPattern::Identifier("k".to_string()),

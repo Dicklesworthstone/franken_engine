@@ -1394,6 +1394,7 @@ fn duplicate_function_parameters_detected_in_module() {
             is_generator: false,
             span: span(1),
             source_text: None,
+            strict: false,
         })],
     );
     let result = analyze(&tree);
@@ -1495,6 +1496,7 @@ fn function_declaration_creates_binding() {
             is_generator: false,
             span: span(1),
             source_text: None,
+            strict: false,
         })],
     );
     let result = analyze(&tree);
@@ -1523,6 +1525,7 @@ fn return_inside_function_is_valid() {
             is_generator: false,
             span: span(1),
             source_text: None,
+            strict: false,
         })],
     );
     let result = analyze(&tree);

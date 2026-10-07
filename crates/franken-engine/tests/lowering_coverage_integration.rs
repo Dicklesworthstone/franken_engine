@@ -1179,6 +1179,7 @@ fn make_func_decl(name: &str, params: &[&str], body: Vec<Statement>) -> Statemen
         is_generator: false,
         span: span(),
         source_text: None,
+        strict: false,
     })
 }
 

@@ -3455,6 +3455,7 @@ mod tests {
                 is_generator: false,
                 span: span(1),
                 source_text: None,
+                strict: false,
             })],
         );
         let result = analyze(&tree);
@@ -3637,6 +3638,7 @@ mod tests {
                 is_generator: false,
                 span: span(1),
                 source_text: None,
+                strict: false,
             })],
         );
         let result = analyze(&tree);
@@ -3674,6 +3676,7 @@ mod tests {
                 is_generator: false,
                 span: span(1),
                 source_text: None,
+                strict: false,
             })],
         );
         let result = analyze(&tree);
@@ -3832,6 +3835,7 @@ mod tests {
                 is_generator: false,
                 span: span(1),
                 source_text: None,
+                strict: false,
             })],
         );
         let result = analyze(&tree);
@@ -4092,6 +4096,7 @@ mod tests {
                     is_generator: false,
                     span: span(1),
                     source_text: None,
+                    strict: false,
                 }),
                 // This return is at top-level (outside function)
                 Statement::Return(ReturnStatement {
@@ -4316,6 +4321,7 @@ mod tests {
                     is_generator: false,
                     span: span(2),
                     source_text: None,
+                    strict: false,
                 }),
             ],
         );
@@ -5218,6 +5224,7 @@ mod tests {
                 is_generator: false,
                 span: span(1),
                 source_text: None,
+                strict: false,
             })],
         );
         let result = analyze(&tree);

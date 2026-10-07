@@ -1370,6 +1370,13 @@ pub struct FunctionDeclaration {
     /// Its source text, for Function.prototype.toString (bd-9vouw.184).
     #[serde(skip)]
     pub source_text: Option<FunctionSourceText>,
+    /// Whether its code is strict mode code (ES2020 10.2.1), as the parser
+    /// determined it (bd-9vouw.272): a sloppy function has own `caller` and
+    /// `arguments`, and its arguments object a `callee`. It follows from the
+    /// directive prologues, the goal and class nesting the canonical
+    /// encoding already covers, so that encoding leaves it out.
+    #[serde(default)]
+    pub strict: bool,
 }
 
 impl FunctionDeclaration {
@@ -1908,6 +1915,10 @@ pub enum Expression {
         /// Its source text, for Function.prototype.toString (bd-9vouw.184).
         #[serde(skip)]
         source_text: Option<FunctionSourceText>,
+        /// Whether its code is strict mode code (see
+        /// [`FunctionDeclaration::strict`], bd-9vouw.272).
+        #[serde(default)]
+        strict: bool,
     },
     Raw(String),
     /// Spread element: `...expr` in array literals, object literals, or
@@ -3996,6 +4007,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 source_text: None,
+                strict: false,
             },
             computed: false,
             shorthand: false,
@@ -4566,6 +4578,7 @@ mod tests {
             is_generator: true,
             span: make_span(),
             source_text: None,
+            strict: false,
         });
         match stmt.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -4588,6 +4601,7 @@ mod tests {
             is_generator: true,
             span: make_span(),
             source_text: None,
+            strict: false,
         };
         match func.canonical_value() {
             CanonicalValue::Map(map) => {
@@ -4705,6 +4719,7 @@ mod tests {
                 is_generator: false,
                 span: span.clone(),
                 source_text: None,
+                strict: false,
             }),
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
@@ -4811,6 +4826,7 @@ mod tests {
                 is_generator: false,
                 span: span.clone(),
                 source_text: None,
+                strict: false,
             }),
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
@@ -5327,6 +5343,7 @@ mod tests {
                 is_generator: false,
                 span: make_span(),
                 source_text: None,
+                strict: false,
             }),
             Statement::ForIn(ForInStatement {
                 binding: BindingPattern::Identifier("k".to_string()),
@@ -5786,6 +5803,7 @@ mod tests {
             is_generator: false,
             span: make_span(),
             source_text: None,
+            strict: false,
         };
         if let CanonicalValue::Map(map) = func.canonical_value() {
             assert_eq!(map["name"], CanonicalValue::String("add".to_string()));

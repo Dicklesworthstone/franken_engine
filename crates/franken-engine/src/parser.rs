@@ -13791,12 +13791,12 @@ fn parse_function_expression_with_super(
             if !context.strict_mode {
                 apply_annex_b_block_functions(&mut body, &params);
             }
-            Ok((params, body))
+            Ok((params, body, context.strict_mode))
         })
     });
     context.super_property_allowed = saved_super_property_allowed;
     context.super_call = saved_super_call;
-    let (params, body_stmts) = parsed?;
+    let (params, body_stmts, strict) = parsed?;
 
     Ok(Expression::Function {
         name,
@@ -13808,6 +13808,7 @@ fn parse_function_expression_with_super(
         is_async,
         is_generator,
         source_text: None,
+        strict,
     })
 }
 
@@ -15224,11 +15225,11 @@ fn parse_function_declaration(
             if !context.strict_mode {
                 apply_annex_b_block_functions(&mut body, &params);
             }
-            Ok((params, body))
+            Ok((params, body, context.strict_mode))
         })
     });
     context.super_call = saved_super_call;
-    let (params, body_stmts) = parsed?;
+    let (params, body_stmts, strict) = parsed?;
 
     Ok(Statement::FunctionDeclaration(FunctionDeclaration {
         name,
@@ -15241,6 +15242,7 @@ fn parse_function_declaration(
         is_generator,
         span,
         source_text,
+        strict,
     }))
 }
 

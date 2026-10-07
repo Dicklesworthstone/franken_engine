@@ -756,6 +756,7 @@ mod tests {
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
             function_sources: Default::default(),
+            sloppy_functions: Default::default(),
         }
     }
 

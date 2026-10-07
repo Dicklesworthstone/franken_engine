@@ -565,6 +565,7 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
             is_async: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         },
         Ir1Op::BeginTry {
             catch_label: 5,

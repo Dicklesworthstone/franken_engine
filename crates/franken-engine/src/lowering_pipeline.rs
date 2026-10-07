@@ -4840,6 +4840,11 @@ fn lower_object_assignment_pattern_to_ir1(
 /// first such slot (ES2020 ExpectedArgumentCount, bd-9vouw.134).
 const DEFAULTED_PARAM_SLOT_PREFIX: &str = "__param_default_";
 
+/// The prefix every synthetic parameter slot shares (`__param_N` for a
+/// destructuring pattern, [`DEFAULTED_PARAM_SLOT_PREFIX`] for an
+/// initializer): a parameter list with one is not simple (bd-9vouw.272).
+const SYNTHETIC_PARAM_SLOT_PREFIX: &str = "__param_";
+
 /// ExpectedArgumentCount: parameters before the first one with an
 /// initializer or the rest parameter.
 fn expected_argument_count(param_names: &[String], rest_param_index: Option<u32>) -> u32 {
@@ -7328,6 +7333,7 @@ fn lower_statement_to_ir1_with_flow(
                 is_async: func.is_async,
                 rest_param_index,
                 source_text: func.source_text.clone(),
+                sloppy: !func.strict,
             });
             ops.push(Ir1Op::Pop);
         }
@@ -7510,6 +7516,7 @@ fn lower_statement_to_ir1_with_flow(
                 is_async: false,
                 rest_param_index,
                 source_text: cls.source_text.clone(),
+                sloppy: false,
             });
             // Discard (not Pop): the class binding is in r0 when the class is the
             // first top-level binding, but a SECOND class's DeclareFunction Pop
@@ -7795,6 +7802,7 @@ fn lower_statement_to_ir1_with_flow(
                     is_arrow: false,
                     rest_param_index: m_rest_param_index,
                     source_text: method.source_text.clone(),
+                    sloppy: false,
                 });
 
                 match (class_element_record_kind(method), method.kind) {
@@ -8442,6 +8450,8 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         rest_param_index: Option<u32>,
         /// Function.prototype.toString's text (bd-9vouw.184).
         source_text: Option<crate::ast::FunctionSourceText>,
+        /// Not strict mode code (bd-9vouw.272).
+        sloppy: bool,
     }
     let mut deferred_functions = Vec::<DeferredFunction>::new();
 
@@ -10149,6 +10159,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 is_async,
                 rest_param_index,
                 source_text,
+                sloppy,
             } => {
                 // A scope-routed function binding (captured, or past the
                 // register-resident root budget like any spilled `var`,
@@ -10211,6 +10222,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         is_arrow: false,
                         rest_param_index: *rest_param_index,
                         source_text: source_text.clone(),
+                        sloppy: *sloppy,
                     });
                     if *is_generator && *is_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10300,6 +10312,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 is_arrow,
                 rest_param_index,
                 source_text,
+                sloppy,
             } => {
                 let dst = alloc_register(&mut register_cursor);
                 let self_capture_name = name
@@ -10349,6 +10362,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     is_arrow: *is_arrow,
                     rest_param_index: *rest_param_index,
                     source_text: source_text.clone(),
+                    sloppy: *sloppy,
                 });
                 if *is_generator && *is_async {
                     ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10804,6 +10818,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             is_arrow: fn_is_arrow,
             rest_param_index: fn_rest_param_index,
             source_text: fn_source_text,
+            sloppy: fn_sloppy,
         } = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
@@ -12194,6 +12209,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     is_async: inner_async,
                     rest_param_index: inner_rest,
                     source_text: inner_source_text,
+                    sloppy: inner_sloppy,
                 } => {
                     if inner_body.is_empty() {
                         unreachable!(
@@ -12252,6 +12268,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         is_arrow: false,
                         rest_param_index: *inner_rest,
                         source_text: inner_source_text.clone(),
+                        sloppy: *inner_sloppy,
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -12329,6 +12346,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     is_arrow: inner_arrow,
                     rest_param_index: inner_rest,
                     source_text: inner_source_text,
+                    sloppy: inner_sloppy,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
                     let available_capture_names: BTreeSet<&str> = fv_id_to_name
@@ -12373,6 +12391,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         is_arrow: *inner_arrow,
                         rest_param_index: *inner_rest,
                         source_text: inner_source_text.clone(),
+                        sloppy: *inner_sloppy,
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -12935,6 +12954,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         if let Some(text) = fn_source_text {
             let function_index = u32::try_from(ir3.function_table.len()).unwrap_or(u32::MAX);
             ir3.function_sources.insert(function_index, text);
+        }
+        // bd-9vouw.272: its own `caller`/`arguments` and `callee`. A
+        // destructured or defaulted parameter has a synthetic slot, and a
+        // rest parameter its index, so the list is simple without either.
+        if fn_sloppy {
+            let function_index = u32::try_from(ir3.function_table.len()).unwrap_or(u32::MAX);
+            let simple_parameters = fn_rest_param_index.is_none()
+                && !param_names
+                    .iter()
+                    .any(|name| name.starts_with(SYNTHETIC_PARAM_SLOT_PREFIX));
+            ir3.sloppy_functions
+                .insert(function_index, simple_parameters);
         }
         ir3.function_table.push(Ir3FunctionDesc {
             entry,
@@ -15082,6 +15113,7 @@ fn try_lower_arrow_expression_to_ir1(
         is_arrow: true,
         rest_param_index,
         source_text: source_text.clone(),
+        sloppy: false,
     });
     Ok(true)
 }
@@ -19281,6 +19313,7 @@ fn lower_expression_to_ir1_inner(
             is_async,
             is_generator,
             source_text,
+            strict,
         } => {
             // Same as ArrowFunction but with a BlockStatement body and optional name.
             let mut body_ops = Vec::new();
@@ -19468,6 +19501,7 @@ fn lower_expression_to_ir1_inner(
                 is_arrow: false,
                 rest_param_index,
                 source_text: source_text.clone(),
+                sloppy: !*strict,
             });
         }
         Expression::New { callee, arguments } => {
@@ -20036,6 +20070,7 @@ fn lower_expression_to_ir1_inner(
                 is_async: false,
                 rest_param_index,
                 source_text: class_source_text.clone(),
+                sloppy: false,
             });
             // Discard (not Pop): the class binding is in r0 when the class is the
             // first top-level binding, but a SECOND class's DeclareFunction Pop
@@ -20333,6 +20368,7 @@ fn lower_expression_to_ir1_inner(
                     is_arrow: false,
                     rest_param_index: m_rest_param_index,
                     source_text: method.source_text.clone(),
+                    sloppy: false,
                 });
                 match (class_element_record_kind(method), method.kind) {
                     (Some(element), _) => push_class_element_record(ops, element),
@@ -35004,6 +35040,7 @@ mod tests {
             is_arrow: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         }
     }
 
@@ -36105,6 +36142,7 @@ mod tests {
             is_arrow: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         }
     }
 
@@ -36670,6 +36708,7 @@ mod tests {
             is_arrow: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "net.write".to_string(),
@@ -36710,6 +36749,7 @@ mod tests {
             is_arrow: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         });
         ir1.ops.push(Ir1Op::Call { arg_count: 0 });
         ir1.ops.push(Ir1Op::HostCall {
@@ -36756,6 +36796,7 @@ mod tests {
             is_async: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         });
         ir1.ops.push(Ir1Op::Pop);
         ir1.ops.push(Ir1Op::LoadBinding { binding_id: 23 });
@@ -36838,6 +36879,7 @@ mod tests {
             is_arrow: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         });
         ir1.ops.push(Ir1Op::HostCall {
             capability: "net.write".to_string(),
@@ -36891,6 +36933,7 @@ mod tests {
             is_arrow: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         }
     }
 
@@ -36963,6 +37006,7 @@ mod tests {
                 is_arrow: false,
                 rest_param_index: None,
                 source_text: None,
+                sloppy: false,
             },
             Ir1Op::Call { arg_count: 0 },
             Ir1Op::HostCall {
@@ -37003,6 +37047,7 @@ mod tests {
             is_arrow: false,
             rest_param_index: None,
             source_text: None,
+            sloppy: false,
         };
         ir1.ops.extend([
             Ir1Op::NewObject { count: 0 },
@@ -37087,6 +37132,7 @@ mod tests {
                     is_arrow: false,
                     rest_param_index: None,
                     source_text: None,
+                    sloppy: false,
                 },
                 Ir1Op::Call { arg_count: 0 },
                 Ir1Op::HostCall {
@@ -45130,6 +45176,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             source_text: None,
+            strict: false,
         };
         let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::Identifier("v".into()),
@@ -45168,6 +45215,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             source_text: None,
+            strict: false,
         };
         let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::Identifier("value".into()),
@@ -45240,6 +45288,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             source_text: None,
+            strict: false,
         };
         let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::StringLiteral(exact.clone()),
@@ -45272,6 +45321,7 @@ mod tests {
             is_async: false,
             is_generator: false,
             source_text: None,
+            strict: false,
         };
         let ir0 = expr_ir0(Expression::ObjectLiteral(vec![ObjectProperty {
             key: Expression::StringLiteral(exact.clone()),
@@ -46941,6 +46991,7 @@ mod tests {
             is_generator: false,
             span: span(),
             source_text: None,
+            strict: false,
         })]);
         let result = lower_ir0_to_ir1(&ir0).expect("function should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
@@ -46962,6 +47013,7 @@ mod tests {
             is_generator: false,
             span: span(),
             source_text: None,
+            strict: false,
         })]);
         let result = lower_ir0_to_ir1(&ir0).expect("anon function should lower");
         assert!(result.module.ops.iter().any(|op| matches!(
@@ -46989,6 +47041,7 @@ mod tests {
             is_generator: false,
             span: span(),
             source_text: None,
+            strict: false,
         })]);
 
         let ir1 = lower_ir0_to_ir1(&ir0)
@@ -47098,6 +47151,7 @@ mod tests {
             is_generator: false,
             span: span(),
             source_text: None,
+            strict: false,
         })]);
 
         let context = LoweringContext::new("trace-react-return", "decision-react-return", "policy");
@@ -48925,6 +48979,7 @@ mod tests {
             is_generator: false,
             span: span(),
             source_text: None,
+            strict: false,
         });
 
         let ir0 = Ir0Module {
@@ -49363,6 +49418,7 @@ mod tests {
                 is_async: false,
                 span: span(),
                 source_text: None,
+                strict: false,
             })],
             span: span(),
         };
@@ -49932,6 +49988,7 @@ mod tests {
                     is_async: false,
                     is_generator: false,
                     source_text: None,
+                    strict: false,
                 }),
                 span: span(),
             }),

@@ -3639,6 +3639,10 @@ pub enum BuiltinFunctionKind {
     /// `Function.prototype[@@hasInstance](V)` (ES2020 19.2.3.6):
     /// OrdinaryHasInstance(this, V) (bd-9vouw.268). Append only.
     FunctionPrototypeHasInstance,
+    /// %ThrowTypeError% (ES2020 9.2.9.1): throws a TypeError. The `get` and
+    /// `set` of every arguments object's `callee` but a sloppy function
+    /// with a simple parameter list's (bd-9vouw.272). Append only.
+    ThrowTypeError,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5577,7 +5581,8 @@ impl BuiltinFunction {
             | BuiltinFunctionKind::PromiseFinallyValueThunk
             | BuiltinFunctionKind::PromiseFinallyThrower
             | BuiltinFunctionKind::ArrayFromAsyncFulfilled
-            | BuiltinFunctionKind::ArrayFromAsyncRejected => "",
+            | BuiltinFunctionKind::ArrayFromAsyncRejected
+            | BuiltinFunctionKind::ThrowTypeError => "",
             BuiltinFunctionKind::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
             BuiltinFunctionKind::ObjectPrototypeToLocaleString => "toLocaleString",
             BuiltinFunctionKind::BigIntToString => "toString",
@@ -5873,7 +5878,8 @@ impl BuiltinFunction {
             | K::PromiseFinallyValueThunk
             | K::PromiseFinallyThrower
             | K::ProxyRevoke
-            | K::PrototypeGetter => Some(0),
+            | K::PrototypeGetter
+            | K::ThrowTypeError => Some(0),
             _ => None,
         };
         if fixed.is_some() {
@@ -9385,6 +9391,18 @@ struct GeneratorInvocation {
     module_specifier: Option<String>,
     /// Generated artifact whose program owns `function_index`, when present.
     generated_function_artifact: Option<GeneratedFunctionArtifactHandle>,
+}
+
+/// An arguments object's `callee` (ES2020 9.4.4.6-7, bd-9vouw.272).
+enum ArgumentsCallee {
+    /// A sloppy function with a simple parameter list: a data property
+    /// holding the function.
+    Function(Value),
+    /// Every other function: the %ThrowTypeError% accessor.
+    ThrowTypeError,
+    /// No `callee` (an arguments object made without call setup, a sloppy
+    /// generator's).
+    Omitted,
 }
 
 /// Complete execution-local activation owned by a suspended generator.
@@ -44508,6 +44526,13 @@ impl InterpreterCore {
                     got: other.as_ref().map_or("undefined", Value::type_name).to_string(),
                 }),
             },
+            // %ThrowTypeError% (ES2020 9.2.9.1), with V8's message.
+            BuiltinFunctionKind::ThrowTypeError => Err(InterpreterError::TypeError {
+                expected: "no access to a strict arguments object's callee".to_string(),
+                got: "'caller', 'callee', and 'arguments' properties may not be accessed on \
+                      strict mode functions or the arguments objects for calls to them"
+                    .to_string(),
+            }),
             // Function.prototype[@@hasInstance](V) (ES2020 19.2.3.6):
             // OrdinaryHasInstance(this, V), which answers false for a
             // non-callable `this` instead of throwing as `instanceof` does.
@@ -47836,7 +47861,7 @@ impl InterpreterCore {
         }
         self.apply_rest_param(&mut argument_values, function.rest_param_index, args)?;
         self.apply_rest_param_labels(&mut argument_labels, function.rest_param_index, args)?;
-        self.stage_arguments_object(module, function, args)?;
+        self.stage_arguments_object(module, function, function_index, &active_callee, args)?;
         self.run_pre_call_hook(module, &active_callee, function_index, &argument_values)?;
 
         let scope_depth = self.scope_chain.depth();
@@ -48077,7 +48102,18 @@ impl InterpreterCore {
                 .argument_labels
                 .iter()
                 .fold(Label::Public, |joined, label| joined.join(label));
-            Some((self.alloc_arguments_object(&invocation.arguments)?, label))
+            // bd-9vouw.272: a strict generator's or one with a non-simple
+            // parameter list's `callee` is the %ThrowTypeError% accessor.
+            // No-claim: a sloppy generator with a simple parameter list gets
+            // no `callee` (Node: the generator function).
+            let callee = match module.sloppy_functions.get(&invocation.function_index) {
+                Some(true) => ArgumentsCallee::Omitted,
+                _ => ArgumentsCallee::ThrowTypeError,
+            };
+            Some((
+                self.alloc_arguments_object(Some(module), &invocation.arguments, callee)?,
+                label,
+            ))
         } else {
             None
         };
@@ -50851,7 +50887,7 @@ impl InterpreterCore {
                         }
                         self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
                         self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
-                        self.stage_arguments_object(module, func, args)?;
+                        self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
                         let captured_env_bytes = captured_env
@@ -51128,7 +51164,7 @@ impl InterpreterCore {
                                 func.rest_param_index,
                                 args,
                             )?;
-                            self.stage_arguments_object(module, func, args)?;
+                            self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -51494,7 +51530,7 @@ impl InterpreterCore {
                         self.mark_inline_callback_started();
                         self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
                         self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
-                        self.stage_arguments_object(module, func, args)?;
+                        self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
                         let captured_env_bytes = captured_env
@@ -51728,7 +51764,7 @@ impl InterpreterCore {
                     self.mark_inline_callback_started();
                     self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
                     self.apply_rest_param_labels(&mut arg_labels, func.rest_param_index, args)?;
-                    self.stage_arguments_object(module, func, args)?;
+                    self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -54034,7 +54070,7 @@ impl InterpreterCore {
                                 func.rest_param_index,
                                 args,
                             )?;
-                            self.stage_arguments_object(module, func, args)?;
+                            self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -87573,7 +87609,11 @@ impl InterpreterCore {
                         self.replace_pending_hostcall_result_label(Some(label))?;
                         Ok(value)
                     }
-                    _ => Ok(Value::Object(self.alloc_arguments_object(&[])?)),
+                    _ => Ok(Value::Object(self.alloc_arguments_object(
+                        module,
+                        &[],
+                        ArgumentsCallee::Omitted,
+                    )?)),
                 }
             }
             "builtin:ClassPrototypeLink" => {
@@ -103864,6 +103904,8 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         function: &crate::ir_contract::Ir3FunctionDesc,
+        function_index: u32,
+        callee: &Value,
         args: RegRange,
     ) -> Result<(), InterpreterError> {
         let uses_arguments = matches!(
@@ -103887,7 +103929,14 @@ impl InterpreterCore {
             values.push(self.read_reg(register)?);
             label = label.join(self.get_register_label(register)?);
         }
-        let object = self.alloc_arguments_object(&values)?;
+        // bd-9vouw.272: a sloppy function with a simple parameter list gets
+        // a `callee` data property (CreateMappedArgumentsObject), any other
+        // function the %ThrowTypeError% accessor.
+        let callee = match module.sloppy_functions.get(&function_index) {
+            Some(true) => ArgumentsCallee::Function(callee.clone()),
+            _ => ArgumentsCallee::ThrowTypeError,
+        };
+        let object = self.alloc_arguments_object(Some(module), &values, callee)?;
         self.pending_arguments_object = Some((
             self.call_stack.len().saturating_add(1),
             Value::Object(object),
@@ -103896,11 +103945,18 @@ impl InterpreterCore {
         Ok(())
     }
 
-    /// An unmapped arguments object (ES2020 9.4.4.6): indexed elements, a
-    /// non-enumerable `length`, and a non-enumerable own @@iterator that is
+    /// An arguments object (ES2020 9.4.4.6-7): indexed elements, a
+    /// non-enumerable `length`, a non-enumerable own @@iterator that is
     /// %Array.prototype.values%, so `[...arguments]`, `Array.from(arguments)`
-    /// and `for (const a of arguments)` iterate it.
-    fn alloc_arguments_object(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
+    /// and `for (const a of arguments)` iterate it, and its `callee`
+    /// (bd-9vouw.272). No-claim: its indices are not mapped to the
+    /// parameters (bd-9vouw.281).
+    fn alloc_arguments_object(
+        &mut self,
+        module: Option<&Ir3Module>,
+        values: &[Value],
+        callee: ArgumentsCallee,
+    ) -> Result<ObjectId, InterpreterError> {
         let object = self.alloc_object_with_prototype(None)?;
         // Its builtinTag is "Arguments" (ES2020 19.1.3.6 step 7):
         // is-arguments and deep-equal tell it apart by
@@ -103931,7 +103987,79 @@ impl InterpreterCore {
             hidden,
         )?;
         self.set_own_property_attributes(object, &iterator_key, hidden)?;
+        let callee_key = RuntimePropertyKey::String(JsString::from("callee"));
+        match callee {
+            // ES2020 9.4.4.7 step 22: writable, not enumerable, configurable.
+            ArgumentsCallee::Function(function) => {
+                self.set_object_runtime_property(object, callee_key.clone(), function)?;
+                self.set_own_property_attributes(object, &callee_key, hidden)?;
+            }
+            // ES2020 9.4.4.6 step 8: get and set are %ThrowTypeError%, not
+            // enumerable or configurable.
+            ArgumentsCallee::ThrowTypeError => {
+                let module = module.ok_or_else(|| InterpreterError::InternalError {
+                    details: "a strict arguments object is made with its module".to_string(),
+                })?;
+                let thrower = self.throw_type_error_intrinsic(module)?;
+                for kind in [AccessorKind::Get, AccessorKind::Set] {
+                    self.define_accessor_property(
+                        object,
+                        callee_key.clone(),
+                        thrower.clone(),
+                        kind,
+                    )?;
+                }
+                self.set_own_property_attributes(
+                    object,
+                    &callee_key,
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: false,
+                        configurable: false,
+                    },
+                )?;
+            }
+            ArgumentsCallee::Omitted => {}
+        }
         Ok(object)
+    }
+
+    /// %ThrowTypeError% (ES2020 9.2.9.1): one function per realm (every
+    /// value of the kind is the same function), whose `length` (0) and
+    /// `name` ("") are neither writable nor configurable and which is not
+    /// extensible, so it is frozen. Its own-property object is made so the
+    /// first time it is handed out.
+    fn throw_type_error_intrinsic(
+        &mut self,
+        module: &Ir3Module,
+    ) -> Result<Value, InterpreterError> {
+        let thrower = Value::BuiltinFunction(BuiltinFunction::new_kind(
+            BuiltinFunctionKind::ThrowTypeError,
+        ));
+        if let Some(backing) = self.ensure_function_own_property_object(module, &thrower)?
+            && self
+                .heap
+                .get(backing.0 as usize)
+                .is_some_and(HeapObject::extensible)
+        {
+            for key in ["length", "name"] {
+                self.set_own_property_attributes(
+                    backing,
+                    &RuntimePropertyKey::String(JsString::from(key)),
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: false,
+                        configurable: false,
+                    },
+                )?;
+            }
+            self.mutate_heap(|heap| {
+                if let Some(object) = heap.get_mut(backing.0 as usize) {
+                    object.is_non_extensible = true;
+                }
+            });
+        }
+        Ok(thrower)
     }
 
     fn apply_rest_param(
@@ -109674,6 +109802,7 @@ mod active_builtin_regressions {
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
             function_sources: Default::default(),
+            sloppy_functions: Default::default(),
         }
     }
 
@@ -112820,6 +112949,7 @@ mod async_runtime_tests_current {
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
             function_sources: Default::default(),
+            sloppy_functions: Default::default(),
         }
     }
 
@@ -136069,6 +136199,7 @@ mod function_prototype_call_apply_tests_current {
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
             function_sources: Default::default(),
+            sloppy_functions: Default::default(),
         }
     }
 
@@ -141262,6 +141393,7 @@ mod event_loop_timer_microtask_tests {
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
             function_sources: Default::default(),
+            sloppy_functions: Default::default(),
         }
     }
 
@@ -141529,6 +141661,7 @@ mod tests {
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
             function_sources: Default::default(),
+            sloppy_functions: Default::default(),
         }
     }
 
@@ -161652,6 +161785,7 @@ mod string_intrinsic_table_parity_tests {
             required_capabilities: Vec::new(),
             function_lengths: Default::default(),
             function_sources: Default::default(),
+            sloppy_functions: Default::default(),
         }
     }
 

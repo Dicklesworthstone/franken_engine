@@ -236,6 +236,11 @@ fn member_write_default_strict() -> bool {
     true
 }
 
+/// serde `skip_serializing_if` for flags that are absent when false.
+fn is_false(flag: &bool) -> bool {
+    !*flag
+}
+
 fn member_write_is_strict(strict: &bool) -> bool {
     *strict
 }
@@ -642,6 +647,13 @@ pub enum Ir1Op {
         /// module's `function_sources` carries it, hashed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_text: Option<crate::ast::FunctionSourceText>,
+        /// Its code is not strict mode code (bd-9vouw.272): the function
+        /// has own `caller` and `arguments`, and its arguments object a
+        /// `callee`. Excluded from the canonical encoding: the IR3 module's
+        /// `sloppy_functions` carries it, hashed. IR without the field reads
+        /// as strict.
+        #[serde(default, skip_serializing_if = "is_false")]
+        sloppy: bool,
     },
     /// Create a function value (expression position — arrow functions and
     /// function expressions).  The resulting value is pushed onto the stack.
@@ -685,6 +697,13 @@ pub enum Ir1Op {
         /// module's `function_sources` carries it, hashed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_text: Option<crate::ast::FunctionSourceText>,
+        /// Its code is not strict mode code (bd-9vouw.272): the function
+        /// has own `caller` and `arguments`, and its arguments object a
+        /// `callee`. Excluded from the canonical encoding: the IR3 module's
+        /// `sloppy_functions` carries it, hashed. IR without the field reads
+        /// as strict.
+        #[serde(default, skip_serializing_if = "is_false")]
+        sloppy: bool,
     },
     /// Begin a try block; on exception, jump to catch_label.
     /// If a finally block exists, `finally_label` points to its entry.
@@ -941,6 +960,7 @@ impl Ir1Op {
                 is_async,
                 rest_param_index: _,
                 source_text: _,
+                sloppy: _,
             } => {
                 let mut entries = vec![
                     ("op", CanonicalValue::str("declare_function")),
@@ -995,6 +1015,7 @@ impl Ir1Op {
                 is_arrow,
                 rest_param_index: _,
                 source_text: _,
+                sloppy: _,
             } => {
                 let mut entries = vec![
                     ("op", CanonicalValue::str("create_function")),
@@ -2696,6 +2717,17 @@ pub struct Ir3Module {
     /// change what toString (and `new Function(f.toString())`) sees.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub function_sources: std::collections::BTreeMap<u32, crate::ast::FunctionSourceText>,
+    /// The functions whose code is not strict mode code (bd-9vouw.272), by
+    /// function_table index, each with whether its parameter list is simple
+    /// (ES2020 14.1.13 IsSimpleParameterList). A sloppy ordinary function
+    /// has own `caller` and `arguments` (null); a sloppy function with a
+    /// simple parameter list gets a mapped arguments object, whose `callee`
+    /// is a data property. Every other function inherits
+    /// Function.prototype's %ThrowTypeError% accessors, and every other
+    /// arguments object's `callee` is that accessor. Serialized and hashed
+    /// only when present.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sloppy_functions: std::collections::BTreeMap<u32, bool>,
 }
 
 impl Ir3Module {
@@ -2714,6 +2746,7 @@ impl Ir3Module {
             required_capabilities: Vec::new(),
             function_lengths: std::collections::BTreeMap::new(),
             function_sources: std::collections::BTreeMap::new(),
+            sloppy_functions: std::collections::BTreeMap::new(),
         }
     }
 
@@ -2732,6 +2765,22 @@ impl Ir3Module {
                                         .as_bytes()
                                         .to_vec(),
                                 ),
+                            ])
+                        })
+                        .collect(),
+                ),
+            )
+        });
+        let sloppy_functions = (!self.sloppy_functions.is_empty()).then(|| {
+            (
+                "sloppy_functions",
+                CanonicalValue::Array(
+                    self.sloppy_functions
+                        .iter()
+                        .map(|(function, simple_parameters)| {
+                            CanonicalValue::Array(vec![
+                                CanonicalValue::U64(u64::from(*function)),
+                                CanonicalValue::Bool(*simple_parameters),
                             ])
                         })
                         .collect(),
@@ -2803,7 +2852,8 @@ impl Ir3Module {
             ]
             .into_iter()
             .chain(function_lengths)
-            .chain(function_sources),
+            .chain(function_sources)
+            .chain(sloppy_functions),
         )
     }
 

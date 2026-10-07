@@ -29,6 +29,7 @@ fn create_function_with_constructor(function_body_expr: Expression) -> FunctionD
         is_generator: false,
         span: span(),
         source_text: None,
+        strict: false,
     }
 }
 

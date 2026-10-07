@@ -115,10 +115,16 @@ fn wide_frame_program() -> String {
 /// module's widest frame is the host's opt-in (`frankenctl run` sets it).
 /// Without it the deterministic lane's configured 256 registers stay the
 /// ceiling and refuse the wide module (as configured_register_limits_*
-/// requires of any configured window); with it the module runs.
+/// requires of any configured window); with it the module runs. The program
+/// calls Object.keys, so the package holds the `builtin` grant frankenctl
+/// gives every run (without it the opted-in run is refused at
+/// `builtin:ObjectKeys`, not at the window).
 #[test]
 fn register_window_auto_sizing_is_the_hosts_opt_in() {
-    let wide = package(&wide_frame_program());
+    let wide = ExtensionPackage {
+        capabilities: vec!["builtin".to_string()],
+        ..package(&wide_frame_program())
+    };
     let error = orchestrator(LaneChoice::QuickJs, RuntimeConfig::default())
         .execute(&wide)
         .expect_err("the configured 256-register window is the ceiling");

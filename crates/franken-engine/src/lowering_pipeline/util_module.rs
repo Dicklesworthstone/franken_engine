@@ -771,41 +771,47 @@ macro_rules! scoped_walk {
 
 pub(super) use scoped_walk;
 
+/// The names a `for`, `for-in` or `for-of` head binds for the loop: its
+/// lexical initializer's, or its binding's.
+fn loop_head_names(statement: &Statement, names: &mut BTreeSet<String>) {
+    match statement {
+        Statement::For(for_statement) => {
+            if let Some(initializer) = &for_statement.init {
+                let initializer: &Statement = initializer;
+                lexical_names(std::slice::from_ref(initializer), names);
+            }
+        }
+        Statement::ForIn(for_statement) => {
+            names.extend(
+                for_statement
+                    .binding
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
+            );
+        }
+        Statement::ForOf(for_statement) => {
+            names.extend(
+                for_statement
+                    .binding
+                    .binding_names()
+                    .into_iter()
+                    .map(str::to_string),
+            );
+        }
+        _ => {}
+    }
+}
+
 impl Walk for BuiltinRewriter {
     scoped_walk!();
 
     fn statement(&mut self, statement: &mut Statement) -> Outcome {
         let mut names = BTreeSet::new();
-        match statement {
-            Statement::For(for_statement) => {
-                if let Some(initializer) = &for_statement.init {
-                    let initializer: &Statement = initializer;
-                    lexical_names(std::slice::from_ref(initializer), &mut names);
-                }
-            }
-            Statement::ForIn(for_statement) => {
-                names.extend(
-                    for_statement
-                        .binding
-                        .binding_names()
-                        .into_iter()
-                        .map(str::to_string),
-                );
-            }
-            Statement::ForOf(for_statement) => {
-                names.extend(
-                    for_statement
-                        .binding
-                        .binding_names()
-                        .into_iter()
-                        .map(str::to_string),
-                );
-            }
-            // A dynamic object environment can supply its own require.
-            Statement::With(_) => {
-                names.insert("require".to_string());
-            }
-            _ => {}
+        loop_head_names(statement, &mut names);
+        // A dynamic object environment can supply its own require.
+        if matches!(statement, Statement::With(_)) {
+            names.insert("require".to_string());
         }
         self.scoped(names, |walker| walk_statement(walker, statement))
     }
@@ -865,6 +871,15 @@ mod tests {
 
     impl Walk for FreeNames {
         scoped_walk!();
+
+        /// A loop head's bindings are in scope in the loop, as the rewrite
+        /// scopes them; without this every `for (let i ...)` counter read as
+        /// a free name.
+        fn statement(&mut self, statement: &mut Statement) -> Outcome {
+            let mut names = BTreeSet::new();
+            loop_head_names(statement, &mut names);
+            self.scoped(names, |walker| walk_statement(walker, statement))
+        }
 
         fn expression(&mut self, expression: &mut Expression) -> Outcome {
             if let Expression::Identifier(name) = expression {

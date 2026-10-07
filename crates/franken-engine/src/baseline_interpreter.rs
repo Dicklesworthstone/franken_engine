@@ -63142,82 +63142,84 @@ impl InterpreterCore {
             }
             let mut owner = object_id;
             let mut owner_depth = depth;
-            while !define_on_receiver {
-                if owner_depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
-                    return Err(InterpreterError::StackOverflow {
-                        depth: owner_depth as usize,
-                        max: MAX_PROTOTYPE_CHAIN_DEPTH as usize,
-                    });
-                }
-                // OrdinarySet delegates to the prototype's [[Set]] before
-                // consulting the receiver. Preserve that receiver exactly. A
-                // typed array's [[Set]] answers numeric keys itself
-                // (ES2024 10.4.5.5).
-                if owner != object_id
-                    && (self.proxy_record(owner)?.is_some()
-                        || self
-                            .heap
-                            .get(owner.0 as usize)
-                            .is_some_and(|object| object.typed_array.is_some()))
-                {
-                    return self.proxy_aware_set_runtime_property(
-                        module,
-                        owner,
-                        key,
-                        value,
-                        receiver,
-                        owner_depth,
-                    );
-                }
-                let Some(object) = self.heap.get(owner.0 as usize) else {
-                    return Err(InterpreterError::ObjectNotFound { id: owner.0 });
-                };
-                if let Some(property) = object.own_runtime_property_value(key) {
-                    if matches!(&property, Value::Accessor { .. }) {
-                        return self.resolve_accessor_set(module, property, receiver, value);
+            if !define_on_receiver {
+                loop {
+                    if owner_depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                        return Err(InterpreterError::StackOverflow {
+                            depth: owner_depth as usize,
+                            max: MAX_PROTOTYPE_CHAIN_DEPTH as usize,
+                        });
                     }
-                    // ES2020 9.1.9.2 OrdinarySetWithOwnDescriptor: an own or
-                    // inherited non-writable data property rejects the write.
-                    if !object.own_property_attributes(key).writable {
+                    // OrdinarySet delegates to the prototype's [[Set]] before
+                    // consulting the receiver. Preserve that receiver exactly. A
+                    // typed array's [[Set]] answers numeric keys itself
+                    // (ES2024 10.4.5.5).
+                    if owner != object_id
+                        && (self.proxy_record(owner)?.is_some()
+                            || self
+                                .heap
+                                .get(owner.0 as usize)
+                                .is_some_and(|object| object.typed_array.is_some()))
+                    {
+                        return self.proxy_aware_set_runtime_property(
+                            module,
+                            owner,
+                            key,
+                            value,
+                            receiver,
+                            owner_depth,
+                        );
+                    }
+                    let Some(object) = self.heap.get(owner.0 as usize) else {
+                        return Err(InterpreterError::ObjectNotFound { id: owner.0 });
+                    };
+                    if let Some(property) = object.own_runtime_property_value(key) {
+                        if matches!(&property, Value::Accessor { .. }) {
+                            return self.resolve_accessor_set(module, property, receiver, value);
+                        }
+                        // ES2020 9.1.9.2 OrdinarySetWithOwnDescriptor: an own or
+                        // inherited non-writable data property rejects the write.
+                        if !object.own_property_attributes(key).writable {
+                            return Ok(false);
+                        }
+                        break;
+                    }
+                    // bd-9vouw.17: so do %Function.prototype%'s virtual `length`
+                    // and `name` (ES2020 19.2.3); a write must not shadow them
+                    // with a new own property.
+                    if !self.virtual_property_is_writable(owner, key) {
                         return Ok(false);
                     }
-                    break;
-                }
-                // bd-9vouw.17: so do %Function.prototype%'s virtual `length`
-                // and `name` (ES2020 19.2.3); a write must not shadow them
-                // with a new own property.
-                if !self.virtual_property_is_writable(owner, key) {
-                    return Ok(false);
-                }
-                // A built-in prototype's getter-only accessor
-                // (`RegExp.prototype.source`, `Map.prototype.size`) has no
-                // setter, so OrdinarySet fails (ES2020 9.1.9.2 step 3.e): a
-                // sloppy `re.source = 'x'` does nothing and a strict one
-                // throws. The write created an own property that then
-                // answered reads (bd-9vouw.150). Event's returnValue and
-                // cancelBubble have setters in the DOM and keep the old
-                // behavior.
-                if let Some(getter) = self.prototype_getter_at(owner, key)
-                    && !matches!(
-                        getter.module_specifier.0.as_deref(),
-                        Some("Event.returnValue" | "Event.cancelBubble")
-                    )
-                {
-                    return Ok(false);
-                }
-                // Only stored links (bd-9vouw.34): array and object literals
-                // still initialize through [[Set]] (NewArray/NewObject plus
-                // SetProperty), so following the implicit Object.prototype /
-                // Array.prototype link here would let an inherited setter or
-                // read-only property there intercept or reject literal
-                // construction. Until literals lower to CreateDataProperty,
-                // [[Set]] keeps the pre-.34 behavior for the implicit link.
-                match object.prototype {
-                    Some(prototype) => {
-                        owner = prototype;
-                        owner_depth += 1;
+                    // A built-in prototype's getter-only accessor
+                    // (`RegExp.prototype.source`, `Map.prototype.size`) has no
+                    // setter, so OrdinarySet fails (ES2020 9.1.9.2 step 3.e): a
+                    // sloppy `re.source = 'x'` does nothing and a strict one
+                    // throws. The write created an own property that then
+                    // answered reads (bd-9vouw.150). Event's returnValue and
+                    // cancelBubble have setters in the DOM and keep the old
+                    // behavior.
+                    if let Some(getter) = self.prototype_getter_at(owner, key)
+                        && !matches!(
+                            getter.module_specifier.0.as_deref(),
+                            Some("Event.returnValue" | "Event.cancelBubble")
+                        )
+                    {
+                        return Ok(false);
                     }
-                    None => break,
+                    // Only stored links (bd-9vouw.34): array and object literals
+                    // still initialize through [[Set]] (NewArray/NewObject plus
+                    // SetProperty), so following the implicit Object.prototype /
+                    // Array.prototype link here would let an inherited setter or
+                    // read-only property there intercept or reject literal
+                    // construction. Until literals lower to CreateDataProperty,
+                    // [[Set]] keeps the pre-.34 behavior for the implicit link.
+                    match object.prototype {
+                        Some(prototype) => {
+                            owner = prototype;
+                            owner_depth += 1;
+                        }
+                        None => break,
+                    }
                 }
             }
             let Some(receiver_id) = self.proxy_set_receiver_object(&receiver)? else {
@@ -102452,7 +102454,7 @@ impl InterpreterCore {
                     *key != length
                         && *key != name
                         && !matches!(key, Value::Str(text)
-                            if Self::canonical_array_index_key(&text.to_string()).is_some())
+                            if Self::canonical_array_index_key(text.as_ref()).is_some())
                 })
                 .unwrap_or(names.len());
             names.insert(position, prototype);

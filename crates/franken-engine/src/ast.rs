@@ -1368,7 +1368,7 @@ pub struct FunctionDeclaration {
     pub is_generator: bool,
     pub span: SourceSpan,
     /// Its source text, for Function.prototype.toString (bd-9vouw.184).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub source_text: Option<FunctionSourceText>,
 }
 
@@ -1467,7 +1467,7 @@ pub struct MethodDefinition {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_generator: bool,
     /// Its source text, for Function.prototype.toString (bd-9vouw.184).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub source_text: Option<FunctionSourceText>,
 }
 
@@ -1492,7 +1492,7 @@ pub struct ClassDeclaration {
     pub body: Vec<MethodDefinition>,
     pub span: SourceSpan,
     /// Its source text, for Function.prototype.toString (bd-9vouw.184).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub source_text: Option<FunctionSourceText>,
 }
 
@@ -1886,7 +1886,7 @@ pub enum Expression {
         body: ArrowBody,
         is_async: bool,
         /// Its source text, for Function.prototype.toString (bd-9vouw.184).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip)]
         source_text: Option<FunctionSourceText>,
     },
     New {
@@ -1906,7 +1906,7 @@ pub enum Expression {
         is_async: bool,
         is_generator: bool,
         /// Its source text, for Function.prototype.toString (bd-9vouw.184).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip)]
         source_text: Option<FunctionSourceText>,
     },
     Raw(String),
@@ -1924,7 +1924,7 @@ pub enum Expression {
         super_class: Option<Box<Expression>>,
         body: Vec<MethodDefinition>,
         /// Its source text, for Function.prototype.toString (bd-9vouw.184).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip)]
         source_text: Option<FunctionSourceText>,
     },
     /// Super keyword for accessing parent class methods and constructor.

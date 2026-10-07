@@ -125423,7 +125423,8 @@ mod async_runtime_tests_current {
                 + InterpreterCore::estimate_value_bytes(&long)
         );
 
-        core.clear_current_register_frame_width(4);
+        // Registers 0-2: the short string goes, the long one in 3 stays.
+        core.clear_current_register_frame_width(3);
         assert_eq!(cached(&core), InterpreterCore::estimate_value_bytes(&long));
         core.clear_current_register_frame_width(5);
         assert_eq!(cached(&core), 0);

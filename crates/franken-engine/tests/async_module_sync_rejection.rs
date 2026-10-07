@@ -7,6 +7,7 @@ pub use frankenengine_engine::module_live_binding;
 pub use frankenengine_engine::object_model;
 pub use frankenengine_engine::promise_model;
 
+#[allow(dead_code)]
 #[path = "../src/async_module_promise_bridge.rs"]
 mod async_module_promise_bridge;
 

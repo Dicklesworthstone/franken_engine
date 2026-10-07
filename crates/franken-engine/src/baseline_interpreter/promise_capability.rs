@@ -50,6 +50,21 @@ const SHARED_LENGTH: &str = "length";
 const SHARED_REMAINING: &str = "remaining";
 
 impl InterpreterCore {
+    /// Whether %Array.prototype% or %Object.prototype% has an own `then`, so
+    /// resolving a combinator's result with its values array reads it (the
+    /// Promise Resolve Function's Get(resolution, "then")): the native
+    /// combinator, which settles with the array directly, would skip it
+    /// (bd-9vouw.350: a poisoned or thenable Array.prototype.then).
+    fn arrays_inherit_then(&self) -> bool {
+        let then = RuntimePropertyKey::String(JsString::from("then"));
+        ["Array", "Object"].iter().any(|name| {
+            self.builtin_prototypes
+                .get(*name)
+                .and_then(|prototype| self.heap.get(prototype.0 as usize))
+                .is_some_and(|prototype| prototype.contains_own_runtime_property(&then))
+        })
+    }
+
     /// Whether `value` is this realm's %Promise%.
     pub(super) fn is_intrinsic_promise_constructor(value: &Value) -> bool {
         matches!(value, Value::BuiltinFunction(builtin)
@@ -527,6 +542,7 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::PromiseResolve
                     && builtin.bound_object.is_none())
             && self.promise_prototype_then_is_intrinsic()
+            && !self.arrays_inherit_then()
             && self.promise_combinator_has_native_inputs(module, &constructor, &iterable)?
         {
             return self.dispatch_promise_hostcall(capability_tag, args, Some(module));

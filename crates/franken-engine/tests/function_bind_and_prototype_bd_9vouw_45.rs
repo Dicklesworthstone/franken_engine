@@ -159,3 +159,73 @@ fn plain_calls_inside_methods_do_not_inherit_this() {
         "3 true,true,true,true true true true",
     );
 }
+
+/// bd-9vouw.263: `Function.prototype.bind` reads the target's `length` and
+/// `name` when it binds (ES2024 20.2.3.2 steps 4-10): HasOwnProperty, then
+/// [[Get]], so getters and proxy traps run then (a throwing `name` getter
+/// throws from `bind`), later changes to the target do not reach the bound
+/// function, and a Number length keeps its value (2147483648, Infinity,
+/// 2.7 -> 2). `Reflect.construct(bound, args, F)` constructs the target with
+/// newTarget F, or with the target when F is the bound function itself
+/// (10.4.1.2 step 5). The name and length were computed from the live
+/// target through engine-internal reads, and a bound function with an
+/// explicit newTarget was called rather than constructed. Expected lines
+/// are Node v22.2.0's output, captured programmatically; Bun 1.4.2 agrees.
+#[test]
+fn bind_reads_target_length_and_name_at_bind_time_bd_9vouw_263() {
+    let source = r#"function attempt(f) { try { return String(f()); } catch (e) { return e.constructor.name; } }
+var target = Object.defineProperty(function () {}, 'name', { value: 'target' });
+var bt = target.bind();
+Object.defineProperty(target, 'name', { value: 'changed' });
+var d = Object.getOwnPropertyDescriptor(bt, 'name');
+console.log(bt.name, d.writable, d.enumerable, d.configurable, target.bind().bind().name);
+var thrower = Object.defineProperty(function () {}, 'name', { get: function () { throw new RangeError('n'); } });
+var symbolNamed = Object.defineProperty(function () {}, 'name', { value: Symbol('s') });
+console.log(attempt(function () { return thrower.bind(); }), JSON.stringify(symbolNamed.bind().name), JSON.stringify((function () {}).bind().name));
+function f() {}
+var lengths = [2147483648, Infinity, -Infinity, NaN, 2.7, -0.5, '3'].map(function (value) {
+  Object.defineProperty(f, 'length', { value: value });
+  return String(f.bind().length) + '/' + String(f.bind(0, 0).length);
+});
+console.log(lengths.join(' '));
+function g(a, b, c) {}
+var beforeDelete = g.bind(null, 1).length;
+delete g.length;
+console.log(beforeDelete, g.bind().length, Math.max.bind(null, 1).length, Math.max.bind().name);
+var order = [];
+var proxy = new Proxy(function (a, b) {}, {
+  getOwnPropertyDescriptor: function (t, k) { order.push('gopd:' + String(k)); return Reflect.getOwnPropertyDescriptor(t, k); },
+  get: function (t, k) { order.push('get:' + String(k)); return Reflect.get(t, k); }
+});
+console.log(Function.prototype.bind.call(proxy).length, order.join(','));
+var newTarget;
+function A() { newTarget = new.target; }
+function Other() {}
+var B = A.bind();
+var C = B.bind();
+var viaA = Reflect.construct(C, [], A);
+var sameA = newTarget === A;
+var viaC = Reflect.construct(C, [], C);
+var sameC = newTarget === A;
+var viaOther = Reflect.construct(B, [], Other);
+console.log(sameA, Object.getPrototypeOf(viaA) === A.prototype, sameC, Object.getPrototypeOf(viaC) === A.prototype, newTarget === Other, Object.getPrototypeOf(viaOther) === Other.prototype, new C() instanceof A);
+"#;
+    let lines: Vec<String> = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"))
+        .console_output
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "bound target false false true bound bound changed",
+            "RangeError \"bound \" \"bound \"",
+            "2147483648/2147483647 Infinity/Infinity 0/0 0/0 2/1 0/0 0/0",
+            "2 0 1 bound max",
+            "2 gopd:length,get:length,get:name",
+            "true true true true true true true",
+        ]
+    );
+}

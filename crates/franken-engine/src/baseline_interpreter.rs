@@ -40456,6 +40456,7 @@ impl InterpreterCore {
                 builtin.kind == BuiltinFunctionKind::FunctionPrototypeApply,
             ),
             BuiltinFunctionKind::FunctionPrototypeBind => self.function_prototype_bind(
+                module,
                 receiver.unwrap_or(Value::Undefined),
                 receiver_register,
                 args,
@@ -52066,7 +52067,7 @@ impl InterpreterCore {
                                 if builtin.kind == BuiltinFunctionKind::BoundFunction
                                     && let Some(key) = property_key.as_str()
                                     && let Some(value) =
-                                        self.bound_function_property(module, &builtin, key)?
+                                        self.bound_function_property(&builtin, key)?
                                 {
                                     value
                                 } else if Self::is_species_key(&property_key)
@@ -53431,6 +53432,37 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    // A bound function (ES2020 9.4.1.2) constructs its
+                    // target with this newTarget, or with the target when
+                    // the newTarget is the bound function itself.
+                    if let Value::BuiltinFunction(builtin) = &callee_value
+                        && builtin.kind == BuiltinFunctionKind::BoundFunction
+                    {
+                        let (result, result_label) = match self.construct_bound_function(
+                            module,
+                            builtin,
+                            args,
+                            Some((new_target_value.clone(), new_target_label.clone())),
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                match self.route_isolated_explicit_throw(module, error)? {
+                                    None => continue,
+                                    Some(error) => return Err(error),
+                                }
+                            }
+                        };
+                        let result_label = self
+                            .join_owned_label_with_temporary_budget(result_label, &callee_label)?;
+                        let result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            &new_target_label,
+                        )?;
+                        self.write_reg_with_label(dst, result, result_label)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     if let Value::BuiltinFunction(builtin) = &callee_value {
                         let constructed = self.construct_builtin_with_new_target(
                             module,
@@ -53529,7 +53561,7 @@ impl InterpreterCore {
                         && builtin.kind == BuiltinFunctionKind::BoundFunction
                     {
                         let (result, result_label) = match self
-                            .construct_bound_function(module, builtin, args)
+                            .construct_bound_function(module, builtin, args, None)
                         {
                             Ok(value) => value,
                             Err(err) => match self.route_isolated_explicit_throw(module, err)? {
@@ -64354,7 +64386,7 @@ impl InterpreterCore {
             Value::BuiltinFunction(builtin)
                 if builtin.kind == BuiltinFunctionKind::BoundFunction =>
             {
-                match self.bound_function_property(module, builtin, name)? {
+                match self.bound_function_property(builtin, name)? {
                     Some(value) => value,
                     None => Self::function_prototype_property(name).unwrap_or(Value::Undefined),
                 }
@@ -75299,6 +75331,17 @@ impl InterpreterCore {
             return Ok(self.object_own_property_contains(receiver, property));
         };
         let key = self.executable_property_key_from_value(property);
+        // A callable proxy answers through its getOwnPropertyDescriptor
+        // trap or its target, as an object proxy does (bd-9vouw.263:
+        // Function.prototype.bind's HasOwnProperty(Target, "length")).
+        if let Value::BuiltinFunction(builtin) = receiver
+            && builtin.kind == BuiltinFunctionKind::CallableProxy
+        {
+            let proxy = Self::callable_proxy_record_id(builtin)?;
+            let descriptor =
+                self.proxy_aware_own_property_descriptor(Some(module), proxy, &key, 0)?;
+            return Ok(!matches!(descriptor, Value::Undefined));
+        }
         if let Value::BuiltinFunction(builtin) = receiver
             && builtin.kind == BuiltinFunctionKind::StandardConstructor
             && let Some(name) = key.as_str()
@@ -75697,11 +75740,13 @@ impl InterpreterCore {
     }
 
     /// ES2020 19.2.3.2 Function.prototype.bind. The bound function's private
-    /// state object holds the target, the bound `this` and the bound
-    /// arguments; its mutation label carries every input's label, and every
-    /// call through the bound function joins that label into its arguments.
+    /// state object holds the target, the bound `this`, the bound arguments
+    /// and the `name` and `length` read from the target at bind time; its
+    /// mutation label carries every input's label, and every call through
+    /// the bound function joins that label into its arguments.
     fn function_prototype_bind(
         &mut self,
+        module: &Ir3Module,
         target: Value,
         target_register: Option<u32>,
         args: RegRange,
@@ -75721,11 +75766,55 @@ impl InterpreterCore {
         if let Some(register) = target_register {
             label = label.join(self.get_register_label(register)?);
         }
+        // Steps 4-8 (ES2024 20.2.3.2): HasOwnProperty(Target, "length"),
+        // then Get(Target, "length") and Get(Target, "name"). A getter or a
+        // proxy trap runs (and may throw) now; later changes to the target
+        // do not reach the bound function. Guest code runs while native
+        // locals hold values: no collection until this returns.
+        self.gc_nested_request = None;
+        let mut length = Value::Int(0);
+        if self.value_has_own_property(Some(module), &target, &Value::str("length"))? {
+            let bound_count = i64::try_from(bound_arguments.len()).unwrap_or(i64::MAX);
+            length = match self.get_v(
+                module,
+                &target,
+                &RuntimePropertyKey::String(JsString::from("length")),
+            )? {
+                Value::Int(target_length) => {
+                    Value::Int(target_length.saturating_sub(bound_count).max(0))
+                }
+                Value::Float(target_length) if target_length.inner() == f64::INFINITY => {
+                    Value::Float(Float64::new(f64::INFINITY))
+                }
+                Value::Float(target_length) if target_length.inner().is_finite() => {
+                    let remaining = target_length.inner().trunc() - bound_count as f64;
+                    if remaining > 0.0 {
+                        js_number_to_value(remaining)
+                    } else {
+                        Value::Int(0)
+                    }
+                }
+                _ => Value::Int(0),
+            };
+        }
+        let name = match self.get_v(
+            module,
+            &target,
+            &RuntimePropertyKey::String(JsString::from("name")),
+        )? {
+            Value::Str(target_name) => format!("bound {target_name}"),
+            _ => "bound ".to_string(),
+        };
+        if let Some(getter_label) = self.take_pending_hostcall_result_label() {
+            label = label.join(&getter_label);
+        }
         let arguments_id = self.alloc_array_from_values(&bound_arguments)?;
         let state = self.alloc_object_with_prototype(None)?;
         self.set_object_property(state, "target".to_string(), target)?;
         self.set_object_property(state, "this".to_string(), bound_this)?;
         self.set_object_property(state, "arguments".to_string(), Value::Object(arguments_id))?;
+        self.set_object_property(state, "name".to_string(), Value::str(name))?;
+        self.set_object_property(state, "length".to_string(), length)?;
         self.join_object_mutation_label(state, &label)?;
         self.join_object_mutation_label(arguments_id, &label)?;
         let mut bound = BuiltinFunction::new_kind(BuiltinFunctionKind::BoundFunction);
@@ -75801,15 +75890,20 @@ impl InterpreterCore {
     }
 
     /// ES2020 9.4.1.2 [[Construct]] of a bound function: construct the target
-    /// with the bound arguments followed by the call's own; `new.target` is
-    /// the target. Every argument carries the call's and the bound state's
+    /// with the bound arguments followed by the call's own. `new.target` is
+    /// the target unless an explicit one other than the bound function
+    /// itself is given (`Reflect.construct(bound, args, F)`), which passes
+    /// through. Every argument carries the call's and the bound state's
     /// labels.
     fn construct_bound_function(
         &mut self,
         module: &Ir3Module,
         builtin: &BuiltinFunction,
         args: RegRange,
+        new_target: Option<(Value, Label)>,
     ) -> Result<(Value, Label), InterpreterError> {
+        let bound = Value::BuiltinFunction(builtin.clone());
+        let new_target = new_target.filter(|(value, _)| !Self::same_value(value, &bound));
         let (target, _bound_this, mut arguments, state) = self.bound_function_parts(builtin)?;
         if !self.is_constructible_value(&target) {
             return Err(InterpreterError::TypeError {
@@ -75832,51 +75926,33 @@ impl InterpreterCore {
                 receiver: Label::Public,
                 arguments: IsolatedArgumentLabels::Uniform(label.clone()),
             }),
-            None,
+            new_target,
         )?;
         Ok((value, result_label.join(&label)))
     }
 
     /// `name` ("bound " + the target's name) and `length` (the target's
-    /// length less the bound arguments, at least 0) of a bound function
-    /// (ES2020 19.2.3.2 steps 5-11).
+    /// length less the bound arguments, at least 0) of a bound function, as
+    /// `Function.prototype.bind` read them from the target (ES2020 19.2.3.2
+    /// steps 5-11).
     fn bound_function_property(
-        &mut self,
-        module: &Ir3Module,
+        &self,
         builtin: &BuiltinFunction,
         key: &str,
     ) -> Result<Option<Value>, InterpreterError> {
         if !matches!(key, "name" | "length") {
             return Ok(None);
         }
-        let (target, _, bound_arguments, _) = self.bound_function_parts(builtin)?;
-        let target_value = match &target {
-            Value::Function(index) => {
-                Self::function_name_or_length(module, *index, key).unwrap_or(Value::Undefined)
-            }
-            Value::Closure(closure_id) => self.closure_property_value(module, *closure_id, key)?,
-            Value::BuiltinFunction(inner) if inner.kind == BuiltinFunctionKind::BoundFunction => {
-                self.bound_function_property(module, inner, key)?
-                    .unwrap_or(Value::Undefined)
-            }
-            Value::BuiltinFunction(inner) if key == "name" => Value::str(inner.display_name()),
-            _ => Value::Int(0),
-        };
-        Ok(Some(if key == "name" {
-            let name = match target_value {
-                Value::Str(name) => name.to_string(),
-                _ => String::new(),
-            };
-            Value::str(format!("bound {name}"))
-        } else {
-            let length = match target_value {
-                Value::Int(length) => length,
-                Value::Float(length) if length.inner().is_finite() => length.inner().trunc() as i64,
-                _ => 0,
-            };
-            let bound = i64::try_from(bound_arguments.len()).unwrap_or(i64::MAX);
-            Value::Int(length.saturating_sub(bound).max(0))
-        }))
+        let state = builtin
+            .bound_object
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "bound function state".to_string(),
+                got: "bound function without state".to_string(),
+            })?;
+        Ok(self
+            .heap
+            .get(state as usize)
+            .and_then(|object| object.properties.get(key).cloned()))
     }
 
     /// ES2020 9.4.1.1 [[Call]] of a bound function: call the target with the
@@ -103544,9 +103620,7 @@ impl InterpreterCore {
                 }
             }
             Value::BuiltinFunction(builtin) => match builtin.kind {
-                BuiltinFunctionKind::BoundFunction => {
-                    self.bound_function_property(module, builtin, key)?
-                }
+                BuiltinFunctionKind::BoundFunction => self.bound_function_property(builtin, key)?,
                 BuiltinFunctionKind::StandardConstructor => {
                     Some(self.standard_constructor_property(builtin, key)?)
                 }

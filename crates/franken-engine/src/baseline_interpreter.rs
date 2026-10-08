@@ -7415,13 +7415,8 @@ fn decimal_u32_len(value: u32) -> usize {
     }
 }
 
-fn append_decimal_u32(bytes: &mut Vec<u8>, value: u32) {
+fn append_decimal_u32(bytes: &mut Vec<u8>, mut value: u32) {
     let mut digits = [0u8; 10];
-    bytes.extend_from_slice(decimal_u32_digits(value, &mut digits));
-}
-
-/// `value`'s decimal digits, written into the end of `digits`.
-fn decimal_u32_digits(mut value: u32, digits: &mut [u8; 10]) -> &[u8] {
     let mut start = digits.len();
     loop {
         start -= 1;
@@ -7431,7 +7426,7 @@ fn decimal_u32_digits(mut value: u32, digits: &mut [u8; 10]) -> &[u8] {
             break;
         }
     }
-    &digits[start..]
+    bytes.extend_from_slice(&digits[start..]);
 }
 
 impl RuntimePropertyKey {
@@ -7543,37 +7538,6 @@ fn property_resolution_found_payload(
     payload.extend_from_slice(b",depth=");
     append_decimal_u32(&mut payload, depth);
     payload
-}
-
-/// Fold [`property_resolution_found_payload`] into `trace`'s witness. A
-/// plain string key, the common case, streams the payload's parts instead
-/// of building it: one allocation per resolved property read.
-fn witness_property_resolution_found(
-    trace: &mut NondeterminismTrace,
-    key: &RuntimePropertyKey,
-    object_id: ObjectId,
-    depth: u32,
-) {
-    let Some(name) = key.as_str().filter(|name| !name.starts_with("~pk~")) else {
-        trace.witness_deterministic(
-            NondeterminismSource::PropertyResolution,
-            &property_resolution_found_payload(key, object_id, depth),
-        );
-        return;
-    };
-    let mut object_digits = [0u8; 10];
-    let mut depth_digits = [0u8; 10];
-    trace.witness_deterministic_parts(
-        NondeterminismSource::PropertyResolution,
-        &[
-            b"property_found:key=",
-            name.as_bytes(),
-            b",object_id=",
-            decimal_u32_digits(object_id.0, &mut object_digits),
-            b",depth=",
-            decimal_u32_digits(depth, &mut depth_digits),
-        ],
-    );
 }
 
 /// Slots per heap chunk. A full chunk whose objects were all reclaimed is
@@ -62239,7 +62203,10 @@ impl InterpreterCore {
         depth: u32,
     ) {
         // Deterministic decision: fold, don't record (bd-9vouw.18).
-        witness_property_resolution_found(&mut self.nondeterminism_trace, key, object_id, depth);
+        self.nondeterminism_trace.witness_deterministic(
+            NondeterminismSource::PropertyResolution,
+            &property_resolution_found_payload(key, object_id, depth),
+        );
     }
 
     /// Resolve an `Array.prototype` method name to its receiver-aware builtin
@@ -154274,17 +154241,6 @@ mod tests {
                         )
                         .into_bytes(),
                         "found-property payload bytes must remain exactly formatter-compatible"
-                    );
-                    let mut built = NondeterminismTrace::new("built");
-                    built.witness_deterministic(
-                        NondeterminismSource::PropertyResolution,
-                        &property_resolution_found_payload(key, object_id, depth),
-                    );
-                    let mut streamed = NondeterminismTrace::new("streamed");
-                    witness_property_resolution_found(&mut streamed, key, object_id, depth);
-                    assert_eq!(
-                        streamed.deterministic_witness, built.deterministic_witness,
-                        "the streamed fold must equal the payload's for {key:?}"
                     );
                 }
             }

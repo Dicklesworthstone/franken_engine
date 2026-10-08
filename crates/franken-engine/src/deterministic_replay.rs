@@ -207,20 +207,6 @@ impl DeterministicEventWitness {
         self.absorb(value);
         self.event_count = self.event_count.saturating_add(1);
     }
-
-    /// [`Self::fold`] of the concatenation of `parts`, without building it:
-    /// the digest absorbs bytes in order, so it is the same.
-    pub fn fold_parts(&mut self, source: NondeterminismSource, parts: &[&[u8]]) {
-        let source = source.as_str().as_bytes();
-        self.absorb(&(source.len() as u64).to_be_bytes());
-        self.absorb(source);
-        let value_len: usize = parts.iter().map(|part| part.len()).sum();
-        self.absorb(&(value_len as u64).to_be_bytes());
-        for part in parts {
-            self.absorb(part);
-        }
-        self.event_count = self.event_count.saturating_add(1);
-    }
 }
 
 /// Nondeterminism trace: a complete record of all nondeterministic decisions.
@@ -256,11 +242,6 @@ impl NondeterminismTrace {
     /// individually for forensics.
     pub fn witness_deterministic(&mut self, source: NondeterminismSource, value: &[u8]) {
         self.deterministic_witness.fold(source, value);
-    }
-
-    /// [`Self::witness_deterministic`] of the concatenation of `parts`.
-    pub fn witness_deterministic_parts(&mut self, source: NondeterminismSource, parts: &[&[u8]]) {
-        self.deterministic_witness.fold_parts(source, parts);
     }
 
     /// Record a nondeterminism event.
@@ -4908,31 +4889,6 @@ mod tests {
             witness_of(&[(pr.clone(), b"")]),
             DeterministicEventWitness::default(),
             "folding an empty value is still an observable fold"
-        );
-    }
-
-    #[test]
-    fn folding_parts_is_folding_their_concatenation() {
-        let pr = NondeterminismSource::PropertyResolution;
-        let cases: [&[&[u8]]; 3] = [
-            &[b"property_found:key=", b"x", b",object_id=", b"12"],
-            &[b"", b"ab", b"", b"c"],
-            &[],
-        ];
-        for parts in cases {
-            let joined = parts.concat();
-            let mut whole = DeterministicEventWitness::default();
-            whole.fold(pr.clone(), &joined);
-            let mut streamed = DeterministicEventWitness::default();
-            streamed.fold_parts(pr.clone(), parts);
-            assert_eq!(whole, streamed, "{joined:?}");
-        }
-        let mut split = DeterministicEventWitness::default();
-        split.fold_parts(pr.clone(), &[b"a", b"bc"]);
-        assert_ne!(
-            split,
-            witness_of(&[(pr.clone(), b"a"), (pr.clone(), b"bc")]),
-            "one fold of parts is one event, not one per part"
         );
     }
 

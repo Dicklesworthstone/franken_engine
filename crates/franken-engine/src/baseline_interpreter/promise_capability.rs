@@ -228,7 +228,14 @@ impl InterpreterCore {
                 &value,
                 &RuntimePropertyKey::String(JsString::from("constructor")),
             )?;
-            if Self::values_equal(&value_constructor, &constructor) {
+            // Either representation of %Promise% is the same constructor
+            // (see await_keeps_promise): Promise.prototype.finally's default C
+            // is the standard-constructor reference, the promise's
+            // `constructor` the materialized global.
+            if Self::values_equal(&value_constructor, &constructor)
+                || (Self::is_intrinsic_promise_constructor(&value_constructor)
+                    && Self::is_intrinsic_promise_constructor(&constructor))
+            {
                 return Ok(value);
             }
         }
@@ -293,10 +300,11 @@ impl InterpreterCore {
             &Value::Promise(promise),
             &RuntimePropertyKey::String(JsString::from("constructor")),
         )?;
-        Ok(Self::values_equal(
-            &constructor,
-            &Value::BuiltinFunction(BuiltinFunction::standard_constructor("Promise")),
-        ))
+        // The realm's %Promise% has two representations (the materialized
+        // global and a standard-constructor reference); comparing with one of
+        // them by value missed the other and wrapped every awaited native
+        // promise, two jobs late.
+        Ok(Self::is_intrinsic_promise_constructor(&constructor))
     }
 
     /// Promise.reject(r) for a C other than %Promise% (ES2020 25.6.4.4).

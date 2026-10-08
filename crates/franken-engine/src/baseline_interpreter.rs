@@ -48502,6 +48502,8 @@ impl InterpreterCore {
         self.apply_rest_param_labels(&mut argument_labels, function.rest_param_index, args)?;
         self.stage_arguments_object(module, function, function_index, &active_callee, args)?;
         self.run_pre_call_hook(module, &active_callee, function_index, &argument_values)?;
+        let super_home_object =
+            self.constructor_super_home_object(module, &active_callee, function_index)?;
 
         let scope_depth = self.scope_chain.depth();
         let captured_env_bytes = captured_env
@@ -48528,7 +48530,7 @@ impl InterpreterCore {
             new_target_label,
             super_value,
             super_label,
-            super_home_object: None,
+            super_home_object,
             construct_this,
             derived_constructor,
             this_initialized,
@@ -54986,6 +54988,8 @@ impl InterpreterCore {
                             self.stage_arguments_object(module, func, func_idx, &callee_val, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+                            let super_home_object =
+                                self.constructor_super_home_object(module, &callee_val, func_idx)?;
 
                             // Push constructor frame with `construct_this`.
                             let scope_depth = self.scope_chain.depth();
@@ -55015,7 +55019,7 @@ impl InterpreterCore {
                                 new_target_label: callee_label,
                                 super_value: Value::Undefined,
                                 super_label: Label::Public,
-                                super_home_object: None,
+                                super_home_object,
                                 construct_this: Some(this_val.clone()),
                                 derived_constructor: false,
                                 this_initialized: true,
@@ -104785,6 +104789,28 @@ impl InterpreterCore {
                 got: value.type_name().to_string(),
             }),
         }
+    }
+
+    /// The [[HomeObject]] of a class constructor whose body reads `super`
+    /// (ES2020 14.6.13 step 12: the constructor's HomeObject is its
+    /// prototype object), so `super.x`, `super.m()` and an arrow's `super`
+    /// look up from that prototype's [[Prototype]], as a method's do.
+    /// Constructor frames had none, so LoadSuper read the frame's
+    /// `super_value`, the parent constructor: `super.m()` called the
+    /// parent's static `m`, and a base class's `super.x` threw
+    /// (bd-9vouw.363). `super(...)` still takes the parent constructor from
+    /// `super_value`.
+    fn constructor_super_home_object(
+        &mut self,
+        module: &Ir3Module,
+        constructor: &Value,
+        function_index: u32,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        if !self.function_uses_lexical_super(module, function_index)? {
+            return Ok(None);
+        }
+        let prototype = self.default_constructor_prototype_for_value(module, constructor)?;
+        Ok(Some(prototype))
     }
 
     fn derived_constructor_metadata(

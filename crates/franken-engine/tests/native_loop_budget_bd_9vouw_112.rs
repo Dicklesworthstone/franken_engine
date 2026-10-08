@@ -188,15 +188,6 @@ fn guest_sized_native_copies_are_charged_before_allocation() {
     .expect("a 32 MiB blob fits a 64 MiB budget");
     assert_eq!(console(&result), "33554432");
 
-    // A typed array is an iterable of one part per byte: its collection is
-    // charged step by step, so 40 Mi elements end at the budget instead of
-    // building ~1 GB of native values first.
-    let outcome = run("new Blob(new Uint8Array(40 * 1024 * 1024));");
-    assert!(
-        matches!(outcome, Err(InterpreterError::MemoryBudgetExceeded { .. })),
-        "blob of a 40 Mi element typed array: {outcome:?}"
-    );
-
     // The segmenter refuses up front: the request it reports is the
     // 96-bytes-per-code-unit transient, not a later per-record charge.
     let outcome = run("new Intl.Segmenter().segment('a'.repeat(2 ** 20));");

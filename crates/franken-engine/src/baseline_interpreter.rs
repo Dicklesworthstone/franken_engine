@@ -3666,6 +3666,10 @@ pub enum BuiltinFunctionKind {
     /// `set` of every arguments object's `callee` but a sloppy function
     /// with a simple parameter list's (bd-9vouw.272). Append only.
     ThrowTypeError,
+    /// `set Object.prototype.__proto__` (Annex B.2.2.1.2), the setter of the
+    /// accessor whose getter is the `"Object.__proto__"` PrototypeGetter
+    /// (bd-9vouw.284). Append only.
+    ObjectProtoSetter,
 }
 
 /// Annex B B.2.2.2-14: each String HTML method's tag and attribute name.
@@ -5028,6 +5032,10 @@ impl BuiltinFunction {
         }
     }
 
+    fn object_proto_setter() -> Self {
+        Self::new_kind(BuiltinFunctionKind::ObjectProtoSetter)
+    }
+
     fn proxy_revoke(proxy_id: ObjectId) -> Self {
         Self {
             kind: BuiltinFunctionKind::ProxyRevoke,
@@ -5177,6 +5185,7 @@ impl BuiltinFunction {
                 "@@iterator"
             }
             BuiltinFunctionKind::ProxyRevoke => "revoke",
+            BuiltinFunctionKind::ObjectProtoSetter => "set __proto__",
             BuiltinFunctionKind::CallableProxy => "",
             BuiltinFunctionKind::UrlMethod => {
                 if self.module_specifier.0.as_deref() == Some("toJSON") {
@@ -5887,7 +5896,8 @@ impl BuiltinFunction {
             | K::PromiseAllResolveElement
             | K::PromiseAllSettledResolveElement
             | K::PromiseAllSettledRejectElement
-            | K::PromiseAnyRejectElement => Some(1),
+            | K::PromiseAnyRejectElement
+            | K::ObjectProtoSetter => Some(1),
             K::PromiseCapabilityExecutor => Some(2),
             K::IteratorNext
             | K::IteratorSelf
@@ -43490,6 +43500,14 @@ impl InterpreterCore {
             BuiltinFunctionKind::PrototypeGetter => {
                 self.call_prototype_getter(module, builtin, receiver.unwrap_or(Value::Undefined))
             }
+            BuiltinFunctionKind::ObjectProtoSetter => {
+                let proto = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.object_proto_setter_call(
+                    Some(module),
+                    receiver.unwrap_or(Value::Undefined),
+                    proto,
+                )
+            }
             BuiltinFunctionKind::ErrorPrototypeToString => {
                 self.error_prototype_to_string(module, receiver.unwrap_or(Value::Undefined))
             }
@@ -61640,8 +61658,10 @@ impl InterpreterCore {
             if object.contains_own_runtime_property(&key) {
                 return false;
             }
+            // Unless `delete Object.prototype.__proto__` removed it
+            // (bd-9vouw.284).
             if Some(current) == object_prototype {
-                return true;
+                return !self.virtual_own_property_deleted(current, &key);
             }
             match object.prototype {
                 Some(next) => current = next,
@@ -64598,6 +64618,12 @@ impl InterpreterCore {
                             Some("Event.returnValue" | "Event.cancelBubble")
                         )
                     {
+                        // Object.prototype.__proto__ has a setter, called on
+                        // the receiver (bd-9vouw.284).
+                        if getter.module_specifier.0.as_deref() == Some("Object.__proto__") {
+                            self.object_proto_setter_call(module, receiver, value)?;
+                            return Ok(true);
+                        }
                         return Ok(false);
                     }
                     // OrdinarySet follows the same observable prototype chain
@@ -109070,8 +109096,14 @@ impl InterpreterCore {
             if let Some(value) = self.canonical_prototype_virtual_property(object_id, key) {
                 (value, self.virtual_property_attributes(object_id, key))
             } else if let Some(getter) = self.prototype_getter_at(object_id, key) {
+                let setter = key.as_str().and_then(|name| {
+                    self.builtin_prototypes
+                        .iter()
+                        .find(|(_, prototype)| **prototype == object_id)
+                        .and_then(|(owner, _)| Self::prototype_accessor_setter(owner, name))
+                });
                 (
-                    Self::accessor_property_value(Some(Value::BuiltinFunction(getter)), None),
+                    Self::accessor_property_value(Some(Value::BuiltinFunction(getter)), setter),
                     NON_ENUMERABLE_DATA_ATTRIBUTES,
                 )
             } else {

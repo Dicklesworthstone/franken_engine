@@ -35,7 +35,10 @@
 //! (`class X extends Transform`, `stream.Readable`, Duplex, finished, a
 //! `require` inside a function, async iteration, ...); a top-level
 //! destructure whose every name and use the facade serves keeps the facade's
-//! HostCall lowering. No filesystem/module-load
+//! HostCall lowering. `buffer` (bd-305gi.3) is Node's module object over the
+//! realm's Buffer, atob, btoa and Blob, so `require('buffer').Buffer`,
+//! safer-buffer's key copy and a destructured `{ Buffer }` load; the script
+//! goal refused every such form as a file read. No filesystem/module-load
 //! authority is introduced. The filesystem facade shares these hooks through
 //! `fs_module`; its methods retain their native fs:read/fs:write checks.
 //! Other specifiers and `require` as a value keep their existing authority checks.
@@ -76,6 +79,7 @@ const TIMERS_MODULE_BINDING: &str = "%timers_module";
 const STRING_DECODER_MODULE_BINDING: &str = "%string_decoder_module";
 const VM_MODULE_BINDING: &str = "%vm_module";
 const STREAM_MODULE_BINDING: &str = "%stream_module";
+const BUFFER_MODULE_BINDING: &str = "%buffer_module";
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PureModule {
@@ -85,6 +89,7 @@ enum PureModule {
     Timers,
     StringDecoder,
     Vm,
+    Buffer,
     // After Events and StringDecoder: its declaration reads theirs.
     Stream,
 }
@@ -98,6 +103,7 @@ impl PureModule {
             Self::Timers => TIMERS_MODULE_BINDING,
             Self::StringDecoder => STRING_DECODER_MODULE_BINDING,
             Self::Vm => VM_MODULE_BINDING,
+            Self::Buffer => BUFFER_MODULE_BINDING,
             Self::Stream => STREAM_MODULE_BINDING,
         }
     }
@@ -134,6 +140,7 @@ const ASSERT_SOURCE: &str = include_str!("assert_module.js");
 const TIMERS_SOURCE: &str = include_str!("timers_module.js");
 const STRING_DECODER_SOURCE: &str = include_str!("string_decoder_module.js");
 const STREAM_SOURCE: &str = include_str!("stream_module.js");
+const BUFFER_SOURCE: &str = include_str!("buffer_module.js");
 
 const TIMERS_PLACEHOLDERS: [(&str, &str); 3] = [
     ("__franken_timers_timeout", "%TimersPromisesSetTimeout"),
@@ -222,6 +229,8 @@ fn builtin_require_member(expression: &Expression) -> Option<(PureModule, Option
         Some((PureModule::StringDecoder, None))
     } else if *specifier == "vm" || *specifier == "node:vm" {
         Some((PureModule::Vm, None))
+    } else if *specifier == "buffer" || *specifier == "node:buffer" {
+        Some((PureModule::Buffer, None))
     } else if *specifier == "stream" || *specifier == "node:stream" {
         Some((PureModule::Stream, None))
     } else if *specifier == "stream/promises" || *specifier == "node:stream/promises" {
@@ -310,6 +319,21 @@ const ASSERT_GLOBALS: [&str; 10] = [
 ];
 
 const VM_GLOBALS: [&str; 2] = ["EvalError", "TypeError"];
+
+const BUFFER_GLOBALS: [&str; 12] = [
+    "ArrayBuffer",
+    "Blob",
+    "Buffer",
+    "Error",
+    "File",
+    "Object",
+    "String",
+    "TextDecoder",
+    "TypeError",
+    "Uint8Array",
+    "atob",
+    "btoa",
+];
 
 const STREAM_GLOBALS: [&str; 15] = [
     "AggregateError",
@@ -638,6 +662,7 @@ fn parse_module_source(module: PureModule) -> Result<Expression, LoweringPipelin
         PureModule::Timers => ("franken:timers", TIMERS_SOURCE),
         PureModule::StringDecoder => ("franken:string_decoder", STRING_DECODER_SOURCE),
         PureModule::Vm => ("franken:vm", VM_SOURCE),
+        PureModule::Buffer => ("franken:buffer", BUFFER_SOURCE),
         PureModule::Stream => ("franken:stream", STREAM_SOURCE),
     };
     let parse_failed = || LoweringPipelineError::InvariantViolation {
@@ -673,6 +698,7 @@ fn module_source(
         PureModule::Timers => &TIMERS_GLOBALS,
         PureModule::StringDecoder => &STRING_DECODER_GLOBALS,
         PureModule::Vm => &VM_GLOBALS,
+        PureModule::Buffer => &BUFFER_GLOBALS,
         PureModule::Stream => &STREAM_GLOBALS,
     };
     let mut renamer = ModuleRenamer {
@@ -965,6 +991,21 @@ mod tests {
         let free = free_names(&mut parse_module_source(PureModule::Vm).expect("parses"));
         assert_eq!(free, expected);
         let protected = free_names(&mut module_source(&expected, PureModule::Vm).expect("builds"));
+        assert_eq!(protected, BTreeSet::from(["globalThis".to_string()]));
+    }
+
+    /// BUFFER_SOURCE reads only BUFFER_GLOBALS (bd-305gi.3), and with all
+    /// of them declared by the program (`var Buffer = require('buffer')
+    /// .Buffer`) it reads them through `globalThis`: no other ambient name,
+    /// no intrinsic, no HostCall.
+    #[test]
+    fn buffer_source_reads_only_its_globals() {
+        let expected: BTreeSet<String> =
+            BUFFER_GLOBALS.iter().map(|name| name.to_string()).collect();
+        let free = free_names(&mut parse_module_source(PureModule::Buffer).expect("parses"));
+        assert_eq!(free, expected);
+        let protected =
+            free_names(&mut module_source(&expected, PureModule::Buffer).expect("builds"));
         assert_eq!(protected, BTreeSet::from(["globalThis".to_string()]));
     }
 

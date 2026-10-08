@@ -78994,6 +78994,22 @@ impl InterpreterCore {
         Ok(result)
     }
 
+    /// ES2020 25.6.3.1 step 1: Promise's [[Call]] (NewTarget undefined)
+    /// throws. The Call instruction refused it (bd-auy04), but
+    /// `Promise.call(...)`, `Promise.apply(...)` and `Reflect.apply(Promise,
+    /// ...)` reach the builtin dispatcher, which constructs (bd-9vouw.377).
+    fn reject_promise_constructor_call(function: &Value) -> Result<(), InterpreterError> {
+        if matches!(function, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::PromiseConstructor)
+        {
+            return Err(InterpreterError::TypeError {
+                expected: "new Promise(executor)".to_string(),
+                got: "Promise constructor called without new".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn forward_function_invocation(
         &mut self,
         module: Option<&Ir3Module>,
@@ -79071,6 +79087,8 @@ impl InterpreterCore {
                 }
                 values
             };
+            // Call(F, thisArgument, argList) after the list is built.
+            Self::reject_promise_constructor_call(&function)?;
             // bd-9vouw.50: a list that does not fit a register frame goes to
             // the builtin as a vector.
             let vector_tag = Self::vector_variadic_builtin_tag(&function)

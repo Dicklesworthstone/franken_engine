@@ -77424,10 +77424,14 @@ impl InterpreterCore {
             .enumerate()
             .filter_map(|(slot, name)| name.map(|name| (name, group_value(spans[slot]))))
             .collect();
+        // A match's `groups` is OrdinaryObjectCreate(null) (ES2020 21.2.5.2.2
+        // step 25): no inherited members, and a group named `__proto__` is
+        // an ordinary own property (bd-9vouw.365).
         let groups = if named.is_empty() {
             Value::Undefined
         } else {
             let groups = self.alloc_object_with_prototype(None)?;
+            self.store_prototype_link(groups, None);
             for (name, value) in named {
                 self.set_object_property(groups, name, value)?;
             }
@@ -77460,6 +77464,7 @@ impl InterpreterCore {
                 Value::Undefined
             } else {
                 let groups = self.alloc_object_with_prototype(None)?;
+                self.store_prototype_link(groups, None);
                 for (name, value) in named {
                     self.set_object_property(groups, name, value)?;
                 }

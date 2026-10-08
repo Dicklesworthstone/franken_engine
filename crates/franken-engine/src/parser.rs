@@ -6402,7 +6402,7 @@ fn parse_primary_expression(
         && expression.ends_with('`')
         && find_top_level_template_start(expression) == Some(0)
     {
-        return parse_template_literal(expression, span, context, recursion_depth);
+        return parse_template_literal(expression, span, context, recursion_depth, false);
     }
 
     // Parenthesized expression.
@@ -7051,11 +7051,15 @@ fn parse_new_expression(
 // Template literal parsing
 // ---------------------------------------------------------------------------
 
+/// `tagged`: the template is a tagged template's, whose `NotEscapeSequence`
+/// shapes (`\01`, `\8`, `\xg`, `\u{110000}`) are not errors but cook to
+/// undefined (ES2018 template literal revision; `cook_template_quasi`).
 fn parse_template_literal(
     expression: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
+    tagged: bool,
 ) -> ParseResult<Expression> {
     // ES2020 §11.8.6 TemplateCharacter — the entire template literal MUST
     // be terminated by a backtick. The tokeniser at `scan_template_literal`
@@ -7092,7 +7096,7 @@ fn parse_template_literal(
             // non-octal decimal escapes, and malformed hex/unicode escapes.
             // The lexer was previously fail-open on all of these (bd-no788
             // cases 4 and 5).
-            if let Err(message) = validate_template_escape_sequence(bytes, i) {
+            if !tagged && let Err(message) = validate_template_escape_sequence(bytes, i) {
                 return Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     message,
@@ -8569,11 +8573,16 @@ fn try_parse_postfix(
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            let template =
-                match parse_template_literal(template_src, span, context, recursion_depth + 1) {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
+            let template = match parse_template_literal(
+                template_src,
+                span,
+                context,
+                recursion_depth + 1,
+                true,
+            ) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(e)),
+            };
             // ES2020 §12.2.9: a tagged template `tag`q0${e0}q1…`` invokes
             // `tag(stringsArray, e0, e1, …)` where `stringsArray` holds the
             // COOKED quasis (bd-1lrbw). The previous desugar passed the whole

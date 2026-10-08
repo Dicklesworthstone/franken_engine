@@ -48,3 +48,37 @@ console.log(out.join(' '));
         ]
     );
 }
+
+/// A tagged template's invalid escape (`\01`, `\8`, `\xg`, `\u{110000}`, `\u12`)
+/// is not a SyntaxError: its cooked string is undefined and its raw string
+/// keeps the text (ES2018 template literal revision; Test262
+/// tagged-template/invalid-escape-sequences). The parser rejected them as
+/// it does in an untagged template. The line is Node v22.2.0's.
+#[test]
+fn tagged_template_invalid_escapes_cook_to_undefined() {
+    let source = r#"
+var out = [];
+function tag(s) { return (s[0] === undefined) + ":" + s.raw[0] + ":" + s.length; }
+out.push("octal=" + tag`\01`);
+out.push("octal8=" + tag`\8`);
+out.push("xbad=" + tag`\xg`);
+out.push("ubad=" + tag`\u{110000}`);
+out.push("ushort=" + tag`\u12`);
+out.push("valid=" + tag`a\n`);
+console.log(out.join(' '));
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "octal=true:\\01:1 octal8=true:\\8:1 xbad=true:\\xg:1 ubad=true:\\u{110000}:1 ushort=true:\\u12:1 valid=false:a\\n:1",
+        ]
+    );
+}

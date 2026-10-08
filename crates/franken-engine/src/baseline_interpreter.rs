@@ -14652,6 +14652,10 @@ pub struct InterpreterCore {
     /// it by that delta ([`Self::adjust_register_labels_bytes`]); a write of
     /// two byte-free labels leaves it; any other change of the file clears it.
     register_labels_bytes: std::cell::Cell<Option<u64>>,
+    /// Each tagged-template call site's frozen template object, keyed by its
+    /// module's content hash (else label) and parse ordinal (ES2020
+    /// 12.2.9.3 [[TemplateMap]], bd-9vouw.343). Collector roots.
+    template_objects: BTreeMap<(String, String), ObjectId>,
     /// Call stack.
     call_stack: CallStack,
     /// Object heap. SEED-SURFACE.
@@ -15978,6 +15982,7 @@ impl InterpreterCore {
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             registers_value_bytes: std::cell::Cell::new(None),
             register_labels_bytes: std::cell::Cell::new(None),
+            template_objects: BTreeMap::new(),
             call_stack: CallStack::default(),
             heap: SeedTrackedField::new(Heap::new()),
             estimated_memory_bytes,
@@ -91264,6 +91269,72 @@ impl InterpreterCore {
 
                 // Return the target (the function itself for a function).
                 Ok(target_val)
+            }
+            "builtin:TemplateObject" => {
+                // ES2020 12.2.9.3 GetTemplateObject (bd-9vouw.343): a tagged
+                // template's `%TemplateObject(site, [cooked...], [raw...])`.
+                // The first evaluation of a call site freezes the raw array,
+                // makes it the cooked array's non-writable, non-enumerable,
+                // non-configurable `raw`, freezes the cooked array and keeps
+                // it; every later evaluation of the site answers that object.
+                // A site is keyed by its module's content hash (else its label)
+                // and its parse ordinal.
+                let site = match self.builtin_arg(args, 0)? {
+                    Some(Value::Str(site)) => site.to_string(),
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "template call-site key".to_string(),
+                            got: other
+                                .map_or("undefined", |value| value.type_name())
+                                .to_string(),
+                        });
+                    }
+                };
+                // A dispatch without a module (host-driven, never a lowered
+                // tagged template) has no site to key, so it is not cached.
+                let key = module.map(|module| {
+                    let module_key = module
+                        .header
+                        .source_hash
+                        .as_ref()
+                        .map_or_else(|| module.header.source_label.clone(), |hash| hash.to_hex());
+                    (module_key, site)
+                });
+                if let Some(cached) = key.as_ref().and_then(|key| self.template_objects.get(key)) {
+                    return Ok(Value::Object(*cached));
+                }
+                let (Some(Value::Object(cooked)), Some(Value::Object(raw))) =
+                    (self.builtin_arg(args, 1)?, self.builtin_arg(args, 2)?)
+                else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "template strings arrays".to_string(),
+                        got: "non-array arguments".to_string(),
+                    });
+                };
+                self.mutate_heap(|heap| {
+                    if let Some(object) = heap.get_mut(raw.0 as usize) {
+                        object.is_frozen = true;
+                    }
+                });
+                self.set_object_property(cooked, "raw".to_string(), Value::Object(raw))?;
+                self.set_own_property_attributes(
+                    cooked,
+                    &RuntimePropertyKey::String(JsString::from("raw")),
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: false,
+                        configurable: false,
+                    },
+                )?;
+                self.mutate_heap(|heap| {
+                    if let Some(object) = heap.get_mut(cooked.0 as usize) {
+                        object.is_frozen = true;
+                    }
+                });
+                if let Some(key) = key {
+                    self.template_objects.insert(key, cooked);
+                }
+                Ok(Value::Object(cooked))
             }
             "builtin:ObjectFreeze" => {
                 // Object.freeze implementation - makes an object immutable

@@ -17328,11 +17328,16 @@ fn lower_expression_to_ir1_inner(
                 });
             }
             // The `with` and util rewrites' intrinsics (`%WithBase(...)`,
-            // `%UtilInspect(...)`, ...): a HostCall on the evaluated arguments.
+            // `%UtilInspect(...)`, ...) and a tagged template's
+            // `%TemplateObject(...)`: a HostCall on the evaluated arguments.
             if let Expression::Identifier(name) = callee.as_ref()
                 && let Some(capability) = with_statement::intrinsic_capability(name)
                     .or_else(|| util_module::intrinsic_capability(name))
                     .or_else(|| path_module::intrinsic_capability(name))
+                    .or_else(|| {
+                        (name == crate::parser::TEMPLATE_OBJECT_INTRINSIC)
+                            .then_some(TEMPLATE_OBJECT_CAPABILITY)
+                    })
             {
                 for argument in arguments {
                     lower_expression_to_ir1(
@@ -29437,6 +29442,12 @@ fn is_process_next_tick_read(
 /// direct `eval(src)` keeps its ambient check; no source text is compiled
 /// through either form.
 pub(crate) const EVAL_VALUE_CAPABILITY: &str = "builtin:static-value:builtin:Eval";
+
+/// A tagged template's `%TemplateObject(site, [cooked...], [raw...])`
+/// (crate::parser::TEMPLATE_OBJECT_INTRINSIC): the call site's one frozen
+/// template object (ES2020 12.2.9.3, bd-9vouw.343). Pure: it builds or
+/// returns an array of the literal strings.
+pub(crate) const TEMPLATE_OBJECT_CAPABILITY: &str = "builtin:TemplateObject";
 
 fn is_eval_value_read(
     expression: &Expression,

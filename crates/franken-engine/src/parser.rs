@@ -2150,7 +2150,16 @@ struct ParseExecutionContext<'a> {
     /// and class comes from in the source, so Function.prototype.toString
     /// can return that source text.
     function_sources: FunctionSourceMap,
+    /// Tagged templates parsed so far: each call site's key for the
+    /// runtime's template-object cache (bd-9vouw.343).
+    template_sites: u32,
 }
+
+/// The intrinsic a tagged template's strings argument calls:
+/// `%TemplateObject(site, [cooked...], [raw...])` answers the call site's one
+/// frozen template object (ES2020 12.2.9.3). `%` cannot start a source
+/// identifier, so no program can name it.
+pub(crate) const TEMPLATE_OBJECT_INTRINSIC: &str = "%TemplateObject";
 
 /// The parse text is the source with its comments blanked to spaces (same
 /// byte offsets), merged into logical lines whose separators are
@@ -4030,6 +4039,7 @@ fn parse_source(
         formal_parameters: false,
         private_name_scopes: Vec::new(),
         function_sources: FunctionSourceMap::default(),
+        template_sites: 0,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -8599,57 +8609,23 @@ fn try_parse_postfix(
                 .iter()
                 .map(|quasi| Some(Expression::StringLiteral(quasi.clone().into())))
                 .collect();
-            // ES2020 §12.2.9: the strings array carries a `.raw` sibling array
-            // (used by String.raw and `tag` functions reading `s.raw[i]`). An
-            // ArrayLiteral cannot carry an extra property, so wrap the cooked
-            // array in an immediately-applied arrow that sets `.raw` and returns
-            // it: `((__tt_strings) => { __tt_strings.raw = [<raw>]; return
-            // __tt_strings; })([<cooked>])`. `__tt_strings` is the cooked array
-            // passed by reference (a heap object), so the member assignment
-            // mutates the shared object — no closure-write-back concern (that bug
-            // is about reassigning OUTER let bindings, not mutating a param's
-            // object). CAVEAT: this allocates the strings object per evaluation;
-            // ES2020 §12.2.9 specifies per-call-site caching (same array identity
-            // across evaluations), which a parser desugar cannot provide — a
-            // memoized runtime template-strings intrinsic is the long-term fix
-            // (the cooked-only bd-1lrbw desugar already had this non-memoization).
-            let strings_param = "__tt_strings".to_string();
-            let raw_arrow = Expression::ArrowFunction {
-                params: vec![FunctionParam {
-                    pattern: BindingPattern::Identifier(strings_param.clone()),
-                    span: span.clone(),
-                }],
-                body: ArrowBody::Block(BlockStatement {
-                    body: vec![
-                        Statement::Expression(ExpressionStatement {
-                            expression: Expression::Assignment {
-                                operator: AssignmentOperator::Assign,
-                                left: Box::new(Expression::Member {
-                                    object: Box::new(Expression::Identifier(strings_param.clone())),
-                                    property: Box::new(Expression::Identifier("raw".to_string())),
-                                    computed: false,
-                                    span: None,
-                                }),
-                                right: Box::new(Expression::ArrayLiteral(raw_strings)),
-                                assignment_strictness: AssignmentStrictness::from_strict_mode(
-                                    context.strict_mode,
-                                ),
-                            },
-                            span: span.clone(),
-                        }),
-                        Statement::Return(ReturnStatement {
-                            argument: Some(Expression::Identifier(strings_param.clone())),
-                            span: span.clone(),
-                        }),
-                    ],
-                    span: span.clone(),
-                }),
-                is_async: false,
-                source_text: None,
-            };
+            // ES2020 12.2.9.3 GetTemplateObject: the strings array (its `raw`
+            // sibling a frozen non-enumerable property) is created once per
+            // call site and realm, frozen, and every evaluation of the site
+            // passes that same object, so a tag can key a cache on it (lit,
+            // styled-components, graphql-tag). The runtime intrinsic keeps one
+            // per (module, site); the site is this parse's ordinal of tagged
+            // templates (bd-9vouw.343).
+            context.template_sites = context.template_sites.saturating_add(1);
             let strings_with_raw = Expression::Call {
-                callee: Box::new(raw_arrow),
-                arguments: vec![Expression::ArrayLiteral(cooked_strings)],
+                callee: Box::new(Expression::Identifier(
+                    TEMPLATE_OBJECT_INTRINSIC.to_string(),
+                )),
+                arguments: vec![
+                    Expression::StringLiteral(context.template_sites.to_string().into()),
+                    Expression::ArrayLiteral(cooked_strings),
+                    Expression::ArrayLiteral(raw_strings),
+                ],
                 span: None,
             };
             let mut arguments = Vec::with_capacity(expressions.len() + 1);
@@ -20488,6 +20464,7 @@ mod tests {
             formal_parameters: false,
             private_name_scopes: Vec::new(),
             function_sources: FunctionSourceMap::default(),
+            template_sites: 0,
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)
     }

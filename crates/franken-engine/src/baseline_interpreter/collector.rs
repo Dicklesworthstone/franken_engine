@@ -1681,6 +1681,7 @@ impl InterpreterCore {
             registers_value_bytes: _,
             // A byte count of the register label file.
             register_labels_bytes: _,
+            template_objects,
             call_stack,
             heap: _,
             estimated_memory_bytes: _,
@@ -2010,6 +2011,9 @@ impl InterpreterCore {
         // Intrinsics.
         function_prototypes.values().for_each(|id| m.object(*id));
         builtin_prototypes.values().for_each(|id| m.object(*id));
+        // A tagged template's call site answers its one template object on
+        // every evaluation (bd-9vouw.343).
+        template_objects.values().for_each(|id| m.object(*id));
         // A forEach in progress keeps its collection's storage.
         collection_for_each_cursors
             .iter()

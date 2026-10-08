@@ -3659,7 +3659,12 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     trimmed_source_offset,
                 );
                 current_start_line = prev.start_line;
-                last_significant = None;
+                // A line merged as a division follows an operand: its
+                // leading `/` divides. With no token before it the scanner
+                // read `/ 2` as a regex start and missed that a lone `/`
+                // line awaits its right operand, so `x = 18\n/ 2\n/\n9`
+                // split before `9` (bd-9vouw.362).
+                last_significant = division_continues_previous.then_some(')');
                 trailing_identifier.clear();
             } else {
                 current_text.clear();

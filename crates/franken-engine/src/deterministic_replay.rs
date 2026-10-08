@@ -170,8 +170,8 @@ impl TraceEvent {
 pub struct DeterministicEventWitness {
     /// Number of folded events.
     pub event_count: u64,
-    /// FNV-1a-64 over the length-prefixed `(source, value)` of every folded
-    /// event, in fold order.
+    /// A multiply-xorshift fold, eight bytes per step, over the
+    /// length-prefixed `(source, value)` of every folded event, in fold order.
     pub digest: u64,
 }
 
@@ -179,20 +179,41 @@ impl Default for DeterministicEventWitness {
     fn default() -> Self {
         Self {
             event_count: 0,
-            digest: Self::FNV_OFFSET_BASIS,
+            digest: Self::SEED,
         }
     }
 }
 
 impl DeterministicEventWitness {
-    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    const SEED: u64 = 0xcbf2_9ce4_8422_2325;
+    /// Odd, so each step is a bijection of the digest for a given word.
+    const MULTIPLIER: u64 = 0x9e37_79b9_7f4a_7c15;
 
+    /// One step: injective in `word` for a given digest and a bijection of
+    /// `digest` for a given word, so two streams that differ in a single
+    /// word always end in different digests.
+    fn mix(digest: u64, word: u64) -> u64 {
+        let product = (digest ^ word).wrapping_mul(Self::MULTIPLIER);
+        product ^ (product >> 32)
+    }
+
+    /// Absorb `bytes` eight at a time (little-endian), the tail zero-padded;
+    /// every field `fold` absorbs is length-prefixed, so the padding cannot
+    /// make two different event streams equal. It was FNV-1a, one dependent
+    /// multiply per byte: 8% of a property-read loop (bd-9vouw.381).
     fn absorb(&mut self, bytes: &[u8]) {
         let mut digest = self.digest;
-        for byte in bytes {
-            digest ^= u64::from(*byte);
-            digest = digest.wrapping_mul(Self::FNV_PRIME);
+        let mut words = bytes.chunks_exact(8);
+        for word in &mut words {
+            let mut buffer = [0_u8; 8];
+            buffer.copy_from_slice(word);
+            digest = Self::mix(digest, u64::from_le_bytes(buffer));
+        }
+        let tail = words.remainder();
+        if !tail.is_empty() {
+            let mut buffer = [0_u8; 8];
+            buffer[..tail.len()].copy_from_slice(tail);
+            digest = Self::mix(digest, u64::from_le_bytes(buffer));
         }
         self.digest = digest;
     }
@@ -4890,6 +4911,35 @@ mod tests {
             DeterministicEventWitness::default(),
             "folding an empty value is still an observable fold"
         );
+    }
+
+    /// bd-9vouw.381: the fold absorbs eight bytes per step and zero-pads the
+    /// tail; the length prefixes keep padding from colliding, and a change
+    /// in any byte of any word (first, middle, last, tail) changes it.
+    #[test]
+    fn witness_word_fold_is_padding_and_position_sensitive_bd_9vouw_381() {
+        let pr = NondeterminismSource::PropertyResolution;
+        assert_ne!(
+            witness_of(&[(pr.clone(), b"a")]),
+            witness_of(&[(pr.clone(), b"a\0")]),
+            "an explicit zero byte is not tail padding"
+        );
+        assert_ne!(
+            witness_of(&[(pr.clone(), b"abcdefgh")]),
+            witness_of(&[(pr.clone(), b"abcdefgh\0")]),
+            "a full word and a word plus a zero tail differ"
+        );
+        let base = b"property_found:key=length,object_id=12,depth=3".to_vec();
+        let reference = witness_of(&[(pr.clone(), &base)]);
+        for index in 0..base.len() {
+            let mut changed = base.clone();
+            changed[index] ^= 1;
+            assert_ne!(
+                reference,
+                witness_of(&[(pr.clone(), &changed)]),
+                "flipping byte {index} must change the witness"
+            );
+        }
     }
 
     #[test]

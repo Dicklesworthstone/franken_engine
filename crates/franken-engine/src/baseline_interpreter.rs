@@ -60350,12 +60350,21 @@ impl InterpreterCore {
             return Ok(regex);
         }
         let mut builder = Self::regexp_builder(pattern, flags)?;
-        let regex = match builder
-            .size_limit(REGEXP_CACHE_MAX_PROGRAM_BYTES)
-            .dfa_size_limit(REGEXP_CACHE_MAX_DFA_BYTES)
-            .build()
-        {
-            Ok(regex) => CompiledRegExp::Automaton(regex),
+        let built = match Self::es_repetition_matcher(pattern, flags) {
+            Some(regexp) => Ok(regexp),
+            None => builder
+                .size_limit(REGEXP_CACHE_MAX_PROGRAM_BYTES)
+                .dfa_size_limit(REGEXP_CACHE_MAX_DFA_BYTES)
+                .build()
+                .map(CompiledRegExp::Automaton),
+        };
+        let regex = match built {
+            Ok(CompiledRegExp::Backtracking(regexp))
+                if regexp.program_len() > REGEXP_CACHE_MAX_BACKTRACK_INSTRUCTIONS =>
+            {
+                return Ok(CompiledRegExp::Backtracking(regexp));
+            }
+            Ok(regex) => regex,
             // Too large for the cache limits, or not expressible by `regex`:
             // the default limits or the backtracking matcher decide. Only a
             // small backtracking program is kept.
@@ -60430,11 +60439,29 @@ impl InterpreterCore {
         Ok(builder)
     }
 
+    /// The backtracking matcher for a pattern whose repetitions the `regex`
+    /// crate would answer differently from ES2020 (captures nested in a
+    /// repeated atom, or a repeated atom that can match empty), when this
+    /// module's parser accepts it (bd-9vouw.367).
+    fn es_repetition_matcher(pattern: &str, flags: &str) -> Option<CompiledRegExp> {
+        if !BacktrackRegExp::needs_es_repetition_semantics(pattern, flags) {
+            return None;
+        }
+        BacktrackRegExp::new(pattern, flags)
+            .ok()
+            .map(|regexp| CompiledRegExp::Backtracking(Rc::new(regexp)))
+    }
+
     /// Compile under the default limits: the `regex` crate for the patterns
     /// it can express, the backtracking matcher for look-around,
-    /// backreferences and the rest. A pattern neither accepts is invalid.
+    /// backreferences, repetitions with ES2020-only results and the rest. A
+    /// pattern neither accepts is invalid.
     fn build_regexp(pattern: &str, flags: &str) -> Result<CompiledRegExp, InterpreterError> {
-        if let Ok(regex) = Self::regexp_builder(pattern, flags)?.build() {
+        let builder = Self::regexp_builder(pattern, flags)?;
+        if let Some(regexp) = Self::es_repetition_matcher(pattern, flags) {
+            return Ok(regexp);
+        }
+        if let Ok(regex) = builder.build() {
             return Ok(CompiledRegExp::Automaton(regex));
         }
         BacktrackRegExp::new(pattern, flags)

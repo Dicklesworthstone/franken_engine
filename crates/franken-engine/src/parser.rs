@@ -2402,6 +2402,12 @@ fn line_starts_call_or_index(line: &str) -> bool {
     code.starts_with('(') || code.starts_with('[')
 }
 
+/// Whether a line starts with a `/` that is not a comment: after a line that
+/// ends an expression it is a division operator (bd-9vouw.362).
+fn line_starts_division(line: &str) -> bool {
+    line.starts_with('/') && !line.starts_with("//") && !line.starts_with("/*")
+}
+
 /// Whether a logical line ends with something an argument list or index can
 /// follow: `)`, `]`, a literal or an identifier that is not a keyword ending
 /// a statement head (`return`, `break`, ...), outside import and export
@@ -3603,7 +3609,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             // dropped. A previous line ending with `;`, a `}` (a block or a
             // declaration), a keyword that cannot end an expression, or an
             // import/export declaration still ends there.
-            let paren_continues_previous = line_starts_call_or_index(trimmed_line) && {
+            let previous_ends_expression = || {
                 let comment_lines = result
                     .iter()
                     .rev()
@@ -3612,7 +3618,16 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 result.len() > comment_lines
                     && previous_line_ends_expression(&result[result.len() - 1 - comment_lines].text)
             };
-            if paren_continues_previous {
+            let paren_continues_previous =
+                line_starts_call_or_index(trimmed_line) && previous_ends_expression();
+            // So does a line starting with `/` (not a comment): after an
+            // expression the goal symbol is InputElementDiv, so it is a
+            // division, not a regex starting a new statement. `x = 18\n/\n2`
+            // is 18 / 2 and `a\n/g/i` is a / g / i, as Node reads them;
+            // both were split into a second statement (bd-9vouw.362).
+            let division_continues_previous =
+                line_starts_division(trimmed_line) && previous_ends_expression();
+            if paren_continues_previous || division_continues_previous {
                 while result.last().is_some_and(is_comment_only_line) {
                     result.pop();
                 }
@@ -3624,6 +3639,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 || body_continues_header
                 || clause_continues_statement
                 || paren_continues_previous
+                || division_continues_previous
             {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;

@@ -65698,6 +65698,8 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .is_some_and(|object| object.brand() == Some("Date"));
+        let object_prototype = self.builtin_prototypes.get("Object").copied();
+        let mut reaches_object_prototype = false;
         let mut to_primitive_seen = false;
         let mut current = Some(object_id);
         // Bounded like the other prototype walks; a longer chain keeps the
@@ -65709,19 +65711,16 @@ impl InterpreterCore {
             let Some(object) = self.heap.get(id.0 as usize) else {
                 break;
             };
-            let guest_method = |name: &str| {
-                matches!(
-                    object.properties.get(name),
-                    Some(
-                        Value::Closure(_)
-                            | Value::Function(_)
-                            | Value::AsyncFunction(_)
-                            | Value::GeneratorFunction(_)
-                            | Value::AsyncGeneratorFunction(_)
-                    )
-                )
-            };
-            if guest_method("toString") || guest_method("valueOf") {
+            reaches_object_prototype |= Some(id) == object_prototype;
+            // The intrinsic prototypes supply their conversion methods
+            // virtually, so a stored `toString` or `valueOf` is the program's:
+            // a function, or a value OrdinaryToPrimitive skips (`null`, a
+            // number) and an accessor, which only the generic path reads.
+            // `{ valueOf: null, toString: null } + ''` is a TypeError; the
+            // engine's string form answered "[object Object]".
+            if object.properties.contains_key("toString")
+                || object.properties.contains_key("valueOf")
+            {
                 return true;
             }
             // The first @@toPrimitive on the chain is the one ToPrimitive
@@ -65739,6 +65738,11 @@ impl InterpreterCore {
                 to_primitive_seen = true;
             }
             current = self.observable_prototype_link(object, id);
+        }
+        // A chain that ends without %Object.prototype% (`Object.create(null)`)
+        // has no conversion methods at all: OrdinaryToPrimitive throws.
+        if current.is_none() && !reaches_object_prototype {
+            return true;
         }
         is_date && !to_primitive_seen
     }

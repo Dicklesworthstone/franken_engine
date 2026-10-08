@@ -25824,18 +25824,27 @@ impl InterpreterCore {
         let writable_view = (self.writable_streams.contains_key(&object_id)
             || self.writable_terminal_states.contains_key(&object_id))
             && Self::is_writable_state_view_key(key);
-        let binary_slot = self.heap.get(object_id.0 as usize).is_some_and(|object| {
-            if object.typed_array.is_some() {
-                TYPED_ARRAY_SLOT_KEYS.contains(&key)
-            } else if object.data_view.is_some() {
-                DATA_VIEW_SLOT_KEYS.contains(&key)
-            } else {
-                object.array_buffer.is_some() && ARRAY_BUFFER_SLOT_KEYS.contains(&key)
-            }
-        });
+        let binary_slot = self
+            .heap
+            .get(object_id.0 as usize)
+            .is_some_and(|object| Self::binary_slot_key(object, key));
         // The internal slots of events, targets and signals (bd-9vouw.170).
         let event_slot = event_target::EVENT_FAMILY_SLOT_KEYS.contains(&key);
         !(writable_view || binary_slot || event_slot)
+    }
+
+    /// Whether `key` is one of the heap entries through which `object`, a
+    /// typed array, DataView or ArrayBuffer, keeps an internal slot or the
+    /// value of a prototype accessor (`length`, `byteLength`, ...) rather
+    /// than an own property.
+    fn binary_slot_key(object: &HeapObject, key: &str) -> bool {
+        if object.typed_array.is_some() {
+            TYPED_ARRAY_SLOT_KEYS.contains(&key)
+        } else if object.data_view.is_some() {
+            DATA_VIEW_SLOT_KEYS.contains(&key)
+        } else {
+            object.array_buffer.is_some() && ARRAY_BUFFER_SLOT_KEYS.contains(&key)
+        }
     }
 
     fn own_runtime_property_visible(&self, object_id: ObjectId, key: &JsString) -> bool {
@@ -58474,23 +58483,37 @@ impl InterpreterCore {
             }
             ForOfStep::Array { iterator, index } => {
                 let receiver = Value::Object(iterator.object_id);
-                let length = self.iterator_protocol_property(
-                    module,
-                    iterator.object_id,
-                    &RuntimePropertyKey::String(JsString::from("length")),
-                    receiver.clone(),
-                )?;
-                if matches!(length, Value::BigInt(_) | Value::Symbol(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "number-compatible array-like length".to_string(),
-                        got: length.type_name().to_string(),
-                    });
-                }
-                let length = Self::coerce_to_float(&length).unwrap_or(f64::NAN);
-                let length = if length.is_nan() || length <= 0.0 {
-                    0
+                // A typed array iterated by Array.prototype.values / keys /
+                // entries reads its view's length each step, and a view out
+                // of bounds is a TypeError (ES2024 23.1.5.1 step 2.b.ii), as
+                // `ta.values()` does above; it iterated as empty
+                // (bd-9vouw.360).
+                let typed_view = self
+                    .heap
+                    .get(iterator.object_id.0 as usize)
+                    .and_then(|object| object.typed_array.clone());
+                let length = if let Some(view) = typed_view {
+                    Self::reject_out_of_bounds_typed_array(&view, "next")?;
+                    view.length
                 } else {
-                    length.floor().min(9_007_199_254_740_991.0) as usize
+                    let length = self.iterator_protocol_property(
+                        module,
+                        iterator.object_id,
+                        &RuntimePropertyKey::String(JsString::from("length")),
+                        receiver.clone(),
+                    )?;
+                    if matches!(length, Value::BigInt(_) | Value::Symbol(_)) {
+                        return Err(InterpreterError::TypeError {
+                            expected: "number-compatible array-like length".to_string(),
+                            got: length.type_name().to_string(),
+                        });
+                    }
+                    let length = Self::coerce_to_float(&length).unwrap_or(f64::NAN);
+                    if length.is_nan() || length <= 0.0 {
+                        0
+                    } else {
+                        length.floor().min(9_007_199_254_740_991.0) as usize
+                    }
                 };
                 if index >= length {
                     if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
@@ -64426,7 +64449,17 @@ impl InterpreterCore {
                     let Some(object) = self.heap.get(owner.0 as usize) else {
                         return Err(InterpreterError::ObjectNotFound { id: owner.0 });
                     };
-                    if let Some(property) = object.own_runtime_property_value(key) {
+                    // A typed array's, DataView's or ArrayBuffer's `length`,
+                    // `byteLength`, ... entries keep internal slots, not own
+                    // properties: the write goes on to the prototype's
+                    // getter-only accessor and fails. It replaced the slot, so
+                    // `ta.length = 0` made `ta.length` read 0 and
+                    // Array.prototype.push on a typed array changed nothing
+                    // instead of throwing.
+                    let slot = key
+                        .as_str()
+                        .is_some_and(|name| Self::binary_slot_key(object, name));
+                    if !slot && let Some(property) = object.own_runtime_property_value(key) {
                         if matches!(&property, Value::Accessor { .. }) {
                             return self.resolve_accessor_set(module, property, receiver, value);
                         }

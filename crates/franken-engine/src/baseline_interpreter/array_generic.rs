@@ -18,9 +18,10 @@
 //! No-claim: on a proxy `values`/`keys`/`entries` (and so for-of) read the
 //! elements when the iterator is created, not lazily (an array-like keeps the
 //! ordinary lazy iterator); typed arrays used as array-likes keep their
-//! ordinary paths. A function `this` runs here over its own properties
-//! (bd-9vouw.285). `flat`, `flatMap` and `toSpliced` run here too
-//! (bd-9vouw.354).
+//! ordinary paths for the methods that only read, and run here for the
+//! ones that write and for concat (bd-9vouw.360). A function `this` runs
+//! here over its own properties (bd-9vouw.285). `flat`, `flatMap` and
+//! `toSpliced` run here too (bd-9vouw.354).
 
 use super::*;
 
@@ -149,7 +150,27 @@ impl InterpreterCore {
                             && !self.array_has_dense_data_elements(object_id));
                     return Ok(generic.then_some(object_id));
                 }
-                let generic_typed_array = kind == K::ArrayJoin && !typed_array_method;
+                // Array.prototype's own methods that write (fill, sort,
+                // push, ...) and concat run on a typed array generically too:
+                // [[Set]] converts into the buffer, and `length` and an
+                // element's [[Delete]] refuse, so push and pop throw a
+                // TypeError. The element-storage paths wrote nothing, and
+                // concat spread a typed array, which is not concat-spreadable.
+                let generic_typed_array = !typed_array_method
+                    && matches!(
+                        kind,
+                        K::ArrayJoin
+                            | K::ArrayConcat
+                            | K::ArrayFill
+                            | K::ArrayCopyWithin
+                            | K::ArrayReverse
+                            | K::ArraySort
+                            | K::ArrayPush
+                            | K::ArrayPop
+                            | K::ArrayShift
+                            | K::ArrayUnshift
+                            | K::ArraySplice
+                    );
                 Ok(((!is_typed_array || generic_typed_array) && !iterator).then_some(object_id))
             }
             Some(

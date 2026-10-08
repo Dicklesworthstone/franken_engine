@@ -72127,6 +72127,16 @@ impl InterpreterCore {
         for (index, value) in values.iter().enumerate() {
             self.typed_array_indexed_set_property(target, &index.to_string(), value)?;
         }
+        self.join_typed_array_source_label(target, source)
+    }
+
+    /// `target`'s storage joins the label of `source`'s backing buffer, whose
+    /// elements were written to it.
+    fn join_typed_array_source_label(
+        &mut self,
+        target: ObjectId,
+        source: ObjectId,
+    ) -> Result<(), InterpreterError> {
         let label = self
             .array_buffer_id_for_object(source)
             .and_then(|buffer| self.heap.get(buffer.0 as usize))
@@ -72431,17 +72441,69 @@ impl InterpreterCore {
                     });
                 }
                 let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
-                // ES2020 22.2.3.19 step 5: map creates its result before the
-                // callbacks run; filter (22.2.3.9 step 10) after them.
-                let mapped_species = if method == "map" {
-                    let length = Value::Int(i64::try_from(view.length).unwrap_or(i64::MAX));
-                    self.typed_array_species_result(module, target_id, view.kind, vec![length])?
-                } else {
-                    None
-                };
-                let mut results = Vec::with_capacity(values.len());
-                for (index, element) in values.into_iter().enumerate() {
-                    let result = self.invoke_array_callback(
+                let len = view.length;
+                if method == "map" {
+                    // ES2024 23.2.3.22: the result exists before the
+                    // callbacks run (step 4). Each step reads O[k] when it
+                    // runs (undefined once a resize left k out of bounds)
+                    // and Sets the result's element, converting the mapped
+                    // value then (steps 6.b-6.d).
+                    let length = Value::Int(i64::try_from(len).unwrap_or(i64::MAX));
+                    let species = self.typed_array_species_result(
+                        module,
+                        target_id,
+                        view.kind,
+                        vec![length],
+                    )?;
+                    let created = match species {
+                        Some(created) => created,
+                        None => self.alloc_typed_array_with_fresh_buffer(view.kind, len)?,
+                    };
+                    // A species constructor may return another element type.
+                    let created_kind = self
+                        .typed_array_view_for_object(created)?
+                        .map_or(view.kind, |created_view| created_view.kind);
+                    for index in 0..len {
+                        let element = self
+                            .array_loop_element(Some(module), target_id, index, true)?
+                            .unwrap_or(Value::Undefined);
+                        // Set converts the mapped value (its valueOf runs)
+                        // before the next callback.
+                        let converted =
+                            self.with_gc_nested_request(vec![Value::Object(created)], |core| {
+                                let mapped = core.invoke_array_callback(
+                                    Some(module),
+                                    &callback,
+                                    this_arg.clone(),
+                                    element,
+                                    index,
+                                    target_id,
+                                )?;
+                                core.typed_array_element_value(Some(module), created_kind, mapped)
+                            })?;
+                        self.typed_array_indexed_set_property(
+                            created,
+                            &index.to_string(),
+                            &converted,
+                        )?;
+                    }
+                    // As before: a species result joins the receiver's
+                    // storage label (typed_array_write_values); the
+                    // default result is a fresh array of the mapped values.
+                    if species.is_some() {
+                        self.join_typed_array_source_label(created, target_id)?;
+                    }
+                    return Ok(Value::Object(created));
+                }
+                // ES2024 23.2.3.10: each step reads O[k] when it runs; the
+                // kept values go to a result created after the callbacks
+                // (step 9).
+                let mut kept = Vec::new();
+                for index in 0..len {
+                    let element = self
+                        .array_loop_element(Some(module), target_id, index, true)?
+                        .unwrap_or(Value::Undefined);
+                    let selected = self.invoke_array_callback(
                         Some(module),
                         &callback,
                         this_arg.clone(),
@@ -72449,26 +72511,22 @@ impl InterpreterCore {
                         index,
                         target_id,
                     )?;
-                    if method == "map" {
-                        results.push(result);
-                    } else if result.is_truthy() {
-                        results.push(element);
+                    if selected.is_truthy() {
+                        kept.push(element);
                     }
                 }
-                let species = match mapped_species {
-                    Some(created) => Some(created),
-                    None if method == "filter" => {
-                        let length = Value::Int(i64::try_from(results.len()).unwrap_or(i64::MAX));
-                        self.typed_array_species_result(module, target_id, view.kind, vec![length])?
-                    }
-                    None => None,
-                };
-                let created = match species {
+                let length = Value::Int(i64::try_from(kept.len()).unwrap_or(i64::MAX));
+                let created = match self.typed_array_species_result(
+                    module,
+                    target_id,
+                    view.kind,
+                    vec![length],
+                )? {
                     Some(created) => {
-                        self.typed_array_write_values(created, target_id, &results)?;
+                        self.typed_array_write_values(created, target_id, &kept)?;
                         created
                     }
-                    None => self.alloc_typed_array_from_values(view.kind, &results)?,
+                    None => self.alloc_typed_array_from_values(view.kind, &kept)?,
                 };
                 return Ok(Value::Object(created));
             }

@@ -64616,6 +64616,9 @@ impl InterpreterCore {
             if self.active_inline_callback_context_label.is_some() {
                 self.reflect_admit_mutation_label(receiver_id)?;
             }
+            // A write over a canonical prototype's virtual property keeps its
+            // attributes (bd-9vouw.379).
+            self.materialize_virtual_own_property(receiver_id, key)?;
             let Some(receiver_object) = self.heap.get(receiver_id.0 as usize) else {
                 return Err(InterpreterError::ObjectNotFound { id: receiver_id.0 });
             };
@@ -82323,6 +82326,8 @@ impl InterpreterCore {
         key: RuntimePropertyKey,
         descriptor: PropertyDescriptorFields,
     ) -> Result<bool, InterpreterError> {
+        // A canonical prototype's virtual property is the current one.
+        self.materialize_virtual_own_property(obj_id, &key)?;
         let object = self
             .heap
             .get(obj_id.0 as usize)
@@ -82657,19 +82662,7 @@ impl InterpreterCore {
             .flatten()
             .or_else(|| {
                 let virtual_value = self.canonical_prototype_virtual_property(object_id, key)?;
-                let attributes = if matches!(key.as_str(), Some("length" | "name"))
-                    && self.builtin_prototypes.get("Function") == Some(&object_id)
-                {
-                    FUNCTION_NAME_LENGTH_ATTRIBUTES
-                } else if self.virtual_property_is_configurable(object_id, key) {
-                    NON_ENUMERABLE_DATA_ATTRIBUTES
-                } else {
-                    PropertyAttributes {
-                        writable: true,
-                        enumerable: false,
-                        configurable: false,
-                    }
-                };
+                let attributes = self.virtual_property_attributes(object_id, key);
                 Some((BaselineSymbolProperty::Data(virtual_value), attributes))
             });
         let (property, attributes) = source?;
@@ -109006,6 +108999,73 @@ impl InterpreterCore {
     ) -> bool {
         !(key.as_str() == Some("length")
             && self.builtin_prototypes.get("Array") == Some(&object_id))
+    }
+
+    /// The attributes of the virtual own data property `key` of the
+    /// canonical prototype `object_id`: %Function.prototype%'s `length` and
+    /// `name` are read-only, %Array.prototype%.length is non-configurable,
+    /// and the rest are { writable: true, enumerable: false, configurable:
+    /// true }.
+    fn virtual_property_attributes(
+        &self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> PropertyAttributes {
+        if matches!(key.as_str(), Some("length" | "name"))
+            && self.builtin_prototypes.get("Function") == Some(&object_id)
+        {
+            FUNCTION_NAME_LENGTH_ATTRIBUTES
+        } else if self.virtual_property_is_configurable(object_id, key) {
+            NON_ENUMERABLE_DATA_ATTRIBUTES
+        } else {
+            PropertyAttributes {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+            }
+        }
+    }
+
+    /// bd-9vouw.379: store the virtual own property `key` of the canonical
+    /// prototype `object_id` (a method, `constructor`, @@iterator, or a
+    /// getter-only accessor such as `Map.prototype.size`) as an ordinary own
+    /// property with its attributes, so [[DefineOwnProperty]] validates
+    /// against them and keeps the fields a descriptor leaves out, and a
+    /// [[Set]] replaces only its value. Both took the property as absent:
+    /// `Object.defineProperty(Array.prototype, 'map', { value })` left `map`
+    /// non-writable and non-configurable, and `Array.prototype.forEach =
+    /// Array.prototype.forEach` made it enumerable, so for-in over every
+    /// array listed it. The stored property shadows the virtual one and
+    /// `delete` removes both. Answers whether a property was stored.
+    fn materialize_virtual_own_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<bool, InterpreterError> {
+        if self.heap.get(object_id.0 as usize).is_none_or(|object| {
+            object.contains_own_runtime_property(key)
+                || (object.is_array && key.as_str() == Some("length"))
+        }) || !self
+            .builtin_prototypes
+            .values()
+            .any(|prototype| *prototype == object_id)
+        {
+            return Ok(false);
+        }
+        let (value, attributes) =
+            if let Some(value) = self.canonical_prototype_virtual_property(object_id, key) {
+                (value, self.virtual_property_attributes(object_id, key))
+            } else if let Some(getter) = self.prototype_getter_at(object_id, key) {
+                (
+                    Self::accessor_property_value(Some(Value::BuiltinFunction(getter)), None),
+                    NON_ENUMERABLE_DATA_ATTRIBUTES,
+                )
+            } else {
+                return Ok(false);
+            };
+        self.set_object_runtime_property(object_id, key.clone(), value)?;
+        self.set_own_property_attributes(object_id, key, attributes)?;
+        Ok(true)
     }
 
     /// `delete` of the virtual own property `key` of a canonical prototype

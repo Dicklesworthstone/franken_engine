@@ -151,13 +151,19 @@ impl InterpreterCore {
 
     /// `{ get, set: undefined, enumerable: false, configurable: true }` when
     /// `object` is the prototype of an owner in PROTOTYPE_GETTERS and `key`
-    /// one of its accessors, unless `delete` removed it.
+    /// one of its accessors, unless `delete` removed it or a stored property
+    /// (a redefinition, bd-9vouw.379) shadows it.
     pub(super) fn prototype_getter_descriptor(
         &mut self,
         object: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<Option<Value>, InterpreterError> {
-        if self.virtual_own_property_deleted(object, key) {
+        if self.virtual_own_property_deleted(object, key)
+            || self
+                .heap
+                .get(object.0 as usize)
+                .is_some_and(|stored| stored.contains_own_runtime_property(key))
+        {
             return Ok(None);
         }
         let RuntimePropertyKey::String(key) = key else {

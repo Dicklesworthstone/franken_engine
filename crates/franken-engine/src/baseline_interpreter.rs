@@ -41144,10 +41144,14 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::DateUtc => {
                 // Date.UTC(year[, month[, date[, hours[, minutes[, seconds[, ms]]]]]])
-                // (ES2020 20.4.3.4); a two-digit year maps to 19xx.
+                // (ES2020 20.4.3.4); a two-digit year maps to 19xx. Each
+                // argument is ToNumber'd in order, an object's valueOf
+                // included; an object counted as NaN (bd-9vouw.368).
                 let mut parts = Vec::with_capacity(7);
                 for index in 0..args.count.min(7) {
-                    let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+                    let value = self
+                        .builtin_number_arg(module, args, index)?
+                        .unwrap_or(Value::Undefined);
                     parts.push(Self::coerce_to_float(&value).unwrap_or(f64::NAN));
                 }
                 let part = |index: usize, fallback: f64| parts.get(index).copied().unwrap_or(fallback);

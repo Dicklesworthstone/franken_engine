@@ -8910,6 +8910,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     let mut pinned_register_high: Reg = register_cursor;
     let mut register_high_water: Reg = register_cursor;
     let mut iterator_anchors = Vec::<IteratorAnchor>::new();
+    // Binding registers a compound assignment's operator reads in place
+    // while they sit on the value stack (compound_left_operand_reads_in_place).
+    let mut compound_reads_in_place = BTreeSet::<Reg>::new();
     for (op_index, op) in ir2.ops.iter().enumerate() {
         prune_iterator_anchors(&mut iterator_anchors, &value_stack);
         // A short-lived temporary's register is free once its last
@@ -9039,7 +9042,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 dst,
                 &operands,
                 copies,
-                &value_stack,
+                compaction_value_stack(&value_stack, &compound_reads_in_place),
                 reserved_below,
                 &mut register_cursor,
                 &mut register_high_water,
@@ -9081,12 +9084,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut pinned_register_high,
                         &mut register_high_water,
                     );
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions.push(Ir3Instruction::Move {
-                        dst,
-                        src: source_reg,
-                    });
-                    value_stack.push(dst);
+                    // `x op= rhs`'s read of a pinned register binding: the
+                    // operator reads the register itself and writes the
+                    // result back to it (see the BinaryOp arm), one
+                    // instruction as before bd-9vouw.327's read-first order.
+                    if source_reg < pinned_register_high
+                        && !short_lived_temporaries.contains_key(binding_id)
+                        && compound_left_operand_reads_in_place(&ir2.ops, op_index, *binding_id)
+                    {
+                        compound_reads_in_place.insert(source_reg);
+                        value_stack.push(source_reg);
+                    } else {
+                        let dst = alloc_register(&mut register_cursor);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst,
+                            src: source_reg,
+                        });
+                        value_stack.push(dst);
+                    }
                 }
             }
             Ir1Op::LoadName {
@@ -9307,7 +9322,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
@@ -9354,7 +9369,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
@@ -9530,15 +9545,27 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             Ir1Op::BinaryOp { operator } => {
                 let rhs = pop_lowering_value(&mut value_stack)?;
                 let lhs = pop_lowering_value(&mut value_stack)?;
-                let dst = pure_op_result_register(
-                    &[lhs, rhs],
-                    &value_stack,
-                    statement_register_floor
-                        .max(pinned_register_high)
-                        .max(live_status_register_ceiling(&live_status_registers)),
-                    &mut register_cursor,
-                    &mut register_high_water,
-                );
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                let dst = if compound_reads_in_place.remove(&lhs) {
+                    // The next op assigns the result to the binding whose
+                    // register lhs is: write it there, and free rhs as
+                    // pure_op_result_register would have reused it.
+                    if rhs >= reserved_below && value_stack.iter().all(|&live| live < rhs) {
+                        register_high_water = register_high_water.max(register_cursor);
+                        register_cursor = register_cursor.min(rhs);
+                    }
+                    lhs
+                } else {
+                    pure_op_result_register(
+                        &[lhs, rhs],
+                        &value_stack,
+                        reserved_below,
+                        &mut register_cursor,
+                        &mut register_high_water,
+                    )
+                };
                 let instr = match operator {
                     BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
                     BinaryOperator::Subtract => Ir3Instruction::Sub { dst, lhs, rhs },
@@ -9686,6 +9713,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     continue;
                 }
                 match operator {
+                    // A compound assignment's operator already wrote the
+                    // binding's register when it read it in place.
+                    AssignmentOperator::Assign if src == dst => {}
                     AssignmentOperator::Assign => {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     }
@@ -10650,7 +10680,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &arg_regs,
                     args,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
@@ -10741,7 +10771,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
@@ -34745,6 +34775,22 @@ fn compact_batch_literal(
     base
 }
 
+/// The value stack as call-result compaction sees it at the top level. The
+/// binding registers a compound assignment reads in place
+/// (compound_left_operand_reads_in_place) are pinned bindings, not
+/// temporaries, so a stack holding only them compacts as an empty one does:
+/// the result stays in its register.
+fn compaction_value_stack<'a>(value_stack: &'a [Reg], in_place: &BTreeSet<Reg>) -> &'a [Reg] {
+    if value_stack
+        .iter()
+        .all(|register| in_place.contains(register))
+    {
+        &[]
+    } else {
+        value_stack
+    }
+}
+
 /// bd-9vouw.23: once a call (Call, CallMethod, Construct, HostCall) has
 /// produced `result`, its callee, receiver and argument registers and the
 /// contiguous argument copies are dead. Reclaim the temporaries among them
@@ -34903,6 +34949,68 @@ fn store_result_needs_copy(
     ) && !iterator_cleanup_labels
         .values()
         .any(|register| *register == stored)
+}
+
+/// Whether the read of register binding `binding_id` at `ops[index]` is the
+/// left operand of a compound assignment that straight-line code alone
+/// separates from its operator: scanning forward over ops whose stack effect
+/// is known, the op that consumes the read is a BinaryOp taking it as its
+/// left operand, the next op assigns the result to the same binding, and no
+/// op in between writes the binding or branches. `x op= rhs` reads x before
+/// rhs (bd-9vouw.327), but a register binding is written only by its own
+/// ops (a closure's binding is scoped instead), so after such an rhs the
+/// register still holds the value read and the operator can read it in
+/// place. Any other op, or a right side longer than
+/// `COMPOUND_IN_PLACE_SCAN_LIMIT` ops, ends the scan with a copy (every read
+/// scans, so an unbounded scan of nested right sides was quadratic).
+fn compound_left_operand_reads_in_place(
+    ops: &[Ir2Op],
+    index: usize,
+    binding_id: BindingId,
+) -> bool {
+    const COMPOUND_IN_PLACE_SCAN_LIMIT: usize = 64;
+    // Values pushed above the read and not yet consumed.
+    let mut above = 0usize;
+    for (offset, op) in ops
+        .iter()
+        .enumerate()
+        .skip(index.saturating_add(1))
+        .take(COMPOUND_IN_PLACE_SCAN_LIMIT)
+    {
+        let (pops, pushes) = match &op.inner {
+            Ir1Op::LoadLiteral { .. } | Ir1Op::LoadName { .. } | Ir1Op::LoadBinding { .. } => {
+                (0, 1)
+            }
+            Ir1Op::StoreBinding { binding_id: other }
+            | Ir1Op::AssignOp {
+                binding_id: other, ..
+            } if *other != binding_id => (1, 1),
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(_),
+            }
+            | Ir1Op::UnaryOp { .. } => (1, 1),
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic,
+            }
+            | Ir1Op::BinaryOp { .. } => (2, 1),
+            Ir1Op::Call { arg_count } => ((*arg_count as usize).saturating_add(1), 1),
+            Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
+            _ => return false,
+        };
+        if pops > above {
+            return above == 1
+                && matches!(op.inner, Ir1Op::BinaryOp { .. })
+                && matches!(
+                    ops.get(offset + 1).map(|next| &next.inner),
+                    Some(Ir1Op::AssignOp {
+                        binding_id: assigned,
+                        operator: AssignmentOperator::Assign,
+                    }) if *assigned == binding_id
+                );
+        }
+        above = above - pops + pushes;
+    }
+    false
 }
 
 fn prune_iterator_anchors(anchors: &mut Vec<IteratorAnchor>, value_stack: &[Reg]) {

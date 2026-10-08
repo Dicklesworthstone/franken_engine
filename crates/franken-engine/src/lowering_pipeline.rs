@@ -29786,6 +29786,9 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         // `object_receiver_static_call_capability` below, NOT here.
         ("JSON", "parse") => Some("builtin:JsonParse"),
         ("JSON", "stringify") => Some("builtin:JsonStringify"),
+        // JSON.parse source text access (Node v22, bd-9vouw.380).
+        ("JSON", "rawJSON") => Some("builtin:JsonRawJson"),
+        ("JSON", "isRawJSON") => Some("builtin:JsonIsRawJson"),
         // `Array.*` and `String.*` statics — same family, same slot-0 convention
         // (bd-tvpjk). `Array`/`String` globals have no eval-scope binding either.
         ("Array", "isArray") => Some("builtin:ArrayIsArray"),

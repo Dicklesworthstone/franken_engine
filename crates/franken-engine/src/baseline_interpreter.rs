@@ -395,6 +395,8 @@ const MAX_PROTOTYPE_CHAIN_DEPTH: u32 = 64;
 const PROXY_TYPE_TAG: &str = "Proxy";
 /// The brand of a `stream.Readable` (bd-9vouw.150).
 const READABLE_BRAND: &str = "Readable";
+/// The brand of a JSON.rawJSON result, its [[IsRawJSON]] slot (bd-9vouw.380).
+const RAW_JSON_BRAND: &str = "RawJSON";
 const PROXY_TARGET_SLOT: &str = "__proxy_target";
 const PROXY_HANDLER_SLOT: &str = "__proxy_handler";
 const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
@@ -6776,7 +6778,7 @@ const SLOT0_STATIC_GLOBALS: [&str; 10] = [
     "Number",
     "Buffer",
 ];
-const SLOT0_STATIC_MEMBERS: [&str; 44] = [
+const SLOT0_STATIC_MEMBERS: [&str; 46] = [
     "keys",
     "hasOwn",
     "values",
@@ -6798,6 +6800,8 @@ const SLOT0_STATIC_MEMBERS: [&str; 44] = [
     "isView",
     "parse",
     "stringify",
+    "rawJSON",
+    "isRawJSON",
     "isArray",
     "from",
     "fromAsync",
@@ -37706,6 +37710,14 @@ impl InterpreterCore {
             (
                 "stringify",
                 Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonStringify")),
+            ),
+            (
+                "rawJSON",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonRawJson")),
+            ),
+            (
+                "isRawJSON",
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall("builtin:JsonIsRawJson")),
             ),
         ])?;
         self.mark_builtin_members_non_enumerable(json)?;
@@ -92034,6 +92046,8 @@ impl InterpreterCore {
             // JSON methods
             "builtin:JsonStringify" => self.json_stringify_builtin(module, args),
             "builtin:JsonParse" => self.json_parse_builtin(module, args),
+            "builtin:JsonRawJson" => self.json_raw_json_builtin(module, args),
+            "builtin:JsonIsRawJson" => self.json_is_raw_json_builtin(args),
             "builtin:isNaN" => {
                 self.primitive_conversion_builtin(module, args, PrimitiveConversion::IsNaN)
             }

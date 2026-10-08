@@ -563,6 +563,26 @@ impl InterpreterCore {
                                 }
                             }
                             Value::Str(value) => state.quote(self, &value)?,
+                            // A JSON.rawJSON result is its text (bd-9vouw.380).
+                            Value::Object(object) if self.is_raw_json_object(object) => {
+                                let raw = match self.json_stringify_get(
+                                    module,
+                                    object,
+                                    Value::Object(object),
+                                    &JsString::from("rawJSON"),
+                                )? {
+                                    Value::Str(raw) => raw,
+                                    other => {
+                                        return Err(InterpreterError::TypeError {
+                                            expected: "raw JSON text".into(),
+                                            got: other.type_name().into(),
+                                        });
+                                    }
+                                };
+                                for unit in raw.encode_utf16() {
+                                    state.push(self, unit)?;
+                                }
+                            }
                             value if value.is_object_like() => {
                                 let backing =
                                     self.iterator_carrier_backing_id(&value, "JSON object")?;

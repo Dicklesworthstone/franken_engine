@@ -196,9 +196,27 @@ impl InterpreterCore {
                 }
                 let written = encoded.len();
                 let offset = view.byte_offset;
-                self.with_array_buffer_bytes_mut(view.buffer, |bytes| {
-                    bytes[offset..offset + written].copy_from_slice(&encoded);
+                // A transferred or shrunk buffer leaves the view with length 0
+                // but its old byte offset, over a backing that may now be
+                // empty: slicing `bytes[offset..offset]` panicked. Nothing to
+                // write is a no-op; bytes that no longer fit are a TypeError.
+                let stored = self.with_array_buffer_bytes_mut(view.buffer, |bytes| match bytes
+                    .get_mut(offset..offset.saturating_add(written))
+                {
+                    Some(destination) => {
+                        destination.copy_from_slice(&encoded);
+                        true
+                    }
+                    None => written == 0,
                 })?;
+                if !stored {
+                    return Err(InterpreterError::TypeError {
+                        expected:
+                            "an attached, in-bounds Uint8Array for TextEncoder.prototype.encodeInto"
+                                .to_string(),
+                        got: "a detached or out-of-bounds view".to_string(),
+                    });
+                }
                 let result = self.alloc_object_with_prototype(None)?;
                 self.set_object_property(
                     result,

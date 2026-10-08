@@ -392,13 +392,14 @@ fn collect_release_binaries(
     src_root: &Path,
 ) -> Result<Vec<ReleaseBinary>, ArchitectureInventoryError> {
     let cargo_toml = read_to_string(cargo_toml_path)?;
-    let manifest =
-        cargo_toml
-            .parse::<toml::Value>()
-            .map_err(|err| ArchitectureInventoryError::Toml {
-                path: cargo_toml_path.to_path_buf(),
-                message: err.to_string(),
-            })?;
+    // A whole document, not one value: toml 1.x's `Value::from_str` parses a
+    // single TOML value and rejects a `[package]` manifest.
+    let manifest = toml::from_str::<toml::Value>(&cargo_toml).map_err(|err| {
+        ArchitectureInventoryError::Toml {
+            path: cargo_toml_path.to_path_buf(),
+            message: err.to_string(),
+        }
+    })?;
     let manifest_bins = manifest_binary_targets(&manifest);
     let bin_root = src_root.join("bin");
     let mut binaries = BTreeMap::new();

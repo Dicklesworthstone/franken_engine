@@ -86,6 +86,12 @@ fn loops_over_a_guest_chosen_length_end_at_the_budget() {
         "var a = []; a.length = 2 ** 32 - 1; a.indexOf(1);".to_string(),
         "var a = []; a.length = 2 ** 32 - 1; a.join();".to_string(),
         "var a = [1]; a.length = 2 ** 32 - 1; a.lastIndexOf(2);".to_string(),
+        // A DIRECT call reaches the generic copyWithin loop with no inline
+        // callback context, so only a per-step charge stops it (v0.3.0 review).
+        "var a = []; a.length = 2 ** 32 - 1; a.copyWithin(0, 1);".to_string(),
+        "var o = { length: 2 ** 53 - 1, copyWithin: Array.prototype.copyWithin }; \
+         o.copyWithin(1, 0);"
+            .to_string(),
         // Below the string limit, so only the budget can stop it.
         "Array.prototype.toLocaleString.call({ length: 10000000 });".to_string(),
     ];
@@ -150,4 +156,49 @@ fn copy_within_copies_in_place_without_a_buffer() {
         console(&result),
         r#"4,5,3,4,5 1,1,2,3,4 1,2,3,3,4 ["0","2"] 4 {"0":1,"3":1,"length":5}"#
     );
+}
+
+/// Native copies sized by the guest are charged before they are made
+/// (v0.3.0 release review). `new Blob(parts)` accumulated every part in a
+/// native buffer that was charged only once complete, so 64 parts of one
+/// 8 MiB blob allocated 512 MiB natively before failing; it now fails at the
+/// part that crosses the 64 MiB budget, so the request it reports stays near
+/// the budget. `Intl.Segmenter#segment` checks its per-segment native
+/// transient against the budget before splitting.
+#[test]
+fn guest_sized_native_copies_are_charged_before_allocation() {
+    let outcome = run("var big = new Blob([new Uint8Array(8 * 1024 * 1024)]); \
+         new Blob(new Array(64).fill(big));");
+    match outcome {
+        Err(InterpreterError::MemoryBudgetExceeded {
+            requested_bytes,
+            max_bytes,
+            ..
+        }) => assert!(
+            requested_bytes < max_bytes.saturating_mul(2),
+            "blob parts were copied past the budget before the check: \
+             requested {requested_bytes} of {max_bytes}"
+        ),
+        other => panic!("blob of 64 x 8 MiB parts: {other:?}"),
+    }
+
+    let outcome = run("new Intl.Segmenter().segment('a'.repeat(2 ** 20));");
+    assert!(
+        matches!(outcome, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+        "segmenting 2^20 code units under a 64 MiB budget: {outcome:?}"
+    );
+}
+
+/// `TextEncoder#encodeInto` into a view whose buffer was transferred (length
+/// 0, byte offset kept, backing empty) writes nothing; it sliced
+/// `bytes[4..4]` of an empty backing and panicked (v0.3.0 release review).
+#[test]
+fn encode_into_a_detached_view_does_not_panic() {
+    let result = run(
+        "var ab = new ArrayBuffer(8), v = new Uint8Array(ab, 4); ab.transfer(); \
+         var r = new TextEncoder().encodeInto('x', v); \
+         console.log(r.read, r.written, v.length);",
+    )
+    .expect("encodeInto into a detached view runs");
+    assert_eq!(console(&result), "0 0 0");
 }

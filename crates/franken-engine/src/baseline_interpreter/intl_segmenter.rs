@@ -23,6 +23,11 @@ use unicode_segmentation::UnicodeSegmentation;
 /// granularity, whether it is word-like.
 type Segment = (String, usize, Option<bool>);
 
+/// Upper bound of the native bytes `split_segments` allocates per UTF-16
+/// code unit of input: a `&str` (16), a `Segment` tuple (40) and the owned
+/// segment `String`'s smallest heap block (~32), rounded up.
+const SEGMENT_NATIVE_BYTES_PER_CODE_UNIT: u64 = 96;
+
 impl InterpreterCore {
     /// ECMA-402 18.1.1 steps 7-13: localeMatcher and granularity.
     pub(super) fn intl_segmenter_options(
@@ -72,6 +77,18 @@ impl InterpreterCore {
             Some(Value::Str(granularity)) => granularity.to_string(),
             _ => "grapheme".to_string(),
         };
+        // `split_segments` builds a slice, a tuple and an owned `String` per
+        // segment natively before any record is charged, so the memory budget
+        // is checked against that transient first: at most one segment per
+        // UTF-16 code unit, `SEGMENT_NATIVE_BYTES_PER_CODE_UNIT` each. Without
+        // this, `segment('a'.repeat(2 ** 24))` allocated ~1.5 GB past a 64 MiB
+        // budget before the first record failed.
+        let code_units = u64::try_from(input.encode_utf16().count()).unwrap_or(u64::MAX);
+        let transient = code_units.saturating_mul(SEGMENT_NATIVE_BYTES_PER_CODE_UNIT);
+        let requested = self.estimated_memory_bytes.saturating_add(transient);
+        if self.memory_request_exceeds_budget(requested, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(requested, self.heap_object_count_u32()));
+        }
         let segments = Self::split_segments(&input, &granularity)?;
         let mut records = Vec::with_capacity(segments.len());
         for segment in &segments {

@@ -640,6 +640,12 @@ impl InterpreterCore {
                 let count = end.saturating_sub(from).min(len - to);
                 let backwards = from < to && to < from + count;
                 for step in 0..count {
+                    // A hole or a plain data element runs no guest code, so
+                    // each step is metered here, as the native path metered
+                    // holes before copyWithin moved to this generic loop
+                    // (bd-9vouw.112): `a.length = 2 ** 32 - 1; a.copyWithin(0, 1)`
+                    // otherwise ran ~4e9 uncharged steps.
+                    self.charge_native_hole_read()?;
                     let (source, target) = if backwards {
                         (from + count - 1 - step, to + count - 1 - step)
                     } else {

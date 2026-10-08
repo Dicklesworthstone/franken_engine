@@ -102,6 +102,7 @@ impl InterpreterCore {
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
             if let Some(blob) = &object.blob {
+                self.check_blob_bytes_headroom(bytes.len(), blob.bytes.len())?;
                 bytes.extend_from_slice(&blob.bytes);
                 return Ok(());
             }
@@ -109,7 +110,9 @@ impl InterpreterCore {
                 || object.typed_array.is_some()
                 || object.data_view.is_some()
             {
-                bytes.extend(self.text_codec_input_bytes(part)?);
+                let viewed = self.text_codec_input_bytes(part)?;
+                self.check_blob_bytes_headroom(bytes.len(), viewed.len())?;
+                bytes.extend(viewed);
                 return Ok(());
             }
         }
@@ -117,9 +120,27 @@ impl InterpreterCore {
             Value::Str(text) => text.clone(),
             other => JsString::from(self.value_to_string(other)),
         };
-        bytes.extend_from_slice(
-            super::text_codec::utf8_of_code_units(text.encode_utf16()).as_bytes(),
-        );
+        let utf8 = super::text_codec::utf8_of_code_units(text.encode_utf16());
+        self.check_blob_bytes_headroom(bytes.len(), utf8.len())?;
+        bytes.extend_from_slice(utf8.as_bytes());
+        Ok(())
+    }
+
+    /// Refuse to grow a blob under construction past the memory budget
+    /// BEFORE copying the next part: the bytes accumulate in a native `Vec`
+    /// that `alloc_blob` only charges once every part is in, so repeating one
+    /// large blob part could otherwise allocate far past the guest's budget
+    /// (`new Blob(Array(1e5).fill(eightMiBBlob))`).
+    fn check_blob_bytes_headroom(
+        &self,
+        accumulated: usize,
+        next_part: usize,
+    ) -> Result<(), InterpreterError> {
+        let pending = u64::try_from(accumulated.saturating_add(next_part)).unwrap_or(u64::MAX);
+        let requested = self.estimated_memory_bytes.saturating_add(pending);
+        if self.memory_request_exceeds_budget(requested, self.config.max_total_memory_bytes) {
+            return Err(self.memory_budget_error(requested, self.heap_object_count_u32()));
+        }
         Ok(())
     }
 
@@ -221,6 +242,7 @@ impl InterpreterCore {
             }
             "text" => {
                 let text = String::from_utf8_lossy(&data.bytes).into_owned();
+                self.check_string_limit(text.encode_utf16().count())?;
                 let promise = self
                     .create_fulfilled_promise(Self::value_to_js_value(&Value::str(text)), label)?;
                 Ok(Value::Promise(promise.0))

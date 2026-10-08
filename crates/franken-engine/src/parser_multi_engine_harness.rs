@@ -1827,6 +1827,7 @@ fn parse_error_code_alias(value: &str) -> Option<ParseErrorCode> {
         "emptysource" | "empty_source" => Some(ParseErrorCode::EmptySource),
         "invalidgoal" | "invalid_goal" => Some(ParseErrorCode::InvalidGoal),
         "unsupportedsyntax" | "unsupported_syntax" => Some(ParseErrorCode::UnsupportedSyntax),
+        "invalidsyntax" | "invalid_syntax" => Some(ParseErrorCode::InvalidSyntax),
         "ioreadfailed" | "io_read_failed" => Some(ParseErrorCode::IoReadFailed),
         "invalidutf8" | "invalid_utf8" => Some(ParseErrorCode::InvalidUtf8),
         "sourcetoolarge" | "source_too_large" => Some(ParseErrorCode::SourceTooLarge),
@@ -2791,6 +2792,27 @@ mod tests {
         assert_eq!(normalized.severity, "error");
         assert!(normalized.diagnostic_code.starts_with("FE-PARSER-DIAG-"));
         assert!(normalized.canonical_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn normalize_invalid_syntax_diagnostic_preserves_native_taxonomy() {
+        for alias in ["invalid_syntax", "InvalidSyntax"] {
+            let normalized = normalize_diagnostic_code(alias);
+            assert_eq!(
+                normalized.taxonomy_version,
+                ParseDiagnosticTaxonomy::taxonomy_version()
+            );
+            assert_eq!(
+                normalized.parse_error_code.as_deref(),
+                Some("invalid_syntax")
+            );
+            assert_eq!(normalized.category, "syntax");
+            assert_eq!(normalized.severity, "error");
+            assert_eq!(
+                normalized.diagnostic_code,
+                ParseErrorCode::InvalidSyntax.stable_diagnostic_code()
+            );
+        }
     }
 
     #[test]

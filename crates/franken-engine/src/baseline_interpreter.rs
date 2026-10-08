@@ -7292,6 +7292,24 @@ enum RuntimePropertyKey {
     Symbol(SymbolId),
 }
 
+impl From<&str> for RuntimePropertyKey {
+    fn from(value: &str) -> Self {
+        Self::String(JsString::from(value))
+    }
+}
+
+impl From<&String> for RuntimePropertyKey {
+    fn from(value: &String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+impl From<&RuntimePropertyKey> for RuntimePropertyKey {
+    fn from(value: &RuntimePropertyKey) -> Self {
+        value.clone()
+    }
+}
+
 fn core_symbol_id(symbol: SymbolId) -> CoreSymbolId {
     CoreSymbolId(symbol.0)
 }
@@ -12669,7 +12687,8 @@ impl CompactTier1Program {
                 requirement(&[*obj, *key, *dst], &[])
             }
             Ir3Instruction::SetProperty { obj, key, val }
-            | Ir3Instruction::SetPropertySloppy { obj, key, val } => {
+            | Ir3Instruction::SetPropertySloppy { obj, key, val }
+            | Ir3Instruction::CreateDataProperty { obj, key, val } => {
                 requirement(&[*obj, *key, *val], &[])
             }
             Ir3Instruction::DefineAccessor { obj, key, func, .. }
@@ -13017,6 +13036,62 @@ enum PromiseCombinatorState {
     Any(crate::promise_model::PromiseAnyTracker),
 }
 
+impl PromiseCombinatorState {
+    fn result_promise(&self) -> crate::promise_model::PromiseHandle {
+        match self {
+            Self::All(tracker) => tracker.result_promise,
+            Self::AllSettled(tracker) => tracker.result_promise,
+            Self::Race(tracker) => tracker.result_promise,
+            Self::Any(tracker) => tracker.result_promise,
+        }
+    }
+
+    /// Additional retained payload of one still-live element reaction. The
+    /// map/string charges match the model trackers' resident-memory algebra.
+    fn observation_memory_growth(
+        &self,
+        index: u32,
+        kind: crate::promise_model::ReactionKind,
+        value: &crate::object_model::JsValue,
+    ) -> Option<u64> {
+        let entry_bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+            .saturating_add(crate::promise_model::estimate_js_value_memory_bytes(value));
+        let rejected = kind == crate::promise_model::ReactionKind::Reject;
+        match self {
+            Self::All(tracker) if !tracker.settled && index < tracker.total => {
+                if rejected {
+                    Some(0)
+                } else if !tracker.values.contains_key(&index) {
+                    Some(entry_bytes)
+                } else {
+                    None
+                }
+            }
+            Self::AllSettled(tracker)
+                if index < tracker.total && !tracker.outcomes.contains_key(&index) =>
+            {
+                let status = if rejected { "rejected" } else { "fulfilled" };
+                Some(
+                    entry_bytes
+                        .saturating_add(MEMORY_ESTIMATE_STRING_BASE_BYTES)
+                        .saturating_add(status.len() as u64),
+                )
+            }
+            Self::Race(tracker) if !tracker.settled => Some(0),
+            Self::Any(tracker) if !tracker.settled && index < tracker.total => {
+                if !rejected {
+                    Some(0)
+                } else if !tracker.errors.contains_key(&index) {
+                    Some(entry_bytes)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PromiseCombinatorKind {
     All,
@@ -13036,12 +13111,6 @@ enum PromiseReactionKind {
 struct PromiseCombinatorWatcher {
     combinator_id: u64,
     index: u32,
-}
-
-#[derive(Debug, Clone)]
-enum PromiseSettlement {
-    Fulfilled(crate::object_model::JsValue),
-    Rejected(crate::object_model::JsValue),
 }
 
 /// JIT statistics for hot path detection.
@@ -14282,7 +14351,7 @@ struct EventListenerRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EventOnceWrapperState {
     target: ObjectId,
-    event: String,
+    event: RuntimePropertyKey,
     original_listener: Value,
     fired: bool,
     /// `Some(waiter_id)` when this wrapper is the guest-visible carrier for a
@@ -14867,10 +14936,11 @@ pub struct InterpreterCore {
     child_process_task_in_flight_bytes: u64,
     /// Registered listeners shared by standalone `EventEmitter` objects and the
     /// HTTP stream objects (`ClientRequest` / `IncomingMessage`), keyed by heap
-    /// object id then event name. Records stay in registration order and carry
+    /// object id then exact string/Symbol event name. No string encoding can
+    /// alias a symbol identity (bd-9vouw.307). Records stay in registration order and carry
     /// `once` state; holding them outside the heap keeps listeners live across
     /// deferred HTTP event-loop turns (bd-3894s, bd-2dmnn).
-    event_listeners: BTreeMap<ObjectId, BTreeMap<String, Vec<EventListenerRecord>>>,
+    event_listeners: BTreeMap<ObjectId, BTreeMap<RuntimePropertyKey, Vec<EventListenerRecord>>>,
     /// Private state for stable callable `once` wrappers, keyed by the same
     /// heap object that backs each wrapper's public `.listener` property.
     /// Execution-local state is cleared before a restored heap can reuse an
@@ -14879,7 +14949,8 @@ pub struct InterpreterCore {
     /// Promise-backed static `events.once` waiters. Linked Resolve/Reject
     /// records share a waiter id so settling either event removes every sibling
     /// link before its Promise reaction becomes observable (bd-asw4m.1).
-    event_promise_waiters: BTreeMap<ObjectId, BTreeMap<String, Vec<EventPromiseWaiterRecord>>>,
+    event_promise_waiters:
+        BTreeMap<ObjectId, BTreeMap<RuntimePropertyKey, Vec<EventPromiseWaiterRecord>>>,
     next_event_promise_waiter_id: u64,
     /// Authenticated child-process facades whose native lifecycle has settled
     /// under provider limits. Pending facades move here on their deterministic
@@ -19763,7 +19834,7 @@ impl InterpreterCore {
             self.project_loopback_mirror_property(server, "listening", &listening_value)?;
         let listener_bytes = callback.as_ref().map_or(0, |callback| {
             Self::estimate_event_listener_record_bytes(
-                "listening",
+                &RuntimePropertyKey::from("listening"),
                 &EventListenerRecord {
                     listener: callback.clone(),
                     once: true,
@@ -23761,13 +23832,12 @@ impl InterpreterCore {
                 max: self.config.max_registers,
             })?;
         let event_value = self.read_reg(event_reg)?;
-        let Value::Str(event) = event_value else {
+        let Some(event) = self.event_name_arg(args, 1)? else {
             return Err(InterpreterError::TypeError {
-                expected: "string event name".to_string(),
+                expected: "string or symbol event name".to_string(),
                 got: event_value.type_name().to_string(),
             });
         };
-        let event = event.to_string();
         let registration_label = self.join_arg_range_label(args)?;
         let next_waiter_id = self
             .next_event_promise_waiter_id
@@ -23775,16 +23845,18 @@ impl InterpreterCore {
             .ok_or_else(|| InterpreterError::InternalError {
                 details: "events.once waiter id space exhausted".to_string(),
             })?;
-        let link_count = if event == "error" { 1 } else { 2 };
+        let error_event = RuntimePropertyKey::from("error");
+        let link_count = if event == error_event { 1 } else { 2 };
         let added_bytes = (0..link_count).fold(0u64, |total, index| {
-            let link_event = if index == 0 { event.as_str() } else { "error" };
+            let link_event = if index == 0 { &event } else { &error_event };
             total.saturating_add(Self::estimate_event_promise_waiter_record_bytes(
                 link_event,
                 &registration_label,
             ))
         });
         let waiter_id = self.next_event_promise_waiter_id;
-        let pump_reserved = self.reserve_readable_activation_pump(target_id, &event)?;
+        let pump_reserved =
+            self.reserve_readable_activation_pump(target_id, event.as_str().unwrap_or_default())?;
         let promise = match self.create_promise() {
             Ok(promise) => promise,
             Err(error) => {
@@ -23814,11 +23886,11 @@ impl InterpreterCore {
             .entry(event.clone())
             .or_default()
             .push(resolve_record);
-        if event != "error" {
+        if event != error_event {
             self.event_promise_waiters
                 .entry(target_id)
                 .or_default()
-                .entry("error".to_string())
+                .entry(error_event.clone())
                 .or_default()
                 .push(EventPromiseWaiterRecord {
                     waiter_id,
@@ -23834,10 +23906,10 @@ impl InterpreterCore {
         // through settle_event_promise_waiters, which strips these wrappers — so
         // its `.listener` is intentionally inert and the emit dispatch loop never
         // invokes it.
-        let wrapper_events: Vec<String> = if event == "error" {
+        let wrapper_events = if event == error_event {
             vec![event.clone()]
         } else {
-            vec![event.clone(), "error".to_string()]
+            vec![event.clone(), error_event]
         };
         let mut wrapper_rollback: Vec<(ObjectId, usize)> = Vec::new();
         for wrapper_event in &wrapper_events {
@@ -23881,9 +23953,11 @@ impl InterpreterCore {
             }
             wrapper_rollback.push((property_object, previous_heap_len));
         }
-        if let Err(error) =
-            self.activate_readable_from_data_flow_with_reservation(target_id, &event, pump_reserved)
-        {
+        if let Err(error) = self.activate_readable_from_data_flow_with_reservation(
+            target_id,
+            event.as_str().unwrap_or_default(),
+            pump_reserved,
+        ) {
             self.unwind_static_once_wrappers(target_id, waiter_id, &wrapper_rollback);
             self.remove_event_promise_waiter_links(target_id, waiter_id);
             self.next_event_promise_waiter_id = waiter_id;
@@ -24017,7 +24091,7 @@ impl InterpreterCore {
     fn settle_event_promise_waiters(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: &RuntimePropertyKey,
         arguments: &[Value],
         emission_label: &Label,
     ) -> Result<bool, InterpreterError> {
@@ -24062,17 +24136,18 @@ impl InterpreterCore {
     fn insert_event_listener(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         record: EventListenerRecord,
         prepend: bool,
     ) -> Result<(), InterpreterError> {
-        let added_bytes = Self::estimate_event_listener_record_bytes(event, &record);
+        let event = event.into();
+        let added_bytes = Self::estimate_event_listener_record_bytes(&event, &record);
         self.apply_memory_component_delta(0, added_bytes)?;
         let listeners = self
             .event_listeners
             .entry(target_id)
             .or_default()
-            .entry(event.to_string())
+            .entry(event)
             .or_default();
         if prepend {
             listeners.insert(0, record);
@@ -24086,7 +24161,7 @@ impl InterpreterCore {
         MEMORY_ESTIMATE_EVENT_ONCE_WRAPPER_BASE_BYTES
             .saturating_add(MEMORY_ESTIMATE_MAP_ENTRY_BYTES)
             .saturating_add(std::mem::size_of::<EventOnceWrapperState>() as u64)
-            .saturating_add(Self::estimate_string_bytes(&state.event))
+            .saturating_add(Self::estimate_event_name_bytes(&state.event))
             .saturating_add(Self::estimate_value_bytes(&state.original_listener))
     }
 
@@ -24096,13 +24171,13 @@ impl InterpreterCore {
     fn create_event_once_wrapper(
         &mut self,
         target: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         original_listener: Value,
         static_once_waiter: Option<u64>,
     ) -> Result<(Value, ObjectId, usize), InterpreterError> {
         let state = EventOnceWrapperState {
             target,
-            event: event.to_string(),
+            event: event.into(),
             original_listener: original_listener.clone(),
             fired: false,
             static_once_waiter,
@@ -24208,7 +24283,7 @@ impl InterpreterCore {
     fn event_remove_listener_meta_value(
         &self,
         target_id: ObjectId,
-        event: &str,
+        event: &RuntimePropertyKey,
         removal_argument: &Value,
     ) -> Value {
         let records = self
@@ -24228,14 +24303,15 @@ impl InterpreterCore {
     fn rollback_inserted_event_listener(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         prepend: bool,
     ) {
+        let event = event.into();
         let (removed, event_empty) = {
             let Some(listeners) = self
                 .event_listeners
                 .get_mut(&target_id)
-                .and_then(|by_event| by_event.get_mut(event))
+                .and_then(|by_event| by_event.get_mut(&event))
             else {
                 return;
             };
@@ -24248,7 +24324,7 @@ impl InterpreterCore {
         };
         if event_empty {
             if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
-                by_event.remove(event);
+                by_event.remove(&event);
             }
         }
         if self
@@ -24261,7 +24337,7 @@ impl InterpreterCore {
         if let Some(removed) = removed {
             self.estimated_memory_bytes = self
                 .estimated_memory_bytes
-                .saturating_sub(Self::estimate_event_listener_record_bytes(event, &removed));
+                .saturating_sub(Self::estimate_event_listener_record_bytes(&event, &removed));
         }
     }
 
@@ -24271,11 +24347,12 @@ impl InterpreterCore {
     fn event_listener_records_for(
         &self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
     ) -> Vec<EventListenerRecord> {
+        let event = event.into();
         self.event_listeners
             .get(&target_id)
-            .and_then(|by_event| by_event.get(event))
+            .and_then(|by_event| by_event.get(&event))
             .cloned()
             .unwrap_or_default()
     }
@@ -24320,7 +24397,7 @@ impl InterpreterCore {
     fn guest_event_listener_records_for(
         &self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
     ) -> Vec<EventListenerRecord> {
         self.event_listener_records_for(target_id, event)
             .into_iter()
@@ -24336,9 +24413,10 @@ impl InterpreterCore {
         destination: ObjectId,
         token: u32,
     ) -> usize {
+        let event = RuntimePropertyKey::from(event);
         self.event_listeners
             .get(&target_id)
-            .and_then(|by_event| by_event.get(event))
+            .and_then(|by_event| by_event.get(&event))
             .map(|records| {
                 records
                     .iter()
@@ -24375,23 +24453,24 @@ impl InterpreterCore {
     fn remove_event_listener(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         listener: &Value,
     ) -> Option<EventListenerRecord> {
+        let event = event.into();
         let index = self
             .event_listeners
             .get(&target_id)?
-            .get(event)?
+            .get(&event)?
             .iter()
             .rposition(|record| self.event_listener_matches(record, listener))?;
         let (removed, event_empty) = {
-            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(event)?;
+            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(&event)?;
             let removed = listeners.remove(index);
             (removed, listeners.is_empty())
         };
         if event_empty {
             if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
-                by_event.remove(event);
+                by_event.remove(&event);
             }
         }
         if self
@@ -24401,7 +24480,7 @@ impl InterpreterCore {
         {
             self.event_listeners.remove(&target_id);
         }
-        self.release_event_listener_memory(event, &removed);
+        self.release_event_listener_memory(&event, &removed);
         Some(removed)
     }
 
@@ -24417,7 +24496,7 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         target_id: ObjectId,
-        event: &str,
+        event: &RuntimePropertyKey,
         meta_label: Label,
     ) -> Result<(), InterpreterError> {
         let snapshot = self.event_listener_records_for(target_id, event);
@@ -24436,7 +24515,7 @@ impl InterpreterCore {
                 module,
                 target_id,
                 "removeListener",
-                vec![Value::str(event), meta],
+                vec![event.value(), meta],
                 meta_label.clone(),
             )?;
         }
@@ -24462,7 +24541,7 @@ impl InterpreterCore {
         )
     }
 
-    /// Allocation-free teardown for one authenticated internal pipe callback.
+    /// Teardown for one authenticated internal pipe callback.
     /// `readable_pipe` reserves the exact upper bound for postvalidation plus
     /// both eventual listener scans before exposing the link to guest code.
     fn remove_readable_pipe_listener_records(
@@ -24473,11 +24552,12 @@ impl InterpreterCore {
         destination: ObjectId,
         token: u32,
     ) -> usize {
+        let event = RuntimePropertyKey::from(event);
         let (removed_count, released_bytes, event_empty) = {
             let Some(listeners) = self
                 .event_listeners
                 .get_mut(&target_id)
-                .and_then(|by_event| by_event.get_mut(event))
+                .and_then(|by_event| by_event.get_mut(&event))
             else {
                 return 0;
             };
@@ -24487,7 +24567,7 @@ impl InterpreterCore {
                 if Self::is_readable_pipe_listener_for(&record.listener, kind, destination, token) {
                     removed_count = removed_count.saturating_add(1);
                     released_bytes = released_bytes
-                        .saturating_add(Self::estimate_event_listener_record_bytes(event, record));
+                        .saturating_add(Self::estimate_event_listener_record_bytes(&event, record));
                     false
                 } else {
                     true
@@ -24497,7 +24577,7 @@ impl InterpreterCore {
         };
         if event_empty {
             if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
-                by_event.remove(event);
+                by_event.remove(&event);
             }
         }
         if self
@@ -24516,11 +24596,12 @@ impl InterpreterCore {
     fn remove_once_event_listener(
         &mut self,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         listener: &Value,
     ) -> Option<EventListenerRecord> {
+        let event = event.into();
         let (removed, event_empty) = {
-            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(event)?;
+            let listeners = self.event_listeners.get_mut(&target_id)?.get_mut(&event)?;
             let index = listeners.iter().position(|record| {
                 record.once && Self::strict_eq_values(&record.listener, listener)
             })?;
@@ -24529,7 +24610,7 @@ impl InterpreterCore {
         };
         if event_empty {
             if let Some(by_event) = self.event_listeners.get_mut(&target_id) {
-                by_event.remove(event);
+                by_event.remove(&event);
             }
         }
         if self
@@ -24539,13 +24620,13 @@ impl InterpreterCore {
         {
             self.event_listeners.remove(&target_id);
         }
-        self.release_event_listener_memory(event, &removed);
+        self.release_event_listener_memory(&event, &removed);
         Some(removed)
     }
 
     /// Remove one event bucket, or every bucket for an emitter, and release
     /// the same conservative memory charge applied during registration.
-    fn clear_event_listeners(&mut self, target_id: ObjectId, event: Option<&str>) {
+    fn clear_event_listeners(&mut self, target_id: ObjectId, event: Option<&RuntimePropertyKey>) {
         let released_bytes = match (self.event_listeners.get(&target_id), event) {
             (Some(by_event), Some(event)) => by_event.get(event).map_or(0, |records| {
                 records
@@ -24752,9 +24833,10 @@ impl InterpreterCore {
         &self,
         args: RegRange,
         index: u32,
-    ) -> Result<Option<String>, InterpreterError> {
+    ) -> Result<Option<RuntimePropertyKey>, InterpreterError> {
         Ok(match self.builtin_arg(args, index)? {
-            Some(Value::Str(event)) => Some(event.to_string()),
+            Some(Value::Str(event)) => Some(RuntimePropertyKey::String(event)),
+            Some(Value::Symbol(event)) => Some(RuntimePropertyKey::Symbol(event)),
             _ => None,
         })
     }
@@ -24812,7 +24894,7 @@ impl InterpreterCore {
                 module,
                 target,
                 "removeListener",
-                vec![Value::str(event.as_str()), removal_meta_listener],
+                vec![event.value(), removal_meta_listener],
                 argument_label.clone(),
             )?;
         }
@@ -24844,15 +24926,16 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         arguments: Vec<Value>,
         emission_label: Label,
     ) -> Result<bool, InterpreterError> {
-        let records = self.event_listener_records_for(target_id, event);
+        let event = event.into();
+        let records = self.event_listener_records_for(target_id, &event);
         self.emit_event_listener_snapshot(
             module,
             target_id,
-            event,
+            &event,
             arguments,
             emission_label,
             records,
@@ -24866,15 +24949,16 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         target_id: ObjectId,
-        event: &str,
+        event: impl Into<RuntimePropertyKey>,
         arguments: Vec<Value>,
         emission_label: Label,
         records: Vec<EventListenerRecord>,
     ) -> Result<bool, InterpreterError> {
+        let event = event.into();
         let settled_waiter =
-            self.settle_event_promise_waiters(target_id, event, &arguments, &emission_label)?;
+            self.settle_event_promise_waiters(target_id, &event, &arguments, &emission_label)?;
         if records.is_empty() {
-            if event == "error" && !settled_waiter {
+            if event.as_str() == Some("error") && !settled_waiter {
                 let thrown = if let Some(value) = arguments.first() {
                     value.clone()
                 } else {
@@ -24913,7 +24997,7 @@ impl InterpreterCore {
                 // Bare one-shot records are engine-internal callbacks (pipe,
                 // pipeline, and the current Writable end-callback carrier),
                 // not registrations made through EventEmitter.once().
-                let _ = self.remove_once_event_listener(target_id, event, &record.listener);
+                let _ = self.remove_once_event_listener(target_id, &event, &record.listener);
             }
             self.invoke_inline_method_call_with_argument_label(
                 Some(module),
@@ -28865,12 +28949,12 @@ impl InterpreterCore {
                 let error_has_handler = self
                     .event_listeners
                     .get(&object_id)
-                    .and_then(|by_event| by_event.get("error"))
+                    .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("error")))
                     .is_some_and(|records| !records.is_empty())
                     || self
                         .event_promise_waiters
                         .get(&object_id)
-                        .and_then(|by_event| by_event.get("error"))
+                        .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("error")))
                         .is_some_and(|records| !records.is_empty());
                 let prepared_error_event = if !terminal_error_emitted
                     && self
@@ -29483,12 +29567,12 @@ impl InterpreterCore {
     fn has_readable_pull_observer(&self, object_id: ObjectId) -> bool {
         self.event_listeners
             .get(&object_id)
-            .and_then(|events| events.get("readable"))
+            .and_then(|events| events.get(&RuntimePropertyKey::from("readable")))
             .is_some_and(|records| !records.is_empty())
             || self
                 .event_promise_waiters
                 .get(&object_id)
-                .and_then(|events| events.get("readable"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("readable")))
                 .is_some_and(|waiters| !waiters.is_empty())
     }
 
@@ -29753,14 +29837,14 @@ impl InterpreterCore {
         let data_scan_len = self
             .event_listeners
             .get(&source_id)
-            .and_then(|by_event| by_event.get("data"))
+            .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("data")))
             .map(Vec::len)
             .unwrap_or(0)
             .saturating_add(1);
         let end_scan_len = self
             .event_listeners
             .get(&source_id)
-            .and_then(|by_event| by_event.get("end"))
+            .and_then(|by_event| by_event.get(&RuntimePropertyKey::from("end")))
             .map(Vec::len)
             .unwrap_or(0)
             .saturating_add(1);
@@ -39366,6 +39450,7 @@ impl InterpreterCore {
                         ParseErrorCode::StrictModeWithStatement
                             | ParseErrorCode::AwaitOutsideAsync
                             | ParseErrorCode::InvalidClassElementName
+                            | ParseErrorCode::InvalidSyntax
                     ) =>
                 {
                     return Err(self.throw_js_error("SyntaxError", error.message.clone()));
@@ -42092,7 +42177,7 @@ impl InterpreterCore {
                         Self::is_typed_array_prototype_builtin(builtin),
                         "Array.prototype.map",
                     )?;
-                let result = self.array_species_result(module, arr_id, len)?;
+                let result = self.array_species_result(module, arr_id, len as u64)?;
                 for index in 0..len {
                     let Some(element) = self.array_index_get(Some(module), arr_id, index)? else {
                         continue;
@@ -42579,7 +42664,7 @@ impl InterpreterCore {
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
                 let result =
-                    self.array_species_result(module, arr_id, end.saturating_sub(start))?;
+                    self.array_species_result(module, arr_id, end.saturating_sub(start) as u64)?;
                 let mut out = 0usize;
                 let mut index = start;
                 while index < end {
@@ -42679,7 +42764,7 @@ impl InterpreterCore {
                         }
                     }
                 };
-                let removed_arr = self.array_species_result(module, arr_id, delete_count)?;
+                let removed_arr = self.array_species_result(module, arr_id, delete_count as u64)?;
                 let mut items = Vec::new();
                 let mut k = 2u32;
                 while k < args.count {
@@ -43645,7 +43730,7 @@ impl InterpreterCore {
                             || self
                                 .event_promise_waiters
                                 .get(&req_id)
-                                .and_then(|events| events.get("response"))
+                                .and_then(|events| events.get(&RuntimePropertyKey::from("response")))
                                 .is_some_and(|waiters| !waiters.is_empty());
                         // bd-3894s slice (2c)+(2d): deliver the response to the
                         // `http.request(url[, opts], cb)` callback AND to every
@@ -43716,8 +43801,8 @@ impl InterpreterCore {
                 let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 if event
-                    .as_deref()
-                    .is_some_and(|event| matches!(event, "data" | "end"))
+                    .as_ref()
+                    .is_some_and(|event| matches!(event.as_str(), Some("data" | "end")))
                     && self.readable_pipe_links.contains_key(&target_id)
                 {
                     return Err(InterpreterError::TypeError {
@@ -43735,13 +43820,16 @@ impl InterpreterCore {
                 if let Some(event) = event
                     && listener.is_callable()
                 {
+                    // Only native string event names drive host lifecycle hooks;
+                    // a symbol (even Symbol("data")) is an independent event.
+                    let native_event = event.as_str().unwrap_or_default();
                     let pump_reserved =
-                        self.reserve_readable_activation_pump(target_id, &event)?;
+                        self.reserve_readable_activation_pump(target_id, native_event)?;
                     let new_listener_emission = self.emit_event_listener_records(
                         module,
                         target_id,
                         "newListener",
-                        vec![Value::str(event.as_str()), listener.clone()],
+                        vec![event.value(), listener.clone()],
                         listener_label,
                     );
                     if let Err(error) = new_listener_emission {
@@ -43769,14 +43857,14 @@ impl InterpreterCore {
                     }
                     if let Err(error) = self.activate_readable_from_data_flow_with_reservation(
                         target_id,
-                        &event,
+                        native_event,
                         pump_reserved,
                     ) {
                         self.rollback_inserted_event_listener(target_id, &event, false);
                         return Err(error);
                     }
                     if let Err(error) =
-                        self.activate_completed_child_process_event(target_id, &event)
+                        self.activate_completed_child_process_event(target_id, native_event)
                     {
                         self.rollback_inserted_event_listener(target_id, &event, false);
                         return Err(error);
@@ -43797,8 +43885,8 @@ impl InterpreterCore {
                 let event = self.event_name_arg(args, 0)?;
                 let listener = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
                 if event
-                    .as_deref()
-                    .is_some_and(|event| matches!(event, "data" | "end"))
+                    .as_ref()
+                    .is_some_and(|event| matches!(event.as_str(), Some("data" | "end")))
                     && self.readable_pipe_links.contains_key(&target_id)
                 {
                     return Err(InterpreterError::TypeError {
@@ -43821,13 +43909,14 @@ impl InterpreterCore {
                         BuiltinFunctionKind::EmitterPrependListener
                             | BuiltinFunctionKind::EmitterPrependOnceListener
                     );
+                    let native_event = event.as_str().unwrap_or_default();
                     let pump_reserved =
-                        self.reserve_readable_activation_pump(target_id, &event)?;
+                        self.reserve_readable_activation_pump(target_id, native_event)?;
                     let new_listener_emission = self.emit_event_listener_records(
                         module,
                         target_id,
                         "newListener",
-                        vec![Value::str(event.as_str()), listener.clone()],
+                        vec![event.value(), listener.clone()],
                         listener_label,
                     );
                     if let Err(error) = new_listener_emission {
@@ -43888,7 +43977,7 @@ impl InterpreterCore {
                     }
                     if let Err(error) = self.activate_readable_from_data_flow_with_reservation(
                         target_id,
-                        &event,
+                        native_event,
                         pump_reserved,
                     ) {
                         self.rollback_inserted_event_listener(target_id, &event, prepend);
@@ -43901,7 +43990,7 @@ impl InterpreterCore {
                         return Err(error);
                     }
                     if let Err(error) =
-                        self.activate_completed_child_process_event(target_id, &event)
+                        self.activate_completed_child_process_event(target_id, native_event)
                     {
                         self.rollback_inserted_event_listener(target_id, &event, prepend);
                         if let Some((property_object, previous_heap_len)) = wrapper_allocation {
@@ -43936,7 +44025,7 @@ impl InterpreterCore {
                         module,
                         target_id,
                         "removeListener",
-                            vec![Value::str(event.as_str()), removal_meta_listener],
+                            vec![event.value(), removal_meta_listener],
                         listener_label,
                     )?;
                     }
@@ -43953,8 +44042,8 @@ impl InterpreterCore {
                 };
                 let event = self.event_name_arg(args, 0)?;
                 let invalidates_pipe = event
-                    .as_deref()
-                    .is_none_or(|event| matches!(event, "data" | "end"));
+                    .as_ref()
+                    .is_none_or(|event| matches!(event.as_str(), Some("data" | "end")));
                 // bd-asw4m.6: Node emits a `removeListener` meta-event for every
                 // listener dropped by removeAllListeners, but ONLY when a
                 // `removeListener` handler is registered — otherwise it takes the
@@ -43965,7 +44054,7 @@ impl InterpreterCore {
                     .is_empty();
                 if has_remove_listener_handler {
                     let meta_label = self.join_arg_range_label(args)?;
-                    if let Some(event) = event.as_deref() {
+                    if let Some(event) = event.as_ref() {
                         self.remove_all_listeners_for_event_with_meta(
                             module, target_id, event, meta_label,
                         )?;
@@ -43975,13 +44064,13 @@ impl InterpreterCore {
                         // its own handlers observe the other removals (Node
                         // ordering). Snapshot the key set first — the meta
                         // handlers may mutate the live map.
-                        let keys: Vec<String> = self
+                        let keys: Vec<RuntimePropertyKey> = self
                             .event_listeners
                             .get(&target_id)
                             .map(|by_event| by_event.keys().cloned().collect())
                             .unwrap_or_default();
                         for key in keys {
-                            if key == "removeListener" {
+                            if key.as_str() == Some("removeListener") {
                                 continue;
                             }
                             self.remove_all_listeners_for_event_with_meta(
@@ -43994,7 +44083,7 @@ impl InterpreterCore {
                         self.remove_all_listeners_for_event_with_meta(
                             module,
                             target_id,
-                            "removeListener",
+                            &RuntimePropertyKey::from("removeListener"),
                             meta_label,
                         )?;
                     }
@@ -44054,7 +44143,7 @@ impl InterpreterCore {
                                     !Self::is_internal_readable_pipe_listener(&record.listener)
                                 })
                             })
-                            .map(|(event, _)| Value::str(event.as_str()))
+                            .map(|(event, _)| event.value())
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
@@ -44430,11 +44519,14 @@ impl InterpreterCore {
                 // bd-9vouw.137, bd-9vouw.282: PromiseResolve(C, x) for the
                 // `this` C, which must be an object.
                 let constructor = Self::promise_static_this(receiver.as_ref(), "resolve")?;
-                if Self::is_intrinsic_promise_constructor(&constructor) {
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                if Self::is_intrinsic_promise_constructor(&constructor)
+                    && !matches!(value, Value::Promise(_))
+                {
                     return self.dispatch_promise_hostcall("promise:resolve", args, Some(module));
                 }
-                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                self.promise_resolve_with_constructor(module, constructor, value)
+                let label = self.join_arg_range_with_object_mutation_label(args)?;
+                self.promise_resolve_with_constructor(module, constructor, value, label)
             }
             BuiltinFunctionKind::PromiseReject => {
                 if let Some(handle_id) = builtin.bound_object {
@@ -48677,6 +48769,20 @@ impl InterpreterCore {
                 });
             }
 
+            // Native element reactions carry a direct PromiseStore edge to
+            // their aggregate. The terminal walk may therefore have rejected
+            // that result without traversing a legacy watcher entry (including
+            // results whose inputs already queued their jobs).
+            {
+                let store = &self.promise_store;
+                self.promise_combinators.retain(|_, state| {
+                    let keep = !store
+                        .was_terminally_rejected_in_epoch(state.result_promise(), terminal_epoch);
+                    changed |= !keep;
+                    keep
+                });
+            }
+
             // Every changing round removes at least one await context or
             // combinator owner. Watchers are scanned once per round, so this
             // allocation-free fixed point has a finite owner-removal bound.
@@ -50616,6 +50722,21 @@ impl InterpreterCore {
                     // isolated driver restores the caller and re-arms the
                     // original value and label; route that completion here so
                     // every instruction observes the enclosing catch/finally.
+                    if self.pending_exception.is_some()
+                        && let Ok(Ir3Instruction::GetProperty { obj, key, .. }) =
+                            Self::instruction_with_trampoline(module, trampoline, self.ip)
+                    {
+                        // A sealed Proxy invariant error also reveals the
+                        // selected receiver and key. Their operand labels live
+                        // in dispatch locals, outside the callback's scope.
+                        let operands = self.binary_operation_label(*obj, *key)?;
+                        let bytes = Self::estimate_label_bytes(&operands);
+                        self.json_reserve_temporary(bytes)?;
+                        let joined = self.join_pending_exception_label(&operands);
+                        drop(operands);
+                        self.json_release_temporary(bytes);
+                        joined?;
+                    }
                     if let Some(err) = self.route_isolated_explicit_throw(module, err)? {
                         return Err(err);
                     }
@@ -52227,6 +52348,7 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
+                    self.clear_pending_hostcall_result_label();
                     let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
                     let property_key = self.executable_property_key_from_value(&key_val);
                     let object_id = match &obj_val {
@@ -52396,7 +52518,10 @@ impl InterpreterCore {
                                     oid,
                                     &property_key,
                                 )?;
-                                if property_key.as_str() == Some("__proto__") {
+                                if property_key.as_str() == Some("__proto__")
+                                    && !self.heap[oid.0 as usize]
+                                        .contains_own_runtime_property(&property_key)
+                                {
                                     // `__proto__` reads the internal prototype link
                                     // (set by class `extends` and `o.__proto__ = p`),
                                     // not a data property (bd-ppfds). A function's
@@ -52897,6 +53022,12 @@ impl InterpreterCore {
                     let prior_dst_label = self.get_register_label(dst)?;
                     result_label =
                         self.join_owned_label_with_temporary_budget(result_label, prior_dst_label)?;
+                    if let Some(observed_label) = self.take_pending_hostcall_result_label() {
+                        result_label = self.join_owned_label_with_temporary_budget(
+                            result_label,
+                            &observed_label,
+                        )?;
+                    }
                     self.write_reg_with_label(dst, prop, result_label)?;
                     self.pending_cyclic_import_binding =
                         pending_cyclic_import.map(|(module_specifier, export_name)| {
@@ -52907,6 +53038,76 @@ impl InterpreterCore {
                                 export_name,
                             }
                         });
+                    self.ip += 1;
+                }
+                Ir3Instruction::CreateDataProperty { obj, key, val } => {
+                    let target = self.read_reg(obj)?;
+                    let Value::Object(object_id) = target else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "object for CreateDataProperty".to_string(),
+                            got: target.type_name().to_string(),
+                        });
+                    };
+                    // This opcode initializes ordinary literal allocations.
+                    // Exotic definitions use the existing Reflect/Object
+                    // intrinsic path, which owns trap and buffer IFC context.
+                    if self.proxy_record(object_id)?.is_some()
+                        || self.heap[object_id.0 as usize].typed_array.is_some()
+                    {
+                        return Err(InterpreterError::TypeError {
+                            expected: "ordinary object or array literal target".to_string(),
+                            got: "exotic object in CreateDataProperty".to_string(),
+                        });
+                    }
+                    // Literal keys have already completed ToPropertyKey before
+                    // their value expression runs. Defining them must not run
+                    // that conversion again or invoke an inherited setter.
+                    let key_value = self.read_reg(key)?;
+                    let property_key = self.executable_property_key_from_value(&key_value);
+                    self.run_pre_runtime_property_access_hook(module, object_id, &property_key)?;
+                    let value = self.read_reg(val)?;
+                    let value_label = self.get_register_label(val)?.clone();
+                    let mutation_label = self
+                        .get_register_label(obj)?
+                        .join(self.get_register_label(key)?)
+                        .join(&value_label);
+                    self.join_object_mutation_label(object_id, &mutation_label)?;
+                    let previous_label =
+                        self.own_stored_runtime_property_label(object_id, &property_key);
+                    self.set_own_runtime_property_label(object_id, &property_key, &value_label)?;
+                    let fields = PropertyDescriptorFields {
+                        value: Some(value),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        ..PropertyDescriptorFields::default()
+                    };
+                    let result = self.define_own_property_from_descriptor(
+                        object_id,
+                        property_key.clone(),
+                        fields,
+                    );
+                    match result {
+                        Ok(true) => {}
+                        refused => {
+                            self.set_own_runtime_property_label(
+                                object_id,
+                                &property_key,
+                                &previous_label,
+                            )?;
+                            match refused {
+                                Err(error) => return Err(error),
+                                Ok(false) => {
+                                    return Err(InterpreterError::TypeError {
+                                        expected: "permitted own data property definition"
+                                            .to_string(),
+                                        got: property_key.diagnostic(),
+                                    });
+                                }
+                                Ok(true) => unreachable!(),
+                            }
+                        }
+                    }
                     self.ip += 1;
                 }
                 set_instruction @ (Ir3Instruction::SetProperty { obj, key, val }
@@ -52933,329 +53134,356 @@ impl InterpreterCore {
                         self.ip += 1;
                         continue;
                     }
-                    let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
-                    let property_key = self.executable_property_key_from_value(&key_val);
-                    let has_hook_target = matches!(&obj_val, Value::Object(_))
-                        || matches!(
-                            &obj_val,
-                            Value::BuiltinFunction(builtin)
-                                if Self::builtin_function_property_object(builtin).is_some()
-                        );
-                    if !has_hook_target {
-                        self.preflight_legacy_property_key_for_hook(&property_key)?;
-                    }
-                    let binary_object_id = match &obj_val {
-                        Value::Object(object_id) => self
-                            .array_buffer_id_for_object(*object_id)
-                            .map(|_| *object_id),
-                        _ => None,
-                    };
-                    let set_val = self.read_reg(val)?;
+                    let observation = self.begin_property_write_observation(obj, key, val)?;
+                    let outcome = (|| {
+                        let key_val = self.member_key_primitive(module, &obj_val, key_val)?;
+                        let property_key = self.executable_property_key_from_value(&key_val);
+                        let has_hook_target = matches!(&obj_val, Value::Object(_))
+                            || matches!(
+                                &obj_val,
+                                Value::BuiltinFunction(builtin)
+                                    if Self::builtin_function_property_object(builtin).is_some()
+                            );
+                        if !has_hook_target {
+                            self.preflight_legacy_property_key_for_hook(&property_key)?;
+                        }
+                        let binary_object_id = match &obj_val {
+                            Value::Object(object_id) => self
+                                .array_buffer_id_for_object(*object_id)
+                                .map(|_| *object_id),
+                            _ => None,
+                        };
+                        let set_val = self.read_reg(val)?;
 
-                    match obj_val {
-                        Value::Object(oid) => {
-                            self.run_pre_runtime_property_access_hook(module, oid, &property_key)?;
-                            let mutation_label = self
-                                .get_register_label(obj)?
-                                .join(self.get_register_label(key)?)
-                                .join(self.get_register_label(val)?);
-                            self.join_object_mutation_label(oid, &mutation_label)?;
-                            let handled_url = match property_key.as_str() {
-                                Some(key) => self.set_url_object_property(
+                        match obj_val {
+                            Value::Object(oid) => {
+                                self.run_pre_runtime_property_access_hook(
+                                    module,
                                     oid,
-                                    key,
-                                    &set_val,
-                                    &mutation_label,
-                                )?,
-                                None => false,
-                            };
-                            if handled_url {
-                                // Native URL setter committed through its
-                                // authenticated side table; no guest-writable
-                                // mirror property is created.
-                            } else if property_key.as_str() == Some("__proto__") {
-                                // `__proto__` sets the internal prototype link so
-                                // prototype-chain lookups (incl. class `extends`,
-                                // which lowers to `Child.prototype.__proto__ =
-                                // Parent.prototype`) traverse it — not a data
-                                // property (bd-ppfds). A non-object, non-null value
-                                // is a no-op per spec; a function links to its
-                                // own-property backing (bd-9vouw.98).
-                                let proto_update =
-                                    self.prototype_link_for_value(Some(module), &set_val)?;
-                                if let Some(new_proto) = proto_update {
-                                    self.store_prototype_link(oid, new_proto);
-                                }
-                            } else {
-                                // Precharge and stage the label before the value
-                                // write. The value mutation then sees the
-                                // combined retained size; failure restores the
-                                // old sparse label instead of committing an
-                                // unlabeled value under memory pressure.
-                                let value_label = self.get_register_label(val)?.clone();
-                                let label_owner = self
-                                    .proxy_set_receiver_object(&Value::Object(oid))?
-                                    .unwrap_or(oid);
-                                let previous_label = self
-                                    .own_stored_runtime_property_label(label_owner, &property_key);
-                                self.set_own_runtime_property_label(
-                                    label_owner,
                                     &property_key,
-                                    &value_label,
                                 )?;
-                                let set_result = self.proxy_aware_set_runtime_property(
-                                    Some(module),
-                                    oid,
-                                    &property_key,
-                                    set_val,
-                                    Value::Object(oid),
-                                    0,
-                                );
-                                let committed = match set_result {
-                                    Ok(committed) => committed,
-                                    Err(error) => {
+                                let mutation_label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.join_object_mutation_label(oid, &mutation_label)?;
+                                let handled_url = match property_key.as_str() {
+                                    Some(key) => self.set_url_object_property(
+                                        oid,
+                                        key,
+                                        &set_val,
+                                        &mutation_label,
+                                    )?,
+                                    None => false,
+                                };
+                                if handled_url {
+                                    // Native URL setter committed through its
+                                    // authenticated side table; no guest-writable
+                                    // mirror property is created.
+                                } else if property_key.as_str() == Some("__proto__")
+                                    && !self.heap[oid.0 as usize]
+                                        .contains_own_runtime_property(&property_key)
+                                {
+                                    // `__proto__` sets the internal prototype link so
+                                    // prototype-chain lookups (incl. class `extends`,
+                                    // which lowers to `Child.prototype.__proto__ =
+                                    // Parent.prototype`) traverse it — not a data
+                                    // property (bd-ppfds). A non-object, non-null value
+                                    // is a no-op per spec; a function links to its
+                                    // own-property backing (bd-9vouw.98).
+                                    let proto_update =
+                                        self.prototype_link_for_value(Some(module), &set_val)?;
+                                    if let Some(new_proto) = proto_update {
+                                        self.store_prototype_link(oid, new_proto);
+                                    }
+                                } else {
+                                    // Precharge and stage the label before the value
+                                    // write. The value mutation then sees the
+                                    // combined retained size; failure restores the
+                                    // old sparse label instead of committing an
+                                    // unlabeled value under memory pressure.
+                                    let value_label = self.get_register_label(val)?.clone();
+                                    let label_owner = self
+                                        .proxy_set_receiver_object(&Value::Object(oid))?
+                                        .unwrap_or(oid);
+                                    let previous_label = self.own_stored_runtime_property_label(
+                                        label_owner,
+                                        &property_key,
+                                    );
+                                    self.set_own_runtime_property_label(
+                                        label_owner,
+                                        &property_key,
+                                        &value_label,
+                                    )?;
+                                    let set_result = self.proxy_aware_set_runtime_property(
+                                        Some(module),
+                                        oid,
+                                        &property_key,
+                                        set_val,
+                                        Value::Object(oid),
+                                        0,
+                                    );
+                                    let committed = match set_result {
+                                        Ok(committed) => committed,
+                                        Err(error) => {
+                                            self.set_own_runtime_property_label(
+                                                label_owner,
+                                                &property_key,
+                                                &previous_label,
+                                            )?;
+                                            return Err(error);
+                                        }
+                                    };
+                                    if !committed && strict {
                                         self.set_own_runtime_property_label(
                                             label_owner,
                                             &property_key,
                                             &previous_label,
                                         )?;
-                                        return Err(error);
+                                        return Err(
+                                            self.rejected_strict_set_error(oid, &property_key)
+                                        );
                                     }
-                                };
-                                if !committed && strict {
-                                    self.set_own_runtime_property_label(
-                                        label_owner,
-                                        &property_key,
-                                        &previous_label,
-                                    )?;
-                                    return Err(self.rejected_strict_set_error(oid, &property_key));
-                                }
-                                // A sloppy write that [[Set]] rejected left the
-                                // object as it was: restore the prior label.
-                                let owns_property = committed
-                                    && self.heap.get(label_owner.0 as usize).is_some_and(
-                                        |object| {
-                                            object.contains_own_runtime_property(&property_key)
-                                        },
-                                    );
-                                // ([[Set]] itself grows an array's length.)
-                                if !owns_property {
-                                    // Prototype accessors and successful traps
-                                    // need not create an own data property.
-                                    self.set_own_runtime_property_label(
-                                        label_owner,
-                                        &property_key,
-                                        &previous_label,
-                                    )?;
+                                    // A sloppy write that [[Set]] rejected left the
+                                    // object as it was: restore the prior label.
+                                    let owns_property = committed
+                                        && self.heap.get(label_owner.0 as usize).is_some_and(
+                                            |object| {
+                                                object.contains_own_runtime_property(&property_key)
+                                            },
+                                        );
+                                    // ([[Set]] itself grows an array's length.)
+                                    if !owns_property {
+                                        // Prototype accessors and successful traps
+                                        // need not create an own data property.
+                                        self.set_own_runtime_property_label(
+                                            label_owner,
+                                            &property_key,
+                                            &previous_label,
+                                        )?;
+                                    }
                                 }
                             }
-                        }
-                        function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if property_key.as_str() == Some("prototype") =>
-                        {
-                            let label = self
-                                .get_register_label(obj)?
-                                .join(self.get_register_label(key)?)
-                                .join(self.get_register_label(val)?);
-                            self.set_constructor_prototype_override(
-                                module, &function, set_val, label,
-                            )?;
-                        }
-                        // bd-9vouw.17: a built-in's own `name` and `length`
-                        // are non-writable too.
-                        Value::BuiltinFunction(ref builtin)
-                            if Self::builtin_function_property_object(builtin).is_none()
-                                && matches!(property_key.as_str(), Some("name" | "length")) =>
-                        {
-                            if strict {
-                                return Err(Self::read_only_property_error(&property_key));
+                            function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncGeneratorFunction(_))
+                                if property_key.as_str() == Some("prototype") =>
+                            {
+                                let label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.set_constructor_prototype_override(
+                                    module, &function, set_val, label,
+                                )?;
                             }
-                        }
-                        // bd-9vouw.272: a built-in or bound function inherits
-                        // Function.prototype's `caller` / `arguments`.
-                        Value::BuiltinFunction(ref builtin)
-                            if builtin.kind != BuiltinFunctionKind::CallableProxy
-                                && matches!(
-                                    property_key.as_str(),
-                                    Some("caller" | "arguments")
-                                )
-                                && self.restricted_function_property_set(
+                            // bd-9vouw.17: a built-in's own `name` and `length`
+                            // are non-writable too.
+                            Value::BuiltinFunction(ref builtin)
+                                if Self::builtin_function_property_object(builtin).is_none()
+                                    && matches!(property_key.as_str(), Some("name" | "length")) =>
+                            {
+                                if strict {
+                                    return Err(Self::read_only_property_error(&property_key));
+                                }
+                            }
+                            // bd-9vouw.272: a built-in or bound function inherits
+                            // Function.prototype's `caller` / `arguments`.
+                            Value::BuiltinFunction(ref builtin)
+                                if builtin.kind != BuiltinFunctionKind::CallableProxy
+                                    && matches!(
+                                        property_key.as_str(),
+                                        Some("caller" | "arguments")
+                                    )
+                                    && self.restricted_function_property_set(
+                                        module,
+                                        &Value::BuiltinFunction(builtin.clone()),
+                                        &property_key,
+                                        &set_val,
+                                        strict,
+                                    )? => {}
+                            Value::BuiltinFunction(builtin) => {
+                                let property_object =
+                                    match Self::builtin_function_property_object(&builtin) {
+                                        Some(property_object) => property_object,
+                                        // Other built-ins keep assigned properties
+                                        // (`fn.displayName = ...`) on a backing object.
+                                        None => self
+                                            .ensure_function_own_property_object(
+                                                module,
+                                                &Value::BuiltinFunction(builtin.clone()),
+                                            )?
+                                            .ok_or_else(|| InterpreterError::TypeError {
+                                                expected: "object with writable properties"
+                                                    .to_string(),
+                                                got: builtin.display_name().to_string(),
+                                            })?,
+                                    };
+                                let mutation_label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.join_object_mutation_label(property_object, &mutation_label)?;
+                                self.set_backing_object_property(
                                     module,
-                                    &Value::BuiltinFunction(builtin.clone()),
+                                    property_object,
+                                    &property_key,
+                                    val,
+                                    Value::BuiltinFunction(builtin),
+                                    strict,
+                                )?;
+                            }
+                            // bd-9vouw.17: a function's own `name` and `length`
+                            // are non-writable (ES2020 9.2.4 / 9.2.8), so [[Set]]
+                            // rejects the write, unless the program redefined
+                            // them on the backing object (a `static name()`
+                            // method, Object.defineProperty).
+                            ref function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_))
+                                if matches!(property_key.as_str(), Some("name" | "length"))
+                                    && !self.function_backing_has_own_property(
+                                        module,
+                                        function,
+                                        &property_key,
+                                    )? =>
+                            {
+                                if strict {
+                                    return Err(Self::read_only_property_error(&property_key));
+                                }
+                            }
+                            // bd-9vouw.216: `F.__proto__ = P` runs Object.prototype's
+                            // `__proto__` setter (ES2020 B.2.2.1.2): an object, a
+                            // function or null becomes F's [[Prototype]] (`F.s`
+                            // then inherits P's statics), anything else is
+                            // ignored, and a cycle is a TypeError. It stored an
+                            // own property named `__proto__`.
+                            ref function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_))
+                                if property_key.as_str() == Some("__proto__")
+                                    && !self.function_backing_has_own_property(
+                                        module,
+                                        function,
+                                        &property_key,
+                                    )? =>
+                            {
+                                if (set_val.is_object_like() || matches!(set_val, Value::Null))
+                                    && !self.set_function_value_prototype(
+                                        Some(module),
+                                        function,
+                                        &set_val,
+                                    )?
+                                {
+                                    return Err(InterpreterError::TypeError {
+                                        expected: "acyclic __proto__ value".to_string(),
+                                        got: "a prototype chain that reaches the function"
+                                            .to_string(),
+                                    });
+                                }
+                            }
+                            // bd-9vouw.272: `caller` / `arguments` the function
+                            // does not define (Function.prototype's accessors, or
+                            // a sloppy function's read-only own ones).
+                            ref function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_))
+                                if self.restricted_function_property_set(
+                                    module,
+                                    function,
                                     &property_key,
                                     &set_val,
                                     strict,
                                 )? => {}
-                        Value::BuiltinFunction(builtin) => {
-                            let property_object =
-                                match Self::builtin_function_property_object(&builtin) {
-                                    Some(property_object) => property_object,
-                                    // Other built-ins keep assigned properties
-                                    // (`fn.displayName = ...`) on a backing object.
-                                    None => self
-                                        .ensure_function_own_property_object(
-                                            module,
-                                            &Value::BuiltinFunction(builtin.clone()),
-                                        )?
-                                        .ok_or_else(|| InterpreterError::TypeError {
-                                            expected: "object with writable properties".to_string(),
-                                            got: builtin.display_name().to_string(),
-                                        })?,
-                                };
-                            self.set_backing_object_property(
-                                module,
-                                property_object,
-                                &property_key,
-                                val,
-                                set_val,
-                                strict,
-                            )?;
-                        }
-                        // bd-9vouw.17: a function's own `name` and `length`
-                        // are non-writable (ES2020 9.2.4 / 9.2.8), so [[Set]]
-                        // rejects the write, unless the program redefined
-                        // them on the backing object (a `static name()`
-                        // method, Object.defineProperty).
-                        ref function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if matches!(property_key.as_str(), Some("name" | "length"))
-                                && !self.function_backing_has_own_property(
+                            // Other own properties (`F.x = 1`,
+                            // `Test262Error.thrower = ...`) live on the function's
+                            // backing object.
+                            ref function @ (Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_)
+                            | Value::AsyncFunction(_)
+                            | Value::AsyncGeneratorFunction(_)) => {
+                                let property_object = self
+                                    .ensure_function_own_property_object(module, function)?
+                                    .expect(
+                                        "user function values always have a backing-object key",
+                                    );
+                                let mutation_label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.join_object_mutation_label(property_object, &mutation_label)?;
+                                self.set_backing_object_property(
                                     module,
-                                    function,
+                                    property_object,
                                     &property_key,
-                                )? =>
-                        {
-                            if strict {
-                                return Err(Self::read_only_property_error(&property_key));
+                                    val,
+                                    function.clone(),
+                                    strict,
+                                )?;
                             }
-                        }
-                        // bd-9vouw.216: `F.__proto__ = P` runs Object.prototype's
-                        // `__proto__` setter (ES2020 B.2.2.1.2): an object, a
-                        // function or null becomes F's [[Prototype]] (`F.s`
-                        // then inherits P's statics), anything else is
-                        // ignored, and a cycle is a TypeError. It stored an
-                        // own property named `__proto__`.
-                        ref function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if property_key.as_str() == Some("__proto__")
-                                && !self.function_backing_has_own_property(
+                            // A promise, generator or async generator object keeps
+                            // assigned properties (`p.cancel = fn`) on its backing
+                            // object; the assignment threw "expected object".
+                            ref exotic if Self::has_exotic_backing_object(exotic) => {
+                                let property_object = self
+                                    .ensure_function_own_property_object(module, exotic)?
+                                    .expect(
+                                        "promise and generator values have a backing-object key",
+                                    );
+                                let mutation_label = self
+                                    .get_register_label(obj)?
+                                    .join(self.get_register_label(key)?)
+                                    .join(self.get_register_label(val)?);
+                                self.join_object_mutation_label(property_object, &mutation_label)?;
+                                self.set_backing_object_property(
                                     module,
-                                    function,
+                                    property_object,
                                     &property_key,
-                                )? =>
-                        {
-                            if (set_val.is_object_like() || matches!(set_val, Value::Null))
-                                && !self.set_function_value_prototype(
-                                    Some(module),
-                                    function,
-                                    &set_val,
-                                )?
-                            {
+                                    val,
+                                    exotic.clone(),
+                                    strict,
+                                )?;
+                            }
+                            // bd-9vouw.146: [[Set]] with a primitive base creates
+                            // no property (its receiver is not an object), so
+                            // sloppy code ignores the write. undefined and null
+                            // have no properties at all and throw in either mode.
+                            Value::Bool(_)
+                            | Value::Int(_)
+                            | Value::Float(_)
+                            | Value::BigInt(_)
+                            | Value::Str(_)
+                            | Value::Symbol(_)
+                                if !strict => {}
+                            _ => {
                                 return Err(InterpreterError::TypeError {
-                                    expected: "acyclic __proto__ value".to_string(),
-                                    got: "a prototype chain that reaches the function".to_string(),
+                                    expected: "object".to_string(),
+                                    got: self.nullish_access_subject(
+                                        &obj_val,
+                                        &property_key,
+                                        "setting",
+                                    ),
                                 });
                             }
                         }
-                        // bd-9vouw.272: `caller` / `arguments` the function
-                        // does not define (Function.prototype's accessors, or
-                        // a sloppy function's read-only own ones).
-                        ref function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_))
-                            if self.restricted_function_property_set(
-                                module,
-                                function,
-                                &property_key,
-                                &set_val,
-                                strict,
-                            )? => {}
-                        // Other own properties (`F.x = 1`,
-                        // `Test262Error.thrower = ...`) live on the function's
-                        // backing object.
-                        ref function @ (Value::Function(_)
-                        | Value::Closure(_)
-                        | Value::GeneratorFunction(_)
-                        | Value::AsyncFunction(_)
-                        | Value::AsyncGeneratorFunction(_)) => {
-                            let property_object = self
-                                .ensure_function_own_property_object(module, function)?
-                                .expect("user function values always have a backing-object key");
+                        if let Some(object_id) = binary_object_id {
                             let mutation_label = self
                                 .get_register_label(obj)?
                                 .join(self.get_register_label(key)?)
                                 .join(self.get_register_label(val)?);
-                            self.join_object_mutation_label(property_object, &mutation_label)?;
-                            self.set_backing_object_property(
-                                module,
-                                property_object,
-                                &property_key,
-                                val,
-                                set_val,
-                                strict,
-                            )?;
+                            self.join_binary_storage_label(object_id, &mutation_label)?;
                         }
-                        // A promise, generator or async generator object keeps
-                        // assigned properties (`p.cancel = fn`) on its backing
-                        // object; the assignment threw "expected object".
-                        ref exotic if Self::has_exotic_backing_object(exotic) => {
-                            let property_object = self
-                                .ensure_function_own_property_object(module, exotic)?
-                                .expect("promise and generator values have a backing-object key");
-                            let mutation_label = self
-                                .get_register_label(obj)?
-                                .join(self.get_register_label(key)?)
-                                .join(self.get_register_label(val)?);
-                            self.join_object_mutation_label(property_object, &mutation_label)?;
-                            self.set_backing_object_property(
-                                module,
-                                property_object,
-                                &property_key,
-                                val,
-                                set_val,
-                                strict,
-                            )?;
-                        }
-                        // bd-9vouw.146: [[Set]] with a primitive base creates
-                        // no property (its receiver is not an object), so
-                        // sloppy code ignores the write. undefined and null
-                        // have no properties at all and throw in either mode.
-                        Value::Bool(_)
-                        | Value::Int(_)
-                        | Value::Float(_)
-                        | Value::BigInt(_)
-                        | Value::Str(_)
-                        | Value::Symbol(_)
-                            if !strict => {}
-                        _ => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "object".to_string(),
-                                got: self.nullish_access_subject(
-                                    &obj_val,
-                                    &property_key,
-                                    "setting",
-                                ),
-                            });
-                        }
-                    }
-                    if let Some(object_id) = binary_object_id {
-                        let mutation_label = self
-                            .get_register_label(obj)?
-                            .join(self.get_register_label(key)?)
-                            .join(self.get_register_label(val)?);
-                        self.join_binary_storage_label(object_id, &mutation_label)?;
-                    }
+                        Ok(())
+                    })();
+                    self.finish_property_write_observation(observation, outcome)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::DefineAccessor {
@@ -61091,11 +61319,13 @@ impl InterpreterCore {
             let Some(root) = self.heap.get(object_id.0 as usize) else {
                 return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
             };
-            let (root_is_array, root_is_typed_array) = (root.is_array, root.typed_array.is_some());
+            let root_has_implicit_array_prototype =
+                root.is_array && !root.is_null_prototype && root.prototype.is_none();
+            let root_is_typed_array = root.typed_array.is_some();
             // A deleted %Array.prototype%[@@iterator] (bd-9vouw.93) leaves
             // arrays without one, like every prototype's virtual method below.
             let array_deleted = self.canonical_virtual_property_deleted("Array", key);
-            if root_is_array && !array_deleted {
+            if root_has_implicit_array_prototype && !array_deleted {
                 return Ok(Value::BuiltinFunction(BuiltinFunction::array_values()));
             }
             // %TypedArray%.prototype[@@iterator] is
@@ -63475,6 +63705,7 @@ impl InterpreterCore {
                 receiver.clone(),
             ],
         )? {
+            self.validate_proxy_get_trap_result(module, target, key, &value, depth + 1)?;
             return Ok(value);
         }
 
@@ -63668,14 +63899,11 @@ impl InterpreterCore {
                     {
                         return Ok(false);
                     }
-                    // Only stored links (bd-9vouw.34): array and object literals
-                    // still initialize through [[Set]] (NewArray/NewObject plus
-                    // SetProperty), so following the implicit Object.prototype /
-                    // Array.prototype link here would let an inherited setter or
-                    // read-only property there intercept or reject literal
-                    // construction. Until literals lower to CreateDataProperty,
-                    // [[Set]] keeps the pre-.34 behavior for the implicit link.
-                    match object.prototype {
+                    // OrdinarySet follows the same observable prototype chain
+                    // as [[Get]], including implicit Object/Array prototypes.
+                    // Literal initialization uses CreateDataProperty and is
+                    // independent of these inherited descriptors (bd-9vouw.280).
+                    match self.observable_prototype_link(object, owner) {
                         Some(prototype) => {
                             owner = prototype;
                             owner_depth += 1;
@@ -63684,21 +63912,21 @@ impl InterpreterCore {
                     }
                 }
             }
-            // A function receiver's own properties live on its backing object
-            // (bd-9vouw.17): an Array.prototype method writing to a function
-            // `this` (bd-9vouw.285) creates or replaces them there. A function
-            // without a backing object still refuses.
-            let receiver_id = match (&receiver, module) {
-                (function, Some(module))
-                    if function.is_callable() && !Self::is_callable_proxy(function) =>
-                {
-                    self.function_own_property_object(module, function)?
-                }
-                _ => self.proxy_set_receiver_object(&receiver)?,
+            // Resolve backing storage only after the descriptor walk has ruled
+            // out an inherited setter: setters and Proxy traps must receive
+            // the original callable, promise or iterator identity. A data
+            // write may materialize that receiver's own storage (bd-9vouw.280).
+            let receiver_id = if Self::stores_own_properties_on_backing(&receiver) {
+                self.own_property_holder(module, &receiver, true)?
+            } else {
+                self.proxy_set_receiver_object(&receiver)?
             };
             let Some(receiver_id) = receiver_id else {
                 return Ok(false);
             };
+            if self.active_inline_callback_context_label.is_some() {
+                self.reflect_admit_mutation_label(receiver_id)?;
+            }
             let Some(receiver_object) = self.heap.get(receiver_id.0 as usize) else {
                 return Err(InterpreterError::ObjectNotFound { id: receiver_id.0 });
             };
@@ -63753,7 +63981,11 @@ impl InterpreterCore {
                 receiver.clone(),
             ],
         )? {
-            return Ok(result.is_truthy());
+            if !result.is_truthy() {
+                return Ok(false);
+            }
+            self.validate_proxy_set_trap_result(module, target, key, &value, depth + 1)?;
+            return Ok(true);
         }
 
         self.proxy_aware_set_runtime_property(module, target, key, value, receiver, depth + 1)
@@ -63849,11 +64081,14 @@ impl InterpreterCore {
                 key,
                 RuntimePropertyKey::Symbol(symbol) if *symbol == WellKnownSymbol::Iterator.id()
             ) {
-                let root_is_array = self
-                    .heap
-                    .get(object_id.0 as usize)
-                    .is_some_and(|object| object.is_array || object.typed_array.is_some());
-                return Ok(root_is_array
+                let root_has_implicit_iterator =
+                    self.heap.get(object_id.0 as usize).is_some_and(|object| {
+                        object.typed_array.is_some()
+                            || (object.is_array
+                                && !object.is_null_prototype
+                                && object.prototype.is_none())
+                    });
+                return Ok(root_has_implicit_iterator
                     || self.chain_inherits_array_prototype(object_id)
                     || ["Array", "TypedArray", "Map", "Set", "String"]
                         .iter()
@@ -63870,7 +64105,11 @@ impl InterpreterCore {
             "has",
             vec![self.proxy_trap_target(object_id, target), key.value()],
         )? {
-            return Ok(result.is_truthy());
+            if result.is_truthy() {
+                return Ok(true);
+            }
+            self.validate_proxy_property_absence(module, target, key, "has", depth + 1)?;
+            return Ok(false);
         }
 
         // A callable proxy without the trap asks its function target.
@@ -63964,7 +64203,11 @@ impl InterpreterCore {
             "deleteProperty",
             vec![self.proxy_trap_target(object_id, target), key.value()],
         )? {
-            return Ok(result.is_truthy());
+            if !result.is_truthy() {
+                return Ok(false);
+            }
+            self.validate_proxy_property_absence(module, target, key, "deleteProperty", depth + 1)?;
+            return Ok(true);
         }
 
         self.proxy_aware_delete_runtime_property(module, target, key, depth + 1)
@@ -64123,6 +64366,7 @@ impl InterpreterCore {
                     });
                 }
             }
+            self.validate_proxy_own_keys_trap_result(module, target, seen, depth + 1)?;
             return Ok(key_values);
         }
 
@@ -65596,35 +65840,6 @@ impl InterpreterCore {
         Ok(Self::value_to_js_value(&Value::Object(array_id)))
     }
 
-    fn build_promise_all_settled_result(
-        &mut self,
-        outcomes: BTreeMap<u32, crate::promise_model::SettledOutcome>,
-        total: u32,
-    ) -> Result<crate::object_model::JsValue, InterpreterError> {
-        let mut items = Vec::with_capacity(total as usize);
-        for index in 0..total {
-            let outcome =
-                outcomes
-                    .get(&index)
-                    .cloned()
-                    .unwrap_or(crate::promise_model::SettledOutcome {
-                        status: "fulfilled".into(),
-                        value: crate::object_model::JsValue::Undefined,
-                    });
-            let value = self.js_value_to_value(&outcome.value);
-            let mut props = vec![("status", Value::str(outcome.status.as_str()))];
-            if outcome.status == "fulfilled" {
-                props.push(("value", value));
-            } else {
-                props.push(("reason", value));
-            }
-            let obj_id = self.alloc_object_with_properties(&props)?;
-            items.push(Value::Object(obj_id));
-        }
-        let array_id = self.alloc_array_from_values(&items)?;
-        Ok(Self::value_to_js_value(&Value::Object(array_id)))
-    }
-
     fn build_aggregate_error(
         &mut self,
         errors: Vec<crate::object_model::JsValue>,
@@ -65634,6 +65849,13 @@ impl InterpreterCore {
             .map(|value| self.js_value_to_value(value))
             .collect();
         let errors_array = self.alloc_array_from_values(&error_values)?;
+        self.build_aggregate_error_from_array(errors_array)
+    }
+
+    fn build_aggregate_error_from_array(
+        &mut self,
+        errors_array: ObjectId,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
         // bd-9vouw.75: an AggregateError instance, as Promise.any specifies
         // (ES2021 27.2.4.3.1 step 8), not a plain object named like one.
         let prototype = self.ensure_builtin_prototype("AggregateError")?;
@@ -65646,6 +65868,115 @@ impl InterpreterCore {
             NON_ENUMERABLE_DATA_ATTRIBUTES,
         )?;
         Ok(Self::value_to_js_value(&Value::Object(error_id)))
+    }
+
+    /// Count scratch ownership alongside the currently dequeued job, so even
+    /// a nested memory reconciliation retains the reservation. Native result
+    /// construction calls no guest code and releases it on every exit.
+    fn with_promise_temporary_bytes<T>(
+        &mut self,
+        bytes: u64,
+        operation: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        self.apply_memory_component_delta(0, bytes)?;
+        self.promise_in_flight_task_bytes = self.promise_in_flight_task_bytes.saturating_add(bytes);
+        let result = operation(self);
+        self.promise_in_flight_task_bytes = self.promise_in_flight_task_bytes.saturating_sub(bytes);
+        self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(bytes);
+        result
+    }
+
+    fn native_combinator_element(
+        &self,
+        combinator_id: u64,
+        index: u32,
+    ) -> Option<(&crate::object_model::JsValue, Option<&str>)> {
+        match self.promise_combinators.get(&combinator_id)? {
+            PromiseCombinatorState::All(tracker) => {
+                tracker.values.get(&index).map(|value| (value, None))
+            }
+            PromiseCombinatorState::AllSettled(tracker) => tracker
+                .outcomes
+                .get(&index)
+                .map(|outcome| (&outcome.value, Some(outcome.status.as_str()))),
+            PromiseCombinatorState::Any(tracker) => {
+                tracker.errors.get(&index).map(|value| (value, None))
+            }
+            PromiseCombinatorState::Race(_) => None,
+        }
+    }
+
+    /// Materialize directly from the retained tracker. There is no cloned
+    /// result map or full-length temporary vector: only one converted value,
+    /// its bounded index key and an optional allSettled status coexist with
+    /// the already-accounted tracker and destination heap objects.
+    fn build_native_combinator_result(
+        &mut self,
+        combinator_id: u64,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
+        let (total, aggregate_error) = match self.promise_combinators.get(&combinator_id) {
+            Some(PromiseCombinatorState::All(tracker)) => (tracker.total, false),
+            Some(PromiseCombinatorState::AllSettled(tracker)) => (tracker.total, false),
+            Some(PromiseCombinatorState::Any(tracker)) => (tracker.total, true),
+            _ => {
+                return Err(InterpreterError::InternalError {
+                    details: "missing completed native combinator tracker".to_string(),
+                });
+            }
+        };
+        let array = self.alloc_array_with_prototype(None)?;
+        for index in 0..total {
+            let (value, status) = self
+                .native_combinator_element(combinator_id, index)
+                .expect("completed bounded tracker has every element");
+            let value_bytes = match value {
+                crate::object_model::JsValue::Str(text) => Self::estimate_string_bytes(text),
+                crate::object_model::JsValue::Function(id) if *id >= PROMISE_VALUE_CARRIER_BASE => {
+                    self.promise_value_carriers
+                        .get(id)
+                        .map_or(0, Self::estimate_value_bytes)
+                }
+                _ => 0,
+            };
+            let index_digits = u64::from(index.checked_ilog10().unwrap_or(0) + 1);
+            let key_bytes = MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(index_digits.max(6));
+            let status_bytes = status.map_or(0, Self::estimate_string_bytes);
+            self.with_promise_temporary_bytes(
+                value_bytes
+                    .saturating_add(key_bytes)
+                    .saturating_add(status_bytes),
+                |core| {
+                    let (value, status) = core
+                        .native_combinator_element(combinator_id, index)
+                        .expect("native construction invokes no guest code");
+                    let value = core.js_value_to_value(value);
+                    let status = status.map(|status| (Value::str(status), status == "fulfilled"));
+                    let element = if let Some((status, fulfilled)) = status {
+                        let entry = core.alloc_object_with_prototype(None)?;
+                        core.set_object_property(entry, "status".to_string(), status)?;
+                        core.set_object_property(
+                            entry,
+                            if fulfilled { "value" } else { "reason" }.to_string(),
+                            value,
+                        )?;
+                        Value::Object(entry)
+                    } else {
+                        value
+                    };
+                    core.set_object_property(array, index.to_string(), element)
+                },
+            )?;
+        }
+        self.with_promise_temporary_bytes(Self::estimate_string_bytes("length"), |core| {
+            core.set_object_property(array, "length".to_string(), Value::Int(i64::from(total)))
+        })?;
+        if aggregate_error {
+            self.build_aggregate_error_from_array(array)
+        } else {
+            Ok(crate::object_model::JsValue::Object(
+                crate::object_model::ObjectHandle(array.0),
+            ))
+        }
     }
 
     fn register_combinator(
@@ -65692,6 +66023,151 @@ impl InterpreterCore {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Register a native element in the same reaction list as ordinary
+    /// `.then`, so a pending input's later settlement keeps registration order.
+    /// Watchers only retain dependency ownership for fatal cleanup; they no
+    /// longer settle an aggregate synchronously (bd-9vouw.295).
+    fn register_native_combinator_reaction(
+        &mut self,
+        handle: crate::promise_model::PromiseHandle,
+        result_promise: crate::promise_model::PromiseHandle,
+        watcher: PromiseCombinatorWatcher,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        let pending = !self.promise_is_settled(handle);
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let (next_store_bytes, next_queue_bytes) = self
+            .promise_store
+            .projected_then_into_memory_bytes(handle, &label, &self.event_loop.microtasks)
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid combinator input promise".to_string(),
+                got: error.to_string(),
+            })?;
+        let next_promise_bytes = previous_promise_bytes
+            .saturating_sub(self.promise_store.estimated_memory_bytes())
+            .saturating_sub(self.event_loop.microtasks.estimated_memory_bytes())
+            .saturating_add(next_store_bytes)
+            .saturating_add(next_queue_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        self.promise_store
+            .then_for_combinator(
+                handle,
+                result_promise,
+                label,
+                crate::promise_model::PromiseCombinatorReaction {
+                    combinator_id: watcher.combinator_id,
+                    index: watcher.index,
+                },
+                &mut self.event_loop.microtasks,
+            )
+            .expect("preflighted native combinator reaction remains valid");
+        self.settle_projected_promise_bytes(next_promise_bytes)?;
+        if pending {
+            self.add_combinator_watcher(handle, watcher)?;
+        }
+        Ok(())
+    }
+
+    fn enqueue_native_combinator_job(
+        &mut self,
+        job: crate::promise_model::Microtask,
+    ) -> Result<(), InterpreterError> {
+        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let previous_queue_bytes = self.event_loop.microtasks.estimated_memory_bytes();
+        let next_queue_bytes = self
+            .event_loop
+            .microtasks
+            .projected_enqueue_memory_bytes(&job);
+        let next_promise_bytes = previous_promise_bytes
+            .saturating_sub(previous_queue_bytes)
+            .saturating_add(next_queue_bytes);
+        self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
+        self.event_loop.microtasks.enqueue(job);
+        self.settle_projected_promise_bytes(next_promise_bytes)
+    }
+
+    fn join_combinator_result_label(
+        &mut self,
+        result_promise: crate::promise_model::PromiseHandle,
+        label: &Label,
+    ) -> Result<(), InterpreterError> {
+        let previous_store_bytes = self.promise_store.estimated_memory_bytes();
+        let next_store_bytes = self
+            .promise_store
+            .projected_join_label_memory_bytes(result_promise, label)
+            .map_err(|error| InterpreterError::InternalError {
+                details: format!("missing native combinator result: {error}"),
+            })?;
+        self.apply_memory_component_delta(previous_store_bytes, next_store_bytes)?;
+        self.promise_store
+            .join_label(result_promise, label)
+            .expect("preflighted combinator result remains valid");
+        Ok(())
+    }
+
+    /// Admit both the label and the map entry before either owner changes.
+    /// A native job has no guest callback, so its tracker cannot change
+    /// between this preflight and the following record operation.
+    fn prepare_combinator_observation(
+        &mut self,
+        combinator_id: u64,
+        index: u32,
+        kind: crate::promise_model::ReactionKind,
+        value: &crate::object_model::JsValue,
+        label: &Label,
+    ) -> Result<bool, InterpreterError> {
+        let Some(state) = self.promise_combinators.get(&combinator_id) else {
+            return Ok(false);
+        };
+        let Some(entry_bytes) = state.observation_memory_growth(index, kind, value) else {
+            return Ok(false);
+        };
+        let result_promise = state.result_promise();
+        let previous_store_bytes = self.promise_store.estimated_memory_bytes();
+        let next_store_bytes = self
+            .promise_store
+            .projected_join_label_memory_bytes(result_promise, label)
+            .map_err(|error| InterpreterError::InternalError {
+                details: format!("missing native combinator result: {error}"),
+            })?;
+        self.apply_memory_component_delta(
+            previous_store_bytes,
+            next_store_bytes.saturating_add(entry_bytes),
+        )?;
+        self.promise_store
+            .join_label(result_promise, label)
+            .expect("preflighted combinator result remains valid");
+        Ok(true)
+    }
+
+    /// A refused native job must not strand an aggregate or leave a partially
+    /// admitted tracker behind. Reuse the allocation-free fatal Promise walk;
+    /// queued element jobs become inert when their tracker is removed.
+    fn terminally_reject_native_combinator(
+        &mut self,
+        result_promise: crate::promise_model::PromiseHandle,
+        job_label: &Label,
+    ) {
+        let label = self
+            .promise_store
+            .get(result_promise)
+            .map(|record| {
+                if record.label.level() > job_label.level() {
+                    Self::terminal_async_failure_label(&record.label)
+                } else {
+                    Self::terminal_async_failure_label(job_label)
+                }
+            })
+            .unwrap_or_else(|_| Self::terminal_async_failure_label(job_label));
+        if let Ok(epoch) = self
+            .promise_store
+            .terminally_reject_without_jobs(result_promise, &label)
+        {
+            self.close_terminal_async_promise_dependencies(epoch, &label);
+        }
+        self.estimated_memory_bytes = self.recompute_base_estimated_memory_bytes();
     }
 
     fn remove_combinator_and_watchers(
@@ -65914,7 +66390,6 @@ impl InterpreterCore {
         value: crate::object_model::JsValue,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        let previous_estimated_bytes = self.estimated_memory_bytes;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let (next_store_bytes, next_queue_bytes) = self
             .promise_store
@@ -65933,54 +66408,12 @@ impl InterpreterCore {
             .saturating_add(self.promise_combinators_memory_bytes())
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes);
-        // Only watcher-driven combinator cascades need a rollback snapshot.
-        // Admit that physical owner before cloning any attacker-sized payload.
-        let rollback_snapshot = if self.promise_combinator_watchers.contains_key(&handle) {
-            self.apply_memory_component_delta(0, previous_promise_bytes)?;
-            Some((
-                self.promise_store.clone(),
-                self.event_loop.clone(),
-                self.promise_combinators.clone(),
-                self.promise_combinator_watchers.clone(),
-                previous_promise_bytes,
-                self.heap.len(),
-            ))
-        } else {
-            None
-        };
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.promise_store
-            .fulfill(
-                handle,
-                value.clone(),
-                label.clone(),
-                &mut self.event_loop.microtasks,
-            )
+            .fulfill(handle, value, label, &mut self.event_loop.microtasks)
             .expect("preflighted Promise fulfillment must remain valid");
         self.settle_projected_promise_bytes(next_promise_bytes)?;
-        if let Err(error) =
-            self.notify_promise_settled(handle, PromiseSettlement::Fulfilled(value), label)
-        {
-            let (
-                previous_store,
-                previous_event_loop,
-                previous_combinators,
-                previous_watchers,
-                _,
-                previous_heap_len,
-            ) = rollback_snapshot.expect("watcher failure must have a rollback snapshot");
-            self.promise_store = previous_store;
-            self.event_loop = previous_event_loop;
-            self.promise_combinators = previous_combinators;
-            self.promise_combinator_watchers = previous_watchers;
-            self.rollback_heap_to_len(previous_heap_len);
-            self.estimated_memory_bytes = previous_estimated_bytes;
-            return Err(error);
-        }
-        if let Some((_, _, _, _, snapshot_bytes, _)) = rollback_snapshot {
-            self.estimated_memory_bytes =
-                self.estimated_memory_bytes.saturating_sub(snapshot_bytes);
-        }
+        self.release_settled_combinator_watchers(handle);
         Ok(())
     }
 
@@ -65990,7 +66423,6 @@ impl InterpreterCore {
         reason: crate::object_model::JsValue,
         label: crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        let previous_estimated_bytes = self.estimated_memory_bytes;
         let previous_promise_bytes = self.promise_runtime_memory_bytes();
         let (next_store_bytes, next_queue_bytes) = self
             .promise_store
@@ -66009,165 +66441,101 @@ impl InterpreterCore {
             .saturating_add(self.promise_combinators_memory_bytes())
             .saturating_add(self.promise_combinator_watchers_memory_bytes())
             .saturating_add(self.promise_in_flight_task_bytes);
-        let rollback_snapshot = if self.promise_combinator_watchers.contains_key(&handle) {
-            self.apply_memory_component_delta(0, previous_promise_bytes)?;
-            Some((
-                self.promise_store.clone(),
-                self.event_loop.clone(),
-                self.promise_combinators.clone(),
-                self.promise_combinator_watchers.clone(),
-                previous_promise_bytes,
-                self.heap.len(),
-            ))
-        } else {
-            None
-        };
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.promise_store
-            .reject(
-                handle,
-                reason.clone(),
-                label.clone(),
-                &mut self.event_loop.microtasks,
-            )
+            .reject(handle, reason, label, &mut self.event_loop.microtasks)
             .expect("preflighted Promise rejection must remain valid");
         self.settle_projected_promise_bytes(next_promise_bytes)?;
-        if let Err(error) =
-            self.notify_promise_settled(handle, PromiseSettlement::Rejected(reason), label)
-        {
-            let (
-                previous_store,
-                previous_event_loop,
-                previous_combinators,
-                previous_watchers,
-                _,
-                previous_heap_len,
-            ) = rollback_snapshot.expect("watcher failure must have a rollback snapshot");
-            self.promise_store = previous_store;
-            self.event_loop = previous_event_loop;
-            self.promise_combinators = previous_combinators;
-            self.promise_combinator_watchers = previous_watchers;
-            self.rollback_heap_to_len(previous_heap_len);
-            self.estimated_memory_bytes = previous_estimated_bytes;
-            return Err(error);
-        }
-        if let Some((_, _, _, _, snapshot_bytes, _)) = rollback_snapshot {
-            self.estimated_memory_bytes =
-                self.estimated_memory_bytes.saturating_sub(snapshot_bytes);
-        }
+        self.release_settled_combinator_watchers(handle);
         Ok(())
     }
 
-    fn notify_promise_settled(
-        &mut self,
-        handle: crate::promise_model::PromiseHandle,
-        settlement: PromiseSettlement,
-        label: crate::ifc_artifacts::Label,
-    ) -> Result<(), InterpreterError> {
-        let previous_promise_bytes = self.promise_runtime_memory_bytes();
-        let watchers = match self.promise_combinator_watchers.remove(&handle) {
-            Some(watchers) => watchers,
-            None => return Ok(()),
-        };
-        let transferred_bytes = self.begin_promise_task_transfer(previous_promise_bytes);
-        let outcome = watchers
-            .into_iter()
-            .try_for_each(|watcher| match &settlement {
-                PromiseSettlement::Fulfilled(value) => self.update_combinator_fulfillment(
-                    watcher.combinator_id,
-                    watcher.index,
-                    value.clone(),
-                    label.clone(),
-                ),
-                PromiseSettlement::Rejected(reason) => self.update_combinator_rejection(
-                    watcher.combinator_id,
-                    watcher.index,
-                    reason.clone(),
-                    label.clone(),
-                ),
-            });
-        self.finish_promise_task_transfer(transferred_bytes);
-        outcome
+    /// Settlement already queued native reactions together with `.then`
+    /// callbacks. Transfer dependency ownership to those jobs without running
+    /// the aggregate, allocating result objects, or taking a cascade snapshot.
+    fn release_settled_combinator_watchers(&mut self, handle: crate::promise_model::PromiseHandle) {
+        if let Some(watchers) = self.promise_combinator_watchers.remove(&handle) {
+            let bytes = MEMORY_ESTIMATE_MAP_ENTRY_BYTES.saturating_add(
+                (watchers.len() as u64)
+                    .saturating_mul(std::mem::size_of::<PromiseCombinatorWatcher>() as u64),
+            );
+            self.estimated_memory_bytes = self.estimated_memory_bytes.saturating_sub(bytes);
+        }
     }
 
     fn update_combinator_fulfillment(
         &mut self,
         combinator_id: u64,
         index: u32,
-        value: crate::object_model::JsValue,
-        label: crate::ifc_artifacts::Label,
+        value: &crate::object_model::JsValue,
+        label: &crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        enum ResolutionData {
-            Fulfill(
-                crate::promise_model::PromiseHandle,
-                crate::object_model::JsValue,
-            ),
-            FulfillAll(
-                crate::promise_model::PromiseHandle,
-                Vec<crate::object_model::JsValue>,
-            ),
-            FulfillAllSettled(
-                crate::promise_model::PromiseHandle,
-                BTreeMap<u32, crate::promise_model::SettledOutcome>,
-                u32,
-            ),
+        if !self.prepare_combinator_observation(
+            combinator_id,
+            index,
+            crate::promise_model::ReactionKind::Fulfill,
+            value,
+            label,
+        )? {
+            return Ok(());
         }
-
-        let mut resolution: Option<ResolutionData> = None;
-        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        // Record only an admitted retained payload. Terminal materialization
+        // borrows this tracker instead of cloning the whole aggregate.
+        let mut resolution = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
             match state {
                 PromiseCombinatorState::All(tracker) => {
-                    if tracker.settled {
-                        return Ok(());
-                    }
-                    if tracker.record_fulfillment(index, value) {
+                    if tracker.record_fulfillment(index, value.clone()) {
                         tracker.mark_settled();
-                        let collected = tracker.collect_values();
-                        resolution = Some(ResolutionData::FulfillAll(
-                            tracker.result_promise,
-                            collected,
-                        ));
+                        resolution = Some((tracker.result_promise, true));
                     }
                 }
                 PromiseCombinatorState::AllSettled(tracker) => {
-                    if tracker.record_fulfillment(index, value) {
-                        resolution = Some(ResolutionData::FulfillAllSettled(
-                            tracker.result_promise,
-                            tracker.outcomes.clone(),
-                            tracker.total,
-                        ));
+                    if tracker.record_fulfillment(index, value.clone()) {
+                        resolution = Some((tracker.result_promise, true));
                     }
                 }
                 PromiseCombinatorState::Race(tracker) => {
                     if tracker.try_settle() {
-                        resolution = Some(ResolutionData::Fulfill(tracker.result_promise, value));
+                        resolution = Some((tracker.result_promise, false));
                     }
                 }
                 PromiseCombinatorState::Any(tracker) => {
-                    if tracker.settled {
-                        return Ok(());
-                    }
                     tracker.mark_settled();
-                    resolution = Some(ResolutionData::Fulfill(tracker.result_promise, value));
+                    resolution = Some((tracker.result_promise, false));
                 }
             }
         }
-        self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
-
-        if let Some(resolution) = resolution {
-            let (handle, value) = match resolution {
-                ResolutionData::Fulfill(handle, value) => (handle, value),
-                ResolutionData::FulfillAll(handle, values) => {
-                    let value = self.build_promise_all_result(values)?;
-                    (handle, value)
-                }
-                ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
-                    let value = self.build_promise_all_settled_result(outcomes, total)?;
-                    (handle, value)
-                }
+        if let Some((handle, materialize)) = resolution {
+            let label_bytes = Self::estimate_label_bytes(
+                &self
+                    .promise_store
+                    .get(handle)
+                    .expect("native result exists")
+                    .label,
+            );
+            let direct_value_bytes = if materialize {
+                0
+            } else {
+                crate::promise_model::estimate_js_value_memory_bytes(value)
             };
-            self.fulfill_promise(handle, value, label)?;
+            self.with_promise_temporary_bytes(
+                label_bytes.saturating_add(direct_value_bytes),
+                |core| {
+                    let label = core
+                        .promise_store
+                        .get(handle)
+                        .expect("native construction invokes no guest code")
+                        .label
+                        .clone();
+                    let value = if materialize {
+                        core.build_native_combinator_result(combinator_id)?
+                    } else {
+                        value.clone()
+                    };
+                    core.fulfill_promise(handle, value, label)
+                },
+            )?;
             self.remove_combinator_and_watchers(combinator_id)?;
         }
         Ok(())
@@ -66177,79 +66545,77 @@ impl InterpreterCore {
         &mut self,
         combinator_id: u64,
         index: u32,
-        reason: crate::object_model::JsValue,
-        label: crate::ifc_artifacts::Label,
+        reason: &crate::object_model::JsValue,
+        label: &crate::ifc_artifacts::Label,
     ) -> Result<(), InterpreterError> {
-        enum ResolutionData {
-            FulfillAllSettled(
-                crate::promise_model::PromiseHandle,
-                BTreeMap<u32, crate::promise_model::SettledOutcome>,
-                u32,
-            ),
-            Reject(
-                crate::promise_model::PromiseHandle,
-                crate::object_model::JsValue,
-            ),
-            RejectAny(
-                crate::promise_model::PromiseHandle,
-                Vec<crate::object_model::JsValue>,
-            ),
+        if !self.prepare_combinator_observation(
+            combinator_id,
+            index,
+            crate::promise_model::ReactionKind::Reject,
+            reason,
+            label,
+        )? {
+            return Ok(());
         }
-
-        let mut resolution: Option<ResolutionData> = None;
-        let previous_promise_bytes = self.promise_runtime_memory_bytes();
+        let mut resolution = None;
         if let Some(state) = self.promise_combinators.get_mut(&combinator_id) {
             match state {
                 PromiseCombinatorState::All(tracker) => {
-                    if tracker.settled {
-                        return Ok(());
-                    }
                     tracker.mark_settled();
-                    resolution = Some(ResolutionData::Reject(tracker.result_promise, reason));
+                    resolution = Some((tracker.result_promise, false, false));
                 }
                 PromiseCombinatorState::AllSettled(tracker) => {
-                    if tracker.record_rejection(index, reason) {
-                        resolution = Some(ResolutionData::FulfillAllSettled(
-                            tracker.result_promise,
-                            tracker.outcomes.clone(),
-                            tracker.total,
-                        ));
+                    if tracker.record_rejection(index, reason.clone()) {
+                        resolution = Some((tracker.result_promise, true, true));
                     }
                 }
                 PromiseCombinatorState::Race(tracker) => {
                     if tracker.try_settle() {
-                        resolution = Some(ResolutionData::Reject(tracker.result_promise, reason));
+                        resolution = Some((tracker.result_promise, false, false));
                     }
                 }
                 PromiseCombinatorState::Any(tracker) => {
-                    if tracker.settled {
-                        return Ok(());
-                    }
-                    if tracker.record_rejection(index, reason) {
+                    if tracker.record_rejection(index, reason.clone()) {
                         tracker.mark_settled();
-                        let errors = tracker.collect_errors();
-                        resolution =
-                            Some(ResolutionData::RejectAny(tracker.result_promise, errors));
+                        resolution = Some((tracker.result_promise, true, false));
                     }
                 }
             }
         }
-        self.apply_promise_runtime_memory_delta(previous_promise_bytes)?;
-
-        if let Some(resolution) = resolution {
-            match resolution {
-                ResolutionData::FulfillAllSettled(handle, outcomes, total) => {
-                    let value = self.build_promise_all_settled_result(outcomes, total)?;
-                    self.fulfill_promise(handle, value, label)?;
-                }
-                ResolutionData::Reject(handle, reason) => {
-                    self.reject_promise(handle, reason, label)?;
-                }
-                ResolutionData::RejectAny(handle, errors) => {
-                    let aggregate = self.build_aggregate_error(errors)?;
-                    self.reject_promise(handle, aggregate, label)?;
-                }
-            }
+        if let Some((handle, materialize, fulfill)) = resolution {
+            let label_bytes = Self::estimate_label_bytes(
+                &self
+                    .promise_store
+                    .get(handle)
+                    .expect("native result exists")
+                    .label,
+            );
+            let direct_value_bytes = if materialize {
+                0
+            } else {
+                crate::promise_model::estimate_js_value_memory_bytes(reason)
+            };
+            self.with_promise_temporary_bytes(
+                label_bytes.saturating_add(direct_value_bytes),
+                |core| {
+                    let label = core
+                        .promise_store
+                        .get(handle)
+                        .expect("native construction invokes no guest code")
+                        .label
+                        .clone();
+                    let value = if materialize {
+                        core.build_native_combinator_result(combinator_id)?
+                    } else {
+                        reason.clone()
+                    };
+                    if fulfill {
+                        core.fulfill_promise(handle, value, label)
+                    } else {
+                        core.reject_promise(handle, value, label)
+                    }
+                },
+            )?;
             self.remove_combinator_and_watchers(combinator_id)?;
         }
         Ok(())
@@ -66261,6 +66627,11 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
+        let label = self.join_arg_range_with_object_mutation_label(args)?.join(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        );
         let mut inputs = match self.collect_promise_combinator_inputs(module, args) {
             Ok(inputs) => inputs,
             Err(error) => return self.reject_promise_combinator_input(error),
@@ -66273,7 +66644,7 @@ impl InterpreterCore {
             if matches!(input, Value::Object(_)) {
                 let handle = self.create_promise()?;
                 let element = std::mem::replace(input, Value::Promise(handle.0));
-                self.resolve_promise_with_value(module, handle, element, Label::Public)?;
+                self.resolve_promise_with_value(module, handle, element, label.clone())?;
             }
         }
         for input in &inputs {
@@ -66300,7 +66671,7 @@ impl InterpreterCore {
         let previous_combinator_id = self.next_promise_combinator_id;
         let previous_heap_len = self.heap.len();
 
-        let result = self.dispatch_promise_combinator_inputs(kind, inputs);
+        let result = self.dispatch_promise_combinator_inputs(kind, inputs, label);
         if result.is_err() {
             self.promise_store = previous_store;
             self.event_loop = previous_event_loop;
@@ -66325,10 +66696,11 @@ impl InterpreterCore {
         &mut self,
         kind: PromiseCombinatorKind,
         inputs: Vec<Value>,
+        label: Label,
     ) -> Result<Value, InterpreterError> {
-        let label = crate::ifc_artifacts::Label::Public;
         let total = inputs.len() as u32;
         let result_promise = self.create_promise()?;
+        self.join_combinator_result_label(result_promise, &label)?;
 
         match kind {
             PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled if total == 0 => {
@@ -66385,54 +66757,33 @@ impl InterpreterCore {
         let combinator_id = self.register_combinator(state)?;
 
         for (index, input) in inputs.into_iter().enumerate() {
-            if !self.promise_combinators.contains_key(&combinator_id) {
-                break;
-            }
             let index = index as u32;
             match input {
                 Value::Promise(handle) => {
                     let promise_handle = crate::promise_model::PromiseHandle(handle);
-                    let record = self.promise_store.get(promise_handle).map_err(|e| {
-                        InterpreterError::TypeError {
-                            expected: "promise".to_string(),
-                            got: e.to_string(),
-                        }
-                    })?;
-                    match &record.state {
-                        crate::promise_model::PromiseState::Pending => {
-                            self.add_combinator_watcher(
-                                promise_handle,
-                                PromiseCombinatorWatcher {
-                                    combinator_id,
-                                    index,
-                                },
-                            )?;
-                        }
-                        crate::promise_model::PromiseState::Fulfilled(value) => {
-                            self.update_combinator_fulfillment(
-                                combinator_id,
-                                index,
-                                value.clone(),
-                                record.label.clone(),
-                            )?;
-                        }
-                        crate::promise_model::PromiseState::Rejected(reason) => {
-                            self.update_combinator_rejection(
-                                combinator_id,
-                                index,
-                                reason.clone(),
-                                record.label.clone(),
-                            )?;
-                        }
-                    }
+                    self.register_native_combinator_reaction(
+                        promise_handle,
+                        result_promise,
+                        PromiseCombinatorWatcher {
+                            combinator_id,
+                            index,
+                        },
+                        label.clone(),
+                    )?;
                 }
                 other => {
                     let js_val = self.promise_value(&other)?;
-                    self.update_combinator_fulfillment(
-                        combinator_id,
-                        index,
-                        js_val,
-                        label.clone(),
+                    self.enqueue_native_combinator_job(
+                        crate::promise_model::Microtask::PromiseCombinator {
+                            combinator: crate::promise_model::PromiseCombinatorReaction {
+                                combinator_id,
+                                index,
+                            },
+                            kind: crate::promise_model::ReactionKind::Fulfill,
+                            argument: js_val,
+                            result_promise,
+                            label: label.clone(),
+                        },
                     )?;
                 }
             }
@@ -66740,7 +67091,11 @@ impl InterpreterCore {
                 });
             }
         };
-        let label = crate::ifc_artifacts::Label::Public;
+        let label = self.join_arg_range_label(args)?.join(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        );
         let (on_fulfilled, on_rejected) = match kind {
             PromiseReactionKind::Then => {
                 let on_fulfilled = match self.builtin_arg(args, 0)? {
@@ -66830,9 +67185,7 @@ impl InterpreterCore {
             promise,
             &RuntimePropertyKey::String(JsString::from("constructor")),
         )?;
-        if matches!(constructor, Value::Undefined)
-            || Self::is_intrinsic_promise_constructor(&constructor)
-        {
+        if matches!(constructor, Value::Undefined) {
             return Ok(None);
         }
         if !constructor.is_object_like() {
@@ -67184,7 +67537,7 @@ impl InterpreterCore {
         args: RegRange,
         module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
-        let label = self.clone_active_execution_context_label()?;
+        let label = self.join_arg_range_with_object_mutation_label(args)?;
         match cap {
             "promise:constructor" => {
                 // Create a new pending promise and return its handle.
@@ -67740,20 +68093,43 @@ impl InterpreterCore {
                 label,
             );
         }
-        let Value::Object(object) = value else {
+        if !matches!(value, Value::Object(_)) {
             let value = self.promise_value(&value)?;
             return self.fulfill_promise(promise, value, label);
-        };
+        }
+        self.resolve_promise_with_observable_then(module, promise, value, label)
+    }
+
+    /// The observable part of Promise Resolve Functions, also used when
+    /// PromiseResolve must wrap a native promise with a different constructor.
+    fn resolve_promise_with_observable_then(
+        &mut self,
+        module: Option<&Ir3Module>,
+        promise: crate::promise_model::PromiseHandle,
+        value: Value,
+        label: Label,
+    ) -> Result<(), InterpreterError> {
+        // Resolve functions claim their once-only pair before Get(then): an
+        // own getter can re-enter a saved resolver while the promise is still
+        // pending. The eventual thenable job gets a fresh pair for this epoch.
+        self.retire_promise_resolvers(promise)?;
         // The Get may run a getter or a trap; what it reads labels the
         // resolution. The enclosing HostCall's pending result label is set
         // aside so this read neither joins into nor clears it.
         let saved_result_label = self.take_pending_hostcall_result_label();
-        let then = self.iterator_protocol_property(
-            module,
-            object,
-            &RuntimePropertyKey::String(JsString::from("then")),
-            Value::Object(object),
-        );
+        let key = RuntimePropertyKey::String(JsString::from("then"));
+        let then = match &value {
+            Value::Object(object) => {
+                self.iterator_protocol_property(module, *object, &key, value.clone())
+            }
+            _ => match module {
+                Some(module) => self.get_v(module, &value, &key),
+                None => Err(InterpreterError::TypeError {
+                    expected: "module-backed PromiseResolve property read".to_string(),
+                    got: "missing module context".to_string(),
+                }),
+            },
+        };
         let observed = self.take_pending_hostcall_result_label();
         if let Some(saved) = saved_result_label {
             self.replace_pending_hostcall_result_label(Some(saved))?;
@@ -67771,11 +68147,9 @@ impl InterpreterCore {
             }
         };
         match self.promise_reaction_handler_from_value(then, "thenable then")? {
-            Some(handler) => {
-                self.enqueue_resolve_thenable(promise, handler, Value::Object(object), label)
-            }
+            Some(handler) => self.enqueue_resolve_thenable(promise, handler, value, label),
             None => {
-                let value = self.promise_value(&Value::Object(object))?;
+                let value = self.promise_value(&value)?;
                 self.fulfill_promise(promise, value, label)
             }
         }
@@ -67816,10 +68190,7 @@ impl InterpreterCore {
             .saturating_add(self.promise_in_flight_task_bytes);
         self.apply_memory_component_delta(previous_promise_bytes, next_promise_bytes)?;
         self.event_loop.microtasks.enqueue(task);
-        self.settle_projected_promise_bytes(next_promise_bytes)?;
-        // The resolving functions that chose the thenable are already
-        // resolved; the job's own pair takes the next epoch (bd-9vouw.174).
-        self.retire_promise_resolvers(promise)
+        self.settle_projected_promise_bytes(next_promise_bytes)
     }
 
     /// Build a single-use resolve/reject capability function bound to
@@ -67892,7 +68263,7 @@ impl InterpreterCore {
         {
             return Ok(Value::Undefined);
         }
-        let label = crate::ifc_artifacts::Label::Public;
+        let label = self.join_arg_range_with_object_mutation_label(args)?;
         if is_resolve {
             self.resolve_promise_with_value(module, promise, argument, label)?;
         } else {
@@ -68053,6 +68424,34 @@ impl InterpreterCore {
             dequeued_since_compaction += 1;
             let task_result = (|| -> Result<(), InterpreterError> {
                 match &task {
+                    crate::promise_model::Microtask::PromiseCombinator {
+                        combinator,
+                        kind,
+                        argument,
+                        result_promise,
+                        label,
+                    } => {
+                        let result = match kind {
+                            crate::promise_model::ReactionKind::Fulfill => self
+                                .update_combinator_fulfillment(
+                                    combinator.combinator_id,
+                                    combinator.index,
+                                    argument,
+                                    label,
+                                ),
+                            crate::promise_model::ReactionKind::Reject => self
+                                .update_combinator_rejection(
+                                    combinator.combinator_id,
+                                    combinator.index,
+                                    argument,
+                                    label,
+                                ),
+                        };
+                        if let Err(error) = result {
+                            self.terminally_reject_native_combinator(*result_promise, label);
+                            return Err(error);
+                        }
+                    }
                     crate::promise_model::Microtask::PromiseReaction {
                         handler,
                         argument,
@@ -78134,7 +78533,9 @@ impl InterpreterCore {
         self.preflight_legacy_property_key_for_hook(&key)?;
         match object_value {
             Value::Object(object_id) => {
-                if key.as_str() == Some("__proto__") {
+                if key.as_str() == Some("__proto__")
+                    && !self.heap[object_id.0 as usize].contains_own_runtime_property(&key)
+                {
                     let link = self.ordinary_get_prototype_of(object_id)?;
                     return Ok(self.prototype_value_for_link(module, link));
                 }
@@ -80277,12 +80678,26 @@ impl InterpreterCore {
     ) -> Result<bool, InterpreterError> {
         match value {
             Value::Accessor { set: Some(set), .. } => {
+                // A property write already joined the assigned scalar's
+                // label into its receiver. Carry that context into the setter
+                // frame, where the value-only callback arguments otherwise
+                // start Public (including inherited setters, bd-9vouw.280).
+                // Reflect.set may supply any receiver, including a primitive
+                // or null: an inherited setter still receives that exact this.
+                let receiver_object = self.own_property_holder(module, &receiver, false)?;
+                let argument_label = receiver_object
+                    .and_then(|object| self.object_mutation_labels.get(&object))
+                    .map(|label| {
+                        self.check_temporary_memory_budget(Self::estimate_label_bytes(label))?;
+                        Ok::<_, InterpreterError>(label.clone())
+                    })
+                    .transpose()?;
                 let (_, label) = self.invoke_inline_method_call_with_argument_label(
                     module,
                     set.as_ref().clone(),
                     receiver,
                     vec![assigned],
-                    None,
+                    argument_label,
                 )?;
                 let label = self
                     .pending_hostcall_result_label
@@ -80935,13 +81350,15 @@ impl InterpreterCore {
         }))
     }
 
-    /// ES2020 6.2.5.4 FromPropertyDescriptor for the own property `key` of
-    /// `object_id`, or `undefined` when there is no such property.
-    fn own_property_descriptor_value(
-        &mut self,
+    /// The ordinary own descriptor, including virtual data properties, as
+    /// internal fields. Invariant checks must not allocate a guest object just
+    /// to inspect a target property. Public reflection materializes these same
+    /// fields through FromPropertyDescriptor below.
+    fn ordinary_own_property_descriptor_fields(
+        &self,
         object_id: ObjectId,
         key: &RuntimePropertyKey,
-    ) -> Result<Value, InterpreterError> {
+    ) -> Option<PropertyDescriptorFields> {
         let visible = match key {
             RuntimePropertyKey::String(key) => self.own_runtime_property_visible(object_id, key),
             RuntimePropertyKey::Symbol(_) => true,
@@ -80972,43 +81389,37 @@ impl InterpreterCore {
                 };
                 Some((BaselineSymbolProperty::Data(virtual_value), attributes))
             });
-        let Some((property, attributes)) = source else {
+        let (property, attributes) = source?;
+        let fields = PropertyDescriptorFields {
+            enumerable: Some(attributes.enumerable),
+            configurable: Some(attributes.configurable),
+            ..PropertyDescriptorFields::default()
+        };
+        Some(match property {
+            BaselineSymbolProperty::Data(value) => PropertyDescriptorFields {
+                value: Some(value),
+                writable: Some(attributes.writable),
+                ..fields
+            },
+            BaselineSymbolProperty::Accessor { get, set } => PropertyDescriptorFields {
+                get: Some(get.unwrap_or(Value::Undefined)),
+                set: Some(set.unwrap_or(Value::Undefined)),
+                ..fields
+            },
+        })
+    }
+
+    /// ES2020 6.2.5.4 FromPropertyDescriptor for the own property `key` of
+    /// `object_id`, or `undefined` when there is no such property.
+    fn own_property_descriptor_value(
+        &mut self,
+        object_id: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<Value, InterpreterError> {
+        let Some(fields) = self.ordinary_own_property_descriptor_fields(object_id, key) else {
             return Ok(Value::Undefined);
         };
-        let descriptor_id = self.alloc_object_with_prototype(None)?;
-        match property {
-            BaselineSymbolProperty::Data(value) => {
-                self.set_object_property(descriptor_id, "value".to_string(), value)?;
-                self.set_object_property(
-                    descriptor_id,
-                    "writable".to_string(),
-                    Value::Bool(attributes.writable),
-                )?;
-            }
-            BaselineSymbolProperty::Accessor { get, set } => {
-                self.set_object_property(
-                    descriptor_id,
-                    "get".to_string(),
-                    get.unwrap_or(Value::Undefined),
-                )?;
-                self.set_object_property(
-                    descriptor_id,
-                    "set".to_string(),
-                    set.unwrap_or(Value::Undefined),
-                )?;
-            }
-        }
-        self.set_object_property(
-            descriptor_id,
-            "enumerable".to_string(),
-            Value::Bool(attributes.enumerable),
-        )?;
-        self.set_object_property(
-            descriptor_id,
-            "configurable".to_string(),
-            Value::Bool(attributes.configurable),
-        )?;
-        Ok(Value::Object(descriptor_id))
+        self.descriptor_object_from_fields(&fields, false)
     }
 
     /// Install an own property from a validated descriptor value, keeping
@@ -98101,19 +98512,32 @@ impl InterpreterCore {
         Self::estimate_symbol_state_bytes(&self.symbol_state)
     }
 
-    fn estimate_event_listener_record_bytes(event: &str, record: &EventListenerRecord) -> u64 {
+    fn estimate_event_name_bytes(event: &RuntimePropertyKey) -> u64 {
+        match event {
+            RuntimePropertyKey::String(event) => Self::estimate_js_string_bytes(event),
+            RuntimePropertyKey::Symbol(_) => std::mem::size_of::<SymbolId>() as u64,
+        }
+    }
+
+    fn estimate_event_listener_record_bytes(
+        event: &RuntimePropertyKey,
+        record: &EventListenerRecord,
+    ) -> u64 {
         MEMORY_ESTIMATE_EVENT_LISTENER_BASE_BYTES
-            .saturating_add(Self::estimate_string_bytes(event))
+            .saturating_add(Self::estimate_event_name_bytes(event))
             .saturating_add(Self::estimate_value_bytes(&record.listener))
     }
 
-    fn estimate_event_promise_waiter_record_bytes(event: &str, label: &Label) -> u64 {
+    fn estimate_event_promise_waiter_record_bytes(
+        event: &RuntimePropertyKey,
+        label: &Label,
+    ) -> u64 {
         let label_bytes = match label {
             Label::Custom { name, .. } => Self::estimate_string_bytes(name),
             _ => 0,
         };
         MEMORY_ESTIMATE_EVENT_PROMISE_WAITER_BASE_BYTES
-            .saturating_add(Self::estimate_string_bytes(event))
+            .saturating_add(Self::estimate_event_name_bytes(event))
             .saturating_add(label_bytes)
     }
 
@@ -100189,7 +100613,11 @@ impl InterpreterCore {
         )
     }
 
-    fn release_event_listener_memory(&mut self, event: &str, record: &EventListenerRecord) {
+    fn release_event_listener_memory(
+        &mut self,
+        event: &RuntimePropertyKey,
+        record: &EventListenerRecord,
+    ) {
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(Self::estimate_event_listener_record_bytes(event, record));
@@ -105270,10 +105698,25 @@ impl InterpreterCore {
         Ok(Value::Object(instance_id))
     }
 
-    /// bd-9vouw.94: ES2020 22.1.3 ArraySpeciesCreate(original, length): the
+    /// ES2020 9.4.2.2 ArrayCreate(length). Validate before allocating or
+    /// visiting source elements; a length is metadata, not a request to
+    /// allocate that many slots. Keep this check in the ArrayCreate branch
+    /// so custom species constructors can accept larger array-like lengths.
+    fn alloc_array_with_length(&mut self, length: u64) -> Result<ObjectId, InterpreterError> {
+        if length > u64::from(u32::MAX) {
+            return Err(InterpreterError::RangeError {
+                message: "Invalid array length".to_string(),
+            });
+        }
+        let result = self.alloc_array_with_prototype(None)?;
+        self.set_object_property(result, "length".to_string(), Value::Int(length as i64))?;
+        Ok(result)
+    }
+
+    /// bd-9vouw.94: ES2020 9.4.2.3 ArraySpeciesCreate(original, length): the
     /// result object an Array method fills. A plain array (ArrayCreate) when
-    /// `original` is not an array, or its `constructor` is undefined or
-    /// %Array%, or that constructor's @@species is undefined, null or
+    /// `original` is not an array, or its `constructor` is undefined,
+    /// or that constructor's @@species is undefined, null or
     /// %Array%. Otherwise the species is constructed with `length`. A
     /// `constructor` that is not an object, a species that is not a
     /// constructor, or a construct result that is not an object is a
@@ -105282,10 +105725,10 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         original: ObjectId,
-        length: usize,
+        length: u64,
     ) -> Result<ObjectId, InterpreterError> {
         if !self.generic_is_array(original)? {
-            return self.alloc_array_with_prototype(None);
+            return self.alloc_array_with_length(length);
         }
         let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
         let constructor = self.proxy_aware_get_runtime_property(
@@ -105300,8 +105743,8 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::StandardConstructor
                     && Self::standard_constructor_name(builtin).is_ok_and(|name| name == "Array"))
         };
-        if matches!(constructor, Value::Undefined) || is_intrinsic_array(&constructor) {
-            return self.alloc_array_with_prototype(None);
+        if matches!(constructor, Value::Undefined) {
+            return self.alloc_array_with_length(length);
         }
         if !constructor.is_object_like() {
             return Err(InterpreterError::TypeError {
@@ -105311,7 +105754,7 @@ impl InterpreterCore {
         }
         let species = self.species_of_constructor(module, &constructor)?;
         if matches!(species, Value::Undefined | Value::Null) || is_intrinsic_array(&species) {
-            return self.alloc_array_with_prototype(None);
+            return self.alloc_array_with_length(length);
         }
         if !self.is_constructible_value(&species) {
             return Err(InterpreterError::TypeError {
@@ -107066,30 +107509,24 @@ impl InterpreterCore {
         .then(|| constructor("Object"))
     }
 
-    /// Write `set_val` to `property_key` on an ordinary-property backing
-    /// object (builtin or user function), carrying the value register's label
-    /// exactly like a plain object write and restoring the prior label if the
-    /// write does not commit an own property.
+    /// Write register `val` to `property_key` on ordinary backing storage,
+    /// preserving the original receiver for inherited setters and Proxy traps.
+    /// The caller admits the receiver/key/value mutation label before entering;
+    /// stage the own value label here and restore it if no own write commits.
     fn set_backing_object_property(
         &mut self,
         module: &Ir3Module,
         property_object: ObjectId,
         property_key: &RuntimePropertyKey,
         val: u32,
-        set_val: Value,
+        receiver: Value,
         strict: bool,
     ) -> Result<(), InterpreterError> {
         self.run_pre_runtime_property_access_hook(module, property_object, property_key)?;
+        let set_val = self.read_reg(val)?;
         let value_label = self.get_register_label(val)?.clone();
         let previous_label = self.own_stored_runtime_property_label(property_object, property_key);
         self.set_own_runtime_property_label(property_object, property_key, &value_label)?;
-        // A callable proxy is its own receiver (a `set` trap sees the value
-        // the program holds, not the record).
-        let receiver = if self.proxy_call_target(property_object).is_some() {
-            Self::callable_proxy_value(property_object)
-        } else {
-            Value::Object(property_object)
-        };
         let set_result = self.proxy_aware_set_runtime_property(
             Some(module),
             property_object,
@@ -131970,7 +132407,7 @@ mod async_runtime_tests_current {
                 refused
                     .event_listeners
                     .get(&refused_readable)
-                    .and_then(|events| events.get("close"))
+                    .and_then(|events| events.get(&RuntimePropertyKey::from("close")))
                     .map(Vec::len),
                 Some(1),
                 "settlement retry must not emit or clear close again"
@@ -132857,7 +133294,10 @@ mod async_runtime_tests_current {
             once: false,
         };
         let baseline_bytes = core.estimated_memory_bytes();
-        let record_bytes = InterpreterCore::estimate_event_listener_record_bytes(event, &record);
+        let record_bytes = InterpreterCore::estimate_event_listener_record_bytes(
+            &RuntimePropertyKey::from(event),
+            &record,
+        );
 
         assert_eq!(baseline_bytes, core.recompute_estimated_memory_bytes());
         core.config.max_total_memory_bytes = baseline_bytes
@@ -132897,6 +133337,148 @@ mod async_runtime_tests_current {
     }
 
     #[test]
+    fn exact_event_keys_are_collision_free_and_memory_atomic_bd_9vouw_307() {
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_branded_object("EventEmitter", &[])
+            .expect("event target");
+        let symbol = core
+            .allocate_private_symbol(Some(JsString::from("event")))
+            .expect("event symbol");
+        let symbol_key = RuntimePropertyKey::Symbol(symbol);
+        let keys = [
+            RuntimePropertyKey::from(symbol_key.diagnostic().as_str()),
+            symbol_key,
+            RuntimePropertyKey::String(JsString::from_code_units(&[0xD800])),
+            RuntimePropertyKey::String(JsString::from_code_units(&[0xD801])),
+            RuntimePropertyKey::from("\u{FFFD}"),
+        ];
+        let record = EventListenerRecord {
+            listener: Value::BuiltinFunction(BuiltinFunction::new_kind(
+                BuiltinFunctionKind::ArrayIsArray,
+            )),
+            once: false,
+        };
+        let baseline_bytes = core.estimated_memory_bytes();
+
+        for (index, key) in keys.iter().enumerate() {
+            let before = core.estimated_memory_bytes();
+            let record_bytes = InterpreterCore::estimate_event_listener_record_bytes(key, &record);
+            core.config.max_total_memory_bytes = before + record_bytes - 1;
+            assert!(matches!(
+                core.insert_event_listener(target, key, record.clone(), false),
+                Err(InterpreterError::MemoryBudgetExceeded { .. })
+            ));
+            assert!(core.event_listener_records_for(target, key).is_empty());
+            assert_eq!(core.estimated_memory_bytes(), before);
+            assert_eq!(before, core.recompute_estimated_memory_bytes());
+
+            core.config.max_total_memory_bytes = before + record_bytes;
+            core.insert_event_listener(target, key, record.clone(), false)
+                .expect("exact event registration budget");
+            assert_eq!(core.event_listeners[&target].len(), index + 1);
+            assert_eq!(core.estimated_memory_bytes(), before + record_bytes);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(
+                core.remove_event_listener(target, key, &record.listener),
+                Some(record.clone())
+            );
+            assert!(core.event_listener_records_for(target, key).is_empty());
+            for remaining in &keys[index + 1..] {
+                assert_eq!(core.event_listener_records_for(target, remaining).len(), 1);
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+        assert!(!core.event_listeners.contains_key(&target));
+        assert_eq!(core.estimated_memory_bytes(), baseline_bytes);
+    }
+
+    #[test]
+    fn symbol_event_waiters_preserve_labels_and_release_links_bd_9vouw_307() {
+        let module = test_module_with_functions(Vec::new(), Vec::new());
+        for reject in [false, true] {
+            let mut core = test_interpreter();
+            let target = core
+                .alloc_branded_object("EventEmitter", &[])
+                .expect("event target");
+            let symbol = core
+                .allocate_private_symbol(Some(JsString::from("error")))
+                .expect("event symbol");
+            let event = RuntimePropertyKey::Symbol(symbol);
+            let registration_label = Label::Custom {
+                name: "symbol-event-registration".to_string(),
+                level: 4,
+            };
+            core.write_reg_with_label(0, Value::Object(target), Label::Public)
+                .expect("event target register");
+            core.write_reg_with_label(1, event.value(), registration_label.clone())
+                .expect("classified symbol event register");
+            let Value::Promise(promise) = core
+                .register_event_promise_once(RegRange { start: 0, count: 2 })
+                .expect("symbol events.once registration")
+            else {
+                panic!("events.once returns a promise");
+            };
+            assert_eq!(core.event_listener_records_for(target, &event).len(), 1);
+            assert_eq!(core.event_listener_records_for(target, "error").len(), 1);
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+
+            let emitted = if reject {
+                RuntimePropertyKey::from("error")
+            } else {
+                event.clone()
+            };
+            core.emit_event_listener_records(
+                &module,
+                target,
+                &emitted,
+                vec![Value::str("payload")],
+                Label::Secret,
+            )
+            .expect("settle symbol waiter");
+            let settled = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(promise))
+                .expect("settled event promise");
+            assert_eq!(settled.label, registration_label.join(&Label::Secret));
+            if reject {
+                assert!(matches!(
+                    &settled.state,
+                    crate::promise_model::PromiseState::Rejected(
+                        crate::object_model::JsValue::Str(value)
+                    ) if value == "payload"
+                ));
+            } else {
+                assert!(matches!(
+                    &settled.state,
+                    crate::promise_model::PromiseState::Fulfilled(
+                        crate::object_model::JsValue::Object(_)
+                    )
+                ));
+            }
+            assert!(!core.event_listeners.contains_key(&target));
+            assert!(!core.event_promise_waiters.contains_key(&target));
+            assert!(core.event_once_wrappers.values().all(|state| state.fired));
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
     fn event_once_wrapper_allocation_is_atomic_accounted_and_seed_safe_bd_asw4m_2() {
         let mut core = test_interpreter();
         let target = core
@@ -132913,7 +133495,7 @@ mod async_runtime_tests_current {
             Value::BuiltinFunction(BuiltinFunction::new_kind(BuiltinFunctionKind::ArrayIsArray));
         let projected_state = EventOnceWrapperState {
             target,
-            event: "tick".to_string(),
+            event: RuntimePropertyKey::from("tick"),
             original_listener: original_listener.clone(),
             fired: false,
             static_once_waiter: None,
@@ -133067,7 +133649,7 @@ mod async_runtime_tests_current {
         assert!(
             core.event_listeners
                 .get(&source)
-                .and_then(|events| events.get("source"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("source")))
                 .is_some_and(|records| records.len() == 1),
             "scheduling must not consume the source once registration"
         );
@@ -133095,14 +133677,14 @@ mod async_runtime_tests_current {
         assert!(
             core.event_listeners
                 .get(&source)
-                .and_then(|events| events.get("source"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("source")))
                 .is_none(),
             "direct wrapper invocation consumes its captured source registration"
         );
         assert!(
             core.event_listeners
                 .get(&delivery_target)
-                .and_then(|events| events.get("response"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("response")))
                 .is_some_and(|records| {
                     records.len() == 1
                         && InterpreterCore::strict_eq_values(&records[0].listener, &wrapper)
@@ -133179,7 +133761,7 @@ mod async_runtime_tests_current {
         assert!(
             core.event_listeners
                 .get(&target)
-                .and_then(|events| events.get("response"))
+                .and_then(|events| events.get(&RuntimePropertyKey::from("response")))
                 .is_some_and(|records| {
                     records.len() == 1
                         && InterpreterCore::strict_eq_values(&records[0].listener, &late)
@@ -134930,6 +135512,256 @@ mod async_runtime_tests_current {
             &crate::ifc_artifacts::Label::Secret,
             "a Secret value written to a Public object property must read back Secret (bd-ojvo1)"
         );
+    }
+
+    #[test]
+    fn create_data_property_keeps_ifc_labels_and_rejection_accounting_bd_9vouw_280() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateDataProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 3,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+        for frozen in [false, true] {
+            let mut core = test_interpreter();
+            let object = core
+                .alloc_object_with_properties(&[("data", Value::Int(1))])
+                .expect("object allocation");
+            if frozen {
+                core.mutate_heap(|heap| heap[object.0 as usize].is_frozen = true);
+            }
+            core.write_reg_with_label(0, Value::Object(object), Label::Public)
+                .expect("target register");
+            core.write_reg_with_label(1, Value::str("data"), Label::Public)
+                .expect("key register");
+            core.write_reg_with_label(2, Value::Int(42), Label::Secret)
+                .expect("value register");
+            let result = core.execute(&module);
+            if frozen {
+                assert!(matches!(result, Err(InterpreterError::TypeError { .. })));
+                assert_eq!(
+                    core.heap[object.0 as usize].properties.get("data"),
+                    Some(&Value::Int(1))
+                );
+                assert_eq!(core.own_property_label(object, "data"), Label::Public);
+            } else {
+                result.expect("own definition and read");
+                assert_eq!(core.read_reg(3).unwrap(), Value::Int(42));
+                assert_eq!(core.get_register_label(3).unwrap(), &Label::Secret);
+                assert_eq!(core.own_property_label(object, "data"), Label::Secret);
+            }
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_setter_receives_the_assigned_scalar_label_bd_9vouw_280() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::SetPropertySloppy {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::CreateDataProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 3,
+                name: Some("capture_assigned_value".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+        module.constant_pool.push("captured".into());
+        let mut core = test_interpreter();
+        let prototype = core
+            .ensure_builtin_prototype("Object")
+            .expect("Object prototype");
+        core.set_object_runtime_property(
+            prototype,
+            RuntimePropertyKey::String("slot".into()),
+            Value::Accessor {
+                get: None,
+                set: Some(Arc::new(Value::Function(0))),
+            },
+        )
+        .expect("inherited setter");
+        let object = core
+            .alloc_object_with_properties(&[])
+            .expect("ordinary object");
+        core.write_reg_with_label(0, Value::Object(object), Label::Public)
+            .unwrap();
+        core.write_reg_with_label(1, Value::str("slot"), Label::Public)
+            .unwrap();
+        core.write_reg_with_label(2, Value::Int(42), Label::Secret)
+            .unwrap();
+        core.execute(&module).expect("inherited setter executes");
+        assert_eq!(
+            core.heap[object.0 as usize].properties.get("captured"),
+            Some(&Value::Int(42))
+        );
+        assert_eq!(core.own_property_label(object, "captured"), Label::Secret);
+        assert!(!core.heap[object.0 as usize].properties.contains_key("slot"));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn inherited_setters_keep_backed_receiver_identity_and_labels_bd_9vouw_280() {
+        for throws in [false, true] {
+            let mut module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::SetPropertySloppy {
+                        obj: 0,
+                        key: 1,
+                        val: 2,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 1 },
+                    Ir3Instruction::LoadStr {
+                        dst: 2,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::SetPropertySloppy {
+                        obj: 1,
+                        key: 2,
+                        val: 0,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 2,
+                        pool_index: 1,
+                    },
+                    Ir3Instruction::SetPropertySloppy {
+                        obj: 1,
+                        key: 2,
+                        val: 1,
+                    },
+                    if throws {
+                        Ir3Instruction::Throw { value: 0 }
+                    } else {
+                        Ir3Instruction::Return { value: 0 }
+                    },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 2,
+                        arity: 1,
+                        frame_size: 3,
+                        name: Some("capture_backed_receiver".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 8,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("ordinary_receiver".to_string()),
+                        is_generator: false,
+                        rest_param_index: None,
+                    },
+                ],
+            );
+            module.constant_pool = vec!["captured".into(), "seenThis".into()];
+            for kind in 0..4 {
+                let mut core = test_interpreter();
+                let prototype = core
+                    .ensure_builtin_prototype("Object")
+                    .expect("Object prototype");
+                let key = RuntimePropertyKey::String("slot".into());
+                core.set_object_runtime_property(
+                    prototype,
+                    key.clone(),
+                    Value::Accessor {
+                        get: None,
+                        set: Some(Arc::new(Value::Function(0))),
+                    },
+                )
+                .expect("inherited setter");
+                let receiver = match kind {
+                    0 => Value::BuiltinFunction(BuiltinFunction::new_kind(
+                        BuiltinFunctionKind::ArrayIsArray,
+                    )),
+                    1 => Value::Function(1),
+                    2 => Value::Promise(core.create_promise().expect("promise receiver").0),
+                    _ => {
+                        let emitter = core
+                            .alloc_branded_object("EventEmitter", &[])
+                            .expect("wrapper emitter");
+                        core.create_event_once_wrapper(emitter, "tick", Value::Function(1), None)
+                            .expect("callable once wrapper")
+                            .0
+                    }
+                };
+                core.write_reg_with_label(0, receiver.clone(), Label::Public)
+                    .expect("original receiver register");
+                core.write_reg_with_label(1, key.value(), Label::Public)
+                    .expect("key register");
+                core.write_reg_with_label(2, Value::Int(42), Label::Secret)
+                    .expect("classified assigned value");
+                let outcome = core.execute(&module);
+                if throws {
+                    assert!(matches!(
+                        outcome,
+                        Err(InterpreterError::UncaughtException { .. })
+                    ));
+                    assert_eq!(core.pending_exception_label, Label::Secret);
+                } else {
+                    outcome.expect("setter completed");
+                }
+                let backing = core
+                    .own_property_holder(Some(&module), &receiver, false)
+                    .expect("receiver lookup")
+                    .expect("receiver backing");
+                assert_eq!(
+                    core.heap[backing.0 as usize].properties.get("seenThis"),
+                    Some(&receiver),
+                    "kind {kind}: setter must receive the original JavaScript identity"
+                );
+                assert_eq!(
+                    core.heap[backing.0 as usize].properties.get("captured"),
+                    Some(&Value::Int(42))
+                );
+                assert_eq!(core.own_property_label(backing, "captured"), Label::Secret);
+                assert!(!core.heap[backing.0 as usize].contains_own_runtime_property(&key));
+                assert_eq!(
+                    core.own_stored_runtime_property_label(backing, &key),
+                    Label::Public
+                );
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+            }
+        }
     }
 
     /// A promise's own properties live on a backing object; a Secret value
@@ -161138,12 +161970,211 @@ mod tests {
     }
 
     #[test]
+    fn intrinsic_combinators_keep_native_element_jobs_bd_9vouw_295() {
+        for promise_inputs in [false, true] {
+            let mut core = quickjs_test_core();
+            core.inject_runtime_globals().unwrap();
+            for prototype in ["Array", ARRAY_ITERATOR_PROTOTYPE, "Promise"] {
+                core.ensure_builtin_prototype(prototype).unwrap();
+            }
+            let constructor = core.promise_intrinsic_constructor().unwrap();
+            let module = test_module(vec![Ir3Instruction::Halt]);
+            let mut values = Vec::new();
+            for index in 0..128 {
+                values.push(if promise_inputs {
+                    let promise = core
+                        .create_fulfilled_promise(
+                            crate::object_model::JsValue::Int(index),
+                            Label::Public,
+                        )
+                        .unwrap();
+                    Value::Promise(promise.0)
+                } else {
+                    Value::Int(index)
+                });
+            }
+            let input = core.alloc_array_from_values(&values).unwrap();
+            core.write_reg(0, Value::Object(input)).unwrap();
+            let before = core.promise_store.len();
+            let result = core
+                .promise_combinator_call(
+                    &module,
+                    PromiseCombinatorKind::All,
+                    "promise:all",
+                    "all",
+                    RegRange { start: 0, count: 1 },
+                    Some(&constructor),
+                )
+                .unwrap();
+            let Value::Promise(result) = result else {
+                panic!("Promise.all result")
+            };
+            assert_eq!(
+                core.promise_store.len(),
+                before + 1,
+                "intrinsic elements need no artificial promises or guest capabilities"
+            );
+            assert_eq!(core.promise_combinators.len(), 1);
+            assert_eq!(core.event_loop.microtasks.pending_count(), 128);
+            assert!(matches!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(result))
+                    .unwrap()
+                    .state,
+                crate::promise_model::PromiseState::Pending
+            ));
+            core.drain_microtasks(None).unwrap();
+            assert!(core.promise_combinators.is_empty());
+            assert!(
+                core.promise_store
+                    .get(crate::promise_model::PromiseHandle(result))
+                    .unwrap()
+                    .state
+                    .is_fulfilled()
+            );
+            assert_eq!(
+                core.estimated_memory_bytes(),
+                core.recompute_estimated_memory_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn native_combinator_budget_failure_closes_labeled_dependents_bd_9vouw_295() {
+        let mut core = quickjs_test_core();
+        let first = core.create_promise().unwrap();
+        let second = core.create_promise().unwrap();
+        let result = core
+            .dispatch_promise_combinator_inputs(
+                PromiseCombinatorKind::All,
+                vec![
+                    Value::Promise(first.0),
+                    Value::Promise(second.0),
+                    Value::Promise(second.0),
+                ],
+                Label::Internal,
+            )
+            .unwrap();
+        let Value::Promise(result) = result else {
+            panic!("aggregate promise")
+        };
+        let result = crate::promise_model::PromiseHandle(result);
+        let secret = Label::Custom {
+            name: "combinator-secret".repeat(64),
+            level: 7,
+        };
+        core.fulfill_promise(first, crate::object_model::JsValue::Int(1), secret.clone())
+            .unwrap();
+        core.drain_microtasks(None).unwrap();
+        assert_eq!(core.promise_store.get(result).unwrap().label, secret);
+        assert_eq!(
+            core.promise_store.get(result).unwrap().state,
+            crate::promise_model::PromiseState::Pending
+        );
+        let descendant = core
+            .register_promise_then(result, None, None, Label::Public)
+            .unwrap();
+        core.fulfill_promise(
+            second,
+            crate::object_model::JsValue::Str("large-element".repeat(128)),
+            Label::Public,
+        )
+        .unwrap();
+        assert_eq!(core.event_loop.microtasks.pending_count(), 2);
+        let ceiling = core.sync_estimated_memory_bytes().unwrap();
+        core.config.max_total_memory_bytes = ceiling;
+        let heap_slots = core.heap.len();
+        assert!(matches!(
+            core.drain_microtasks(None),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        for promise in [result, descendant] {
+            let record = core.promise_store.get(promise).unwrap();
+            assert_eq!(
+                record.state,
+                crate::promise_model::PromiseState::Rejected(
+                    crate::object_model::JsValue::Undefined
+                )
+            );
+            assert_eq!(record.label.level(), 7);
+            assert!(!record.label.can_flow_to(&Label::Public));
+            assert!(record.reactions.is_empty());
+        }
+        assert_eq!(
+            core.heap.len(),
+            heap_slots,
+            "tracker admission failed before result allocation"
+        );
+        assert!(core.promise_combinators.is_empty());
+        assert!(core.promise_combinator_watchers.is_empty());
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert!(core.estimated_memory_bytes() <= ceiling);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+        core.drain_microtasks(None)
+            .expect("remaining native jobs for a closed aggregate are inert");
+        assert!(core.promise_combinators.is_empty());
+        assert!(core.event_loop.microtasks.is_empty());
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
+    fn native_combinator_terminal_payload_copy_requires_scratch_bd_9vouw_295() {
+        let mut core = quickjs_test_core();
+        let result = core.create_promise().unwrap();
+        let text = "terminal-payload".repeat(1024);
+        let text_len = text.len();
+        let payload_bytes = InterpreterCore::estimate_string_bytes(&text);
+        let combinator = core
+            .register_combinator(PromiseCombinatorState::All(
+                crate::promise_model::PromiseAllTracker {
+                    result_promise: result,
+                    values: BTreeMap::from([(0, crate::object_model::JsValue::Str(text))]),
+                    total: 1,
+                    resolved_count: 1,
+                    settled: true,
+                },
+            ))
+            .unwrap();
+        let before = core.sync_estimated_memory_bytes().unwrap();
+        let heap_slots = core.heap.len();
+        // The empty destination fits, but copying the first retained string
+        // and its bounded key misses admission by exactly one byte. The
+        // tracker must survive unchanged and no result property may appear.
+        let required = before
+            + MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
+            + payload_bytes
+            + MEMORY_ESTIMATE_STRING_BASE_BYTES
+            + 6;
+        core.config.max_total_memory_bytes = required - 1;
+        let error = core.build_native_combinator_result(combinator).unwrap_err();
+        assert!(
+            matches!(error, InterpreterError::MemoryBudgetExceeded { requested_bytes, .. }
+            if requested_bytes == required)
+        );
+        assert_eq!(core.heap.len(), heap_slots + 1);
+        assert!(core.heap[heap_slots].properties.is_empty());
+        assert!(matches!(core.native_combinator_element(combinator, 0),
+            Some((crate::object_model::JsValue::Str(text), None)) if text.len() == text_len));
+        assert_eq!(core.promise_in_flight_task_bytes, 0);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    #[test]
     fn builtin_promise_all_uses_real_aggregate_tracking() {
         let mut core = quickjs_test_core();
         let label = crate::ifc_artifacts::Label::Public;
 
-        let first = core.promise_store.create();
-        let second = core.promise_store.create();
+        let first = core.create_promise().unwrap();
+        let second = core.create_promise().unwrap();
         let input = core
             .alloc_array_from_values(&[Value::Promise(first.0), Value::Promise(second.0)])
             .expect("promise input array should allocate");
@@ -161166,8 +162197,10 @@ mod tests {
             "aggregate should stay pending until all inputs settle"
         );
 
-        core.fulfill_promise(first, crate::object_model::JsValue::Int(7), label.clone())
+        core.fulfill_promise(first, crate::object_model::JsValue::Int(7), Label::Secret)
             .expect("first input promise should fulfill");
+        core.drain_microtasks(None)
+            .expect("first native element job");
         let after_first = core
             .promise_store
             .get(aggregate)
@@ -161182,10 +162215,24 @@ mod tests {
 
         core.fulfill_promise(second, crate::object_model::JsValue::Int(11), label)
             .expect("second input promise should fulfill");
+        assert!(
+            matches!(
+                core.promise_store.get(aggregate).unwrap().state,
+                crate::promise_model::PromiseState::Pending
+            ),
+            "the final input settlement queues its element job before the aggregate settles"
+        );
+        core.drain_microtasks(None)
+            .expect("final native element job");
         let resolved = core
             .promise_store
             .get(aggregate)
             .expect("aggregate promise should resolve after all inputs fulfill");
+        assert_eq!(
+            resolved.label,
+            Label::Secret,
+            "the first input's label survives a later public input"
+        );
         let crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Object(
             values_handle,
         )) = &resolved.state
@@ -161204,6 +162251,10 @@ mod tests {
         assert_eq!(values.properties.get("0"), Some(&Value::Int(7)));
         assert_eq!(values.properties.get("1"), Some(&Value::Int(11)));
         assert_eq!(values.properties.get("length"), Some(&Value::Int(2)));
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
     }
 
     #[test]

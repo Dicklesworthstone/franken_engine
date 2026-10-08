@@ -11,13 +11,14 @@
 //! and its capability is again an engine promise with its own functions.
 //!
 //! The combinators (25.6.4.1-3, ES2021 Promise.any) run the spec algorithm
-//! when C is not %Promise%, when Get(C, "resolve") is not the intrinsic
-//! Promise.resolve, or when %Promise.prototype%.then was replaced:
+//! whenever the inputs or the constructor can run observable guest code:
 //! Get(C, "resolve") once, then per element Call(resolve, C, « value ») and
 //! Invoke(nextPromise, "then", « onFulfilled, onRejected »), with element
 //! functions bound to per-element holders that share the values, the
-//! remaining count and the capability. Any other call keeps the native
-//! combinator, with its IFC label accumulation and memory accounting.
+//! remaining count and the capability. Dense intrinsic arrays of primitives
+//! and unmodified intrinsic promises use native element reactions in the
+//! same registration and microtask order, with IFC label accumulation and
+//! exact memory accounting (bd-9vouw.295).
 
 use super::*;
 
@@ -196,7 +197,7 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    /// ES2020 25.6.4.5.1 PromiseResolve(C, x) for a C other than %Promise%:
+    /// ES2020 25.6.4.5.1 PromiseResolve(C, x):
     /// a promise whose `constructor` is C is returned as is; anything else
     /// resolves a new capability of C.
     pub(super) fn promise_resolve_with_constructor(
@@ -204,6 +205,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         constructor: Value,
         value: Value,
+        label: Label,
     ) -> Result<Value, InterpreterError> {
         if matches!(value, Value::Promise(_)) {
             let value_constructor = self.get_v(
@@ -217,11 +219,44 @@ impl InterpreterCore {
         }
         let capability =
             self.new_promise_capability_record(module, constructor, vec![value.clone()])?;
-        self.invoke_inline_method_call(
+        let label = label.join(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        );
+        if matches!(value, Value::Promise(_))
+            && let Some(promise) = Self::capability_native_promise(&capability)
+        {
+            // A different constructor requires a fresh resolving function:
+            // it observes this promise's `then` and queues its invocation.
+            // Native state adoption would bypass a subclass/own `then` and
+            // would settle the wrapper before the required thenable job.
+            let Value::BuiltinFunction(resolve) = &capability.resolve else {
+                unreachable!("a native capability has native resolving functions")
+            };
+            if self.promise_is_settled(promise)
+                || resolve
+                    .iterator_handle
+                    .is_some_and(|epoch| epoch != u32::from(self.promise_resolver_epoch(promise)))
+            {
+                // A custom constructor can return an already-resolved native
+                // capability. Calling its original resolve is then a no-op,
+                // including when it is still pending while adopting a value.
+                return Ok(capability.promise);
+            }
+            if value == Value::Promise(promise.0) {
+                self.resolve_promise_to_native(promise, promise, label)?;
+            } else {
+                self.resolve_promise_with_observable_then(Some(module), promise, value, label)?;
+            }
+            return Ok(capability.promise);
+        }
+        self.invoke_inline_method_call_with_argument_label(
             Some(module),
             capability.resolve.clone(),
             Value::Undefined,
             vec![value],
+            Some(label),
         )?;
         Ok(capability.promise)
     }
@@ -267,12 +302,20 @@ impl InterpreterCore {
         capability: &PromiseCapabilityRecord,
         error: InterpreterError,
     ) -> Result<Value, InterpreterError> {
-        let (thrown, _) = self.catchable_thrown_value(error)?;
-        self.invoke_inline_method_call(
+        let (thrown, label) = self.catchable_thrown_value(error)?;
+        let label = label
+            .join(&self.clone_active_execution_context_label()?)
+            .join(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
+            );
+        self.invoke_inline_method_call_with_argument_label(
             Some(module),
             capability.reject.clone(),
             Value::Undefined,
             vec![thrown],
+            Some(label),
         )?;
         Ok(capability.promise.clone())
     }
@@ -297,6 +340,150 @@ impl InterpreterCore {
         }
     }
 
+    /// A no-guest-code proof for the native combinator lane. Custom iterables
+    /// must interleave `next`, PromiseResolve and `then`; collecting them first
+    /// changes observable order. Likewise a promise's own properties, a
+    /// subclass prototype, indexed accessors, or changed intrinsics must use
+    /// the ordinary algorithm below, with every Get performed exactly once.
+    fn promise_combinator_has_native_inputs(
+        &mut self,
+        module: &Ir3Module,
+        constructor: &Value,
+        iterable: &Value,
+    ) -> Result<bool, InterpreterError> {
+        let Value::Object(array_id) = iterable else {
+            return Ok(false);
+        };
+        let Some(array) = self.heap.get(array_id.0 as usize) else {
+            return Ok(false);
+        };
+        if !self.promise_combinator_metadata_is_public(*array_id)
+            || !array.is_array
+            || array.is_null_prototype
+            || array
+                .prototype
+                .is_some_and(|prototype| self.builtin_prototypes.get("Array") != Some(&prototype))
+            || array.contains_own_runtime_property(&RuntimePropertyKey::Symbol(
+                WellKnownSymbol::Iterator.id(),
+            ))
+        {
+            return Ok(false);
+        }
+        for (prototype, key, kind) in [
+            (
+                "Array",
+                RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id()),
+                BuiltinFunctionKind::ArrayValues,
+            ),
+            (
+                ARRAY_ITERATOR_PROTOTYPE,
+                RuntimePropertyKey::String(JsString::from("next")),
+                BuiltinFunctionKind::IteratorNext,
+            ),
+        ] {
+            if let Some(&id) = self.builtin_prototypes.get(prototype) {
+                if !self.promise_combinator_metadata_is_public(id)
+                    || self.virtual_own_property_deleted(id, &key)
+                {
+                    return Ok(false);
+                }
+                if let Some(value) = self
+                    .heap
+                    .get(id.0 as usize)
+                    .and_then(|object| object.own_runtime_property_value(&key))
+                    && !matches!(value, Value::BuiltinFunction(builtin)
+                        if builtin.kind == kind && builtin.bound_object.is_none()
+                            && builtin.iterator_handle.is_none())
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
+        if let Some(&prototype) = self.builtin_prototypes.get("Promise") {
+            if !self.promise_combinator_metadata_is_public(prototype)
+                || self.virtual_own_property_deleted(prototype, &constructor_key)
+            {
+                return Ok(false);
+            }
+            if let Some(value) = self
+                .heap
+                .get(prototype.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&constructor_key))
+                && !Self::is_intrinsic_promise_constructor(&value)
+            {
+                return Ok(false);
+            }
+        }
+        // Promise.prototype.then performs SpeciesConstructor even when its
+        // constructor is %Promise%. Only the actual native getter is inert.
+        if let Value::BuiltinFunction(builtin) = constructor
+            && let Some(properties) = Self::builtin_function_property_object(builtin)
+                .or(self.function_own_property_object(module, constructor)?)
+        {
+            if !self.promise_combinator_metadata_is_public(properties) {
+                return Ok(false);
+            }
+            let species_key = RuntimePropertyKey::Symbol(WellKnownSymbol::Species.id());
+            let species = self
+                .heap
+                .get(properties.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&species_key));
+            let native_getter = Value::BuiltinFunction(BuiltinFunction::prototype_getter(
+                "Promise",
+                prototype_getters::SPECIES_GETTER_KEY,
+            ));
+            if !matches!(species, Some(Value::Accessor { get: Some(getter), set: None })
+                if *getter == native_getter)
+            {
+                return Ok(false);
+            }
+        }
+        let length = self.array_like_length(*array_id)?;
+        for index in 0..length {
+            self.json_charge_work()?;
+            let key = Self::generic_index_key(index as u64);
+            let value = self
+                .heap
+                .get(array_id.0 as usize)
+                .and_then(|array| array.own_runtime_property_value(&key));
+            match value {
+                Some(value @ Value::Promise(_)) => {
+                    // Backing storage can carry an own constructor/then or a
+                    // subclass prototype. Do not read either speculatively.
+                    if self.function_own_property_object(module, &value)?.is_some() {
+                        return Ok(false);
+                    }
+                }
+                Some(
+                    Value::Undefined
+                    | Value::Null
+                    | Value::Bool(_)
+                    | Value::Int(_)
+                    | Value::Float(_)
+                    | Value::Str(_)
+                    | Value::Symbol(_)
+                    | Value::BigInt(_),
+                ) => {}
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    /// Identity alone cannot justify skipping a Get: an unchanged intrinsic
+    /// can have a secret property label. Let the ordinary algorithm perform
+    /// those reads, including symbol metadata, without speculative getters.
+    fn promise_combinator_metadata_is_public(&self, object: ObjectId) -> bool {
+        self.object_mutation_labels
+            .get(&object)
+            .is_none_or(|label| *label == Label::Public)
+            && self
+                .heap
+                .get(object.0 as usize)
+                .is_some_and(|object| object.property_labels.is_empty())
+    }
+
     /// Promise.all / allSettled / any / race with `this` (ES2020 25.6.4.1-3,
     /// ES2021 27.2.4.3). `capability_tag` is the native combinator's.
     pub(super) fn promise_combinator_call(
@@ -310,6 +497,14 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let constructor = Self::promise_static_this(receiver, name)?;
         let iterable = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let registration_label = self.join_arg_range_with_object_mutation_label(args)?;
+        self.replace_pending_hostcall_result_label(Some(
+            registration_label.join(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
+            ),
+        ))?;
         // Guest code (C, its `resolve` getter, iterators, `then`) runs while
         // native locals hold values: no collection until this returns.
         self.gc_nested_request = None;
@@ -332,6 +527,7 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::PromiseResolve
                     && builtin.bound_object.is_none())
             && self.promise_prototype_then_is_intrinsic()
+            && self.promise_combinator_has_native_inputs(module, &constructor, &iterable)?
         {
             return self.dispatch_promise_hostcall(capability_tag, args, Some(module));
         }
@@ -366,6 +562,12 @@ impl InterpreterCore {
         ])?;
         let values = self.alloc_object_with_prototype(None)?;
         self.set_object_property(shared, SHARED_VALUES.to_string(), Value::Object(values))?;
+        let registration_label = registration_label.join(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        );
+        self.join_direct_object_mutation_label(shared, &registration_label)?;
         let run = CombinatorRun {
             constructor,
             promise_resolve,
@@ -420,6 +622,15 @@ impl InterpreterCore {
             shared,
         } = run;
         let shared = *shared;
+        let mut label = self
+            .object_mutation_labels
+            .get(&shared)
+            .unwrap_or(&Label::Public)
+            .join(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
+            );
         if kind != PromiseCombinatorKind::Race {
             let Value::Object(values) = self.capability_holder_slot(shared, SHARED_VALUES) else {
                 return Err(InterpreterError::TypeError {
@@ -430,12 +641,14 @@ impl InterpreterCore {
             self.set_object_property(values, index.to_string(), Value::Undefined)?;
             self.set_object_property(shared, SHARED_LENGTH.to_string(), Value::Int(index + 1))?;
         }
-        let next_promise = self.invoke_inline_method_call(
+        let (next_promise, resolve_label) = self.invoke_inline_method_call_with_argument_label(
             Some(module),
             promise_resolve.clone(),
             constructor.clone(),
             vec![value],
+            Some(label.clone()),
         )?;
+        label = label.join(&resolve_label);
         let element = |element_kind: BuiltinFunctionKind, holder: ObjectId| {
             Value::BuiltinFunction(BuiltinFunction::bound_to(element_kind, holder))
         };
@@ -473,11 +686,18 @@ impl InterpreterCore {
             &next_promise,
             &RuntimePropertyKey::String(JsString::from("then")),
         )?;
-        self.invoke_inline_method_call(
+        label = label.join(
+            self.pending_hostcall_result_label
+                .as_ref()
+                .unwrap_or(&Label::Public),
+        );
+        self.join_direct_object_mutation_label(shared, &label)?;
+        self.invoke_inline_method_call_with_argument_label(
             Some(module),
             then,
             next_promise,
             vec![on_fulfilled, on_rejected],
+            Some(label),
         )?;
         Ok(())
     }
@@ -516,20 +736,32 @@ impl InterpreterCore {
         let gathered: Vec<Value> = (0..length)
             .map(|index| self.capability_holder_slot(values, &index.to_string()))
             .collect();
+        let label = self
+            .object_mutation_labels
+            .get(&shared)
+            .unwrap_or(&Label::Public)
+            .join(&self.clone_active_execution_context_label()?);
         if kind == PromiseCombinatorKind::Any {
             let errors = gathered.iter().map(Self::value_to_js_value).collect();
             let error = self.build_aggregate_error(errors)?;
             let error = self.js_value_to_value(&error);
             let reject = self.capability_holder_slot(shared, CAPABILITY_REJECT);
-            self.invoke_inline_method_call(Some(module), reject, Value::Undefined, vec![error])?;
+            self.invoke_inline_method_call_with_argument_label(
+                Some(module),
+                reject,
+                Value::Undefined,
+                vec![error],
+                Some(label),
+            )?;
         } else {
             let array = self.alloc_array_from_values(&gathered)?;
             let resolve = self.capability_holder_slot(shared, CAPABILITY_RESOLVE);
-            self.invoke_inline_method_call(
+            self.invoke_inline_method_call_with_argument_label(
                 Some(module),
                 resolve,
                 Value::Undefined,
                 vec![Value::Object(array)],
+                Some(label),
             )?;
         }
         Ok(())
@@ -567,6 +799,8 @@ impl InterpreterCore {
         ) else {
             return Ok(Value::Undefined);
         };
+        let label = self.join_arg_range_with_object_mutation_label(args)?;
+        self.join_direct_object_mutation_label(shared, &label)?;
         let (kind, element) = match builtin.kind {
             BuiltinFunctionKind::PromiseAllSettledResolveElement => {
                 let entry = self.alloc_object_with_properties(&[

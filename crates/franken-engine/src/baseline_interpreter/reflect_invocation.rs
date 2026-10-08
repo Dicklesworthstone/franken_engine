@@ -14,7 +14,159 @@ pub(super) enum ReflectPropertyOperation {
     Delete,
 }
 
+/// Labels owned by the caller while a direct property write observes its
+/// descriptor and any key-conversion, setter or Proxy callbacks.
+pub(super) struct PropertyWriteObservation {
+    context: Option<Label>,
+    pending_result: Option<Label>,
+    temporary_bytes: u64,
+}
+
 impl InterpreterCore {
+    /// Direct SetProperty has no hostcall scope. Install one for descriptor
+    /// selection, preserving the caller's pending result separately so a
+    /// completed store cannot taint a later, unrelated instruction.
+    pub(super) fn begin_property_write_observation(
+        &mut self,
+        object: u32,
+        key: u32,
+        value: u32,
+    ) -> Result<PropertyWriteObservation, InterpreterError> {
+        let mut context = self
+            .active_execution_context_label()
+            .unwrap_or(&Label::Public);
+        for register in [object, key, value] {
+            let label = self.get_register_label(register)?;
+            if label > context {
+                context = label;
+            }
+        }
+        let context_bytes = Self::estimate_label_bytes(context);
+        let saved_bytes = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0)
+            .saturating_add(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            );
+        let temporary_bytes = self
+            .json_parse_temporary_bytes
+            .checked_add(saved_bytes)
+            .ok_or_else(|| self.memory_budget_error(u64::MAX, self.heap_object_count_u32()))?;
+        // The only new allocation is the winning label's clone. The saved
+        // labels move from retained slots to tracked temporaries; they are
+        // never duplicated or left outside accounting during a callback.
+        self.check_temporary_memory_budget(context_bytes)?;
+        let context = context.clone();
+        self.apply_memory_component_delta(saved_bytes, context_bytes)?;
+        let saved_context = self.active_inline_callback_context_label.replace(context);
+        let saved_result = self.pending_hostcall_result_label.take();
+        self.json_parse_temporary_bytes = temporary_bytes;
+        Ok(PropertyWriteObservation {
+            context: saved_context,
+            pending_result: saved_result,
+            temporary_bytes: saved_bytes,
+        })
+    }
+
+    /// Close every direct-write exit, including strict refusal and guest
+    /// throws. Top-level native errors keep their existing variant and carry
+    /// observations through the pending-result slot used by native routing.
+    /// Isolated callback returns transport guest exceptions instead.
+    /// Resource failures do no further observation work and remain uncatchable.
+    pub(super) fn finish_property_write_observation(
+        &mut self,
+        saved: PropertyWriteObservation,
+        mut outcome: Result<(), InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        let observable = match &outcome {
+            Ok(()) | Err(InterpreterError::UncaughtException { .. }) => true,
+            Err(error) => Self::js_catchable_error_name(error).is_some(),
+        };
+        let has_new_callback_observation =
+            self.pending_hostcall_result_label
+                .as_ref()
+                .is_some_and(|label| {
+                    self.active_inline_callback_context_label
+                        .as_ref()
+                        .is_none_or(|context| label > context)
+                });
+        if observable
+            && has_new_callback_observation
+            && let Err(error) = self.observe_scoped_callback_result()
+        {
+            outcome = Err(error);
+        }
+        // An isolated execution snapshot restores the caller's pending-result
+        // slot. Seal the label into its transported exception before crossing
+        // that boundary; a bare native error would lose this observation.
+        let crosses_callback_boundary = (self.native_run_loop_depth > 1
+            || self.native_boundary_frame().is_some())
+            && !self.has_active_catch_frame()
+            && self.nearest_async_call_depth().is_none();
+        if crosses_callback_boundary
+            && let Err(error) = &outcome
+            && Self::js_catchable_error_name(error).is_some()
+        {
+            outcome = match self.scoped_native_error(error) {
+                Ok(error) | Err(error) => Err(error),
+            };
+        }
+        let context = self
+            .active_inline_callback_context_label
+            .take()
+            .expect("property callbacks restore the write's observation scope");
+        let callback_result = self.pending_hostcall_result_label.take();
+        let previous_bytes = Self::estimate_label_bytes(&context)
+            .saturating_add(
+                callback_result
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(Self::estimate_label_bytes(&self.pending_exception_label));
+        let mut pending_result = saved.pending_result;
+        match &outcome {
+            Err(InterpreterError::UncaughtException { .. })
+                if self.pending_exception.is_some() && context > self.pending_exception_label =>
+            {
+                self.pending_exception_label = context;
+            }
+            Err(error) if Self::js_catchable_error_name(error).is_some() => {
+                if pending_result.as_ref().is_none_or(|label| &context > label) {
+                    pending_result = Some(context);
+                }
+            }
+            _ => {}
+        }
+        self.active_inline_callback_context_label = saved.context;
+        self.pending_hostcall_result_label = pending_result;
+        let restored_bytes = self
+            .active_inline_callback_context_label
+            .as_ref()
+            .map(Self::estimate_label_bytes)
+            .unwrap_or(0)
+            .saturating_add(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .map(Self::estimate_label_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(Self::estimate_label_bytes(&self.pending_exception_label));
+        // All output labels are moved from already-admitted carriers. Cleanup
+        // cannot fail or allocate, even after a budget/cancellation refusal.
+        self.estimated_memory_bytes = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(restored_bytes);
+        self.json_release_temporary(saved.temporary_bytes);
+        outcome
+    }
+
     /// Validate the target before ToPropertyKey, then retain the converted key,
     /// receiver and callback provenance through the actual internal method.
     /// This uses the existing object/Proxy storage, not fabricated backing for
@@ -144,24 +296,9 @@ impl InterpreterCore {
                     {
                         self.reflect_admit_mutation_label(receiver_object)?;
                     }
-                    // A plain function receiver (`Reflect.set(fn, k, v)`
-                    // defaults it to fn) stores on its own-property storage,
-                    // as `fn.k = v` does; so does a promise, generator or
-                    // iterator receiver.
-                    let receiver = match module {
-                        Some(module)
-                            if (receiver.is_callable()
-                                && !matches!(&receiver, Value::BuiltinFunction(builtin)
-                                    if Self::builtin_function_property_object(builtin).is_some()))
-                                || Self::has_exotic_backing_object(&receiver) =>
-                        {
-                            match self.own_property_holder(Some(module), &receiver, true)? {
-                                Some(storage) => Value::Object(storage),
-                                None => receiver,
-                            }
-                        }
-                        _ => receiver,
-                    };
+                    // A setter or Proxy trap must receive the original
+                    // callable/exotic identity. OrdinarySet resolves storage
+                    // only after descriptor selection reaches a data write.
                     let receiver = self.reflect_data_property_receiver(target, &key, receiver)?;
                     Value::Bool(self.proxy_aware_set_runtime_property(
                         module, target, &key, value, receiver, 0,
@@ -300,7 +437,9 @@ impl InterpreterCore {
             match own_accessor {
                 Some(true) => return Ok(receiver),
                 Some(false) => return Ok(Value::Object(backing)),
-                None => match object.prototype {
+                // OrdinarySet also follows the implicit Object/Array link.
+                // An inherited setter must retain the callable receiver.
+                None => match self.observable_prototype_link(object, current) {
                     Some(prototype) => current = prototype,
                     None => return Ok(Value::Object(backing)),
                 },
@@ -393,7 +532,9 @@ impl InterpreterCore {
                         self.json_observe_label(label)?;
                         return Ok(());
                     }
-                    match object.prototype {
+                    // Descriptor selection follows the same observable chain
+                    // as the internal method, including implicit prototypes.
+                    match self.observable_prototype_link(object, current) {
                         Some(prototype) => current = prototype,
                         None => return Ok(()),
                     }
@@ -1133,6 +1274,251 @@ mod constructor_property_tests {
             !Reflect.set(Date, 'value', 23) && Reflect.get(Date, 'value') === 17 &&
                 Reflect.deleteProperty(Date, 'value') && parent.value === 17;
             "#,
+        );
+    }
+
+    #[test]
+    fn reflect_set_observes_implicit_prototype_descriptor_labels_bd_9vouw_280() {
+        for config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            for (shape_label, null_prototype) in [
+                (Label::Public, false),
+                (Label::Secret, false),
+                (Label::Secret, true),
+            ] {
+                let mut config = config.clone();
+                config.granted_capabilities = [
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::HeapAllocate,
+                    RuntimeCapability::Builtin,
+                ]
+                .into_iter()
+                .collect();
+                let mut core = InterpreterCore::new(config, "implicit-prototype-ifc");
+                let prototype = core.ensure_builtin_prototype("Object").unwrap();
+                let key = RuntimePropertyKey::String("locked".into());
+                core.set_object_runtime_property(prototype, key.clone(), Value::Int(1))
+                    .unwrap();
+                core.set_own_property_attributes(
+                    prototype,
+                    &key,
+                    PropertyAttributes {
+                        writable: false,
+                        enumerable: true,
+                        configurable: true,
+                    },
+                )
+                .unwrap();
+                core.join_direct_object_mutation_label(prototype, &shape_label)
+                    .unwrap();
+                let target = core.alloc_object_with_properties(&[]).unwrap();
+                if null_prototype {
+                    core.store_prototype_link(target, None);
+                }
+                core.write_reg_with_label(0, Value::Object(target), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(1, Value::str("locked"), Label::Public)
+                    .unwrap();
+                core.write_reg_with_label(2, Value::Int(9), Label::Public)
+                    .unwrap();
+
+                let result = core
+                    .dispatch_builtin_hostcall(
+                        "builtin:ReflectSet",
+                        RegRange { start: 0, count: 3 },
+                        None,
+                    )
+                    .unwrap();
+                assert_eq!(result, Value::Bool(null_prototype));
+                let expected_label = if null_prototype {
+                    Label::Public
+                } else {
+                    shape_label
+                };
+                assert_eq!(
+                    core.pending_hostcall_result_label
+                        .as_ref()
+                        .unwrap_or(&Label::Public),
+                    &expected_label,
+                    "the selected prototype descriptor controls the Set result"
+                );
+                assert_eq!(
+                    core.heap[target.0 as usize].contains_own_runtime_property(&key),
+                    null_prototype,
+                );
+                assert!(core.active_inline_callback_context_label.is_none());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes(),
+                    "inherited descriptor observations must release reservations"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn direct_write_observation_restores_owned_labels_on_every_exit_bd_9vouw_280() {
+        let outer = Label::Custom {
+            name: "outer-context".repeat(8),
+            level: 2,
+        };
+        let pending = Label::Custom {
+            name: "outer-result".repeat(7),
+            level: 3,
+        };
+        let operand = Label::Custom {
+            name: "assigned-value".repeat(6),
+            level: 4,
+        };
+        let callback = Label::Custom {
+            name: "selected-setter".repeat(9),
+            level: 6,
+        };
+        for config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            for exit in 0..4 {
+                let mut core = InterpreterCore::new(config.clone(), "direct-write-scope");
+                core.set_register_label(2, operand.clone()).unwrap();
+                core.apply_memory_component_delta(0, InterpreterCore::estimate_label_bytes(&outer))
+                    .unwrap();
+                core.active_inline_callback_context_label = Some(outer.clone());
+                core.replace_pending_hostcall_result_label(Some(pending.clone()))
+                    .unwrap();
+                core.json_reserve_temporary(37).unwrap();
+                let baseline = core.estimated_memory_bytes();
+                let scope = core.begin_property_write_observation(0, 1, 2).unwrap();
+                assert_eq!(
+                    core.active_inline_callback_context_label,
+                    Some(operand.clone())
+                );
+                assert!(core.pending_hostcall_result_label.is_none());
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+                core.replace_pending_hostcall_result_label(Some(callback.clone()))
+                    .unwrap();
+                let outcome = match exit {
+                    0 => Ok(()),
+                    1 => Err(InterpreterError::TypeError {
+                        expected: "writable property".into(),
+                        got: "inherited read-only property".into(),
+                    }),
+                    2 => {
+                        core.replace_pending_abrupt_slots(
+                            Some((Value::Int(77), Label::Public)),
+                            None,
+                        )
+                        .unwrap();
+                        Err(InterpreterError::UncaughtException { value: "77".into() })
+                    }
+                    _ => Err(InterpreterError::Cancelled),
+                };
+                let outcome = core.finish_property_write_observation(scope, outcome);
+                match exit {
+                    0 => outcome.expect("successful write"),
+                    1 => assert!(matches!(outcome, Err(InterpreterError::TypeError { .. }))),
+                    2 => {
+                        assert!(matches!(
+                            outcome,
+                            Err(InterpreterError::UncaughtException { .. })
+                        ));
+                        assert_eq!(core.pending_exception, Some(Value::Int(77)));
+                        assert_eq!(core.pending_exception_label, callback);
+                    }
+                    _ => assert!(matches!(outcome, Err(InterpreterError::Cancelled))),
+                }
+                assert_eq!(
+                    core.active_inline_callback_context_label,
+                    Some(outer.clone())
+                );
+                assert_eq!(
+                    core.pending_hostcall_result_label,
+                    Some(if exit == 1 {
+                        callback.clone()
+                    } else {
+                        pending.clone()
+                    })
+                );
+                assert_eq!(core.json_parse_temporary_bytes, 37);
+                if matches!(exit, 0 | 3) {
+                    assert_eq!(core.estimated_memory_bytes(), baseline);
+                }
+                assert_eq!(
+                    core.estimated_memory_bytes(),
+                    core.recompute_estimated_memory_bytes()
+                );
+                core.json_release_temporary(37);
+            }
+        }
+    }
+
+    #[test]
+    fn direct_write_observation_admission_and_cleanup_are_memory_atomic_bd_9vouw_280() {
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "write-budget");
+        let outer = Label::Custom {
+            name: "outer".repeat(16),
+            level: 2,
+        };
+        let pending = Label::Custom {
+            name: "saved".repeat(12),
+            level: 3,
+        };
+        let operand = Label::Custom {
+            name: "operand".repeat(20),
+            level: 4,
+        };
+        core.set_register_label(2, operand.clone()).unwrap();
+        core.apply_memory_component_delta(0, InterpreterCore::estimate_label_bytes(&outer))
+            .unwrap();
+        core.active_inline_callback_context_label = Some(outer.clone());
+        core.replace_pending_hostcall_result_label(Some(pending.clone()))
+            .unwrap();
+        let baseline = core.estimated_memory_bytes();
+        let context_bytes = InterpreterCore::estimate_label_bytes(&operand);
+        core.config.max_total_memory_bytes = baseline + context_bytes - 1;
+        assert!(matches!(
+            core.begin_property_write_observation(0, 1, 2),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(
+            core.active_inline_callback_context_label,
+            Some(outer.clone())
+        );
+        assert_eq!(core.pending_hostcall_result_label, Some(pending.clone()));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = baseline + context_bytes;
+        let scope = core.begin_property_write_observation(0, 1, 2).unwrap();
+        assert_eq!(core.estimated_memory_bytes(), baseline + context_bytes);
+        core.finish_property_write_observation(scope, Ok(()))
+            .unwrap();
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        let scope = core.begin_property_write_observation(0, 1, 2).unwrap();
+        core.replace_pending_hostcall_result_label(Some(Label::Custom {
+            name: "late-callback".repeat(24),
+            level: 7,
+        }))
+        .unwrap();
+        core.config.max_total_memory_bytes = core.estimated_memory_bytes();
+        assert!(matches!(
+            core.finish_property_write_observation(scope, Ok(())),
+            Err(InterpreterError::MemoryBudgetExceeded { .. })
+        ));
+        assert_eq!(core.active_inline_callback_context_label, Some(outer));
+        assert_eq!(core.pending_hostcall_result_label, Some(pending));
+        assert_eq!(core.json_parse_temporary_bytes, 0);
+        assert_eq!(core.estimated_memory_bytes(), baseline);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
     }
 

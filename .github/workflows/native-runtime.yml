@@ -14,8 +14,14 @@ on:
       - 'crates/franken-engine/src/baseline_interpreter*'
       - 'crates/franken-engine/src/baseline_interpreter/**'
       - 'crates/franken-engine/src/lowering_pipeline.rs'
+      - 'crates/franken-engine/src/promise_model*.rs'
       - 'crates/franken-engine/tests/async_generator_execution.rs'
       - 'crates/franken-engine/tests/generator_next_bd_v6cv1_regression.rs'
+      - 'crates/franken-engine/tests/array_species_bd_9vouw_94.rs'
+      - 'crates/franken-engine/tests/proxy_descriptor_traps_bd_9vouw_147.rs'
+      - 'crates/franken-engine/tests/promise_subclass_bd_9vouw_137.rs'
+      - 'crates/franken-engine/tests/promise_reaction_label_conformance.rs'
+      - 'crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs'
       - 'crates/franken-engine/tests/reflect_*.rs'
       - '.github/workflows/native-runtime.yml'
       - 'Cargo.toml'
@@ -102,6 +108,7 @@ jobs:
   # publication binaries. This is additional source-level coverage, not a
   # substitute for the unchanged full-engine gates or native-core unit tests.
   async-generators:
+    name: Native runtime semantics
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -115,7 +122,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust
-        run: rustup toolchain install nightly --profile minimal --component rustfmt
+        run: rustup toolchain install nightly-2026-09-21 --profile minimal --component rustfmt
       - name: Select native runtime dependency closure
         run: |
           mkdir -p async-generator-validation
@@ -162,15 +169,30 @@ jobs:
           pathlib.Path('async-generator-validation/runtime-modules.txt').write_text('\n'.join(sorted(seen)))
           print('Focused runtime module count:', len(seen))
           PY
-      - name: Run async and synchronous generator source regressions
+      - name: Run generator, array, Proxy, and Promise source regressions
         run: |
           status=0
-          cargo +nightly test --locked -p frankenengine-engine --no-default-features --no-fail-fast --test async_generator_execution --test generator_next_bd_v6cv1_regression -- --nocapture > async-generator-validation/tests.log 2>&1 || status=$?
+          cargo +nightly-2026-09-21 test --locked -p frankenengine-engine --no-default-features --no-fail-fast \
+            --test async_generator_execution --test generator_next_bd_v6cv1_regression \
+            --test array_species_bd_9vouw_94 --test proxy_descriptor_traps_bd_9vouw_147 \
+            --test promise_subclass_bd_9vouw_137 --test promise_reaction_label_conformance \
+            --test gc_reclaim_bd_9vouw_57 \
+            -- --nocapture > async-generator-validation/tests.log 2>&1 || status=$?
           tail -n 220 async-generator-validation/tests.log
           exit "$status"
-      - name: Check async implementation and regression formatting
+      - name: Check runtime implementation and regression formatting
         run: |
-          rustfmt +nightly --edition 2024 --check crates/franken-engine/src/baseline_interpreter/async_generator.rs crates/franken-engine/tests/async_generator_execution.rs
+          rustfmt +nightly-2026-09-21 --edition 2024 --check \
+            crates/franken-engine/src/baseline_interpreter/async_generator.rs \
+            crates/franken-engine/src/baseline_interpreter/array_generic.rs \
+            crates/franken-engine/src/baseline_interpreter/object_integrity.rs \
+            crates/franken-engine/src/baseline_interpreter/promise_capability.rs \
+            crates/franken-engine/src/promise_model.rs \
+            crates/franken-engine/tests/async_generator_execution.rs \
+            crates/franken-engine/tests/array_species_bd_9vouw_94.rs \
+            crates/franken-engine/tests/proxy_descriptor_traps_bd_9vouw_147.rs \
+            crates/franken-engine/tests/promise_subclass_bd_9vouw_137.rs \
+            crates/franken-engine/tests/gc_reclaim_bd_9vouw_57.rs
       - name: Retain exact revision and complete validation output
         if: always()
         uses: actions/upload-artifact@v4

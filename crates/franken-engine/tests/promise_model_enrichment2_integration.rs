@@ -356,6 +356,7 @@ fn enrichment_promise_reaction_serde_roundtrip() {
         handler: Some(ClosureHandle(5)),
         result_promise: PromiseHandle(10),
         label: Label::Secret,
+        combinator: None,
     };
     let json = serde_json::to_string(&reaction).unwrap();
     let back: PromiseReaction = serde_json::from_str(&json).unwrap();

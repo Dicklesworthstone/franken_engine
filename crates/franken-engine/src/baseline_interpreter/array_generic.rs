@@ -17,8 +17,7 @@
 //!
 //! No-claim: on a proxy `values`/`keys`/`entries` (and so for-of) read the
 //! elements when the iterator is created, not lazily (an array-like keeps the
-//! ordinary lazy iterator); results are ordinary arrays (the species
-//! constructor is not consulted); `flat`, `flatMap` and `toSpliced` keep the
+//! ordinary lazy iterator); `flat`, `flatMap` and `toSpliced` keep the
 //! ordinary paths, as do typed arrays used as array-likes. A function `this`
 //! runs here over its own properties (bd-9vouw.285).
 
@@ -312,6 +311,28 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Option<Value>, InterpreterError> {
         use BuiltinFunctionKind as K;
+        if matches!(
+            kind,
+            K::ArrayMap | K::ArrayFilter | K::ArraySliceMethod | K::ArraySplice | K::ArrayConcat
+        ) {
+            // Length, species constructors, element reads and callbacks can
+            // each replace the pending result slot. Keep their observations
+            // alive until every write to an arbitrary species result finishes.
+            return self.generic_species_scope(|core| {
+                core.array_method_generic_body(module, kind, object, args)
+            });
+        }
+        self.array_method_generic_body(module, kind, object, args)
+    }
+
+    fn array_method_generic_body(
+        &mut self,
+        module: &Ir3Module,
+        kind: BuiltinFunctionKind,
+        object: ObjectId,
+        args: RegRange,
+    ) -> Result<Option<Value>, InterpreterError> {
+        use BuiltinFunctionKind as K;
         // A collection request is for one guest call; none may run while
         // this method holds values in native locals.
         self.gc_nested_request = None;
@@ -384,26 +405,22 @@ impl InterpreterCore {
                 self.generic_set(m, o, &Self::generic_length_key(), length.clone())?;
                 length
             }
-            K::ArraySplice => self.generic_splice(m, o, args)?,
+            K::ArraySplice => self.generic_splice(module, o, args)?,
             K::ArraySliceMethod => {
                 let len = self.generic_length(m, o)?;
                 let start = self.generic_relative_index(m, arg(self, 0)?, len, 0)?;
                 let end = self.generic_relative_index(m, arg(self, 1)?, len, len)?;
-                let result = self.alloc_array_with_prototype(None)?;
+                let result = self.array_species_result(module, o, end.saturating_sub(start))?;
                 let mut n = 0u64;
                 for k in start..end.max(start) {
                     let key = Self::generic_index_key(k);
                     if self.generic_has(m, o, &key)? {
                         let element = self.generic_get(m, o, &key)?;
-                        self.set_object_property(result, n.to_string(), element)?;
+                        self.generic_create_data_property(m, result, n, element)?;
                     }
                     n += 1;
                 }
-                self.set_object_property(
-                    result,
-                    "length".to_string(),
-                    Self::generic_length_value(n),
-                )?;
+                self.generic_species_set_length(m, result, n)?;
                 Value::Object(result)
             }
             K::ArrayConcat => {
@@ -411,7 +428,7 @@ impl InterpreterCore {
                 for index in 0..args.count {
                     items.push(arg(self, index)?);
                 }
-                let result = self.alloc_array_with_prototype(None)?;
+                let result = self.array_species_result(module, o, 0)?;
                 let mut n = 0u64;
                 for item in items {
                     let spreadable = match &item {
@@ -419,12 +436,12 @@ impl InterpreterCore {
                         _ => false,
                     };
                     let Value::Object(source) = item else {
-                        self.set_object_property(result, n.to_string(), item)?;
+                        self.generic_create_data_property(m, result, n, item)?;
                         n += 1;
                         continue;
                     };
                     if !spreadable {
-                        self.set_object_property(result, n.to_string(), item)?;
+                        self.generic_create_data_property(m, result, n, item)?;
                         n += 1;
                         continue;
                     }
@@ -436,16 +453,12 @@ impl InterpreterCore {
                         let key = Self::generic_index_key(k);
                         if self.generic_has(m, source, &key)? {
                             let element = self.generic_get(m, source, &key)?;
-                            self.set_object_property(result, (n + k).to_string(), element)?;
+                            self.generic_create_data_property(m, result, n + k, element)?;
                         }
                     }
                     n += len;
                 }
-                self.set_object_property(
-                    result,
-                    "length".to_string(),
-                    Self::generic_length_value(n),
-                )?;
+                self.generic_species_set_length(m, result, n)?;
                 Value::Object(result)
             }
             K::ArrayIndexOf | K::ArrayLastIndexOf => {
@@ -685,7 +698,7 @@ impl InterpreterCore {
                     });
                 }
                 let this_arg = arg(self, 1)?;
-                self.generic_iterate(m, o, kind, len, &callback, &this_arg)?
+                self.generic_iterate(module, o, kind, len, &callback, &this_arg)?
             }
             K::ArrayReduce | K::ArrayReduceRight => {
                 let len = self.generic_length(m, o)?;
@@ -850,10 +863,11 @@ impl InterpreterCore {
     /// ES2020 23.1.3.28 Array.prototype.splice over [[Get]]/[[Set]]/[[Delete]].
     fn generic_splice(
         &mut self,
-        m: Option<&Ir3Module>,
+        module: &Ir3Module,
         o: ObjectId,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
+        let m = Some(module);
         let len = self.generic_length(m, o)?;
         let start_arg = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let start = self.generic_relative_index(m, start_arg, len, 0)?;
@@ -874,19 +888,15 @@ impl InterpreterCore {
         if len + item_count - delete_count > MAX_SAFE_LENGTH {
             return Err(Self::generic_length_error());
         }
-        let removed = self.alloc_array_with_prototype(None)?;
+        let removed = self.array_species_result(module, o, delete_count)?;
         for k in 0..delete_count {
             let key = Self::generic_index_key(start + k);
             if self.generic_has(m, o, &key)? {
                 let element = self.generic_get(m, o, &key)?;
-                self.set_object_property(removed, k.to_string(), element)?;
+                self.generic_create_data_property(m, removed, k, element)?;
             }
         }
-        self.set_object_property(
-            removed,
-            "length".to_string(),
-            Self::generic_length_value(delete_count),
-        )?;
+        self.generic_species_set_length(m, removed, delete_count)?;
         if item_count < delete_count {
             for k in start..(len - delete_count) {
                 self.generic_move(m, o, k + delete_count, k + item_count)?;
@@ -910,7 +920,7 @@ impl InterpreterCore {
     /// forEach, map, filter, some, every and the find family.
     fn generic_iterate(
         &mut self,
-        m: Option<&Ir3Module>,
+        module: &Ir3Module,
         o: ObjectId,
         kind: BuiltinFunctionKind,
         len: u64,
@@ -918,8 +928,10 @@ impl InterpreterCore {
         this_arg: &Value,
     ) -> Result<Value, InterpreterError> {
         use BuiltinFunctionKind as K;
+        let m = Some(module);
         let result = match kind {
-            K::ArrayMap | K::ArrayFilter => Some(self.alloc_array_with_prototype(None)?),
+            K::ArrayMap => Some(self.array_species_result(module, o, len)?),
+            K::ArrayFilter => Some(self.array_species_result(module, o, 0)?),
             _ => None,
         };
         let backwards = matches!(kind, K::ArrayFindLast | K::ArrayFindLastIndex);
@@ -961,11 +973,11 @@ impl InterpreterCore {
             match kind {
                 K::ArrayMap => {
                     let result = result.expect("map allocates its result");
-                    self.set_object_property(result, k.to_string(), outcome)?;
+                    self.generic_create_data_property(m, result, k, outcome)?;
                 }
                 K::ArrayFilter if outcome.is_truthy() => {
                     let result = result.expect("filter allocates its result");
-                    self.set_object_property(result, filtered.to_string(), element)?;
+                    self.generic_create_data_property(m, result, filtered, element)?;
                     filtered += 1;
                 }
                 K::ArraySome if outcome.is_truthy() => return Ok(Value::Bool(true)),
@@ -980,12 +992,6 @@ impl InterpreterCore {
         Ok(match kind {
             K::ArrayMap | K::ArrayFilter => {
                 let result = result.expect("map and filter allocate their result");
-                let length = if kind == K::ArrayMap { len } else { filtered };
-                self.set_object_property(
-                    result,
-                    "length".to_string(),
-                    Self::generic_length_value(length),
-                )?;
                 Value::Object(result)
             }
             K::ArraySome => Value::Bool(false),
@@ -1200,6 +1206,131 @@ impl InterpreterCore {
             self.replace_pending_hostcall_result_label(Some(joined))?;
         }
         self.proxy_aware_get_runtime_property(m, o, key, self.generic_object_value(o), 0)
+    }
+
+    /// CreateDataPropertyOrThrow on a species result. Species may return a
+    /// Proxy or an object with an existing property: defining an element
+    /// uses [[DefineOwnProperty]], never [[Set]] or an inherited setter.
+    fn generic_create_data_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object: ObjectId,
+        index: u64,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let fields = PropertyDescriptorFields {
+            value: Some(value),
+            writable: Some(true),
+            get: None,
+            set: None,
+            enumerable: Some(true),
+            configurable: Some(true),
+        };
+        let key = Self::generic_index_key(index);
+        self.generic_species_output_write(object, &key, |core| {
+            if core.proxy_aware_define_own_property(module, object, key.clone(), fields, 0)? {
+                Ok(())
+            } else {
+                Err(InterpreterError::TypeError {
+                    expected: "definable element on an Array species result".to_string(),
+                    got: "a refused [[DefineOwnProperty]]".to_string(),
+                })
+            }
+        })
+    }
+
+    fn generic_species_set_length(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object: ObjectId,
+        length: u64,
+    ) -> Result<(), InterpreterError> {
+        let key = Self::generic_length_key();
+        self.generic_species_output_write(object, &key, |core| {
+            core.generic_set(module, object, &key, Self::generic_length_value(length))
+        })
+    }
+
+    /// A species can return an existing public alias. Admit its mutation
+    /// label before guest code can write, including through Proxy targets,
+    /// and retain observations when a later definition or length write fails.
+    /// The scoped callback floor also protects values handed to destination
+    /// traps whose nested calls replace the pending result label.
+    fn generic_species_output_write(
+        &mut self,
+        object: ObjectId,
+        key: &RuntimePropertyKey,
+        write: impl FnOnce(&mut Self) -> Result<(), InterpreterError>,
+    ) -> Result<(), InterpreterError> {
+        self.generic_species_scope(|core| {
+            core.generic_species_admit_output_label(object, key)?;
+            let outcome = write(core);
+            core.observe_scoped_callback_result()?;
+            // A trap may mutate its target before returning false or throwing.
+            core.generic_species_admit_output_label(object, key)?;
+            outcome
+        })
+    }
+
+    fn generic_species_admit_output_label(
+        &mut self,
+        object: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        self.reflect_admit_mutation_label(object)?;
+        let label = self.json_parse_context_label()?;
+        let bytes = Self::estimate_label_bytes(&label);
+        self.json_reserve_temporary(bytes)?;
+        let outcome = (|| {
+            let mut current = object;
+            for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+                self.json_charge_work()?;
+                let previous = self.own_stored_runtime_property_label(current, key);
+                let stored = self.join_owned_label_with_temporary_budget(previous, &label)?;
+                let stored_bytes = Self::estimate_label_bytes(&stored);
+                self.json_reserve_temporary(stored_bytes)?;
+                let outcome = self.set_own_runtime_property_label(current, key, &stored);
+                drop(stored);
+                self.json_release_temporary(stored_bytes);
+                outcome?;
+                match self.proxy_record(current)? {
+                    Some((target, _, false)) => current = target,
+                    _ => return Ok(()),
+                }
+            }
+            Err(InterpreterError::StackOverflow {
+                depth: MAX_PROTOTYPE_CHAIN_DEPTH as usize,
+                max: MAX_PROTOTYPE_CHAIN_DEPTH as usize,
+            })
+        })();
+        drop(label);
+        self.json_release_temporary(bytes);
+        outcome
+    }
+
+    fn generic_species_scope<T>(
+        &mut self,
+        step: impl FnOnce(&mut Self) -> Result<T, InterpreterError>,
+    ) -> Result<T, InterpreterError> {
+        self.scoped_conversion(|core| {
+            let label = core.json_parse_context_label()?;
+            core.json_observe_label(label)?;
+            let mut outcome = step(core);
+            if let Err(error) = core.observe_scoped_callback_result() {
+                outcome = Err(error);
+            }
+            match outcome {
+                Err(error) if Self::js_catchable_error_name(&error).is_some() => {
+                    Err(core.scoped_native_error(&error)?)
+                }
+                Err(error @ InterpreterError::UncaughtException { .. }) => {
+                    let label = core.json_parse_context_label()?;
+                    core.join_pending_exception_label(&label)?;
+                    Err(error)
+                }
+                other => other,
+            }
+        })
     }
 
     /// Set(O, P, V, true): a refused write is a TypeError.

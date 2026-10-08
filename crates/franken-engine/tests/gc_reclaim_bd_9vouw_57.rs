@@ -226,6 +226,39 @@ fn event_loop_garbage_completes_past_the_object_budget() {
 /// every structure must read back intact.
 const CHURN: &str = "for (let i = 0; i < 300000; i++) { const g = { i }; }";
 
+/// The source promises leave their local scope before the checkpoint. Native
+/// element jobs must retain their object values and rejection reasons while
+/// the collector can reclaim those settled source promise records.
+#[test]
+fn native_combinator_jobs_keep_values_across_gc_bd_9vouw_295() {
+    let source = r#"function all(values) { console.log('all:' + values.map(v => v.n).join(',')); }
+function settled(values) { console.log('settled:' + values.map(v => (v.value || v.reason).n).join(',')); }
+function any(value) { console.log('any:' + value.n); }
+(function () {
+ const p = Promise.resolve({ n: 7 });
+ const q = Promise.resolve({ n: 11 });
+ const r = Promise.reject({ n: 13 });
+ Promise.all([p, q]).then(all);
+ Promise.allSettled([p, r]).then(settled);
+ Promise.any([r, q]).then(any);
+})();
+for (let i = 0; i < 128; i++) { const garbage = { i }; }
+"#;
+    let run = run(source, Some(1));
+    let result = run.result.as_ref().expect("native jobs survive collection");
+    let printed: Vec<&str> = result
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(printed, ["all:7,11", "settled:7,13", "any:11"]);
+    assert!(run.gc.collections > 0);
+    assert!(
+        run.gc.reclaimed_promises > 0,
+        "settled source promises can be reclaimed independently of queued values"
+    );
+}
+
 /// Promise programs that hold promises, resolving functions, queued jobs and
 /// suspended async code across a top-level churn of 300,000 garbage objects
 /// (the `CHURN` placeholder). A settled promise may be reclaimed only when

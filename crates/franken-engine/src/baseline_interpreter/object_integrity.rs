@@ -773,10 +773,13 @@ impl InterpreterCore {
             }
             return Ok(true);
         }
-        let object = &self.heap[id.0 as usize];
         let unchanged = match prototype {
-            Some(_) => self.observable_prototype_link(object, id) == prototype,
+            // The non-allocating lookup may temporarily skip an unmaterialized
+            // Array.prototype and return Object.prototype. Compare with the
+            // actual default before deciding that a requested change is a no-op.
+            Some(_) => self.ordinary_get_prototype_of(id)? == prototype,
             None => {
+                let object = &self.heap[id.0 as usize];
                 object.prototype.is_none()
                     && (object.is_null_prototype
                         || self.builtin_prototypes.get("Object") == Some(&id))
@@ -888,7 +891,7 @@ impl InterpreterCore {
     /// ES2020 6.2.5.4 FromPropertyDescriptor, after CompletePropertyDescriptor
     /// (6.2.5.6) when `complete`: the descriptor object a trap receives or a
     /// getOwnPropertyDescriptor call returns.
-    fn descriptor_object_from_fields(
+    pub(super) fn descriptor_object_from_fields(
         &mut self,
         fields: &PropertyDescriptorFields,
         complete: bool,
@@ -985,12 +988,211 @@ impl InterpreterCore {
         key: &RuntimePropertyKey,
         depth: u32,
     ) -> Result<Option<PropertyDescriptorFields>, InterpreterError> {
+        if self.proxy_record(target)?.is_none()
+            && self
+                .heap
+                .get(target.0 as usize)
+                .is_some_and(|object| object.typed_array.is_none())
+            && self.prototype_getter_at(target, key).is_none()
+        {
+            self.integrity_step(target, depth)?;
+            self.observe_own_property_descriptor_label(target, key)?;
+            return Ok(self.ordinary_own_property_descriptor_fields(target, key));
+        }
         match self.proxy_aware_own_property_descriptor(module, target, key, depth)? {
-            descriptor @ Value::Object(_) => {
-                Ok(Some(self.read_property_descriptor(module, &descriptor)?))
+            Value::Object(descriptor_id) => {
+                // [[GetOwnProperty]] has already read and completed any guest
+                // descriptor. Its result here is our plain FromPropertyDescriptor
+                // object, not another guest descriptor to run ToPropertyDescriptor
+                // on. Inherited fields on Object.prototype must not change the
+                // internal descriptor or invoke getters during an invariant check.
+                let descriptor = self.heap.get(descriptor_id.0 as usize).ok_or(
+                    InterpreterError::ObjectNotFound {
+                        id: descriptor_id.0,
+                    },
+                )?;
+                let own = |name| descriptor.properties.get(name).cloned();
+                Ok(Some(PropertyDescriptorFields {
+                    value: own("value"),
+                    writable: own("writable").map(|value| value.is_truthy()),
+                    get: own("get"),
+                    set: own("set"),
+                    enumerable: own("enumerable").map(|value| value.is_truthy()),
+                    configurable: own("configurable").map(|value| value.is_truthy()),
+                }))
             }
             _ => Ok(None),
         }
+    }
+
+    /// Both the descriptor's shape and its stored value can decide whether an
+    /// invariant succeeds. Publish that observation even when a public trap
+    /// returns a constant: SameValue must not become an oracle for a secret
+    /// frozen property's value. Only this own key is inspected, not inherited
+    /// properties or other values on the target.
+    fn observe_own_property_descriptor_label(
+        &mut self,
+        object: ObjectId,
+        key: &RuntimePropertyKey,
+    ) -> Result<(), InterpreterError> {
+        let stored = self.own_stored_runtime_property_label(object, key);
+        let label = stored
+            .join(
+                self.object_mutation_labels
+                    .get(&object)
+                    .unwrap_or(&Label::Public),
+            )
+            .join(
+                self.pending_hostcall_result_label
+                    .as_ref()
+                    .unwrap_or(&Label::Public),
+            );
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        self.observe_scoped_callback_result()
+    }
+
+    /// Proxy [[Get]] observes the target descriptor after the trap has run.
+    /// Only a locked data value or an accessor without a getter constrains it;
+    /// a non-extensible target alone does not constrain the returned value.
+    pub(super) fn validate_proxy_get_trap_result(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target: ObjectId,
+        key: &RuntimePropertyKey,
+        result: &Value,
+        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let Some(fields) = self.proxy_target_descriptor_fields(module, target, key, depth)? else {
+            return Ok(());
+        };
+        if fields.configurable == Some(true) {
+            return Ok(());
+        }
+        let incompatible_data = fields.is_data()
+            && fields.writable != Some(true)
+            && !Self::same_value(result, fields.value.as_ref().unwrap_or(&Value::Undefined));
+        let missing_getter = fields.is_accessor()
+            && matches!(fields.get.as_ref(), None | Some(Value::Undefined))
+            && !matches!(result, Value::Undefined);
+        if incompatible_data || missing_getter {
+            let error = Self::integrity_type_error(
+                "a get trap result compatible with the target's non-configurable property",
+                &key.diagnostic(),
+            );
+            return Err(self.scoped_native_error(&error)?);
+        }
+        Ok(())
+    }
+
+    /// Proxy [[Set]] checks only a truthy trap result. Reporting false is a
+    /// normal refusal, and must not query the target or call any of its traps.
+    pub(super) fn validate_proxy_set_trap_result(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target: ObjectId,
+        key: &RuntimePropertyKey,
+        value: &Value,
+        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let Some(fields) = self.proxy_target_descriptor_fields(module, target, key, depth)? else {
+            return Ok(());
+        };
+        if fields.configurable == Some(true) {
+            return Ok(());
+        }
+        let incompatible_data = fields.is_data()
+            && fields.writable != Some(true)
+            && !Self::same_value(value, fields.value.as_ref().unwrap_or(&Value::Undefined));
+        let missing_setter =
+            fields.is_accessor() && matches!(fields.set.as_ref(), None | Some(Value::Undefined));
+        if incompatible_data || missing_setter {
+            let error = Self::integrity_type_error(
+                "a successful set trap compatible with the target's non-configurable property",
+                &key.diagnostic(),
+            );
+            return Err(self.scoped_native_error(&error)?);
+        }
+        Ok(())
+    }
+
+    /// A false `has` result and a true `deleteProperty` result share the
+    /// absence invariant: neither may hide a non-configurable own property,
+    /// nor a configurable own property of a non-extensible target. The
+    /// descriptor and extensibility reads retain their observable order.
+    pub(super) fn validate_proxy_property_absence(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target: ObjectId,
+        key: &RuntimePropertyKey,
+        trap: &str,
+        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let Some(fields) = self.proxy_target_descriptor_fields(module, target, key, depth)? else {
+            return Ok(());
+        };
+        if fields.configurable != Some(true) || !self.object_is_extensible(module, target, depth)? {
+            let error = Self::integrity_type_error(
+                &format!("a {trap} trap result that preserves the target's own property"),
+                &key.diagnostic(),
+            );
+            return Err(self.scoped_native_error(&error)?);
+        }
+        Ok(())
+    }
+
+    /// Proxy [[OwnPropertyKeys]] runs IsExtensible, OwnPropertyKeys and every
+    /// GetOwnProperty on the target before comparing the key sets. In
+    /// particular, an early missing key must not skip later descriptor traps.
+    /// `keys` is already validated for String/Symbol types and duplicates.
+    pub(super) fn validate_proxy_own_keys_trap_result(
+        &mut self,
+        module: Option<&Ir3Module>,
+        target: ObjectId,
+        mut keys: BTreeSet<RuntimePropertyKey>,
+        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let extensible = self.object_is_extensible(module, target, depth)?;
+        let target_keys = self.proxy_aware_own_property_keys(module, target, depth)?;
+        let mut non_configurable = Vec::new();
+        let mut configurable = Vec::new();
+        for value in target_keys {
+            self.json_charge_work()?;
+            let key = self.executable_property_key_from_value(&value);
+            let fields = self.proxy_target_descriptor_fields(module, target, &key, depth)?;
+            if fields.is_some_and(|fields| fields.configurable != Some(true)) {
+                non_configurable.push(key);
+            } else {
+                configurable.push(key);
+            }
+        }
+        for key in non_configurable {
+            if !keys.remove(&key) {
+                let error = Self::integrity_type_error(
+                    "ownKeys containing every non-configurable target key",
+                    &format!("missing key {}", key.diagnostic()),
+                );
+                return Err(self.scoped_native_error(&error)?);
+            }
+        }
+        if !extensible {
+            for key in configurable {
+                if !keys.remove(&key) {
+                    let error = Self::integrity_type_error(
+                        "ownKeys containing every key of a non-extensible target",
+                        &format!("missing key {}", key.diagnostic()),
+                    );
+                    return Err(self.scoped_native_error(&error)?);
+                }
+            }
+            if !keys.is_empty() {
+                let error = Self::integrity_type_error(
+                    "ownKeys containing only keys of a non-extensible target",
+                    "an extra key",
+                );
+                return Err(self.scoped_native_error(&error)?);
+            }
+        }
+        Ok(())
     }
 
     /// [[GetOwnProperty]] of `object_id` as a descriptor object or undefined,
@@ -1003,6 +1205,7 @@ impl InterpreterCore {
         depth: u32,
     ) -> Result<Value, InterpreterError> {
         self.integrity_step(object_id, depth)?;
+        self.observe_own_property_descriptor_label(object_id, key)?;
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
             if let Some(descriptor) = self.typed_array_own_property_descriptor(object_id, key)? {
                 return Ok(descriptor);

@@ -83,10 +83,14 @@ pub enum ParseErrorCode {
     /// getter, setter, generator or async method named `constructor`, a
     /// field named `constructor`, a static member named `prototype`.
     InvalidClassElementName,
+    /// Source that violates a recognized grammar or early-error rule. Unlike
+    /// UnsupportedSyntax, this proves the source is invalid and may be exposed
+    /// as a catchable SyntaxError by dynamic compilation.
+    InvalidSyntax,
 }
 
 impl ParseErrorCode {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::EmptySource,
         Self::InvalidGoal,
         Self::UnsupportedSyntax,
@@ -97,6 +101,7 @@ impl ParseErrorCode {
         Self::StrictModeWithStatement,
         Self::AwaitOutsideAsync,
         Self::InvalidClassElementName,
+        Self::InvalidSyntax,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -111,6 +116,7 @@ impl ParseErrorCode {
             Self::StrictModeWithStatement => "strict_mode_with_statement",
             Self::AwaitOutsideAsync => "await_outside_async",
             Self::InvalidClassElementName => "invalid_class_element_name",
+            Self::InvalidSyntax => "invalid_syntax",
         }
     }
 
@@ -126,6 +132,7 @@ impl ParseErrorCode {
             Self::StrictModeWithStatement => "FE-PARSER-DIAG-STRICT-MODE-WITH-STATEMENT-0001",
             Self::AwaitOutsideAsync => "FE-PARSER-DIAG-AWAIT-OUTSIDE-ASYNC-0001",
             Self::InvalidClassElementName => "FE-PARSER-DIAG-INVALID-CLASS-ELEMENT-NAME-0001",
+            Self::InvalidSyntax => "FE-PARSER-DIAG-INVALID-SYNTAX-0001",
         }
     }
 
@@ -136,7 +143,8 @@ impl ParseErrorCode {
             Self::UnsupportedSyntax
             | Self::StrictModeWithStatement
             | Self::AwaitOutsideAsync
-            | Self::InvalidClassElementName => ParseDiagnosticCategory::Syntax,
+            | Self::InvalidClassElementName
+            | Self::InvalidSyntax => ParseDiagnosticCategory::Syntax,
             Self::IoReadFailed => ParseDiagnosticCategory::System,
             Self::InvalidUtf8 => ParseDiagnosticCategory::Encoding,
             Self::SourceTooLarge | Self::BudgetExceeded => ParseDiagnosticCategory::Resource,
@@ -154,7 +162,8 @@ impl ParseErrorCode {
             | Self::InvalidUtf8
             | Self::StrictModeWithStatement
             | Self::AwaitOutsideAsync
-            | Self::InvalidClassElementName => ParseDiagnosticSeverity::Error,
+            | Self::InvalidClassElementName
+            | Self::InvalidSyntax => ParseDiagnosticSeverity::Error,
         }
     }
 
@@ -174,6 +183,7 @@ impl ParseErrorCode {
                 "await expressions require module top-level or an async function"
             }
             Self::InvalidClassElementName => "class element name is not allowed for its kind",
+            Self::InvalidSyntax => "source violates a grammar or early-error rule",
             Self::BudgetExceeded => match budget_kind {
                 Some(ParseBudgetKind::SourceBytes) => "source byte budget exceeded",
                 Some(ParseBudgetKind::TokenCount) => "token budget exceeded",
@@ -5358,7 +5368,7 @@ fn parse_binding_pattern_inner(
     let trimmed = source.trim();
     if trimmed.is_empty() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "empty binding pattern",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -5372,7 +5382,7 @@ fn parse_binding_pattern_inner(
         // initializer (`[...x = 1]`, `(...args = [])`).
         if matches!(inner, BindingPattern::AssignmentPattern { .. }) {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "a rest element cannot have an initializer",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -5414,7 +5424,7 @@ fn parse_binding_pattern_inner(
     if is_identifier(trimmed) {
         if is_unconditional_reserved_keyword(trimmed) {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("`{trimmed}` is a reserved word and cannot be used as a binding name"),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -5425,7 +5435,7 @@ fn parse_binding_pattern_inner(
         // (ES2020 11.6.2): `var` with an escaped `case` is a SyntaxError.
         if is_unconditional_reserved_keyword(&name) {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("keyword `{name}` must not contain escaped characters"),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -5800,7 +5810,7 @@ fn parse_variable_declaration(
         .expect("serde serialization should succeed");
     if body.is_empty() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("{keyword} declaration must include at least one binding"),
             context.source_label.to_string(),
             Some(span),
@@ -5810,7 +5820,7 @@ fn parse_variable_declaration(
     let declarator_segments = split_var_declarator_segments(body);
     if declarator_segments.is_empty() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("{keyword} declaration must include at least one binding"),
             context.source_label.to_string(),
             Some(span),
@@ -5829,7 +5839,7 @@ fn parse_variable_declaration(
                 let initializer_source = initializer_source.trim();
                 if initializer_source.is_empty() {
                     return Err(ParseError::new(
-                        ParseErrorCode::UnsupportedSyntax,
+                        ParseErrorCode::InvalidSyntax,
                         format!("{keyword} initializer expression is empty"),
                         context.source_label.to_string(),
                         Some(span.clone()),
@@ -5839,7 +5849,7 @@ fn parse_variable_declaration(
             }
             None if kind == VariableDeclarationKind::Const => {
                 return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     "const declarations must include an initializer in parser scaffold",
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -5947,7 +5957,7 @@ fn parse_expression(
     let expression = strip_trailing_line_comment(expression.trim()).trim();
     if expression.is_empty() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "empty expression statement",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -6427,8 +6437,16 @@ fn parse_primary_expression(
             b'*' | b'%' | b'&' | b'|' | b'^' | b'<' | b'>' | b'=' | b'?'
         )
     {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "expression begins with a binary operator with no left-hand operand",
+            span,
+            context,
+        ));
+    }
+
+    if expression.starts_with([')', ']', '}']) {
+        return Err(invalid_syntax_error(
+            "unexpected closing delimiter in expression",
             span,
             context,
         ));
@@ -6640,7 +6658,7 @@ fn parse_formal_parameter_list(
         context: &ParseExecutionContext<'_>,
     ) -> ParseError {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             message.to_string(),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -6705,7 +6723,7 @@ fn reject_duplicate_params(
     {
         if !seen.insert(name) {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("duplicate parameter name `{name}` is not allowed here"),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -6732,7 +6750,7 @@ fn reject_accessor_arity(
         return Ok(());
     }
     Err(ParseError::new(
-        ParseErrorCode::UnsupportedSyntax,
+        ParseErrorCode::InvalidSyntax,
         if is_getter {
             "a getter must not have parameters"
         } else {
@@ -7265,8 +7283,11 @@ fn try_parse_assignment(
             let lhs = expr[..i].trim();
             let rhs = expr[i + len..].trim();
             if lhs.is_empty() || rhs.is_empty() {
-                i += 1;
-                continue;
+                return Some(Err(invalid_syntax_error(
+                    "assignment requires a target and a value",
+                    span,
+                    context,
+                )));
             }
             let left =
                 match parse_assignment_target_expression(lhs, span, context, recursion_depth + 1) {
@@ -7727,7 +7748,7 @@ fn try_parse_binary(
             i += 2;
             continue;
         }
-        if let Some((op, len)) = match_binary_operator_at(bytes, i) {
+        if let Some((op, len)) = match_binary_operator_at(expr, i) {
             // For the same precedence, prefer the rightmost for right-associative,
             // leftmost for left-associative.
             let dominated = if let Some(ref prev) = best_op {
@@ -7761,6 +7782,13 @@ fn try_parse_binary(
                         .is_none_or(|&c| is_operator_context_byte(c));
                 let exponent_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
                     && is_decimal_exponent_sign(bytes, i);
+                if !lhs.is_empty() && rhs.is_empty() && !unary_sign && !exponent_sign {
+                    return Some(Err(invalid_syntax_error(
+                        "binary operator requires a right-hand operand",
+                        span,
+                        context,
+                    )));
+                }
                 if !lhs.is_empty() && !rhs.is_empty() && !unary_sign && !exponent_sign {
                     best_op = Some(op);
                     best_pos = i;
@@ -7931,28 +7959,38 @@ fn star_follows_function_keyword(bytes: &[u8], star: usize) -> bool {
         })
 }
 
-fn match_binary_operator_at(bytes: &[u8], i: usize) -> Option<(BinaryOperator, usize)> {
+fn match_binary_operator_at(expr: &str, i: usize) -> Option<(BinaryOperator, usize)> {
+    let bytes = expr.as_bytes();
     let remaining = bytes.len() - i;
 
     // Check for keyword operators first (instanceof, in). A `#` before one
     // makes it a private name (`this.#in`), and a `.` a property name
     // (`o.in.x`, `o.in?.x`, `o.instanceof`; arktype reads `inner.in?.rawIn`),
-    // not an operator.
+    // not an operator. Whitespace is permitted between a dot and its property
+    // name, including Unicode whitespace (`o. in`, `o.\u{00a0}instanceof`).
     if remaining >= 10 && &bytes[i..i + 10] == b"instanceof" {
-        let before_ok = i == 0
-            || !(is_identifier_continue(bytes[i - 1] as char)
-                || matches!(bytes[i - 1], b'#' | b'.'));
-        let after_ok = i + 10 >= bytes.len() || !is_identifier_continue(bytes[i + 10] as char);
-        if before_ok && after_ok {
+        let before_ok = expr[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.'));
+        let after_ok = expr[i + 10..]
+            .chars()
+            .next()
+            .is_none_or(|c| !is_identifier_continue(c));
+        if before_ok && after_ok && !expr[..i].trim_end().ends_with('.') {
             return Some((BinaryOperator::Instanceof, 10));
         }
     }
     if remaining >= 2 && &bytes[i..i + 2] == b"in" {
-        let before_ok = i == 0
-            || !(is_identifier_continue(bytes[i - 1] as char)
-                || matches!(bytes[i - 1], b'#' | b'.'));
-        let after_ok = i + 2 >= bytes.len() || !is_identifier_continue(bytes[i + 2] as char);
-        if before_ok && after_ok {
+        let before_ok = expr[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.'));
+        let after_ok = expr[i + 2..]
+            .chars()
+            .next()
+            .is_none_or(|c| !is_identifier_continue(c));
+        if before_ok && after_ok && !expr[..i].trim_end().ends_with('.') {
             return Some((BinaryOperator::In, 2));
         }
     }
@@ -8349,7 +8387,7 @@ fn reject_reserved_identifier_reference(
             ));
     if reserved {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("`{name}` is a reserved word here and cannot be referenced"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -8370,7 +8408,7 @@ fn reject_strict_eval_arguments_target(
         && matches!(name.as_str(), "eval" | "arguments")
     {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("`{name}` cannot be assigned in strict mode code"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -8405,7 +8443,7 @@ fn reject_non_assignable_update_target(
             | Expression::Function { .. }
             | Expression::ClassExpression { .. }
     ) {
-        return Some(Err(unsupported_expression_syntax_error(
+        return Some(Err(invalid_syntax_error(
             "invalid update target: this expression cannot be incremented or decremented",
             span,
             context,
@@ -8855,6 +8893,19 @@ fn optional_chaining_syntax_error(
     )
 }
 
+fn invalid_syntax_error(
+    message: &str,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseError {
+    ParseError::new(
+        ParseErrorCode::InvalidSyntax,
+        message,
+        context.source_label.to_string(),
+        Some(span.clone()),
+    )
+}
+
 fn unsupported_expression_syntax_error(
     message: &str,
     span: &SourceSpan,
@@ -9235,7 +9286,7 @@ fn parse_assignment_target_expression(
                 ..
             }
     ) {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "invalid assignment target",
             span,
             context,
@@ -12186,7 +12237,7 @@ fn reject_declaration_in_statement_position(
     };
     if let Some(declaration) = declaration {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("{declaration} is not allowed in statement position"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -12205,7 +12256,7 @@ fn reject_strict_restricted_binding(
 ) -> ParseResult<()> {
     if strict && matches!(name, "eval" | "arguments") {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("`{name}` cannot be a binding name in strict mode code"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -12224,7 +12275,7 @@ fn reject_let_lexical_binding(
 ) -> ParseResult<()> {
     if kind != VariableDeclarationKind::Var && pattern.binding_names().contains(&"let") {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "`let` is disallowed as a lexically bound name",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -12259,7 +12310,7 @@ fn reject_context_reserved_binding(
             ));
     if reserved {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("`{name}` is a reserved word here and cannot be a binding name"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -12283,7 +12334,7 @@ fn reject_use_strict_with_non_simple_params(
         && has_use_strict_directive(body_src)
     {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "\"use strict\" is not allowed in a function with non-simple parameters",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -12772,13 +12823,18 @@ fn parse_for_statement(
 
     let init = if init_src.is_empty() {
         None
+    } else if let Some(kind) = parse_variable_declaration_kind(init_src) {
+        Some(Box::new(Statement::VariableDeclaration(
+            parse_variable_declaration(init_src, kind, span.clone(), context)?,
+        )))
     } else {
-        Some(Box::new(parse_statement(
-            init_src,
-            goal,
-            span.clone(),
-            context,
-        )?))
+        // A non-declaration initializer is an expression, so anonymous class
+        // and function expressions are valid here even though declarations
+        // in statement position require a name.
+        Some(Box::new(Statement::Expression(ExpressionStatement {
+            expression: parse_expression_allowing_sequence(init_src, &span, context, 1)?,
+            span: span.clone(),
+        })))
     };
     let condition = if cond_src.is_empty() {
         None
@@ -14000,6 +14056,13 @@ fn parse_class_declaration(
     let source_text =
         class_text_through_body(statement).and_then(|text| context.function_sources.text_of(text));
     let (name, super_class, body) = parse_class_parts(statement, &span, context)?;
+    if name.is_none() {
+        return Err(invalid_syntax_error(
+            "class declarations require a binding name",
+            &span,
+            context,
+        ));
+    }
 
     Ok(Statement::ClassDeclaration(ClassDeclaration {
         name,
@@ -16251,7 +16314,7 @@ mod tests {
         let err = parser
             .parse("const answer", ParseGoal::Script)
             .expect_err("const without initializer must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
         assert!(
             err.message
                 .contains("const declarations must include an initializer")
@@ -16264,7 +16327,7 @@ mod tests {
         let err = parser
             .parse("var", ParseGoal::Script)
             .expect_err("var without binding must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     // bd-wa01t: parser must fail-closed on these three classes of syntactically
@@ -16290,7 +16353,7 @@ mod tests {
                 .expect_err(&format!("`{source}` must fail-closed"));
             assert_eq!(
                 err.code,
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "wrong code for `{source}`",
             );
         }
@@ -16308,7 +16371,7 @@ mod tests {
                 .expect_err(&format!("`{source}` must fail-closed"));
             assert_eq!(
                 err.code,
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "wrong code for keyword `{keyword}`",
             );
         }

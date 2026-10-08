@@ -195,6 +195,48 @@ pub struct PromiseReaction {
     pub result_promise: PromiseHandle,
     /// IFC label at registration time.
     pub label: Label,
+    /// Native element reaction for a Promise combinator. Kept in the same
+    /// registration list as guest `.then` callbacks so settlement preserves
+    /// their relative job order without allocating an artificial promise or
+    /// invoking a guest function for every element (bd-9vouw.295).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combinator: Option<PromiseCombinatorReaction>,
+}
+
+/// The native state and element selected by a combinator reaction job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromiseCombinatorReaction {
+    pub combinator_id: u64,
+    pub index: u32,
+}
+
+impl PromiseReaction {
+    fn into_microtask(self, argument: JsValue, settlement_label: &Label) -> Microtask {
+        let label = settlement_label.join(&self.label);
+        if let Some(combinator) = self.combinator {
+            return Microtask::PromiseCombinator {
+                combinator,
+                kind: self.kind,
+                argument,
+                result_promise: self.result_promise,
+                label,
+            };
+        }
+        if self.kind == ReactionKind::Reject && self.handler.is_none() {
+            Microtask::PromiseRejection {
+                reason: argument,
+                result_promise: self.result_promise,
+                label,
+            }
+        } else {
+            Microtask::PromiseReaction {
+                handler: self.handler,
+                argument,
+                result_promise: self.result_promise,
+                label,
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +335,16 @@ pub enum Microtask {
         /// The thenable value.
         thenable: JsValue,
         /// IFC label.
+        label: Label,
+    },
+    /// PromiseReactionJob for a native combinator element. It runs at the
+    /// same FIFO position as an ordinary reaction and updates the aggregate
+    /// directly; `result_promise` remains an explicit GC/fatal-cleanup edge.
+    PromiseCombinator {
+        combinator: PromiseCombinatorReaction,
+        kind: ReactionKind,
+        argument: JsValue,
+        result_promise: PromiseHandle,
         label: Label,
     },
 }
@@ -777,6 +829,9 @@ pub(crate) fn estimate_microtask_payload_memory_bytes(task: &Microtask) -> u64 {
     match task {
         Microtask::PromiseReaction {
             argument, label, ..
+        }
+        | Microtask::PromiseCombinator {
+            argument, label, ..
         } => estimate_js_value_memory_bytes(argument)
             .saturating_add(estimate_label_memory_bytes(label)),
         Microtask::PromiseRejection { reason, label, .. } => estimate_js_value_memory_bytes(reason)
@@ -1177,6 +1232,38 @@ impl PromiseStore {
             .ok_or(PromiseError::InvalidHandle { handle })
     }
 
+    /// Exact retained charge after joining one more native combinator
+    /// observation into its still-pending result's label.
+    pub(crate) fn projected_join_label_memory_bytes(
+        &self,
+        handle: PromiseHandle,
+        label: &Label,
+    ) -> Result<u64, PromiseError> {
+        let record = self.get(handle)?;
+        Ok(self
+            .estimated_memory_bytes()
+            .saturating_sub(estimate_label_memory_bytes(&record.label))
+            .saturating_add(estimate_joined_label_memory_bytes(&record.label, label)))
+    }
+
+    /// Retain all observed input labels until the aggregate settles. Using
+    /// the result record avoids a second label owner in a watcher table.
+    pub(crate) fn join_label(
+        &mut self,
+        handle: PromiseHandle,
+        label: &Label,
+    ) -> Result<(), PromiseError> {
+        self.update(handle, |record| {
+            if label > &record.label {
+                // No callback can observe this replacement. Release the old
+                // owned name before copying the admitted dominant label;
+                // preserving an already-dominant label needs no allocation.
+                record.label = Label::Public;
+                record.label = label.clone();
+            }
+        })
+    }
+
     /// The epoch of the resolving-function pair that may still settle
     /// `handle` (see [`PromiseRecord::resolver_epoch`]).
     pub fn resolver_epoch(&self, handle: PromiseHandle) -> Result<u16, PromiseError> {
@@ -1236,12 +1323,7 @@ impl PromiseStore {
         // Enqueue only the fulfill reactions for a fulfilled promise.
         for reaction in reactions {
             if reaction.kind == ReactionKind::Fulfill {
-                queue.enqueue(Microtask::PromiseReaction {
-                    handler: reaction.handler,
-                    argument: value.clone(),
-                    result_promise: reaction.result_promise,
-                    label: label.join(&reaction.label),
-                });
+                queue.enqueue(reaction.into_microtask(value.clone(), &label));
             }
         }
 
@@ -1285,20 +1367,7 @@ impl PromiseStore {
         // Enqueue only the reject reactions for a rejected promise.
         for reaction in reactions {
             if reaction.kind == ReactionKind::Reject {
-                if reaction.handler.is_some() {
-                    queue.enqueue(Microtask::PromiseReaction {
-                        handler: reaction.handler,
-                        argument: reason.clone(),
-                        result_promise: reaction.result_promise,
-                        label: label.join(&reaction.label),
-                    });
-                } else {
-                    queue.enqueue(Microtask::PromiseRejection {
-                        reason: reason.clone(),
-                        result_promise: reaction.result_promise,
-                        label: label.join(&reaction.label),
-                    });
-                }
+                queue.enqueue(reaction.into_microtask(reason.clone(), &label));
             }
         }
 
@@ -1461,6 +1530,47 @@ impl PromiseStore {
         label: Label,
         queue: &mut MicrotaskQueue,
     ) -> Result<(), PromiseError> {
+        self.then_into_with_combinator(
+            handle,
+            (on_fulfilled, on_rejected),
+            result_promise,
+            label,
+            None,
+            queue,
+        )
+    }
+
+    /// Register native element reactions in ordinary `.then` order. The
+    /// caller uses `projected_then_into_memory_bytes` to admit the exact
+    /// pending reaction or settled job charge before mutating either owner.
+    pub(crate) fn then_for_combinator(
+        &mut self,
+        handle: PromiseHandle,
+        result_promise: PromiseHandle,
+        label: Label,
+        combinator: PromiseCombinatorReaction,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<(), PromiseError> {
+        self.then_into_with_combinator(
+            handle,
+            (None, None),
+            result_promise,
+            label,
+            Some(combinator),
+            queue,
+        )
+    }
+
+    fn then_into_with_combinator(
+        &mut self,
+        handle: PromiseHandle,
+        handlers: (Option<ClosureHandle>, Option<ClosureHandle>),
+        result_promise: PromiseHandle,
+        label: Label,
+        combinator: Option<PromiseCombinatorReaction>,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<(), PromiseError> {
+        let (on_fulfilled, on_rejected) = handlers;
         let record = self.get(handle)?;
         let state = record.state.clone();
         let settlement_label = record.label.clone();
@@ -1473,38 +1583,40 @@ impl PromiseStore {
                         handler: on_fulfilled,
                         result_promise,
                         label: label.clone(),
+                        combinator,
                     });
                     record.reactions.push(PromiseReaction {
                         kind: ReactionKind::Reject,
                         handler: on_rejected,
                         result_promise,
                         label,
+                        combinator,
                     });
                 })?;
             }
             PromiseState::Fulfilled(value) => {
-                queue.enqueue(Microtask::PromiseReaction {
-                    handler: on_fulfilled,
-                    argument: value,
-                    result_promise,
-                    label: settlement_label.join(&label),
-                });
+                queue.enqueue(
+                    PromiseReaction {
+                        kind: ReactionKind::Fulfill,
+                        handler: on_fulfilled,
+                        result_promise,
+                        label,
+                        combinator,
+                    }
+                    .into_microtask(value, &settlement_label),
+                );
             }
             PromiseState::Rejected(reason) => {
-                if on_rejected.is_some() {
-                    queue.enqueue(Microtask::PromiseReaction {
+                queue.enqueue(
+                    PromiseReaction {
+                        kind: ReactionKind::Reject,
                         handler: on_rejected,
-                        argument: reason,
                         result_promise,
-                        label: settlement_label.join(&label),
-                    });
-                } else {
-                    queue.enqueue(Microtask::PromiseRejection {
-                        reason,
-                        result_promise,
-                        label: settlement_label.join(&label),
-                    });
-                }
+                        label,
+                        combinator,
+                    }
+                    .into_microtask(reason, &settlement_label),
+                );
             }
         }
 
@@ -1569,6 +1681,7 @@ impl PromiseStore {
                     handler: None,
                     result_promise: target,
                     label: label.clone(),
+                    combinator: None,
                 });
             }
         })
@@ -1601,12 +1714,14 @@ impl PromiseStore {
                         handler: None,
                         result_promise,
                         label: label.clone(),
+                        combinator: None,
                     });
                     record.reactions.push(PromiseReaction {
                         kind: ReactionKind::Reject,
                         handler: None,
                         result_promise,
                         label,
+                        combinator: None,
                     });
                 })?;
             }
@@ -1831,7 +1946,8 @@ impl MicrotaskQueue {
         for task in self.tasks.slots.iter().flatten() {
             match task {
                 Microtask::PromiseReaction { result_promise, .. }
-                | Microtask::PromiseRejection { result_promise, .. } => visit(*result_promise),
+                | Microtask::PromiseRejection { result_promise, .. }
+                | Microtask::PromiseCombinator { result_promise, .. } => visit(*result_promise),
                 Microtask::ResolveThenable { promise, .. } => visit(*promise),
             }
         }
@@ -1847,7 +1963,8 @@ impl MicrotaskQueue {
                     ..
                 } => visit(*handler),
                 Microtask::PromiseReaction { handler: None, .. }
-                | Microtask::PromiseRejection { .. } => {}
+                | Microtask::PromiseRejection { .. }
+                | Microtask::PromiseCombinator { .. } => {}
                 Microtask::ResolveThenable { then_handler, .. } => visit(*then_handler),
             }
         }
@@ -1858,7 +1975,8 @@ impl MicrotaskQueue {
     pub(crate) fn for_each_value(&self, mut visit: impl FnMut(&JsValue)) {
         for task in self.tasks.slots.iter().flatten() {
             match task {
-                Microtask::PromiseReaction { argument, .. } => visit(argument),
+                Microtask::PromiseReaction { argument, .. }
+                | Microtask::PromiseCombinator { argument, .. } => visit(argument),
                 Microtask::PromiseRejection { reason, .. } => visit(reason),
                 Microtask::ResolveThenable { thenable, .. } => visit(thenable),
             }
@@ -3278,6 +3396,7 @@ mod tests {
                     handler: Some(ClosureHandle(4)),
                     result_promise: PromiseHandle(1),
                     label: label.clone(),
+                    combinator: None,
                 }],
                 label: label.clone(),
                 creation_seq: 0,

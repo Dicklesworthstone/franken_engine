@@ -61079,7 +61079,10 @@ impl InterpreterCore {
                 // ES2020 21.2.5.8 step 14.l: with named groups the replacer
                 // also receives the groups object, as its last argument.
                 if group_names.iter().any(Option::is_some) {
+                    // OrdinaryObjectCreate(null), as a match's `groups` is
+                    // (bd-9vouw.365): `None` alone links Object.prototype.
                     let named = self.alloc_object_with_prototype(None)?;
+                    self.store_prototype_link(named, None);
                     for (name, group) in group_names.iter().zip(&groups) {
                         if let Some(name) = name {
                             let value = group.clone().map_or(Value::Undefined, Value::str);

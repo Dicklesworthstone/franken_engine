@@ -590,6 +590,7 @@ impl GcMarker {
             register_bytes: _,
             generator_delegation,
             register_labels: _,
+            register_label_bytes: _,
             active_inline_callback_context_label: _,
             call_stack,
             ip: _,
@@ -1678,6 +1679,8 @@ impl InterpreterCore {
             registers,
             // A byte count of the register file.
             registers_value_bytes: _,
+            // A byte count of the register label file.
+            register_labels_bytes: _,
             call_stack,
             heap: _,
             estimated_memory_bytes: _,

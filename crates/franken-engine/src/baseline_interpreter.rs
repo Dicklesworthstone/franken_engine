@@ -13072,6 +13072,9 @@ struct ModuleExecutionSnapshot {
     /// execution replaces the register values, so its snapshot must preserve
     /// labels as well or a stream/event callback can corrupt caller taint.
     register_labels: Vec<Label>,
+    /// [`InterpreterCore::register_labels_memory_bytes`] of
+    /// `register_labels`, which no one writes while they are parked here.
+    register_label_bytes: u64,
     /// PC-style provenance for an isolated stream/event callback. Keeping one
     /// snapshotted label avoids cloning a Custom label into every register.
     active_inline_callback_context_label: Option<Label>,
@@ -14642,6 +14645,13 @@ pub struct InterpreterCore {
     /// tenth of babel-standalone's run time. Every register write clears it
     /// in [`Self::mutate_registers`]; installing a whole file sets it.
     registers_value_bytes: std::cell::Cell<Option<u64>>,
+    /// Cached [`Self::register_labels_memory_bytes`], `None` when stale
+    /// (bd-9vouw.376). Every isolated callback's snapshot and restore read it,
+    /// and each read summed the whole label file (`max_registers` slots):
+    /// 8% of a forEach loop. A label write whose bytes the writer knows moves
+    /// it by that delta ([`Self::adjust_register_labels_bytes`]); a write of
+    /// two byte-free labels leaves it; any other change of the file clears it.
+    register_labels_bytes: std::cell::Cell<Option<u64>>,
     /// Call stack.
     call_stack: CallStack,
     /// Object heap. SEED-SURFACE.
@@ -15967,6 +15977,7 @@ impl InterpreterCore {
             timer_effect_authority: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             registers_value_bytes: std::cell::Cell::new(None),
+            register_labels_bytes: std::cell::Cell::new(None),
             call_stack: CallStack::default(),
             heap: SeedTrackedField::new(Heap::new()),
             estimated_memory_bytes,
@@ -34341,6 +34352,7 @@ impl InterpreterCore {
             label
         };
         self.register_labels[actual_reg] = next_label;
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
     }
@@ -34943,6 +34955,7 @@ impl InterpreterCore {
             let previous_label = std::mem::replace(target_label, Label::Public);
             drop(previous_label);
             *target_label = final_label;
+            self.adjust_register_labels_bytes(previous_label_bytes, final_label_bytes);
         }
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
@@ -36742,11 +36755,13 @@ impl InterpreterCore {
         let registers = self.registers.to_vec();
         let register_bytes = self.registers_memory_bytes();
         let register_labels = self.register_labels.clone();
+        let register_label_bytes = self.register_labels_memory_bytes();
         Ok(self.module_execution_snapshot(
             accounted_bytes,
             registers,
             register_bytes,
             register_labels,
+            register_label_bytes,
         ))
     }
 
@@ -36764,12 +36779,16 @@ impl InterpreterCore {
         let registers = std::mem::replace(&mut self.registers.value, fresh_registers);
         // `Undefined` carries no bytes beyond its slot.
         self.registers_value_bytes.set(Some(0));
+        let register_label_bytes = self.register_labels_memory_bytes();
         let register_labels = std::mem::replace(&mut self.register_labels, fresh_labels);
+        // A Public label owns no bytes beyond its slot.
+        self.register_labels_bytes.set(Some(0));
         Ok(self.module_execution_snapshot(
             accounted_bytes,
             registers,
             register_bytes,
             register_labels,
+            register_label_bytes,
         ))
     }
 
@@ -36793,6 +36812,7 @@ impl InterpreterCore {
         registers: Vec<Value>,
         register_bytes: u64,
         register_labels: Vec<Label>,
+        register_label_bytes: u64,
     ) -> ModuleExecutionSnapshot {
         ModuleExecutionSnapshot {
             accounted_bytes,
@@ -36800,6 +36820,7 @@ impl InterpreterCore {
             register_bytes,
             generator_delegation: self.generator_delegation.clone(),
             register_labels,
+            register_label_bytes,
             active_inline_callback_context_label: self.active_inline_callback_context_label.clone(),
             call_stack: self.call_stack.to_vec(),
             ip: self.ip,
@@ -36833,7 +36854,10 @@ impl InterpreterCore {
         };
         self.install_register_file(snapshot.registers, Some(snapshot.register_bytes));
         self.generator_delegation = snapshot.generator_delegation;
-        self.register_labels = snapshot.register_labels;
+        self.install_register_labels(
+            snapshot.register_labels,
+            Some(snapshot.register_label_bytes),
+        );
         self.active_inline_callback_context_label = snapshot.active_inline_callback_context_label;
         self.call_stack
             .replace(snapshot.call_stack, &mut self.closures.cold_cells);
@@ -36889,8 +36913,7 @@ impl InterpreterCore {
             r.clear();
             r.resize(max_regs, Value::Undefined);
         });
-        self.register_labels.clear();
-        self.register_labels.resize(max_regs, Label::Public);
+        self.install_register_labels(vec![Label::Public; max_regs], Some(0));
         self.call_stack.clear(&mut self.closures.cold_cells);
         self.ip = 0;
         self.register_base = 0;
@@ -46465,6 +46488,7 @@ impl InterpreterCore {
             *slot = label;
         }
         self.register_labels[reg_end..window_end].fill(Label::Public);
+        self.register_labels_bytes.set(None);
 
         // Resume execution - now we can safely get the mutable reference
         let async_function = self
@@ -48872,6 +48896,7 @@ impl InterpreterCore {
         let registers = std::mem::take(&mut self.registers.value);
         self.registers_value_bytes.set(Some(0));
         let register_labels = std::mem::take(&mut self.register_labels);
+        self.register_labels_bytes.set(Some(0));
         let mut execution = GeneratorExecutionSnapshot {
             register_len: registers.len(),
             register_label_len: register_labels.len(),
@@ -49309,7 +49334,7 @@ impl InterpreterCore {
         }
         self.registers.value = registers;
         self.registers_value_bytes.set(None);
-        self.register_labels = register_labels;
+        self.install_register_labels(register_labels, None);
         self.generator_delegation = execution.delegation;
         self.active_inline_callback_context_label = execution.active_inline_callback_context_label;
         self.call_stack
@@ -88663,12 +88688,17 @@ impl InterpreterCore {
             self.register_labels.resize(required_len, Label::Public);
         }
         let mut saved_labels = Vec::with_capacity(value_count);
+        let (mut released_label_bytes, mut added_label_bytes) = (0u64, 0u64);
         for (offset, label) in labels.into_iter().enumerate() {
-            saved_labels.push(std::mem::replace(
-                &mut self.register_labels[register_base + offset],
-                label,
-            ));
+            added_label_bytes =
+                added_label_bytes.saturating_add(Self::estimate_label_bytes(&label));
+            let previous =
+                std::mem::replace(&mut self.register_labels[register_base + offset], label);
+            released_label_bytes =
+                released_label_bytes.saturating_add(Self::estimate_label_bytes(&previous));
+            saved_labels.push(previous);
         }
+        self.adjust_register_labels_bytes(released_label_bytes, added_label_bytes);
 
         // A pending publication surviving from BEFORE this delegation is
         // stale provenance: were it left in place, an inner dispatch that
@@ -88751,11 +88781,23 @@ impl InterpreterCore {
         if self.register_labels.len() < required_len {
             self.register_labels.resize(required_len, Label::Public);
         }
+        let (mut released_label_bytes, mut added_label_bytes) = (0u64, 0u64);
         for (offset, label) in saved_labels.into_iter().enumerate() {
-            self.register_labels[register_base + offset] = label;
+            added_label_bytes =
+                added_label_bytes.saturating_add(Self::estimate_label_bytes(&label));
+            let previous =
+                std::mem::replace(&mut self.register_labels[register_base + offset], label);
+            released_label_bytes =
+                released_label_bytes.saturating_add(Self::estimate_label_bytes(&previous));
+        }
+        if let Some(truncated) = self.register_labels.get(original_label_len..) {
+            released_label_bytes = released_label_bytes.saturating_add(Self::saturating_sum(
+                truncated.iter().map(Self::estimate_label_bytes),
+            ));
         }
         self.register_labels
             .resize(original_label_len, Label::Public);
+        self.adjust_register_labels_bytes(released_label_bytes, added_label_bytes);
         drop(stale_entry_publication);
     }
 
@@ -98955,6 +98997,7 @@ impl InterpreterCore {
                 .clone();
             self.register_labels[actual_reg] = next_label;
         }
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
         self.estimated_memory_bytes = projected;
         Ok(())
     }
@@ -99042,6 +99085,7 @@ impl InterpreterCore {
             label
         };
         self.register_labels[actual_reg] = next_label;
+        self.adjust_register_labels_bytes(previous_label_bytes, next_label_bytes);
         self.estimated_memory_bytes = requested_bytes;
         Ok(())
     }
@@ -99179,6 +99223,7 @@ impl InterpreterCore {
                 .resize(physical_frame_end, Label::Public);
         }
         self.register_labels[frame_start..frame_end].fill(Label::Public);
+        self.adjust_register_labels_bytes(released_label_bytes, 0);
         self.estimated_memory_bytes = self
             .estimated_memory_bytes
             .saturating_sub(released_value_bytes)
@@ -101327,7 +101372,37 @@ impl InterpreterCore {
     }
 
     fn register_labels_memory_bytes(&self) -> u64 {
-        Self::saturating_sum(self.register_labels.iter().map(Self::estimate_label_bytes))
+        if let Some(bytes) = self.register_labels_bytes.get() {
+            debug_assert_eq!(
+                bytes,
+                Self::saturating_sum(self.register_labels.iter().map(Self::estimate_label_bytes)),
+                "cached register-label bytes went stale: a label write bypassed the cache"
+            );
+            return bytes;
+        }
+        let bytes =
+            Self::saturating_sum(self.register_labels.iter().map(Self::estimate_label_bytes));
+        self.register_labels_bytes.set(Some(bytes));
+        bytes
+    }
+
+    /// Move the cached register-label bytes by a write the caller measured:
+    /// labels of `released` bytes left the file and labels of `added` bytes
+    /// entered it (the label file's [`Self::mutate_registers_by_bytes`]).
+    fn adjust_register_labels_bytes(&self, released: u64, added: u64) {
+        self.register_labels_bytes.set(
+            self.register_labels_bytes
+                .get()
+                .map(|bytes| bytes.saturating_sub(released).saturating_add(added)),
+        );
+    }
+
+    /// Install a whole label file whose [`Self::register_labels_memory_bytes`]
+    /// is `bytes` when the caller knows it (a Public file is 0, a restored
+    /// snapshot carries its own), else `None`.
+    fn install_register_labels(&mut self, labels: Vec<Label>, bytes: Option<u64>) {
+        self.register_labels = labels;
+        self.register_labels_bytes.set(bytes);
     }
 
     /// The share of [`Self::registers_memory_bytes`] plus
@@ -109467,6 +109542,9 @@ mod delegated_hostcall_scratch_frame_tests_bd_z1peg3 {
             level: 3,
         };
         core.register_labels[1] = Label::Secret;
+        // A direct write of the label file, as the production writers'
+        // cache maintenance would leave it (bd-9vouw.376).
+        core.register_labels_bytes.set(None);
         core.sync_estimated_memory_bytes().expect("baseline sync");
         let (values_before, labels_before) = register_snapshot(&core, 4);
         let baseline = core.estimated_memory_bytes();
@@ -109680,6 +109758,7 @@ mod delegated_hostcall_scratch_frame_tests_bd_z1peg3 {
         // A hostile/nested path shrank both files below the frame's window.
         core.mutate_registers(|registers| registers.clear());
         core.register_labels.clear();
+        core.register_labels_bytes.set(None);
 
         core.restore_delegated_hostcall_scratch(frame);
         assert_eq!(

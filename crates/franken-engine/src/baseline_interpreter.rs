@@ -103083,6 +103083,32 @@ impl InterpreterCore {
     /// the same values as their indexed read, and an array-like has no
     /// iterator, so those return `None` for the indexed path. (A Set gave an
     /// empty typed array and a generator was taken for a length.)
+    /// Whether the first `@@iterator` on `object`'s chain is a data property
+    /// holding undefined or null, which GetMethod (ES2020 7.3.10) answers as
+    /// no method: TypedArray(object) then reads it as an array-like
+    /// (`new Uint8Array({ [Symbol.iterator]: null, length: 2 })`,
+    /// bd-9vouw.378). An accessor or a proxy is not decided here.
+    fn iterator_method_is_nullish_data(&self, object: ObjectId) -> bool {
+        let key = RuntimePropertyKey::Symbol(WellKnownSymbol::Iterator.id());
+        let mut current = Some(object);
+        for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
+            let Some(id) = current else {
+                return false;
+            };
+            let Some(object) = self.heap.get(id.0 as usize) else {
+                return false;
+            };
+            if object.contains_own_runtime_property(&key) {
+                return matches!(
+                    object.own_runtime_property_value(&key),
+                    Some(Value::Undefined | Value::Null)
+                );
+            }
+            current = object.prototype;
+        }
+        false
+    }
+
     fn typed_array_iterable_source(
         &mut self,
         module: Option<&Ir3Module>,
@@ -103104,7 +103130,10 @@ impl InterpreterCore {
                 } else {
                     let map = self.collection_storage_id(*id, "Map", "__entries");
                     let set = self.collection_storage_id(*id, "Set", "__values");
-                    map.is_some() || set.is_some() || self.array_from_has_explicit_iterator(*id)?
+                    map.is_some()
+                        || set.is_some()
+                        || (self.array_from_has_explicit_iterator(*id)?
+                            && !self.iterator_method_is_nullish_data(*id))
                 }
             }
             _ => false,

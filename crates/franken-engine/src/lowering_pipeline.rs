@@ -19415,17 +19415,45 @@ fn lower_expression_to_ir1_inner(
             let skip_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
 
-            // Evaluate the callee and store into temp.
-            lower_expression_to_ir1(
-                callee,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                root_scope_id,
-                label_counter,
-                span_table,
-            )?;
+            // Evaluate the callee and store into temp. `super.m?.(...)` (the
+            // optional chain lowering leaves a `super` prefix here) looks the
+            // method up from [[HomeObject]] and calls it with this
+            // activation's `this`, as `super.m(...)` does (bd-9vouw.359).
+            let super_method = if let Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } = callee.as_ref()
+                && matches!(object.as_ref(), Expression::Super)
+            {
+                ops.push(Ir1Op::LoadSuper);
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::GetProperty { key });
+                true
+            } else {
+                lower_expression_to_ir1(
+                    callee,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                false
+            };
             ops.push(Ir1Op::StoreBinding {
                 binding_id: temp_callee,
             });
@@ -19445,10 +19473,15 @@ fn lower_expression_to_ir1_inner(
             ops.push(Ir1Op::LoadBinding {
                 binding_id: temp_callee,
             });
+            if super_method {
+                ops.push(Ir1Op::LoadThis);
+            }
             if stages_argument_array(arguments) {
-                ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::Undefined,
-                });
+                if !super_method {
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                }
                 let argument_list =
                     Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
                 lower_expression_to_ir1(
@@ -19492,8 +19525,14 @@ fn lower_expression_to_ir1_inner(
                         max: u32::MAX as usize,
                     });
                 }
-                ops.push(Ir1Op::Call {
-                    arg_count: arg_count as u32,
+                ops.push(if super_method {
+                    Ir1Op::CallMethod {
+                        arg_count: arg_count as u32,
+                    }
+                } else {
+                    Ir1Op::Call {
+                        arg_count: arg_count as u32,
+                    }
                 });
                 ops.push(Ir1Op::StoreBinding {
                     binding_id: result_binding,

@@ -58,7 +58,7 @@ impl InterpreterCore {
         match parts {
             Value::Undefined => {}
             parts if parts.is_object_like() => {
-                for part in self.promise_combinator_iterable_values(Some(module), parts)? {
+                for part in self.blob_part_values(module, parts)? {
                     self.append_blob_part(&part, &mut bytes)?;
                 }
             }
@@ -136,12 +136,41 @@ impl InterpreterCore {
         accumulated: usize,
         next_part: usize,
     ) -> Result<(), InterpreterError> {
-        let pending = u64::try_from(accumulated.saturating_add(next_part)).unwrap_or(u64::MAX);
-        let requested = self.estimated_memory_bytes.saturating_add(pending);
-        if self.memory_request_exceeds_budget(requested, self.config.max_total_memory_bytes) {
-            return Err(self.memory_budget_error(requested, self.heap_object_count_u32()));
+        self.check_temporary_memory_budget(
+            u64::try_from(accumulated.saturating_add(next_part)).unwrap_or(u64::MAX),
+        )
+    }
+
+    /// The blob parts of `parts`, the whole sequence first as WebIDL
+    /// converts it. An Array goes through the budget-checked element buffer;
+    /// any other iterable (a typed array iterates natively, one `Value` per
+    /// byte) is collected with the growing `Vec` charged at each step, so
+    /// `new Blob(new Uint8Array(48 << 20))` is refused instead of building
+    /// ~1-2 GB of `Value`s before the first part is appended.
+    fn blob_part_values(
+        &mut self,
+        module: &Ir3Module,
+        parts: Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        if let Value::Object(array_id) = parts
+            && self
+                .heap
+                .get(array_id.0 as usize)
+                .is_some_and(|object| object.is_array)
+            && !self.array_from_has_explicit_iterator(array_id)?
+        {
+            return self.array_like_values(array_id);
         }
-        Ok(())
+        let iterator = self.init_for_of_iterator(Some(module), parts)?;
+        let mut values = Vec::new();
+        while let Some(value) = self.advance_for_of_iterator(Some(module), iterator.clone())? {
+            values.push(value);
+            self.check_temporary_memory_budget(
+                u64::try_from(values.len().saturating_mul(std::mem::size_of::<Value>()))
+                    .unwrap_or(u64::MAX),
+            )?;
+        }
+        Ok(values)
     }
 
     /// A fresh blob object holding `bytes`, its bytes charged.

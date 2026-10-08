@@ -182,11 +182,33 @@ fn guest_sized_native_copies_are_charged_before_allocation() {
         other => panic!("blob of 64 x 8 MiB parts: {other:?}"),
     }
 
-    let outcome = run("new Intl.Segmenter().segment('a'.repeat(2 ** 20));");
+    // Under the budget it still works: 4 x 8 MiB parts make a 32 MiB blob.
+    let result = run("var big = new Blob([new Uint8Array(8 * 1024 * 1024)]); \
+         console.log(new Blob(new Array(4).fill(big)).size);")
+    .expect("a 32 MiB blob fits a 64 MiB budget");
+    assert_eq!(console(&result), "33554432");
+
+    // A typed array is an iterable of one part per byte: its collection is
+    // charged step by step, so 40 Mi elements end at the budget instead of
+    // building ~1 GB of native values first.
+    let outcome = run("new Blob(new Uint8Array(40 * 1024 * 1024));");
     assert!(
         matches!(outcome, Err(InterpreterError::MemoryBudgetExceeded { .. })),
-        "segmenting 2^20 code units under a 64 MiB budget: {outcome:?}"
+        "blob of a 40 Mi element typed array: {outcome:?}"
     );
+
+    // The segmenter refuses up front: the request it reports is the
+    // 96-bytes-per-code-unit transient, not a later per-record charge.
+    let outcome = run("new Intl.Segmenter().segment('a'.repeat(2 ** 20));");
+    match outcome {
+        Err(InterpreterError::MemoryBudgetExceeded {
+            requested_bytes, ..
+        }) => assert!(
+            requested_bytes >= (1u64 << 20) * 96,
+            "segmenter failed after splitting, not on the pre-check: requested {requested_bytes}"
+        ),
+        other => panic!("segmenting 2^20 code units under a 64 MiB budget: {other:?}"),
+    }
 }
 
 /// `TextEncoder#encodeInto` into a view whose buffer was transferred (length

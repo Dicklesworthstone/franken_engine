@@ -15101,11 +15101,10 @@ fn try_lower_optional_chain_to_ir1(
     }
     let chain = &links[start..];
     let prefix = chain[0].inner();
-    let keeps_existing_lowering = matches!(prefix, Expression::Super)
-        || chain.iter().any(|link| {
-            matches!(link, OptionalChainLink::Call { arguments, .. }
-                if stages_argument_array(arguments))
-        });
+    // A call link with spread (or staged) arguments is lowered here too,
+    // through ReflectApply (bd-9vouw.359): the fallback lowered each spread
+    // element as one argument and dropped a member callee's receiver.
+    let keeps_existing_lowering = matches!(prefix, Expression::Super);
     if keeps_existing_lowering {
         return Ok(false);
     }
@@ -15212,6 +15211,33 @@ fn try_lower_optional_chain_to_ir1(
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: receiver_binding,
                     });
+                }
+                // `o.m?.(...xs)`, `f?.(a, ...xs)`: the argument array goes
+                // through ReflectApply, which reads [callee, this, argsList]
+                // like `super.m(...xs)` (bd-9vouw.359).
+                if stages_argument_array(arguments) {
+                    if method_receiver.is_none() {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Undefined,
+                        });
+                    }
+                    let argument_list =
+                        Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+                    lower_expression_to_ir1(
+                        &argument_list,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ReflectApply".to_string(),
+                        arg_count: 3,
+                    });
+                    continue;
                 }
                 for argument in arguments {
                     lower_expression_to_ir1(
@@ -19413,13 +19439,20 @@ fn lower_expression_to_ir1_inner(
                 label_id: skip_label,
             });
 
-            // Not-nullish path: perform the call.
+            // Not-nullish path: perform the call. Spread (or staged)
+            // arguments go through ReflectApply with an undefined this
+            // (bd-9vouw.359); each spread array was passed as one argument.
             ops.push(Ir1Op::LoadBinding {
                 binding_id: temp_callee,
             });
-            for arg in arguments {
+            if stages_argument_array(arguments) {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+                let argument_list =
+                    Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
                 lower_expression_to_ir1(
-                    arg,
+                    &argument_list,
                     ops,
                     bindings,
                     binding_lookup,
@@ -19428,24 +19461,48 @@ fn lower_expression_to_ir1_inner(
                     label_counter,
                     span_table,
                 )?;
-            }
-            let arg_count = arguments.len();
-            if arg_count > u32::MAX as usize {
-                return Err(LoweringPipelineError::TooManyArguments {
-                    count: arg_count,
-                    max: u32::MAX as usize,
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ReflectApply".to_string(),
+                    arg_count: 3,
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+            } else {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                ops.push(Ir1Op::Call {
+                    arg_count: arg_count as u32,
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
                 });
             }
-            ops.push(Ir1Op::Call {
-                arg_count: arg_count as u32,
-            });
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: result_binding,
-            });
-            ops.push(Ir1Op::Pop);
-            ops.push(Ir1Op::Jump {
-                label_id: end_label,
-            });
 
             // Nullish path: produce undefined.
             ops.push(Ir1Op::Label { id: skip_label });

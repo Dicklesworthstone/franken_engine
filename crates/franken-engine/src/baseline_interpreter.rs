@@ -68927,8 +68927,12 @@ impl InterpreterCore {
                 return self.reject_promise(promise, reason, reason_label);
             }
         };
+        // The adoption stands in for the job's `then` call only when that
+        // call is unobservable: a subclass instance's `then` constructs the
+        // subclass, so it runs as any thenable's (bd-9vouw.349).
         if matches!(&then, Value::BuiltinFunction(builtin)
             if builtin.kind == BuiltinFunctionKind::PromiseThen && builtin.bound_object.is_none())
+            && self.native_then_is_inert(module, &Value::Promise(source_handle))?
         {
             return self.enqueue_adopt_native(promise, source, false, label);
         }

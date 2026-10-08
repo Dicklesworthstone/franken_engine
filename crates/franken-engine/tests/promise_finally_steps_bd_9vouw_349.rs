@@ -40,3 +40,38 @@ setTimeout(function () { console.log(log.join(' ')); }, 0);
         .collect();
     assert_eq!(lines, ["f1 t1 f2 t2 cx t3 v1 t4 e2 count6 rn1 t5"]);
 }
+
+/// Resolving with a native promise adopts it directly only when the
+/// PromiseResolveThenableJob's `then` call is unobservable. A Promise
+/// subclass instance's `then` constructs the subclass (SpeciesConstructor),
+/// for `resolve(sub)`, an async function returning `sub` and a `then`
+/// callback returning it alike: three constructions before `b` logs. A
+/// promise with an own property keeps the same job order. The adoption
+/// skipped those constructions (0). Node v22.2.0's line (Bun 1.4.2 agrees).
+#[test]
+fn subclass_promise_resolution_runs_the_then_job() {
+    let source = r#"
+var log = [];
+var made = 0;
+class Sub extends Promise { constructor(executor) { made++; super(executor); } }
+var tagged = Promise.resolve('p');
+tagged.tag = 'own';
+var sub = Sub.resolve('s');
+var subMade = made;
+new Promise(function (resolve) { resolve(tagged); }).then(function (v) { log.push('a' + v); });
+new Promise(function (resolve) { resolve(sub); }).then(function (v) { log.push('b' + v + (made - subMade)); });
+Promise.resolve().then(function () { log.push('t1'); }).then(function () { log.push('t2'); }).then(function () { log.push('t3'); }).then(function () { log.push('t4'); });
+(async function () { return sub; })().then(function (v) { log.push('c' + v + (made - subMade)); });
+Promise.resolve(1).then(function () { return sub; }).then(function (v) { log.push('d' + v + (made - subMade)); });
+setTimeout(function () { console.log(log.join(' ')); }, 0);
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(lines, ["t1 t2 ap bs3 t3 cs3 t4 ds3",]);
+}

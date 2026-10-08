@@ -517,6 +517,70 @@ impl InterpreterCore {
         Ok(true)
     }
 
+    /// Whether %Promise.prototype%.then called on the native promise
+    /// `source` (a PromiseResolveThenableJob's call) has no effect beyond
+    /// its reaction, so resolving with `source` may adopt it directly:
+    /// `source` has no own properties and no subclass prototype, and
+    /// %Promise.prototype%.constructor and the realm's Promise[@@species]
+    /// are unchanged and unlabeled, so SpeciesConstructor reads no guest code
+    /// and constructs nothing. A Promise subclass instance's `then` constructs
+    /// the subclass, which `count` in Promise.prototype.finally's steps
+    /// observes (bd-9vouw.349). Reads no guest code.
+    pub(super) fn native_then_is_inert(
+        &self,
+        module: &Ir3Module,
+        source: &Value,
+    ) -> Result<bool, InterpreterError> {
+        if self.function_own_property_object(module, source)?.is_some() {
+            return Ok(false);
+        }
+        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
+        if let Some(&prototype) = self.builtin_prototypes.get("Promise") {
+            if !self.promise_combinator_metadata_is_public(prototype)
+                || self.virtual_own_property_deleted(prototype, &constructor_key)
+            {
+                return Ok(false);
+            }
+            if let Some(value) = self
+                .heap
+                .get(prototype.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&constructor_key))
+                && !Self::is_intrinsic_promise_constructor(&value)
+            {
+                return Ok(false);
+            }
+        }
+        // An unseeded realm Promise has no property object to redefine
+        // @@species on.
+        let Some(binding) = self.realm_dynamic_globals.get("Promise") else {
+            return Ok(true);
+        };
+        let promise = binding.state()?.value.clone();
+        let Value::BuiltinFunction(builtin) = &promise else {
+            return Ok(false);
+        };
+        let Some(properties) = Self::builtin_function_property_object(builtin)
+            .filter(|_| builtin.kind == BuiltinFunctionKind::PromiseConstructor)
+        else {
+            return Ok(false);
+        };
+        if !self.promise_combinator_metadata_is_public(properties) {
+            return Ok(false);
+        }
+        let species = self.heap.get(properties.0 as usize).and_then(|object| {
+            object.own_runtime_property_value(&RuntimePropertyKey::Symbol(
+                WellKnownSymbol::Species.id(),
+            ))
+        });
+        let native_getter = Value::BuiltinFunction(BuiltinFunction::prototype_getter(
+            "Promise",
+            prototype_getters::SPECIES_GETTER_KEY,
+        ));
+        let native = matches!(species, Some(Value::Accessor { get: Some(getter), set: None })
+            if *getter == native_getter);
+        Ok(native)
+    }
+
     /// Identity alone cannot justify skipping a Get: an unchanged intrinsic
     /// can have a secret property label. Let the ordinary algorithm perform
     /// those reads, including symbol metadata, without speculative getters.

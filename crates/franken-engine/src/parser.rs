@@ -12357,19 +12357,7 @@ fn reject_context_reserved_binding(
 ) -> ParseResult<()> {
     let reserved = ((context.await_context || context.static_block_await) && name == "await")
         || (context.yield_context && name == "yield")
-        || (context.strict_mode
-            && matches!(
-                name,
-                "implements"
-                    | "interface"
-                    | "let"
-                    | "package"
-                    | "private"
-                    | "protected"
-                    | "public"
-                    | "static"
-                    | "yield"
-            ));
+        || (context.strict_mode && is_strict_mode_reserved_word(name));
     if reserved {
         return Err(ParseError::new(
             ParseErrorCode::InvalidSyntax,
@@ -12379,6 +12367,67 @@ fn reject_context_reserved_binding(
         ));
     }
     Ok(())
+}
+
+fn is_strict_mode_reserved_word(name: &str) -> bool {
+    matches!(
+        name,
+        "implements"
+            | "interface"
+            | "let"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "static"
+            | "yield"
+    )
+}
+
+/// ES2020 14.1.2, 14.4.1, 14.7.1: the BindingIdentifier of a function,
+/// generator or async function. It is an IdentifierName that is not a
+/// reserved word (an escape does not make one usable), bound by its decoded
+/// spelling: `function a\u0062() {}` declares `ab`. `strict` is whether the
+/// name is strict code (the enclosing code is strict, or the body has a
+/// "use strict" directive); `yield_reserved` and `await_reserved` are the
+/// [Yield] and [Await] parameters the grammar gives the name.
+fn function_binding_name(
+    raw: &str,
+    strict: bool,
+    yield_reserved: bool,
+    await_reserved: bool,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<String> {
+    let invalid = |message: String| {
+        Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            message,
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ))
+    };
+    if !is_identifier(raw) {
+        return invalid(format!("invalid function name `{raw}`"));
+    }
+    let name = canonicalize_identifier(raw);
+    if is_unconditional_reserved_keyword(&name) {
+        return invalid(if name == raw {
+            format!("`{name}` is a reserved word and cannot be a function name")
+        } else {
+            format!("keyword `{name}` must not contain escaped characters")
+        });
+    }
+    reject_strict_restricted_binding(&name, strict, span, context)?;
+    if (strict && is_strict_mode_reserved_word(&name))
+        || (yield_reserved && name == "yield")
+        || (await_reserved && name == "await")
+    {
+        return invalid(format!(
+            "`{name}` is a reserved word here and cannot be a function name"
+        ));
+    }
+    Ok(name)
 }
 
 /// ES2020 14.1.2, 14.2.1, 14.3.1: a function whose own body has a
@@ -13978,6 +14027,23 @@ fn parse_function_expression_with_super(
             Some(span.clone()),
         )
     })?;
+    // An expression's name is scoped to the function itself, so its own kind
+    // gives [Yield] and [Await] (ES2020 14.1: `function
+    // BindingIdentifier[~Yield, ~Await]`, `function *
+    // BindingIdentifier[+Yield, ~Await]`, `async function
+    // BindingIdentifier[~Yield, +Await]`).
+    let name = name
+        .map(|raw| {
+            function_binding_name(
+                &raw,
+                context.strict_mode || has_use_strict_directive(body_src),
+                is_generator,
+                is_async,
+                span,
+                context,
+            )
+        })
+        .transpose()?;
     let goal = ParseGoal::Script;
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
@@ -15420,14 +15486,20 @@ fn parse_function_declaration(
     let source_text = context
         .function_sources
         .text_of(&statement[..statement.len() - after_body.len()]);
-    if let Some(name) = name.as_deref() {
-        reject_strict_restricted_binding(
-            name,
-            context.strict_mode || has_use_strict_directive(body_src),
-            &span,
-            context,
-        )?;
-    }
+    // A declaration binds its name in the enclosing code, whose [Yield] and
+    // [Await] apply (ES2020 14.1: `BindingIdentifier[?Yield, ?Await]`).
+    let name = name
+        .map(|raw| {
+            function_binding_name(
+                &raw,
+                context.strict_mode || has_use_strict_directive(body_src),
+                context.yield_context,
+                context.await_context || context.static_block_await,
+                &span,
+                context,
+            )
+        })
+        .transpose()?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
     let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
     let parsed = with_function_context(is_async, is_generator, context, |context| {

@@ -8351,7 +8351,10 @@ fn try_parse_update(
         if operand_src.is_empty() || operand_src.starts_with('+') || operand_src.starts_with('-') {
             return None;
         }
-        let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
+        let target = global_value_property_target(
+            operand_src,
+            parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
+        );
         if !is_simple_update_target(&target) {
             return reject_non_assignable_update_target(&target, span, context);
         }
@@ -8380,7 +8383,10 @@ fn try_parse_update(
         if operand_src.is_empty() || operand_src.ends_with('+') || operand_src.ends_with('-') {
             return None;
         }
-        let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
+        let target = global_value_property_target(
+            operand_src,
+            parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
+        );
         if !is_simple_update_target(&target) {
             return reject_non_assignable_update_target(&target, span, context);
         }
@@ -9290,6 +9296,25 @@ fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
 // Array/object literal parsing
 // ---------------------------------------------------------------------------
 
+/// `undefined`, `NaN` and `Infinity` parse as their constants when read, but
+/// they are identifiers (ES2020 18.1: non-writable properties of the global
+/// object, or a binding that shadows them), so an assignment or update can
+/// target them: `undefined = 5` and `NaN++` are not early errors. The
+/// runtime makes such a write a no-op, or a TypeError in strict code, unless
+/// a binding of that name receives it. Any other target is unchanged.
+fn global_value_property_target(source: &str, target: Expression) -> Expression {
+    let source = source.trim();
+    match target {
+        Expression::UndefinedLiteral if source == "undefined" => {
+            Expression::Identifier(source.to_string())
+        }
+        Expression::FloatLiteral(_) if matches!(source, "NaN" | "Infinity") => {
+            Expression::Identifier(source.to_string())
+        }
+        target => target,
+    }
+}
+
 /// Parse cover grammar only where the caller has already recognized an
 /// assignment target. An initialized shorthand (`{x = value}`) must never be
 /// accepted as an ordinary object expression or in the default's RHS.
@@ -9327,7 +9352,10 @@ fn parse_assignment_target_expression(
             parse_assignment_target_expression(rest, span, context, recursion_depth + 1)?,
         )));
     }
-    let target = parse_expression(source, span, context, recursion_depth)?;
+    let target = global_value_property_target(
+        source,
+        parse_expression(source, span, context, recursion_depth)?,
+    );
     // The specific diagnostic first: `config?.theme = value`.
     if assignment_target_has_optional_chain(&target) {
         return Err(ParseError::new(

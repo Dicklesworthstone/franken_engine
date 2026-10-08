@@ -15879,6 +15879,8 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         if let Some(binding) = self.resolve_runtime_name_binding(name) {
             self.put_resolved_runtime_name_binding(name, binding, value)
+        } else if let Some(outcome) = Self::put_read_only_global_value(name, strict) {
+            outcome
         } else if self.active_generated_function_artifact.is_none()
             && self.global_object_binding(module, name)?.is_some()
         {
@@ -15910,6 +15912,27 @@ impl InterpreterCore {
         )
     }
 
+    /// The global object's NaN, Infinity and undefined are non-writable data
+    /// properties (ES2020 18.1): assigning one through an identifier that no
+    /// binding shadows changes nothing, and in strict code is a TypeError
+    /// (PutValue step 6's [[Set]] returns false). `None` for any other name.
+    fn put_read_only_global_value(
+        name: &str,
+        strict: bool,
+    ) -> Option<Result<(), InterpreterError>> {
+        if !matches!(name, "NaN" | "Infinity" | "undefined") {
+            return None;
+        }
+        Some(if strict {
+            Err(InterpreterError::TypeError {
+                expected: "writable global property".to_string(),
+                got: format!("the global object's read-only `{name}`"),
+            })
+        } else {
+            Ok(())
+        })
+    }
+
     fn put_runtime_name_with_status_labeled(
         &mut self,
         module: Option<&Ir3Module>,
@@ -15926,6 +15949,11 @@ impl InterpreterCore {
             .ok_or_else(|| InterpreterError::InternalError {
                 details: format!("unknown runtime name reference token {reference_token}"),
             })?;
+        if !matches!(reference, RuntimeNameReference::Resolved(_))
+            && let Some(outcome) = Self::put_read_only_global_value(name, strict)
+        {
+            return outcome;
+        }
         match reference {
             RuntimeNameReference::Resolved(binding) => {
                 self.put_resolved_runtime_name_binding(name, binding, value)

@@ -295,6 +295,9 @@ impl InterpreterCore {
         module: &Ir3Module,
         promise: u32,
     ) -> Result<bool, InterpreterError> {
+        if self.promise_constructor_read_is_inert(module, &Value::Promise(promise))? {
+            return Ok(true);
+        }
         let constructor = self.get_v(
             module,
             &Value::Promise(promise),
@@ -531,24 +534,8 @@ impl InterpreterCore {
         module: &Ir3Module,
         source: &Value,
     ) -> Result<bool, InterpreterError> {
-        if self.function_own_property_object(module, source)?.is_some() {
+        if !self.promise_constructor_read_is_inert(module, source)? {
             return Ok(false);
-        }
-        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
-        if let Some(&prototype) = self.builtin_prototypes.get("Promise") {
-            if !self.promise_combinator_metadata_is_public(prototype)
-                || self.virtual_own_property_deleted(prototype, &constructor_key)
-            {
-                return Ok(false);
-            }
-            if let Some(value) = self
-                .heap
-                .get(prototype.0 as usize)
-                .and_then(|object| object.own_runtime_property_value(&constructor_key))
-                && !Self::is_intrinsic_promise_constructor(&value)
-            {
-                return Ok(false);
-            }
         }
         // An unseeded realm Promise has no property object to redefine
         // @@species on.
@@ -579,6 +566,40 @@ impl InterpreterCore {
         let native = matches!(species, Some(Value::Accessor { get: Some(getter), set: None })
             if *getter == native_getter);
         Ok(native)
+    }
+
+    /// Whether Get(source, "constructor") on the native promise `source` is
+    /// %Promise% with nothing to observe: `source` has no own properties and
+    /// no subclass prototype, and %Promise.prototype%'s `constructor` is the
+    /// intrinsic, not deleted and unlabeled. Await and PromiseResolve then
+    /// keep `source` without the read, which allocated (bd-9vouw.352: an
+    /// exactly budgeted async generator await ran out by 199 bytes). Reads
+    /// no guest code.
+    pub(super) fn promise_constructor_read_is_inert(
+        &self,
+        module: &Ir3Module,
+        source: &Value,
+    ) -> Result<bool, InterpreterError> {
+        if self.function_own_property_object(module, source)?.is_some() {
+            return Ok(false);
+        }
+        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
+        if let Some(&prototype) = self.builtin_prototypes.get("Promise") {
+            if !self.promise_combinator_metadata_is_public(prototype)
+                || self.virtual_own_property_deleted(prototype, &constructor_key)
+            {
+                return Ok(false);
+            }
+            if let Some(value) = self
+                .heap
+                .get(prototype.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&constructor_key))
+                && !Self::is_intrinsic_promise_constructor(&value)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Identity alone cannot justify skipping a Get: an unchanged intrinsic

@@ -624,6 +624,11 @@ impl InterpreterCore {
     ) -> Result<(Option<PromiseHandle>, Label), InterpreterError> {
         let backing = self.async_generators[id as usize].generator_id;
         let owner = Arc::clone(&self.generators[backing as usize].owner_module);
+        // Nothing to observe: keep the promise without opening a read
+        // context, at the cost an await had before the read existed.
+        if self.promise_constructor_read_is_inert(owner.as_ref(), &Value::Promise(handle))? {
+            return Ok((None, floor.clone()));
+        }
         self.in_async_generator_await_context(floor, |this| {
             this.json_charge_work()?;
             let keeps = this

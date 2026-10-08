@@ -35,7 +35,7 @@ The rules compose. A containment action is replay-anchored *and* signed, so a co
 
 This is research-grade infrastructure, not a packaged product.
 
-- **First published release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); the bash installer falls back to a source build on other platforms. The standalone source/release build now resolves only workspace and registry sources and requires no `/dp` sibling checkout (`bd-gw4cg`); see *Standalone Mode*. Current `main` stages `frankenengine-core` and `frankenengine-engine` at an unreleased `0.2.0` compatibility boundary; it does not create a `v0.2.0` tag or release. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
+- **Latest release: `v0.3.0`** (after `v0.2.0` on 2026-10-04 and the first release, `v0.1.0`). Prebuilt `frankenctl` binaries (Linux x86_64, macOS Apple Silicon and Windows x86_64) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases), each with a `.sha256` sidecar, and the checksum-verified `curl | bash` installer ([`install.sh`](./install.sh), plus [`install.ps1`](./install.ps1) on Windows) installs them; the bash installer falls back to a source build on other platforms. The standalone source/release build resolves only workspace and registry sources and requires no `/dp` sibling checkout (`bd-gw4cg`); see *Standalone Mode*. `frankenengine-core` and `frankenengine-engine` carry the release version (`0.3.0`). See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
 - **README claim wording has an invoked gate.** When run, [`./scripts/run_claim_to_proof_matrix_gate.sh ci`](./scripts/run_claim_to_proof_matrix_gate.sh) checks this file against [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json). Claims classified `hypothesis` or `target` must say so explicitly; absolute-superiority language without artifacts is rejected. Continuous CI enforcement and automatic re-execution of every producer are not established.
 - **Automation surfaces ship in advisory-only mode.** The shadow daemon and related automations cannot execute live mutations or production deployments until adoption gates are explicitly verified green. See [`docs/SHADOW_DAEMON_PROOF_STATE.md`](./docs/SHADOW_DAEMON_PROOF_STATE.md).
 
@@ -64,13 +64,13 @@ Most recent promotions and proof-bundle landings from the May 2026 cycle (see [`
 
 ### Versioning & Release Posture
 
-The published baseline is `v0.1.0`. Current `main` deliberately splits the two public runtime crates onto an unreleased `0.2.0` line so their source-breaking exhaustive-enum evolution is explicit; unrelated workspace packages remain at `0.1.0`. Artifact bundles still version individual runtime behaviours, decisions, and benchmark claims independently of Cargo semver.
+The latest published release is `v0.3.0`. The two public runtime crates (`frankenengine-core`, `frankenengine-engine`) carry the release version so their source-breaking exhaustive-enum evolution is explicit; unrelated workspace packages remain at `0.1.0`. Artifact bundles still version individual runtime behaviours, decisions, and benchmark claims independently of Cargo semver.
 
 | Concept | What it is |
 |---|---|
-| **Cargo package versions** | `frankenengine-core` and `frankenengine-engine` stage an unreleased `0.2.0` compatibility line on `main`; every other workspace package remains at `0.1.0`. This is not a tag or publication. |
+| **Cargo package versions** | `frankenengine-core` and `frankenengine-engine` are `0.3.0`, matching the `v0.3.0` release; every other workspace package remains at `0.1.0`. None of them is published to crates.io. |
 | **Backup tags** (`backup/main-tip-*`, `backup/worktree-tip-*`) | Periodic preservation tags so a future bisect can find a known-good point. Not releases. |
-| **GitHub Releases** | `v0.1.0` is the published baseline. No `v0.2.0` release is created by the compatibility migration; a future GA release remains gated by the GA-exit evidence package. |
+| **GitHub Releases** | `v0.1.0` (2026-05-29), `v0.2.0` (2026-10-04) and `v0.3.0` ship `frankenctl` for Linux x86_64, macOS arm64 and Windows x86_64, each with a `.sha256` sidecar. A future GA release remains gated by the GA-exit evidence package. |
 | **Artifact bundle version** (`franken-engine.proof-artifact-manifest.v1`) | The schema version that every gate's `run_manifest.json` carries. Bumped when the manifest shape changes; pinned by `SchemaId` in evidence records. |
 | **`SchemaId`** (per persisted type) | Content hash of a schema definition. Automatically detects schema evolution; replay refuses to silently reinterpret old bytes under a new schema. |
 | **Bead** (`bd-<base36>` in `.beads/issues.jsonl`) | The unit of work granularity. Every claim in the claim-to-proof matrix names a single owning bead; closing the bead is the unit of release-level change. |

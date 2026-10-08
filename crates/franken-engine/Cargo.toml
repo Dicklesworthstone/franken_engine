@@ -1,6 +1,6 @@
 [package]
 name = "frankenengine-engine"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 build = "build.rs"
 
@@ -301,7 +301,7 @@ ryu-js = "1.0"
 # BigInt arithmetic (bd-9vouw.54). Already locked (0.4.6) as a transitive
 # dependency; the engine keeps its decimal BigInt representation and uses this
 # only for the operators, radix conversion and asUintN/asIntN.
-num-bigint = "0.4"
+num-bigint = "0.5"
 url = "2.5.8"
 digest = "0.10"
 sha2 = "0.10"
@@ -320,9 +320,9 @@ ctr = "0.9.2"
 zeroize = "1.8"
 flate2 = "1.1"
 zlib-rs = { version = "0.6.3", default-features = false, features = ["std", "rust-allocator"] }
-lz4_flex = "0.11"
-zstd = "0.13"
-brotli = "8.0"
+lz4_flex = "0.14"
+zstd = "0.14"
+brotli = "9.0"
 subtle = "2.6"
 ed25519-dalek = "2.0"
 p256 = { version = "0.13", default-features = false, features = [
@@ -332,13 +332,13 @@ p256 = { version = "0.13", default-features = false, features = [
 ] }
 rand = "0.8"
 hex = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 mimalloc = { version = "0.1", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 uuid = { version = "1.16", features = ["v7", "serde"] }
 syn = { version = "2.0", features = ["full", "visit"] }
-toml = "0.8"
+toml = "1"
 clap = { version = "4.5", features = ["derive"] }
 sqlmodel = { version = "0.5.0", optional = true }
 sqlmodel-core = { version = "0.5.0", optional = true }
@@ -388,7 +388,7 @@ dp = { path = "../dp" }
 frankenengine-engine = { path = ".", default-features = false, features = [
     "tee-test-mock",
 ] }
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 tempfile = "3.0"
 tracing = "0.1"
 # insta snapshot-testing crate — adoption spike for bd-ub6x8.11. One demo

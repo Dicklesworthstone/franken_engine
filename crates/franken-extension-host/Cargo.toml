@@ -31,7 +31,7 @@ rustix = { version = "1.1", features = ["fs", "process", "net", "event"] }
 
 [dev-dependencies]
 insta = { version = "1.39", features = ["filters"] }
-toml = "0.8"
+toml = "1"
 tempfile = "3.0"
 # bd-3894s slice (5): self-signed certificate generation for the mock-free TLS
 # loopback tests (real rustls server on 127.0.0.1, no external network).

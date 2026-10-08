@@ -6380,8 +6380,13 @@ fn parse_primary_expression(
         return parse_class_expression(expression, span, context);
     }
 
-    // Template literal: `text ${expr} text`
-    if expression.starts_with('`') && expression.ends_with('`') {
+    // Template literal: `text ${expr} text`. Only when that one template is
+    // the whole expression: in `a``b` the template `a` closes first and is
+    // the tag of `b` (bd-9vouw.342), a call that throws Node's TypeError.
+    if expression.starts_with('`')
+        && expression.ends_with('`')
+        && find_top_level_template_start(expression) == Some(0)
+    {
         return parse_template_literal(expression, span, context, recursion_depth);
     }
 
@@ -23132,6 +23137,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         // bd-9vouw.342: the last of chained templates.
         assert_eq!(find_top_level_template_start("rec`x``y``z`"), Some(9));
         assert_eq!(find_top_level_template_start("t`${`a`}``b`"), Some(9));
+        // A template used as a tag: `a` closes before `b` opens.
+        assert_eq!(find_top_level_template_start("`a``b`"), Some(3));
+        assert_eq!(find_top_level_template_start("`a${`b`}c`"), Some(0));
         let segments: Vec<&str> = split_statement_segments("a(`;${`;`}`); b;")
             .into_iter()
             .map(|(_, _, text)| text)

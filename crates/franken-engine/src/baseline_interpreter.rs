@@ -57289,6 +57289,15 @@ impl InterpreterCore {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
             match self.get_v(module, &constructor, &key)? {
                 Value::Object(prototype) => prototype,
+                // A function is an object: `F.prototype = fn` (Test262
+                // S13.2.2_A1) is searched for as that function.
+                function if function.is_callable() => {
+                    return Ok(Value::Bool(self.value_prototype_chain_contains(
+                        Some(module),
+                        &candidate,
+                        &function,
+                    )?));
+                }
                 other => {
                     return Err(InterpreterError::TypeError {
                         expected: "object-valued constructor prototype".into(),
@@ -57301,6 +57310,13 @@ impl InterpreterCore {
         {
             match value {
                 Value::Object(prototype) => prototype,
+                function if function.is_callable() => {
+                    return Ok(Value::Bool(self.value_prototype_chain_contains(
+                        Some(module),
+                        &candidate,
+                        &function,
+                    )?));
+                }
                 _ => {
                     return Err(InterpreterError::TypeError {
                         expected: "object-valued constructor prototype".into(),
@@ -61665,6 +61681,16 @@ impl InterpreterCore {
         value: &Value,
         needle: &Value,
     ) -> Result<bool, InterpreterError> {
+        // A function needle is linked into chains as its own-property
+        // backing object (prototype_link_for_value: `Object.create(fn)`,
+        // `F.prototype = fn; new F()`), so a link to that object is the
+        // function. Without a backing no object links to it.
+        let needle_backing = match module {
+            Some(module) if needle.is_callable() => {
+                self.function_own_property_object(module, needle)?
+            }
+            _ => None,
+        };
         let mut current = value.clone();
         for _ in 0..MAX_PROTOTYPE_CHAIN_DEPTH {
             let next = match &current {
@@ -61700,7 +61726,9 @@ impl InterpreterCore {
                 },
                 _ => return Ok(false),
             };
-            if next == *needle {
+            if next == *needle
+                || matches!((&next, needle_backing), (Value::Object(id), Some(backing)) if *id == backing)
+            {
                 return Ok(true);
             }
             if matches!(next, Value::Null) {
@@ -104841,22 +104869,40 @@ impl InterpreterCore {
         value: &Value,
     ) -> Result<ObjectId, InterpreterError> {
         if let Some((value, _)) = self.constructor_prototype_override(module, value)? {
-            return match value {
-                Value::Object(prototype) => Ok(prototype),
-                _ => self.ensure_builtin_prototype("Object"),
-            };
+            return self.constructed_prototype_link(module, value);
         }
         // A callable proxy newTarget (bd-9vouw.132): GetPrototypeFromConstructor
         // reads its `prototype` through [[Get]], so its get trap or its target
         // answers. `new P(...)` of a trapless proxy over a proxy passes P on.
         if Self::is_callable_proxy(value) {
             let key = RuntimePropertyKey::String(JsString::from("prototype"));
-            return match self.get_v(module, value, &key)? {
-                Value::Object(prototype) => Ok(prototype),
-                _ => self.ensure_builtin_prototype("Object"),
-            };
+            let prototype = self.get_v(module, value, &key)?;
+            return self.constructed_prototype_link(module, prototype);
         }
         self.default_constructor_prototype_for_value(module, value)
+    }
+
+    /// GetPrototypeFromConstructor step 3-4 (ES2020 9.1.14) for a
+    /// `prototype` value read from the constructor: an object is the link,
+    /// and so is a function, through its own-property backing object
+    /// (prototype_link_for_value; `F.prototype = fn; new F()` inherits fn's
+    /// properties and `fn.isPrototypeOf` holds, Test262 S13.2.2_A1);
+    /// anything else falls back to %Object.prototype%.
+    fn constructed_prototype_link(
+        &mut self,
+        module: &Ir3Module,
+        prototype: Value,
+    ) -> Result<ObjectId, InterpreterError> {
+        match prototype {
+            Value::Object(prototype) => Ok(prototype),
+            function if function.is_callable() => {
+                match self.prototype_link_for_value(Some(module), &function)? {
+                    Some(Some(link)) => Ok(link),
+                    _ => self.ensure_builtin_prototype("Object"),
+                }
+            }
+            _ => self.ensure_builtin_prototype("Object"),
+        }
     }
 
     fn default_constructor_prototype_for_value(

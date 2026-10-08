@@ -10,13 +10,87 @@
 
 use super::*;
 
+/// The object Array.from fills: a fresh Array, or the object `new C(...)`
+/// returned for a constructor `this` (ES2020 22.1.2.1 steps 5.a and 12.a),
+/// which gets its elements through [[DefineOwnProperty]] and its length
+/// through [[Set]] (bd-9vouw.361).
+#[derive(Clone, Copy)]
+struct ArrayFromTarget {
+    id: ObjectId,
+    constructed: bool,
+}
+
 impl InterpreterCore {
     pub(super) fn array_from_builtin(
         &mut self,
         module: Option<&Ir3Module>,
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
-        self.array_from_impl(module, args, false)
+        self.array_from_impl(module, args, false, None)
+    }
+
+    /// `C.from(items, mapfn, thisArg)` for a constructor `C` other than
+    /// %Array% (a subclass, `Array.from.call(Object, ...)`): `new C()` before
+    /// an iterable's iterator is taken, `new C(len)` once an array-like's
+    /// length is read, each element defined on the result as it is read and
+    /// mapped (a failing definition closes the iterator), then
+    /// Set(A, "length", len, true). The result was a finished plain array
+    /// copied into `new C()`: C saw no length, a `length` setter never ran,
+    /// and a Proxy result's defineProperty trap was skipped (bd-9vouw.361).
+    pub(super) fn array_from_with_constructor(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        constructor: Value,
+    ) -> Result<Value, InterpreterError> {
+        self.array_from_impl(Some(module), args, false, Some(constructor))
+    }
+
+    /// `C.of(...items)` for a constructor `C` other than %Array%:
+    /// `new C(items.length)`, CreateDataPropertyOrThrow of each item, then
+    /// Set(A, "length", len, true) (ES2020 22.1.2.3, bd-9vouw.361).
+    pub(super) fn array_of_with_constructor(
+        &mut self,
+        module: &Ir3Module,
+        args: RegRange,
+        constructor: Value,
+    ) -> Result<Value, InterpreterError> {
+        let length = u64::from(args.count);
+        let held = (0..args.count)
+            .map(|offset| self.read_reg(args.start + offset))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (instance, label) = self.with_gc_nested_request(held, |core| {
+            core.invoke_inline_construct_with_labels(
+                Some(module),
+                constructor,
+                vec![Value::Int(length as i64)],
+                None,
+                None,
+            )
+        })?;
+        let label = self
+            .pending_hostcall_result_label
+            .as_ref()
+            .unwrap_or(&Label::Public)
+            .join(&label);
+        self.replace_pending_hostcall_result_label(Some(label))?;
+        let Value::Object(instance_id) = instance else {
+            return Err(InterpreterError::TypeError {
+                expected: "object from the Array.of constructor".to_string(),
+                got: instance.type_name().to_string(),
+            });
+        };
+        for offset in 0..args.count {
+            let item = self.read_reg(args.start + offset)?;
+            self.generic_create_data_property(Some(module), instance_id, u64::from(offset), item)?;
+        }
+        self.generic_set(
+            Some(module),
+            instance_id,
+            &Self::generic_length_key(),
+            Value::Int(length as i64),
+        )?;
+        Ok(Value::Object(instance_id))
     }
 
     /// IterableToList + CreateArrayFromList for builtins that take an
@@ -35,6 +109,7 @@ impl InterpreterCore {
                 count: args.count.min(1),
             },
             true,
+            None,
         )
     }
 
@@ -43,6 +118,7 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         args: RegRange,
         iterable_only: bool,
+        constructor: Option<Value>,
     ) -> Result<Value, InterpreterError> {
         let source = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
         let mapper = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
@@ -84,7 +160,17 @@ impl InterpreterCore {
             for value in [&source, &mapper, &this_arg] {
                 self.json_observe_reachable_value(value)?;
             }
-            self.array_from_source(module, source, &mapper, &this_arg, iterable_only)
+            if let Some(constructor) = &constructor {
+                self.json_observe_reachable_value(constructor)?;
+            }
+            self.array_from_source(
+                module,
+                source,
+                &mapper,
+                &this_arg,
+                iterable_only,
+                constructor.as_ref(),
+            )
         })();
         if let Err(error) = self.observe_scoped_callback_result() {
             outcome = Err(error);
@@ -136,6 +222,7 @@ impl InterpreterCore {
         mapper: &Value,
         this_arg: &Value,
         iterable_only: bool,
+        constructor: Option<&Value>,
     ) -> Result<Value, InterpreterError> {
         let backing = self.array_from_source_backing(&source)?;
         // GetMethod occurs once, before allocating the destination. Nullish
@@ -146,12 +233,13 @@ impl InterpreterCore {
             None => None,
         };
         self.observe_scoped_callback_result()?;
-        let target = self.alloc_array_with_prototype(None)?;
-        let count = if let Some(method) = method {
+        let (target, count) = if let Some(method) = method {
             let module = module.ok_or_else(|| InterpreterError::TypeError {
                 expected: "module-backed Array.from iterator invocation".to_string(),
                 got: "missing module context".to_string(),
             })?;
+            // `new C()` precedes GetIteratorFromMethod (step 5.a).
+            let target = self.array_from_target(Some(module), constructor, None)?;
             let context = self.json_parse_context_label()?;
             let (iterator, label) = self.invoke_inline_method_call_with_argument_label(
                 Some(module),
@@ -164,10 +252,14 @@ impl InterpreterCore {
             let init = self.prepare_custom_iterator_result(module, iterator)?;
             self.observe_scoped_callback_result()?;
             let iterator = self.init_iterator_from_state(source, init, IterationKind::ForOf)?;
-            self.array_from_iterator(Some(module), iterator, mapper, this_arg, target)?
+            let count =
+                self.array_from_iterator(Some(module), iterator, mapper, this_arg, target)?;
+            (target, count)
         } else if matches!(source, Value::Iterator(_) | Value::Generator(_)) {
+            let target = self.array_from_target(module, constructor, None)?;
             let iterator = self.init_for_of_iterator(module, source)?;
-            self.array_from_iterator(module, iterator, mapper, this_arg, target)?
+            let count = self.array_from_iterator(module, iterator, mapper, this_arg, target)?;
+            (target, count)
         } else {
             let explicit_iterator = match backing {
                 Some(object) => self.array_from_has_explicit_iterator(object)?,
@@ -178,34 +270,98 @@ impl InterpreterCore {
             // Reuse that same state rather than inventing a parallel key model.
             // This retains its existing key-identity and mutation limitations
             // (bd-9vouw.33); it does not claim complete Map/Set conformance.
-            let collection_iterator = match &source {
-                Value::Object(object) if !explicit_iterator => {
-                    self.array_from_collection_iterator(*object)?
-                }
+            let collection = match &source {
+                Value::Object(object) if !explicit_iterator => self
+                    .collection_storage_id(*object, "Set", "__values")
+                    .or_else(|| self.collection_storage_id(*object, "Map", "__entries"))
+                    .map(|_| *object),
                 _ => None,
             };
-            if let Some(iterator) = collection_iterator {
-                self.array_from_iterator(module, iterator, mapper, this_arg, target)?
+            if let Some(object) = collection {
+                // `new C()` before the collection's entries are taken.
+                let target = self.array_from_target(module, constructor, None)?;
+                let iterator = self
+                    .array_from_collection_iterator(object)?
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "native collection storage".to_string(),
+                        got: "missing collection storage".to_string(),
+                    })?;
+                let count = self.array_from_iterator(module, iterator, mapper, this_arg, target)?;
+                (target, count)
             } else if let Value::Str(text) = source {
                 // The implicit native string iterator is code-point based.
                 // An explicitly nullish @@iterator instead selects ToObject's
-                // indexed UTF-16 code-unit view, including split surrogates.
-                self.array_from_string(module, &text, mapper, this_arg, target, !explicit_iterator)?
+                // indexed UTF-16 code-unit view, including split surrogates,
+                // an array-like whose length `new C(len)` receives.
+                let code_points = !explicit_iterator;
+                let length = (!code_points).then(|| text.encode_utf16().count() as u64);
+                let target = self.array_from_target(module, constructor, length)?;
+                let count =
+                    self.array_from_string(module, &text, mapper, this_arg, target, code_points)?;
+                (target, count)
             } else if iterable_only {
                 return Err(InterpreterError::TypeError {
                     expected: "iterable".to_string(),
                     got: source.type_name().to_string(),
                 });
             } else {
-                self.array_from_array_like(module, source, backing, mapper, this_arg, target)?
+                self.array_from_array_like(module, source, backing, mapper, this_arg, constructor)?
             }
         };
-        self.json_store_parsed_property(
-            target,
-            JsString::from("length"),
-            Value::Int(count as i64),
+        if target.constructed {
+            // Set(A, "length", len, true): a setter runs, a refusal throws.
+            self.generic_set(
+                module,
+                target.id,
+                &Self::generic_length_key(),
+                Value::Int(count as i64),
+            )?;
+        } else {
+            self.json_store_parsed_property(
+                target.id,
+                JsString::from("length"),
+                Value::Int(count as i64),
+            )?;
+        }
+        Ok(Value::Object(target.id))
+    }
+
+    /// The object Array.from fills: `new C()` (an iterable) or `new C(len)`
+    /// (an array-like) for a constructor `this`, else a fresh Array.
+    fn array_from_target(
+        &mut self,
+        module: Option<&Ir3Module>,
+        constructor: Option<&Value>,
+        length: Option<u64>,
+    ) -> Result<ArrayFromTarget, InterpreterError> {
+        let Some(constructor) = constructor else {
+            return Ok(ArrayFromTarget {
+                id: self.alloc_array_with_prototype(None)?,
+                constructed: false,
+            });
+        };
+        let arguments = length.map_or_else(Vec::new, |length| {
+            vec![Value::Int(i64::try_from(length).unwrap_or(i64::MAX))]
+        });
+        let (instance, label) = self.invoke_inline_construct_with_labels(
+            module,
+            constructor.clone(),
+            arguments,
+            None,
+            None,
         )?;
-        Ok(Value::Object(target))
+        self.json_observe_label(label)?;
+        self.observe_scoped_callback_result()?;
+        let Value::Object(id) = instance else {
+            return Err(InterpreterError::TypeError {
+                expected: "object from the Array.from constructor".to_string(),
+                got: instance.type_name().to_string(),
+            });
+        };
+        Ok(ArrayFromTarget {
+            id,
+            constructed: true,
+        })
     }
 
     /// The object a source's property reads go to: an object-like value's
@@ -313,7 +469,7 @@ impl InterpreterCore {
         iterator: Value,
         mapper: &Value,
         this_arg: &Value,
-        target: ObjectId,
+        target: ArrayFromTarget,
     ) -> Result<u64, InterpreterError> {
         let mut index = 0_u64;
         loop {
@@ -400,22 +556,25 @@ impl InterpreterCore {
         backing: Option<ObjectId>,
         mapper: &Value,
         this_arg: &Value,
-        target: ObjectId,
-    ) -> Result<u64, InterpreterError> {
+        constructor: Option<&Value>,
+    ) -> Result<(ArrayFromTarget, u64), InterpreterError> {
         let Some(backing) = backing else {
-            return Ok(0);
+            let target = self.array_from_target(module, constructor, Some(0))?;
+            return Ok((target, 0));
         };
         // LengthOfArrayLike: Get and ToLength each occur once. Reuse the
         // observable length coercion already used by the JSON native methods.
         let length = self.json_reviver_array_length(module, backing, receiver.clone())?;
-        // This entry point constructs an ordinary Array, whose length is a
-        // uint32. ArrayCreate must fail before the first indexed Get; do not
-        // turn an invalid length into a long loop and a host budget refusal.
-        if length > u64::from(u32::MAX) {
+        // Without a constructor `this` this constructs an ordinary Array,
+        // whose length is a uint32. ArrayCreate must fail before the first
+        // indexed Get; do not turn an invalid length into a long loop and a
+        // host budget refusal. `new C(len)` decides for itself (step 12.a).
+        if constructor.is_none() && length > u64::from(u32::MAX) {
             return Err(InterpreterError::RangeError {
                 message: "invalid Array.from array length".to_string(),
             });
         }
+        let target = self.array_from_target(module, constructor, Some(length))?;
         for index in 0..length {
             self.json_charge_work()?;
             let key = RuntimePropertyKey::String(JsString::from(index.to_string()));
@@ -424,7 +583,7 @@ impl InterpreterCore {
             self.observe_scoped_callback_result()?;
             self.array_from_append(module, mapper, this_arg, target, index, element)?;
         }
-        Ok(length)
+        Ok((target, length))
     }
 
     fn array_from_string(
@@ -433,7 +592,7 @@ impl InterpreterCore {
         text: &JsString,
         mapper: &Value,
         this_arg: &Value,
-        target: ObjectId,
+        target: ArrayFromTarget,
         code_points: bool,
     ) -> Result<u64, InterpreterError> {
         // Stream exact UTF-16 code points. No source-sized vector, and no
@@ -470,7 +629,7 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         mapper: &Value,
         this_arg: &Value,
-        target: ObjectId,
+        target: ArrayFromTarget,
         index: u64,
         element: Value,
     ) -> Result<(), InterpreterError> {
@@ -504,7 +663,17 @@ impl InterpreterCore {
             self.json_reserve_temporary(mapped_bytes)?;
             let stored = (|| {
                 self.json_observe_reachable_value(&mapped)?;
-                self.json_store_parsed_property(target, JsString::from(index.to_string()), mapped)
+                if target.constructed {
+                    // CreateDataPropertyOrThrow on `new C(...)`'s result: its
+                    // [[DefineOwnProperty]] (a Proxy's trap) decides.
+                    self.generic_create_data_property(module, target.id, index, mapped)
+                } else {
+                    self.json_store_parsed_property(
+                        target.id,
+                        JsString::from(index.to_string()),
+                        mapped,
+                    )
+                }
             })();
             self.json_release_temporary(mapped_bytes);
             stored

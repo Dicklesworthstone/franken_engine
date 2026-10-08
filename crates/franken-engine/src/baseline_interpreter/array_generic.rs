@@ -1336,7 +1336,7 @@ impl InterpreterCore {
         }
     }
 
-    fn generic_length_key() -> RuntimePropertyKey {
+    pub(super) fn generic_length_key() -> RuntimePropertyKey {
         RuntimePropertyKey::String(JsString::from("length"))
     }
 
@@ -1384,7 +1384,7 @@ impl InterpreterCore {
     /// CreateDataPropertyOrThrow on a species result. Species may return a
     /// Proxy or an object with an existing property: defining an element
     /// uses [[DefineOwnProperty]], never [[Set]] or an inherited setter.
-    fn generic_create_data_property(
+    pub(super) fn generic_create_data_property(
         &mut self,
         module: Option<&Ir3Module>,
         object: ObjectId,
@@ -1507,7 +1507,7 @@ impl InterpreterCore {
     }
 
     /// Set(O, P, V, true): a refused write is a TypeError.
-    fn generic_set(
+    pub(super) fn generic_set(
         &mut self,
         m: Option<&Ir3Module>,
         o: ObjectId,

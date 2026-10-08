@@ -43425,25 +43425,30 @@ impl InterpreterCore {
                 self.call_standard_constructor(module, builtin, args)
             }
             BuiltinFunctionKind::StaticHostcall => {
-                let result = self.call_static_hostcall(module, builtin, args)?;
-                match receiver {
-                    // bd-9vouw.94: `C.from(...)` / `C.of(...)` with a
-                    // constructor `C` (a subclass of Array inherits them)
-                    // construct a C (ES2020 22.1.2.1 step 5.a, 22.1.2.3
-                    // step 4); they returned a plain Array.
-                    Some(ref constructor @ (Value::Closure(_) | Value::Function(_)))
-                        if matches!(
-                            &*builtin.module_specifier,
-                            "builtin:ArrayFrom" | "builtin:ArrayOf"
-                        ) && self.is_constructible_value(constructor) =>
-                    {
-                        self.array_static_result_for_constructor(
-                            module,
-                            constructor.clone(),
-                            result,
-                        )
+                // bd-9vouw.94: `C.from(...)` / `C.of(...)` with a constructor
+                // `C` other than %Array% (a subclass of Array inherits them;
+                // `Array.from.call(Object, ...)`) construct a C (ES2020
+                // 22.1.2.1 steps 5.a and 12.a, 22.1.2.3 step 4), in the
+                // specification's order (bd-9vouw.361).
+                let array_static = matches!(
+                    &*builtin.module_specifier,
+                    "builtin:ArrayFrom" | "builtin:ArrayOf"
+                );
+                if array_static
+                    && let Some(constructor) = receiver.clone()
+                    && !Self::is_intrinsic_array_constructor(&constructor)
+                    && self.is_constructible_value(&constructor)
+                {
+                    let tag = builtin.module_specifier.to_string();
+                    let instruction_index = u32::try_from(self.ip).unwrap_or(u32::MAX);
+                    check_hostcall_capability_gate(self, &tag, instruction_index)?;
+                    if tag == "builtin:ArrayFrom" {
+                        self.array_from_with_constructor(module, args, constructor)
+                    } else {
+                        self.array_of_with_constructor(module, args, constructor)
                     }
-                    _ => Ok(result),
+                } else {
+                    self.call_static_hostcall(module, builtin, args)
                 }
             }
             BuiltinFunctionKind::PrototypeGetter => {
@@ -106873,54 +106878,12 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
-    /// bd-9vouw.94: the result of Array.from / Array.of called with the
-    /// constructor `constructor`: `new constructor()` holding the elements of
-    /// the plain array the builtin produced (CreateDataPropertyOrThrow per
-    /// index), then `length` set. A construct result that is not an object
-    /// is a TypeError.
-    fn array_static_result_for_constructor(
-        &mut self,
-        module: &Ir3Module,
-        constructor: Value,
-        plain: Value,
-    ) -> Result<Value, InterpreterError> {
-        let Value::Object(plain_id) = plain else {
-            return Ok(plain);
-        };
-        let (instance, label) =
-            self.with_gc_nested_request(vec![Value::Object(plain_id)], |core| {
-                core.invoke_inline_construct_with_labels(
-                    Some(module),
-                    constructor,
-                    Vec::new(),
-                    None,
-                    None,
-                )
-            })?;
-        let label = self
-            .pending_hostcall_result_label
-            .as_ref()
-            .unwrap_or(&Label::Public)
-            .join(&label);
-        self.replace_pending_hostcall_result_label(Some(label))?;
-        let Value::Object(instance_id) = instance else {
-            return Err(InterpreterError::TypeError {
-                expected: "object from the Array.from / Array.of constructor".to_string(),
-                got: instance.type_name().to_string(),
-            });
-        };
-        let length = self.generic_length(Some(module), plain_id)?;
-        for index in 0..usize::try_from(length).unwrap_or(usize::MAX) {
-            if let Some(element) = self.array_index_get(Some(module), plain_id, index)? {
-                self.create_data_property_or_throw(instance_id, index.to_string(), element)?;
-            }
-        }
-        self.set_object_property(
-            instance_id,
-            "length".to_string(),
-            Value::Int(i64::try_from(length).unwrap_or(i64::MAX)),
-        )?;
-        Ok(Value::Object(instance_id))
+    /// Whether `value` is this realm's %Array%: Array.from / Array.of with
+    /// it as `this` build an ordinary Array directly.
+    fn is_intrinsic_array_constructor(value: &Value) -> bool {
+        matches!(value, Value::BuiltinFunction(builtin)
+            if builtin.kind == BuiltinFunctionKind::StandardConstructor
+                && &*builtin.module_specifier == "Array")
     }
 
     /// ES2020 9.4.2.2 ArrayCreate(length). Validate before allocating or

@@ -58,7 +58,7 @@ impl InterpreterCore {
         match parts {
             Value::Undefined => {}
             parts if parts.is_object_like() => {
-                for part in self.promise_combinator_iterable_values(Some(module), parts)? {
+                for part in self.blob_part_values(module, parts)? {
                     self.append_blob_part(&part, &mut bytes)?;
                 }
             }
@@ -102,6 +102,7 @@ impl InterpreterCore {
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
             if let Some(blob) = &object.blob {
+                self.check_blob_bytes_headroom(bytes.len(), blob.bytes.len())?;
                 bytes.extend_from_slice(&blob.bytes);
                 return Ok(());
             }
@@ -109,7 +110,9 @@ impl InterpreterCore {
                 || object.typed_array.is_some()
                 || object.data_view.is_some()
             {
-                bytes.extend(self.text_codec_input_bytes(part)?);
+                let viewed = self.text_codec_input_bytes(part)?;
+                self.check_blob_bytes_headroom(bytes.len(), viewed.len())?;
+                bytes.extend(viewed);
                 return Ok(());
             }
         }
@@ -117,10 +120,57 @@ impl InterpreterCore {
             Value::Str(text) => text.clone(),
             other => JsString::from(self.value_to_string(other)),
         };
-        bytes.extend_from_slice(
-            super::text_codec::utf8_of_code_units(text.encode_utf16()).as_bytes(),
-        );
+        let utf8 = super::text_codec::utf8_of_code_units(text.encode_utf16());
+        self.check_blob_bytes_headroom(bytes.len(), utf8.len())?;
+        bytes.extend_from_slice(utf8.as_bytes());
         Ok(())
+    }
+
+    /// Refuse to grow a blob under construction past the memory budget
+    /// BEFORE copying the next part: the bytes accumulate in a native `Vec`
+    /// that `alloc_blob` only charges once every part is in, so repeating one
+    /// large blob part could otherwise allocate far past the guest's budget
+    /// (`new Blob(Array(1e5).fill(eightMiBBlob))`).
+    fn check_blob_bytes_headroom(
+        &self,
+        accumulated: usize,
+        next_part: usize,
+    ) -> Result<(), InterpreterError> {
+        self.check_temporary_memory_budget(
+            u64::try_from(accumulated.saturating_add(next_part)).unwrap_or(u64::MAX),
+        )
+    }
+
+    /// The blob parts of `parts`, the whole sequence first as WebIDL
+    /// converts it. An Array goes through the budget-checked element buffer;
+    /// any other iterable (a typed array iterates natively, one `Value` per
+    /// byte) is collected with the growing `Vec` charged at each step, so
+    /// `new Blob(new Uint8Array(48 << 20))` is refused instead of building
+    /// ~1-2 GB of `Value`s before the first part is appended.
+    fn blob_part_values(
+        &mut self,
+        module: &Ir3Module,
+        parts: Value,
+    ) -> Result<Vec<Value>, InterpreterError> {
+        if let Value::Object(array_id) = parts
+            && self
+                .heap
+                .get(array_id.0 as usize)
+                .is_some_and(|object| object.is_array)
+            && !self.array_from_has_explicit_iterator(array_id)?
+        {
+            return self.array_like_values(array_id);
+        }
+        let iterator = self.init_for_of_iterator(Some(module), parts)?;
+        let mut values = Vec::new();
+        while let Some(value) = self.advance_for_of_iterator(Some(module), iterator.clone())? {
+            values.push(value);
+            self.check_temporary_memory_budget(
+                u64::try_from(values.len().saturating_mul(std::mem::size_of::<Value>()))
+                    .unwrap_or(u64::MAX),
+            )?;
+        }
+        Ok(values)
     }
 
     /// A fresh blob object holding `bytes`, its bytes charged.
@@ -221,6 +271,7 @@ impl InterpreterCore {
             }
             "text" => {
                 let text = String::from_utf8_lossy(&data.bytes).into_owned();
+                self.check_string_limit(text.encode_utf16().count())?;
                 let promise = self
                     .create_fulfilled_promise(Self::value_to_js_value(&Value::str(text)), label)?;
                 Ok(Value::Promise(promise.0))

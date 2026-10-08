@@ -44,3 +44,45 @@ console.log(out.join(' '));
         ]
     );
 }
+
+/// A String wrapper's own keys are its indices, then `length`
+/// (ES2020 9.4.3.3), and Object.assign / object spread copy its indices
+/// (enumerable; `length` is not). getOwnPropertyNames, Reflect.ownKeys and
+/// getOwnPropertyDescriptors left `length` out, and copies of
+/// `new String('ab')` had no indices. Node v22.2.0's line (Bun 1.4.2
+/// agrees).
+#[test]
+fn string_wrapper_own_keys_and_copies() {
+    let source = r#"
+var out = [];
+function t(name, f) { try { out.push(name + '=' + JSON.stringify(f())); } catch (e) { out.push(name + '!' + e.constructor.name); } }
+t('assign-prim', function () { return Object.assign({}, 'ab'); });
+t('assign-wrapper', function () { return Object.assign({}, Object('ab')); });
+t('spread-prim', function () { return { ...'ab' }; });
+t('spread-wrapper', function () { return { ...Object('ab') }; });
+t('entries', function () { return Object.entries('ab'); });
+t('values', function () { return Object.values(Object('ab')); });
+t('names-prim', function () { return Object.getOwnPropertyNames('ab'); });
+t('names-wrapper', function () { return Object.getOwnPropertyNames(Object('ab')); });
+t('ownkeys', function () { return Reflect.ownKeys(Object('ab')); });
+t('descs', function () { return Object.keys(Object.getOwnPropertyDescriptors('ab')); });
+t('hasown', function () { return [Object.hasOwn('ab', 1), Object.hasOwn('ab', 'length'), Object('ab').hasOwnProperty('length')]; });
+t('rest', function () { var { 0: a, ...r } = 'xyz'; return [a, r]; });
+t('assign-extra', function () { var s = Object('ab'); s.x = 1; return Object.assign({}, s); });
+console.log(out.join(' | '));
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "assign-prim={\"0\":\"a\",\"1\":\"b\"} | assign-wrapper={\"0\":\"a\",\"1\":\"b\"} | spread-prim={\"0\":\"a\",\"1\":\"b\"} | spread-wrapper={\"0\":\"a\",\"1\":\"b\"} | entries=[[\"0\",\"a\"],[\"1\",\"b\"]] | values=[\"a\",\"b\"] | names-prim=[\"0\",\"1\",\"length\"] | names-wrapper=[\"0\",\"1\",\"length\"] | ownkeys=[\"0\",\"1\",\"length\"] | descs=[\"0\",\"1\",\"length\"] | hasown=[true,true,true] | rest=[\"x\",{\"1\":\"y\",\"2\":\"z\"}] | assign-extra={\"0\":\"a\",\"1\":\"b\",\"x\":1}",
+        ]
+    );
+}

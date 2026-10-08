@@ -64820,6 +64820,12 @@ impl InterpreterCore {
             .into_iter()
             .map(|(key, _)| Value::Str(key))
             .collect();
+        // A String wrapper's `length` follows its indices (ES2020 9.4.3.3);
+        // Reflect.ownKeys(new String('ab')) left it out (bd-9vouw.356).
+        let string_wrapper = matches!(self.primitive_wrapper_value(object_id), Some(Value::Str(_)));
+        if string_wrapper {
+            keys.push(Value::Str(JsString::from("length")));
+        }
         let virtual_keys = self.canonical_prototype_virtual_own_keys(object_id);
         keys.extend(virtual_keys.iter().cloned());
         let object = self
@@ -64832,7 +64838,8 @@ impl InterpreterCore {
                 .into_iter()
                 .filter_map(|key| match key {
                     RuntimePropertyKey::String(key)
-                        if self.own_runtime_property_visible(object_id, &key) =>
+                        if self.own_runtime_property_visible(object_id, &key)
+                            && !(string_wrapper && key.as_str() == Some("length")) =>
                     {
                         Some(Value::Str(key))
                     }
@@ -65285,6 +65292,15 @@ impl InterpreterCore {
                 .is_some_and(|index| index < view.length)
         {
             return Ok(true);
+        }
+        // So are a String wrapper's code-unit indices, which are not heap
+        // entries either; its `length` is not enumerable (ES2020 9.4.3.1).
+        // Object.assign({}, new String('ab')) copied nothing (bd-9vouw.356).
+        if let RuntimePropertyKey::String(name) = key
+            && let Some(name) = name.as_str()
+            && self.string_wrapper_own_property(object_id, name).is_some()
+        {
+            return Ok(name != "length");
         }
         // Recheck existence per key: an earlier getter may delete a later
         // property, even though that key remains in the ownKeys snapshot.
@@ -93844,6 +93860,13 @@ impl InterpreterCore {
                             .into_iter()
                             .map(|(key, _)| Value::Str(key))
                             .collect::<Vec<_>>();
+                        // A String wrapper's `length` follows its indices, as
+                        // for a string primitive above (bd-9vouw.356).
+                        let string_wrapper =
+                            matches!(self.primitive_wrapper_value(obj_id), Some(Value::Str(_)));
+                        if string_wrapper {
+                            property_name_values.push(Value::str("length"));
+                        }
                         // bd-9vouw.122: %Array.prototype%'s virtual names first.
                         let virtual_names = self
                             .canonical_prototype_virtual_own_keys(obj_id)
@@ -93858,7 +93881,10 @@ impl InterpreterCore {
                                 .properties
                                 .exact_keys()
                                 .into_iter()
-                                .filter(|key| self.own_runtime_property_visible(obj_id, key))
+                                .filter(|key| {
+                                    self.own_runtime_property_visible(obj_id, key)
+                                        && !(string_wrapper && key.as_str() == Some("length"))
+                                })
                                 .map(Value::Str)
                                 .filter(|key| !virtual_names.contains(key)),
                         );

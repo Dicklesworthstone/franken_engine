@@ -1104,11 +1104,14 @@ pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<S
     let unicode_mode_error = (unicode_sets || flags.contains('u'))
         .then(|| regexp_syntax::unicode_mode_syntax_error(pattern, unicode_sets))
         .flatten();
-    if let Some(message) = unicode_mode_error.or_else(|| {
-        unicode_sets
-            .then(|| regexp_syntax::unicode_sets_class_error(pattern))
-            .flatten()
-    }) {
+    if let Some(message) = unicode_mode_error
+        .or_else(|| {
+            unicode_sets
+                .then(|| regexp_syntax::unicode_sets_class_error(pattern))
+                .flatten()
+        })
+        .or_else(|| regexp_syntax::group_modifier_error(pattern, unicode_sets))
+    {
         return Some(format!(
             "Invalid regular expression: /{pattern}/{flags}: {message}"
         ));

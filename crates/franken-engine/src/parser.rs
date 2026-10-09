@@ -11596,15 +11596,18 @@ fn leading_regexp_literal(input: &str) -> Option<(usize, String, String)> {
             // Found closing slash
             let pattern = &input[1..i];
             let rest = &input[i + 1..];
-            // Parse flags (d, g, i, m, s, u, v, y)
+            // RegularExpressionFlags are every IdentifierPart character (and
+            // escape) after the slash; regexp_literal_early_error rejects any
+            // that is not one of `dgimsuvy`, so `/./G` and `/./\u0067` are
+            // SyntaxErrors rather than a literal followed by a name.
             let mut flags = String::new();
             let mut end = i + 1;
             for (offset, fc) in rest.char_indices() {
-                if matches!(fc, 'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd' | 'v') {
+                if is_identifier_continue(fc) || fc == '\\' {
                     flags.push(fc);
                     end = i + 1 + offset + fc.len_utf8();
                 } else {
-                    // Stop at non-flag character (could be operator or whitespace)
+                    // An operator, whitespace or punctuator ends the flags.
                     break;
                 }
             }

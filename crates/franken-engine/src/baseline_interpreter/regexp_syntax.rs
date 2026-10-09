@@ -2059,6 +2059,55 @@ pub(super) fn unicode_sets_class_error(pattern: &str) -> Option<&'static str> {
     None
 }
 
+/// The early error of a group that opens with `(?` (ES2025 22.2.1): after
+/// `(?` comes `:`, `=`, `!`, `<=`, `<!` or a `<name>`, or modifiers
+/// `(?ims-ims:` whose letters are only `i`, `m` and `s`, none twice, with a
+/// `-` that has a letter on at least one side. `regex` reads `(?ms-i)`,
+/// `(?-s)` and `(?u:a)` as its own flag groups, so those compiled. `None`
+/// when every such group is well formed.
+pub(super) fn group_modifier_error(pattern: &str, unicode_sets: bool) -> Option<&'static str> {
+    const INVALID_GROUP: &str = "Invalid group";
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut index = 0;
+    while let Some(&c) = chars.get(index) {
+        match c {
+            '\\' => index += 2,
+            '[' => index += class_len(&chars, index, unicode_sets),
+            '(' if chars.get(index + 1) == Some(&'?') => {
+                let mut cursor = index + 2;
+                if matches!(chars.get(cursor), Some(':' | '=' | '!' | '<')) {
+                    index = cursor + 1;
+                    continue;
+                }
+                let mut seen = [false; 3];
+                let mut letters = [0usize; 2];
+                let mut side = 0;
+                loop {
+                    match chars.get(cursor) {
+                        Some('-') if side == 0 => side = 1,
+                        Some(&flag @ ('i' | 'm' | 's')) => {
+                            let slot = "ims".find(flag).unwrap_or(0);
+                            if std::mem::replace(&mut seen[slot], true) {
+                                return Some("Repeated flag in modifiers");
+                            }
+                            letters[side] += 1;
+                        }
+                        Some(':') => break,
+                        _ => return Some(INVALID_GROUP),
+                    }
+                    cursor += 1;
+                }
+                if side == 1 && letters == [0, 0] {
+                    return Some(INVALID_GROUP);
+                }
+                index = cursor + 1;
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
 pub(super) fn unicode_property_escape_error(pattern: &str, flags: &str) -> Option<&'static str> {
     let unicode_sets = flags.contains('v');
     if !unicode_sets && !flags.contains('u') {
@@ -2164,7 +2213,7 @@ fn valid_property_escape(body: &str, negated: bool, unicode_sets: bool) -> bool 
 mod tests {
     use super::{
         GENERAL_CATEGORY_VALUES, LONE_PROPERTY_NAMES, SCRIPT_VALUES, STRING_PROPERTY_NAMES,
-        has_nested_quantifier, js_pattern_to_rust, unicode_mode_syntax_error,
+        group_modifier_error, has_nested_quantifier, js_pattern_to_rust, unicode_mode_syntax_error,
         unicode_property_escape_error, unicode_sets_class_error,
     };
     use regex::{Regex, RegexBuilder};
@@ -2943,5 +2992,37 @@ mod tests {
         assert!(!rust_with(r"^[\u0000-\udfff]$", "u").is_match("\u{FFFF}"));
         assert!(rust_with(r"^[^\ud800-\udfff]$", "u").is_match("😀"));
         assert!(rust_with(r"^[\uD83D\uDE00]$", "u").is_match("😀"));
+    }
+
+    /// bd-9vouw.406: `(?` groups. The verdicts are Bun 1.4.2's
+    /// (`Function("/" + pattern + "/" + flags)`), which implements ES2025
+    /// modifiers; Node v22.2.0 predates them and rejects all of these.
+    #[test]
+    fn group_modifiers_bd_9vouw_406() {
+        for (pattern, unicode_sets) in [
+            ("(?i:a)", false),
+            ("(?-i:a)", false),
+            ("(?im-s:a)", false),
+            ("(?i-ms:a)", false),
+            ("(?:a)", false),
+            ("(?i:a(?m:b))", false),
+            ("[(?ms)]", false),
+            ("(?<n>a)", false),
+            ("(?<=a)b", false),
+            ("(?<!a)b", false),
+            ("(?i:a)", true),
+            (r"a\(?b", false),
+        ] {
+            assert_eq!(
+                group_modifier_error(pattern, unicode_sets),
+                None,
+                "{pattern}"
+            );
+        }
+        for pattern in [
+            "(?ms-i)", "(?-s)", "(?-u:a)", "(?u:a)", "(?ii:a)", "(?i-i:a)", "(?-:a)",
+        ] {
+            assert!(group_modifier_error(pattern, false).is_some(), "{pattern}");
+        }
     }
 }

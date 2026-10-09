@@ -157497,7 +157497,7 @@ mod tests {
         assert!(matches!(
             err,
             InterpreterError::TypeError { expected, got }
-                if expected == "binding kind 0..=4" && got == "kind 99"
+                if expected == "binding kind 0..=5" && got == "kind 99"
         ));
     }
 

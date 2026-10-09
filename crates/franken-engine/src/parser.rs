@@ -18285,11 +18285,12 @@ mod tests {
             Expression::StringLiteral(value) if value.code_units_vec() == [0x0000, 0x0038]
         ));
 
+        // A SyntaxError, as in Node (bd-9vouw.444), not a refusal.
         for source in ["\"a\nb\"", "\"a\rb\"", "\"a\r\nb\""] {
             let error = CanonicalEs2020Parser
                 .parse(source, ParseGoal::Script)
                 .expect_err("raw LF/CRLF in a quoted literal must fail closed");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
     }
 
@@ -18362,7 +18363,8 @@ mod tests {
             let error = CanonicalEs2020Parser
                 .parse(source, ParseGoal::Script)
                 .expect_err("malformed quoted source must fail closed");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            // A SyntaxError, as in Node (bd-9vouw.444), not a refusal.
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
     }
 
@@ -18493,7 +18495,8 @@ mod tests {
             let error = CanonicalEs2020Parser
                 .parse(source, ParseGoal::Script)
                 .expect_err("malformed quoted postfix source must fail closed");
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source:?}");
+            // A SyntaxError, as in Node (bd-9vouw.444), not a refusal.
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source:?}");
         }
     }
 
@@ -20122,7 +20125,8 @@ mod tests {
             let error = CanonicalEs2020Parser
                 .parse(source, ParseGoal::Module)
                 .expect_err(source);
-            assert_eq!(error.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+            // A SyntaxError, as in Node (bd-9vouw.429), not a refusal.
+            assert_eq!(error.code, ParseErrorCode::InvalidSyntax, "{source}");
         }
     }
 

@@ -4202,6 +4202,9 @@ fn parse_source(
     if !context.strict_mode {
         apply_annex_b_block_functions(&mut statements, &[]);
     }
+    if goal == ParseGoal::Module {
+        reject_duplicate_export_names(&statements, source_label)?;
+    }
     let source_len = to_u64(text.len(), source_label, None)?;
     let (end_line, end_column) = source_end_position(text, source_label)?;
     let span = SourceSpan::new(0, source_len, 1, 1, end_line, end_column);
@@ -4210,6 +4213,80 @@ fn parse_source(
         body: statements,
         span,
     })
+}
+
+/// An import or export declaration is a ModuleItem: it may stand only at a
+/// module's top level, not in a block, a branch, a loop body, a label or a
+/// function body (ES2020 15.2). The statement being parsed is nested when
+/// its statement depth is above 1; such a declaration reached lowering and
+/// failed with "Value stack underflow during lowering" (bd-9vouw.392).
+fn reject_nested_module_declaration(
+    context: &ParseExecutionContext<'_>,
+    keyword: &str,
+    span: &SourceSpan,
+) -> ParseResult<()> {
+    if context.statement_depth > 1 {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            format!("an {keyword} declaration may only appear at the top level of a module"),
+            context.source_label.to_string(),
+            Some(*span),
+        ));
+    }
+    Ok(())
+}
+
+/// ES2020 15.2.1.1: it is a Syntax Error if the ExportedNames of a module
+/// contain a duplicate (`export { a }; export { b as a }`, two default
+/// exports, `export * as ns` beside `export { ns }`). A plain `export *`
+/// exports no name of its own (bd-9vouw.392).
+fn reject_duplicate_export_names(statements: &[Statement], source_label: &str) -> ParseResult<()> {
+    let mut seen = BTreeSet::new();
+    for statement in statements {
+        let Statement::Export(export) = statement else {
+            continue;
+        };
+        for name in exported_names(&export.kind) {
+            if !seen.insert(name.clone()) {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    format!("duplicate export name `{name}`"),
+                    source_label.to_string(),
+                    Some(export.span),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The names an export declaration adds to the module's ExportedNames.
+fn exported_names(kind: &ExportKind) -> Vec<String> {
+    let clause = match kind {
+        ExportKind::Default(_) => return vec!["default".to_string()],
+        ExportKind::NamedClause(clause) => clause.canonical_head(),
+    };
+    let clause = clause.trim();
+    if let Some(namespace) = clause.strip_prefix("* as ") {
+        return vec![namespace.trim().to_string()];
+    }
+    let Some(inner) = clause
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+    else {
+        return Vec::new();
+    };
+    inner
+        .split(',')
+        .map(str::trim)
+        .filter(|specifier| !specifier.is_empty())
+        .map(
+            |specifier| match specifier.split_whitespace().collect::<Vec<_>>().as_slice() {
+                [_, "as", exported] => (*exported).to_string(),
+                _ => specifier.to_string(),
+            },
+        )
+        .collect()
 }
 
 fn parse_module_statement_segment(
@@ -4823,6 +4900,7 @@ fn parse_statement_inner(
                 Some(span),
             ));
         }
+        reject_nested_module_declaration(context, "import", &span)?;
         return parse_import(statement, context.source_label, span).map(Statement::Import);
     }
 
@@ -4835,6 +4913,7 @@ fn parse_statement_inner(
                 Some(span),
             ));
         }
+        reject_nested_module_declaration(context, "export", &span)?;
         return parse_export(statement, span, context).map(Statement::Export);
     }
 

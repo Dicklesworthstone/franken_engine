@@ -8,10 +8,14 @@
 //!
 //! Verdicts are Node v22.2.0's, which throws SyntaxError for all of these
 //! except increments of an ordinary call (`f()++`, `++g()`): V8 defers
-//! those to a runtime ReferenceError for web compatibility, while ES2020 and
-//! Test262 make them early SyntaxErrors, which is what this parser does.
-//! Before this change the engine threw a SyntaxError only when the
-//! expression ran, after calling `f`.
+//! those to a runtime ReferenceError for web compatibility. In non-strict
+//! code Annex B does too (Test262 annexB/language/expressions/
+//! assignmenttargettype/callexpression-in-{postfix,prefix}-update.js,
+//! bd-9vouw.408); in strict code they are early SyntaxErrors (Test262
+//! language/expressions/assignmenttargettype/direct-callexpression-in-*),
+//! which is what these cases assert. They used to be sloppy here, asserting
+//! the pre-Annex-B rule that .408 replaced. Before this change the engine
+//! threw a SyntaxError only when the expression ran, after calling `f`.
 
 use frankenengine_engine::parser_api_stability::parse_script;
 
@@ -34,8 +38,8 @@ fn calls_and_optional_chains_are_not_update_targets() {
     for source in [
         "import('')++",
         "++import('');",
-        "function f() {} f()++;",
-        "function g() {} ++g();",
+        "'use strict'; function f() {} f()++;",
+        "'use strict'; function g() {} ++g();",
         "var a = {}; a?.b++;",
     ] {
         let error = parse_script(source).expect_err("early SyntaxError");

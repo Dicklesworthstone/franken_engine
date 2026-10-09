@@ -38387,7 +38387,7 @@ impl InterpreterCore {
         if Self::is_bare_module_specifier(specifier) {
             let candidate = self.resolve_bare_import_specifier(specifier)?;
             let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
-            return Ok(canonical.display().to_string());
+            return Ok(self.module_key_for_canonical_path(&canonical));
         }
         let resolved = self.resolve_specifier_base(specifier)?;
         let candidate = self.resolve_module_candidate(&resolved).ok_or_else(|| {
@@ -38397,7 +38397,25 @@ impl InterpreterCore {
             }
         })?;
         let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
-        Ok(canonical.display().to_string())
+        Ok(self.module_key_for_canonical_path(&canonical))
+    }
+
+    /// The module-map key of a resolved module file: the entry module's own
+    /// specifier when the file is the entry's (bd-9vouw.411). The entry is
+    /// recorded under its source label, the path as the caller gave it
+    /// (`app.mjs`, `./app.mjs`, `/dir/./app.mjs`), while imports resolve to
+    /// canonical paths, so an import cycling back to the entry missed its
+    /// record and loaded and evaluated the entry a second time (its top-level
+    /// code ran twice, and the first run saw the cycle's exports missing).
+    fn module_key_for_canonical_path(&self, canonical: &Path) -> String {
+        if let Some(entry) = self.entry_module_specifier.as_deref()
+            && Path::new(entry)
+                .canonicalize()
+                .is_ok_and(|entry_path| entry_path == canonical)
+        {
+            return entry.to_string();
+        }
+        canonical.display().to_string()
     }
 
     /// Not a relative (`./`, `../`) or absolute path: a package name, a

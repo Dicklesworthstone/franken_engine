@@ -805,9 +805,12 @@ fn lower_ir0_to_ir3_unit(
         }
     };
 
-    let mut ir2_result = match lower_ir1_to_ir2_with_host_io_exception_provenance(
+    // Each pass hashed its output module; the next pass reuses that hash
+    // while the module is unchanged (bd-9vouw.382).
+    let mut ir2_result = match lower_ir1_to_ir2_with_input_hash(
         &ir1_result.module,
         context.host_io_exception_provenance,
+        content_hash_from_hash_string(&ir1_result.witness.output_hash),
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir1_to_ir2_lowered"));
@@ -829,6 +832,7 @@ fn lower_ir0_to_ir3_unit(
     // ordinary per-op classifier. Declare the wrapper's module-load authority
     // explicitly so IR3 routing and E9 dispatch metadata see the same surface
     // that the interpreter can execute.
+    let mut ir2_hash = content_hash_from_hash_string(&ir2_result.witness.output_hash);
     if context.authenticated_commonjs_runtime_bindings
         && !ir2_result
             .module
@@ -844,6 +848,8 @@ fn lower_ir0_to_ir3_unit(
             .module
             .required_capabilities
             .sort_by(|left, right| left.0.cmp(&right.0));
+        // The pass's output hash no longer describes the module.
+        ir2_hash = None;
     }
 
     let ir2_flow_proof_artifact = match build_ir2_flow_proof_artifact(&ir2_result.module, context) {
@@ -861,10 +867,11 @@ fn lower_ir0_to_ir3_unit(
         }
     };
 
-    let ir3_result = match lower_ir2_to_ir3_with_host_io_exception_provenance(
+    let ir3_result = match lower_ir2_to_ir3_with_input_hash(
         &ir2_result.module,
         context.host_io_exception_provenance,
         context.authenticated_commonjs_runtime_bindings,
+        ir2_hash,
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir2_to_ir3_lowered"));
@@ -5734,9 +5741,13 @@ fn lower_statement_to_ir1_with_flow(
                 control_flow,
                 label_ctx,
             )?;
-            ops.push(Ir1Op::Jump {
-                label_id: end_label,
-            });
+            // Without an else branch the end follows the consequent: no jump
+            // to the next instruction (bd-9vouw.328).
+            if if_stmt.alternate.is_some() {
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+            }
             ops.push(Ir1Op::Label { id: else_label });
             if let Some(alt) = &if_stmt.alternate {
                 lower_statement_to_ir1_with_flow(
@@ -7601,13 +7612,20 @@ fn lower_statement_to_ir1_with_flow(
                         arg_count: 0,
                     });
                 } else {
-                    // Load the parent constructor evaluated once above.
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: super_binding.expect("user superclass binding"),
-                    });
-                    ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".into()),
-                    });
+                    // The parent constructor evaluated once above.
+                    let prototype_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "class_super_prototype",
+                    )?;
+                    emit_heritage_prototype(
+                        ops,
+                        super_binding.expect("user superclass binding"),
+                        prototype_binding,
+                        label_counter,
+                    );
                 }
 
                 // Child.prototype inherits from Parent.prototype. An internal
@@ -7699,10 +7717,18 @@ fn lower_statement_to_ir1_with_flow(
                 if method.is_generator {
                     push_generator_prologue_end(&mut m_body_ops);
                 }
+                // The member's own mentions with the class-level ones: the
+                // whole class's set cost each member the size of the class,
+                // O(members^2) to lower one class.
+                let member_mentions = MentionedNames::of_class(
+                    cls.name.as_deref(),
+                    cls.super_class.as_deref(),
+                    std::slice::from_ref(method),
+                );
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     None,
-                    &class_mentions,
+                    &member_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
@@ -8026,10 +8052,27 @@ fn lower_ir1_to_ir2_with_host_io_exception_provenance(
     ir1: &Ir1Module,
     host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
+    lower_ir1_to_ir2_with_input_hash(ir1, host_io_exception_provenance, None)
+}
+
+/// [`lower_ir1_to_ir2_with_host_io_exception_provenance`] given `ir1`'s
+/// content hash when the caller already holds it: the IR0 -> IR1 pass's
+/// output hash, for the module it returned unchanged. Each canonical hash
+/// of a bundle's IR is a full encode of the module (bd-9vouw.382).
+fn lower_ir1_to_ir2_with_input_hash(
+    ir1: &Ir1Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    input_hash: Option<ContentHash>,
+) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_object_method_schema(ir1).map_err(lowering_error_from_ir_error)?;
-    let ir1_hash = ir1.content_hash();
+    let ir1_hash = input_hash.unwrap_or_else(|| ir1.content_hash());
+    debug_assert_eq!(
+        ir1_hash,
+        ir1.content_hash(),
+        "a supplied IR1 hash is the module's"
+    );
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
     ir2.header.schema_version = ir1.header.schema_version;
     ir2.scopes = ir1.scopes.clone();
@@ -8201,6 +8244,26 @@ fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Inst
 /// compound-assignment lowering (bd-cwfiv) to build the read-modify-write
 /// `object[key] = object[key] <op> rhs`. `Assign` and the logical compound ops
 /// (`&&=`/`||=`/`??=`) are handled on dedicated paths and must not reach here.
+/// Whether evaluating `expression` runs no code that could write a binding:
+/// a literal or a read of a resolved source binding (bd-9vouw.327). Any other
+/// form can call a function, a getter or a conversion.
+fn right_side_runs_no_code(
+    expression: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    match expression {
+        Expression::NumericLiteral(_)
+        | Expression::FloatLiteral(_)
+        | Expression::StringLiteral(_)
+        | Expression::BigIntLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral
+        | Expression::UndefinedLiteral => true,
+        Expression::Identifier(name) => has_source_lexical_binding(binding_lookup, name),
+        _ => false,
+    }
+}
+
 fn compound_assignment_binary_operator(
     operator: AssignmentOperator,
 ) -> Result<BinaryOperator, LoweringPipelineError> {
@@ -8362,6 +8425,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     host_io_exception_provenance: HostIoExceptionProvenance,
     authenticated_commonjs_runtime_bindings: bool,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
+    lower_ir2_to_ir3_with_input_hash(
+        ir2,
+        host_io_exception_provenance,
+        authenticated_commonjs_runtime_bindings,
+        None,
+    )
+}
+
+/// [`lower_ir2_to_ir3_with_host_io_exception_provenance`] given `ir2`'s
+/// content hash when the caller already holds it (the IR1 -> IR2 pass's
+/// output hash for an unchanged module, bd-9vouw.382).
+fn lower_ir2_to_ir3_with_input_hash(
+    ir2: &Ir2Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    authenticated_commonjs_runtime_bindings: bool,
+    input_hash: Option<ContentHash>,
+) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
     // Nested function bodies are re-annotated below for their runtime flow
     // guards; they share the whole lowering unit's bound (bd-9vouw.1).
@@ -8393,7 +8473,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         },
     }
 
-    let ir2_hash = ir2.content_hash();
+    let ir2_hash = input_hash.unwrap_or_else(|| ir2.content_hash());
+    debug_assert_eq!(
+        ir2_hash,
+        ir2.content_hash(),
+        "a supplied IR2 hash is the module's"
+    );
     let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
     ir3.header.schema_version = ir2.header.schema_version;
     let mut constant_pool = ConstantPool::new();
@@ -8465,13 +8550,15 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         child_captured_locals: Vec<(String, BindingId)>,
         local_lexical_bindings: Vec<ResolvedBinding>,
         is_generator: bool,
-        is_async: bool,
         is_arrow: bool,
         rest_param_index: Option<u32>,
         /// Function.prototype.toString's text (bd-9vouw.184).
         source_text: Option<crate::ast::FunctionSourceText>,
         /// Not strict mode code (bd-9vouw.272).
         sloppy: bool,
+        /// A named function expression whose own name the body mentions:
+        /// that name is the closure's immutable self binding (bd-9vouw.331).
+        self_capture: bool,
     }
     let mut deferred_functions = Vec::<DeferredFunction>::new();
 
@@ -8871,6 +8958,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     let mut pinned_register_high: Reg = register_cursor;
     let mut register_high_water: Reg = register_cursor;
     let mut iterator_anchors = Vec::<IteratorAnchor>::new();
+    // Binding registers a compound assignment's operator reads in place
+    // while they sit on the value stack (compound_left_operand_reads_in_place).
+    let mut compound_reads_in_place = BTreeSet::<Reg>::new();
     for (op_index, op) in ir2.ops.iter().enumerate() {
         prune_iterator_anchors(&mut iterator_anchors, &value_stack);
         // A short-lived temporary's register is free once its last
@@ -9000,7 +9090,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 dst,
                 &operands,
                 copies,
-                &value_stack,
+                compaction_value_stack(&value_stack, &compound_reads_in_place),
                 reserved_below,
                 &mut register_cursor,
                 &mut register_high_water,
@@ -9042,12 +9132,24 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         &mut pinned_register_high,
                         &mut register_high_water,
                     );
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions.push(Ir3Instruction::Move {
-                        dst,
-                        src: source_reg,
-                    });
-                    value_stack.push(dst);
+                    // `x op= rhs`'s read of a pinned register binding: the
+                    // operator reads the register itself and writes the
+                    // result back to it (see the BinaryOp arm), one
+                    // instruction as before bd-9vouw.327's read-first order.
+                    if source_reg < pinned_register_high
+                        && !short_lived_temporaries.contains_key(binding_id)
+                        && compound_left_operand_reads_in_place(&ir2.ops, op_index, *binding_id)
+                    {
+                        compound_reads_in_place.insert(source_reg);
+                        value_stack.push(source_reg);
+                    } else {
+                        let dst = alloc_register(&mut register_cursor);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst,
+                            src: source_reg,
+                        });
+                        value_stack.push(dst);
+                    }
                 }
             }
             Ir1Op::LoadName {
@@ -9268,7 +9370,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
@@ -9315,7 +9417,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
@@ -9491,15 +9593,27 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             Ir1Op::BinaryOp { operator } => {
                 let rhs = pop_lowering_value(&mut value_stack)?;
                 let lhs = pop_lowering_value(&mut value_stack)?;
-                let dst = pure_op_result_register(
-                    &[lhs, rhs],
-                    &value_stack,
-                    statement_register_floor
-                        .max(pinned_register_high)
-                        .max(live_status_register_ceiling(&live_status_registers)),
-                    &mut register_cursor,
-                    &mut register_high_water,
-                );
+                let reserved_below = statement_register_floor
+                    .max(pinned_register_high)
+                    .max(live_status_register_ceiling(&live_status_registers));
+                let dst = if compound_reads_in_place.remove(&lhs) {
+                    // The next op assigns the result to the binding whose
+                    // register lhs is: write it there, and free rhs as
+                    // pure_op_result_register would have reused it.
+                    if rhs >= reserved_below && value_stack.iter().all(|&live| live < rhs) {
+                        register_high_water = register_high_water.max(register_cursor);
+                        register_cursor = register_cursor.min(rhs);
+                    }
+                    lhs
+                } else {
+                    pure_op_result_register(
+                        &[lhs, rhs],
+                        &value_stack,
+                        reserved_below,
+                        &mut register_cursor,
+                        &mut register_high_water,
+                    )
+                };
                 let instr = match operator {
                     BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
                     BinaryOperator::Subtract => Ir3Instruction::Sub { dst, lhs, rhs },
@@ -9647,6 +9761,9 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     continue;
                 }
                 match operator {
+                    // A compound assignment's operator already wrote the
+                    // binding's register when it read it in place.
+                    AssignmentOperator::Assign if src == dst => {}
                     AssignmentOperator::Assign => {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
                     }
@@ -10268,11 +10385,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         child_captured_locals: child_captured_locals.clone(),
                         local_lexical_bindings: local_lexical_bindings.clone(),
                         is_generator: *is_generator,
-                        is_async: *is_async,
                         is_arrow: false,
                         rest_param_index: *rest_param_index,
                         source_text: source_text.clone(),
                         sloppy: *sloppy,
+                        self_capture: false,
                     });
                     if *is_generator && *is_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10408,11 +10525,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     child_captured_locals: child_captured_locals.clone(),
                     local_lexical_bindings: local_lexical_bindings.clone(),
                     is_generator: *is_generator,
-                    is_async: *is_async,
                     is_arrow: *is_arrow,
                     rest_param_index: *rest_param_index,
                     source_text: source_text.clone(),
                     sloppy: *sloppy,
+                    self_capture: self_capture_name.is_some(),
                 });
                 if *is_generator && *is_async {
                     ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10611,7 +10728,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &arg_regs,
                     args,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
@@ -10702,7 +10819,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     dst,
                     &args,
                     copies,
-                    &value_stack,
+                    compaction_value_stack(&value_stack, &compound_reads_in_place),
                     reserved_below,
                     &mut register_cursor,
                     &mut register_high_water,
@@ -10864,11 +10981,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
             child_captured_locals: fn_child_captured_locals,
             local_lexical_bindings: fn_local_lexical_bindings,
             is_generator: fn_is_generator,
-            is_async: fn_is_async,
             is_arrow: fn_is_arrow,
             rest_param_index: fn_rest_param_index,
             source_text: fn_source_text,
             sloppy: fn_sloppy,
+            self_capture: fn_self_capture,
         } = std::mem::take(&mut deferred_functions[deferred_idx]);
         // Taken, not cloned: a processed entry is never read again (only the
         // list's length numbers later bodies), and a body's clone copied
@@ -10946,6 +11063,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 dst: register,
             });
         }
+        // bd-9vouw.317: an arrow function has no new.target of its own
+        // (ES2020 12.3.8.1 GetNewTarget). A non-arrow function whose arrows
+        // read it (through arrows only) binds its own once here, declared
+        // below as `ARROW_NEW_TARGET_BINDING`, and those arrows load that
+        // name through their captured scope chain.
+        let new_target_register = (!fn_is_arrow && arrows_read_new_target(body_ops)).then(|| {
+            let register = fn_reg;
+            fn_reg = fn_reg.saturating_add(1);
+            ir3.instructions
+                .push(Ir3Instruction::LoadNewTarget { dst: register });
+            register
+        });
 
         // When this function has free variables, put parameters on the
         // scope chain so LoadScoped can find them alongside captured
@@ -10971,6 +11100,20 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 ir3.instructions.push(Ir3Instruction::PushScope);
             }
             let pool_idx = push_constant_optimized(&mut constant_pool, "arguments");
+            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                name_pool_index: pool_idx,
+                kind: 0,
+            });
+            ir3.instructions.push(Ir3Instruction::InitBinding {
+                name_pool_index: pool_idx,
+                src: register,
+            });
+        }
+        if let Some(register) = new_target_register {
+            if free_vars.is_empty() && arguments_register.is_none() {
+                ir3.instructions.push(Ir3Instruction::PushScope);
+            }
+            let pool_idx = push_constant_optimized(&mut constant_pool, ARROW_NEW_TARGET_BINDING);
             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                 name_pool_index: pool_idx,
                 kind: 0,
@@ -11392,9 +11535,42 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                             &mut fn_pinned_register_high,
                             &mut fn_register_high_water,
                         );
-                        let dst = alloc_register(&mut fn_reg);
-                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                        fn_value_stack.push(dst);
+                        // bd-9vouw.330: a pinned local that the next op reads
+                        // (an operator, or a static property read), or the op
+                        // after one more load, is read in place: nothing in
+                        // between can write it, those ops write only their
+                        // result, and their result register is never a pinned
+                        // one (pure_op_result_register's floor). Any other
+                        // read is a copy, as an assignment may follow it.
+                        let consumed_next = |offset: usize| {
+                            matches!(
+                                annotated_body_ops
+                                    .get(op_index + offset)
+                                    .map(|next| &next.inner),
+                                Some(
+                                    Ir1Op::BinaryOp { .. }
+                                        | Ir1Op::GetProperty {
+                                            key: Ir1PropertyKey::Static(_)
+                                        }
+                                )
+                            )
+                        };
+                        let read_in_place = src < fn_pinned_register_high
+                            && (consumed_next(1)
+                                || (matches!(
+                                    annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                                    Some(Ir1Op::LoadLiteral { .. } | Ir1Op::LoadBinding { .. })
+                                ) && matches!(
+                                    annotated_body_ops.get(op_index + 2).map(|next| &next.inner),
+                                    Some(Ir1Op::BinaryOp { .. })
+                                )));
+                        if read_in_place {
+                            fn_value_stack.push(src);
+                        } else {
+                            let dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                            fn_value_stack.push(dst);
+                        }
                     }
                 }
                 Ir1Op::LoadName {
@@ -11475,6 +11651,18 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 Ir1Op::StoreBinding { binding_id } => {
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         let src = pop_lowering_value(&mut fn_value_stack)?;
+                        // A named function expression's own name is an
+                        // immutable binding made with strict = false
+                        // (ES2020 14.1.22 step 4): sloppy code's assignment
+                        // to it is ignored, keeping the assigned value as the
+                        // result; strict code's still throws at the const
+                        // binding (bd-9vouw.331). `var init = function init()
+                        // { init = null; ... }` threw.
+                        if fn_self_capture && fn_sloppy && fn_name.as_deref() == Some(name.as_str())
+                        {
+                            fn_value_stack.push(src);
+                            continue;
+                        }
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::StoreScoped {
                             src,
@@ -11650,25 +11838,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 }
                 Ir1Op::Return => {
                     let value = pop_lowering_value(&mut fn_value_stack)?;
-                    // Async-generator ReturnStatement awaits its operand
-                    // BEFORE creating the return completion. In particular,
-                    // rejection must still enter this frame's catch/finally;
-                    // awaiting only the finished generator's result is too late.
-                    // AwaitValue overwrites its register, so never await in a
-                    // register that may still back a live local binding.
-                    let value = if fn_is_async && fn_is_generator {
-                        let awaited = alloc_register(&mut fn_reg);
-                        ir3.instructions.push(Ir3Instruction::Move {
-                            dst: awaited,
-                            src: value,
-                        });
-                        ir3.instructions.push(Ir3Instruction::AwaitValue {
-                            promise_reg: awaited,
-                        });
-                        awaited
-                    } else {
-                        value
-                    };
+                    // An async generator's `return expr` already awaits its
+                    // operand in the body: the parser writes it as
+                    // `return await expr`, so a rejection still enters this
+                    // frame's catch/finally. `return;` and the implicit
+                    // return do not await (bd-9vouw.351); they were awaited
+                    // here, with every other return.
                     ir3.instructions.push(Ir3Instruction::Return { value });
                     // A return or throw ends its statement as a Pop does: its
                     // operand and temporaries are dead.
@@ -11860,6 +12035,14 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     operator,
                 } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
+                    // bd-9vouw.328: a postfix update whose value is discarded
+                    // (`n++;`) is the prefix one, with no old value to keep.
+                    // A function body has no completion value to preserve.
+                    let postfix_value_used = operator.is_postfix_update()
+                        && !matches!(
+                            annotated_body_ops.get(op_index + 1).map(|next| &next.inner),
+                            Some(Ir1Op::Pop | Ir1Op::Discard)
+                        );
                     if let Some(name) = fv_id_to_name
                         .get(binding_id)
                         .or_else(|| runtime_local_id_to_name.get(binding_id))
@@ -11889,7 +12072,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                                 dst: lhs,
                                 name_pool_index: pool_idx,
                             });
-                            let (result, value) = if operator.is_postfix_update() {
+                            let (result, value) = if postfix_value_used {
                                 lower_postfix_update_to_ir3(
                                     *operator,
                                     lhs,
@@ -11931,7 +12114,7 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                     });
                     if *operator == AssignmentOperator::Assign {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                    } else if operator.is_postfix_update() {
+                    } else if postfix_value_used {
                         // `x++`/`x--` evaluate to the old value (bd-9vouw.119).
                         let (result, value) = lower_postfix_update_to_ir3(
                             *operator,
@@ -11944,11 +12127,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         fn_value_stack.push(value);
                         continue;
                     } else {
-                        let result = alloc_register(&mut fn_reg);
-                        let instr = lower_assign_op_to_ir3(*operator, result, dst, src);
-                        ir3.instructions.push(instr);
+                        // In place, as the top-level loop does (bd-9vouw.328):
+                        // one instruction reads and writes the binding's
+                        // register, which no closure or other code can write
+                        // meanwhile.
                         ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: result });
+                            .push(lower_assign_op_to_ir3(*operator, dst, dst, src));
                     }
                     fn_value_stack.push(dst);
                     // As in the top-level loop: a used assignment value is a
@@ -12105,6 +12289,19 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::LoadThis { dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::LoadNewTarget if fn_is_arrow => {
+                    // bd-9vouw.317: the enclosing function's, bound in its
+                    // scope; an arrow outside any function reads undefined.
+                    let dst = alloc_register(&mut fn_reg);
+                    let name_pool_index =
+                        push_constant_optimized(&mut constant_pool, ARROW_NEW_TARGET_BINDING);
+                    ir3.instructions.push(Ir3Instruction::LoadName {
+                        dst,
+                        name_pool_index,
+                        allow_missing: true,
+                    });
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadNewTarget => {
@@ -12345,11 +12542,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         child_captured_locals: inner_child_captured_locals.clone(),
                         local_lexical_bindings: inner_local_lexical_bindings.clone(),
                         is_generator: *inner_gen,
-                        is_async: *inner_async,
                         is_arrow: false,
                         rest_param_index: *inner_rest,
                         source_text: inner_source_text.clone(),
                         sloppy: *inner_sloppy,
+                        self_capture: false,
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -12468,11 +12665,11 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
                         child_captured_locals: inner_child_captured_locals.clone(),
                         local_lexical_bindings: inner_local_lexical_bindings.clone(),
                         is_generator: *inner_gen,
-                        is_async: *inner_async,
                         is_arrow: *inner_arrow,
                         rest_param_index: *inner_rest,
                         source_text: inner_source_text.clone(),
                         sloppy: *inner_sloppy,
+                        self_capture: self_capture_name.is_some(),
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -14118,6 +14315,45 @@ fn lower_super_member_assignment(
     Ok(())
 }
 
+/// Push a user superclass's prototype for `builtin:ClassPrototypeLink`
+/// (ES2020 14.6.13 step 6.e-g): null for `extends null`, whose `prototype`
+/// is not read, and otherwise the parent's `prototype`, which the link
+/// checks is an object or null (bd-9vouw.325). The parent is null or a
+/// constructor here: `RegisterDerivedConstructor` rejected anything else.
+fn emit_heritage_prototype(
+    ops: &mut Vec<Ir1Op>,
+    super_binding: BindingId,
+    result_binding: BindingId,
+    label_counter: &mut u32,
+) {
+    let link = alloc_label(label_counter);
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Null,
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Discard);
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: super_binding,
+    });
+    ops.push(Ir1Op::JumpIfNullish { label_id: link });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: super_binding,
+    });
+    ops.push(Ir1Op::GetProperty {
+        key: Ir1PropertyKey::Static("prototype".into()),
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: result_binding,
+    });
+    ops.push(Ir1Op::Discard);
+    ops.push(Ir1Op::Label { id: link });
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: result_binding,
+    });
+}
+
 /// ES2020 9.2.1 [[Call]] step 2: a class constructor called without `new`
 /// (Function.prototype.call, Reflect.apply, a bound call included) throws a
 /// TypeError before its parameters or body run (bd-9vouw.292). Emitted at
@@ -14955,11 +15191,10 @@ fn try_lower_optional_chain_to_ir1(
     }
     let chain = &links[start..];
     let prefix = chain[0].inner();
-    let keeps_existing_lowering = matches!(prefix, Expression::Super)
-        || chain.iter().any(|link| {
-            matches!(link, OptionalChainLink::Call { arguments, .. }
-                if stages_argument_array(arguments))
-        });
+    // A call link with spread (or staged) arguments is lowered here too,
+    // through ReflectApply (bd-9vouw.359): the fallback lowered each spread
+    // element as one argument and dropped a member callee's receiver.
+    let keeps_existing_lowering = matches!(prefix, Expression::Super);
     if keeps_existing_lowering {
         return Ok(false);
     }
@@ -15066,6 +15301,33 @@ fn try_lower_optional_chain_to_ir1(
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: receiver_binding,
                     });
+                }
+                // `o.m?.(...xs)`, `f?.(a, ...xs)`: the argument array goes
+                // through ReflectApply, which reads [callee, this, argsList]
+                // like `super.m(...xs)` (bd-9vouw.359).
+                if stages_argument_array(arguments) {
+                    if method_receiver.is_none() {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Undefined,
+                        });
+                    }
+                    let argument_list =
+                        Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+                    lower_expression_to_ir1(
+                        &argument_list,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                    ops.push(Ir1Op::HostCall {
+                        capability: "builtin:ReflectApply".to_string(),
+                        arg_count: 3,
+                    });
+                    continue;
                 }
                 for argument in arguments {
                     lower_expression_to_ir1(
@@ -16341,6 +16603,17 @@ fn lower_expression_to_ir1_inner(
                 }
 
                 if let Some(binding_id) = resolved_binding_id {
+                    // ES2020 12.15.4 step 2.b: `x op= rhs` reads x before
+                    // evaluating rhs, which may write x (`x += (x = 5)`, a call
+                    // that updates a captured x). AssignOp reads its binding
+                    // when it runs, after rhs; it stays for a right side that
+                    // runs no code, so `i += 1` still steps in place
+                    // (bd-9vouw.327).
+                    let read_first = compound_assignment_binary_operator(*operator).is_ok()
+                        && !right_side_runs_no_code(right, binding_lookup);
+                    if read_first {
+                        ops.push(Ir1Op::LoadBinding { binding_id });
+                    }
                     let start = ops.len();
                     lower_expression_to_ir1(
                         right,
@@ -16355,10 +16628,20 @@ fn lower_expression_to_ir1_inner(
                     if *operator == AssignmentOperator::Assign {
                         name_anonymous_function_definition(ops, start, right, name);
                     }
-                    ops.push(Ir1Op::AssignOp {
-                        binding_id,
-                        operator: *operator,
-                    });
+                    if read_first {
+                        ops.push(Ir1Op::BinaryOp {
+                            operator: compound_assignment_binary_operator(*operator)?,
+                        });
+                        ops.push(Ir1Op::AssignOp {
+                            binding_id,
+                            operator: AssignmentOperator::Assign,
+                        });
+                    } else {
+                        ops.push(Ir1Op::AssignOp {
+                            binding_id,
+                            operator: *operator,
+                        });
+                    }
                 } else if *operator == AssignmentOperator::Assign {
                     // ResolveBinding precedes RHS evaluation even though
                     // PutValue occurs afterward. The status register prevents
@@ -17111,11 +17394,16 @@ fn lower_expression_to_ir1_inner(
                 });
             }
             // The `with` and util rewrites' intrinsics (`%WithBase(...)`,
-            // `%UtilInspect(...)`, ...): a HostCall on the evaluated arguments.
+            // `%UtilInspect(...)`, ...) and a tagged template's
+            // `%TemplateObject(...)`: a HostCall on the evaluated arguments.
             if let Expression::Identifier(name) = callee.as_ref()
                 && let Some(capability) = with_statement::intrinsic_capability(name)
                     .or_else(|| util_module::intrinsic_capability(name))
                     .or_else(|| path_module::intrinsic_capability(name))
+                    .or_else(|| {
+                        (name == crate::parser::TEMPLATE_OBJECT_INTRINSIC)
+                            .then_some(TEMPLATE_OBJECT_CAPABILITY)
+                    })
             {
                 for argument in arguments {
                     lower_expression_to_ir1(
@@ -19222,17 +19510,45 @@ fn lower_expression_to_ir1_inner(
             let skip_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
 
-            // Evaluate the callee and store into temp.
-            lower_expression_to_ir1(
-                callee,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                root_scope_id,
-                label_counter,
-                span_table,
-            )?;
+            // Evaluate the callee and store into temp. `super.m?.(...)` (the
+            // optional chain lowering leaves a `super` prefix here) looks the
+            // method up from [[HomeObject]] and calls it with this
+            // activation's `this`, as `super.m(...)` does (bd-9vouw.359).
+            let super_method = if let Expression::Member {
+                object,
+                property,
+                computed,
+                ..
+            } = callee.as_ref()
+                && matches!(object.as_ref(), Expression::Super)
+            {
+                ops.push(Ir1Op::LoadSuper);
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::GetProperty { key });
+                true
+            } else {
+                lower_expression_to_ir1(
+                    callee,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                false
+            };
             ops.push(Ir1Op::StoreBinding {
                 binding_id: temp_callee,
             });
@@ -19246,13 +19562,25 @@ fn lower_expression_to_ir1_inner(
                 label_id: skip_label,
             });
 
-            // Not-nullish path: perform the call.
+            // Not-nullish path: perform the call. Spread (or staged)
+            // arguments go through ReflectApply with an undefined this
+            // (bd-9vouw.359); each spread array was passed as one argument.
             ops.push(Ir1Op::LoadBinding {
                 binding_id: temp_callee,
             });
-            for arg in arguments {
+            if super_method {
+                ops.push(Ir1Op::LoadThis);
+            }
+            if stages_argument_array(arguments) {
+                if !super_method {
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                }
+                let argument_list =
+                    Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
                 lower_expression_to_ir1(
-                    arg,
+                    &argument_list,
                     ops,
                     bindings,
                     binding_lookup,
@@ -19261,24 +19589,54 @@ fn lower_expression_to_ir1_inner(
                     label_counter,
                     span_table,
                 )?;
-            }
-            let arg_count = arguments.len();
-            if arg_count > u32::MAX as usize {
-                return Err(LoweringPipelineError::TooManyArguments {
-                    count: arg_count,
-                    max: u32::MAX as usize,
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ReflectApply".to_string(),
+                    arg_count: 3,
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+            } else {
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                        span_table,
+                    )?;
+                }
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                ops.push(if super_method {
+                    Ir1Op::CallMethod {
+                        arg_count: arg_count as u32,
+                    }
+                } else {
+                    Ir1Op::Call {
+                        arg_count: arg_count as u32,
+                    }
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
                 });
             }
-            ops.push(Ir1Op::Call {
-                arg_count: arg_count as u32,
-            });
-            ops.push(Ir1Op::StoreBinding {
-                binding_id: result_binding,
-            });
-            ops.push(Ir1Op::Pop);
-            ops.push(Ir1Op::Jump {
-                label_id: end_label,
-            });
 
             // Nullish path: produce undefined.
             ops.push(Ir1Op::Label { id: skip_label });
@@ -20589,12 +20947,19 @@ fn lower_expression_to_ir1_inner(
                         arg_count: 0,
                     });
                 } else {
-                    ops.push(Ir1Op::LoadBinding {
-                        binding_id: super_binding.expect("user superclass binding"),
-                    });
-                    ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".into()),
-                    });
+                    let prototype_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "class_expression_super_prototype",
+                    )?;
+                    emit_heritage_prototype(
+                        ops,
+                        super_binding.expect("user superclass binding"),
+                        prototype_binding,
+                        label_counter,
+                    );
                 }
                 ops.push(Ir1Op::HostCall {
                     capability: CLASS_PROTOTYPE_LINK_CAPABILITY.to_string(),
@@ -20684,10 +21049,17 @@ fn lower_expression_to_ir1_inner(
                 if method.is_generator {
                     push_generator_prologue_end(&mut m_body_ops);
                 }
+                // The member's own mentions with the class-level ones (see
+                // the class declaration path).
+                let member_mentions = MentionedNames::of_class(
+                    name.as_deref(),
+                    super_class.as_deref(),
+                    std::slice::from_ref(method),
+                );
                 let method_pre_lower_names = prepare_function_body_bindings(
                     Some(&method.body.body),
                     name.as_deref(),
-                    &class_mentions,
+                    &member_mentions,
                     binding_lookup,
                     &mut m_lookup,
                     &mut m_binding_index,
@@ -20880,6 +21252,35 @@ fn function_reads_sloppy_this(body_ops: &[Ir1Op]) -> bool {
             body_ops,
             ..
         } => function_reads_sloppy_this(body_ops),
+        _ => false,
+    })
+}
+
+/// Scope binding holding a function's new.target for the arrow functions in
+/// it (bd-9vouw.317); no identifier can spell this name.
+const ARROW_NEW_TARGET_BINDING: &str = "new.target";
+
+/// Whether an arrow function in this body (through arrows only, whose
+/// new.target is this function's) reads new.target (bd-9vouw.317).
+fn arrows_read_new_target(body_ops: &[Ir1Op]) -> bool {
+    body_ops.iter().any(|op| match op {
+        Ir1Op::CreateFunction {
+            is_arrow: true,
+            body_ops,
+            ..
+        } => arrow_reads_new_target(body_ops),
+        _ => false,
+    })
+}
+
+fn arrow_reads_new_target(body_ops: &[Ir1Op]) -> bool {
+    body_ops.iter().any(|op| match op {
+        Ir1Op::LoadNewTarget => true,
+        Ir1Op::CreateFunction {
+            is_arrow: true,
+            body_ops,
+            ..
+        } => arrow_reads_new_target(body_ops),
         _ => false,
     })
 }
@@ -29108,6 +29509,12 @@ fn is_process_next_tick_read(
 /// through either form.
 pub(crate) const EVAL_VALUE_CAPABILITY: &str = "builtin:static-value:builtin:Eval";
 
+/// A tagged template's `%TemplateObject(site, [cooked...], [raw...])`
+/// (crate::parser::TEMPLATE_OBJECT_INTRINSIC): the call site's one frozen
+/// template object (ES2020 12.2.9.3, bd-9vouw.343). Pure: it builds or
+/// returns an array of the literal strings.
+pub(crate) const TEMPLATE_OBJECT_CAPABILITY: &str = "builtin:TemplateObject";
+
 fn is_eval_value_read(
     expression: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -29438,12 +29845,16 @@ pub(crate) fn slot0_static_member_capability(global: &str, member: &str) -> Opti
         ("Buffer", "concat") => Some("builtin:BufferConcat"),
         ("Buffer", "compare") => Some("builtin:BufferCompare"),
         ("Buffer", "isBuffer") => Some("builtin:BufferIsBuffer"),
+        ("Buffer", "isEncoding") => Some("builtin:BufferIsEncoding"),
         // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
         // calling convention (handler reads args.start+1.., guards count<N
         // counting a slot-0 receiver) — they are wired via
         // `object_receiver_static_call_capability` below, NOT here.
         ("JSON", "parse") => Some("builtin:JsonParse"),
         ("JSON", "stringify") => Some("builtin:JsonStringify"),
+        // JSON.parse source text access (Node v22, bd-9vouw.380).
+        ("JSON", "rawJSON") => Some("builtin:JsonRawJson"),
+        ("JSON", "isRawJSON") => Some("builtin:JsonIsRawJson"),
         // `Array.*` and `String.*` statics — same family, same slot-0 convention
         // (bd-tvpjk). `Array`/`String` globals have no eval-scope binding either.
         ("Array", "isArray") => Some("builtin:ArrayIsArray"),
@@ -29621,6 +30032,7 @@ fn buffer_static_builtin_call_capability(
         "concat" => Some("builtin:BufferConcat"),
         "compare" => Some("builtin:BufferCompare"),
         "isBuffer" => Some("builtin:BufferIsBuffer"),
+        "isEncoding" => Some("builtin:BufferIsEncoding"),
         _ => None,
     }
 }
@@ -34437,6 +34849,22 @@ fn compact_batch_literal(
     base
 }
 
+/// The value stack as call-result compaction sees it at the top level. The
+/// binding registers a compound assignment reads in place
+/// (compound_left_operand_reads_in_place) are pinned bindings, not
+/// temporaries, so a stack holding only them compacts as an empty one does:
+/// the result stays in its register.
+fn compaction_value_stack<'a>(value_stack: &'a [Reg], in_place: &BTreeSet<Reg>) -> &'a [Reg] {
+    if value_stack
+        .iter()
+        .all(|register| in_place.contains(register))
+    {
+        &[]
+    } else {
+        value_stack
+    }
+}
+
 /// bd-9vouw.23: once a call (Call, CallMethod, Construct, HostCall) has
 /// produced `result`, its callee, receiver and argument registers and the
 /// contiguous argument copies are dead. Reclaim the temporaries among them
@@ -34597,6 +35025,68 @@ fn store_result_needs_copy(
         .any(|register| *register == stored)
 }
 
+/// Whether the read of register binding `binding_id` at `ops[index]` is the
+/// left operand of a compound assignment that straight-line code alone
+/// separates from its operator: scanning forward over ops whose stack effect
+/// is known, the op that consumes the read is a BinaryOp taking it as its
+/// left operand, the next op assigns the result to the same binding, and no
+/// op in between writes the binding or branches. `x op= rhs` reads x before
+/// rhs (bd-9vouw.327), but a register binding is written only by its own
+/// ops (a closure's binding is scoped instead), so after such an rhs the
+/// register still holds the value read and the operator can read it in
+/// place. Any other op, or a right side longer than
+/// `COMPOUND_IN_PLACE_SCAN_LIMIT` ops, ends the scan with a copy (every read
+/// scans, so an unbounded scan of nested right sides was quadratic).
+fn compound_left_operand_reads_in_place(
+    ops: &[Ir2Op],
+    index: usize,
+    binding_id: BindingId,
+) -> bool {
+    const COMPOUND_IN_PLACE_SCAN_LIMIT: usize = 64;
+    // Values pushed above the read and not yet consumed.
+    let mut above = 0usize;
+    for (offset, op) in ops
+        .iter()
+        .enumerate()
+        .skip(index.saturating_add(1))
+        .take(COMPOUND_IN_PLACE_SCAN_LIMIT)
+    {
+        let (pops, pushes) = match &op.inner {
+            Ir1Op::LoadLiteral { .. } | Ir1Op::LoadName { .. } | Ir1Op::LoadBinding { .. } => {
+                (0, 1)
+            }
+            Ir1Op::StoreBinding { binding_id: other }
+            | Ir1Op::AssignOp {
+                binding_id: other, ..
+            } if *other != binding_id => (1, 1),
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(_),
+            }
+            | Ir1Op::UnaryOp { .. } => (1, 1),
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Dynamic,
+            }
+            | Ir1Op::BinaryOp { .. } => (2, 1),
+            Ir1Op::Call { arg_count } => ((*arg_count as usize).saturating_add(1), 1),
+            Ir1Op::CallMethod { arg_count } => ((*arg_count as usize).saturating_add(2), 1),
+            _ => return false,
+        };
+        if pops > above {
+            return above == 1
+                && matches!(op.inner, Ir1Op::BinaryOp { .. })
+                && matches!(
+                    ops.get(offset + 1).map(|next| &next.inner),
+                    Some(Ir1Op::AssignOp {
+                        binding_id: assigned,
+                        operator: AssignmentOperator::Assign,
+                    }) if *assigned == binding_id
+                );
+        }
+        above = above - pops + pushes;
+    }
+    false
+}
+
 fn prune_iterator_anchors(anchors: &mut Vec<IteratorAnchor>, value_stack: &[Reg]) {
     while anchors
         .last()
@@ -34690,6 +35180,14 @@ fn scope_binding_ids_are_unique(scopes: &[ScopeNode]) -> bool {
 
 fn hash_string(hash: &ContentHash) -> String {
     format!("sha256:{}", hex::encode(hash.as_bytes()))
+}
+
+/// The hash a [`hash_string`] spells, or `None` for any other text.
+fn content_hash_from_hash_string(text: &str) -> Option<ContentHash> {
+    let digits = text.strip_prefix("sha256:")?;
+    let mut bytes = [0_u8; 32];
+    hex::decode_to_slice(digits, &mut bytes).ok()?;
+    Some(ContentHash::from_bytes(bytes))
 }
 
 fn lowering_error_from_ir_error(error: IrError) -> LoweringPipelineError {
@@ -42186,23 +42684,41 @@ mod tests {
         );
     }
 
+    /// bd-305gi.1: a stream form the facade does not claim is never elided to
+    /// a stream kernel HostCall; it lowers with the engine-owned stream module
+    /// (whose process.nextTick HostCall marks it) instead of the ambient
+    /// `require` refusal it met before that module existed.
+    fn assert_served_by_stream_module(source: &str, label: &str) {
+        let ops = lower_script_source_ops(source, label);
+        for kernel in [
+            "builtin:StreamReadable",
+            "builtin:StreamReadableFrom",
+            "builtin:StreamWritable",
+            "builtin:StreamPassThrough",
+            "builtin:StreamTransform",
+            "builtin:StreamPipeline",
+            "builtin:StreamPromisesPipeline",
+        ] {
+            assert_eq!(
+                count_hostcall_deep(&ops, kernel),
+                0,
+                "{label}: {kernel} for {source}"
+            );
+        }
+        assert!(
+            count_hostcall_deep(&ops, "builtin:ProcessNextTick") > 0,
+            "{label}: the stream module was not materialized for {source}"
+        );
+    }
+
     #[test]
-    fn stream_transform_pipeline_escapes_remain_fail_closed_bd_fw7zd_12() {
+    fn stream_transform_pipeline_escapes_get_the_module_not_the_kernel_bd_fw7zd_12() {
         for source in [
             "const { Transform } = require('stream'); console.log(Transform);",
             "const { pipeline } = require('stream'); const escaped = pipeline;",
             "const { promises } = require('stream'); console.log(promises['pipeline']);",
         ] {
-            let tree = crate::parser_api_stability::parse_script(source)
-                .expect("parse rejected stream use");
-            let ir0 = Ir0Module::from_syntax_tree(tree, "stream_rejected_bd_fw7zd_12.js");
-            let error = lower_ir0_to_ir1(&ir0).expect_err("stream escape must not be elided");
-            assert!(
-                error.to_string().contains("ambient")
-                    || error.to_string().contains("require")
-                    || error.to_string().contains("unsupported"),
-                "unexpected fail-closed error: {error}"
-            );
+            assert_served_by_stream_module(source, "stream_escape_bd_fw7zd_12.js");
         }
     }
 
@@ -42241,17 +42757,7 @@ mod tests {
                  const { PassThrough: Through } = require('stream');\n",
             ),
         ] {
-            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
-            let ir0 = Ir0Module::from_syntax_tree(tree, format!("stream_{label}_bd_fw7zd.js"));
-            let error = lower_ir0_to_ir1(&ir0)
-                .expect_err("rejected PassThrough use must preserve ambient require denial");
-            assert!(
-                matches!(
-                    error,
-                    LoweringPipelineError::AmbientAuthorityViolation { .. }
-                ),
-                "{label} should preserve ambient denial, got {error:?}"
-            );
+            assert_served_by_stream_module(source, &format!("stream_{label}_bd_fw7zd.js"));
         }
 
         for (label, source) in [
@@ -42318,14 +42824,7 @@ mod tests {
             "const { Duplex } = require('stream'); new Duplex();",
             "const stream = require('stream'); new stream.Readable();",
         ] {
-            let tree = crate::parser_api_stability::parse_script(source).expect("parse script");
-            let ir0 = Ir0Module::from_syntax_tree(tree, "unsupported_stream_constructor.js");
-            let error = lower_ir0_to_ir1(&ir0)
-                .expect_err("unsupported stream possession must preserve ambient denial");
-            assert!(matches!(
-                error,
-                LoweringPipelineError::AmbientAuthorityViolation { .. }
-            ));
+            assert_served_by_stream_module(source, "unsupported_stream_constructor.js");
         }
     }
 
@@ -44979,6 +45478,27 @@ mod tests {
         let s = hash_string(&hash);
         assert!(s.starts_with("sha256:"));
         assert_eq!(s.len(), 7 + 64); // "sha256:" + 64 hex chars
+    }
+
+    /// bd-9vouw.382: a pass's output hash string reads back as the hash, and
+    /// nothing else does.
+    #[test]
+    fn hash_string_reads_back_as_its_hash_bd_9vouw_382() {
+        let hash = ContentHash::compute(b"module");
+        assert_eq!(
+            content_hash_from_hash_string(&hash_string(&hash)),
+            Some(hash)
+        );
+        let hex = hex::encode(hash.as_bytes());
+        for text in [
+            hex.clone(),
+            format!("sha1:{hex}"),
+            format!("sha256:{}", &hex[..62]),
+            format!("sha256:{hex}00"),
+            format!("sha256:{}zz", &hex[..62]),
+        ] {
+            assert_eq!(content_hash_from_hash_string(&text), None, "{text}");
+        }
     }
 
     // -- ensure_checks_pass --

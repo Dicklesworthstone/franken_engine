@@ -387,9 +387,10 @@ fn generator_and_async_functions_have_their_kind_prototypes() {
          Function.prototype.hello = function () { return 'hi ' + this.name; }; [g.hello(), a.hello()].join(' ')",
         "hi g hi a",
     );
-    // Deviation, pinned: Node compiles `new AsyncFunction('return 1')` and
-    // `GeneratorFunction('yield 1')`; creating these kinds from source text is
-    // not supported here, and the constructors refuse with a TypeError.
+    // `new AsyncFunction('return 1')` and `GeneratorFunction('yield 1')`
+    // build functions of their kind from source text, as in Node
+    // (bd-9vouw.321 removed the deviation this pinned: both refused with a
+    // TypeError).
     assert_eq!(
         HybridRouter::default()
             .eval(
@@ -400,7 +401,7 @@ fn generator_and_async_functions_have_their_kind_prototypes() {
             )
             .map(|outcome| outcome.value)
             .unwrap_or_else(|err| format!("ERROR: {err:?}")),
-        "TypeError TypeError"
+        "ok ok"
     );
 }
 

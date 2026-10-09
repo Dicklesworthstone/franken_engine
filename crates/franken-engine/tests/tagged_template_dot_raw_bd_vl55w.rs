@@ -1,9 +1,8 @@
 //! bd-vl55w — tagged-template strings array carries a `.raw` sibling array.
 //!
-//! Follow-up to bd-1lrbw (cooked strings). The desugar now wraps the cooked
-//! array in `((__tt_strings) => { __tt_strings.raw = [<raw>]; return
-//! __tt_strings; })([<cooked>])`, so `s.raw[i]` holds the raw (un-cooked)
-//! quasis. `.length` distinguishes raw from cooked without escaped-string
+//! Follow-up to bd-1lrbw (cooked strings). The tag receives the call site's
+//! template object (`%TemplateObject(site, [<cooked>], [<raw>])`, bd-9vouw.343),
+//! so `s.raw[i]` holds the raw (un-cooked) quasis. `.length` distinguishes raw from cooked without escaped-string
 //! assertions. Sources use raw Rust strings so `\n` reaches the engine as the
 //! two-character template escape, not a literal newline.
 

@@ -130,6 +130,11 @@ pub(super) struct GcState {
     builtin_depth: u32,
     /// `builtin_depth` of each enclosing run loop, restored on exit.
     builtin_depth_stack: Vec<u32>,
+    /// How many scope frames and binding cells the last collection visited:
+    /// the next one reserves that much in its visited sets up front instead
+    /// of growing them by rehashing (3% of babel-standalone's run).
+    last_visited_frames: usize,
+    last_visited_cells: usize,
     /// Planted negative for the root-coverage tests: skip the registers,
     /// call frames, scope chain and realm globals.
     #[cfg(test)]
@@ -582,8 +587,10 @@ impl GcMarker {
         let ModuleExecutionSnapshot {
             accounted_bytes: _,
             registers,
+            register_bytes: _,
             generator_delegation,
             register_labels: _,
+            register_label_bytes: _,
             active_inline_callback_context_label: _,
             call_stack,
             ip: _,
@@ -1159,9 +1166,13 @@ impl InterpreterCore {
             self.generators.len(),
             self.async_generators.len(),
         );
+        marker.visited_frames.reserve(self.gc.last_visited_frames);
+        marker.visited_cells.reserve(self.gc.last_visited_cells);
         self.gc_mark_roots(&mut marker)?;
         self.gc_drain(&mut marker);
         self.gc_mark_ephemerons(&mut marker);
+        self.gc.last_visited_frames = marker.visited_frames.len();
+        self.gc.last_visited_cells = marker.visited_cells.len();
 
         #[cfg(debug_assertions)]
         let drift_before = self
@@ -1666,6 +1677,11 @@ impl InterpreterCore {
             host_effect_journal: _,
             timer_effect_authority: _,
             registers,
+            // A byte count of the register file.
+            registers_value_bytes: _,
+            // A byte count of the register label file.
+            register_labels_bytes: _,
+            template_objects,
             call_stack,
             heap: _,
             estimated_memory_bytes: _,
@@ -1995,6 +2011,9 @@ impl InterpreterCore {
         // Intrinsics.
         function_prototypes.values().for_each(|id| m.object(*id));
         builtin_prototypes.values().for_each(|id| m.object(*id));
+        // A tagged template's call site answers its one template object on
+        // every evaluation (bd-9vouw.343).
+        template_objects.values().for_each(|id| m.object(*id));
         // A forEach in progress keeps its collection's storage.
         collection_for_each_cursors
             .iter()

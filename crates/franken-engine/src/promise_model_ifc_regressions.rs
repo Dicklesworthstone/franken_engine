@@ -90,7 +90,8 @@ fn reaction_label(task: &Microtask) -> &Label {
         Microtask::PromiseReaction { label, .. }
         | Microtask::PromiseRejection { label, .. }
         | Microtask::PromiseCombinator { label, .. }
-        | Microtask::ResolveThenable { label, .. } => label,
+        | Microtask::ResolveThenable { label, .. }
+        | Microtask::AdoptNative { label, .. } => label,
     }
 }
 
@@ -207,7 +208,9 @@ fn registration_result(
                 }
             );
         }
-        Microtask::ResolveThenable { .. } => panic!("not a reaction job"),
+        Microtask::ResolveThenable { .. } | Microtask::AdoptNative { .. } => {
+            panic!("not a reaction job")
+        }
     }
     assert!(queue.is_empty());
     task
@@ -327,7 +330,9 @@ fn native_adoption_preserves_both_source_and_registration_labels() {
                 | Microtask::PromiseRejection { result_promise, .. } => {
                     assert_eq!(result_promise, target);
                 }
-                Microtask::ResolveThenable { .. } | Microtask::PromiseCombinator { .. } => {
+                Microtask::ResolveThenable { .. }
+                | Microtask::PromiseCombinator { .. }
+                | Microtask::AdoptNative { .. } => {
                     panic!("unexpected job kind")
                 }
             }

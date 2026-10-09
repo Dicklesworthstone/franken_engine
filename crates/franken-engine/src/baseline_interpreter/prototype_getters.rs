@@ -19,7 +19,11 @@ use super::*;
 /// are real own properties of the prototype, installed when it is created.
 /// The [`SPECIES_GETTER_KEY`] rows are the constructors' own
 /// `get [Symbol.species]` (bd-9vouw.278), installed on the constructor.
-pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 54] = [
+pub(super) const PROTOTYPE_GETTERS: [(&str, &str, &str); 55] = [
+    // Annex B.2.2.1 (bd-9vouw.284): the one accessor here with a setter
+    // ([`InterpreterCore::prototype_accessor_setter`]). Ordinary `o.__proto__`
+    // reads and writes keep their direct path while they reach it.
+    ("Object", "__proto__", "get __proto__"),
     ("Map", "size", "get size"),
     ("Set", "size", "get size"),
     ("ArrayBuffer", "byteLength", "get byteLength"),
@@ -151,13 +155,19 @@ impl InterpreterCore {
 
     /// `{ get, set: undefined, enumerable: false, configurable: true }` when
     /// `object` is the prototype of an owner in PROTOTYPE_GETTERS and `key`
-    /// one of its accessors, unless `delete` removed it.
+    /// one of its accessors, unless `delete` removed it or a stored property
+    /// (a redefinition, bd-9vouw.379) shadows it.
     pub(super) fn prototype_getter_descriptor(
         &mut self,
         object: ObjectId,
         key: &RuntimePropertyKey,
     ) -> Result<Option<Value>, InterpreterError> {
-        if self.virtual_own_property_deleted(object, key) {
+        if self.virtual_own_property_deleted(object, key)
+            || self
+                .heap
+                .get(object.0 as usize)
+                .is_some_and(|stored| stored.contains_own_runtime_property(key))
+        {
             return Ok(None);
         }
         let RuntimePropertyKey::String(key) = key else {
@@ -174,9 +184,10 @@ impl InterpreterCore {
             return Ok(None);
         };
         let getter = Value::BuiltinFunction(BuiltinFunction::prototype_getter(owner, key));
+        let setter = Self::prototype_accessor_setter(owner, key).unwrap_or(Value::Undefined);
         let descriptor = self.alloc_object_with_properties(&[
             ("get", getter),
-            ("set", Value::Undefined),
+            ("set", setter),
             ("enumerable", Value::Bool(false)),
             ("configurable", Value::Bool(true)),
         ])?;
@@ -204,6 +215,9 @@ impl InterpreterCore {
         // `get [Symbol.species]() { return this }`, whatever `this` is.
         if key == SPECIES_GETTER_KEY {
             return Ok(receiver);
+        }
+        if owner == "Object" {
+            return self.object_proto_getter(module, receiver);
         }
         // ES2020 22.2.3.32: the receiver's [[TypedArrayName]], and undefined
         // (never a TypeError) for anything else (bd-9vouw.155).
@@ -360,7 +374,45 @@ impl InterpreterCore {
         {
             Self::reject_out_of_bounds_data_view(view, key)?;
         }
+        if let Some(value) = self.view_internal_slot(id, owner, key) {
+            return Ok(value);
+        }
         self.prototype_getter_own_slot(module, id, key, receiver)
+    }
+
+    /// A typed array's or DataView's [[ViewedArrayBuffer]], [[ByteOffset]],
+    /// [[ByteLength]] and [[ArrayLength]], from the view itself: a program
+    /// can redefine the own properties of those names, which the getters
+    /// read before, so `get buffer.call(view)` returned the redefinition
+    /// (bd-9vouw.320). An out-of-bounds typed array reads 0 for the three
+    /// numbers (ES2024 23.2.3); an out-of-bounds DataView was refused above.
+    fn view_internal_slot(&self, id: ObjectId, owner: &str, key: &str) -> Option<Value> {
+        let object = self.heap.get(id.0 as usize)?;
+        let int = |value: usize| Value::Int(i64::try_from(value).unwrap_or(i64::MAX));
+        match owner {
+            "TypedArray" => {
+                let view = object.typed_array.as_ref()?;
+                let in_bounds = !view.bounds.is_some_and(|bounds| bounds.out_of_bounds);
+                let number = |value: usize| int(if in_bounds { value } else { 0 });
+                match key {
+                    "buffer" => Some(Value::Object(view.buffer)),
+                    "byteLength" => Some(number(view.byte_length)),
+                    "byteOffset" => Some(number(view.byte_offset)),
+                    "length" => Some(number(view.length)),
+                    _ => None,
+                }
+            }
+            "DataView" => {
+                let view = object.data_view.as_ref()?;
+                match key {
+                    "buffer" => Some(Value::Object(view.buffer)),
+                    "byteLength" => Some(int(view.byte_length)),
+                    "byteOffset" => Some(int(view.byte_offset)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The receiver's own `key` slot (`flags`, `source`, `byteLength`, ...).
@@ -406,5 +458,100 @@ impl InterpreterCore {
             "Blob" => object.blob.is_some(),
             _ => false,
         }
+    }
+
+    /// The setter of the PROTOTYPE_GETTERS accessor `owner.key`, if it has
+    /// one: only `Object.prototype.__proto__` (bd-9vouw.284).
+    pub(super) fn prototype_accessor_setter(owner: &str, key: &str) -> Option<Value> {
+        (owner == "Object" && key == "__proto__")
+            .then(|| Value::BuiltinFunction(BuiltinFunction::object_proto_setter()))
+    }
+
+    /// `get Object.prototype.__proto__` (Annex B.2.2.1.1): the
+    /// [[GetPrototypeOf]] of ToObject(this). A primitive answers its
+    /// intrinsic prototype without allocating a wrapper; undefined and null
+    /// are a TypeError (bd-9vouw.284).
+    fn object_proto_getter(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        if receiver.is_callable()
+            && self
+                .iterator_carrier_backing_id(&receiver, "object target")?
+                .is_none()
+        {
+            return self.function_value_prototype(Some(module), &receiver);
+        }
+        if let Some(name) = self.exotic_intrinsic_prototype_name(&receiver) {
+            if let Some(prototype) = self.exotic_prototype_override(module, &receiver)? {
+                return Ok(Value::Object(prototype));
+            }
+            return Ok(Value::Object(self.ensure_builtin_prototype(name)?));
+        }
+        if receiver.is_object_like() {
+            let id = self.reflection_target_object(&receiver)?;
+            return Ok(match self.object_get_prototype(Some(module), id, 0)? {
+                Value::Object(link) => self.prototype_value_for_link(Some(module), Some(link)),
+                other => other,
+            });
+        }
+        let name = match receiver {
+            Value::Str(_) => "String",
+            Value::Int(_) | Value::Float(_) => "Number",
+            Value::Bool(_) => "Boolean",
+            Value::BigInt(_) => "BigInt",
+            Value::Symbol(_) => "Symbol",
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "an object-coercible this for Object.prototype.__proto__".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        Ok(Value::Object(self.ensure_builtin_prototype(name)?))
+    }
+
+    /// `set Object.prototype.__proto__` (Annex B.2.2.1.2): undefined and
+    /// null receivers are a TypeError; a proposed value that is neither an
+    /// object nor null, or a primitive receiver, changes nothing; otherwise
+    /// [[SetPrototypeOf]], whose refusal (a cycle, a non-extensible object,
+    /// Object.prototype's immutable prototype) is a TypeError
+    /// (bd-9vouw.284).
+    pub(super) fn object_proto_setter_call(
+        &mut self,
+        module: Option<&Ir3Module>,
+        receiver: Value,
+        proto: Value,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(receiver, Value::Undefined | Value::Null) {
+            return Err(InterpreterError::TypeError {
+                expected: "an object-coercible this for Object.prototype.__proto__".to_string(),
+                got: receiver.type_name().to_string(),
+            });
+        }
+        let Some(link) = self.prototype_link_for_value(module, &proto)? else {
+            return Ok(Value::Undefined);
+        };
+        if !receiver.is_object_like() {
+            return Ok(Value::Undefined);
+        }
+        let accepted = if receiver.is_callable()
+            && self
+                .iterator_carrier_backing_id(&receiver, "object target")?
+                .is_none()
+        {
+            self.set_function_value_prototype(module, &receiver, &proto)?
+        } else {
+            let id = self.reflection_target_object(&receiver)?;
+            self.object_set_prototype(module, id, link, 0)?
+        };
+        if !accepted {
+            return Err(InterpreterError::TypeError {
+                expected: "a permitted __proto__ change".to_string(),
+                got: "a cyclic or refused prototype".to_string(),
+            });
+        }
+        Ok(Value::Undefined)
     }
 }

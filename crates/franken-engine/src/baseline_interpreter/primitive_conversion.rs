@@ -80,6 +80,23 @@ impl InterpreterCore {
         Ok(self.value_to_string(&primitive))
     }
 
+    /// [`Self::builtin_arg_text`] keeping the string's exact UTF-16 content
+    /// (a lone surrogate, which the UTF-8 text replaces with U+FFFD): the URI
+    /// encoders refuse one (ES2020 18.2.6.1.1 step 3.e).
+    pub(super) fn builtin_arg_js_text(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+        index: u32,
+    ) -> Result<JsString, InterpreterError> {
+        let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+        match self.object_to_string_primitive(module, value)? {
+            Value::Symbol(_) => Err(Self::symbol_to_string_error()),
+            Value::Str(text) => Ok(text),
+            primitive => Ok(JsString::from(self.value_to_string(&primitive))),
+        }
+    }
+
     /// ES2020 7.1.22 ToIndex of a primitive (an object argument has been
     /// through ToPrimitive already): ToIntegerOrInfinity of ToNumber, so NaN
     /// and undefined are 0 and fractions truncate toward zero. A Symbol or

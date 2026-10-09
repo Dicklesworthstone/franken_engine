@@ -50,6 +50,21 @@ const SHARED_LENGTH: &str = "length";
 const SHARED_REMAINING: &str = "remaining";
 
 impl InterpreterCore {
+    /// Whether %Array.prototype% or %Object.prototype% has an own `then`, so
+    /// resolving a combinator's result with its values array reads it (the
+    /// Promise Resolve Function's Get(resolution, "then")): the native
+    /// combinator, which settles with the array directly, would skip it
+    /// (bd-9vouw.350: a poisoned or thenable Array.prototype.then).
+    fn arrays_inherit_then(&self) -> bool {
+        let then = RuntimePropertyKey::String(JsString::from("then"));
+        ["Array", "Object"].iter().any(|name| {
+            self.builtin_prototypes
+                .get(*name)
+                .and_then(|prototype| self.heap.get(prototype.0 as usize))
+                .is_some_and(|prototype| prototype.contains_own_runtime_property(&then))
+        })
+    }
+
     /// Whether `value` is this realm's %Promise%.
     pub(super) fn is_intrinsic_promise_constructor(value: &Value) -> bool {
         matches!(value, Value::BuiltinFunction(builtin)
@@ -213,7 +228,14 @@ impl InterpreterCore {
                 &value,
                 &RuntimePropertyKey::String(JsString::from("constructor")),
             )?;
-            if Self::values_equal(&value_constructor, &constructor) {
+            // Either representation of %Promise% is the same constructor
+            // (see await_keeps_promise): Promise.prototype.finally's default C
+            // is the standard-constructor reference, the promise's
+            // `constructor` the materialized global.
+            if Self::values_equal(&value_constructor, &constructor)
+                || (Self::is_intrinsic_promise_constructor(&value_constructor)
+                    && Self::is_intrinsic_promise_constructor(&constructor))
+            {
                 return Ok(value);
             }
         }
@@ -259,6 +281,33 @@ impl InterpreterCore {
             Some(label),
         )?;
         Ok(capability.promise)
+    }
+
+    /// Await's PromiseResolve(%Promise%, promise) step 2 (ES2020 6.2.3.1,
+    /// 25.6.4.5.1; bd-9vouw.352): whether Get(promise, "constructor") is
+    /// %Promise%, so the promise itself is awaited. The read is observable
+    /// (an own property, a subclass prototype's, a redefined
+    /// Promise.prototype.constructor) and its abrupt completion is the
+    /// await's; any other constructor awaits a fresh %Promise% resolved with
+    /// the promise, which reads its `then`.
+    pub(super) fn await_keeps_promise(
+        &mut self,
+        module: &Ir3Module,
+        promise: u32,
+    ) -> Result<bool, InterpreterError> {
+        if self.promise_constructor_read_is_inert(module, &Value::Promise(promise))? {
+            return Ok(true);
+        }
+        let constructor = self.get_v(
+            module,
+            &Value::Promise(promise),
+            &RuntimePropertyKey::String(JsString::from("constructor")),
+        )?;
+        // The realm's %Promise% has two representations (the materialized
+        // global and a standard-constructor reference); comparing with one of
+        // them by value missed the other and wrapped every awaited native
+        // promise, two jobs late.
+        Ok(Self::is_intrinsic_promise_constructor(&constructor))
     }
 
     /// Promise.reject(r) for a C other than %Promise% (ES2020 25.6.4.4).
@@ -471,6 +520,88 @@ impl InterpreterCore {
         Ok(true)
     }
 
+    /// Whether %Promise.prototype%.then called on the native promise
+    /// `source` (a PromiseResolveThenableJob's call) has no effect beyond
+    /// its reaction, so resolving with `source` may adopt it directly:
+    /// `source` has no own properties and no subclass prototype, and
+    /// %Promise.prototype%.constructor and the realm's Promise[@@species]
+    /// are unchanged and unlabeled, so SpeciesConstructor reads no guest code
+    /// and constructs nothing. A Promise subclass instance's `then` constructs
+    /// the subclass, which `count` in Promise.prototype.finally's steps
+    /// observes (bd-9vouw.349). Reads no guest code.
+    pub(super) fn native_then_is_inert(
+        &self,
+        module: &Ir3Module,
+        source: &Value,
+    ) -> Result<bool, InterpreterError> {
+        if !self.promise_constructor_read_is_inert(module, source)? {
+            return Ok(false);
+        }
+        // An unseeded realm Promise has no property object to redefine
+        // @@species on.
+        let Some(binding) = self.realm_dynamic_globals.get("Promise") else {
+            return Ok(true);
+        };
+        let promise = binding.state()?.value.clone();
+        let Value::BuiltinFunction(builtin) = &promise else {
+            return Ok(false);
+        };
+        let Some(properties) = Self::builtin_function_property_object(builtin)
+            .filter(|_| builtin.kind == BuiltinFunctionKind::PromiseConstructor)
+        else {
+            return Ok(false);
+        };
+        if !self.promise_combinator_metadata_is_public(properties) {
+            return Ok(false);
+        }
+        let species = self.heap.get(properties.0 as usize).and_then(|object| {
+            object.own_runtime_property_value(&RuntimePropertyKey::Symbol(
+                WellKnownSymbol::Species.id(),
+            ))
+        });
+        let native_getter = Value::BuiltinFunction(BuiltinFunction::prototype_getter(
+            "Promise",
+            prototype_getters::SPECIES_GETTER_KEY,
+        ));
+        let native = matches!(species, Some(Value::Accessor { get: Some(getter), set: None })
+            if *getter == native_getter);
+        Ok(native)
+    }
+
+    /// Whether Get(source, "constructor") on the native promise `source` is
+    /// %Promise% with nothing to observe: `source` has no own properties and
+    /// no subclass prototype, and %Promise.prototype%'s `constructor` is the
+    /// intrinsic, not deleted and unlabeled. Await and PromiseResolve then
+    /// keep `source` without the read, which allocated (bd-9vouw.352: an
+    /// exactly budgeted async generator await ran out by 199 bytes). Reads
+    /// no guest code.
+    pub(super) fn promise_constructor_read_is_inert(
+        &self,
+        module: &Ir3Module,
+        source: &Value,
+    ) -> Result<bool, InterpreterError> {
+        if self.function_own_property_object(module, source)?.is_some() {
+            return Ok(false);
+        }
+        let constructor_key = RuntimePropertyKey::String(JsString::from("constructor"));
+        if let Some(&prototype) = self.builtin_prototypes.get("Promise") {
+            if !self.promise_combinator_metadata_is_public(prototype)
+                || self.virtual_own_property_deleted(prototype, &constructor_key)
+            {
+                return Ok(false);
+            }
+            if let Some(value) = self
+                .heap
+                .get(prototype.0 as usize)
+                .and_then(|object| object.own_runtime_property_value(&constructor_key))
+                && !Self::is_intrinsic_promise_constructor(&value)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Identity alone cannot justify skipping a Get: an unchanged intrinsic
     /// can have a secret property label. Let the ordinary algorithm perform
     /// those reads, including symbol metadata, without speculative getters.
@@ -527,6 +658,7 @@ impl InterpreterCore {
                 if builtin.kind == BuiltinFunctionKind::PromiseResolve
                     && builtin.bound_object.is_none())
             && self.promise_prototype_then_is_intrinsic()
+            && !self.arrays_inherit_then()
             && self.promise_combinator_has_native_inputs(module, &constructor, &iterable)?
         {
             return self.dispatch_promise_hostcall(capability_tag, args, Some(module));

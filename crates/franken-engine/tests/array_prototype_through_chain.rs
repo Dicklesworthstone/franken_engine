@@ -207,7 +207,9 @@ fn array_prototype_through_the_chain_matches_node() {
 /// that copy every element charge the buffer to the memory budget first:
 /// the run ends with a budget error instead. splice on an array-like copies
 /// only what it removes and moves, and returns Node's two-element array.
-/// `push` past 2^53 - 1 is Node's TypeError.
+/// `push` past 2^53 - 1 is Node's TypeError. A change-by-copy method's
+/// ArrayCreate rejects a length past 2^32 - 1 first, with Node's RangeError
+/// (bd-9vouw.354); one within it still copies, so it is budgeted.
 #[test]
 fn huge_array_like_lengths_are_budgeted_not_fatal() {
     assert_eq!(
@@ -218,7 +220,7 @@ fn huge_array_like_lengths_are_budgeted_not_fatal() {
     );
     for source in [
         "Array.prototype.sort.call({ length: 2 ** 53 - 1 });",
-        "Array.prototype.toSorted.call({ length: 2 ** 40 });",
+        "Array.prototype.toSorted.call({ length: 2 ** 32 - 1 });",
     ] {
         let error = console_output(source).expect_err(source);
         assert!(
@@ -226,6 +228,12 @@ fn huge_array_like_lengths_are_budgeted_not_fatal() {
             "`{source}` must end with a budget error, got {error}"
         );
     }
+    assert_eq!(
+        console_output(
+            "try { Array.prototype.toSorted.call({ length: 2 ** 40 }); } catch (e) { console.log(e.constructor.name); }"
+        ),
+        Ok("RangeError".to_string())
+    );
     assert_eq!(
         console_output(
             "var o = { length: 2 ** 53 - 1 }; try { Array.prototype.push.call(o, 1); console.log('none'); } catch (e) { console.log(e.constructor.name, o.length); }"

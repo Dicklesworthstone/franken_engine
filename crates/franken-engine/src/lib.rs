@@ -2941,7 +2941,11 @@ mod tests {
 
     #[test]
     fn prepared_eval_preserves_frontend_refusals_and_memory_budget() {
-        for source in ["let", "break;", "process.env.SECRET;"] {
+        // A lone `let` is an identifier reference in sloppy code (ES2020
+        // 13.5: an ExpressionStatement may start with `let` not followed by
+        // `[`), a runtime ReferenceError as in Node, so the parse refusal is
+        // a missing initializer.
+        for source in ["let x = ;", "break;", "process.env.SECRET;"] {
             let prepare_error = HybridRouter::prepare_eval(source)
                 .expect_err("frontend refusal must occur while preparing");
             let mut one_shot_router = HybridRouter::default();
@@ -3214,7 +3218,11 @@ mod tests {
     #[test]
     fn parse_failures_capture_correlation_and_parse_stage_stack_frame() {
         let mut quickjs = QuickJsInspiredNativeEngine;
-        let err = quickjs.eval("let").expect_err("expected parse failure");
+        // Not a lone `let`: that is an identifier reference in sloppy code
+        // (ES2020 13.5) and fails at run time, as in Node.
+        let err = quickjs
+            .eval("let x = ;")
+            .expect_err("expected parse failure");
 
         let correlation = err
             .correlation_ids

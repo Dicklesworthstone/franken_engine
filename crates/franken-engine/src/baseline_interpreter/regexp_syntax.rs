@@ -599,8 +599,18 @@ impl Translator {
     }
 
     /// A class under the `v` flag, whose nested classes and `&&`/`--`
-    /// operators `regex` shares. Only escapes are rewritten.
+    /// operators `regex` shares. Only escapes are rewritten. A class with
+    /// strings (`\q{..}`, `\p{Emoji_Keycap_Sequence}`) is evaluated instead
+    /// (bd-9vouw.355).
     fn unicode_sets_class(&mut self) {
+        let start = self.index;
+        if self.class_has_strings() {
+            if let Some(value) = self.class_set_value() {
+                self.emit_class_set(value);
+                return;
+            }
+            self.index = start;
+        }
         let mut depth = 0usize;
         while let Some(c) = self.peek(0) {
             match c {
@@ -637,6 +647,290 @@ impl Translator {
                 }
             }
         }
+    }
+
+    /// Whether the `v` class at the cursor holds a string: a `\q{..}` or
+    /// `\p{Emoji_Keycap_Sequence}`, the property of strings whose 12 strings
+    /// are enumerated here. Another property of strings in a class keeps the
+    /// pass-through, which `regex` rejects as before.
+    fn class_has_strings(&self) -> bool {
+        let end = self.index + class_len(&self.chars, self.index, true);
+        let mut index = self.index;
+        let mut found = false;
+        while index + 1 < end {
+            if self.chars[index] == '\\' {
+                let rest = &self.chars[index + 1..end];
+                if rest.starts_with(&['q', '{']) {
+                    found = true;
+                } else if rest.starts_with(&['p', '{']) {
+                    let body: String = rest[2..].iter().take_while(|&&c| c != '}').collect();
+                    if body == KEYCAP_PROPERTY {
+                        found = true;
+                    } else if STRING_PROPERTY_NAMES.binary_search(&body.as_str()).is_ok() {
+                        return false;
+                    }
+                }
+                index += 2;
+            } else {
+                index += 1;
+            }
+        }
+        found
+    }
+
+    /// ES2024 22.2.2 ClassSetExpression with strings: a union, an
+    /// intersection chain (`&&`) or a subtraction chain (`--`) of operands.
+    /// The cursor is on `[`; `None` (the caller rewinds) for a form this
+    /// evaluator leaves to the pass-through, such as a negated class holding
+    /// strings, an early error (MayContainStrings).
+    fn class_set_value(&mut self) -> Option<ClassSetValue> {
+        self.index += 1;
+        let negated = self.peek(0) == Some('^');
+        if negated {
+            self.index += 1;
+        }
+        let mut value = if self.peek(0) == Some(']') {
+            ClassSetValue::empty()
+        } else {
+            let first = self.class_set_union_item()?;
+            match (self.peek(0), self.peek(1)) {
+                (Some('&'), Some('&')) | (Some('-'), Some('-')) => {
+                    let operator = self.peek(0)?;
+                    let mut value = first;
+                    while self.peek(0) == Some(operator) && self.peek(1) == Some(operator) {
+                        self.index += 2;
+                        let operand = self.class_set_operand()?;
+                        value = if operator == '&' {
+                            value.intersect(operand)
+                        } else {
+                            value.subtract(operand)
+                        };
+                    }
+                    value
+                }
+                _ => {
+                    let mut value = first;
+                    while self.peek(0).is_some_and(|c| c != ']') {
+                        value = value.union(self.class_set_union_item()?);
+                    }
+                    value
+                }
+            }
+        };
+        if self.peek(0) != Some(']') {
+            return None;
+        }
+        self.index += 1;
+        if negated {
+            if !value.strings.is_empty() {
+                return None;
+            }
+            value.chars = format!("[^{}]", value.chars);
+        }
+        Some(value)
+    }
+
+    /// A ClassUnion item: a ClassSetRange (`a-z`) or a ClassSetOperand.
+    fn class_set_union_item(&mut self) -> Option<ClassSetValue> {
+        let start = self.index;
+        let first = self.class_set_character();
+        if let Some(first) = first
+            && self.peek(0) == Some('-')
+            && self.peek(1) != Some('-')
+        {
+            self.index += 1;
+            let last = self.class_set_character()?;
+            if last < first {
+                return None;
+            }
+            let mut chars = String::from("[");
+            push_scalar_range(&mut chars, first, last);
+            chars.push(']');
+            return Some(ClassSetValue::chars(chars));
+        }
+        self.index = start;
+        self.class_set_operand()
+    }
+
+    /// A ClassSetCharacter at the cursor (a literal or a character escape),
+    /// consumed; `None` (the cursor unchanged) for anything else.
+    fn class_set_character(&mut self) -> Option<u32> {
+        let c = self.peek(0)?;
+        match c {
+            '[' | ']' | '{' | '}' | '(' | ')' | '/' | '|' | '-' => None,
+            '&' if self.peek(1) == Some('&') => None,
+            '\\' => {
+                let escaped = self.peek(1)?;
+                if escaped == 'q'
+                    || class_escape_body(escaped).is_some()
+                    || matches!(escaped, 'p' | 'P')
+                {
+                    return None;
+                }
+                match self.class_escape() {
+                    ClassAtom::Char(value) => Some(value),
+                    _ => None,
+                }
+            }
+            _ => {
+                self.index += 1;
+                Some(u32::from(c))
+            }
+        }
+    }
+
+    /// A ClassSetOperand: a nested class, a `\q{..}` string disjunction, a
+    /// class escape or property escape, or a single character.
+    fn class_set_operand(&mut self) -> Option<ClassSetValue> {
+        match (self.peek(0)?, self.peek(1)) {
+            ('[', _) => self.class_set_value(),
+            ('\\', Some('q')) if self.peek(2) == Some('{') => {
+                self.index += 3;
+                let mut value = ClassSetValue::empty();
+                let mut current = Vec::new();
+                loop {
+                    match self.peek(0)? {
+                        '}' => {
+                            self.index += 1;
+                            value.add_string(std::mem::take(&mut current));
+                            return Some(value);
+                        }
+                        '|' => {
+                            self.index += 1;
+                            value.add_string(std::mem::take(&mut current));
+                        }
+                        _ => current.push(self.class_set_character()?),
+                    }
+                }
+            }
+            ('\\', Some('p')) if self.chars[self.index..].starts_with(&KEYCAP_ESCAPE) => {
+                self.index += KEYCAP_ESCAPE.len();
+                let mut value = ClassSetValue::empty();
+                for key in ['#', '*', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] {
+                    value.add_string(vec![u32::from(key), 0xFE0F, 0x20E3]);
+                }
+                Some(value)
+            }
+            ('\\', Some(escaped))
+                if class_escape_body(escaped).is_some() || matches!(escaped, 'p' | 'P') =>
+            {
+                match self.class_escape() {
+                    ClassAtom::Set(text) if text.starts_with('[') => {
+                        Some(ClassSetValue::chars(text))
+                    }
+                    ClassAtom::Set(text) => Some(ClassSetValue::chars(format!("[{text}]"))),
+                    _ => None,
+                }
+            }
+            _ => {
+                let value = self.class_set_character()?;
+                let mut chars = String::from("[");
+                push_char(&mut chars, value);
+                chars.push(']');
+                Some(ClassSetValue::chars(chars))
+            }
+        }
+    }
+
+    /// A class with strings as a `regex` group: the strings of two or more
+    /// characters, longest first (ES2024 22.2.2.7 CompileAtom tries a
+    /// class's strings by descending length), then its characters, then the
+    /// empty string if it holds one.
+    fn emit_class_set(&mut self, value: ClassSetValue) {
+        if value.strings.is_empty() {
+            self.out.push_str(&value.chars);
+            return;
+        }
+        let mut strings: Vec<&Vec<u32>> = value.strings.iter().collect();
+        strings.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        let mut alternatives: Vec<String> = Vec::new();
+        let mut empty = false;
+        for string in strings {
+            if string.is_empty() {
+                empty = true;
+                continue;
+            }
+            // No UTF-8 string holds a lone surrogate.
+            if string.iter().any(|&unit| is_surrogate(unit)) {
+                continue;
+            }
+            let mut text = String::new();
+            for &unit in string {
+                push_char(&mut text, unit);
+            }
+            alternatives.push(text);
+        }
+        alternatives.push(value.chars);
+        if empty {
+            alternatives.push(String::new());
+        }
+        self.out.push_str("(?:");
+        self.out.push_str(&alternatives.join("|"));
+        self.out.push(')');
+    }
+}
+
+/// `\p{Emoji_Keycap_Sequence}`: `[#*0-9]` U+FE0F U+20E3, the property of
+/// strings the `v` class evaluator enumerates.
+const KEYCAP_PROPERTY: &str = "Emoji_Keycap_Sequence";
+const KEYCAP_ESCAPE: [char; 25] = [
+    '\\', 'p', '{', 'E', 'm', 'o', 'j', 'i', '_', 'K', 'e', 'y', 'c', 'a', 'p', '_', 'S', 'e', 'q',
+    'u', 'e', 'n', 'c', 'e', '}',
+];
+
+/// The value of a `v` class with strings (bd-9vouw.355): its single
+/// characters as a bracketed `regex` class (NEVER when it has none) and its
+/// strings of any other length (the empty string included) as code point
+/// sequences. Unions, intersections and differences of the characters are
+/// `regex`'s own class set operations; those of the strings are computed
+/// here, a string of two or more characters never being a character.
+struct ClassSetValue {
+    chars: String,
+    strings: std::collections::BTreeSet<Vec<u32>>,
+}
+
+impl ClassSetValue {
+    fn empty() -> Self {
+        Self::chars(NEVER.to_string())
+    }
+
+    fn chars(chars: String) -> Self {
+        Self {
+            chars,
+            strings: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// A `\q{..}` alternative: a single character joins the characters.
+    fn add_string(&mut self, string: Vec<u32>) {
+        if let [unit] = string.as_slice() {
+            let mut chars = String::from("[");
+            chars.push_str(&self.chars);
+            push_char(&mut chars, *unit);
+            chars.push(']');
+            self.chars = chars;
+        } else {
+            self.strings.insert(string);
+        }
+    }
+
+    fn union(mut self, other: Self) -> Self {
+        self.chars = format!("[{}{}]", self.chars, other.chars);
+        self.strings.extend(other.strings);
+        self
+    }
+
+    fn intersect(mut self, other: Self) -> Self {
+        self.chars = format!("[{}&&{}]", self.chars, other.chars);
+        self.strings.retain(|string| other.strings.contains(string));
+        self
+    }
+
+    fn subtract(mut self, other: Self) -> Self {
+        self.chars = format!("[{}--{}]", self.chars, other.chars);
+        self.strings
+            .retain(|string| !other.strings.contains(string));
+        self
     }
 }
 
@@ -1366,6 +1660,97 @@ pub(super) const TOO_MANY_PROPERTY_ESCAPES: &str = "Too many Unicode property es
 
 /// Upper bound on the property escapes in `pattern` (a `\p{`/`\P{` that is
 /// itself escaped is counted too, which only errs on the strict side).
+/// ES2020 21.2.1: a Term is an Atom with at most one Quantifier (a prefix
+/// and an optional lazy `?`), so a quantifier right after another has
+/// nothing to repeat: `a**`, `a+?+`, `x{1}{1,}`. The `regex` crate reads
+/// those as nested repetitions. Escapes (a `\u{...}` code point in `u`/`v`
+/// mode as a whole), classes (nested in `v` mode) and the `?` opening a
+/// group's `(?:`, `(?=`, `(?<name>` are skipped.
+pub(super) fn has_nested_quantifier(pattern: &str, flags: &str) -> bool {
+    let unicode = flags.contains('u') || flags.contains('v');
+    let unicode_sets = flags.contains('v');
+    let chars: Vec<char> = pattern.chars().collect();
+    let digits_from = |from: usize| {
+        chars[from.min(chars.len())..]
+            .iter()
+            .take_while(|ch| ch.is_ascii_digit())
+            .count()
+    };
+    let braced_len = |at: usize| {
+        let min_digits = digits_from(at + 1);
+        if min_digits == 0 {
+            return None;
+        }
+        let mut cursor = at + 1 + min_digits;
+        if chars.get(cursor) == Some(&',') {
+            cursor += 1 + digits_from(cursor + 1);
+        }
+        (chars.get(cursor) == Some(&'}')).then_some(cursor + 1 - at)
+    };
+    let mut index = 0;
+    let mut after_quantifier = false;
+    while let Some(&ch) = chars.get(index) {
+        let quantifier_len = match ch {
+            '*' | '+' | '?' => Some(1),
+            '{' => braced_len(index),
+            _ => None,
+        };
+        if let Some(length) = quantifier_len {
+            if after_quantifier {
+                return true;
+            }
+            index += length;
+            if chars.get(index) == Some(&'?') {
+                index += 1;
+            }
+            after_quantifier = true;
+            continue;
+        }
+        after_quantifier = false;
+        index += match ch {
+            '\\' if unicode
+                && chars.get(index + 1) == Some(&'u')
+                && chars.get(index + 2) == Some(&'{') =>
+            {
+                chars[index + 3..]
+                    .iter()
+                    .position(|&close| close == '}')
+                    .map_or(chars.len() - index, |close| close + 4)
+            }
+            '\\' => 2,
+            '[' => class_len(&chars, index, unicode_sets),
+            '(' if chars.get(index + 1) == Some(&'?') => 2,
+            _ => 1,
+        };
+    }
+    false
+}
+
+/// The length of the class opening at `start`, to its closing `]` (classes
+/// nest in `v` mode), or to the end of an unterminated one.
+fn class_len(chars: &[char], start: usize, unicode_sets: bool) -> usize {
+    let mut depth = 0usize;
+    let mut index = start;
+    while let Some(&ch) = chars.get(index) {
+        match ch {
+            '\\' => {
+                index += 2;
+                continue;
+            }
+            '[' if depth == 0 || unicode_sets => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return index + 1 - start;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    chars.len() - start
+}
+
 pub(super) fn property_escape_count(pattern: &str) -> usize {
     pattern.matches("\\p{").count() + pattern.matches("\\P{").count()
 }
@@ -1475,9 +1860,60 @@ fn valid_property_escape(body: &str, negated: bool, unicode_sets: bool) -> bool 
 mod tests {
     use super::{
         GENERAL_CATEGORY_VALUES, LONE_PROPERTY_NAMES, SCRIPT_VALUES, STRING_PROPERTY_NAMES,
-        js_pattern_to_rust, unicode_property_escape_error,
+        has_nested_quantifier, js_pattern_to_rust, unicode_property_escape_error,
     };
     use regex::{Regex, RegexBuilder};
+
+    /// bd-9vouw.337: a quantifier right after another is a SyntaxError;
+    /// one quantifier with its lazy `?` is not. Verdicts are Node v22.2.0's
+    /// `new RegExp(pattern, flags)`.
+    #[test]
+    fn a_quantifier_after_a_quantifier_has_nothing_to_repeat() {
+        for (pattern, flags) in [
+            ("a**", ""),
+            ("a+++", ""),
+            ("a????", ""),
+            ("x{1}{1,}", ""),
+            ("x{0,1}{1,}", ""),
+            ("a*??", ""),
+            ("a+?+", ""),
+            ("a{1}??", ""),
+            ("a{1,}?{2}", ""),
+            ("(a)?*", ""),
+            ("a*{1}", ""),
+            ("[a-z]+*", ""),
+            (".**", ""),
+            (r"\d{2}{3}", "u"),
+            (r"\u{10}*", ""),
+            (r"\\**", ""),
+            ("[^]**", ""),
+        ] {
+            assert!(has_nested_quantifier(pattern, flags), "/{pattern}/{flags}");
+        }
+        for (pattern, flags) in [
+            (r"\u{10}*", "u"),
+            (r"\u{1F600}*", "u"),
+            ("[*]*", ""),
+            ("a{,5}*", ""),
+            ("(?:a)*?", ""),
+            ("a*?", ""),
+            ("a{1}?", ""),
+            ("(?=a)*", ""),
+            ("[[a]--[b]]*", "v"),
+            (r"\p{L}*", "u"),
+            ("a{1}{", ""),
+            ("a{1}{x}", ""),
+            ("(?<n>a)*", ""),
+            (r"[\]]*", ""),
+            (r"[\]*]", ""),
+            (r"a\*\*", ""),
+            (r"\x2a*", ""),
+            ("(?:a|b)+?", ""),
+            ("(?<=a)b*", ""),
+        ] {
+            assert!(!has_nested_quantifier(pattern, flags), "/{pattern}/{flags}");
+        }
+    }
 
     /// bd-9vouw.247: properties of strings with `v`; the expected values
     /// are Node v22.2.0's.
@@ -1514,6 +1950,49 @@ mod tests {
         assert!(!rust_with(r"^\p{Basic_Emoji}$", "v").is_match("\u{1F44D}\u{1F3FD}"));
         assert!(rust_with(r"^\p{Emoji_Keycap_Sequence}$", "v").is_match("#\u{FE0F}\u{20E3}"));
         assert!(unicode_property_escape_error(r"^\p{RGI_Emoji}$", "v").is_none());
+    }
+
+    /// bd-9vouw.355: `v` classes with strings follow the set operations; the
+    /// expected values are Node v22.2.0's.
+    #[test]
+    fn unicode_sets_classes_with_strings_follow_set_operations() {
+        let keycap9 = "9\u{FE0F}\u{20E3}";
+        for (pattern, text, expected) in [
+            (r"^[[0-9]--\q{0|2|4|9️⃣}]+$", "9", true),
+            (r"^[[0-9]--\q{0|2|4|9️⃣}]+$", "0", false),
+            (r"^[\q{0|2|4|9️⃣}--\d]+$", keycap9, true),
+            (r"^[\q{0|2|4|9️⃣}--\d]+$", "2", false),
+            (r"^[\d--\p{Emoji_Keycap_Sequence}]+$", "5", true),
+            (r"^[\p{Emoji_Keycap_Sequence}--\d]+$", keycap9, true),
+            (r"^[\p{Emoji_Keycap_Sequence}&&\q{9️⃣}]$", keycap9, true),
+            (
+                r"^[\p{Emoji_Keycap_Sequence}&&\q{9️⃣}]$",
+                "#\u{FE0F}\u{20E3}",
+                false,
+            ),
+            (
+                r"^[_\p{Emoji_Keycap_Sequence}]+$",
+                "_#\u{FE0F}\u{20E3}_",
+                true,
+            ),
+            (r"^[\q{abc|a|}]$", "", true),
+            (r"^[\q{abc|a|}]+$", "abca", true),
+            (r"^[\q{abc|ab}]$", "abc", true),
+            (r"^[a-c\q{xy}]+$", "bxyc", true),
+            (r"^[[a-z]--[aeiou]]+$", "bcd", true),
+        ] {
+            assert_eq!(
+                rust_with(pattern, "v").is_match(text),
+                expected,
+                "{pattern} on {text:?}"
+            );
+        }
+        let longest_first = rust_with(r"[\q{abc|a}\p{Emoji_Keycap_Sequence}]", "v");
+        let found: Vec<&str> = longest_first
+            .find_iter("abc9\u{FE0F}\u{20E3}")
+            .map(|found| found.as_str())
+            .collect();
+        assert_eq!(found, ["abc", keycap9]);
     }
 
     #[test]

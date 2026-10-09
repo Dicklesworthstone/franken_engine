@@ -2687,6 +2687,7 @@ impl ExecutionOrchestrator {
                 let result = self.phase_execute(
                     package,
                     &lowering_output.ir3,
+                    adaptive_routing_context.ir3_content_hash,
                     &trace_id,
                     &adaptive_routing_decision,
                     CellExecutionDispatch {
@@ -3708,10 +3709,13 @@ impl ExecutionOrchestrator {
         AdaptiveRoutingDecision::build(context, pre_state)
     }
 
+    /// `ir3_hash` is `ir3`'s content hash, computed once for the run's
+    /// adaptive routing context.
     fn phase_execute(
         &self,
         package: &ExtensionPackage,
         ir3: &Ir3Module,
+        ir3_hash: ContentHash,
         trace_id: &str,
         adaptive_routing_decision: &AdaptiveRoutingDecision,
         dispatch: CellExecutionDispatch<'_>,
@@ -3756,7 +3760,7 @@ impl ExecutionOrchestrator {
         }
         lane_router.set_timer_effect_authority(timer_effect_authority);
         lane_router.set_failed_console_output_sink(Arc::clone(&self.last_failed_console_output));
-        let compact_tier1 = CompactTier1Program::compile(ir3);
+        let compact_tier1 = CompactTier1Program::compile_with_source_hash(ir3, ir3_hash);
         let routed = lane_router
             .execute_with_hook_and_compact_tier1(
                 ir3,

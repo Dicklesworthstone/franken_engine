@@ -10,9 +10,9 @@
 //!
 //! No-claim: a literal either engine accepts is left to the runtime. The
 //! backtracking parser is lenient in some `u`-mode corners (identity escapes
-//! such as `\-` or `\a`), and the `regex` crate accepts nested quantifiers
-//! (`/a**/`, which Node rejects as "Nothing to repeat"), so those invalid
-//! literals still parse.
+//! such as `\-` or `\a`), so those invalid literals still parse. Nested
+//! quantifiers (`/a**/`, which the `regex` crate would compile) are refused
+//! before either engine sees them (bd-9vouw.337).
 //!
 //! No mocks: real source through the public `HybridRouter::eval` path.
 
@@ -74,6 +74,51 @@ fn the_constructor_throws_syntax_errors() {
              valid('\\\\d{2,}', 'giu'), valid('x', 'uv'), valid('[a-z]', 'v')].join()"
         ),
         Ok("false,false,false,false,true,true,false,true".to_string())
+    );
+}
+
+/// bd-9vouw.337: a quantifier right after another (after its optional lazy
+/// `?`) has nothing to repeat (ES2020 21.2.1: a Term is an Atom with at most
+/// one Quantifier). The `regex` crate compiled `a**` as `(a*)*`, so
+/// `new RegExp('a**')` succeeded and the literal parsed (10 Node-passing
+/// Test262 tests, built-ins/RegExp/S15.10.1_A1_T1..T6, T13..T16). One
+/// quantifier with its lazy `?`, a `\u{10}` code point escape with `u`, and
+/// a quantifier on a class or group stay valid. Verdicts and the message
+/// are Node v22.2.0's.
+#[test]
+fn nested_quantifiers_are_syntax_errors() {
+    for source in [
+        "/a**/",
+        "function never() { return /x{1}{1,}/; } 1",
+        "/a+?+/",
+    ] {
+        let error = eval(source).expect_err(source);
+        assert!(
+            error.contains("parse") && error.contains("Nothing to repeat"),
+            "`{source}` must be an early SyntaxError, got {error}"
+        );
+    }
+    assert_eq!(
+        eval(
+            "function valid(p, f) { try { new RegExp(p, f); return true; } \
+             catch (e) { return e instanceof SyntaxError ? e.message : 'other'; } } \
+             [valid('a**'), valid('a***'), valid('a++'), valid('a+++'), valid('a???'), \
+             valid('a????'), valid('x{1}{1,}'), valid('x{1,2}{1}'), valid('x{1,}{1}'), \
+             valid('x{0,1}{1,}'), valid('a*?'), valid('a{1}?'), valid('\\\\u{10}*', 'u'), \
+             valid('[*]+'), valid('(?:ab)+?')].join('|')"
+        ),
+        Ok("Invalid regular expression: /a**/: Nothing to repeat|\
+            Invalid regular expression: /a***/: Nothing to repeat|\
+            Invalid regular expression: /a++/: Nothing to repeat|\
+            Invalid regular expression: /a+++/: Nothing to repeat|\
+            Invalid regular expression: /a???/: Nothing to repeat|\
+            Invalid regular expression: /a????/: Nothing to repeat|\
+            Invalid regular expression: /x{1}{1,}/: Nothing to repeat|\
+            Invalid regular expression: /x{1,2}{1}/: Nothing to repeat|\
+            Invalid regular expression: /x{1,}{1}/: Nothing to repeat|\
+            Invalid regular expression: /x{0,1}{1,}/: Nothing to repeat|\
+            true|true|true|true|true"
+            .to_string())
     );
 }
 

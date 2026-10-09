@@ -16,6 +16,17 @@ enum ReachableEdges {
     Inspect,
 }
 
+/// A JSON Parse Record (JSON.parse source text access, bd-9vouw.380): the
+/// value one parse node produced, a primitive's source text, and the
+/// records of an array's elements or an object's entries, each taken once
+/// as the reviver walk reaches it.
+struct JsonParseRecord {
+    value: Value,
+    source: Option<JsString>,
+    elements: Vec<Option<JsonParseRecord>>,
+    entries: Vec<(JsString, Option<JsonParseRecord>)>,
+}
+
 impl InterpreterCore {
     pub(super) fn json_parse_builtin(
         &mut self,
@@ -126,19 +137,237 @@ impl InterpreterCore {
         self.json_reserve_temporary(unit_bytes)?;
         let units = text.code_units_vec();
         let outcome = self.json_parse_document(&units);
+        // A reviver sees each unmodified primitive's source text (JSON.parse
+        // source text access, bd-9vouw.380): record the parse tree before
+        // any guest code runs.
+        let mut record_bytes = 0;
+        let record = match &outcome {
+            Ok(value) if reviver.is_callable() => {
+                Some(self.json_parse_record(&units, &mut 0, value.clone(), &mut record_bytes))
+            }
+            _ => None,
+        };
         drop(units);
         self.json_release_temporary(unit_bytes);
-        let value = outcome?;
-        if !reviver.is_callable() {
-            return Ok(value);
+        let outcome = (|| {
+            let value = outcome?;
+            let Some(record) = record else {
+                return Ok(value);
+            };
+            let record = record?;
+            let prototype = self.ensure_builtin_prototype("Object")?;
+            let holder = self.alloc_object_with_prototype(Some(prototype))?;
+            self.json_store_parsed_property(holder, JsString::from(""), value)?;
+            // Parsing is committed before user code begins. A reviver can
+            // retain a reference to the holder or any descendant and then
+            // throw; none of its effects or escaped objects may be rolled back
+            // as syntax scratch.
+            self.json_internalize_property(
+                module,
+                holder,
+                JsString::from(""),
+                &reviver,
+                0,
+                Some(record),
+            )
+        })();
+        self.json_release_temporary(record_bytes);
+        outcome
+    }
+
+    /// The JSON Parse Record of the validated text at `pos`, whose parse
+    /// produced `value`; a container's children are read back from the
+    /// parsed objects before any reviver runs. Each record is charged to
+    /// `charged` as it is built.
+    fn json_parse_record(
+        &mut self,
+        units: &[u16],
+        pos: &mut usize,
+        value: Value,
+        charged: &mut u64,
+    ) -> Result<JsonParseRecord, InterpreterError> {
+        self.json_charge_work()?;
+        let bytes = std::mem::size_of::<JsonParseRecord>() as u64;
+        self.json_reserve_temporary(bytes)?;
+        *charged += bytes;
+        Self::json_skip_ws(units, pos);
+        let start = *pos;
+        let mut record = JsonParseRecord {
+            value,
+            source: None,
+            elements: Vec::new(),
+            entries: Vec::new(),
+        };
+        match units.get(*pos) {
+            Some(0x7B) => {
+                *pos += 1;
+                loop {
+                    Self::json_skip_ws(units, pos);
+                    if units.get(*pos) == Some(&0x7D) {
+                        *pos += 1;
+                        break;
+                    }
+                    let Some(key) = Self::json_parse_string(units, pos) else {
+                        break;
+                    };
+                    Self::json_skip_ws(units, pos);
+                    *pos += 1;
+                    let child = self.json_parsed_child(&record.value, &key);
+                    let child = self.json_parse_record(units, pos, child, charged)?;
+                    // A repeated key keeps its last entry, the one the object
+                    // holds.
+                    if let Some(entry) = record
+                        .entries
+                        .iter_mut()
+                        .find(|(existing, _)| *existing == key)
+                    {
+                        entry.1 = Some(child);
+                    } else {
+                        let bytes = Self::estimate_js_string_bytes(&key).saturating_add(
+                            std::mem::size_of::<(JsString, JsonParseRecord)>() as u64,
+                        );
+                        self.json_reserve_temporary(bytes)?;
+                        *charged += bytes;
+                        record.entries.push((key, Some(child)));
+                    }
+                    Self::json_skip_ws(units, pos);
+                    if units.get(*pos) == Some(&0x2C) {
+                        *pos += 1;
+                    }
+                }
+            }
+            Some(0x5B) => {
+                *pos += 1;
+                loop {
+                    Self::json_skip_ws(units, pos);
+                    if *pos >= units.len() {
+                        break;
+                    }
+                    if units.get(*pos) == Some(&0x5D) {
+                        *pos += 1;
+                        break;
+                    }
+                    let key = JsString::from(record.elements.len().to_string());
+                    let child = self.json_parsed_child(&record.value, &key);
+                    let child = self.json_parse_record(units, pos, child, charged)?;
+                    record.elements.push(Some(child));
+                    Self::json_skip_ws(units, pos);
+                    if units.get(*pos) == Some(&0x2C) {
+                        *pos += 1;
+                    }
+                }
+            }
+            first => {
+                match first {
+                    Some(0x22) => {
+                        Self::json_parse_string(units, pos);
+                    }
+                    Some(0x2D | 0x30..=0x39) => {
+                        Self::json_parse_number(units, pos);
+                    }
+                    Some(0x74 | 0x6E) => *pos += 4,
+                    Some(0x66) => *pos += 5,
+                    _ => *pos = units.len(),
+                }
+                let end = (*pos).min(units.len());
+                let source = JsString::from_code_units(&units[start.min(end)..end]);
+                let bytes = Self::estimate_js_string_bytes(&source);
+                self.json_reserve_temporary(bytes)?;
+                *charged += bytes;
+                record.source = Some(source);
+            }
         }
-        let prototype = self.ensure_builtin_prototype("Object")?;
-        let holder = self.alloc_object_with_prototype(Some(prototype))?;
-        self.json_store_parsed_property(holder, JsString::from(""), value)?;
-        // Parsing is committed before user code begins. A reviver can retain a
-        // reference to the holder or any descendant and then throw; none of its
-        // effects or escaped objects may be rolled back as syntax scratch.
-        self.json_internalize_property(module, holder, JsString::from(""), &reviver, 0)
+        Ok(record)
+    }
+
+    /// The parsed value of `key` in the parsed container `parent`.
+    fn json_parsed_child(&self, parent: &Value, key: &JsString) -> Value {
+        let Value::Object(id) = parent else {
+            return Value::Undefined;
+        };
+        self.heap
+            .get(id.0 as usize)
+            .and_then(|object| {
+                object.own_runtime_property_value(&RuntimePropertyKey::String(key.clone()))
+            })
+            .unwrap_or(Value::Undefined)
+    }
+
+    /// `JSON.rawJSON(text)` (JSON.parse source text access, in Node v22;
+    /// bd-9vouw.380): a frozen null-prototype object whose only property,
+    /// `rawJSON`, is ToString(text), and which JSON.stringify emits
+    /// verbatim. The text must be one JSON number, string, boolean or null
+    /// with no whitespace around it; anything else is a SyntaxError.
+    pub(super) fn json_raw_json_builtin(
+        &mut self,
+        module: Option<&Ir3Module>,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        if matches!(self.builtin_arg(args, 0)?, Some(Value::Symbol(_))) {
+            return Err(InterpreterError::TypeError {
+                expected: "JSON text convertible to a String".to_string(),
+                got: "Symbol".to_string(),
+            });
+        }
+        let text = if args.count == 0 {
+            JsString::from("undefined")
+        } else {
+            match self.primitive_conversion_builtin(module, args, PrimitiveConversion::String)? {
+                Value::Str(text) => text,
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "string conversion result".to_string(),
+                        got: other.type_name().to_string(),
+                    });
+                }
+            }
+        };
+        self.check_string_limit(text.len())?;
+        let units = text.code_units_vec();
+        let padded =
+            |unit: Option<&u16>| unit.is_none_or(|unit| matches!(unit, 0x09 | 0x0A | 0x0D | 0x20));
+        if padded(units.first())
+            || padded(units.last())
+            || matches!(units.first(), Some(0x7B | 0x5B))
+        {
+            return self.json_syntax_error(0);
+        }
+        self.json_parse_document(&units)?;
+        drop(units);
+        let label = self.clone_dominant_label_with_temporary_budget(
+            &self.join_arg_range_label(args)?,
+            &self.json_parse_context_label()?,
+            0,
+        )?;
+        let object = self.alloc_object_with_properties(&[("rawJSON", Value::Str(text))])?;
+        self.store_prototype_link(object, None);
+        self.set_object_brand(object, RAW_JSON_BRAND)?;
+        self.mutate_heap(|heap| heap[object.0 as usize].is_frozen = true);
+        if label != Label::Public {
+            let key = RuntimePropertyKey::String(JsString::from("rawJSON"));
+            self.set_own_runtime_property_label(object, &key, &label)?;
+            self.join_direct_object_mutation_label(object, &label)?;
+        }
+        Ok(Value::Object(object))
+    }
+
+    /// `JSON.isRawJSON(value)`: whether `value` is a JSON.rawJSON result.
+    pub(super) fn json_is_raw_json_builtin(
+        &mut self,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let raw = match self.builtin_arg(args, 0)? {
+            Some(Value::Object(object)) => self.is_raw_json_object(object),
+            _ => false,
+        };
+        Ok(Value::Bool(raw))
+    }
+
+    /// Whether `object` has [[IsRawJSON]] (a JSON.rawJSON result).
+    pub(super) fn is_raw_json_object(&self, object: ObjectId) -> bool {
+        self.heap
+            .get(object.0 as usize)
+            .is_some_and(|object| object.brand() == Some(RAW_JSON_BRAND))
     }
 
     fn json_parse_document(&mut self, units: &[u16]) -> Result<Value, InterpreterError> {
@@ -282,9 +511,12 @@ impl InterpreterCore {
             _ => None,
         };
         match edges {
+            // The walk visits each reachable object once and joins labels,
+            // so child order does not matter: no per-key lookup for creation
+            // order (bd-9vouw.333).
             ReachableEdges::Data => heap_object
                 .properties
-                .values()
+                .values_unordered()
                 .filter_map(object_id)
                 .collect(),
             ReachableEdges::Inspect => {
@@ -417,6 +649,7 @@ impl InterpreterCore {
         name: JsString,
         reviver: &Value,
         depth: usize,
+        record: Option<JsonParseRecord>,
     ) -> Result<Value, InterpreterError> {
         // Guest mutations can introduce cycles after lexical parsing. Use an
         // explicit work stack: a Rust-recursive walk can overflow the native
@@ -440,13 +673,15 @@ impl InterpreterCore {
             value: Value,
             children: Children,
             charged: u64,
+            /// The parse record when `value` is still the parsed one.
+            record: Option<JsonParseRecord>,
         }
         let mut frames = Vec::<Frame>::new();
-        let mut next = Some((holder, name));
+        let mut next = Some((holder, name, record));
         let mut retained = 0_u64;
         let outcome = (|| {
             loop {
-                if let Some((holder, name)) = next.take() {
+                if let Some((holder, name, record)) = next.take() {
                     let current_depth = depth.saturating_add(frames.len());
                     if current_depth > 200 {
                         return Err(InterpreterError::StackOverflow {
@@ -475,12 +710,17 @@ impl InterpreterCore {
                     frames.try_reserve(1).map_err(|_| {
                         self.memory_budget_error(u64::MAX, self.heap_object_count_u32())
                     })?;
+                    // A record describes the value only while it is the
+                    // parsed one (SameValue): a reviver's replacement, or a
+                    // value it added, has no source.
+                    let record = record.filter(|record| Self::same_value(&record.value, &value));
                     frames.push(Frame {
                         holder,
                         name,
                         value,
                         children: Children::None,
                         charged,
+                        record,
                     });
                     let frame = frames.last_mut().expect("pushed reviver frame");
                     if frame.value.is_object_like()
@@ -533,7 +773,14 @@ impl InterpreterCore {
                         length,
                         next: index,
                     } if *index < *length => {
-                        next = Some((*object, JsString::from(index.to_string())));
+                        let child = frame
+                            .record
+                            .as_mut()
+                            .and_then(|record| {
+                                record.elements.get_mut(usize::try_from(*index).ok()?)
+                            })
+                            .and_then(Option::take);
+                        next = Some((*object, JsString::from(index.to_string()), child));
                         *index += 1;
                         continue;
                     }
@@ -542,13 +789,37 @@ impl InterpreterCore {
                         keys,
                         next: index,
                     } if *index < keys.len() => {
-                        next = Some((*object, keys[*index].clone()));
+                        let key = keys[*index].clone();
+                        let child = frame
+                            .record
+                            .as_mut()
+                            .and_then(|record| {
+                                record.entries.iter_mut().find(|(entry, _)| *entry == key)
+                            })
+                            .and_then(|(_, child)| child.take());
+                        next = Some((*object, key, child));
                         *index += 1;
                         continue;
                     }
                     _ => {}
                 }
                 let frame = frames.pop().expect("completed reviver frame");
+                // The reviver's third argument: a plain object with the
+                // source text of a still-parsed primitive.
+                let context_object = {
+                    let prototype = self.ensure_builtin_prototype("Object")?;
+                    let object = self.alloc_object_with_prototype(Some(prototype))?;
+                    if !frame.value.is_object_like()
+                        && let Some(source) = frame.record.as_ref().and_then(|r| r.source.clone())
+                    {
+                        self.json_store_parsed_property(
+                            object,
+                            JsString::from("source"),
+                            Value::Str(source),
+                        )?;
+                    }
+                    Value::Object(object)
+                };
                 // Keep the popped frame charged until its callback returns,
                 // even when it recursively parses or retains the original value.
                 let context = self.json_parse_context_label()?;
@@ -556,7 +827,7 @@ impl InterpreterCore {
                     module,
                     reviver.clone(),
                     Value::Object(frame.holder),
-                    vec![Value::Str(frame.name.clone()), frame.value],
+                    vec![Value::Str(frame.name.clone()), frame.value, context_object],
                     Some(context),
                 )?;
                 self.json_observe_label(label)?;

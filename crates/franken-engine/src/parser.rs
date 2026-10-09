@@ -2150,7 +2150,16 @@ struct ParseExecutionContext<'a> {
     /// and class comes from in the source, so Function.prototype.toString
     /// can return that source text.
     function_sources: FunctionSourceMap,
+    /// Tagged templates parsed so far: each call site's key for the
+    /// runtime's template-object cache (bd-9vouw.343).
+    template_sites: u32,
 }
+
+/// The intrinsic a tagged template's strings argument calls:
+/// `%TemplateObject(site, [cooked...], [raw...])` answers the call site's one
+/// frozen template object (ES2020 12.2.9.3). `%` cannot start a source
+/// identifier, so no program can name it.
+pub(crate) const TEMPLATE_OBJECT_INTRINSIC: &str = "%TemplateObject";
 
 /// The parse text is the source with its comments blanked to spaces (same
 /// byte offsets), merged into logical lines whose separators are
@@ -2402,6 +2411,12 @@ fn line_starts_call_or_index(line: &str) -> bool {
     code.starts_with('(') || code.starts_with('[')
 }
 
+/// Whether a line starts with a `/` that is not a comment: after a line that
+/// ends an expression it is a division operator (bd-9vouw.362).
+fn line_starts_division(line: &str) -> bool {
+    line.starts_with('/') && !line.starts_with("//") && !line.starts_with("/*")
+}
+
 /// Whether a logical line ends with something an argument list or index can
 /// follow: `)`, `]`, a literal or an identifier that is not a keyword ending
 /// a statement head (`return`, `break`, ...), outside import and export
@@ -2421,6 +2436,11 @@ fn previous_line_ends_expression(text: &str) -> bool {
         .rev()
         .find(|(_, c)| !is_identifier_char(*c))
         .map_or(0, |(index, c)| index + c.len_utf8());
+    // A Statement-position `let` is an identifier: `if (a) let\n(b)` calls
+    // it, and `if (a) let\n[b] = c` stays one statement, which is an error.
+    if &code[word_start..] == "let" && ends_with_statement_position_let(code) {
+        return true;
+    }
     if matches!(
         &code[word_start..],
         "return"
@@ -2453,6 +2473,26 @@ fn previous_line_ends_expression(text: &str) -> bool {
             let clause = strip_leading_labels(clause).trim_start();
             starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export")
         })
+}
+
+/// Whether `text` ends with a `let` that is a whole Statement: the body of
+/// an `if`, `else`, loop or `with` header or of a label (`if (a) let`,
+/// `L: let`). A Statement is never a lexical declaration, so that `let` is
+/// an identifier and a line break after it ends its expression statement
+/// unless the next line continues the expression (ES2020 13.5 lookahead,
+/// 11.9.1): `if (a) let\nx = 1` is `if (a) let;` then `x = 1;`.
+fn ends_with_statement_position_let(text: &str) -> bool {
+    let code = strip_comments_to_whitespace(text);
+    let Some(before) = code.trim_end().strip_suffix("let") else {
+        return false;
+    };
+    if before.ends_with(|ch: char| ch == '_' || ch == '$' || ch == '.' || ch.is_alphanumeric()) {
+        return false;
+    }
+    let before = before.trim_end();
+    let tail = text_after_last_top_level_terminator(before).trim();
+    (!tail.is_empty() && strip_leading_labels(tail).is_empty())
+        || statement_header_takes_unbraced_body(before)
 }
 
 fn logical_line_from_buffer(
@@ -3578,7 +3618,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             // dropped. A previous line ending with `;`, a `}` (a block or a
             // declaration), a keyword that cannot end an expression, or an
             // import/export declaration still ends there.
-            let paren_continues_previous = line_starts_call_or_index(trimmed_line) && {
+            let previous_ends_expression = || {
                 let comment_lines = result
                     .iter()
                     .rev()
@@ -3587,7 +3627,16 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 result.len() > comment_lines
                     && previous_line_ends_expression(&result[result.len() - 1 - comment_lines].text)
             };
-            if paren_continues_previous {
+            let paren_continues_previous =
+                line_starts_call_or_index(trimmed_line) && previous_ends_expression();
+            // So does a line starting with `/` (not a comment): after an
+            // expression the goal symbol is InputElementDiv, so it is a
+            // division, not a regex starting a new statement. `x = 18\n/\n2`
+            // is 18 / 2 and `a\n/g/i` is a / g / i, as Node reads them;
+            // both were split into a second statement (bd-9vouw.362).
+            let division_continues_previous =
+                line_starts_division(trimmed_line) && previous_ends_expression();
+            if paren_continues_previous || division_continues_previous {
                 while result.last().is_some_and(is_comment_only_line) {
                     result.pop();
                 }
@@ -3599,6 +3648,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 || body_continues_header
                 || clause_continues_statement
                 || paren_continues_previous
+                || division_continues_previous
             {
                 let prev = result.pop().expect("checked non-empty above");
                 current_text = prev.text;
@@ -3618,7 +3668,12 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     trimmed_source_offset,
                 );
                 current_start_line = prev.start_line;
-                last_significant = None;
+                // A line merged as a division follows an operand: its
+                // leading `/` divides. With no token before it the scanner
+                // read `/ 2` as a regex start and missed that a lone `/`
+                // line awaits its right operand, so `x = 18\n/ 2\n/\n9`
+                // split before `9` (bd-9vouw.362).
+                last_significant = division_continues_previous.then_some(')');
                 trailing_identifier.clear();
             } else {
                 current_text.clear();
@@ -3842,7 +3897,10 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                     last_significant,
                     trailing_identifier.as_str(),
                     trailing_identifier_follows_dot,
-                ))
+                )
+                || (trailing_identifier == "let"
+                    && !trailing_identifier_follows_dot
+                    && ends_with_statement_position_let(&current_text)))
         {
             if let Some(logical_line) = logical_line_from_buffer(
                 &current_text,
@@ -3981,6 +4039,7 @@ fn parse_source(
         formal_parameters: false,
         private_name_scopes: Vec::new(),
         function_sources: FunctionSourceMap::default(),
+        template_sites: 0,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -4626,7 +4685,11 @@ fn parse_statement_inner(
         return parse_export(statement, span, context).map(Statement::Export);
     }
 
-    if let Some(kind) = parse_variable_declaration_kind(statement) {
+    if let Some(kind) = parse_variable_declaration_kind(statement)
+        && (kind != VariableDeclarationKind::Let
+            || context.strict_mode
+            || let_starts_lexical_declaration(&statement["let".len()..]))
+    {
         return parse_variable_declaration(statement, kind, span, context)
             .map(Statement::VariableDeclaration);
     }
@@ -5796,6 +5859,15 @@ fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclaratio
     None
 }
 
+/// ES2020 13.3.1: `let` starts a lexical declaration only before a binding
+/// identifier or pattern. Before anything else sloppy code reads it as an
+/// identifier (`let = 1`, the body `let` of `if (a) let;`).
+fn let_starts_lexical_declaration(after_let: &str) -> bool {
+    after_let.trim_start().chars().next().is_some_and(|ch| {
+        ch == '[' || ch == '{' || ch == '_' || ch == '$' || ch == '\\' || ch.is_alphabetic()
+    })
+}
+
 fn parse_variable_declaration(
     statement: &str,
     kind: VariableDeclarationKind,
@@ -6170,7 +6242,7 @@ fn parse_primary_expression(
                 ));
             }
             if context.formal_parameters {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "an `await` expression cannot be in a parameter list",
                     span,
                     context,
@@ -6181,7 +6253,7 @@ fn parse_primary_expression(
         }
         if rest.starts_with('(') && context.await_context {
             if context.formal_parameters {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "an `await` expression cannot be in a parameter list",
                     span,
                     context,
@@ -6239,7 +6311,7 @@ fn parse_primary_expression(
             || rest.starts_with('}'))
     {
         if context.formal_parameters {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "a `yield` expression cannot be in a parameter list",
                 span,
                 context,
@@ -6323,9 +6395,14 @@ fn parse_primary_expression(
         return parse_class_expression(expression, span, context);
     }
 
-    // Template literal: `text ${expr} text`
-    if expression.starts_with('`') && expression.ends_with('`') {
-        return parse_template_literal(expression, span, context, recursion_depth);
+    // Template literal: `text ${expr} text`. Only when that one template is
+    // the whole expression: in `a``b` the template `a` closes first and is
+    // the tag of `b` (bd-9vouw.342), a call that throws Node's TypeError.
+    if expression.starts_with('`')
+        && expression.ends_with('`')
+        && find_top_level_template_start(expression) == Some(0)
+    {
+        return parse_template_literal(expression, span, context, recursion_depth, false);
     }
 
     // Parenthesized expression.
@@ -6974,11 +7051,15 @@ fn parse_new_expression(
 // Template literal parsing
 // ---------------------------------------------------------------------------
 
+/// `tagged`: the template is a tagged template's, whose `NotEscapeSequence`
+/// shapes (`\01`, `\8`, `\xg`, `\u{110000}`) are not errors but cook to
+/// undefined (ES2018 template literal revision; `cook_template_quasi`).
 fn parse_template_literal(
     expression: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
+    tagged: bool,
 ) -> ParseResult<Expression> {
     // ES2020 §11.8.6 TemplateCharacter — the entire template literal MUST
     // be terminated by a backtick. The tokeniser at `scan_template_literal`
@@ -7015,7 +7096,7 @@ fn parse_template_literal(
             // non-octal decimal escapes, and malformed hex/unicode escapes.
             // The lexer was previously fail-open on all of these (bd-no788
             // cases 4 and 5).
-            if let Err(message) = validate_template_escape_sequence(bytes, i) {
+            if !tagged && let Err(message) = validate_template_escape_sequence(bytes, i) {
                 return Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
                     message,
@@ -8294,7 +8375,10 @@ fn try_parse_update(
         if operand_src.is_empty() || operand_src.starts_with('+') || operand_src.starts_with('-') {
             return None;
         }
-        let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
+        let target = global_value_property_target(
+            operand_src,
+            parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
+        );
         if !is_simple_update_target(&target) {
             return reject_non_assignable_update_target(&target, span, context);
         }
@@ -8323,7 +8407,10 @@ fn try_parse_update(
         if operand_src.is_empty() || operand_src.ends_with('+') || operand_src.ends_with('-') {
             return None;
         }
-        let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
+        let target = global_value_property_target(
+            operand_src,
+            parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
+        );
         if !is_simple_update_target(&target) {
             return reject_non_assignable_update_target(&target, span, context);
         }
@@ -8486,11 +8573,16 @@ fn try_parse_postfix(
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
-            let template =
-                match parse_template_literal(template_src, span, context, recursion_depth + 1) {
-                    Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
-                };
+            let template = match parse_template_literal(
+                template_src,
+                span,
+                context,
+                recursion_depth + 1,
+                true,
+            ) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(e)),
+            };
             // ES2020 §12.2.9: a tagged template `tag`q0${e0}q1…`` invokes
             // `tag(stringsArray, e0, e1, …)` where `stringsArray` holds the
             // COOKED quasis (bd-1lrbw). The previous desugar passed the whole
@@ -8526,57 +8618,23 @@ fn try_parse_postfix(
                 .iter()
                 .map(|quasi| Some(Expression::StringLiteral(quasi.clone().into())))
                 .collect();
-            // ES2020 §12.2.9: the strings array carries a `.raw` sibling array
-            // (used by String.raw and `tag` functions reading `s.raw[i]`). An
-            // ArrayLiteral cannot carry an extra property, so wrap the cooked
-            // array in an immediately-applied arrow that sets `.raw` and returns
-            // it: `((__tt_strings) => { __tt_strings.raw = [<raw>]; return
-            // __tt_strings; })([<cooked>])`. `__tt_strings` is the cooked array
-            // passed by reference (a heap object), so the member assignment
-            // mutates the shared object — no closure-write-back concern (that bug
-            // is about reassigning OUTER let bindings, not mutating a param's
-            // object). CAVEAT: this allocates the strings object per evaluation;
-            // ES2020 §12.2.9 specifies per-call-site caching (same array identity
-            // across evaluations), which a parser desugar cannot provide — a
-            // memoized runtime template-strings intrinsic is the long-term fix
-            // (the cooked-only bd-1lrbw desugar already had this non-memoization).
-            let strings_param = "__tt_strings".to_string();
-            let raw_arrow = Expression::ArrowFunction {
-                params: vec![FunctionParam {
-                    pattern: BindingPattern::Identifier(strings_param.clone()),
-                    span: span.clone(),
-                }],
-                body: ArrowBody::Block(BlockStatement {
-                    body: vec![
-                        Statement::Expression(ExpressionStatement {
-                            expression: Expression::Assignment {
-                                operator: AssignmentOperator::Assign,
-                                left: Box::new(Expression::Member {
-                                    object: Box::new(Expression::Identifier(strings_param.clone())),
-                                    property: Box::new(Expression::Identifier("raw".to_string())),
-                                    computed: false,
-                                    span: None,
-                                }),
-                                right: Box::new(Expression::ArrayLiteral(raw_strings)),
-                                assignment_strictness: AssignmentStrictness::from_strict_mode(
-                                    context.strict_mode,
-                                ),
-                            },
-                            span: span.clone(),
-                        }),
-                        Statement::Return(ReturnStatement {
-                            argument: Some(Expression::Identifier(strings_param.clone())),
-                            span: span.clone(),
-                        }),
-                    ],
-                    span: span.clone(),
-                }),
-                is_async: false,
-                source_text: None,
-            };
+            // ES2020 12.2.9.3 GetTemplateObject: the strings array (its `raw`
+            // sibling a frozen non-enumerable property) is created once per
+            // call site and realm, frozen, and every evaluation of the site
+            // passes that same object, so a tag can key a cache on it (lit,
+            // styled-components, graphql-tag). The runtime intrinsic keeps one
+            // per (module, site); the site is this parse's ordinal of tagged
+            // templates (bd-9vouw.343).
+            context.template_sites = context.template_sites.saturating_add(1);
             let strings_with_raw = Expression::Call {
-                callee: Box::new(raw_arrow),
-                arguments: vec![Expression::ArrayLiteral(cooked_strings)],
+                callee: Box::new(Expression::Identifier(
+                    TEMPLATE_OBJECT_INTRINSIC.to_string(),
+                )),
+                arguments: vec![
+                    Expression::StringLiteral(context.template_sites.to_string().into()),
+                    Expression::ArrayLiteral(cooked_strings),
+                    Expression::ArrayLiteral(raw_strings),
+                ],
                 span: None,
             };
             let mut arguments = Vec::with_capacity(expressions.len() + 1);
@@ -8940,12 +8998,17 @@ fn assignment_target_has_optional_chain(target: &Expression) -> bool {
     }
 }
 
-/// Find the first top-level backtick that begins a trailing template literal.
+/// Find the top-level backtick that begins the last (trailing) template
+/// literal. In `tag`a``b`` the trailing `b` template's tag is the tagged
+/// template `tag`a`` (ES2020 12.3: MemberExpression TemplateLiteral), so
+/// the split is before the last template; splitting before the first read
+/// `a``b` as one template.
 fn find_top_level_template_start(s: &str) -> Option<usize> {
     let mut quotes = QuoteState::default();
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
+    let mut last = None;
 
     for (index, ch) in s.char_indices() {
         if quotes.active() {
@@ -8966,19 +9029,19 @@ fn find_top_level_template_start(s: &str) -> Option<usize> {
             ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
             '}' => brace_depth = brace_depth.saturating_sub(1),
-            '`' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                return Some(index);
-            }
-            // A template nested in an argument or index is opaque
-            // (bd-9vouw.41); its text must not move the bracket depths.
+            // A top-level template is a candidate; its text, like a nested
+            // template's (bd-9vouw.41), must not move the bracket depths.
             '`' => {
+                if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                    last = Some(index);
+                }
                 quotes.open_char(ch);
             }
             _ => {}
         }
     }
 
-    None
+    last
 }
 
 /// Find the first top-level `(`…`)` pair in `s` — the open `(` that appears at
@@ -9228,6 +9291,25 @@ fn find_last_top_level_optional_chain(s: &str) -> Option<usize> {
 // Array/object literal parsing
 // ---------------------------------------------------------------------------
 
+/// `undefined`, `NaN` and `Infinity` parse as their constants when read, but
+/// they are identifiers (ES2020 18.1: non-writable properties of the global
+/// object, or a binding that shadows them), so an assignment or update can
+/// target them: `undefined = 5` and `NaN++` are not early errors. The
+/// runtime makes such a write a no-op, or a TypeError in strict code, unless
+/// a binding of that name receives it. Any other target is unchanged.
+fn global_value_property_target(source: &str, target: Expression) -> Expression {
+    let source = source.trim();
+    match target {
+        Expression::UndefinedLiteral if source == "undefined" => {
+            Expression::Identifier(source.to_string())
+        }
+        Expression::FloatLiteral(_) if matches!(source, "NaN" | "Infinity") => {
+            Expression::Identifier(source.to_string())
+        }
+        target => target,
+    }
+}
+
 /// Parse cover grammar only where the caller has already recognized an
 /// assignment target. An initialized shorthand (`{x = value}`) must never be
 /// accepted as an ordinary object expression or in the default's RHS.
@@ -9265,7 +9347,10 @@ fn parse_assignment_target_expression(
             parse_assignment_target_expression(rest, span, context, recursion_depth + 1)?,
         )));
     }
-    let target = parse_expression(source, span, context, recursion_depth)?;
+    let target = global_value_property_target(
+        source,
+        parse_expression(source, span, context, recursion_depth)?,
+    );
     // The specific diagnostic first: `config?.theme = value`.
     if assignment_target_has_optional_chain(&target) {
         return Err(ParseError::new(
@@ -12295,19 +12380,7 @@ fn reject_context_reserved_binding(
 ) -> ParseResult<()> {
     let reserved = ((context.await_context || context.static_block_await) && name == "await")
         || (context.yield_context && name == "yield")
-        || (context.strict_mode
-            && matches!(
-                name,
-                "implements"
-                    | "interface"
-                    | "let"
-                    | "package"
-                    | "private"
-                    | "protected"
-                    | "public"
-                    | "static"
-                    | "yield"
-            ));
+        || (context.strict_mode && is_strict_mode_reserved_word(name));
     if reserved {
         return Err(ParseError::new(
             ParseErrorCode::InvalidSyntax,
@@ -12317,6 +12390,67 @@ fn reject_context_reserved_binding(
         ));
     }
     Ok(())
+}
+
+fn is_strict_mode_reserved_word(name: &str) -> bool {
+    matches!(
+        name,
+        "implements"
+            | "interface"
+            | "let"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "static"
+            | "yield"
+    )
+}
+
+/// ES2020 14.1.2, 14.4.1, 14.7.1: the BindingIdentifier of a function,
+/// generator or async function. It is an IdentifierName that is not a
+/// reserved word (an escape does not make one usable), bound by its decoded
+/// spelling: `function a\u0062() {}` declares `ab`. `strict` is whether the
+/// name is strict code (the enclosing code is strict, or the body has a
+/// "use strict" directive); `yield_reserved` and `await_reserved` are the
+/// [Yield] and [Await] parameters the grammar gives the name.
+fn function_binding_name(
+    raw: &str,
+    strict: bool,
+    yield_reserved: bool,
+    await_reserved: bool,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseResult<String> {
+    let invalid = |message: String| {
+        Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            message,
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ))
+    };
+    if !is_identifier(raw) {
+        return invalid(format!("invalid function name `{raw}`"));
+    }
+    let name = canonicalize_identifier(raw);
+    if is_unconditional_reserved_keyword(&name) {
+        return invalid(if name == raw {
+            format!("`{name}` is a reserved word and cannot be a function name")
+        } else {
+            format!("keyword `{name}` must not contain escaped characters")
+        });
+    }
+    reject_strict_restricted_binding(&name, strict, span, context)?;
+    if (strict && is_strict_mode_reserved_word(&name))
+        || (yield_reserved && name == "yield")
+        || (await_reserved && name == "await")
+    {
+        return invalid(format!(
+            "`{name}` is a reserved word here and cannot be a function name"
+        ));
+    }
+    Ok(name)
 }
 
 /// ES2020 14.1.2, 14.2.1, 14.3.1: a function whose own body has a
@@ -13073,6 +13207,9 @@ fn for_in_of_statement(
 /// - an awaited `next()` per step;
 /// - on break, return or throw from the body, an awaited `return()`
 ///   (AsyncIteratorClose). No close after `next()` throws or reports done.
+///   After a throw, getting, calling or awaiting `return` cannot replace the
+///   body's exception: its errors are dropped (ES2022 AsyncIteratorClose
+///   returns a throw completion before the close's own).
 ///
 /// Before this, `for await` ran as a synchronous for-of: an async
 /// generator's `next()` promise was taken as the iteration result, and the
@@ -13115,14 +13252,19 @@ fn desugar_for_await_of(header: &str, body: &str) -> Option<String> {
          let __franken_fa_sync = __franken_fa_am == null; \
          let __franken_fa_it = __franken_fa_sync ? __franken_fa_src[Symbol.iterator]() : \
          __franken_fa_am.call(__franken_fa_src); \
-         let __franken_fa_fin = false; \
+         let __franken_fa_fin = false; let __franken_fa_thrown = false; \
          try {{ while (true) {{ __franken_fa_fin = true; \
          let __franken_fa_r = await __franken_fa_it.next(); \
          if (__franken_fa_r.done) break; \
          __franken_fa_fin = false; \
          {bind} {body}{body_terminator} }} }} \
-         finally {{ if (!__franken_fa_fin) {{ let __franken_fa_ret = __franken_fa_it.return; \
-         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }}"
+         catch (__franken_fa_e) {{ __franken_fa_thrown = true; throw __franken_fa_e; }} \
+         finally {{ if (!__franken_fa_fin) {{ if (__franken_fa_thrown) {{ \
+         try {{ let __franken_fa_ret = __franken_fa_it.return; \
+         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} \
+         catch (__franken_fa_ignored) {{}} }} else {{ \
+         let __franken_fa_ret = __franken_fa_it.return; \
+         if (__franken_fa_ret != null) await __franken_fa_ret.call(__franken_fa_it); }} }} }} }}"
     ))
 }
 
@@ -13397,6 +13539,18 @@ fn parse_return_statement(
         // (bd-h5m8u; mirrors bd-qxkli/bd-j4l7k).
         Some(parse_expression_allowing_sequence(body, &span, context, 1)?)
     };
+    // ES2020 13.10.1: in an async generator, `return expr` awaits expr
+    // before the return completion exists (a rejection still reaches this
+    // frame's catch and finally); `return;` and falling off the end do not
+    // await (bd-9vouw.351). The lowering and the runtime settle the
+    // completion at once.
+    let argument = argument.map(|argument| {
+        if context.await_context && context.yield_context {
+            Expression::Await(Box::new(argument))
+        } else {
+            argument
+        }
+    });
     Ok(Statement::Return(ReturnStatement { argument, span }))
 }
 
@@ -13896,6 +14050,23 @@ fn parse_function_expression_with_super(
             Some(span.clone()),
         )
     })?;
+    // An expression's name is scoped to the function itself, so its own kind
+    // gives [Yield] and [Await] (ES2020 14.1: `function
+    // BindingIdentifier[~Yield, ~Await]`, `function *
+    // BindingIdentifier[+Yield, ~Await]`, `async function
+    // BindingIdentifier[~Yield, +Await]`).
+    let name = name
+        .map(|raw| {
+            function_binding_name(
+                &raw,
+                context.strict_mode || has_use_strict_directive(body_src),
+                is_generator,
+                is_async,
+                span,
+                context,
+            )
+        })
+        .transpose()?;
     let goal = ParseGoal::Script;
     let saved_super_property_allowed = context.super_property_allowed;
     context.super_property_allowed = super_property_allowed;
@@ -14195,7 +14366,7 @@ fn undeclared_private_name_error(
     context: &ParseExecutionContext<'_>,
 ) -> ParseError {
     ParseError::new(
-        ParseErrorCode::UnsupportedSyntax,
+        ParseErrorCode::InvalidSyntax,
         format!("Private field '{name}' must be declared in an enclosing class"),
         context.source_label.to_string(),
         Some(span.clone()),
@@ -15142,10 +15313,17 @@ fn class_member_is_field(member: &str) -> bool {
         _ => skip_identifier_name(member),
     };
     // `get`, `set` and `static` continue across a line break (`get <LF> x()
-    // {}` is a getter); `async` does not (no LineTerminator after it).
+    // {}` is a getter); `async` does not (no LineTerminator after it). An
+    // accessor cannot be a generator, so `get <LF> *m() {}` is a field `get`
+    // and a generator method, while `static <LF> *m() {}` is one static
+    // generator (bd-9vouw.334).
     let key = &member[..member.len() - after_key.len()];
-    if !matches!(key, "get" | "set" | "static") && !key.is_empty() && ends_at_line_break(after_key)
-    {
+    let continues_across_line_break = match key {
+        "static" => true,
+        "get" | "set" => !after_key.trim_start().starts_with('*'),
+        _ => false,
+    };
+    if !continues_across_line_break && !key.is_empty() && ends_at_line_break(after_key) {
         return true;
     }
     // Look past a computed key: in `get [x = 1]() {}` or `[k = 'm']() {}` the
@@ -15331,14 +15509,20 @@ fn parse_function_declaration(
     let source_text = context
         .function_sources
         .text_of(&statement[..statement.len() - after_body.len()]);
-    if let Some(name) = name.as_deref() {
-        reject_strict_restricted_binding(
-            name,
-            context.strict_mode || has_use_strict_directive(body_src),
-            &span,
-            context,
-        )?;
-    }
+    // A declaration binds its name in the enclosing code, whose [Yield] and
+    // [Await] apply (ES2020 14.1: `BindingIdentifier[?Yield, ?Await]`).
+    let name = name
+        .map(|raw| {
+            function_binding_name(
+                &raw,
+                context.strict_mode || has_use_strict_directive(body_src),
+                context.yield_context,
+                context.await_context || context.static_block_await,
+                &span,
+                context,
+            )
+        })
+        .transpose()?;
     let goal = ParseGoal::Script; // Function bodies use script goal.
     let saved_super_call = std::mem::replace(&mut context.super_call, SuperCallContext::Forbidden);
     let parsed = with_function_context(is_async, is_generator, context, |context| {
@@ -20289,6 +20473,7 @@ mod tests {
             formal_parameters: false,
             private_name_scopes: Vec::new(),
             function_sources: FunctionSourceMap::default(),
+            template_sites: 0,
         };
         parse_statement(source, ParseGoal::Script, span, &mut context)
     }
@@ -22940,6 +23125,12 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         );
         assert_eq!(find_matching_open_paren("f(`)${`(`}`)"), Some(1));
         assert_eq!(find_top_level_template_start("tag(`)`)`x`"), Some(8));
+        // bd-9vouw.342: the last of chained templates.
+        assert_eq!(find_top_level_template_start("rec`x``y``z`"), Some(9));
+        assert_eq!(find_top_level_template_start("t`${`a`}``b`"), Some(9));
+        // A template used as a tag: `a` closes before `b` opens.
+        assert_eq!(find_top_level_template_start("`a``b`"), Some(3));
+        assert_eq!(find_top_level_template_start("`a${`b`}c`"), Some(0));
         let segments: Vec<&str> = split_statement_segments("a(`;${`;`}`); b;")
             .into_iter()
             .map(|(_, _, text)| text)

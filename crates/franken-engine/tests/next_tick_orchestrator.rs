@@ -69,8 +69,9 @@ fn run_frankenctl(
 }
 
 /// Node's canonical interleaving: sync body first, then the tick queue, then
-/// Promise microtasks, and a tick enqueued by a microtask runs before any
-/// later microtask work.
+/// Promise microtasks, and a tick enqueued by a microtask runs once the
+/// microtask queue has drained (here it holds no other job; the rounds are
+/// pinned by next_tick_rounds_bd_9vouw_319).
 #[test]
 fn next_tick_runs_before_promise_microtasks_bd_8nrud() {
     let (success, stderr, messages) = run_frankenctl(

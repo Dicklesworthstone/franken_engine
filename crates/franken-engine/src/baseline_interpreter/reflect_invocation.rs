@@ -801,6 +801,10 @@ impl InterpreterCore {
             )?;
             labels.arguments = IsolatedArgumentLabels::Exact(argument_labels);
             self.json_observe_label(selection_label)?;
+            // Reflect.apply's Call(target, ...) after the list is built.
+            if !construct {
+                Self::reject_promise_constructor_call(&target)?;
+            }
             // bd-9vouw.50: a list that does not fit a register frame goes to a
             // vector-variadic builtin as a vector.
             let vector_tag = (!construct)

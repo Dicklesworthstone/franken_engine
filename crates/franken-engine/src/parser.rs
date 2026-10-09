@@ -6905,6 +6905,7 @@ fn parse_expression(
                 || rest.starts_with(';')
                 || rest.starts_with(')')
                 || rest.starts_with('}')
+                || yield_operand_follows_directly(rest, context)
         });
     let awaits_unary_expr = !await_names_identifier_operand(expression, context)
         && expression
@@ -7133,7 +7134,8 @@ fn parse_primary_expression(
             || rest.is_empty()
             || rest.starts_with(';')
             || rest.starts_with(')')
-            || rest.starts_with('}'))
+            || rest.starts_with('}')
+            || yield_operand_follows_directly(rest, context))
     {
         if context.formal_parameters {
             return Err(invalid_syntax_error(
@@ -9597,6 +9599,15 @@ fn try_parse_unary_prefix(
 /// outside a generator in non-strict code, followed by an operator that
 /// continues the expression (`yield + x`, `yield * 2`, `yield(1)`), so it is
 /// parsed as an operand rather than a yield expression (bd-9vouw.396).
+/// Whether, in a generator, `yield` is followed with no space by a token that
+/// can only begin its operand: `yield(x)`, `yield[a, b]`, `yield/re/g`,
+/// `yield{}`, `yield"s"`, `yield!0`, as minifiers write them. They were read
+/// as a call or member of a bare `yield`, so `const r = yield(1)` yielded
+/// undefined and then called the resumed value (bd-9vouw.460).
+fn yield_operand_follows_directly(rest: &str, context: &ParseExecutionContext<'_>) -> bool {
+    context.yield_context && rest.starts_with(['(', '[', '{', '/', '"', '\'', '`', '!', '~'])
+}
+
 fn yield_names_identifier_operand(expression: &str, context: &ParseExecutionContext<'_>) -> bool {
     !context.yield_context
         && !context.strict_mode

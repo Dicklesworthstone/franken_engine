@@ -7331,6 +7331,18 @@ fn parse_primary_expression(
                 context,
             ));
         }
+        // In strict code the strict-mode reserved words are no references
+        // either (ES2020 12.1.1): `"use strict"; public = 42` parsed and
+        // ran into a ReferenceError, and in a strict function body it
+        // parsed silently (bd-9vouw.447). A strict `yield` was refused
+        // above.
+        if context.strict_mode && is_strict_mode_reserved_word(&name) {
+            return Err(invalid_syntax_error(
+                "a strict-mode reserved word cannot be an identifier reference",
+                span,
+                context,
+            ));
+        }
         return Ok(Expression::Identifier(name));
     }
 
@@ -18612,6 +18624,39 @@ mod tests {
             "for (var a = 0 in {});",
             "for (var k in o) ;",
             "for (; 'a' in o; ) break;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.447: in strict code the strict-mode reserved words are no
+    // identifier references; sloppy code and property names keep them.
+    #[test]
+    fn strict_mode_reserved_words_are_not_references_in_strict_code() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "'use strict';\npublic = 42;",
+            "function f() {\n  'use strict';\n  return interface;\n}",
+            "'use strict';\nvoid {\n  get x() {\n    public = 42;\n  }\n};",
+            "'use strict';\nvar n = package + 1;",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "var public = 1;\npublic = 2;",
+            "'use strict';\nvar o = { public: 1 };\no.public = 2;",
+            "'use strict';\nclass C { static m() { return 1; } }",
+            "function f() { return private; }",
         ] {
             parser
                 .parse(source, ParseGoal::Script)

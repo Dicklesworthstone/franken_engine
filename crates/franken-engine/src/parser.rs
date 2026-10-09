@@ -3804,10 +3804,17 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
             let body_continues_header = !trimmed_line.starts_with('{')
                 && previous_clause.is_some_and(statement_header_takes_unbraced_body);
             // `else` on its own line after an unbraced consequent
-            // (`if (a) x();\nelse y();`), and a do statement's `while` on its
-            // own line (`do\n  i++;\nwhile (c);`).
+            // (`if (a) x();\nelse y();`), also after the `;` that ends it
+            // (`if (a) continue\n; else {}`; after a block consequent that
+            // `;` is an empty statement ending the if), and a do statement's
+            // `while` on its own line (`do\n  i++;\nwhile (c);`).
+            let semicolon_else = trimmed_line
+                .strip_prefix(';')
+                .is_some_and(|after| starts_with_keyword(after.trim_start(), "else"));
             let clause_continues_statement = previous_clause.is_some_and(|clause| {
-                (starts_with_keyword(trimmed_line, "else") && clause_takes_else(clause))
+                ((starts_with_keyword(trimmed_line, "else")
+                    || (semicolon_else && !clause.ends_with('}')))
+                    && clause_takes_else(clause))
                     || (starts_with_keyword(trimmed_line, "while")
                         && do_statement_awaits_while(clause))
             });
@@ -24761,6 +24768,48 @@ mod tests {
         let err = parser
             .parse("function* g() {\n  yield\n  * 1\n}", ParseGoal::Script)
             .expect_err("`yield` newline `* 1` is a SyntaxError");
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
+    }
+
+    #[test]
+    fn merge_logical_lines_semicolon_before_else_continues_the_if() {
+        // bd-9vouw.465: the `;` that ends an unbraced consequent may start
+        // the next line, before the `else` (Test262 continue/12.7-1.js).
+        let texts = |source: &str| -> Vec<String> {
+            merge_logical_lines(source)
+                .into_iter()
+                .map(|line| line.text)
+                .collect()
+        };
+        assert_eq!(
+            texts("if (a) continue\n; else {}"),
+            ["if (a) continue ; else {}"]
+        );
+        assert_eq!(
+            texts("if (a) k = 1\n; else k = 2"),
+            ["if (a) k = 1 ; else k = 2"]
+        );
+        // Not after a statement that takes no else.
+        assert_eq!(texts("k = 1\n; else k = 2"), ["k = 1", "; else k = 2"]);
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "for (;;) {\n  if (a) continue\n  ; else {}\n}",
+            "function f(x) {\n  if (x) return\n  ; else return 7;\n}",
+            "if (a) k = 1\n; else k = 2",
+        ] {
+            let tree = parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+            let debug = format!("{tree:?}");
+            assert!(
+                debug.contains("alternate: Some("),
+                "`{source}` must keep its else branch: {debug}"
+            );
+        }
+        // A `;` after a block consequent ends the if: the else is an error.
+        let err = parser
+            .parse("if (a) {}\n; else {}", ParseGoal::Script)
+            .expect_err("`if (a) {}` newline `; else {}` is a SyntaxError");
         assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
     }
 

@@ -2527,13 +2527,19 @@ fn enum_declaration_head(line: &str) -> Option<EnumDeclarationHead<'_>> {
 /// The index of the `}` closing the `{` at `open`, skipping strings,
 /// template literals and comments.
 fn matching_enum_brace(source: &str, open: usize) -> Option<usize> {
+    matching_close(source, open, b'{', b'}')
+}
+
+/// The index of the `close_byte` matching the `open_byte` at `open`,
+/// skipping strings, template literals and comments.
+fn matching_close(source: &str, open: usize, open_byte: u8, close_byte: u8) -> Option<usize> {
     let bytes = source.as_bytes();
     let mut depth = 0usize;
     let mut index = open;
     while index < bytes.len() {
         match bytes[index] {
-            b'{' => depth += 1,
-            b'}' => {
+            byte if byte == open_byte => depth += 1,
+            byte if byte == close_byte => {
                 depth = depth.checked_sub(1)?;
                 if depth == 0 {
                     return Some(index);
@@ -2777,86 +2783,172 @@ fn is_enum_member_reserved(name: &str) -> bool {
     )
 }
 
+/// TypeScript parameter properties (`constructor(private readonly x: T)`):
+/// the modifiers (`public`, `private`, `protected`, `readonly`,
+/// `override`, in any combination) are removed from the parameter and the
+/// constructor body assigns `this.x = x` first, or right after its
+/// top-level `super(...)` call, as TypeScript emits it (bd-9vouw.414). The
+/// parameter list and the body may span lines and the class may be written
+/// on one line; only the modifier words are removed, so the line count is
+/// kept. The earlier lowering read a `constructor(` that started a line
+/// with its whole parameter list on that line, closed a multi-line body
+/// early and assigned before `super()`.
 fn lower_constructor_parameter_properties(source: &str) -> String {
-    let mut out = Vec::<String>::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("constructor(") {
-            out.push(line.to_string());
-            continue;
+    rewrite_outside_strings_and_comments(source, |source, index, output| {
+        if !starts_with_keyword(source, index, "constructor") {
+            return None;
         }
+        let after_keyword = index + "constructor".len();
+        let open = after_keyword
+            + (source[after_keyword..].len() - source[after_keyword..].trim_start().len());
+        if source.as_bytes().get(open) != Some(&b'(') {
+            return None;
+        }
+        let close = matching_close(source, open, b'(', b')')?;
+        let (parameters, names) = strip_parameter_property_modifiers(&source[open + 1..close]);
+        if names.is_empty() {
+            return None;
+        }
+        let after_close = close + 1;
+        let body_open =
+            after_close + (source[after_close..].len() - source[after_close..].trim_start().len());
+        if source.as_bytes().get(body_open) != Some(&b'{') {
+            return None;
+        }
+        let body_close = matching_close(source, body_open, b'{', b'}')?;
+        let insert_at =
+            super_call_statement_end(source, body_open + 1, body_close).unwrap_or(body_open + 1);
+        output.push_str(&source[index..=open]);
+        output.push_str(&parameters);
+        output.push_str(&source[close..insert_at]);
+        for name in &names {
+            output.push_str(&format!(" this.{name} = {name};"));
+        }
+        output.push(' ');
+        Some(insert_at)
+    })
+}
 
-        let Some(args_start) = trimmed.find('(') else {
-            out.push(line.to_string());
-            continue;
-        };
-        let Some(args_end) = trimmed.find(')') else {
-            out.push(line.to_string());
-            continue;
-        };
-
-        let args_text = &trimmed[args_start + 1..args_end];
-        let mut normalized_args = Vec::<String>::new();
-        let mut injected_assignments = Vec::<String>::new();
-
-        for argument in args_text.split(',') {
-            let raw_arg = argument.trim();
-            if raw_arg.is_empty() {
-                continue;
-            }
-
-            let (visibility, remaining) = if let Some(rest) = raw_arg.strip_prefix("private ") {
-                (Some("private"), rest)
-            } else if let Some(rest) = raw_arg.strip_prefix("public ") {
-                (Some("public"), rest)
-            } else if let Some(rest) = raw_arg.strip_prefix("protected ") {
-                (Some("protected"), rest)
-            } else {
-                (None, raw_arg)
+/// A constructor's parameter list with the parameter-property modifiers
+/// (and the `?` of an optional property) removed in place, and the names
+/// of the parameters that had them.
+fn strip_parameter_property_modifiers(parameters: &str) -> (String, Vec<String>) {
+    const MODIFIERS: [&str; 5] = ["public", "private", "protected", "readonly", "override"];
+    let mut out = String::with_capacity(parameters.len());
+    let mut names = Vec::new();
+    for (index, segment) in split_top_level_commas(parameters).into_iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        let leading = &segment[..segment.len() - segment.trim_start().len()];
+        let mut rest = segment.trim_start();
+        let mut modified = false;
+        loop {
+            let Some(keyword) = MODIFIERS.iter().find(|keyword| {
+                rest.strip_prefix(**keyword)
+                    .is_some_and(|after| after.starts_with(char::is_whitespace))
+            }) else {
+                break;
             };
-
-            let no_readonly = remaining
-                .strip_prefix("readonly ")
-                .unwrap_or(remaining)
-                .trim();
-
-            let param_name = no_readonly.split(':').next().unwrap_or(no_readonly).trim();
-
-            normalized_args.push(no_readonly.to_string());
-
-            if visibility.is_some() && !param_name.is_empty() {
-                injected_assignments.push(format!("this.{param_name} = {param_name};"));
-            }
+            rest = rest[keyword.len()..].trim_start();
+            modified = true;
         }
-
-        let mut rebuilt = String::new();
-        rebuilt.push_str("constructor(");
-        rebuilt.push_str(&normalized_args.join(", "));
-        rebuilt.push(')');
-
-        if let Some(brace_open) = trimmed.find('{') {
-            let body_start = brace_open + 1;
-            let body_end = trimmed.rfind('}').unwrap_or(trimmed.len());
-            let existing_body = trimmed[body_start..body_end].trim();
-            rebuilt.push_str(" {");
-            if !injected_assignments.is_empty() {
-                rebuilt.push(' ');
-                rebuilt.push_str(&injected_assignments.join(" "));
-            }
-            if !existing_body.is_empty() {
-                rebuilt.push(' ');
-                rebuilt.push_str(existing_body);
-            }
-            rebuilt.push_str(" }");
-        } else {
-            rebuilt.push(';');
+        out.push_str(leading);
+        if !modified {
+            out.push_str(rest);
+            continue;
         }
-
-        out.push(rebuilt);
+        let name_len = rest
+            .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'))
+            .unwrap_or(rest.len());
+        let name = &rest[..name_len];
+        if !name.is_empty() {
+            names.push(name.to_string());
+        }
+        out.push_str(name);
+        let after_name = &rest[name_len..];
+        out.push_str(after_name.strip_prefix('?').unwrap_or(after_name));
     }
+    (out, names)
+}
 
-    out.join("\n")
+/// `text` split at commas outside brackets, quotes and template literals,
+/// each part with its surrounding white space.
+fn split_top_level_commas(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                index += 1;
+                while index < bytes.len() && bytes[index] != quote {
+                    if bytes[index] == b'\\' {
+                        index += 1;
+                    }
+                    index += 1;
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 => {
+                parts.push(&text[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// The end of the first top-level `super(...)` call statement (with its
+/// `;`) between `start` and `end` of a constructor body, if any.
+fn super_call_statement_end(source: &str, start: usize, end: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    let mut depth = 0i32;
+    let mut index = start;
+    while index < end {
+        match bytes[index] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                index += 1;
+                while index < end && bytes[index] != quote {
+                    if bytes[index] == b'\\' {
+                        index += 1;
+                    }
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < end && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b's' if depth == 0 && starts_with_keyword(source, index, "super") => {
+                let after = index + "super".len();
+                let open =
+                    after + (source[after..end].len() - source[after..end].trim_start().len());
+                if bytes.get(open) == Some(&b'(') {
+                    let close = matching_close(source, open, b'(', b')')?;
+                    let rest = &source[close + 1..end];
+                    let semicolon = rest.len() - rest.trim_start().len();
+                    return Some(if rest.trim_start().starts_with(';') {
+                        close + 1 + semicolon + 1
+                    } else {
+                        close + 1
+                    });
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
 }
 
 fn normalize_definite_assignment_assertions(source: &str) -> String {

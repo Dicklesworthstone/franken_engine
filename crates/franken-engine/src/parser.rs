@@ -7016,8 +7016,13 @@ fn parse_primary_expression(
         return Ok(Expression::Identifier(name));
     }
 
+    // Two expressions with no operator between them are no expression
+    // (bd-9vouw.396: InvalidSyntax, so Function(), eval and module loading
+    // throw a catchable SyntaxError; in the land58 Test262 census this
+    // message met no Node-passing positive source but `new Function({})`,
+    // whose `[object Object]` body that test expects to be a SyntaxError).
     if is_unseparated_expression_sequence(expression) {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "unseparated expression sequence",
             span,
             context,

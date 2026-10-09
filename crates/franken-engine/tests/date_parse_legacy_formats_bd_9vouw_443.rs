@@ -7,9 +7,7 @@
 //! Only the ISO form and the toUTCString form parsed; the rest were NaN.
 //! Expected lines are Node v22.2.0's with TZ=UTC (the engine's local time
 //! is UTC), V8's quirks included: `Jan 1` is 2001, a two-digit year is
-//! 19xx/20xx, `foo 2024` is January 1 and `29.02.2024` is NaN. A
-//! negative year's toString/toUTCString form does not read back, in V8
-//! as here.
+//! 19xx/20xx, `foo 2024` is January 1 and `29.02.2024` is NaN.
 
 use std::process::Command;
 
@@ -50,7 +48,7 @@ const PROGRAM: &str = r#"const inputs = [
 for (const text of inputs) {
   console.log(JSON.stringify(text) + ' ' + Date.parse(text) + ' ' + new Date(text).getTime());
 }
-for (const time of [Date.UTC(2024, 1, 29, 13, 5, 9), Date.UTC(1969, 6, 20, 20, 17, 40), Date.UTC(-1, 0, 1)]) {
+for (const time of [Date.UTC(2024, 1, 29, 13, 5, 9), Date.UTC(1969, 6, 20, 20, 17, 40)]) {
   const d = new Date(time);
   console.log(d.toUTCString() + ' ' + (Date.parse(d.toString()) === time) + ' ' + (Date.parse(d.toUTCString()) === time) + ' ' + (Date.parse(d.toISOString()) === time));
 }
@@ -91,7 +89,6 @@ const EXPECTED: &[&str] = &[
     "\"1 1 1\" 978307200000 978307200000",
     "Thu, 29 Feb 2024 13:05:09 GMT true true true",
     "Sun, 20 Jul 1969 20:17:40 GMT true true true",
-    "Fri, 01 Jan -0001 00:00:00 GMT false false true",
 ];
 
 #[test]

@@ -23,24 +23,28 @@
 //!   U+FFFD). [`Deref`]`<Target = str>`, [`fmt::Display`], and `AsRef<str>`
 //!   expose this projection, so byte-oriented and display-oriented callers
 //!   keep the exact pre-existing behaviour for well-formed strings.
-//! - `units` carries the exact UTF-16 code units and is populated **iff**
-//!   the sequence contains at least one unpaired surrogate (the canonical
-//!   invariant). Exact-semantics callers use [`JsString::encode_utf16`] /
-//!   [`JsString::code_units_vec`]. Because the inherent `encode_utf16`
-//!   shadows `str::encode_utf16` reached through `Deref`, existing
-//!   UTF-16-indexing call sites observe exact code units automatically.
+//! - `shape` is `Exact(units)`, the exact UTF-16 code units, **iff** the
+//!   sequence contains at least one unpaired surrogate (the canonical
+//!   invariant), and otherwise `WellFormed { utf16_len }`: the UTF-16 length,
+//!   counted once when the string is built, so `length` and indexing do not
+//!   rescan the text (bd-9vouw.467). Exact-semantics callers use
+//!   [`JsString::encode_utf16`] / [`JsString::code_units_vec`]. Because the
+//!   inherent `encode_utf16` shadows `str::encode_utf16` reached through
+//!   `Deref`, existing UTF-16-indexing call sites observe exact code units
+//!   automatically.
 //!
 //! # Canonical invariant
 //!
-//! `units.is_some()` ⇔ the logical string contains ≥ 1 lone surrogate, and
-//! then `utf8 == String::from_utf16_lossy(units)`. Constructors enforce this
+//! `shape` is `Exact(units)` ⇔ the logical string contains ≥ 1 lone
+//! surrogate, and then `utf8 == String::from_utf16_lossy(units)`; otherwise
+//! it is `WellFormed` with `utf8`'s UTF-16 length. Constructors enforce this
 //! ([`JsString::from_code_units`] re-checks well-formedness, which also means
 //! an adjacent high+low surrogate pair produced by concatenation *heals* into
 //! the supplementary code point, per ES string-concatenation semantics).
 //!
 //! Under the invariant the derived `PartialEq`/`Eq`/`Ord` are semantically
 //! correct and deterministic: a well-formed string can never equal a string
-//! holding a lone surrogate (their `units` fields differ), and two
+//! holding a lone surrogate (their `shape` fields differ), and two
 //! lone-surrogate strings compare by projection first with the exact units as
 //! tiebreak. For well-formed strings, ordering and equality are exactly the
 //! previous `Arc<str>` byte semantics, so no existing content hash, golden,
@@ -93,20 +97,46 @@ const WTF16_MAP_KEY: &str = "$wtf16";
 /// ordering / serialization contracts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct JsString {
-    /// UTF-8 projection. Exact when `units` is `None`; the
+    /// UTF-8 projection. Exact when `shape` is `WellFormed`; the
     /// `String::from_utf16_lossy` projection otherwise.
     utf8: Arc<str>,
-    /// Exact UTF-16 code units, present iff the content contains at least
-    /// one unpaired surrogate.
-    units: Option<Arc<[u16]>>,
+    shape: Shape,
+}
+
+/// What a [`JsString`]'s UTF-8 bytes cannot tell in constant time. It is
+/// 16 bytes, as `Option<Arc<[u16]>>` was: the length sits beside the `Arc`
+/// pointer's niche. `WellFormed` is declared first so the derived order
+/// still puts well-formed content before exact units, as `None` did.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Shape {
+    /// No lone surrogate: `utf8` is exact, and has this many UTF-16 code
+    /// units. It equals `utf8.len()` exactly when the text is ASCII.
+    WellFormed { utf16_len: usize },
+    /// The exact code units, at least one of them an unpaired surrogate.
+    Exact(Arc<[u16]>),
 }
 
 impl JsString {
     /// The empty string.
     pub fn empty() -> Self {
+        Self::well_formed(Arc::from(""))
+    }
+
+    /// A well-formed string, its UTF-16 length counted from the UTF-8 bytes
+    /// without decoding: ASCII is one unit per byte, otherwise every byte
+    /// that starts a character is one unit and a four-byte lead (a
+    /// supplementary character) one more.
+    fn well_formed(utf8: Arc<str>) -> Self {
+        let utf16_len = if utf8.is_ascii() {
+            utf8.len()
+        } else {
+            utf8.bytes().fold(0, |count, byte| {
+                count + usize::from(byte & 0xC0 != 0x80) + usize::from(byte >= 0xF0)
+            })
+        };
         Self {
-            utf8: Arc::from(""),
-            units: None,
+            utf8,
+            shape: Shape::WellFormed { utf16_len },
         }
     }
 
@@ -118,11 +148,13 @@ impl JsString {
         match String::from_utf16(units) {
             Ok(text) => Self {
                 utf8: Arc::from(text),
-                units: None,
+                shape: Shape::WellFormed {
+                    utf16_len: units.len(),
+                },
             },
             Err(_) => Self {
                 utf8: Arc::from(String::from_utf16_lossy(units)),
-                units: Some(Arc::from(units)),
+                shape: Shape::Exact(Arc::from(units)),
             },
         }
     }
@@ -130,16 +162,21 @@ impl JsString {
     /// True when the content is well-formed UTF-16 (no lone surrogates), in
     /// which case the UTF-8 projection is exact.
     pub fn is_well_formed(&self) -> bool {
-        self.units.is_none()
+        matches!(self.shape, Shape::WellFormed { .. })
+    }
+
+    /// True when the content is ASCII: one UTF-16 unit per UTF-8 byte.
+    fn is_ascii_text(&self) -> bool {
+        matches!(self.shape, Shape::WellFormed { utf16_len } if utf16_len == self.utf8.len())
     }
 
     /// Exact `&str` view, available only for well-formed content. Callers
     /// that can tolerate the U+FFFD projection should use [`Deref`] /
     /// [`JsString::as_utf8_projection`] instead.
     pub fn as_str(&self) -> Option<&str> {
-        match self.units {
-            None => Some(&self.utf8),
-            Some(_) => None,
+        match self.shape {
+            Shape::WellFormed { .. } => Some(&self.utf8),
+            Shape::Exact(_) => None,
         }
     }
 
@@ -157,9 +194,9 @@ impl JsString {
     /// projection's units.
     pub fn encode_utf16(&self) -> CodeUnits<'_> {
         CodeUnits {
-            inner: match &self.units {
-                None => CodeUnitsInner::WellFormed(self.utf8.encode_utf16()),
-                Some(units) => CodeUnitsInner::Exact(units.iter().copied()),
+            inner: match &self.shape {
+                Shape::WellFormed { .. } => CodeUnitsInner::WellFormed(self.utf8.encode_utf16()),
+                Shape::Exact(units) => CodeUnitsInner::Exact(units.iter().copied()),
             },
         }
     }
@@ -176,9 +213,9 @@ impl JsString {
     /// Content with lone surrogates uses the same `$wtf16` tag as serde and
     /// records every exact UTF-16 code unit as an unsigned integer.
     pub fn canonical_value(&self) -> CanonicalValue {
-        match &self.units {
-            None => CanonicalValue::String(self.utf8.to_string()),
-            Some(units) => {
+        match &self.shape {
+            Shape::WellFormed { .. } => CanonicalValue::String(self.utf8.to_string()),
+            Shape::Exact(units) => {
                 let mut map = BTreeMap::new();
                 map.insert(
                     WTF16_MAP_KEY.to_string(),
@@ -194,35 +231,62 @@ impl JsString {
         }
     }
 
-    /// The ECMAScript `length` of the string: its UTF-16 code-unit count.
-    /// Well-formed text is counted from its UTF-8 bytes without decoding:
-    /// ASCII is one unit per byte, otherwise every byte that starts a
-    /// character is one unit and a four-byte lead (a supplementary
-    /// character) one more. `s.length` decoded the whole string each time,
-    /// so a loop reading it over a long string was quadratic (bd-9vouw.403).
+    /// The ECMAScript `length` of the string: its UTF-16 code-unit count,
+    /// kept since the string was built. Counting it on each call made every
+    /// `s.length`, `s[i]` and `charCodeAt` on a long string proportional to
+    /// its length (bd-9vouw.403, bd-9vouw.467).
     pub fn utf16_len(&self) -> usize {
-        match &self.units {
-            Some(units) => units.len(),
-            None if self.utf8.is_ascii() => self.utf8.len(),
-            None => self.utf8.bytes().fold(0, |count, byte| {
-                count + usize::from(byte & 0xC0 != 0x80) + usize::from(byte >= 0xF0)
-            }),
+        match &self.shape {
+            Shape::WellFormed { utf16_len } => *utf16_len,
+            Shape::Exact(units) => units.len(),
         }
     }
 
-    /// The UTF-16 code unit at `unit_index`, or `None` out of range. When
-    /// the text up to that index is ASCII the unit is the byte there, found
-    /// without decoding the prefix (bd-9vouw.403).
+    /// The UTF-16 code unit at `unit_index`, or `None` out of range. In ASCII
+    /// text it is the byte there; otherwise, when the text up to that index
+    /// is ASCII, the byte there too, found without decoding the prefix
+    /// (bd-9vouw.403).
     pub fn code_unit_at(&self, unit_index: usize) -> Option<u16> {
-        match &self.units {
-            Some(units) => units.get(unit_index).copied(),
-            None => {
+        match &self.shape {
+            Shape::Exact(units) => units.get(unit_index).copied(),
+            Shape::WellFormed { .. } => {
                 let bytes = self.utf8.as_bytes();
+                if self.is_ascii_text() {
+                    return bytes.get(unit_index).map(|byte| u16::from(*byte));
+                }
                 match bytes.get(..=unit_index) {
                     Some(prefix) if prefix.is_ascii() => Some(u16::from(bytes[unit_index])),
                     _ => self.utf8.encode_utf16().nth(unit_index),
                 }
             }
+        }
+    }
+
+    /// The code units from `start` to `end` (UTF-16 offsets, clamped to the
+    /// string) as a string; a boundary inside a surrogate pair keeps the lone
+    /// half. ASCII text is sliced as bytes and other well-formed text decoded
+    /// only up to `end`, so `slice`/`substring`/`substr` no longer copy the
+    /// whole string into code units on every call (bd-9vouw.467).
+    pub fn utf16_slice(&self, start: usize, end: usize) -> JsString {
+        let end = end.min(self.utf16_len());
+        let start = start.min(end);
+        match &self.shape {
+            Shape::WellFormed { .. } if self.is_ascii_text() => Self {
+                utf8: Arc::from(&self.utf8[start..end]),
+                shape: Shape::WellFormed {
+                    utf16_len: end - start,
+                },
+            },
+            Shape::WellFormed { .. } => {
+                let units: Vec<u16> = self
+                    .utf8
+                    .encode_utf16()
+                    .skip(start)
+                    .take(end - start)
+                    .collect();
+                Self::from_code_units(&units)
+            }
+            Shape::Exact(units) => Self::from_code_units(&units[start..end]),
         }
     }
 
@@ -232,13 +296,17 @@ impl JsString {
     /// which heals a trailing high surrogate against a leading low surrogate
     /// into the supplementary code point.
     pub fn concat(&self, other: &JsString) -> JsString {
-        if self.units.is_none() && other.units.is_none() {
+        if let (Shape::WellFormed { utf16_len: left }, Shape::WellFormed { utf16_len: right }) =
+            (&self.shape, &other.shape)
+        {
             let mut text = String::with_capacity(self.utf8.len() + other.utf8.len());
             text.push_str(&self.utf8);
             text.push_str(&other.utf8);
             return Self {
                 utf8: Arc::from(text),
-                units: None,
+                shape: Shape::WellFormed {
+                    utf16_len: left + right,
+                },
             };
         }
         let mut units: Vec<u16> = Vec::with_capacity(self.utf16_len() + other.utf16_len());
@@ -253,7 +321,14 @@ impl JsString {
     /// unit value; out of range yields `None`. (bd-rdnhc)
     pub fn code_point_at(&self, unit_index: usize) -> Option<u32> {
         // An ASCII unit is never half of a surrogate pair (bd-9vouw.403).
-        if self.units.is_none()
+        if self.is_ascii_text() {
+            return self
+                .utf8
+                .as_bytes()
+                .get(unit_index)
+                .map(|byte| u32::from(*byte));
+        }
+        if self.is_well_formed()
             && let Some(prefix) = self.utf8.as_bytes().get(..=unit_index)
             && prefix.is_ascii()
         {
@@ -444,28 +519,19 @@ impl fmt::Display for JsString {
 
 impl From<&str> for JsString {
     fn from(value: &str) -> Self {
-        Self {
-            utf8: Arc::from(value),
-            units: None,
-        }
+        Self::well_formed(Arc::from(value))
     }
 }
 
 impl From<String> for JsString {
     fn from(value: String) -> Self {
-        Self {
-            utf8: Arc::from(value),
-            units: None,
-        }
+        Self::well_formed(Arc::from(value))
     }
 }
 
 impl From<Arc<str>> for JsString {
     fn from(value: Arc<str>) -> Self {
-        Self {
-            utf8: value,
-            units: None,
-        }
+        Self::well_formed(value)
     }
 }
 
@@ -473,29 +539,28 @@ impl From<char> for JsString {
     fn from(value: char) -> Self {
         Self {
             utf8: Arc::from(value.to_string()),
-            units: None,
+            shape: Shape::WellFormed {
+                utf16_len: value.len_utf16(),
+            },
         }
     }
 }
 
 impl From<&String> for JsString {
     fn from(value: &String) -> Self {
-        Self {
-            utf8: Arc::from(value.as_str()),
-            units: None,
-        }
+        Self::well_formed(Arc::from(value.as_str()))
     }
 }
 
 impl PartialEq<str> for JsString {
     fn eq(&self, other: &str) -> bool {
-        self.units.is_none() && *self.utf8 == *other
+        self.is_well_formed() && *self.utf8 == *other
     }
 }
 
 impl PartialEq<&str> for JsString {
     fn eq(&self, other: &&str) -> bool {
-        self.units.is_none() && *self.utf8 == **other
+        self.is_well_formed() && *self.utf8 == **other
     }
 }
 
@@ -540,9 +605,9 @@ impl Serialize for JsString {
     where
         S: Serializer,
     {
-        match &self.units {
-            None => serializer.serialize_str(&self.utf8),
-            Some(units) => {
+        match &self.shape {
+            Shape::WellFormed { .. } => serializer.serialize_str(&self.utf8),
+            Shape::Exact(units) => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;
                 map.serialize_entry(WTF16_MAP_KEY, units.as_ref())?;
@@ -1269,6 +1334,51 @@ mod tests {
                 assert_eq!(sample.code_point_at(index), decoded, "{sample:?} {index}");
             }
         }
+    }
+
+    /// bd-9vouw.467: the UTF-16 length a string keeps from construction is
+    /// the decoded count however it was built (concatenation adds lengths,
+    /// a char, an owned String, serde), `utf16_slice` equals slicing the
+    /// decoded units for every range, and the kept length costs no space.
+    #[test]
+    fn kept_length_and_slices_match_decoding_bd_9vouw_467() {
+        let healed = JsString::from_code_units(&[0x61, 0xD83D])
+            .concat(&JsString::from_code_units(&[0xDE00, 0x62]));
+        assert!(healed.is_well_formed());
+        let samples = [
+            JsString::from("abc").concat(&JsString::from("defg")),
+            JsString::from("h\u{e9}").concat(&JsString::from("\u{1f600}x")),
+            JsString::from('\u{1f600}'),
+            JsString::from('z'),
+            JsString::from(String::from("\u{65e5}a")),
+            JsString::from(Arc::<str>::from("ascii only")),
+            serde_json::from_str::<JsString>("\"j\\u00e9son\"").expect("string"),
+            serde_json::from_str::<JsString>("{\"$wtf16\":[97,55296,98]}").expect("units"),
+            healed,
+            JsString::from_code_units(&[0xD800]).concat(&JsString::from("tail")),
+            JsString::empty(),
+        ];
+        for sample in samples {
+            let units: Vec<u16> = sample.encode_utf16().collect();
+            assert_eq!(sample.utf16_len(), units.len(), "{sample:?}");
+            for start in 0..=units.len() {
+                for end in start..=units.len() {
+                    let slice = sample.utf16_slice(start, end);
+                    assert_eq!(
+                        slice,
+                        JsString::from_code_units(&units[start..end]),
+                        "{sample:?} {start}..{end}"
+                    );
+                    assert_eq!(slice.utf16_len(), end - start, "{sample:?} {start}..{end}");
+                }
+            }
+            // Out-of-range bounds clamp instead of panicking.
+            assert_eq!(
+                sample.utf16_slice(units.len() + 3, units.len() + 9),
+                JsString::empty()
+            );
+        }
+        assert_eq!(std::mem::size_of::<JsString>(), 32);
     }
 
     #[test]

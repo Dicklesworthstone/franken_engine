@@ -60590,15 +60590,19 @@ impl InterpreterCore {
         args: RegRange,
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.20: prefix test at an optional position, over exact
-        // UTF-16 code units (bd-9a8cz.1, bd-rdnhc).
+        // UTF-16 code units (bd-9a8cz.1, bd-rdnhc). Only the needle-long
+        // slice at `from` is built, not the receiver's units (bd-9vouw.467);
+        // canonical JsStrings are equal exactly when their units are.
         let search = self.builtin_search_js_string(module, args, 0)?;
-        let units = this_str.code_units_vec();
-        let needle = search.code_units_vec();
+        let len = this_str.utf16_len();
         let from = match self.builtin_number_arg(module, args, 1)? {
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, units.len() as i64) as usize,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, len as i64) as usize,
             None => 0,
         };
-        Ok(Value::Bool(units[from..].starts_with(&needle)))
+        let end = from + search.utf16_len();
+        Ok(Value::Bool(
+            end <= len && this_str.utf16_slice(from, end) == search,
+        ))
     }
 
     fn string_ends_with_impl(
@@ -60609,15 +60613,18 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         // ES2020 21.1.3.6: suffix test against the prefix of code-unit
         // length `endPosition` (default = full length) (bd-9a8cz.1,
-        // bd-rdnhc).
+        // bd-rdnhc). Only the needle-long slice before `end` is built
+        // (bd-9vouw.467).
         let search = self.builtin_search_js_string(module, args, 0)?;
-        let units = this_str.code_units_vec();
-        let needle = search.code_units_vec();
+        let len = this_str.utf16_len();
         let end = match self.builtin_number_arg(module, args, 1)? {
-            Some(Value::Undefined) | None => units.len(),
-            Some(arg) => Self::value_as_integer(&arg).clamp(0, units.len() as i64) as usize,
+            Some(Value::Undefined) | None => len,
+            Some(arg) => Self::value_as_integer(&arg).clamp(0, len as i64) as usize,
         };
-        Ok(Value::Bool(units[..end].ends_with(&needle)))
+        Ok(Value::Bool(
+            end.checked_sub(search.utf16_len())
+                .is_some_and(|start| this_str.utf16_slice(start, end) == search),
+        ))
     }
 
     fn string_index_of_impl(
@@ -60678,8 +60685,7 @@ impl InterpreterCore {
         // offsets over exact units, composing with the unit-indexed search
         // family; a boundary inside a surrogate pair yields the lone half
         // losslessly (bd-9a8cz.1, bd-3kvat; previously scalar-indexed).
-        let units = this_str.code_units_vec();
-        let len = units.len() as i64;
+        let len = this_str.utf16_len() as i64;
         let normalize = |n: i64| -> i64 {
             if n < 0 {
                 len.saturating_add(n).max(0)
@@ -60698,9 +60704,9 @@ impl InterpreterCore {
         if start >= end {
             return Ok(Value::str(String::new()));
         }
-        Ok(Value::Str(JsString::from_code_units(
-            &units[start as usize..end as usize],
-        )))
+        Ok(Value::Str(
+            this_str.utf16_slice(start as usize, end as usize),
+        ))
     }
 
     fn string_substring_impl(
@@ -60713,8 +60719,7 @@ impl InterpreterCore {
         // start <= end. Indices are UTF-16 code-unit offsets over exact
         // units; split-pair boundaries are lossless (bd-9a8cz.1, bd-3kvat;
         // previously scalar-indexed).
-        let units = this_str.code_units_vec();
-        let len = units.len() as i64;
+        let len = this_str.utf16_len() as i64;
         let clamp_idx = |n: i64| -> i64 { n.clamp(0, len) };
         let start = match self.builtin_number_arg(module, args, 0)? {
             Some(Value::Undefined) | None => 0,
@@ -60729,9 +60734,7 @@ impl InterpreterCore {
         } else {
             (end, start)
         };
-        Ok(Value::Str(JsString::from_code_units(
-            &units[lo as usize..hi as usize],
-        )))
+        Ok(Value::Str(this_str.utf16_slice(lo as usize, hi as usize)))
     }
 
     fn string_substr_impl(
@@ -60748,8 +60751,7 @@ impl InterpreterCore {
         // This is deliberately NOT `substring`, which clamps both args to [0, len]
         // and swaps them. `size` and both offsets are UTF-16 code-unit counts
         // over exact units (bd-fqlfw.2.11.2, bd-3kvat; previously scalar).
-        let units = this_str.code_units_vec();
-        let size = units.len() as i64;
+        let size = this_str.utf16_len() as i64;
         let int_start = match self.builtin_number_arg(module, args, 0)? {
             Some(Value::Undefined) | None => 0,
             Some(arg) => Self::value_as_integer(&arg),
@@ -60768,9 +60770,9 @@ impl InterpreterCore {
             return Ok(Value::str(String::new()));
         }
         let end = start + result_length;
-        Ok(Value::Str(JsString::from_code_units(
-            &units[start as usize..end as usize],
-        )))
+        Ok(Value::Str(
+            this_str.utf16_slice(start as usize, end as usize),
+        ))
     }
 
     /// Intrinsic-table binding (fixed signature, no module): a callable
@@ -76394,16 +76396,17 @@ impl InterpreterCore {
         index: Option<Value>,
     ) -> Result<Value, InterpreterError> {
         let string_val = Self::require_object_coercible_to_js_string(&receiver)?;
-        let units: Vec<u16> = string_val.code_units_vec();
-        let len = units.len() as i64;
+        let len = string_val.utf16_len() as i64;
         let raw = index.as_ref().map(Self::value_as_integer).unwrap_or(0);
         let idx = if raw < 0 { raw + len } else { raw };
         if idx < 0 || idx >= len {
             return Ok(Value::Undefined);
         }
-        Ok(Value::Str(JsString::from_code_units(
-            &[units[idx as usize]],
-        )))
+        Ok(string_val
+            .code_unit_at(idx as usize)
+            .map_or(Value::Undefined, |unit| {
+                Value::Str(JsString::from_code_units(&[unit]))
+            }))
     }
 
     /// Validates Array method callback arguments for fail-closed implementations.

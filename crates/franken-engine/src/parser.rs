@@ -9854,6 +9854,20 @@ fn reject_non_assignable_update_target(
             context,
         )));
     }
+    // A parenthesized operand is as assignable as what it holds (ES2020
+    // AssignmentTargetType of a ParenthesizedExpression): `(x)++` and
+    // `(o.p)++` are updates, but `(yield)++` and `++(a + b)` are not
+    // (bd-9vouw.449). Unparenthesized operands are left to the paths that
+    // split them (`yield x++`). A call keeps its Annex B handling above.
+    let parenthesized = operand_src.starts_with('(')
+        && extract_balanced(operand_src, '(', ')').is_some_and(|(_, rest)| rest.trim().is_empty());
+    if parenthesized && !matches!(target, Expression::Call { .. }) {
+        return Some(Err(invalid_syntax_error(
+            "invalid update target: a parenthesized expression that is no reference",
+            span,
+            context,
+        )));
+    }
     None
 }
 
@@ -18759,6 +18773,39 @@ mod tests {
             .map(|line| line.text)
             .collect();
         assert_eq!(texts, ["var r = tag `x`;"]);
+    }
+
+    // bd-9vouw.449: a parenthesized update operand is as assignable as what
+    // it holds.
+    #[test]
+    fn parenthesized_update_operands_must_be_references() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "function* g() { (yield)++; }",
+            "function* g() { ++(yield); }",
+            "var a, b; (a + b)++;",
+            "async function f() { (await 1)++; }",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "var x = 1; (x)++;",
+            "var o = {p: 1}; (o.p)++; ++(o.p);",
+            "function* g() { var x = 0; yield x++; }",
+            "var x = 1; ((x))--;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
     }
 
     #[test]

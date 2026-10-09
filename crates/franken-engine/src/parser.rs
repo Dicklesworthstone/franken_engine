@@ -2641,7 +2641,11 @@ fn line_starts_with_continuation_operator(line: &str) -> Option<LeadingOperator>
     let first = *bytes.first()?;
     let second = bytes.get(1).copied();
     match first {
-        b'|' | b'&' | b'?' | b':' | b',' | b'*' | b'%' | b'^' | b'=' => {
+        // `<` and `>` cannot begin an expression either: a line starting
+        // with a relational or shift operator (`>>`, `<=`, `>>>`) continues
+        // the previous one (bd-9vouw.391). In script code a leading `<!--`
+        // was blanked as a comment before this pass.
+        b'|' | b'&' | b'?' | b':' | b',' | b'*' | b'%' | b'^' | b'=' | b'<' | b'>' => {
             Some(LeadingOperator::BinaryOnly)
         }
         b'!' if second == Some(b'=') => Some(LeadingOperator::BinaryOnly),

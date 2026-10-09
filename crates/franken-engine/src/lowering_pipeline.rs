@@ -9038,6 +9038,10 @@ fn lower_ir2_to_ir3_with_input_hash(
                 kind: if runtime_lexical_binding_ids.contains(binding_id) {
                     match binding_kind_by_id.get(binding_id) {
                         Some(BindingKind::Const) => 2,
+                        // An exported `var` a closure captures
+                        // (`export var n = 0; export function inc() { n++; }`)
+                        // is hoisted too, never in a temporal dead zone.
+                        Some(BindingKind::Var) => 0,
                         Some(BindingKind::Import) => RUNTIME_IMPORT_BINDING_KIND,
                         _ => 1,
                     }

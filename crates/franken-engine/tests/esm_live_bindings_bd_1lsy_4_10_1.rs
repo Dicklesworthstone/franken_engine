@@ -144,3 +144,29 @@ fn imports_in_a_cycle_see_the_exports_instantiation_state() {
         ["ReferenceError undefined function", "1 2 function"]
     );
 }
+
+/// An exported `var` a closure captures is hoisted (`undefined` while its
+/// module's import of itself runs), its declaration's value reaches the
+/// import, and the closure's later writes do too. Node v22.2.0 lines; the
+/// gate59e binary (before exported bindings were runtime cells) printed
+/// "undefined function", "undefined", "0".
+#[test]
+fn a_captured_exported_var_is_hoisted_and_live() {
+    let root = tempfile::tempdir().expect("temp dir");
+    for (name, source) in [
+        (
+            "vcounter.mjs",
+            "import { n as early, inc as bump } from './vcounter.mjs';\nconsole.log(early, typeof bump);\nexport var n = 0;\nexport function inc() { n++; }\nconsole.log(early);\n",
+        ),
+        (
+            "main.mjs",
+            "import { n, inc } from './vcounter.mjs';\ninc(); inc();\nconsole.log(n);\n",
+        ),
+    ] {
+        std::fs::write(root.path().join(name), source).expect("write module");
+    }
+    assert_eq!(
+        run_module(root.path(), "main.mjs"),
+        ["undefined function", "0", "2"]
+    );
+}

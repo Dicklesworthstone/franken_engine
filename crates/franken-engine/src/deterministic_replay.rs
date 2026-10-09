@@ -203,13 +203,10 @@ impl DeterministicEventWitness {
     /// multiply per byte: 8% of a property-read loop (bd-9vouw.381).
     fn absorb(&mut self, bytes: &[u8]) {
         let mut digest = self.digest;
-        let mut words = bytes.chunks_exact(8);
-        for word in &mut words {
-            let mut buffer = [0_u8; 8];
-            buffer.copy_from_slice(word);
-            digest = Self::mix(digest, u64::from_le_bytes(buffer));
+        let (words, tail) = bytes.as_chunks::<8>();
+        for word in words {
+            digest = Self::mix(digest, u64::from_le_bytes(*word));
         }
-        let tail = words.remainder();
         if !tail.is_empty() {
             let mut buffer = [0_u8; 8];
             buffer[..tail.len()].copy_from_slice(tail);

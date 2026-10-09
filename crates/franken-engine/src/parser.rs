@@ -4222,6 +4222,40 @@ fn parse_named_declaration_export(
     }
 
     let declaration_text = rest.trim_start();
+    if let Some(default_text) = declaration_text
+        .strip_prefix("default")
+        .filter(|after| after.starts_with(char::is_whitespace))
+        .map(str::trim_start)
+        && starts_named_exportable_declaration(default_text)
+        && default_declaration_name(default_text).is_some()
+    {
+        // `export default function A() {}` (also `function*`, `async
+        // function`, `async function*` and `class A {}`) declares the local
+        // binding A and exports it as `default` (ES2020 15.2.3.5: its
+        // ExportEntry has LocalName "A"), as `export { A as default }` does.
+        // An anonymous declaration keeps the default-expression form.
+        let declaration_span =
+            span_after_prefix(&span, statement.len().saturating_sub(default_text.len()));
+        let declaration =
+            parse_statement(default_text, ParseGoal::Module, declaration_span, context)?;
+        let [name] = export_names_for_declaration(&declaration, &span, context.source_label)?
+            .try_into()
+            .map_err(|_| {
+                ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    "a default export declaration declares exactly one name",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                )
+            })?;
+        return Ok(Some(vec![
+            declaration,
+            Statement::Export(ExportDeclaration {
+                kind: ExportKind::NamedClause(format!("{{ {name} as default }}").into()),
+                span,
+            }),
+        ]));
+    }
     if declaration_text.is_empty()
         || declaration_text.starts_with("default")
         || declaration_text.starts_with('{')
@@ -4273,6 +4307,28 @@ fn span_after_prefix(span: &SourceSpan, prefix_len: usize) -> SourceSpan {
         span.end_line,
         span.end_column,
     )
+}
+
+/// The binding name of a function or class declaration's head
+/// (`function* A(`, `async function A(`, `class A extends B {`), or `None`
+/// for an anonymous one (`function (`, `class {`, `class extends B {`).
+fn default_declaration_name(text: &str) -> Option<&str> {
+    let head = if let Some(after) = text.strip_prefix("class") {
+        after
+    } else {
+        let after = text
+            .strip_prefix("async")
+            .map_or(text, str::trim_start)
+            .strip_prefix("function")?
+            .trim_start();
+        after.strip_prefix('*').unwrap_or(after)
+    };
+    let head = head.trim_start();
+    let end = head
+        .find(|ch: char| !(ch == '\\' || is_identifier_continue(ch)))
+        .unwrap_or(head.len());
+    let name = &head[..end];
+    (!name.is_empty() && name != "extends" && is_identifier(name)).then_some(name)
 }
 
 fn starts_named_exportable_declaration(statement: &str) -> bool {
@@ -21682,6 +21738,43 @@ mod tests {
         let module = strip_comments_to_whitespace_for_goal(src, ParseGoal::Module);
         assert_eq!(module, "a <!--b\n--> c\n  \n   --> d\nx-->y\n'<!--'\n");
         assert_eq!(strip_comments_to_whitespace(src), module);
+    }
+
+    #[test]
+    fn default_declaration_names_bd_9vouw_386() {
+        for (head, name) in [
+            ("function A() {}", Some("A")),
+            ("function* G() {}", Some("G")),
+            ("function *G() {}", Some("G")),
+            ("async function F() {}", Some("F")),
+            ("async function* AG() {}", Some("AG")),
+            ("class K extends B {}", Some("K")),
+            ("class $k{}", Some("$k")),
+            ("function () {}", None),
+            ("function() {}", None),
+            ("async function* () {}", None),
+            ("class {}", None),
+            ("class extends B {}", None),
+        ] {
+            assert_eq!(default_declaration_name(head), name, "{head}");
+        }
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "export default class K {}\nexport { K as alias };",
+                ParseGoal::Module,
+            )
+            .expect("parse");
+        assert!(
+            matches!(
+                tree.body.as_slice(),
+                [
+                    Statement::ClassDeclaration(_),
+                    Statement::Export(_),
+                    Statement::Export(_)
+                ]
+            ),
+            "a named default declaration is the declaration plus `export {{ K as default }}`"
+        );
     }
 
     #[test]

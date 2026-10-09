@@ -1098,6 +1098,14 @@ pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<S
             "Invalid regular expression: /{pattern}/{flags}: {message}"
         ));
     }
+    // `regex` takes a `v` class's syntax characters as literals.
+    if flags.contains('v')
+        && let Some(message) = regexp_syntax::unicode_sets_class_error(pattern)
+    {
+        return Some(format!(
+            "Invalid regular expression: /{pattern}/{flags}: {message}"
+        ));
+    }
     let message = BacktrackRegExp::syntax_error(pattern, flags)?;
     let automaton_accepts = InterpreterCore::regexp_builder(pattern, flags)
         .is_ok_and(|builder| builder.build().is_ok());

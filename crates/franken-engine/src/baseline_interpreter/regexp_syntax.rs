@@ -1755,6 +1755,102 @@ pub(super) fn property_escape_count(pattern: &str) -> usize {
     pattern.matches("\\p{").count() + pattern.matches("\\P{").count()
 }
 
+/// The early error of a class under the `v` flag (ES2024 22.2.1): an
+/// unescaped ClassSetSyntaxCharacter (`(`, `)`, `{`, `}`, `/`, `|`, or a
+/// `-` that starts a class or ends one and is no `--`), a
+/// ClassSetReservedDoublePunctuator (`!!`, `##`, `^^`, ...), or an `&&`
+/// with no operand on one side. `regex` reads these as literal characters,
+/// so `/[(]/v` and `/[!!]/v` compiled (bd-9vouw.400). Only the caller's
+/// `v` patterns reach here; `None` when every class is well formed.
+pub(super) fn unicode_sets_class_error(pattern: &str) -> Option<&'static str> {
+    const INVALID_CHARACTER: &str = "Invalid character in character class";
+    const INVALID_OPERATION: &str = "Invalid set operation in character class";
+    const UNTERMINATED: &str = "Unterminated character class";
+    const DOUBLE_PUNCTUATORS: &str = "&!#$%*+,.:;<=>?@^`~";
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut index = 0;
+    while let Some(&c) = chars.get(index) {
+        match c {
+            '\\' => {
+                index += 2;
+                continue;
+            }
+            '[' => {}
+            _ => {
+                index += 1;
+                continue;
+            }
+        }
+        let mut depth = 0usize;
+        // Just after a class's `[` (or `[^`): nothing to operate on yet.
+        let mut fresh = false;
+        loop {
+            let Some(&c) = chars.get(index) else {
+                return Some(UNTERMINATED);
+            };
+            let next = chars.get(index + 1).copied();
+            match c {
+                '\\' => {
+                    let braced = matches!(next, Some('p' | 'P' | 'q' | 'u'))
+                        && chars.get(index + 2) == Some(&'{');
+                    if braced {
+                        let Some(close) = chars[index + 3..].iter().position(|&ch| ch == '}')
+                        else {
+                            return Some(UNTERMINATED);
+                        };
+                        index += close + 4;
+                    } else {
+                        index += 2;
+                    }
+                    fresh = false;
+                }
+                '[' => {
+                    depth += 1;
+                    index += 1;
+                    if chars.get(index) == Some(&'^') {
+                        index += 1;
+                    }
+                    fresh = true;
+                }
+                ']' => {
+                    depth -= 1;
+                    index += 1;
+                    fresh = false;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                '(' | ')' | '{' | '}' | '/' | '|' => return Some(INVALID_CHARACTER),
+                '-' if next == Some('-') => {
+                    index += 2;
+                    fresh = false;
+                }
+                '-' => {
+                    if fresh || next == Some(']') {
+                        return Some(INVALID_CHARACTER);
+                    }
+                    index += 1;
+                }
+                '&' if next == Some('&') => {
+                    if fresh || matches!(chars.get(index + 2), Some('&' | ']') | None) {
+                        return Some(INVALID_OPERATION);
+                    }
+                    index += 2;
+                    fresh = false;
+                }
+                _ if next == Some(c) && DOUBLE_PUNCTUATORS.contains(c) => {
+                    return Some(INVALID_OPERATION);
+                }
+                _ => {
+                    index += 1;
+                    fresh = false;
+                }
+            }
+        }
+    }
+    None
+}
+
 pub(super) fn unicode_property_escape_error(pattern: &str, flags: &str) -> Option<&'static str> {
     let unicode_sets = flags.contains('v');
     if !unicode_sets && !flags.contains('u') {
@@ -1861,8 +1957,69 @@ mod tests {
     use super::{
         GENERAL_CATEGORY_VALUES, LONE_PROPERTY_NAMES, SCRIPT_VALUES, STRING_PROPERTY_NAMES,
         has_nested_quantifier, js_pattern_to_rust, unicode_property_escape_error,
+        unicode_sets_class_error,
     };
     use regex::{Regex, RegexBuilder};
+
+    /// bd-9vouw.400: a `v` class may not hold an unescaped syntax character,
+    /// a reserved double punctuator, a dangling `-` or an `&&` without both
+    /// operands. Verdicts are Node v22.2.0's `new RegExp(pattern, "v")`.
+    #[test]
+    fn unicode_sets_class_syntax_errors_bd_9vouw_400() {
+        for pattern in [
+            r#"[(]"#,
+            r#"[)]"#,
+            r#"[[]"#,
+            r#"[{]"#,
+            r#"[}]"#,
+            r#"[/]"#,
+            r#"[-]"#,
+            r#"[|]"#,
+            r#"[&&]"#,
+            r#"[!!]"#,
+            r#"[##]"#,
+            r#"[$$]"#,
+            r#"[%%]"#,
+            r#"[**]"#,
+            r#"[++]"#,
+            r#"[,,]"#,
+            r#"[..]"#,
+            r#"[::]"#,
+            r#"[;;]"#,
+            r#"[<<]"#,
+            r#"[==]"#,
+            r#"[>>]"#,
+            r#"[??]"#,
+            r#"[@@]"#,
+            r#"[``]"#,
+            r#"[~~]"#,
+            r#"[^^^]"#,
+            r#"[_^^]"#,
+            r#"[a&&&b]"#,
+            r#"[a-]"#,
+            r#"[&&a]"#,
+        ] {
+            assert!(unicode_sets_class_error(pattern).is_some(), "{pattern}");
+        }
+        for pattern in [
+            r#"[a-z]"#,
+            r#"[\[-a]"#,
+            r#"[\p{L}--\p{Lu}]"#,
+            r#"[[a-z]&&[aeiou]]"#,
+            r#"[\q{abc|d}]"#,
+            r#"[^^]"#,
+            r#"[^\d]"#,
+            r#"[\-]"#,
+            r#"[a--b]"#,
+            r#"x{2}"#,
+            r#"[\(\)\{\}\/\|]"#,
+            r#"[a!b]"#,
+            r#"[\!!]"#,
+            r#"(a|b)[c]"#,
+        ] {
+            assert_eq!(unicode_sets_class_error(pattern), None, "{pattern}");
+        }
+    }
 
     /// bd-9vouw.337: a quantifier right after another is a SyntaxError;
     /// one quantifier with its lazy `?` is not. Verdicts are Node v22.2.0's

@@ -43795,6 +43795,21 @@ impl InterpreterCore {
             BuiltinFunctionKind::ArrayToSorted => {
                 // ES2023 23.1.3.34: return a sorted COPY using the same ordering
                 // as `sort` (optional comparator); receiver unchanged (bd-ib0ue).
+                // Step 1: a comparator that is neither undefined nor callable
+                // is a TypeError before the receiver's length is read; an
+                // empty or one-element array never called it, so
+                // `[].toSorted(null)` returned [] (bd-9vouw.456).
+                let comparator = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => None,
+                    Some(callback) if callback.is_callable() => Some(callback),
+                    Some(other) => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "a function or undefined comparator for Array.prototype.toSorted"
+                                .to_string(),
+                            got: format!("{} is not a function", other.type_name()),
+                        });
+                    }
+                };
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let Value::Object(arr_id) = receiver else {
                     return Err(InterpreterError::TypeError {
@@ -43803,10 +43818,6 @@ impl InterpreterCore {
                     });
                 };
                 let len = self.array_like_length(arr_id)?;
-                let comparator = match self.builtin_arg(args, 0)? {
-                    Some(Value::Undefined) | None => None,
-                    Some(callback) => Some(callback),
-                };
                 let mut elements = self.element_buffer(len)?;
                 for index in 0..len {
                     elements.push(

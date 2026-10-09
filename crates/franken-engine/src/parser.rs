@@ -2427,6 +2427,36 @@ fn line_starts_division(line: &str) -> bool {
 /// follow: `)`, `]`, a literal or an identifier that is not a keyword ending
 /// a statement head (`return`, `break`, ...), outside import and export
 /// declarations.
+/// Whether `text` ends with the keyword of a restricted production
+/// (`return`, `break`, `continue`, `throw`, `yield`; ES2020 11.9.1) and the
+/// next line's leading operator could begin that keyword's operand: a
+/// unary `+`/`-`, or the `*` of `yield*`. A semicolon is inserted before
+/// such a token after a line break, so the line does not continue:
+/// `return` newline `+ 1` returns undefined, and `yield` newline `* 1` is
+/// `yield;` and a SyntaxError (bd-9vouw.444). Other operators (`: b`,
+/// `, b`) still continue (`c ? yield` newline `: yield`). A word after a `.`
+/// is a property name (`it.return`). Only the line's tail is read: a long
+/// statement continued line by line is not rescanned per line.
+fn restricted_keyword_ends_before(text: &str, unary_operator: bool, star: bool) -> bool {
+    if !(unary_operator || star) {
+        return false;
+    }
+    let code = text.trim_end();
+    let word_start = code
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(*c == '_' || *c == '$' || c.is_alphanumeric()))
+        .map_or(0, |(index, c)| index + c.len_utf8());
+    if code[..word_start].trim_end().ends_with('.') {
+        return false;
+    }
+    match &code[word_start..] {
+        "yield" => unary_operator || star,
+        "return" | "break" | "continue" | "throw" => unary_operator,
+        _ => false,
+    }
+}
+
 fn previous_line_ends_expression(text: &str) -> bool {
     let code = strip_comments_to_whitespace(text);
     let code = code.trim_end();
@@ -3706,6 +3736,11 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
                         !prev.text.ends_with(';')
                             && (operator == LeadingOperator::BinaryOnly
                                 || !prev.text.ends_with('}'))
+                            && !restricted_keyword_ends_before(
+                                &prev.text,
+                                operator == LeadingOperator::UnaryOrBinary,
+                                trimmed_line.starts_with('*'),
+                            )
                     })
                 });
             // A physical newline cannot terminate a try/catch/finally or
@@ -23963,6 +23998,30 @@ mod tests {
             texts,
             ["var a = /x/", "var b = /[^#/:?]+/", "var e = 6 / 3"]
         );
+    }
+
+    #[test]
+    fn merge_logical_lines_restricted_keyword_ends_before_an_operand_start() {
+        // bd-9vouw.444: after `return`/`yield` and a line break, a token that
+        // could begin their operand starts a new statement (ASI); other
+        // operators still continue the expression.
+        let texts = |source: &str| -> Vec<String> {
+            merge_logical_lines(source)
+                .into_iter()
+                .map(|line| line.text)
+                .collect()
+        };
+        assert_eq!(texts("return\n+ 1"), ["return", "+ 1"]);
+        assert_eq!(texts("return\n- 1"), ["return", "- 1"]);
+        assert_eq!(texts("yield\n* 1"), ["yield", "* 1"]);
+        assert_eq!(texts("x = c ? yield\n: yield"), ["x = c ? yield : yield"]);
+        assert_eq!(texts("it.return\n+ 1"), ["it.return + 1"]);
+        assert_eq!(texts("total = a\n+ b"), ["total = a + b"]);
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("function* g() {\n  yield\n  * 1\n}", ParseGoal::Script)
+            .expect_err("`yield` newline `* 1` is a SyntaxError");
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
     }
 
     #[test]

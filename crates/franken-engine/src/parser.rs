@@ -4221,12 +4221,17 @@ fn parse_source(
             boundaries: std::mem::take(&mut logical_line.source_boundaries),
         });
         for (statement_text, span) in segments {
-            statements.extend(parse_module_statement_segment(
-                statement_text,
-                goal,
-                span,
-                &mut context,
-            )?);
+            let mut remaining = Some(statement_text);
+            while let Some(text) = remaining {
+                let (statement_text, tail) = split_after_do_while(text);
+                statements.extend(parse_module_statement_segment(
+                    statement_text,
+                    goal,
+                    span,
+                    &mut context,
+                )?);
+                remaining = tail;
+            }
         }
         context.function_sources.frames.pop();
     }
@@ -12859,8 +12864,17 @@ fn parse_body_statements(
             boundaries: std::mem::take(&mut ll.source_boundaries),
         });
         for (_start, _end, text) in segments {
-            let inner_span = span.clone();
-            stmts.push(parse_statement(text, goal, inner_span, context)?);
+            let mut remaining = Some(text);
+            while let Some(text) = remaining {
+                let (statement_text, tail) = split_after_do_while(text);
+                stmts.push(parse_statement(
+                    statement_text,
+                    goal,
+                    span.clone(),
+                    context,
+                )?);
+                remaining = tail;
+            }
         }
         context.function_sources.frames.pop();
     }
@@ -14649,6 +14663,99 @@ fn do_condition_while_index(after_do: &str) -> Option<usize> {
     found
 }
 
+/// A do-while statement ends at the `)` of its condition, with a `;` right
+/// after it: ES2020 11.9.1 inserts that semicolon even on the same line, so
+/// `do x++; while (x < 3) f();` is two statements. The segment splitter
+/// keeps a do statement's `while` with it and so can hand over the next
+/// statement too; this splits it off. The do-while parse read only the
+/// condition and silently dropped the rest (`do { } while (0) x = 42;`
+/// never assigned), or refused an unbraced body (bd-9vouw.410).
+fn split_after_do_while(text: &str) -> (&str, Option<&str>) {
+    let trimmed = text.trim_start();
+    if !starts_with_keyword(trimmed, "do") {
+        return (text, None);
+    }
+    let Some(len) = do_while_statement_len(trimmed) else {
+        return (text, None);
+    };
+    let end = text.len() - trimmed.len() + len;
+    let tail = text[end..].trim();
+    if tail.is_empty() {
+        (text, None)
+    } else {
+        (&text[..end], Some(tail))
+    }
+}
+
+/// The byte length of the do-while statement `text` starts with (through
+/// its condition's `)` and a `;` right after it), when its body is a block,
+/// another do-while or a simple statement ending at its first top-level
+/// `;`; `None` for any other body, which is left to the existing parse.
+fn do_while_statement_len(text: &str) -> Option<usize> {
+    let after_do = text.strip_prefix("do")?;
+    if after_do.starts_with(is_identifier_continue) {
+        return None;
+    }
+    let body = after_do.trim_start();
+    let body_offset = text.len() - body.len();
+    let body_len = if body.starts_with('{') {
+        let (_, rest) = extract_balanced(body, '{', '}')?;
+        body.len() - rest.len()
+    } else if starts_with_keyword(body, "do") {
+        do_while_statement_len(body)?
+    } else if [
+        "if", "for", "while", "with", "switch", "try", "function", "class", "let", "const", "async",
+    ]
+    .iter()
+    .any(|keyword| starts_with_keyword(body, keyword))
+        || find_top_level_colon(body).is_some_and(|colon| is_identifier(body[..colon].trim()))
+    {
+        return None;
+    } else {
+        first_top_level_semicolon(body)? + 1
+    };
+    let after_body = &text[body_offset + body_len..];
+    let rest = after_body.trim_start().strip_prefix("while")?;
+    if rest.starts_with(is_identifier_continue) {
+        return None;
+    }
+    let condition = rest.trim_start();
+    let (_, tail) = extract_balanced(condition, '(', ')')?;
+    let after_condition = tail.trim_start();
+    Some(if after_condition.starts_with(';') {
+        text.len() - after_condition.len() + 1
+    } else {
+        text.len() - tail.len()
+    })
+}
+
+/// The index of the first `;` of `text` outside brackets, quotes, template
+/// literals and regular expression literals.
+fn first_top_level_semicolon(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut quotes = QuoteState::default();
+    for (index, &byte) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(byte);
+            continue;
+        }
+        if byte == b'/' && quotes.open_regex_at(text, index) {
+            continue;
+        }
+        match byte {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(byte);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b';' if depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_do_while_statement(
     statement: &str,
     goal: ParseGoal,
@@ -14698,7 +14805,7 @@ fn parse_do_while_statement(
 
     let rest = rest.trim();
     let rest = rest.strip_prefix("while").unwrap_or(rest).trim_start();
-    let (condition_src, _) = extract_balanced(rest, '(', ')').ok_or_else(|| {
+    let (condition_src, after_condition) = extract_balanced(rest, '(', ')').ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::InvalidSyntax,
             "do-while requires a parenthesized condition after 'while'",
@@ -14706,6 +14813,19 @@ fn parse_do_while_statement(
             Some(span.clone()),
         )
     })?;
+    // split_after_do_while separates a statement that follows the condition
+    // on the same line; one it could not separate is refused, never dropped
+    // (bd-9vouw.410).
+    let after_condition = after_condition.trim_start();
+    let after_condition = after_condition.strip_prefix(';').unwrap_or(after_condition);
+    if !after_condition.trim().is_empty() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "a statement after a do-while condition on the same line is not separated here",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
     let condition = parse_expression_allowing_sequence(condition_src.trim(), &span, context, 1)?;
 
     Ok(Statement::DoWhile(DoWhileStatement {

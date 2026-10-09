@@ -6023,6 +6023,15 @@ fn parse_object_binding_pattern(
         if let Some(colon_pos) = find_top_level_colon_in_pattern(seg) {
             let key_src = seg[..colon_pos].trim();
             let value_src = seg[colon_pos + 1..].trim();
+            // A property name is never a private name: `{ #x: x } = this`
+            // is a SyntaxError (bd-9vouw.398).
+            if key_src.starts_with('#') {
+                return Err(invalid_syntax_error(
+                    "a private name cannot be a destructuring key",
+                    span,
+                    context,
+                ));
+            }
             let key = parse_contextual_static_property_key(
                 key_src,
                 span,
@@ -6719,7 +6728,17 @@ fn parse_primary_expression(
                 context,
             ));
         }
+        let gap = &rest[..rest.len() - rest.trim_start().len()];
         let rest = rest.trim_start();
+        // `yield [no LineTerminator here] *` (ES2020 14.4): after a line
+        // break the `*` cannot start a delegation (bd-9vouw.398).
+        if rest.starts_with('*') && gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+            return Err(invalid_syntax_error(
+                "a line break cannot separate `yield` from its `*`",
+                span,
+                context,
+            ));
+        }
         let (delegate, rest) = if let Some(after_star) = rest.strip_prefix('*') {
             (true, after_star.trim_start())
         } else {
@@ -7058,6 +7077,16 @@ fn try_parse_arrow_function(
         let (params_src, after_params) = extract_balanced(rest, '(', ')')?;
         let after = after_params.trim_start();
         let body_src = after.strip_prefix("=>")?;
+        // ArrowParameters [no LineTerminator here] `=>` (ES2020 14.2).
+        if after_params[..after_params.len() - after.len()]
+            .contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+        {
+            return Some(Err(invalid_syntax_error(
+                "a line break cannot come before `=>`",
+                span,
+                context,
+            )));
+        }
         let body_src = body_src.trim();
         let directive_source = if body_src.starts_with('{') {
             extract_balanced(body_src, '{', '}')
@@ -7098,6 +7127,16 @@ fn try_parse_arrow_function(
         let param_name = rest[..arrow_pos].trim();
         if !is_identifier(param_name) {
             return None;
+        }
+        if rest[..arrow_pos]
+            .trim_start()
+            .contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+        {
+            return Some(Err(invalid_syntax_error(
+                "a line break cannot come before `=>`",
+                span,
+                context,
+            )));
         }
         let body_src = rest[arrow_pos + 2..].trim();
         // The parameter is a BindingIdentifier: reserved words (`yield` in
@@ -7981,6 +8020,15 @@ fn try_parse_conditional(
                     Ok(e) => e,
                     Err(e) => return Some(Err(e)),
                 };
+                // The condition is a ShortCircuitExpression: `yield ? a : b`
+                // is a SyntaxError, `(yield) ? a : b` is not (bd-9vouw.398).
+                if matches!(test, Expression::Yield { .. }) && !test_src.starts_with('(') {
+                    return Some(Err(invalid_syntax_error(
+                        "a `yield` expression cannot be the condition of `?:`",
+                        span,
+                        context,
+                    )));
+                }
                 let consequent =
                     match parse_expression(consequent_src, span, context, recursion_depth + 1) {
                         Ok(e) => e,
@@ -8369,6 +8417,11 @@ fn try_parse_binary(
                     Ok(e) => e,
                     Err(e) => return Some(Err(e)),
                 };
+                if let Some(error) =
+                    unparenthesized_yield_binary_operand(operand_src, &operand, span, context)
+                {
+                    return Some(Err(error));
+                }
                 folded = Some(match (folded, pending_op) {
                     (Some(left), Some(previous)) => Expression::Binary {
                         operator: previous,
@@ -8385,6 +8438,11 @@ fn try_parse_binary(
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
             };
+            if let Some(error) =
+                unparenthesized_yield_binary_operand(last_src, &last, span, context)
+            {
+                return Some(Err(error));
+            }
             return Some(Ok(Expression::Binary {
                 operator: pending_op.expect("a chain has at least two operators"),
                 left: Box::new(folded.expect("a chain has at least two operands")),
@@ -8426,6 +8484,13 @@ fn try_parse_binary(
         Ok(e) => e,
         Err(e) => return Some(Err(e)),
     };
+    for (operand_src, operand) in [(lhs_src, &left), (rhs_src, &right)] {
+        if let Some(error) =
+            unparenthesized_yield_binary_operand(operand_src, operand, span, context)
+        {
+            return Some(Err(error));
+        }
+    }
     Some(Ok(Expression::Binary {
         operator: op,
         left: Box::new(left),
@@ -8822,6 +8887,26 @@ fn try_parse_unary_prefix(
     }
 
     None
+}
+
+/// A binary operator's operands are narrower than an AssignmentExpression,
+/// which a yield expression is: in a generator `yield 3 + yield 4` and
+/// `yield || yield` are SyntaxErrors, `3 + (yield 4)` is fine (ES2020
+/// 12.7-12.13, bd-9vouw.398).
+fn unparenthesized_yield_binary_operand(
+    operand_src: &str,
+    operand: &Expression,
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> Option<ParseError> {
+    (matches!(operand, Expression::Yield { .. }) && !operand_src.trim_start().starts_with('('))
+        .then(|| {
+            invalid_syntax_error(
+                "a `yield` expression cannot be an operand of a binary operator",
+                span,
+                context,
+            )
+        })
 }
 
 /// A unary operator's operand is a UnaryExpression, which a yield expression

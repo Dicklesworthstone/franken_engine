@@ -422,8 +422,8 @@ The Lowering Gap Truth Invariant (`docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md`) enf
 | JSON.parse / JSON.stringify | Executed | Compound traversal proof lane (`run_rgc_json_stringify_compound_traversal.sh`) demonstrates real heap-backed compound values, not placeholder strings. |
 | Reflection / Symbols / Proxies | Partial | Coverage tracked in the gap inventory; not all reflection surfaces are executed yet. |
 | Top-level `await` | Lowered | Async module evaluation dependency tracking (`bd-…`, March 2026). |
-| `eval` / `Function()` | Restricted | The capability gate refuses dynamic-code execution by default; opt-in via explicit capability grant. |
-| `import.meta` | Fail-closed at parser | Listed in the gap inventory; deliberate refusal pending a typed contract. |
+| `eval` / `Function()` | Restricted | `Function()` and the `GeneratorFunction` / `AsyncFunction` / `AsyncGeneratorFunction` constructors compile their source into a contained realm with its own global object and intrinsics; the caller's globals are not visible there. `eval` is refused: a direct `eval(...)` fails at lowering without the `runtime.eval` effect, which no shipped profile grants, and every other call of the `eval` value throws `EvalError`. There is no eval implementation behind that effect yet. |
+| `import.meta` | Partial | An object with `url` and `dirname` from a fixed typed contract (`frankenengine://module/import-meta`, `frankenengine://module/`), not the module's own `file:` URL; no `filename` or `resolve`, and its contract fields cannot be written. |
 | `WebAssembly` | Out of scope for the JS lane | Has its own runtime lane (`wasm_runtime_lane.rs`); not yet exposed via the JS module loader. |
 
 This list is not exhaustive; it is the operator-facing summary. The authoritative state is the lowering-gap inventory at HEAD.

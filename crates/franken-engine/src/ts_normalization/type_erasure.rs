@@ -165,11 +165,18 @@ impl Eraser<'_> {
                 if self.text(cursor) == "..." {
                     cursor += 1;
                 }
-                // Parameter-property lowering still owns these modifiers.
+                // Parameter-property lowering still owns these modifiers. A
+                // modifier word followed by no binding is the parameter's
+                // own name (`override: unknown`, bd-9vouw.435).
                 while matches!(
                     self.text(cursor),
                     "public" | "private" | "protected" | "readonly" | "override"
-                ) {
+                ) && (self
+                    .tokens
+                    .get(cursor + 1)
+                    .is_some_and(|token| token.kind == Kind::Word)
+                    || matches!(self.text(cursor + 1), "{" | "["))
+                {
                     cursor += 1;
                 }
             }
@@ -1066,6 +1073,13 @@ mod tests {
         );
         check("function rest(first⟦?: number⟧, ...values⟦: number[]⟧) { return values; }");
         check("function receiverOnly(⟦this: object⟧) { return this; }");
+    }
+
+    /// bd-9vouw.435: a parameter named like a parameter-property modifier.
+    #[test]
+    fn modifier_named_parameters_keep_their_annotations_erased() {
+        check("function pick(evidence⟦: Evidence⟧, override⟦: unknown⟧) { return override; }");
+        check("function pick(readonly⟦?: boolean⟧, count⟦: number⟧ = 1) { return readonly; }");
     }
 
     #[test]

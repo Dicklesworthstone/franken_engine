@@ -2979,13 +2979,10 @@ fn strip_parameter_property_modifiers(parameters: &str) -> (String, Vec<String>)
         let leading = &segment[..segment.len() - segment.trim_start().len()];
         let mut rest = segment.trim_start();
         let mut modified = false;
-        loop {
-            let Some(keyword) = MODIFIERS.iter().find(|keyword| {
-                rest.strip_prefix(**keyword)
-                    .is_some_and(|after| after.starts_with(char::is_whitespace))
-            }) else {
-                break;
-            };
+        while let Some(keyword) = MODIFIERS.iter().find(|keyword| {
+            rest.strip_prefix(**keyword)
+                .is_some_and(|after| after.starts_with(char::is_whitespace))
+        }) {
             rest = rest[keyword.len()..].trim_start();
             modified = true;
         }

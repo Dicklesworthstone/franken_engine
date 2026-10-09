@@ -38518,6 +38518,37 @@ impl InterpreterCore {
                 return Some(index_js);
             }
         }
+        // TypeScript sources (bd-9vouw.431): a project names a module
+        // without its extension (`./lib`, `./app.config`, `./dir` for
+        // `dir/index.ts`) or by the JavaScript file it compiles to
+        // (`./lib.js` for `lib.ts`, `./m.mjs` for `m.mts`: TypeScript's
+        // NodeNext spelling), as Bun resolves. Only a specifier no
+        // JavaScript file answers reaches these probes.
+        let typescript_files = match candidate
+            .extension()
+            .and_then(|extension| extension.to_str())
+        {
+            Some("js") => vec![
+                candidate.with_extension("ts"),
+                candidate.with_extension("tsx"),
+            ],
+            Some("jsx") => vec![candidate.with_extension("tsx")],
+            Some("mjs") => vec![candidate.with_extension("mts")],
+            Some("cjs") => vec![candidate.with_extension("cts")],
+            _ => ["ts", "tsx", "mts", "cts"]
+                .into_iter()
+                .map(|extension| package_resolution::with_appended_extension(candidate, extension))
+                .collect(),
+        };
+        if let Some(path) = typescript_files.into_iter().find(|path| path.is_file()) {
+            return Some(path);
+        }
+        if candidate.is_dir() {
+            return ["index.ts", "index.tsx"]
+                .into_iter()
+                .map(|index| candidate.join(index))
+                .find(|path| path.is_file());
+        }
         None
     }
 

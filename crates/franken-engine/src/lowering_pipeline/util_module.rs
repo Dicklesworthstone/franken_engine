@@ -252,7 +252,7 @@ const BUILTIN_REQUIRE_SEARCH: Search = Search {
 /// The standard globals UTIL_SOURCE reads by name. A program that declares
 /// one at its top level would capture the module's reference, so the
 /// module reads those through `globalThis` instead.
-const MODULE_GLOBALS: [&str; 14] = [
+const MODULE_GLOBALS: [&str; 15] = [
     "Array",
     "Error",
     "JSON",
@@ -260,6 +260,7 @@ const MODULE_GLOBALS: [&str; 14] = [
     "Object",
     "Promise",
     "Reflect",
+    "RegExp",
     "Set",
     "String",
     "Symbol",
@@ -291,7 +292,7 @@ const STRING_DECODER_GLOBALS: [&str; 9] = [
     "WeakMap",
 ];
 
-const EVENTS_GLOBALS: [&str; 11] = [
+const EVENTS_GLOBALS: [&str; 14] = [
     "AbortController",
     "AbortSignal",
     "Array",
@@ -301,8 +302,11 @@ const EVENTS_GLOBALS: [&str; 11] = [
     "Promise",
     "RangeError",
     "Reflect",
+    "String",
     "Symbol",
     "TypeError",
+    "WeakMap",
+    "queueMicrotask",
 ];
 
 const ASSERT_GLOBALS: [&str; 10] = [
@@ -1197,6 +1201,8 @@ mod events_tests {
         let mut expected: BTreeSet<String> =
             EVENTS_GLOBALS.iter().map(|name| name.to_string()).collect();
         expected.extend(EVENTS_PLACEHOLDERS.iter().map(|(name, _)| name.to_string()));
+        // setMaxListeners reads its own `arguments` (bd-9vouw.438).
+        expected.insert("arguments".to_string());
         let free = super::tests::free_names(
             &mut parse_module_source(PureModule::Events).expect("events source parses"),
         );
@@ -1210,6 +1216,7 @@ mod events_tests {
             .map(|(_, name)| name.to_string())
             .collect();
         expected.insert("globalThis".to_string());
+        expected.insert("arguments".to_string());
         assert_eq!(protected, expected);
     }
 }

@@ -1296,7 +1296,7 @@ fn parser_rejects_optional_chain_assignment_target() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("optional chaining assignment target should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     assert_eq!(
         err.message,
         "optional chaining cannot be used as an assignment target"
@@ -1619,7 +1619,7 @@ fn parser_tagged_meta_frontier_parses_super_call_expression_bd_ppfz7() {
     let err = parser
         .parse("super()", ParseGoal::Script)
         .expect_err("a SuperCall outside a derived constructor is a SyntaxError");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     assert!(
         err.message.contains("'super' keyword unexpected here"),
         "{}",

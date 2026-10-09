@@ -5016,7 +5016,7 @@ fn parse_statement_inner(
                         || goal == ParseGoal::Module))
             {
                 return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     format!("`{name}` cannot be a label here"),
                     context.source_label.to_string(),
                     Some(span),
@@ -5976,7 +5976,7 @@ fn parse_object_binding_pattern(
 
         if seen_rest {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "rest element must be the absolute last property in object pattern (no trailing commas allowed)",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -6159,7 +6159,7 @@ fn parse_array_binding_pattern(
         .collect();
     if rest_positions.len() > 1 {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "array pattern has more than one rest element",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -6169,7 +6169,7 @@ fn parse_array_binding_pattern(
         // Rest must be the absolute last element (no trailing commas/holes allowed after it)
         if pos != elements.len() - 1 {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "rest element must be the last element in array pattern",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -6520,7 +6520,7 @@ fn parse_primary_expression(
 
     // ES2022: a private name is an operand only in `o.#x` and `#x in o`.
     if whole_private_name(expression).is_some() {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "a private name is only valid in `o.#x` or `#x in o`",
             span,
             context,
@@ -6659,7 +6659,7 @@ fn parse_primary_expression(
     // Inside an async function or module `await` is an operator and needs
     // its operand: a bare `await` is a SyntaxError (ES2020 14.7.1, 15.2.1.1).
     if expression == "await" && (context.await_context || context.static_block_await) {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "`await` is reserved here and needs an operand",
             span,
             context,
@@ -6679,14 +6679,14 @@ fn parse_primary_expression(
         // Outside a generator `yield` is an IdentifierReference, reserved in
         // strict code (ES2020 12.1.1); it never starts a yield expression.
         if context.strict_mode {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "`yield` is a reserved word in strict mode code",
                 span,
                 context,
             ));
         }
         if !rest.trim().is_empty() {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "a `yield` expression is only valid in a generator",
                 span,
                 context,
@@ -6877,7 +6877,7 @@ fn parse_primary_expression(
         // `import` is only an ImportCall callee (handled with its arguments)
         // or `import.meta`; a bare reference is a SyntaxError.
         if expression == "import" {
-            return Err(unsupported_expression_syntax_error(
+            return Err(invalid_syntax_error(
                 "`import` must be called: import(specifier)",
                 span,
                 context,
@@ -7375,7 +7375,7 @@ fn parse_new_expression(
     if let Some(after) = rest.trim_start().strip_prefix("import")
         && after.trim_start().starts_with('(')
     {
-        return Err(unsupported_expression_syntax_error(
+        return Err(invalid_syntax_error(
             "import() cannot be used with `new`",
             span,
             context,
@@ -7787,7 +7787,7 @@ fn try_parse_assignment(
                 };
             if assignment_target_has_optional_chain(&left) {
                 return Some(Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     "optional chaining cannot be used as an assignment target",
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -8749,7 +8749,7 @@ fn try_parse_unary_prefix(
             // (ES2020 12.5.3.1).
             let op = if matches!(op, UnaryOperator::Delete) && context.strict_mode {
                 if matches!(arg, Expression::Identifier(_)) {
-                    return Some(Err(unsupported_expression_syntax_error(
+                    return Some(Err(invalid_syntax_error(
                         "delete of an unqualified identifier in strict mode",
                         span,
                         context,
@@ -8763,7 +8763,7 @@ fn try_parse_unary_prefix(
             if matches!(op, UnaryOperator::Delete | UnaryOperator::StrictDelete)
                 && is_private_member_expression(&arg)
             {
-                return Some(Err(unsupported_expression_syntax_error(
+                return Some(Err(invalid_syntax_error(
                     "private fields can not be deleted",
                     span,
                     context,
@@ -8825,7 +8825,7 @@ fn unparenthesized_yield_operand(
 ) -> Option<ParseError> {
     (matches!(operand, Expression::Yield { .. }) && !operand_src.trim_start().starts_with('('))
         .then(|| {
-            unsupported_expression_syntax_error(
+            invalid_syntax_error(
                 "a `yield` expression cannot be the operand of a unary operator",
                 span,
                 context,
@@ -9185,7 +9185,7 @@ fn try_parse_postfix(
             };
         let callee = if callee_src == "super" && !optional {
             if context.super_call == SuperCallContext::Forbidden {
-                return Some(Err(unsupported_expression_syntax_error(
+                return Some(Err(invalid_syntax_error(
                     "'super' keyword unexpected here: super() is only valid in a derived class constructor",
                     span,
                     context,
@@ -9202,7 +9202,7 @@ fn try_parse_postfix(
                     .iter()
                     .any(|argument| matches!(argument, Expression::SpreadElement(_)))
             {
-                return Some(Err(unsupported_expression_syntax_error(
+                return Some(Err(invalid_syntax_error(
                     "import() takes one specifier and an optional options argument",
                     span,
                     context,
@@ -9304,7 +9304,7 @@ fn try_parse_postfix(
         let private_name = whole_private_name(property_src);
         // `o.# x`: a private name has no whitespace after its `#`.
         if private_name.is_none() && property_src.starts_with('#') {
-            return Some(Err(unsupported_expression_syntax_error(
+            return Some(Err(invalid_syntax_error(
                 "invalid private name after `.`",
                 span,
                 context,
@@ -9321,7 +9321,7 @@ fn try_parse_postfix(
             && !object_src.is_empty()
         {
             if object_src == "super" {
-                return Some(Err(unsupported_expression_syntax_error(
+                return Some(Err(invalid_syntax_error(
                     "super has no private members (`super.#x`)",
                     span,
                     context,
@@ -9865,7 +9865,7 @@ fn parse_assignment_target_expression(
     // The specific diagnostic first: `config?.theme = value`.
     if assignment_target_has_optional_chain(&target) {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "optional chaining cannot be used as an assignment target",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -9919,7 +9919,7 @@ fn parse_array_literal(
                 && (index + 1 != parts.len()
                     || matches!(target.as_ref(), Expression::Assignment { .. }))
             {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "assignment rest element must be last, without a default or trailing comma",
                     span,
                     context,
@@ -10042,7 +10042,7 @@ fn parse_object_literal(
                 try_parse_object_accessor(p, span, context, recursion_depth)?
         {
             if assignment_pattern {
-                return Err(unsupported_expression_syntax_error(
+                return Err(invalid_syntax_error(
                     "accessors are not assignment patterns",
                     span,
                     context,
@@ -11159,10 +11159,11 @@ fn regexp_literal_expression(
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<Expression> {
+    // The same check makes `new RegExp(...)` throw a SyntaxError at run time.
     if let Some(message) = crate::baseline_interpreter::regexp_literal_early_error(&pattern, &flags)
     {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             message,
             context.source_label.to_string(),
             Some(span.clone()),
@@ -13755,7 +13756,7 @@ fn try_parse_for_in_of(
                 && matches!(**left, BindingPattern::Identifier(_)))
         {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("for-{keyword} loop variable declaration may not have an initializer"),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -14248,7 +14249,7 @@ fn parse_try_catch_statement(
             let parameter = p.trim();
             if parameter.is_empty() {
                 return Err(ParseError::new(
-                    ParseErrorCode::UnsupportedSyntax,
+                    ParseErrorCode::InvalidSyntax,
                     "catch clause parameter cannot be empty",
                     context.source_label.to_string(),
                     Some(span.clone()),
@@ -14327,7 +14328,7 @@ fn parse_try_catch_statement(
 
     if handler.is_none() && finalizer.is_none() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "try statement requires at least a catch or finally clause",
             context.source_label.to_string(),
             Some(span),
@@ -15004,8 +15005,13 @@ fn declare_private_name(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
+    // The two early errors are SyntaxErrors; a declaration with no class
+    // body around it is a parser fault, not invalid source.
     let conflict = if name == "#constructor" {
-        Some("classes may not have a private element named '#constructor'".to_string())
+        Some((
+            ParseErrorCode::InvalidSyntax,
+            "classes may not have a private element named '#constructor'".to_string(),
+        ))
     } else if let Some(scope) = context.private_name_scopes.last_mut() {
         use PrivateNameDeclaration::{Accessor, Getter, Setter};
         let merged = match (scope.declared.get(name).copied(), declaration) {
@@ -15023,17 +15029,21 @@ fn declare_private_name(
                 scope.declared.insert(name.to_string(), merged);
                 None
             }
-            None => Some(format!("private name '{name}' is declared more than once")),
+            None => Some((
+                ParseErrorCode::InvalidSyntax,
+                format!("private name '{name}' is declared more than once"),
+            )),
         }
     } else {
-        Some(format!(
-            "private name '{name}' declared outside a class body"
+        Some((
+            ParseErrorCode::UnsupportedSyntax,
+            format!("private name '{name}' declared outside a class body"),
         ))
     };
     match conflict {
         None => Ok(()),
-        Some(message) => Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+        Some((code, message)) => Err(ParseError::new(
+            code,
             message,
             context.source_label.to_string(),
             Some(span.clone()),
@@ -15094,7 +15104,7 @@ fn parse_class_static_block(
     });
     if let Some(found) = forbidden {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("a class static block may not contain `{found}`"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -15238,7 +15248,7 @@ fn parse_class_body_members(
         };
         if rest.starts_with('#') && field_key_end == 0 {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("invalid private name in class element `{segment}`"),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -15853,7 +15863,7 @@ fn parse_class_field(
     // through arrow functions, not ordinary ones) or call `super(...)`.
     if let Some(found) = value.as_ref().and_then(field_initializer_forbidden) {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("a class field initializer may not contain `{found}`"),
             context.source_label.to_string(),
             Some(span.clone()),
@@ -16101,7 +16111,7 @@ fn parse_function_declaration(
 
     if name.is_none() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "function declarations require a binding name",
             context.source_label.to_string(),
             Some(span),
@@ -22112,7 +22122,7 @@ mod tests {
         let err = parser
             .parse("function () { return 1 }", ParseGoal::Script)
             .expect_err("anonymous function statement must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
         assert!(err.message.contains("binding name"));
     }
 
@@ -22122,7 +22132,7 @@ mod tests {
         let err = parser
             .parse("function* () { yield 1 }", ParseGoal::Script)
             .expect_err("anonymous generator statement must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
         assert!(err.message.contains("binding name"));
     }
 

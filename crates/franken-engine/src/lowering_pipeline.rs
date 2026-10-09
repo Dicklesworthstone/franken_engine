@@ -5624,9 +5624,14 @@ fn lower_statement_to_ir1_with_flow(
                             || (is_require_url_module_initializer(init, binding_lookup)
                                 && binding_lookup.contains_key(&url_module_alias_sentinel(alias))
                                 && !require_is_commonjs_wrapper(binding_lookup))
+                            // Under the CommonJS wrapper `require('querystring')`
+                            // runs and returns the engine's querystring module
+                            // (bd-9vouw.439), so a function that reads the
+                            // alias sees it, as for os below.
                             || (is_require_querystring_module_initializer(init, binding_lookup)
                                 && binding_lookup
-                                    .contains_key(&querystring_module_alias_sentinel(alias)))
+                                    .contains_key(&querystring_module_alias_sentinel(alias))
+                                && !require_is_commonjs_wrapper(binding_lookup))
                             // Under the CommonJS wrapper `require('os')` runs:
                             // the loader returns the engine's os module
                             // (bd-9vouw.204), so `typeof os` and
@@ -23213,7 +23218,20 @@ fn is_require_querystring_module_initializer(
 /// recognizer (an alias is confirmed only by a usage the call arm will really
 /// intercept). `decode`/`encode` are Node's documented aliases of
 /// `parse`/`stringify`.
-fn querystring_method_capability(method: &str) -> Option<&'static str> {
+/// The `querystring` methods in Node v22's key order (without
+/// `unescapeBuffer`, which the facade has no HostCall for), each with a
+/// [`querystring_method_capability`]: the members of the runtime
+/// `require('querystring')` module object (bd-9vouw.439).
+pub(crate) const QUERYSTRING_METHOD_NAMES: [&str; 6] = [
+    "unescape",
+    "escape",
+    "stringify",
+    "encode",
+    "parse",
+    "decode",
+];
+
+pub(crate) fn querystring_method_capability(method: &str) -> Option<&'static str> {
     match method {
         "parse" | "decode" => Some("builtin:QuerystringParse"),
         "stringify" | "encode" => Some("builtin:QuerystringStringify"),

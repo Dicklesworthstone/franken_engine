@@ -6295,6 +6295,10 @@ const BUFFER_MODULE_KEY: &str = "<module buffer>";
 /// Seed-tracked slot of the `require('os')` module object (bd-9vouw.204).
 const OS_MODULE_KEY: &str = "<module os>";
 
+/// Seed-tracked slot of the `require('querystring')` module object
+/// (bd-9vouw.439).
+const QUERYSTRING_MODULE_KEY: &str = "<module querystring>";
+
 /// Seed-tracked slot of the `require('url')` module object (bd-9vouw.224).
 const URL_MODULE_KEY: &str = "<module url>";
 
@@ -6768,6 +6772,17 @@ fn static_hostcall_owner_and_name(tag: &str) -> Option<(&'static str, &'static s
                 .copied()
                 .find(|name| crate::lowering_pipeline::os_method_capability(name) == Some(tag))
                 .map(|name| ("os", name))
+        })
+        // The members of `require('querystring')` (bd-9vouw.439): `parse`
+        // and `stringify` before their `decode`/`encode` aliases.
+        .or_else(|| {
+            crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES
+                .iter()
+                .copied()
+                .find(|name| {
+                    crate::lowering_pipeline::querystring_method_capability(name) == Some(tag)
+                })
+                .map(|name| ("querystring", name))
         })
 }
 
@@ -39553,6 +39568,32 @@ impl InterpreterCore {
         Ok(Value::Object(object))
     }
 
+    /// `require('querystring')` (bd-9vouw.439): Node's querystring module
+    /// over the querystring facade's own HostCalls (pure string work), as
+    /// for os. The facade lowers the member calls of a program-level alias
+    /// in the program body only, so a function that read the alias saw
+    /// undefined, and an alias read only in functions left a require that
+    /// found no module. `decode` and `encode` are `parse` and `stringify`,
+    /// as in Node.
+    fn querystring_core_module(&mut self) -> Result<Value, InterpreterError> {
+        if let Some(object) = self.builtin_prototypes.get(QUERYSTRING_MODULE_KEY) {
+            return Ok(Value::Object(*object));
+        }
+        let members = crate::lowering_pipeline::QUERYSTRING_METHOD_NAMES.map(|name| {
+            let tag = crate::lowering_pipeline::querystring_method_capability(name)
+                .expect("QUERYSTRING_METHOD_NAMES names are all in the facade table");
+            (
+                name,
+                Value::BuiltinFunction(BuiltinFunction::static_hostcall(tag)),
+            )
+        });
+        let object = self.alloc_object_with_properties(&members)?;
+        self.mutate_builtin_prototypes(|prototypes| {
+            prototypes.insert(QUERYSTRING_MODULE_KEY.to_string(), object);
+        });
+        Ok(Value::Object(object))
+    }
+
     /// `require('events')` (bd-9vouw.210): as in Node, the EventEmitter
     /// constructor itself, whose own properties hold `EventEmitter` (itself),
     /// `once`, `defaultMaxListeners` and `errorMonitor`. The events facade
@@ -39624,6 +39665,9 @@ impl InterpreterCore {
         }
         if matches!(specifier, "os" | "node:os") {
             return self.os_core_module();
+        }
+        if matches!(specifier, "querystring" | "node:querystring") {
+            return self.querystring_core_module();
         }
         if matches!(specifier, "events" | "node:events") {
             return self.events_core_module(module);

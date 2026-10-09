@@ -2429,6 +2429,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut extension_id: Option<String> = None;
     let mut goal = ParseGoal::Script;
     let mut commonjs_entry = false;
+    let mut goal_given = false;
     let mut module_root: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut explain = false;
@@ -2449,6 +2450,7 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
             "--extension-id" => extension_id = Some(next_arg(args, &mut index, "--extension-id")?),
             "--goal" => {
                 let value = next_arg(args, &mut index, "--goal")?;
+                goal_given = true;
                 commonjs_entry = value == "commonjs";
                 goal = if commonjs_entry {
                     ParseGoal::Script
@@ -2526,6 +2528,16 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let input = input.ok_or_else(|| "run requires --input <path>".to_string())?;
     let extension_id =
         extension_id.ok_or_else(|| "run requires --extension-id <id>".to_string())?;
+    // Without --goal, the extension decides as Node's does: `.mjs` / `.mts`
+    // is an ES module and `.cjs` / `.cts` a CommonJS module (bd-9vouw.415);
+    // anything else stays a script.
+    if !goal_given {
+        match input.extension().and_then(|extension| extension.to_str()) {
+            Some("mjs" | "mts") => goal = ParseGoal::Module,
+            Some("cjs" | "cts") => commonjs_entry = true,
+            _ => {}
+        }
+    }
     // Fail closed: a certificate bundle is meaningless without the data
     // contract that declares the claims it certifies.
     if certificate_out.is_some() && data_contract.is_none() {
@@ -13460,6 +13472,38 @@ mod tests {
         let args = vec!["run".to_string(), "--help".to_string()];
         let parsed = parse_command(&args).expect("run --help should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::Run));
+    }
+
+    /// bd-9vouw.415: without --goal, `.mjs` / `.mts` run as ES modules and
+    /// `.cjs` / `.cts` as CommonJS modules, as Node runs them; other files
+    /// stay scripts, and an explicit --goal wins.
+    #[test]
+    fn run_goal_defaults_from_the_input_extension_bd_9vouw_415() {
+        let parse = |input: &str, goal: Option<&str>| {
+            let mut args = vec![
+                "run".to_string(),
+                "--input".to_string(),
+                input.to_string(),
+                "--extension-id".to_string(),
+                "ext".to_string(),
+            ];
+            if let Some(goal) = goal {
+                args.push("--goal".to_string());
+                args.push(goal.to_string());
+            }
+            match parse_command(&args).expect("run command should parse") {
+                CommandSpec::Run(spec) => (spec.parse_goal, spec.commonjs_entry),
+                other => panic!("expected run command, got {other:?}"),
+            }
+        };
+        assert_eq!(parse("app.mjs", None), (ParseGoal::Module, false));
+        assert_eq!(parse("app.mts", None), (ParseGoal::Module, false));
+        assert_eq!(parse("app.cjs", None), (ParseGoal::Script, true));
+        assert_eq!(parse("app.cts", None), (ParseGoal::Script, true));
+        assert_eq!(parse("app.js", None), (ParseGoal::Script, false));
+        assert_eq!(parse("app.ts", None), (ParseGoal::Script, false));
+        assert_eq!(parse("app.mjs", Some("script")), (ParseGoal::Script, false));
+        assert_eq!(parse("app.js", Some("commonjs")), (ParseGoal::Script, true));
     }
 
     #[test]

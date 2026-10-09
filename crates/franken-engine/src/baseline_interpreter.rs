@@ -39321,7 +39321,7 @@ impl InterpreterCore {
                     };
                 }
                 if !async_evaluating {
-                    self.sort_module_namespace_keys(resolved);
+                    self.sort_module_namespace_keys(resolved)?;
                 }
                 if async_evaluating {
                     let promise = self
@@ -46225,34 +46225,44 @@ impl InterpreterCore {
     /// A module namespace lists its exports in code-unit order of their names
     /// (ES2020 9.4.6.11 [[OwnPropertyKeys]]); they register while the module
     /// evaluates, so the namespace is put in that order once it has finished.
-    fn sort_module_namespace_keys(&mut self, specifier: &str) {
+    /// The Symbol-keyed properties (its @@toStringTag) are carried over: the
+    /// reorder cleared the whole map, so a namespace whose exports arrived
+    /// out of order (a hoisted function before an earlier-sorting `let`)
+    /// lost "Module" while its bytes stayed charged (bd-9vouw.471).
+    fn sort_module_namespace_keys(&mut self, specifier: &str) -> Result<(), InterpreterError> {
         let Some(namespace) = self
             .module_state
             .modules
             .get(specifier)
             .map(|record| record.namespace_object)
         else {
-            return;
+            return Ok(());
         };
-        self.mutate_heap(|heap| {
-            let Some(object) = heap.get_mut(namespace.0 as usize) else {
-                return;
-            };
-            let mut entries: Vec<(Vec<u16>, JsString, Value)> = object
-                .properties
-                .exact_entries()
-                .into_iter()
-                .map(|(key, value)| (key.code_units_vec(), key, value.clone()))
-                .collect();
-            if entries.is_sorted_by(|a, b| a.0 <= b.0) {
-                return;
-            }
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-            object.properties.clear();
-            for (_, key, value) in entries {
-                object.properties.insert_exact(key, value);
-            }
-        });
+        let Some(object) = self.heap.get(namespace.0 as usize) else {
+            return Ok(());
+        };
+        let mut entries: Vec<(Vec<u16>, JsString, Value)> = object
+            .properties
+            .exact_entries()
+            .into_iter()
+            .map(|(key, value)| (key.code_units_vec(), key, value.clone()))
+            .collect();
+        if entries.is_sorted_by(|a, b| a.0 <= b.0) {
+            return Ok(());
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let previous_bytes = Self::estimate_ordered_property_map_bytes(&object.properties);
+        let mut sorted = OrderedStringMap::new();
+        for (_, key, value) in entries {
+            sorted.insert_exact(key, value);
+        }
+        for (symbol, property) in object.properties.baseline_symbol_properties() {
+            sorted.insert_baseline_symbol_property(symbol, property.clone());
+        }
+        let next_bytes = Self::estimate_ordered_property_map_bytes(&sorted);
+        self.apply_memory_component_delta(previous_bytes, next_bytes)?;
+        self.mutate_heap(|heap| heap[namespace.0 as usize].properties = sorted);
+        Ok(())
     }
 
     /// The value a nested module evaluation threw, taken from its pending-
@@ -47850,7 +47860,7 @@ impl InterpreterCore {
             Ok(_) => {
                 // Static importers ignore the fulfillment value; an `import()`
                 // of the module follows this promise to its namespace.
-                self.sort_module_namespace_keys(specifier);
+                self.sort_module_namespace_keys(specifier)?;
                 let mut namespace = crate::object_model::JsValue::Undefined;
                 if let Some(record) = self.module_state.modules.get_mut(specifier) {
                     record.status = ModuleRuntimeStatus::Evaluated;
@@ -120292,6 +120302,38 @@ mod async_runtime_tests_current {
             .map(|entry| entry.message.as_str())
             .collect();
         assert_eq!(messages, ["4 4 4", "true 4"]);
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
+        );
+    }
+
+    /// bd-9vouw.471: sorting a namespace whose exports were published out of
+    /// order (a hoisted function before an earlier-sorting `let`) keeps its
+    /// @@toStringTag and releases nothing it did not take: the reorder used
+    /// to clear the whole property map, Symbol sidecar included, and left
+    /// the tag's 86 bytes charged.
+    #[test]
+    fn namespace_sort_keeps_to_string_tag_and_exact_accounting_bd_9vouw_471() {
+        let temp = tempfile::tempdir().expect("namespace-sort root");
+        let entry = temp.path().join("entry.mjs");
+        let entry_source = "import * as ns from './m.mjs'; console.log(Object.prototype.toString.call(ns), Object.keys(ns).join(','), ns[Symbol.toStringTag]);";
+        std::fs::write(&entry, entry_source).expect("write namespace-sort entry");
+        std::fs::write(
+            temp.path().join("m.mjs"),
+            "export let count = 0; export function inc() { count++; }",
+        )
+        .expect("write namespace-sort module");
+
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, entry_source);
+        let mut core = async_module_graph_core_bd_yn3lv(temp.path());
+        let result = core.execute(&module).expect("namespace-sort graph runs");
+        let messages: Vec<&str> = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["[object Module] count,inc Module"]);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()

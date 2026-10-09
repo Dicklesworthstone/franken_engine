@@ -2198,12 +2198,12 @@ fn parse_namespace_exports(body: &str) -> Result<Vec<String>, TsNormalizationErr
             });
         };
 
-        let declaration = if let Some(value) = strip_leading_keyword(exported, "const") {
-            value
+        let (keyword, declaration) = if let Some(value) = strip_leading_keyword(exported, "const") {
+            ("const", value)
         } else if let Some(value) = strip_leading_keyword(exported, "let") {
-            value
+            ("let", value)
         } else if let Some(value) = strip_leading_keyword(exported, "var") {
-            value
+            ("var", value)
         } else if is_exported_function_declaration(exported) {
             assignments.extend(render_namespace_export_function(exported)?);
             cursor = statement_end;
@@ -2226,7 +2226,14 @@ fn parse_namespace_exports(body: &str) -> Result<Vec<String>, TsNormalizationErr
             });
         }
 
-        assignments.push(format!("  ns.{symbol} = {};", rhs.trim()));
+        // The member is also a local of the namespace body, so the body's
+        // functions and later initializers can name it (bd-9vouw.416); a
+        // later write to it inside the body does not reach the namespace
+        // object (TypeScript rewrites such names to the object's property).
+        assignments.push(format!(
+            "  ns.{symbol} = {}; {keyword} {symbol} = ns.{symbol};",
+            rhs.trim()
+        ));
         cursor = statement_end;
     }
 

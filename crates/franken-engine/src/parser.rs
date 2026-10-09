@@ -6095,6 +6095,16 @@ fn parse_contextual_static_property_key(
     }
     // `\u` escapes in an IdentifierName key denote the same property name as
     // the characters they spell (`{ \u0061: 1 }.a`, ES2020 11.6).
+    // Only characters an IdentifierName may hold: an escape spelling `#`
+    // or U+0000 makes no key (bd-9vouw.397).
+    if source.contains('\\') && !is_identifier(source) {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            format!("invalid escaped {construct} property key: `{source}`"),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
     Ok(Expression::Identifier(canonicalize_identifier(source)))
 }
 
@@ -9306,6 +9316,19 @@ fn try_parse_postfix(
         if private_name.is_none() && property_src.starts_with('#') {
             return Some(Err(invalid_syntax_error(
                 "invalid private name after `.`",
+                span,
+                context,
+            )));
+        }
+        // A property name spelled with escapes must decode to an
+        // IdentifierName: an escaped `#` does not make a private name
+        // (bd-9vouw.397).
+        if property_src.contains('\\')
+            && decode_identifier_escapes(property_src).is_some()
+            && !is_identifier(property_src)
+        {
+            return Some(Err(invalid_syntax_error(
+                "invalid escaped property name after `.`",
                 span,
                 context,
             )));
@@ -14914,6 +14937,19 @@ fn parse_class_body(
     let parsed = parse_class_body_members(body, derived, span, context);
     let scope = context.private_name_scopes.pop().unwrap_or_default();
     let methods = parsed?;
+    // ES2022 15.7.1: at most one "constructor" in a class body.
+    if methods
+        .iter()
+        .filter(|method| matches!(method.kind, MethodKind::Constructor))
+        .nth(1)
+        .is_some()
+    {
+        return Err(invalid_syntax_error(
+            "a class may have only one constructor",
+            span,
+            context,
+        ));
+    }
     for name in scope.referenced {
         if scope.declared.contains_key(&name) {
             continue;
@@ -14939,7 +14975,14 @@ fn private_name_prefix_len(text: &str) -> usize {
         return 0;
     }
     let name_len = after_hash.len() - skip_identifier_name(after_hash).len();
-    if name_len == 0 { 0 } else { name_len + 1 }
+    // Escapes must spell identifier characters: `#\u200D_x` starts with a
+    // zero-width joiner, which only continues a name (bd-9vouw.397).
+    let name = &after_hash[..name_len];
+    if name_len == 0 || (name.contains('\\') && !is_identifier(name)) {
+        0
+    } else {
+        name_len + 1
+    }
 }
 
 /// `text` as a private name (`#x`, escapes canonicalized) when it is exactly
@@ -15370,6 +15413,19 @@ fn parse_class_body_members(
                 true,
             )
         } else {
+            // `field method() {}`: two names on one line are two elements
+            // with no `;` and no line break for ASI (bd-9vouw.397).
+            if let Some((first, gap_and_rest)) = method_name.split_once([' ', '\t'])
+                && is_identifier(first)
+                && !gap_and_rest.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+                && gap_and_rest.trim_start().starts_with(is_identifier_start)
+            {
+                return Err(invalid_syntax_error(
+                    "class elements on one line need a `;` between them",
+                    span,
+                    context,
+                ));
+            }
             (
                 parse_contextual_static_property_key(
                     method_name,

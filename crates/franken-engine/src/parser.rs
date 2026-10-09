@@ -2127,6 +2127,10 @@ struct ParseExecutionContext<'a> {
     /// reads convert as sloppy ones do. A module's top-level `this` is
     /// undefined and a function's is its call's.
     script_this: bool,
+    /// The source is a Module, whose code (function bodies included) may
+    /// use `import.meta`; in a Script it is an early SyntaxError (ES2020
+    /// 15.1.1, bd-9vouw.455).
+    module_goal: bool,
     /// True only while parsing an object concise method (or a lexically nested
     /// arrow). Bare `super` remains invalid; this admits only `super.x` and
     /// `super[x]` where the resulting closure receives a [[HomeObject]].
@@ -4221,6 +4225,7 @@ fn parse_source(
         pattern_depth: 0,
         strict_mode: goal == ParseGoal::Module,
         script_this: goal == ParseGoal::Script,
+        module_goal: goal == ParseGoal::Module,
         super_property_allowed: false,
         await_context: goal == ParseGoal::Module,
         yield_context: false,
@@ -10339,6 +10344,13 @@ fn try_parse_postfix(
             return Some(Ok(Expression::NewTarget));
         }
         if object_src == "import" && property_src == "meta" {
+            if !context.module_goal {
+                return Some(Err(invalid_syntax_error(
+                    "`import.meta` is only valid in a module",
+                    span,
+                    context,
+                )));
+            }
             return Some(Ok(Expression::ImportMeta));
         }
         if !object_src.is_empty() && is_identifier(property_src) {
@@ -19111,6 +19123,22 @@ mod tests {
         }
     }
 
+    // bd-9vouw.455: `import.meta` belongs to module code, function bodies
+    // included; in a script it is a SyntaxError.
+    #[test]
+    fn import_meta_is_module_only() {
+        let parser = CanonicalEs2020Parser;
+        for source in ["import.meta;", "function f() { return import.meta.url; }"] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError in a script"));
+            assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
+            parser
+                .parse(source, ParseGoal::Module)
+                .unwrap_or_else(|err| panic!("`{source}` must parse in a module: {}", err.message));
+        }
+    }
+
     #[test]
     fn reserved_word_as_binding_identifier_is_rejected() {
         let parser = CanonicalEs2020Parser;
@@ -23050,6 +23078,7 @@ mod tests {
             pattern_depth: 0,
             strict_mode: false,
             script_this: true,
+            module_goal: false,
             super_property_allowed: false,
             await_context: false,
             yield_context: false,

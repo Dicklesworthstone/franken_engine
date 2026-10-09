@@ -76,6 +76,120 @@
     return __franken_util_inspect(value, depth === null ? Infinity : depth);
   }
   inspect.custom = Symbol.for('nodejs.util.inspect.custom');
+
+  // Node's util.inspect.colors (bd-9vouw.440): the enumerable SGR code pairs
+  // in Node v22's order on a null-prototype object, and its non-enumerable
+  // aliases as accessors onto them.
+  inspect.colors = Object.assign(Object.create(null), {
+    reset: [0, 0],
+    bold: [1, 22],
+    dim: [2, 22],
+    italic: [3, 23],
+    underline: [4, 24],
+    blink: [5, 25],
+    inverse: [7, 27],
+    hidden: [8, 28],
+    strikethrough: [9, 29],
+    doubleunderline: [21, 24],
+    black: [30, 39],
+    red: [31, 39],
+    green: [32, 39],
+    yellow: [33, 39],
+    blue: [34, 39],
+    magenta: [35, 39],
+    cyan: [36, 39],
+    white: [37, 39],
+    bgBlack: [40, 49],
+    bgRed: [41, 49],
+    bgGreen: [42, 49],
+    bgYellow: [43, 49],
+    bgBlue: [44, 49],
+    bgMagenta: [45, 49],
+    bgCyan: [46, 49],
+    bgWhite: [47, 49],
+    framed: [51, 54],
+    overlined: [53, 55],
+    gray: [90, 39],
+    redBright: [91, 39],
+    greenBright: [92, 39],
+    yellowBright: [93, 39],
+    blueBright: [94, 39],
+    magentaBright: [95, 39],
+    cyanBright: [96, 39],
+    whiteBright: [97, 39],
+    bgGray: [100, 49],
+    bgRedBright: [101, 49],
+    bgGreenBright: [102, 49],
+    bgYellowBright: [103, 49],
+    bgBlueBright: [104, 49],
+    bgMagentaBright: [105, 49],
+    bgCyanBright: [106, 49],
+    bgWhiteBright: [107, 49]
+  });
+  [
+    ['grey', 'gray'],
+    ['blackBright', 'gray'],
+    ['bgGrey', 'bgGray'],
+    ['bgBlackBright', 'bgGray'],
+    ['faint', 'dim'],
+    ['crossedout', 'strikethrough'],
+    ['strikeThrough', 'strikethrough'],
+    ['crossedOut', 'strikethrough'],
+    ['conceal', 'hidden'],
+    ['swapColors', 'inverse'],
+    ['swapcolors', 'inverse'],
+    ['doubleUnderline', 'doubleunderline']
+  ].forEach(function (pair) {
+    Object.defineProperty(inspect.colors, pair[0], {
+      get: function () { return this[pair[1]]; },
+      set: function (value) { this[pair[1]] = value; },
+      configurable: true,
+      enumerable: false
+    });
+  });
+  function escapeStyleCode(code) {
+    return '\u001b[' + code + 'm';
+  }
+  // ERR_INVALID_ARG_VALUE as validateOneOf throws it.
+  function invalidOneOf(name, value, allowed) {
+    var error = new TypeError('The argument \'' + name + '\' must be one of: ' +
+      allowed.map(function (key) { return '\'' + key + '\''; }).join(', ') +
+      '. Received ' + inspect(value));
+    error.code = 'ERR_INVALID_ARG_VALUE';
+    return error;
+  }
+  function styleText(format, text) {
+    if (typeof text !== 'string') {
+      throw invalidArgType('text', 'string', text);
+    }
+    var formats = Array.isArray(format) ? format : [format];
+    var left = '';
+    var right = '';
+    for (var i = 0; i < formats.length; i++) {
+      var codes = inspect.colors[formats[i]];
+      if (codes === undefined || codes === null) {
+        throw invalidOneOf('format', formats[i], Object.keys(inspect.colors));
+      }
+      left += escapeStyleCode(codes[0]);
+      right = escapeStyleCode(codes[1]) + right;
+    }
+    return left + text + right;
+  }
+  // Node's ANSI escape pattern (internal/util/inspect.js).
+  var ansi = new RegExp('[\\u001B\\u009B][[\\]()#;?]*' +
+    '(?:(?:(?:(?:;[-a-zA-Z\\d\\/\\#&.:=?%@~_]+)*' +
+    '|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/\\#&.:=?%@~_]*)*)?' +
+    '(?:\\u0007|\\u001B\\u005C|\\u009C))' +
+    '|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~]))', 'g');
+  function stripVTControlCharacters(str) {
+    if (typeof str !== 'string') {
+      throw invalidArgType('str', 'string', str);
+    }
+    return str.replace(ansi, '');
+  }
+  function toUSVString(input) {
+    return String(input).toWellFormed();
+  }
   inspect.defaultOptions = { showHidden: false, depth: 2, colors: false, customInspect: true,
     showProxy: false, maxArrayLength: 100, maxStringLength: 10000, breakLength: 128,
     compact: 3, sorted: false, getters: false, numericSeparator: false };
@@ -386,6 +500,9 @@
     debuglog: debuglog,
     debug: debuglog,
     isDeepStrictEqual: isDeepStrictEqual,
+    styleText: styleText,
+    stripVTControlCharacters: stripVTControlCharacters,
+    toUSVString: toUSVString,
     types: types,
     isArray: Array.isArray,
     TextEncoder: TextEncoder,

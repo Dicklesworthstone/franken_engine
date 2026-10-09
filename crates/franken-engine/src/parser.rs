@@ -2673,10 +2673,30 @@ enum LeadingOperator {
 /// the string/regex/comment state machine in `merge_logical_lines` so the
 /// regex-vs-division heuristic and comment boundaries are detected identically.
 pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
+    strip_comments_to_whitespace_with(text, false)
+}
+
+/// [`strip_comments_to_whitespace`] for source parsed with `goal`: Script
+/// source also has the HTML-like comments of ES2020 Annex B.1.3 (Module
+/// source does not; there `<!--` and `-->` are operators). `<!--` starts a
+/// single-line comment anywhere outside a literal; `-->` starts one only
+/// at the start of a line: after the start of the input or a line
+/// terminator, with only white space and single-line `/* */` comments
+/// before it, or right after a `/* */` comment that holds a line
+/// terminator (which counts as one).
+fn strip_comments_to_whitespace_for_goal(text: &str, goal: ParseGoal) -> String {
+    strip_comments_to_whitespace_with(text, goal == ParseGoal::Script)
+}
+
+fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> String {
     let mut out = String::with_capacity(text.len());
     let mut quotes = QuoteState::default();
     let mut in_block_comment = false;
     let mut in_line_comment = false;
+    // Whether a `-->` here would start an HTML close comment, and whether
+    // the open block comment holds a line terminator.
+    let mut at_line_start = true;
+    let mut block_comment_has_line_terminator = false;
     let mut in_regex_literal = false;
     let mut regex_in_char_class = false;
     let mut escaped = false;
@@ -2691,6 +2711,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
         if in_line_comment {
             if is_ecmascript_line_terminator(ch) {
                 in_line_comment = false;
+                at_line_start = true;
                 out.push(ch);
             } else {
                 push_blanked(&mut out, ch);
@@ -2703,7 +2724,9 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 push_blanked(&mut out, '*');
                 push_blanked(&mut out, '/');
                 in_block_comment = false;
+                at_line_start |= block_comment_has_line_terminator;
             } else if is_ecmascript_line_terminator(ch) {
+                block_comment_has_line_terminator = true;
                 out.push(ch);
             } else {
                 push_blanked(&mut out, ch);
@@ -2711,6 +2734,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             continue;
         }
         if quotes.active() {
+            at_line_start = false;
             // A comment inside a template substitution is code, not template
             // text (`${/* @__PURE__ */ f()}`, as bundlers emit). Neither
             // `/*` nor `//` can start a regular expression.
@@ -2723,6 +2747,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 push_blanked(&mut out, next);
                 if next == '*' {
                     in_block_comment = true;
+                    block_comment_has_line_terminator = false;
                 } else {
                     in_line_comment = true;
                 }
@@ -2752,6 +2777,33 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
             }
             continue;
         }
+        if html_comments {
+            let mut ahead = chars.clone();
+            let html_comment = match ch {
+                '<' => {
+                    ahead.next() == Some('!')
+                        && ahead.next() == Some('-')
+                        && ahead.next() == Some('-')
+                }
+                '-' if at_line_start => ahead.next() == Some('-') && ahead.next() == Some('>'),
+                _ => false,
+            };
+            if html_comment {
+                // The rest of the line, `!--` / `->` included, is blanked
+                // by the line-comment state.
+                in_line_comment = true;
+                push_blanked(&mut out, ch);
+                continue;
+            }
+        }
+        if is_ecmascript_line_terminator(ch) {
+            at_line_start = true;
+        } else if !(ch.is_whitespace()
+            || ch == '\u{feff}'
+            || (ch == '/' && matches!(chars.peek(), Some('/' | '*'))))
+        {
+            at_line_start = false;
+        }
         match ch {
             '/' => match chars.peek() {
                 Some('/') => {
@@ -2762,6 +2814,7 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
                 }
                 Some('*') => {
                     in_block_comment = true;
+                    block_comment_has_line_terminator = false;
                     trailing_identifier_closed = true;
                     push_blanked(&mut out, '/');
                     chars.next();
@@ -4068,7 +4121,7 @@ fn parse_source(
         ));
     }
 
-    let stripped = strip_comments_to_whitespace(text);
+    let stripped = strip_comments_to_whitespace_for_goal(text, goal);
     let mut logical_lines = merge_logical_lines(&stripped);
     let source_line_terminators = source_line_terminator_ranges(text);
     let mut statements = Vec::with_capacity(8);
@@ -5509,9 +5562,19 @@ fn parse_binding_pattern_inner(
         return Ok(BindingPattern::Identifier(name));
     }
 
+    // A binding element begins with `{`, `[`, `...` or an identifier, so an
+    // ASCII character that cannot start one (`-->`, `1x`, `+a`) makes the
+    // pattern invalid, not unsupported.
+    let (code, kind) = if trimmed.starts_with(|first: char| {
+        first.is_ascii() && !(first.is_ascii_alphabetic() || matches!(first, '_' | '$' | '\\'))
+    }) {
+        (ParseErrorCode::InvalidSyntax, "invalid")
+    } else {
+        (ParseErrorCode::UnsupportedSyntax, "unsupported")
+    };
     Err(ParseError::new(
-        ParseErrorCode::UnsupportedSyntax,
-        format!("unsupported binding pattern: `{trimmed}`"),
+        code,
+        format!("{kind} binding pattern: `{trimmed}`"),
         context.source_label.to_string(),
         Some(span.clone()),
     ))
@@ -21604,6 +21667,21 @@ mod tests {
         assert!(!stripped.contains("Should"));
         // The newline that terminates the comment is preserved.
         assert!(stripped.ends_with('\n'));
+    }
+
+    #[test]
+    fn html_like_comments_are_script_only_bd_9vouw_322() {
+        let src = "a <!--b\n--> c\n/*\n*/ --> d\nx-->y\n'<!--'\n";
+        let script = strip_comments_to_whitespace_for_goal(src, ParseGoal::Script);
+        assert_eq!(script.len(), src.len(), "byte length must be preserved");
+        assert_eq!(
+            script, "a      \n     \n  \n        \nx-->y\n'<!--'\n",
+            "`<!--` anywhere and `-->` at a line start are comments; after code \
+             `-->` is `--` `>`, and string text is untouched"
+        );
+        let module = strip_comments_to_whitespace_for_goal(src, ParseGoal::Module);
+        assert_eq!(module, "a <!--b\n--> c\n  \n   --> d\nx-->y\n'<!--'\n");
+        assert_eq!(strip_comments_to_whitespace(src), module);
     }
 
     #[test]

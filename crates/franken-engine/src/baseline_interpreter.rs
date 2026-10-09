@@ -172,7 +172,9 @@ use crate::iterator_protocol::{
 use crate::js_string::JsString;
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::object_model::{SymbolId, WellKnownSymbol};
-use crate::parser::{CanonicalEs2020Parser, ParseErrorCode, ParserOptions, ParserSource};
+use crate::parser::{
+    CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions, ParserSource,
+};
 use crate::runtime_config::ExecutionConfig;
 use crate::runtime_observability::{
     CapabilityDenialReason, RuntimeSecurityMetrics, RuntimeSecurityObservability,
@@ -6044,16 +6046,42 @@ impl DynamicFunctionKind {
         matches!(self, Self::Generator | Self::AsyncGenerator)
     }
 
-    /// The source of the wrapper whose one statement returns the function.
-    fn wrapper_source(self, parameters: &str, body: &str) -> String {
-        let prefix = match self {
+    fn function_keyword(self) -> &'static str {
+        match self {
             Self::Normal => "function",
             Self::Generator => "function*",
             Self::Async => "async function",
             Self::AsyncGenerator => "async function*",
-        };
+        }
+    }
+
+    /// The source of the wrapper whose one statement returns the function.
+    fn wrapper_source(self, parameters: &str, body: &str) -> String {
+        let prefix = self.function_keyword();
         format!(
             "function {DYNAMIC_FUNCTION_WRAPPER}() {{\nreturn {prefix} anonymous({parameters}\n) {{\n{body}\n}};\n}}"
+        )
+    }
+
+    /// The parameters alone, as a declaration with an empty body: they
+    /// must parse as that one declaration, as CreateDynamicFunction parses
+    /// them as FormalParameters before forming the full source text (ES2020
+    /// 19.2.1.1.1 step 10). Parameter text that opens a comment or closes
+    /// the list early is a SyntaxError even when the body would complete it.
+    fn parameters_source(self, parameters: &str) -> String {
+        format!("{} anonymous({parameters}\n) {{}}", self.function_keyword())
+    }
+
+    /// Whether `tree` is exactly one declaration of `anonymous` of this
+    /// kind.
+    fn is_single_declaration(self, tree: &crate::ast::SyntaxTree) -> bool {
+        use crate::ast::Statement;
+        matches!(
+            tree.body.as_slice(),
+            [Statement::FunctionDeclaration(function)]
+                if function.name.as_deref() == Some("anonymous")
+                    && function.is_async == self.is_async()
+                    && function.is_generator == self.is_generator()
         )
     }
 
@@ -39604,7 +39632,7 @@ impl InterpreterCore {
         }
         Ok(rendered_argument_bytes
             .saturating_add(u64::from(args.count))
-            .saturating_add("function anonymous() {\n\n}".len() as u64))
+            .saturating_add("function anonymous(\n) {\n\n}".len() as u64))
     }
 
     fn generated_function_compilation_scratch_bytes(
@@ -39739,7 +39767,7 @@ impl InterpreterCore {
                         total.saturating_add(u64::try_from(text.len()).unwrap_or(u64::MAX))
                     })
                     .saturating_add(u64::from(args.count))
-                    .saturating_add("function anonymous() {\n\n}".len() as u64)
+                    .saturating_add("function anonymous(\n) {\n\n}".len() as u64)
                     .saturating_add(kind.wrapper_overhead_bytes()),
                 args.count,
             ),
@@ -39791,10 +39819,6 @@ impl InterpreterCore {
             };
             self.run_pre_allocation_hook(module, AllocKind::Function, generated_source.len())?;
 
-            let parser_source = ParserSource {
-                label: "<function-constructor>".to_string(),
-                text: generated_source,
-            };
             // ES2020 19.2.1.1.1 CreateDynamicFunction steps 18-20: a body or
             // parameter list that is not valid source is a SyntaxError the
             // caller can catch, as is an early error in it (`break` outside a
@@ -39802,31 +39826,49 @@ impl InterpreterCore {
             // a class). They aborted the whole program. Syntax the parser or
             // lowering does not support (`UnsupportedSyntax`) stays a refusal:
             // it says nothing about the source being invalid.
-            let syntax_tree = match CanonicalEs2020Parser.parse_with_options(
-                parser_source,
-                ParseGoal::Script,
-                &ParserOptions::default(),
-            ) {
-                Ok(syntax_tree) => syntax_tree,
-                Err(error)
-                    if matches!(
-                        error.code,
-                        ParseErrorCode::StrictModeWithStatement
-                            | ParseErrorCode::AwaitOutsideAsync
-                            | ParseErrorCode::InvalidClassElementName
-                            | ParseErrorCode::InvalidSyntax
-                    ) =>
-                {
-                    return Err(self.throw_js_error("SyntaxError", error.message.clone()));
-                }
-                Err(error) => {
-                    return Err(InterpreterError::ModuleParseFailed {
+            let parse = |text: String| {
+                CanonicalEs2020Parser.parse_with_options(
+                    ParserSource {
+                        label: "<function-constructor>".to_string(),
+                        text,
+                    },
+                    ParseGoal::Script,
+                    &ParserOptions::default(),
+                )
+            };
+            let parse_failure = |this: &mut Self, error: ParseError| {
+                if matches!(
+                    error.code,
+                    ParseErrorCode::StrictModeWithStatement
+                        | ParseErrorCode::AwaitOutsideAsync
+                        | ParseErrorCode::InvalidClassElementName
+                        | ParseErrorCode::InvalidSyntax
+                ) {
+                    this.throw_js_error("SyntaxError", error.message.clone())
+                } else {
+                    InterpreterError::ModuleParseFailed {
                         specifier: "<function-constructor>".to_string(),
                         error: error.to_string(),
-                    });
+                    }
                 }
             };
-            if kind != DynamicFunctionKind::Normal && !kind.is_exact_wrapper(&syntax_tree) {
+            // The parameters first, on their own; their tree is dropped
+            // before the full source is parsed.
+            let parameters_valid = match parse(kind.parameters_source(&parameter_source)) {
+                Ok(tree) => kind.is_single_declaration(&tree),
+                Err(error) => return Err(parse_failure(self, error)),
+            };
+            let syntax_tree = match parse(generated_source) {
+                Ok(syntax_tree) => syntax_tree,
+                Err(error) => return Err(parse_failure(self, error)),
+            };
+            let exact = match kind {
+                // A body that closes the function early (`}; x(); function
+                // y() {`) leaves more statements after it (bd-9vouw.322).
+                DynamicFunctionKind::Normal => kind.is_single_declaration(&syntax_tree),
+                kind => kind.is_exact_wrapper(&syntax_tree),
+            };
+            if !exact || !parameters_valid {
                 return Err(self.throw_js_error(
                     "SyntaxError",
                     format!("invalid parameters or body for {}", kind.constructor_name()),
@@ -39914,7 +39956,7 @@ impl InterpreterCore {
     }
 
     fn function_constructor_source(parameter_source: &str, body_source: &str) -> String {
-        format!("function anonymous({parameter_source}) {{\n{body_source}\n}}")
+        format!("function anonymous({parameter_source}\n) {{\n{body_source}\n}}")
     }
 
     /// Derive deterministic, content-addressed provenance for a generated

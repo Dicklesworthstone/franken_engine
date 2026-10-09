@@ -783,6 +783,24 @@ impl InterpreterCore {
     /// so the engine's own `JSON.parse` defines that value, and invalid JSON
     /// throws the same `SyntaxError` it would there.
     pub(super) fn json_module_source(text: &str) -> Result<String, InterpreterError> {
+        Ok(format!(
+            "module.exports = JSON.parse({});\n",
+            Self::json_module_text_literal(text)?
+        ))
+    }
+
+    /// An ES module import of a `.json` file (`import data from './x.json'
+    /// with { type: 'json' }`) loads a JSON module (ES2025 16.2.1.7): its
+    /// only export is `default`, the value `JSON.parse` gives for the text,
+    /// so invalid JSON throws that `SyntaxError`.
+    pub(super) fn json_es_module_source(text: &str) -> Result<String, InterpreterError> {
+        Ok(format!(
+            "export default JSON.parse({});\n",
+            Self::json_module_text_literal(text)?
+        ))
+    }
+
+    fn json_module_text_literal(text: &str) -> Result<String, InterpreterError> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let literal =
             serde_json::to_string(text).map_err(|error| InterpreterError::InternalError {
@@ -790,10 +808,9 @@ impl InterpreterCore {
             })?;
         // JSON leaves U+2028/U+2029 unescaped; escape them so the literal is
         // valid for any ECMAScript parser.
-        let literal = literal
+        Ok(literal
             .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029");
-        Ok(format!("module.exports = JSON.parse({literal});\n"))
+            .replace('\u{2029}', "\\u2029"))
     }
 }
 

@@ -5049,13 +5049,16 @@ fn parse_import(
         ));
     }
 
-    if let Some(source) = parse_quoted_string(body) {
-        return Ok(ImportDeclaration {
-            clause: ImportClause::SideEffect,
-            binding: None,
-            source,
-            span,
-        });
+    if body.starts_with(['\'', '"']) {
+        let source_text = strip_import_attributes(body, source_label, &span)?;
+        if let Some(source) = parse_quoted_string(source_text) {
+            return Ok(ImportDeclaration {
+                clause: ImportClause::SideEffect,
+                binding: None,
+                source,
+                span,
+            });
+        }
     }
 
     let (binding_raw, source_raw) = split_import_from(body).ok_or_else(|| {
@@ -5068,7 +5071,8 @@ fn parse_import(
     })?;
 
     let clause = parse_import_binding_clause(binding_raw.trim(), source_label, &span)?;
-    let source = parse_quoted_string(source_raw.trim()).ok_or_else(|| {
+    let source_text = strip_import_attributes(source_raw.trim(), source_label, &span)?;
+    let source = parse_quoted_string(source_text).ok_or_else(|| {
         ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "import source must be quoted",
@@ -5083,6 +5087,118 @@ fn parse_import(
         source,
         span,
     })
+}
+
+/// Split an import attributes clause (ES2025 16.2.2 WithClause: `with {
+/// type: 'json' }`) off the module specifier text that starts `text`, and
+/// return the specifier text alone. The clause has string-valued entries
+/// keyed by identifier names or strings, with no key repeated (a
+/// SyntaxError). The engine supports `type: 'json'` on a `.json` specifier
+/// (the module loader loads `.json` files as JSON modules); any other
+/// attribute or a JSON type on another specifier is refused as
+/// unsupported rather than loaded as something else.
+fn strip_import_attributes<'a>(
+    text: &'a str,
+    source_label: &str,
+    span: &SourceSpan,
+) -> ParseResult<&'a str> {
+    let error = |code, message: &str| {
+        ParseError::new(code, message, source_label.to_string(), Some(span.clone()))
+    };
+    let Some(quote) = text.chars().next().filter(|ch| matches!(ch, '\'' | '"')) else {
+        return Ok(text);
+    };
+    let mut escaped = false;
+    let mut source_end = None;
+    for (index, ch) in text.char_indices().skip(1) {
+        match ch {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            ch if ch == quote => {
+                source_end = Some(index + ch.len_utf8());
+                break;
+            }
+            _ => {}
+        }
+    }
+    let Some(source_end) = source_end else {
+        return Ok(text);
+    };
+    let (source_text, rest) = text.split_at(source_end);
+    let rest = rest.trim();
+    let rest = rest.strip_suffix(';').map_or(rest, str::trim_end);
+    if rest.is_empty() {
+        return Ok(source_text);
+    }
+    let Some(entries) = rest
+        .strip_prefix("with")
+        .map(str::trim_start)
+        .and_then(|after| after.strip_prefix('{'))
+        .and_then(|after| after.strip_suffix('}'))
+    else {
+        return Ok(text);
+    };
+    let mut seen = BTreeSet::new();
+    let mut json = false;
+    for entry in without_trailing_specifier_comma(entries.trim()).split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            if entries.trim().is_empty() {
+                break;
+            }
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "import attributes contain an empty entry",
+            ));
+        }
+        let Some((key, value)) = entry.split_once(':') else {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "an import attribute is `key: 'value'`",
+            ));
+        };
+        let key = key.trim();
+        let key = match parse_quoted_string(key) {
+            Some(key) => key.to_string(),
+            None if is_identifier(key) => canonicalize_identifier(key),
+            None => {
+                return Err(error(
+                    ParseErrorCode::InvalidSyntax,
+                    "an import attribute key is an identifier name or a string",
+                ));
+            }
+        };
+        let Some(value) = parse_quoted_string(value.trim()) else {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "an import attribute value is a string",
+            ));
+        };
+        if !seen.insert(key.clone()) {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "duplicate import attribute key",
+            ));
+        }
+        if key == "type" && value == "json" {
+            json = true;
+        } else {
+            return Err(error(
+                ParseErrorCode::UnsupportedSyntax,
+                "unsupported import attribute (only `type: 'json'` is supported)",
+            ));
+        }
+    }
+    if json
+        && !parse_quoted_string(source_text)
+            .is_some_and(|source| source.to_string().to_ascii_lowercase().ends_with(".json"))
+    {
+        return Err(error(
+            ParseErrorCode::UnsupportedSyntax,
+            "`type: 'json'` is supported for `.json` module specifiers only",
+        ));
+    }
+    Ok(source_text)
 }
 
 fn parse_import_binding_clause(
@@ -21738,6 +21854,45 @@ mod tests {
         let module = strip_comments_to_whitespace_for_goal(src, ParseGoal::Module);
         assert_eq!(module, "a <!--b\n--> c\n  \n   --> d\nx-->y\n'<!--'\n");
         assert_eq!(strip_comments_to_whitespace(src), module);
+    }
+
+    #[test]
+    fn import_attributes_bd_9vouw_387() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "import data from './d.json' with { type: 'json' };",
+            "import * as ns from \"./d.json\" with { \"type\": \"json\", }",
+            "import './d.json' with { type: 'json' }",
+            "import data from './d.json' with {}",
+            "import x from './x.js'",
+        ] {
+            let tree = parser.parse(source, ParseGoal::Module).expect(source);
+            assert!(
+                matches!(tree.body.as_slice(), [Statement::Import(_)]),
+                "{source}"
+            );
+        }
+        for (source, code) in [
+            (
+                "import d from './d.json' with { type: 'json', type: 'json' }",
+                ParseErrorCode::InvalidSyntax,
+            ),
+            (
+                "import d from './d.json' with { type: json }",
+                ParseErrorCode::InvalidSyntax,
+            ),
+            (
+                "import d from './d.css' with { type: 'css' }",
+                ParseErrorCode::UnsupportedSyntax,
+            ),
+            (
+                "import d from './d.js' with { type: 'json' }",
+                ParseErrorCode::UnsupportedSyntax,
+            ),
+        ] {
+            let error = parser.parse(source, ParseGoal::Module).expect_err(source);
+            assert_eq!(error.code, code, "{source}");
+        }
     }
 
     #[test]

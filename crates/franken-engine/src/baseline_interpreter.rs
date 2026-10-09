@@ -38772,14 +38772,15 @@ impl InterpreterCore {
                 specifier: resolved.to_string(),
                 error: error.to_string(),
             })?;
-        let source = if is_cjs
-            && Path::new(resolved)
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-        {
-            Self::json_module_source(&source)?
-        } else {
-            source
+        let is_json = Path::new(resolved)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"));
+        let source = match (is_json, is_cjs) {
+            (true, true) => Self::json_module_source(&source)?,
+            // An ES module import of a `.json` file (`with { type: 'json' }`,
+            // bd-9vouw.387) is a JSON module: its only export is `default`.
+            (true, false) => Self::json_es_module_source(&source)?,
+            (false, _) => source,
         };
         let parser_source = ParserSource {
             label: resolved.to_string(),

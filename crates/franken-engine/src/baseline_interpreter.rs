@@ -12478,6 +12478,24 @@ impl CompactTier1Program {
     /// remain explicit baseline cells; compilation itself never changes module
     /// admission or execution semantics.
     pub(crate) fn compile(module: &Ir3Module) -> Option<Self> {
+        Self::compile_with_known_hash(module, None)
+    }
+
+    /// [`Self::compile`] given `module`'s content hash when the caller already
+    /// computed it for the same module (the orchestrator's routing context),
+    /// instead of a further full canonical encoding (bd-9vouw.382).
+    /// [`Self::validate_module`] still rehashes the module it is given.
+    pub(crate) fn compile_with_source_hash(
+        module: &Ir3Module,
+        source_hash: ContentHash,
+    ) -> Option<Self> {
+        Self::compile_with_known_hash(module, Some(source_hash))
+    }
+
+    fn compile_with_known_hash(
+        module: &Ir3Module,
+        source_hash: Option<ContentHash>,
+    ) -> Option<Self> {
         let verified_function_frame_clear_width = Self::verified_function_frame_clear_width(module);
         let verified_function_frame_clear_widths = if verified_function_frame_clear_width.is_some()
         {
@@ -12514,8 +12532,13 @@ impl CompactTier1Program {
                 compact
             })
             .collect::<Arc<[_]>>();
-        (compact_work_instruction_count > 0).then_some(Self {
-            source_module_hash: module.content_hash(),
+        if compact_work_instruction_count == 0 {
+            return None;
+        }
+        let source_module_hash = source_hash.unwrap_or_else(|| module.content_hash());
+        debug_assert_eq!(source_module_hash, module.content_hash());
+        Some(Self {
+            source_module_hash,
             source_rest_param_indices: module
                 .function_table
                 .iter()

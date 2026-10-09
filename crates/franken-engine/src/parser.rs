@@ -2956,6 +2956,15 @@ fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> (String
                 last_significant = Some(ch);
                 trailing_identifier.clear();
             }
+            // TAB and FF are white space like SP, but the statement
+            // dispatch matches keywords followed by a space (`function `,
+            // `class `, `with `), so `function<TAB>w() {}` declared
+            // nothing (bd-9vouw.459). Outside literals they become spaces,
+            // byte for byte.
+            '\t' | '\u{c}' => {
+                out.push(' ');
+                trailing_identifier_closed = true;
+            }
             ch if ch.is_ascii_whitespace() || is_ecmascript_line_terminator(ch) => {
                 out.push(ch);
                 trailing_identifier_closed = true;
@@ -19207,12 +19216,19 @@ mod tests {
         let parser = CanonicalEs2020Parser;
         for source in [
             "var x;\nx\u{b}=\u{b}1;\nx\u{a0}=\u{a0}2;\nx\u{3000}=\u{3000}3;",
+            "function\tw() {}\nw();",
             "function\t\u{2029}w(\u{c})\u{a0}{\n}\nw();",
         ] {
             let tree = parser
                 .parse(source, ParseGoal::Script)
                 .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
             assert!(tree.body.len() >= 2, "{tree:?}");
+            if source.starts_with("function") {
+                assert!(
+                    matches!(&tree.body[0], Statement::FunctionDeclaration(f) if f.name.as_deref() == Some("w")),
+                    "`{source}` must declare w: {tree:?}"
+                );
+            }
         }
     }
 

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 const SCHEMA_VERSION: &str = "franken-engine.module-import-export-grammar-conformance.v1";
 const BEAD_ID: &str = "bd-h5er9";
 
-const KNOWN_MODULE_GRAMMAR_WAIVERS: &[&str] = &["ES2020-16.2.3.2-export-star-as-namespace"];
+const KNOWN_MODULE_GRAMMAR_WAIVERS: &[&str] = &[];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -360,11 +360,7 @@ fn module_grammar_cases() -> Vec<ModuleGrammarCase> {
                 export_count: 1,
                 checks: Vec::new(),
             },
-            waiver: Some(Waiver {
-                id: "bd-h5er9-waiver-export-star-as-namespace",
-                reason: "current AST only models default and named-clause exports",
-                follow_up: "add ExportKind support for ES2020 namespace re-export",
-            }),
+            waiver: None,
         },
     ]
 }
@@ -767,4 +763,23 @@ fn module_grammar_full_matrix_has_no_unwaived_failures() {
         observed_waivers, expected_waivers,
         "module import/export waiver set drifted. If a gap closed, remove the waiver; if a new gap opened, file a follow-up bead."
     );
+}
+
+#[test]
+fn a_waived_case_that_passes_is_reported_as_waiver_drift() {
+    // The namespace re-export parses as one export statement, so a waiver on
+    // it would be stale; with a failure it stays waived.
+    let mut case = module_grammar_cases()
+        .into_iter()
+        .find(|case| case.id == "ES2020-16.2.3.2-export-star-as-namespace")
+        .expect("namespace re-export case");
+    case.waiver = Some(Waiver {
+        id: "probe-waiver",
+        reason: "probe",
+        follow_up: "probe",
+    });
+    let (status, detail) = classify_case_result(&case, execute_case(&case));
+    assert!(matches!(status, ModuleCaseStatus::WaiverDrift), "{detail}");
+    let (status, detail) = classify_case_result(&case, Err("still rejected".to_string()));
+    assert!(matches!(status, ModuleCaseStatus::Waived), "{detail}");
 }

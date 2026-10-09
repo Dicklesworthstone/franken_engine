@@ -39942,6 +39942,17 @@ impl InterpreterCore {
             // before the full source is parsed.
             let parameters_valid = match parse(kind.parameters_source(&parameter_source)) {
                 Ok(tree) => kind.is_single_declaration(&tree),
+                // The wrapper around the parameters is balanced, so a
+                // structural failure (an unbalanced list or a missing body
+                // brace) comes from the parameter text itself: `a){ /*`
+                // opens a comment that swallows the `) {}`.
+                Err(error)
+                    if error.code == ParseErrorCode::UnsupportedSyntax
+                        && (error.message.contains("unbalanced parentheses")
+                            || error.message.contains("requires a braced body")) =>
+                {
+                    return Err(self.throw_js_error("SyntaxError", error.message.clone()));
+                }
                 Err(error) => return Err(parse_failure(self, error)),
             };
             let syntax_tree = match parse(generated_source) {

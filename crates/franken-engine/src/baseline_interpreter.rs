@@ -3216,6 +3216,10 @@ pub enum BuiltinFunctionKind {
     BufferSwap16,
     BufferSwap32,
     BufferSwap64,
+    /// Node's other `Buffer.prototype` numeric accessors and `write`
+    /// ([`BUFFER_NUMERIC_METHODS`], by method name in `module_specifier`;
+    /// bd-9vouw.437).
+    BufferNumericMethod,
     /// Receiver-independent `Array.isArray`, materialized by a dedicated pure
     /// factory hostcall for unshadowed static member reads (bd-cue2u).
     ArrayIsArray,
@@ -5612,6 +5616,11 @@ impl BuiltinFunction {
                 .copied()
                 .find(|name| self.module_specifier.0.as_deref() == Some(*name))
                 .unwrap_or("dataViewMethod"),
+            BuiltinFunctionKind::BufferNumericMethod => BUFFER_NUMERIC_METHODS
+                .iter()
+                .copied()
+                .find(|name| self.module_specifier.0.as_deref() == Some(*name))
+                .unwrap_or("bufferNumericMethod"),
             BuiltinFunctionKind::DatePrototypeMethod => DATE_PROTOTYPE_METHODS
                 .iter()
                 .copied()
@@ -7367,6 +7376,195 @@ const DATA_VIEW_METHODS: [&str; 14] = [
     "getBigUint64",
     "setBigUint64",
 ];
+
+/// `Buffer.prototype` methods served by
+/// [`BuiltinFunctionKind::BufferNumericMethod`] (bd-9vouw.437): `write`,
+/// and the numeric accessors the dedicated kinds do not serve: 8- and 16-bit
+/// signed, variable width (`readIntLE(offset, byteLength)`), float, double
+/// and 64-bit BigInt, and the lowercase `Uint` aliases Node also defines.
+const BUFFER_NUMERIC_METHODS: &[&str] = &[
+    "write",
+    "readInt8",
+    "writeInt8",
+    "readUint8",
+    "writeUint8",
+    "readInt16LE",
+    "readInt16BE",
+    "writeInt16LE",
+    "writeInt16BE",
+    "readUint16LE",
+    "readUint16BE",
+    "writeUint16LE",
+    "writeUint16BE",
+    "readUint32LE",
+    "readUint32BE",
+    "writeUint32LE",
+    "writeUint32BE",
+    "readIntLE",
+    "readIntBE",
+    "writeIntLE",
+    "writeIntBE",
+    "readUIntLE",
+    "readUIntBE",
+    "writeUIntLE",
+    "writeUIntBE",
+    "readUintLE",
+    "readUintBE",
+    "writeUintLE",
+    "writeUintBE",
+    "readFloatLE",
+    "readFloatBE",
+    "writeFloatLE",
+    "writeFloatBE",
+    "readDoubleLE",
+    "readDoubleBE",
+    "writeDoubleLE",
+    "writeDoubleBE",
+    "readBigInt64LE",
+    "readBigInt64BE",
+    "writeBigInt64LE",
+    "writeBigInt64BE",
+    "readBigUInt64LE",
+    "readBigUInt64BE",
+    "writeBigUInt64LE",
+    "writeBigUInt64BE",
+    "readBigUint64LE",
+    "readBigUint64BE",
+    "writeBigUint64LE",
+    "writeBigUint64BE",
+];
+
+/// The number format of a [`BUFFER_NUMERIC_METHODS`] accessor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BufferNumberFormat {
+    Int {
+        width: usize,
+        signed: bool,
+    },
+    /// `readIntLE(offset, byteLength)`: 1 to 6 bytes.
+    Variable {
+        signed: bool,
+    },
+    Float32,
+    Float64,
+    BigInt64 {
+        signed: bool,
+    },
+}
+
+impl BufferNumberFormat {
+    /// `(write, format, little_endian)` of an accessor name: the 8-bit
+    /// names have no byte-order suffix, every other one has `LE` or `BE`.
+    fn parse(name: &str) -> Option<(bool, Self, bool)> {
+        let (write, rest) = match name.strip_prefix("read") {
+            Some(rest) => (false, rest),
+            None => (true, name.strip_prefix("write")?),
+        };
+        let (body, little_endian, suffixed) = if let Some(body) = rest.strip_suffix("LE") {
+            (body, true, true)
+        } else if let Some(body) = rest.strip_suffix("BE") {
+            (body, false, true)
+        } else {
+            (rest, false, false)
+        };
+        let format = match body {
+            "Int8" => Self::Int {
+                width: 1,
+                signed: true,
+            },
+            "UInt8" | "Uint8" => Self::Int {
+                width: 1,
+                signed: false,
+            },
+            "Int16" => Self::Int {
+                width: 2,
+                signed: true,
+            },
+            "UInt16" | "Uint16" => Self::Int {
+                width: 2,
+                signed: false,
+            },
+            "Int32" => Self::Int {
+                width: 4,
+                signed: true,
+            },
+            "UInt32" | "Uint32" => Self::Int {
+                width: 4,
+                signed: false,
+            },
+            "Int" => Self::Variable { signed: true },
+            "UInt" | "Uint" => Self::Variable { signed: false },
+            "Float" => Self::Float32,
+            "Double" => Self::Float64,
+            "BigInt64" => Self::BigInt64 { signed: true },
+            "BigUInt64" | "BigUint64" => Self::BigInt64 { signed: false },
+            _ => return None,
+        };
+        let one_byte = matches!(format, Self::Int { width: 1, .. });
+        (one_byte != suffixed).then_some((write, format, little_endian))
+    }
+
+    /// The value of `width` little-endian bytes (`bytes` beyond `width`
+    /// are zero).
+    fn decode(self, bytes: [u8; 8], width: usize) -> Value {
+        match self {
+            Self::Int { signed, .. } | Self::Variable { signed } => {
+                let unsigned = u64::from_le_bytes(bytes);
+                let bits = width * 8;
+                let negative = signed && unsigned & (1u64 << (bits - 1)) != 0;
+                let value = unsigned as i64;
+                Value::Int(if negative {
+                    value - (1i64 << bits)
+                } else {
+                    value
+                })
+            }
+            Self::Float32 => js_number_to_value(f64::from(f32::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3],
+            ]))),
+            Self::Float64 => js_number_to_value(f64::from_le_bytes(bytes)),
+            Self::BigInt64 { signed: true } => {
+                Value::BigInt(Arc::from(i64::from_le_bytes(bytes).to_string().as_str()))
+            }
+            Self::BigInt64 { signed: false } => {
+                Value::BigInt(Arc::from(u64::from_le_bytes(bytes).to_string().as_str()))
+            }
+        }
+    }
+}
+
+/// A number as Node's ERR_OUT_OF_RANGE messages print it: an integer beyond
+/// 2 ** 32 with `_` between digit groups (`4_294_967_296`).
+fn node_out_of_range_received(number: f64) -> String {
+    if number.is_infinite() {
+        return if number > 0.0 {
+            "Infinity"
+        } else {
+            "-Infinity"
+        }
+        .to_string();
+    }
+    if number.is_nan() || number.fract() != 0.0 || number.abs() <= 4_294_967_296.0 {
+        return format!("{number}");
+    }
+    group_decimal_digits(&format!("{number}"))
+}
+
+/// `digits` (an optional `-` and decimal digits) with `_` between groups of
+/// three, as Node prints a large number or BigInt in a range error.
+fn group_decimal_digits(digits: &str) -> String {
+    let (sign, digits) = digits
+        .strip_prefix('-')
+        .map_or(("", digits), |rest| ("-", rest));
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            grouped.push('_');
+        }
+        grouped.push(digit);
+    }
+    format!("{sign}{grouped}")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BufferIntegerKind {
@@ -34731,6 +34929,12 @@ impl InterpreterCore {
                 .0
                 .as_deref()
                 .is_some_and(|name| name.starts_with("set")))
+            || (builtin.kind == Kind::BufferNumericMethod
+                && builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("write")))
             || (builtin.kind == Kind::TypedArrayMethod
                 && matches!(
                     builtin.module_specifier.0.as_deref(),
@@ -45212,6 +45416,15 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::BufferSwap64 => {
                 self.buffer_swap(receiver.unwrap_or(Value::Undefined), 8)
+            }
+            BuiltinFunctionKind::BufferNumericMethod => {
+                let name = builtin
+                    .module_specifier
+                    .0
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string();
+                self.buffer_numeric_method(receiver.unwrap_or(Value::Undefined), args, &name)
             }
             BuiltinFunctionKind::PromiseResolve => {
                 if let Some(handle_id) = builtin.bound_object {
@@ -63455,6 +63668,14 @@ impl InterpreterCore {
             "swap16" => BuiltinFunctionKind::BufferSwap16,
             "swap32" => BuiltinFunctionKind::BufferSwap32,
             "swap64" => BuiltinFunctionKind::BufferSwap64,
+            name if BUFFER_NUMERIC_METHODS.contains(&name) => {
+                return Some(BuiltinFunction {
+                    kind: BuiltinFunctionKind::BufferNumericMethod,
+                    module_specifier: BuiltinModuleSpecifier::from_nonempty(name),
+                    iterator_handle: None,
+                    bound_object: None,
+                });
+            }
             _ => return None,
         };
         Some(BuiltinFunction::new_kind(kind))
@@ -74738,7 +74959,19 @@ impl InterpreterCore {
         view: &TypedArrayView,
         width: usize,
     ) -> Result<usize, InterpreterError> {
-        let value = match self.builtin_arg(args, 0)? {
+        self.buffer_offset_arg(args, 0, view, width)
+    }
+
+    /// Node's `offset` argument at `index` of a `width`-byte access: an
+    /// integer from 0 to the view's length minus `width` (undefined is 0).
+    fn buffer_offset_arg(
+        &mut self,
+        args: RegRange,
+        index: u32,
+        view: &TypedArrayView,
+        width: usize,
+    ) -> Result<usize, InterpreterError> {
+        let value = match self.builtin_arg(args, index)? {
             None | Some(Value::Undefined) => Value::Int(0),
             Some(value) => value,
         };
@@ -74947,6 +75180,290 @@ impl InterpreterCore {
         })??;
         let next_offset = offset.saturating_add(width);
         Ok(Value::Int(i64::try_from(next_offset).unwrap_or(i64::MAX)))
+    }
+
+    /// Node's `Buffer.prototype` numeric accessors that the dedicated kinds
+    /// do not serve, and `write(string)` (bd-9vouw.437). A read takes
+    /// `(offset)` (`(offset, byteLength)` for the variable-width family) and
+    /// returns the value; a write takes `(value, offset)` (`(value, offset,
+    /// byteLength)`) and returns the offset after the bytes it wrote.
+    fn buffer_numeric_method(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+        name: &str,
+    ) -> Result<Value, InterpreterError> {
+        if name == "write" {
+            return self.buffer_write_string(receiver, args);
+        }
+        let Some((write, format, little_endian)) = BufferNumberFormat::parse(name) else {
+            return Err(InterpreterError::TypeError {
+                expected: "Buffer numeric accessor".to_string(),
+                got: name.to_string(),
+            });
+        };
+        let (_, view) = self.buffer_receiver_view(receiver, name)?;
+        let width = match format {
+            BufferNumberFormat::Int { width, .. } => width,
+            BufferNumberFormat::Variable { .. } => {
+                self.buffer_byte_length_arg(args, if write { 2 } else { 1 })?
+            }
+            BufferNumberFormat::Float32 => 4,
+            BufferNumberFormat::Float64 | BufferNumberFormat::BigInt64 { .. } => 8,
+        };
+        if write {
+            let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+            let mut bytes = self.buffer_numeric_bytes(format, width, value)?;
+            if !little_endian {
+                bytes[..width].reverse();
+            }
+            let offset = self.buffer_offset_arg(args, 1, &view, width)?;
+            let range = self.buffer_integer_range(&view, offset, width)?;
+            self.with_array_buffer_bytes_mut(view.buffer, |storage| {
+                let slot = storage
+                    .get_mut(range)
+                    .ok_or_else(|| InterpreterError::RangeError {
+                        message: "Buffer write exceeds backing storage".to_string(),
+                    })?;
+                slot.copy_from_slice(&bytes[..width]);
+                Ok(())
+            })??;
+            return Ok(Value::Int(
+                i64::try_from(offset.saturating_add(width)).unwrap_or(i64::MAX),
+            ));
+        }
+        let offset = self.buffer_offset_arg(args, 0, &view, width)?;
+        let range = self.buffer_integer_range(&view, offset, width)?;
+        let mut bytes = self.with_array_buffer_bytes(view.buffer, |storage| {
+            let slot = storage
+                .get(range)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "Buffer read exceeds backing storage".to_string(),
+                })?;
+            let mut bytes = [0u8; 8];
+            bytes[..width].copy_from_slice(slot);
+            Ok::<[u8; 8], InterpreterError>(bytes)
+        })??;
+        if !little_endian {
+            bytes[..width].reverse();
+        }
+        Ok(format.decode(bytes, width))
+    }
+
+    /// The `byteLength` argument of the variable-width accessors: an integer
+    /// from 1 to 6.
+    fn buffer_byte_length_arg(
+        &mut self,
+        args: RegRange,
+        index: u32,
+    ) -> Result<usize, InterpreterError> {
+        let value = self.builtin_arg(args, index)?.unwrap_or(Value::Undefined);
+        let number = match &value {
+            Value::Int(value) => *value as f64,
+            Value::Float(value) => value.inner(),
+            other => {
+                return Err(self.throw_buffer_node_error(
+                    "TypeError",
+                    "ERR_INVALID_ARG_TYPE",
+                    format!(
+                        "The \"byteLength\" argument must be of type number. Received {}",
+                        if matches!(other, Value::Undefined) {
+                            "undefined".to_string()
+                        } else {
+                            format!("type {}", other.type_name())
+                        }
+                    ),
+                ));
+            }
+        };
+        if number.fract() != 0.0 || !(1.0..=6.0).contains(&number) {
+            return Err(self.throw_buffer_node_error(
+                "RangeError",
+                "ERR_OUT_OF_RANGE",
+                format!(
+                    "The value of \"byteLength\" is out of range. It must be >= 1 and <= 6. Received {}",
+                    node_out_of_range_received(number)
+                ),
+            ));
+        }
+        Ok(number as usize)
+    }
+
+    /// The `width` little-endian bytes a numeric write stores for `value`,
+    /// after Node's range check (an integer format takes a Number, a
+    /// BigInt64 format a BigInt).
+    fn buffer_numeric_bytes(
+        &mut self,
+        format: BufferNumberFormat,
+        width: usize,
+        value: Value,
+    ) -> Result<[u8; 8], InterpreterError> {
+        match format {
+            BufferNumberFormat::Int { signed, .. } | BufferNumberFormat::Variable { signed } => {
+                if matches!(value, Value::BigInt(_)) {
+                    return Err(self.throw_js_error(
+                        "TypeError",
+                        "Cannot mix BigInt and other types, use explicit conversions".to_string(),
+                    ));
+                }
+                let number = Self::coerce_to_float(&value).unwrap_or(f64::NAN);
+                let bits = (width * 8) as i32;
+                let (minimum, maximum) = if signed {
+                    (-(2f64.powi(bits - 1)), 2f64.powi(bits - 1) - 1.0)
+                } else {
+                    (0.0, 2f64.powi(bits) - 1.0)
+                };
+                if number < minimum || number > maximum {
+                    let bounds = if width > 4 {
+                        if signed {
+                            format!(">= -(2 ** {}) and < 2 ** {}", bits - 1, bits - 1)
+                        } else {
+                            format!(">= 0 and < 2 ** {bits}")
+                        }
+                    } else {
+                        format!(">= {minimum} and <= {maximum}")
+                    };
+                    return Err(self.throw_buffer_node_error(
+                        "RangeError",
+                        "ERR_OUT_OF_RANGE",
+                        format!(
+                            "The value of \"value\" is out of range. It must be {bounds}. Received {}",
+                            node_out_of_range_received(number)
+                        ),
+                    ));
+                }
+                let integer = if number.is_nan() {
+                    0
+                } else {
+                    number.trunc() as i64
+                };
+                Ok((integer as u64).to_le_bytes())
+            }
+            BufferNumberFormat::Float32 => {
+                Ok(u64::from((Self::typed_array_number(&value) as f32).to_bits()).to_le_bytes())
+            }
+            BufferNumberFormat::Float64 => {
+                Ok(Self::typed_array_number(&value).to_bits().to_le_bytes())
+            }
+            BufferNumberFormat::BigInt64 { signed } => {
+                // Node mixes the value into BigInt arithmetic.
+                let Value::BigInt(digits) = &value else {
+                    return Err(self.throw_js_error(
+                        "TypeError",
+                        "Cannot mix BigInt and other types, use explicit conversions".to_string(),
+                    ));
+                };
+                let parsed = digits.parse::<i128>().ok();
+                let in_range = parsed.is_some_and(|parsed| {
+                    if signed {
+                        i64::try_from(parsed).is_ok()
+                    } else {
+                        u64::try_from(parsed).is_ok()
+                    }
+                });
+                let Some(parsed) = parsed.filter(|_| in_range) else {
+                    let bounds = if signed {
+                        ">= -(2n ** 63n) and < 2n ** 63n"
+                    } else {
+                        ">= 0n and < 2n ** 64n"
+                    };
+                    let large = parsed.is_none_or(|parsed| parsed.unsigned_abs() > 1u128 << 32);
+                    let received = if large {
+                        group_decimal_digits(digits)
+                    } else {
+                        digits.to_string()
+                    };
+                    return Err(self.throw_buffer_node_error(
+                        "RangeError",
+                        "ERR_OUT_OF_RANGE",
+                        format!(
+                            "The value of \"value\" is out of range. It must be {bounds}. Received {received}n"
+                        ),
+                    ));
+                };
+                Ok((parsed as u64).to_le_bytes())
+            }
+        }
+    }
+
+    /// `buf.write(string[, offset[, length]][, encoding])`: the string's
+    /// bytes in `encoding` (utf8 by default) copied in at `offset`, at most
+    /// `length` of them and never a partial character; returns the count.
+    fn buffer_write_string(
+        &mut self,
+        receiver: Value,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let (_, view) = self.buffer_receiver_view(receiver, "write")?;
+        let Some(Value::Str(text)) = self.builtin_arg(args, 0)? else {
+            return Err(self.throw_buffer_node_error(
+                "TypeError",
+                "ERR_INVALID_ARG_TYPE",
+                "The \"string\" argument must be of type string".to_string(),
+            ));
+        };
+        let length = view.byte_length;
+        let mut encoding = "utf8".to_string();
+        let mut offset = 0usize;
+        let mut count = length;
+        match self.builtin_arg(args, 1)? {
+            None | Some(Value::Undefined) => {}
+            Some(Value::Str(name)) => encoding = name.to_string(),
+            Some(_) => {
+                offset = self.buffer_integer_offset(args, 1)?;
+                if offset > length {
+                    return Err(self.throw_buffer_node_error(
+                        "RangeError",
+                        "ERR_OUT_OF_RANGE",
+                        format!(
+                            "The value of \"offset\" is out of range. It must be >= 0 && <= {length}. Received {offset}"
+                        ),
+                    ));
+                }
+                count = length - offset;
+                match self.builtin_arg(args, 2)? {
+                    None | Some(Value::Undefined) => {}
+                    Some(Value::Str(name)) => encoding = name.to_string(),
+                    Some(_) => {
+                        count = count.min(self.buffer_integer_offset(args, 2)?);
+                        if let Some(Value::Str(name)) = self.builtin_arg(args, 3)? {
+                            encoding = name.to_string();
+                        }
+                    }
+                }
+            }
+        }
+        let encoding = encoding.to_ascii_lowercase();
+        let bytes = self.decode_buffer_string(&text, &encoding)?;
+        let mut written = bytes.len().min(count);
+        // Node writes whole characters only.
+        if written < bytes.len() {
+            match encoding.as_str() {
+                "utf8" | "utf-8" => {
+                    while written > 0 && bytes[written] & 0xc0 == 0x80 {
+                        written -= 1;
+                    }
+                }
+                "ucs2" | "ucs-2" | "utf16le" | "utf-16le" => written -= written % 2,
+                _ => {}
+            }
+        }
+        let start =
+            view.byte_offset
+                .checked_add(offset)
+                .ok_or_else(|| InterpreterError::RangeError {
+                    message: "Buffer write offset overflows host address space".to_string(),
+                })?;
+        self.with_array_buffer_bytes_mut(view.buffer, |storage| {
+            let slot = storage.get_mut(start..start + written).ok_or_else(|| {
+                InterpreterError::RangeError {
+                    message: "Buffer write exceeds backing storage".to_string(),
+                }
+            })?;
+            slot.copy_from_slice(&bytes[..written]);
+            Ok(())
+        })??;
+        Ok(Value::Int(i64::try_from(written).unwrap_or(i64::MAX)))
     }
 
     fn buffer_copy(&mut self, receiver: Value, args: RegRange) -> Result<Value, InterpreterError> {

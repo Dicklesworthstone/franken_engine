@@ -1504,12 +1504,21 @@ fn parser_tagged_meta_frontier_accepts_tagged_template_expressions() {
 
 #[test]
 fn parser_tagged_meta_frontier_accepts_new_target_meta_property() {
+    // `new.target` is a meta property of function code. At a script's top
+    // level it is an early SyntaxError (ES2020 15.1.1), which this test
+    // asserted parsed until bd-9vouw.448.
     let parser = CanonicalEs2020Parser;
-    let source = "const target = new.target";
+    parser
+        .parse("const target = new.target", ParseGoal::Script)
+        .expect_err("new.target outside a function is a SyntaxError");
+    let source = "function f() { const target = new.target; }";
     let tree = parser
         .parse(source, ParseGoal::Script)
-        .expect("new.target should parse");
-    let Statement::VariableDeclaration(declaration) = &tree.body[0] else {
+        .expect("new.target should parse in a function");
+    let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+        panic!("expected a function declaration");
+    };
+    let Statement::VariableDeclaration(declaration) = &function.body.body[0] else {
         panic!("expected variable declaration for new.target source");
     };
     assert!(matches!(

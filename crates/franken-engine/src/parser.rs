@@ -2414,7 +2414,9 @@ fn is_comment_only_line(line: &LogicalLine) -> bool {
 fn line_starts_call_or_index(line: &str) -> bool {
     let code = strip_comments_to_whitespace(line);
     let code = code.trim_start();
-    code.starts_with('(') || code.starts_with('[')
+    // No semicolon is inserted before a template either: `tag` newline
+    // `` `x` `` is a tagged template (bd-9vouw.448).
+    code.starts_with('(') || code.starts_with('[') || code.starts_with('`')
 }
 
 /// Whether a line starts with a `/` that is not a comment: after a line that
@@ -9885,6 +9887,15 @@ fn try_parse_postfix(
         let callee_src = expr[..template_start].trim();
         let template_src = expr[template_start..].trim();
         if !callee_src.is_empty() && template_src.starts_with('`') && template_src.ends_with('`') {
+            // An optional chain cannot be a template's tag (ES2020 12.3.1.1:
+            // `a?.b`x``); a parenthesized one can (bd-9vouw.448).
+            if has_top_level_optional_chain(callee_src) {
+                return Some(Err(invalid_syntax_error(
+                    "an optional chain cannot tag a template",
+                    span,
+                    context,
+                )));
+            }
             let callee = match parse_expression(callee_src, span, context, recursion_depth + 1) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
@@ -10178,6 +10189,17 @@ fn try_parse_postfix(
             )));
         }
         if object_src == "new" && property_src == "target" {
+            // A script's own code and its arrows are in no function, where
+            // `new.target` is an early SyntaxError (ES2020 15.1.1); it
+            // parsed and ran (bd-9vouw.448). Function bodies, parameters,
+            // methods and class field initializers clear `script_this`.
+            if context.script_this {
+                return Some(Err(invalid_syntax_error(
+                    "`new.target` is only valid in a function",
+                    span,
+                    context,
+                )));
+            }
             return Some(Ok(Expression::NewTarget));
         }
         if object_src == "import" && property_src == "meta" {
@@ -14656,6 +14678,38 @@ fn has_top_level_in_operator(text: &str) -> bool {
     false
 }
 
+/// Whether `text` has an optional chain `?.` outside every bracket and
+/// literal: `a?.b`, `a?.[0]`, but not `(a?.b)` or `c?.5:d`.
+fn has_top_level_optional_chain(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut quotes = QuoteState::default();
+    for (i, &b) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(b);
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(text, i) {
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'?' if depth == 0
+                && bytes.get(i + 1) == Some(&b'.')
+                && !bytes.get(i + 2).is_some_and(u8::is_ascii_digit) =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn parse_for_statement(
     statement: &str,
     goal: ParseGoal,
@@ -18662,6 +18716,49 @@ mod tests {
                 .parse(source, ParseGoal::Script)
                 .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
         }
+    }
+
+    // bd-9vouw.448: `new.target` outside every function (a script's own
+    // code and its arrows) and an optional chain tagging a template are
+    // SyntaxErrors; no semicolon is inserted before a template, so a line
+    // starting with one continues the expression before it.
+    #[test]
+    fn new_target_outside_functions_and_optional_chain_tags_are_rejected() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "new.target;",
+            "() => {\n  new.target;\n};",
+            "var a = {fn() {}};\na?.fn`hello`;",
+            "null?.fn\n  `hello`;",
+            "var a = [];\na?.[0]`x`;",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "function f() { return new.target; }",
+            "class C { constructor() { this.t = new.target; } }",
+            "function f() { return () => new.target; }",
+            "function f(a = new.target) { return a; }",
+            "class C { x = new.target; }",
+            "var a = { b: (s) => s[0] };\nvar r = (a?.b)`x`;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+        let texts: Vec<String> = merge_logical_lines("var r = tag\n`x`;")
+            .into_iter()
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(texts, ["var r = tag `x`;"]);
     }
 
     #[test]

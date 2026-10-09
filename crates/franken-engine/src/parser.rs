@@ -3831,7 +3831,7 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
                 );
             }
         } else {
-            if quotes.active() {
+            if quotes.active() || in_regex_literal {
                 append_source_fragment(
                     &mut current_text,
                     &mut current_source_boundaries,
@@ -3839,7 +3839,7 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
                     byte_offset,
                 );
             } else {
-                let preserve_leading_whitespace = in_block_comment || in_regex_literal;
+                let preserve_leading_whitespace = in_block_comment;
                 let (fragment, fragment_source_offset) = if preserve_leading_whitespace {
                     (line, byte_offset)
                 } else {
@@ -4014,8 +4014,12 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
         // Preserve physical line terminators while a quoted token is open.
         // The exact string cooker must distinguish a backslash continuation
         // (which removes the terminator) from a raw ECMAScript line terminator
-        // (whose validity depends on the literal grammar).
-        if quotes.active() && !line_ending.is_empty() {
+        // (whose validity depends on the literal grammar). A regular
+        // expression literal open at a line's end has a line terminator in
+        // its body, which no escape makes valid (ES2020 11.8.5): it is kept
+        // too, so the parser reports the SyntaxError. Joined with a space,
+        // `/` newline `/` read as the valid `/ /` (bd-9vouw.444).
+        if (quotes.active() || in_regex_literal) && !line_ending.is_empty() {
             append_source_fragment(
                 &mut current_text,
                 &mut current_source_boundaries,
@@ -4023,6 +4027,7 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
                 byte_offset.saturating_add(line.len()),
             );
             quotes.line_break();
+            escaped = false;
         }
 
         byte_offset = byte_offset.saturating_add(segment.len());
@@ -7359,7 +7364,108 @@ fn parse_primary_expression(
         ));
     }
 
+    if let Some(message) = raw_expression_early_error(expression) {
+        return Err(invalid_syntax_error(message, span, context));
+    }
+
     Ok(Expression::Raw(canonicalize_whitespace(expression)))
+}
+
+/// Why an expression the parser did not recognise cannot be an expression at
+/// all, for shapes no ECMAScript expression has. Such source is a SyntaxError
+/// before anything runs, not an `Expression::Raw` that throws only when it is
+/// evaluated, after the statements before it ran (bd-9vouw.444):
+/// - a `/` opening no complete regular expression literal, whose body met a
+///   line terminator (`/` newline `/`, ES2020 11.8.5);
+/// - a `.` that is no decimal point and has no object before it (`.source`
+///   on its own line after a `;`, `._`);
+/// - outside every literal, a backslash that is no `\u` escape of an
+///   identifier character (`var\u0020x`, `\u003B`, `this\u002Ex`, ES2020
+///   11.6.1.1), or a character that is no white space, line terminator,
+///   punctuator or identifier character (U+180E, ES2020 11.2);
+/// - an escaped `async` before `function` or arrow parameters
+///   (`\u0061sync function f() {}`): a keyword contains no escapes (ES2020
+///   11.6.2).
+fn raw_expression_early_error(expression: &str) -> Option<&'static str> {
+    if expression.starts_with('/') && leading_regexp_literal(expression).is_none() {
+        return Some("unterminated regular expression literal");
+    }
+    if let Some(after_dot) = expression.strip_prefix('.')
+        && !after_dot.starts_with(|ch: char| ch == '.' || ch.is_ascii_digit())
+    {
+        return Some("a member access needs an object before its `.`");
+    }
+    let mut word_end = 0;
+    while let Some(ch) = expression[word_end..].chars().next() {
+        word_end += if ch == '\\' {
+            match identifier_escape_len(&expression[word_end..]) {
+                Some(len) => len,
+                None => break,
+            }
+        } else if is_identifier_continue(ch) {
+            ch.len_utf8()
+        } else {
+            break;
+        };
+    }
+    let word = &expression[..word_end];
+    if word.contains('\\') && canonicalize_identifier(word) == "async" {
+        let rest = expression[word_end..].trim_start();
+        let arrow_parameters = if rest.starts_with('(') {
+            extract_balanced(rest, '(', ')')
+                .is_some_and(|(_, tail)| tail.trim_start().starts_with("=>"))
+        } else {
+            let name_end = rest
+                .find(|ch: char| !is_identifier_continue(ch))
+                .unwrap_or(rest.len());
+            name_end > 0 && rest[name_end..].trim_start().starts_with("=>")
+        };
+        if starts_with_keyword(rest, "function") || arrow_parameters {
+            return Some("keyword `async` must not contain escaped characters");
+        }
+    }
+    let mut quotes = QuoteState::default();
+    let mut chars = expression.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if quotes.active() {
+            quotes.advance_char(ch);
+            continue;
+        }
+        if ch == '/' && quotes.open_regex_at(expression, index) {
+            continue;
+        }
+        if quotes.open_char(ch) || (ch.is_ascii() && ch != '\\') {
+            continue;
+        }
+        if ch == '\\' {
+            let escape_end = identifier_escape_len(&expression[index..])
+                .map(|len| index + len)
+                .filter(|&end| {
+                    decode_identifier_escapes(&expression[index..end])
+                        .is_some_and(|decoded| decoded.chars().all(is_identifier_continue))
+                });
+            let Some(escape_end) = escape_end else {
+                return Some("a `\\` outside a literal must escape an identifier character");
+            };
+            while chars.next_if(|&(next, _)| next < escape_end).is_some() {}
+        } else if !(is_identifier_continue(ch)
+            || (ch.is_whitespace() && ch != '\u{85}')
+            || ch == '\u{feff}')
+        {
+            return Some("invalid character outside a literal");
+        }
+    }
+    None
+}
+
+/// The byte length of the `\uXXXX` or `\u{X...}` escape at the start of
+/// `text`, if it has that shape (its digits are checked when decoded).
+fn identifier_escape_len(text: &str) -> Option<usize> {
+    let rest = text.strip_prefix("\\u")?;
+    match rest.strip_prefix('{') {
+        Some(braced) => braced.find('}').map(|close| 3 + close + 1),
+        None => rest.get(..4).map(|_| 6),
+    }
 }
 
 fn is_unseparated_expression_sequence(expression: &str) -> bool {
@@ -18304,6 +18410,55 @@ mod tests {
                 ParseErrorCode::InvalidSyntax,
                 "wrong code for `{source}`",
             );
+        }
+    }
+
+    // bd-9vouw.444: shapes no expression has are SyntaxErrors before the
+    // source runs, not `Expression::Raw` that throws only when evaluated: a
+    // regular expression literal broken by a line terminator, a leading `.`
+    // member access, an escape or character outside a literal that is no
+    // identifier character, an escaped `async` keyword.
+    #[test]
+    fn unrecognised_expressions_of_no_expression_shape_are_early_errors() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "/\n/",
+            "/\r/",
+            "/\u{2028}/",
+            "/\u{2029}/",
+            "/a\\\n/",
+            "x;\n/\n/;",
+            "x;\n.source;",
+            "._",
+            "var\\u0020x;",
+            "var\\u000Ax;",
+            "\\u003B;",
+            "this\\u002Ex;",
+            "\\u007B\\u007D",
+            "var\u{180e}foo;",
+            "\\u0061sync function f() {}",
+            "\\u0061sync () => {}",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "var re = /[/]/g;\nre.test('a/b');",
+            "var half = .5;",
+            "var \\u{61}b = 1;\n\\u{61}b;",
+            "var a = [1];\na\n  .map(String);",
+            "var s = 'line\\\nbreak';",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
         }
     }
 

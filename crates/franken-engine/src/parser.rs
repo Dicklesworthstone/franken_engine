@@ -8748,11 +8748,14 @@ fn match_binary_operator_at(expr: &str, i: usize) -> Option<(BinaryOperator, usi
     // (`o.in.x`, `o.in?.x`, `o.instanceof`; arktype reads `inner.in?.rawIn`),
     // not an operator. Whitespace is permitted between a dot and its property
     // name, including Unicode whitespace (`o. in`, `o.\u{00a0}instanceof`).
+    // Right after a `/` neither is an operator: after a regular expression
+    // literal they are its flags (`/a/instanceof` is a SyntaxError), and
+    // after a division no operand precedes them (bd-9vouw.406).
     if remaining >= 10 && &bytes[i..i + 10] == b"instanceof" {
         let before_ok = expr[..i]
             .chars()
             .next_back()
-            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.'));
+            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.' | '/'));
         let after_ok = expr[i + 10..]
             .chars()
             .next()
@@ -8765,7 +8768,7 @@ fn match_binary_operator_at(expr: &str, i: usize) -> Option<(BinaryOperator, usi
         let before_ok = expr[..i]
             .chars()
             .next_back()
-            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.'));
+            .is_none_or(|c| !is_identifier_continue(c) && !matches!(c, '#' | '.' | '/'));
         let after_ok = expr[i + 2..]
             .chars()
             .next()

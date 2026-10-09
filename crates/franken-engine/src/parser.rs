@@ -10506,7 +10506,9 @@ fn parse_object_literal(
                 }
                 (left.as_ref().clone(), value)
             } else {
-                return Err(unsupported_expression_syntax_error(
+                // `({ a = 1 })` outside a pattern, `({ 0 })`, `({ [a] })`: no
+                // shorthand form is valid here (bd-9vouw.421).
+                return Err(invalid_syntax_error(
                     "invalid object shorthand property",
                     span,
                     context,
@@ -10521,7 +10523,36 @@ fn parse_object_literal(
             });
         }
     }
+    // ES2020 12.2.6.1: outside an assignment pattern, an object literal
+    // defines `__proto__` by a plain data property at most once; computed,
+    // shorthand, method and accessor forms do not count (bd-9vouw.421).
+    if !assignment_pattern
+        && properties
+            .iter()
+            .filter(|property| is_proto_data_property(property))
+            .count()
+            > 1
+    {
+        return Err(invalid_syntax_error(
+            "duplicate __proto__ property in an object literal",
+            span,
+            context,
+        ));
+    }
     Ok(Expression::ObjectLiteral(properties))
+}
+
+/// A `__proto__: value` or `"__proto__": value` property, which sets the
+/// object's prototype (ES2020 B.3.1).
+fn is_proto_data_property(property: &ObjectProperty) -> bool {
+    !property.computed
+        && !property.shorthand
+        && matches!(property.kind, ObjectPropertyKind::Data)
+        && match &property.key {
+            Expression::Identifier(name) => name == "__proto__",
+            Expression::StringLiteral(value) => value.as_str() == Some("__proto__"),
+            _ => false,
+        }
 }
 
 fn object_accessor_tail<'a>(part: &'a str, prefix: &str) -> Option<&'a str> {

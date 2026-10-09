@@ -1773,18 +1773,27 @@ pub(super) fn unicode_mode_syntax_error(pattern: &str, unicode_sets: bool) -> Op
             .position(|&c| c == closer)
             .map_or(len, |offset| open + offset + 2)
     };
+    // With `u` an IdentityEscape is a SyntaxCharacter or `/` (and `-` in a
+    // class): letters (`\a`, `\e`) belong to the escape grammar the other
+    // checks parse, so only other characters are judged here.
+    let identity_escape_allowed = |escaped: char, in_class: bool| {
+        escaped.is_ascii_alphanumeric()
+            || "^$\\.*+?()[]{}|/".contains(escaped)
+            || (in_class && escaped == '-')
+    };
     // One class atom at `index` with `u`: its end and whether it is a class
-    // escape, which cannot end a range.
-    let class_atom = |index: usize| -> (usize, bool) {
+    // escape, which cannot end a range; `None` for an invalid escape.
+    let class_atom = |index: usize| -> Option<(usize, bool)> {
         if chars[index] != '\\' || index + 1 >= len {
-            return (index + 1, false);
+            return Some((index + 1, false));
         }
-        match chars[index + 1] {
+        Some(match chars[index + 1] {
             'p' | 'P' if chars.get(index + 2) == Some(&'{') => (past_closing(index + 2, '}'), true),
             'u' if chars.get(index + 2) == Some(&'{') => (past_closing(index + 2, '}'), false),
             'd' | 'D' | 's' | 'S' | 'w' | 'W' => (index + 2, true),
+            escaped if !identity_escape_allowed(escaped, true) => return None,
             _ => (index + 2, false),
-        }
+        })
     };
     let mut index = 0;
     while let Some(&c) = chars.get(index) {
@@ -1793,6 +1802,9 @@ pub(super) fn unicode_mode_syntax_error(pattern: &str, unicode_sets: bool) -> Op
                 index = match (chars.get(index + 1), chars.get(index + 2)) {
                     (Some('p' | 'P' | 'u'), Some('{')) => past_closing(index + 2, '}'),
                     (Some('k'), Some('<')) => past_closing(index + 2, '>'),
+                    (Some(&escaped), _) if !identity_escape_allowed(escaped, false) => {
+                        return Some("Invalid escape");
+                    }
                     _ => index + 2,
                 };
             }
@@ -1821,9 +1833,13 @@ pub(super) fn unicode_mode_syntax_error(pattern: &str, unicode_sets: bool) -> Op
                     index += 1;
                 }
                 while index < len && chars[index] != ']' {
-                    let (end, is_class) = class_atom(index);
+                    let Some((end, is_class)) = class_atom(index) else {
+                        return Some("Invalid class escape");
+                    };
                     if chars.get(end) == Some(&'-') && end + 1 < len && chars[end + 1] != ']' {
-                        let (range_end, range_is_class) = class_atom(end + 1);
+                        let Some((range_end, range_is_class)) = class_atom(end + 1) else {
+                            return Some("Invalid class escape");
+                        };
                         if is_class || range_is_class {
                             return Some("Invalid character class");
                         }
@@ -2122,6 +2138,33 @@ mod tests {
             r#"[\]]"#,
         ] {
             assert_eq!(unicode_mode_syntax_error(pattern, false), None, "{pattern}");
+        }
+    }
+
+    /// bd-9vouw.401: with `u` only these ASCII punctuation characters may follow
+    /// a backslash, outside and inside a class (Node v22.2.0's `new
+    /// RegExp(pattern, "u")` over every non-alphanumeric ASCII character);
+    /// every other one is an invalid IdentityEscape.
+    #[test]
+    fn unicode_mode_identity_escapes_bd_9vouw_401() {
+        const ATOM_ESCAPES: &str = r#"$()*+./?[\]^{|}"#;
+        const CLASS_ESCAPES: &str = r#"$()*+-./?[\]^{|}"#;
+        for c in (0u8..0x80)
+            .map(char::from)
+            .filter(|c| !c.is_ascii_alphanumeric())
+        {
+            let atom = format!("\\{c}");
+            let class = format!("[\\{c}]");
+            assert_eq!(
+                unicode_mode_syntax_error(&atom, false).is_none(),
+                ATOM_ESCAPES.contains(c),
+                "{atom:?}"
+            );
+            assert_eq!(
+                unicode_mode_syntax_error(&class, false).is_none(),
+                CLASS_ESCAPES.contains(c),
+                "{class:?}"
+            );
         }
     }
 

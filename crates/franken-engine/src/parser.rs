@@ -6543,17 +6543,19 @@ fn parse_expression(
     // split `yield 1+1` at the `+` and leave the generator yielding the first
     // operand (bd-hoplz bug #2). The prefix tests mirror the yield/await arms in
     // `parse_primary_expression`, which performs the actual parse.
-    let yields_assignment_expr = expression.strip_prefix("yield").is_some_and(|rest| {
-        rest.is_empty()
-            || rest.starts_with(' ')
-            || rest.starts_with('*')
-            || rest.starts_with(';')
-            || rest.starts_with(')')
-            || rest.starts_with('}')
-    });
-    let awaits_unary_expr = expression
-        .strip_prefix("await")
-        .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('('));
+    let yields_assignment_expr = !yield_names_identifier_operand(expression, context)
+        && expression.strip_prefix("yield").is_some_and(|rest| {
+            rest.is_empty()
+                || rest.starts_with(' ')
+                || rest.starts_with('*')
+                || rest.starts_with(';')
+                || rest.starts_with(')')
+                || rest.starts_with('}')
+        });
+    let awaits_unary_expr = !await_names_identifier_operand(expression, context)
+        && expression
+            .strip_prefix("await")
+            .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('('));
     if yields_assignment_expr || awaits_unary_expr {
         return parse_primary_expression(expression, span, context, recursion_depth);
     }
@@ -6687,7 +6689,9 @@ fn parse_primary_expression(
             context,
         ));
     }
-    if let Some(rest) = expression.strip_prefix("await") {
+    if let Some(rest) = expression.strip_prefix("await")
+        && !await_names_identifier_operand(expression, context)
+    {
         if rest.starts_with(' ') {
             if !context.await_context {
                 return Err(ParseError::new(
@@ -6734,11 +6738,7 @@ fn parse_primary_expression(
     // continues the expression (`yield + x`, `yield * 2`, `yield(1)`) is the
     // identifier `yield` as an operand: neither branch below applies, and the
     // operator splitting further on parses it (bd-9vouw.396).
-    let yield_identifier_operand = !context.yield_context
-        && !context.strict_mode
-        && expression
-            .strip_prefix("yield")
-            .is_some_and(yield_identifier_continues_expression);
+    let yield_identifier_operand = yield_names_identifier_operand(expression, context);
     // yield expression: `yield expr` or `yield* expr` (delegation)
     if let Some(rest) = expression.strip_prefix("yield")
         && (rest.starts_with(' ')
@@ -9005,11 +9005,35 @@ fn try_parse_unary_prefix(
     None
 }
 
-/// Whether the text after a `yield` that names an identifier (outside a
-/// generator, in non-strict code) continues an expression with `yield` as
-/// its operand: a binary, assignment, conditional or comma operator, `in`
-/// or `instanceof`, a call, member access or tagged template.
-fn yield_identifier_continues_expression(rest: &str) -> bool {
+/// Whether `expression` starts with `yield` naming an identifier operand:
+/// outside a generator in non-strict code, followed by an operator that
+/// continues the expression (`yield + x`, `yield * 2`, `yield(1)`), so it is
+/// parsed as an operand rather than a yield expression (bd-9vouw.396).
+fn yield_names_identifier_operand(expression: &str, context: &ParseExecutionContext<'_>) -> bool {
+    !context.yield_context
+        && !context.strict_mode
+        && expression
+            .strip_prefix("yield")
+            .is_some_and(keyword_identifier_continues_expression)
+}
+
+/// Whether `expression` starts with `await` naming an identifier operand:
+/// in script code outside async functions and class static blocks, where
+/// `await` is an identifier (ES2020 12.1.1), followed by an operator that
+/// continues the expression (`await + 1`, `await instanceof F`).
+fn await_names_identifier_operand(expression: &str, context: &ParseExecutionContext<'_>) -> bool {
+    !context.await_context
+        && !context.static_block_await
+        && expression
+            .strip_prefix("await")
+            .is_some_and(keyword_identifier_continues_expression)
+}
+
+/// Whether the text after a `yield` or `await` that names an identifier
+/// continues an expression with it as the operand: a binary, assignment,
+/// conditional or comma operator, `in` or `instanceof`, a call, member
+/// access or tagged template.
+fn keyword_identifier_continues_expression(rest: &str) -> bool {
     // `yieldx` is another identifier.
     if rest.chars().next().is_some_and(is_identifier_continue) {
         return false;

@@ -38751,8 +38751,12 @@ impl InterpreterCore {
             match &record.flow_label_ceiling {
                 Some(ceiling) => Self::check_import_flow_bound(resolved, ceiling, import_bound)?,
                 // Still being lowered (a cycle reached it first): its bound is
-                // unknown, so a bounded importer cannot rely on it.
-                None if import_bound.is_some() => {
+                // unknown, so a bounded importer cannot rely on it. A module
+                // that failed to load runs no code, and its error is thrown
+                // again below as on the first import (bd-9vouw.389).
+                None if import_bound.is_some()
+                    && !matches!(record.status, ModuleRuntimeStatus::Failed(_)) =>
+                {
                     return Err(InterpreterError::ModuleLoweringFailed {
                         specifier: resolved.to_string(),
                         error: "module flow label ceiling is not known yet (bd-j8f7q)".to_string(),

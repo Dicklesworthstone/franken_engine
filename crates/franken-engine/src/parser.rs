@@ -6559,6 +6559,14 @@ fn parse_primary_expression(
         return regexp_literal_expression(pattern, flags, span, context);
     }
 
+    if let Some(message) = invalid_numeric_literal_message(expression, context.strict_mode) {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            message,
+            context.source_label.to_string(),
+            Some(*span),
+        ));
+    }
     if let Some(value) = parse_bigint_numeric_literal(expression) {
         return Ok(Expression::BigIntLiteral(value));
     }
@@ -6566,10 +6574,11 @@ fn parse_primary_expression(
     // (`0e0n`, `1.5n`, `.5n`) is a SyntaxError (ES2020 11.8.3); it was
     // evaluated as some other expression.
     if is_malformed_bigint_literal(expression) {
-        return Err(unsupported_expression_syntax_error(
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
             "invalid BigInt literal: no fraction or exponent is allowed",
-            span,
-            context,
+            context.source_label.to_string(),
+            Some(*span),
         ));
     }
 
@@ -10571,6 +10580,117 @@ fn radix_digits_to_decimal(digits: &str, radix: u32) -> Option<String> {
         decimal.push_str(&format!("{limb:09}"));
     }
     Some(decimal)
+}
+
+/// Why a primary expression spelled as a numeric literal (starting with a
+/// digit, or `.` and a digit) is not one, by the NumericLiteral grammar of
+/// ES2020 11.8.3 and ES2021 numeric separators, or `None` when it is valid
+/// or not numeric-looking. Such a token was left to a deferred "unsupported
+/// expression syntax" error, so a program containing it parsed and ran
+/// until the token was evaluated, and `08n` / a strict-mode `010` were
+/// accepted (bd-9vouw.393).
+fn invalid_numeric_literal_message(text: &str, strict: bool) -> Option<&'static str> {
+    let bytes = text.as_bytes();
+    let first = *bytes.first()?;
+    if !(first.is_ascii_digit() || (first == b'.' && bytes.get(1).is_some_and(u8::is_ascii_digit)))
+    {
+        return None;
+    }
+    if text.contains('\\') {
+        return Some("a numeric literal cannot contain an escape sequence");
+    }
+    // Only a lone token is judged here (member access and calls on a number
+    // are split off before this point).
+    let token_char = |index: usize, byte: u8| {
+        byte.is_ascii_alphanumeric()
+            || matches!(byte, b'_' | b'.')
+            || (matches!(byte, b'+' | b'-') && index > 0 && matches!(bytes[index - 1], b'e' | b'E'))
+    };
+    if !bytes
+        .iter()
+        .enumerate()
+        .all(|(index, &byte)| token_char(index, byte))
+    {
+        return None;
+    }
+    let separators_valid =
+        |digits: &str| !digits.starts_with('_') && !digits.ends_with('_') && !digits.contains("__");
+    if let Some(rest) = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .map(|rest| (rest, 16))
+        .or_else(|| {
+            text.strip_prefix("0o")
+                .or_else(|| text.strip_prefix("0O"))
+                .map(|rest| (rest, 8))
+        })
+        .or_else(|| {
+            text.strip_prefix("0b")
+                .or_else(|| text.strip_prefix("0B"))
+                .map(|rest| (rest, 2))
+        })
+    {
+        let (digits, radix) = rest;
+        let digits = digits.strip_suffix('n').unwrap_or(digits);
+        let valid = !digits.is_empty()
+            && separators_valid(digits)
+            && digits.chars().all(|ch| ch == '_' || ch.is_digit(radix));
+        return (!valid).then_some("invalid hexadecimal, octal or binary literal");
+    }
+    let is_bigint = text.ends_with('n');
+    let body = text.strip_suffix('n').unwrap_or(text);
+    if body.len() > 1 && body.starts_with('0') && body.as_bytes()[1].is_ascii_digit() {
+        // A legacy octal (`010`) or non-octal decimal (`08`) integer.
+        if is_bigint {
+            return Some("a BigInt literal cannot have a leading zero");
+        }
+        if body.contains('_') {
+            return Some("a numeric separator cannot appear in a literal with a leading zero");
+        }
+        if strict {
+            return Some(
+                "legacy octal and leading-zero decimal literals are not allowed in strict mode",
+            );
+        }
+        let integer_end = body.find(['.', 'e', 'E']).unwrap_or(body.len());
+        let (integer, rest) = body.split_at(integer_end);
+        if !integer.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Some("invalid numeric literal");
+        }
+        let legacy_octal = integer.bytes().all(|byte| (b'0'..=b'7').contains(&byte));
+        if rest.is_empty() {
+            return None;
+        }
+        if legacy_octal {
+            return Some("a legacy octal literal has no fraction or exponent");
+        }
+        // A NonOctalDecimalIntegerLiteral (`08.5`, `09e1`) takes a fraction
+        // and exponent like a decimal literal: checked below.
+    } else if body.starts_with("0_") {
+        return Some("a numeric separator cannot follow a leading zero");
+    }
+    // DecimalLiteral: digits [. digits] [e [+-] digits], with each digit run
+    // obeying the separator rules.
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(index) => (&body[..index], Some(&body[index + 1..])),
+        None => (body, None),
+    };
+    let (integer, fraction) = match mantissa.split_once('.') {
+        Some((integer, fraction)) => (integer, Some(fraction)),
+        None => (mantissa, None),
+    };
+    let digit_run = |run: &str, may_be_empty: bool| {
+        (may_be_empty && run.is_empty())
+            || (!run.is_empty()
+                && separators_valid(run)
+                && run.chars().all(|ch| ch == '_' || ch.is_ascii_digit()))
+    };
+    let valid = digit_run(integer, fraction.is_some())
+        && fraction.is_none_or(|fraction| digit_run(fraction, !integer.is_empty()))
+        && exponent.is_none_or(|exponent| {
+            digit_run(exponent.strip_prefix(['+', '-']).unwrap_or(exponent), false)
+        });
+    (!valid).then_some("invalid numeric literal")
 }
 
 /// Parse a floating-point numeric literal: decimal (1.5), leading dot (.5),

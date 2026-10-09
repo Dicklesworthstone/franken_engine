@@ -60961,10 +60961,10 @@ impl InterpreterCore {
         // properties, while supplementary characters still occupy two
         // independently observable indices and lone surrogates survive
         // without being projected through U+FFFD.
+        // code_unit_at reads ASCII text directly (bd-9vouw.467).
         if let Some(index) = Self::canonical_array_index_property(key, receiver.utf16_len()) {
             return receiver
-                .encode_utf16()
-                .nth(index)
+                .code_unit_at(index)
                 .map_or(Value::Undefined, |unit| {
                     Value::Str(JsString::from_code_units(&[unit]))
                 });

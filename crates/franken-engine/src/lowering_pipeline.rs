@@ -902,6 +902,56 @@ fn lower_ir0_to_ir3_unit(
     })
 }
 
+/// In module code a top-level function declaration is a lexically declared
+/// name (ES2020 15.2.1.1: LexicallyDeclaredNames of a ModuleItemList), so a
+/// `var`, `let`, `const`, class, import or second function declaration of
+/// the same name is an early error (bd-9vouw.389). Lowering allocates a
+/// function as a var binding, which merges with `var` and with another
+/// function, so the module rule is checked before lowering starts.
+fn module_function_redeclaration(goal: ParseGoal, body: &[Statement]) -> Option<SemanticError> {
+    if goal != ParseGoal::Module {
+        return None;
+    }
+    let mut function_names = BTreeSet::new();
+    for statement in body {
+        if let Statement::FunctionDeclaration(function) = statement
+            && let Some(name) = function.name.as_deref()
+            && !function_names.insert(name)
+        {
+            return Some(SemanticError::new(
+                SemanticErrorCode::DuplicateLetConstDeclaration,
+                Some(name.to_string()),
+                Some(function.span),
+            ));
+        }
+    }
+    for statement in body {
+        let (names, span) = match statement {
+            Statement::VariableDeclaration(declaration) => (
+                declaration
+                    .declarations
+                    .iter()
+                    .flat_map(|declarator| declarator.pattern.binding_names())
+                    .collect::<Vec<_>>(),
+                declaration.span,
+            ),
+            Statement::ClassDeclaration(class) => {
+                (class.name.as_deref().into_iter().collect(), class.span)
+            }
+            Statement::Import(import) => (import.clause.binding_names(), import.span),
+            _ => continue,
+        };
+        if let Some(name) = names.into_iter().find(|name| function_names.contains(name)) {
+            return Some(SemanticError::new(
+                SemanticErrorCode::DuplicateLetConstDeclaration,
+                Some(name.to_string()),
+                Some(span),
+            ));
+        }
+    }
+    None
+}
+
 /// Validate static semantics of an IR0 module without performing full lowering.
 ///
 /// This catches early errors specified by ES2020:
@@ -1103,6 +1153,9 @@ fn lower_ir0_to_ir1_on_current_stack(
 ) -> Result<LoweringPassResult<Ir1Module>, LoweringPipelineError> {
     if ir0.tree.body.is_empty() {
         return Err(LoweringPipelineError::EmptyIr0Body);
+    }
+    if let Some(error) = module_function_redeclaration(ir0.tree.goal, &ir0.tree.body) {
+        return Err(LoweringPipelineError::SemanticViolation(error));
     }
 
     let ir0_hash = ir0.content_hash();

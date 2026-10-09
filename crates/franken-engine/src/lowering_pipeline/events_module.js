@@ -324,5 +324,93 @@
   EventEmitter.defaultMaxListeners = 10;
   EventEmitter.errorMonitor = Symbol('events.errorMonitor');
   EventEmitter.captureRejections = false;
+
+  // Node's static helpers (bd-9vouw.438). This runtime prints no leak
+  // warning, so an EventTarget's maximum is only kept for getMaxListeners.
+  var targetMaxListeners = new WeakMap();
+  function isEmitter(value) {
+    return value !== null && typeof value === 'object' && typeof value.listeners === 'function';
+  }
+  function isEventTarget(value) {
+    return value !== null && typeof value === 'object' &&
+      typeof value.addEventListener === 'function' && !isEmitter(value);
+  }
+  // Node's ERR_INVALID_ARG_TYPE / ERR_OUT_OF_RANGE texts for these helpers.
+  function received(value) {
+    if (value === null || value === undefined) { return String(value); }
+    if (typeof value === 'function') { return 'function ' + value.name; }
+    if (typeof value === 'object') {
+      return value.constructor && value.constructor.name
+        ? 'an instance of ' + value.constructor.name : 'type object';
+    }
+    if (typeof value === 'string') { return "type string ('" + value + "')"; }
+    return 'type ' + typeof value + ' (' + String(value) + ')';
+  }
+  function argumentType(name, expected, value) {
+    var error = new TypeError('The "' + name + '" argument must be ' + expected + '. Received ' + received(value));
+    error.code = 'ERR_INVALID_ARG_TYPE';
+    return error;
+  }
+  function maxListenersValue(n) {
+    if (typeof n !== 'number') { throw argumentType('setMaxListeners', 'of type number', n); }
+    if (n !== n || n < 0) {
+      var error = new RangeError('The value of "setMaxListeners" is out of range. It must be >= 0. Received ' + String(n));
+      error.code = 'ERR_OUT_OF_RANGE';
+      throw error;
+    }
+    return n;
+  }
+  EventEmitter.listenerCount = function (emitter, eventName) {
+    return emitter.listenerCount(eventName);
+  };
+  EventEmitter.getEventListeners = function (emitterOrTarget, eventName) {
+    if (isEmitter(emitterOrTarget)) { return emitterOrTarget.listeners(eventName); }
+    if (isEventTarget(emitterOrTarget)) {
+      // A typed refusal: EventTarget listener lists are not exposed here.
+      throw new TypeError('events.getEventListeners cannot list an EventTarget\'s listeners in this runtime');
+    }
+    throw argumentType('emitter', 'an instance of EventEmitter or EventTarget', emitterOrTarget);
+  };
+  EventEmitter.setMaxListeners = function (n) {
+    if (n === undefined) { n = EventEmitter.defaultMaxListeners; }
+    maxListenersValue(n);
+    if (arguments.length < 2) {
+      EventEmitter.defaultMaxListeners = n;
+      return;
+    }
+    for (var i = 1; i < arguments.length; i++) {
+      var target = arguments[i];
+      if (isEventTarget(target)) { targetMaxListeners.set(target, n); }
+      else if (isEmitter(target) && typeof target.setMaxListeners === 'function') { target.setMaxListeners(n); }
+      else { throw argumentType('eventTargets', 'an instance of EventEmitter or EventTarget', target); }
+    }
+  };
+  EventEmitter.getMaxListeners = function (emitterOrTarget) {
+    if (isEmitter(emitterOrTarget) && typeof emitterOrTarget.getMaxListeners === 'function') {
+      return emitterOrTarget.getMaxListeners();
+    }
+    if (isEventTarget(emitterOrTarget)) {
+      return targetMaxListeners.has(emitterOrTarget)
+        ? targetMaxListeners.get(emitterOrTarget) : EventEmitter.defaultMaxListeners;
+    }
+    throw argumentType('emitter', 'an instance of EventEmitter or EventTarget', emitterOrTarget);
+  };
+  EventEmitter.addAbortListener = function (signal, listener) {
+    if (signal === undefined) { throw invalidType('signal'); }
+    abortSignal(signal);
+    if (typeof listener !== 'function') { throw argumentType('listener', 'of type function', listener); }
+    var remove;
+    if (isAborted(signal)) {
+      queueMicrotask(function () { listener(); });
+    } else {
+      apply(addListener, signal, ['abort', listener, { once: true }]);
+      remove = function () { apply(removeListener, signal, ['abort', listener]); };
+    }
+    var disposable = createObject(null);
+    if (typeof Symbol.dispose === 'symbol') {
+      disposable[Symbol.dispose] = function () { if (remove !== undefined) { remove(); } };
+    }
+    return disposable;
+  };
   return EventEmitter;
 })()

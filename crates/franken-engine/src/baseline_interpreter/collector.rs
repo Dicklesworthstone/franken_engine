@@ -1676,6 +1676,8 @@ impl InterpreterCore {
             process_spawn: _,
             host_effect_journal: _,
             timer_effect_authority: _,
+            // A flow label, no heap reference.
+            entry_flow_label_ceiling: _,
             registers,
             // A byte count of the register file.
             registers_value_bytes: _,

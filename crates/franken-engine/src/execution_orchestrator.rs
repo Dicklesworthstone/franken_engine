@@ -1545,6 +1545,9 @@ struct PreparedLoweringOutput {
     source_label: String,
     source_ingestion: SourceIngestionSummary,
     lowering_output: LoweringPipelineOutput,
+    /// The entry's flow label ceiling, for import edges that cycle back to
+    /// the entry (bd-j8f7q).
+    entry_flow_label_ceiling: Label,
 }
 
 #[derive(Debug)]
@@ -2573,6 +2576,7 @@ impl ExecutionOrchestrator {
             source_label,
             source_ingestion,
             lowering_output,
+            entry_flow_label_ceiling,
         } = prepared;
 
         // Step 2: Create execution cell.
@@ -2688,6 +2692,7 @@ impl ExecutionOrchestrator {
                     package,
                     &lowering_output.ir3,
                     adaptive_routing_context.ir3_content_hash,
+                    &entry_flow_label_ceiling,
                     &trace_id,
                     &adaptive_routing_decision,
                     CellExecutionDispatch {
@@ -3470,10 +3475,15 @@ impl ExecutionOrchestrator {
             lowering_ctx
         };
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
+        let entry_flow_label_ceiling = crate::lowering_pipeline::lowered_unit_flow_label_ceiling(
+            &lowering_output.ir2,
+            host_io_exception_provenance,
+        );
         Ok(PreparedLoweringOutput {
             source_label,
             source_ingestion,
             lowering_output,
+            entry_flow_label_ceiling,
         })
     }
 
@@ -3711,11 +3721,13 @@ impl ExecutionOrchestrator {
 
     /// `ir3_hash` is `ir3`'s content hash, computed once for the run's
     /// adaptive routing context.
+    #[allow(clippy::too_many_arguments)]
     fn phase_execute(
         &self,
         package: &ExtensionPackage,
         ir3: &Ir3Module,
         ir3_hash: ContentHash,
+        entry_flow_label_ceiling: &Label,
         trace_id: &str,
         adaptive_routing_decision: &AdaptiveRoutingDecision,
         dispatch: CellExecutionDispatch<'_>,
@@ -3760,6 +3772,7 @@ impl ExecutionOrchestrator {
         }
         lane_router.set_timer_effect_authority(timer_effect_authority);
         lane_router.set_failed_console_output_sink(Arc::clone(&self.last_failed_console_output));
+        lane_router.set_entry_flow_label_ceiling(entry_flow_label_ceiling.clone());
         let compact_tier1 = CompactTier1Program::compile_with_source_hash(ir3, ir3_hash);
         let routed = lane_router
             .execute_with_hook_and_compact_tier1(

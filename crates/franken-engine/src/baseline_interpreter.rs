@@ -14723,6 +14723,10 @@ pub struct InterpreterCore {
     /// timer registry and event loop remain owned by this interpreter; the
     /// authority gates and records the crossing before mutation.
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
+    /// The flow label ceiling of the entry module's lowering, when the
+    /// embedder lowered it (bd-j8f7q): an import edge back to the entry
+    /// (a cycle through it) is checked against it like any other module's.
+    entry_flow_label_ceiling: Option<Label>,
     /// Register file (flat, indexed by register number). SEED-SURFACE.
     registers: SeedTrackedField<Vec<Value>>,
     /// [`Self::registers_memory_bytes`] of the register file as it stands, or
@@ -16066,6 +16070,7 @@ impl InterpreterCore {
             process_spawn: None,
             host_effect_journal: None,
             timer_effect_authority: None,
+            entry_flow_label_ceiling: None,
             registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             registers_value_bytes: std::cell::Cell::new(None),
             register_labels_bytes: std::cell::Cell::new(None),
@@ -16336,6 +16341,12 @@ impl InterpreterCore {
     /// effects. The actual scheduling provider remains this core's event loop.
     pub fn set_timer_effect_authority(&mut self, authority: Arc<dyn TimerEffectAuthority>) {
         self.timer_effect_authority = Some(authority);
+    }
+
+    /// Record the entry module's flow label ceiling (bd-j8f7q), computed by
+    /// the embedder from the entry's lowering.
+    pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
+        self.entry_flow_label_ceiling = Some(ceiling);
     }
 
     fn join_object_mutation_label(
@@ -36297,6 +36308,11 @@ impl InterpreterCore {
         // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
         self.ensure_module_record(module, &entry_specifier)?;
+        if let Some(ceiling) = self.entry_flow_label_ceiling.clone()
+            && let Some(record) = self.module_state.modules.get_mut(&entry_specifier)
+        {
+            record.flow_label_ceiling = Some(ceiling);
+        }
         self.entry_module_specifier = Some(entry_specifier.clone());
         self.current_module_specifier = Some(entry_specifier);
         self.active_generated_function_artifact = None;
@@ -110810,6 +110826,7 @@ pub struct QuickJsLane {
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    entry_flow_label_ceiling: Option<Label>,
 }
 
 impl Default for QuickJsLane {
@@ -110822,6 +110839,7 @@ impl Default for QuickJsLane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            entry_flow_label_ceiling: None,
         }
     }
 }
@@ -110840,6 +110858,7 @@ impl QuickJsLane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            entry_flow_label_ceiling: None,
         }
     }
 
@@ -110873,6 +110892,12 @@ impl QuickJsLane {
     /// execution fails, so output printed before a throw is not lost.
     pub fn set_failed_console_output_sink(&mut self, sink: FailedConsoleSink) {
         self.failed_console_output = Some(sink);
+    }
+
+    /// The entry module's flow label ceiling for the cores this lane
+    /// creates (bd-j8f7q).
+    pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
+        self.entry_flow_label_ceiling = Some(ceiling);
     }
 
     pub fn execute(
@@ -110917,6 +110942,7 @@ impl QuickJsLane {
             self.host_effect_journal.clone(),
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
+            self.entry_flow_label_ceiling.clone(),
             module,
             trace_id,
             hook,
@@ -110955,6 +110981,7 @@ pub struct V8Lane {
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    entry_flow_label_ceiling: Option<Label>,
 }
 
 impl Default for V8Lane {
@@ -110967,6 +110994,7 @@ impl Default for V8Lane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            entry_flow_label_ceiling: None,
         }
     }
 }
@@ -111001,6 +111029,7 @@ fn execute_lane_with_provisioned_stack(
     host_effect_journal: Option<Arc<InMemoryHostEffectJournal>>,
     timer_effect_authority: Option<Arc<dyn TimerEffectAuthority>>,
     failed_console_output: Option<FailedConsoleSink>,
+    entry_flow_label_ceiling: Option<Label>,
     module: &Ir3Module,
     trace_id: &str,
     hook: Option<Arc<dyn InterpreterHook>>,
@@ -111025,6 +111054,9 @@ fn execute_lane_with_provisioned_stack(
                 }
                 if let Some(authority) = timer_effect_authority {
                     core.set_timer_effect_authority(authority);
+                }
+                if let Some(ceiling) = entry_flow_label_ceiling {
+                    core.set_entry_flow_label_ceiling(ceiling);
                 }
                 let execution = match compact_tier1 {
                     Some(program) => core.execute_ephemeral_with_compact_tier1(module, program),
@@ -111087,6 +111119,7 @@ impl V8Lane {
             host_effect_journal: None,
             timer_effect_authority: None,
             failed_console_output: None,
+            entry_flow_label_ceiling: None,
         }
     }
 
@@ -111122,6 +111155,12 @@ impl V8Lane {
         self.failed_console_output = Some(sink);
     }
 
+    /// The entry module's flow label ceiling for the cores this lane
+    /// creates (bd-j8f7q).
+    pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
+        self.entry_flow_label_ceiling = Some(ceiling);
+    }
+
     pub fn execute(
         &self,
         module: &Ir3Module,
@@ -111154,6 +111193,7 @@ impl V8Lane {
             self.host_effect_journal.clone(),
             self.timer_effect_authority.clone(),
             self.failed_console_output.clone(),
+            self.entry_flow_label_ceiling.clone(),
             module,
             trace_id,
             hook,
@@ -111633,6 +111673,13 @@ impl LaneRouter {
         self.quickjs
             .set_failed_console_output_sink(Arc::clone(&sink));
         self.v8.set_failed_console_output_sink(sink);
+    }
+
+    /// Give both lanes the entry module's flow label ceiling (bd-j8f7q), so
+    /// an import that cycles back to the entry is checked against it.
+    pub fn set_entry_flow_label_ceiling(&mut self, ceiling: Label) {
+        self.quickjs.set_entry_flow_label_ceiling(ceiling.clone());
+        self.v8.set_entry_flow_label_ceiling(ceiling);
     }
 
     /// Route and execute the module.

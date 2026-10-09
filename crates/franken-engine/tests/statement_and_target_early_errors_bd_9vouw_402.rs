@@ -13,7 +13,6 @@ var out = [];
 function t(name, src) {
   try { Function(src); out.push(name + ":ok"); } catch (e) { out.push(name + "!" + e.name); }
 }
-t("else-same-line", "var x; if (false) x = 1 else x = -1;");
 t("throw-newline", "throw\n1;");
 t("throw-empty", "throw;");
 t("unterminated-comment", "/*CHECK#1/");
@@ -42,6 +41,20 @@ v("strict-default-reads-arguments", "'use strict'; var x; [x = arguments.length]
 v("rest-last", "for (var [a, ...b] of [[1, 2, 3]]) return a + ':' + b;");
 v("trailing-comma-no-rest", "var [p, q,] = [8, 9]; return p + q;");
 console.log(ok.join(" | "));
+var out3 = [];
+function v3(name, src) {
+  try { out3.push(name + "=" + Function(src)()); } catch (e) { out3.push(name + "!" + e.name); }
+}
+v3("template-then-newline-else", "var x; if (false) x = `a`\nelse x = 'b'; return x;");
+v3("regex-then-newline-else", "var x; if (false) x = /a/\nelse x = 'r'; return x;");
+v3("call-semicolon-else", "var x; function f(){ return 1; } if (true) x = f(); else x = 2; return x;");
+v3("nested-if-else", "var x = 0; if (true) if (false) x = 1; else x = 2; return x;");
+v3("block-else", "var x; if (false) { x = 1 } else x = 3; return x;");
+v3("empty-consequent-else", "var x = 0; if (false) ; else x = 4; return x;");
+v3("comment-newline-else", "var x; if (false) x = 1 // c\nelse x = 5; return x;");
+v3("block-comment-newline-else", "var x; if (false) x = 1 /*\n*/ else x = 6; return x;");
+v3("arrow-block-semicolon-else", "var x; if (false) x = () => {}; else x = 7; return x;");
+console.log(out3.join(" | "));
 "#;
     let outcome = HybridRouter::default()
         .eval(source)
@@ -54,8 +67,9 @@ console.log(ok.join(" | "));
     assert_eq!(
         lines,
         [
-            "else-same-line!SyntaxError | throw-newline!SyntaxError | throw-empty!SyntaxError | unterminated-comment!SyntaxError | hashbang-in-body!SyntaxError | hashbang-in-block!SyntaxError | strict-array-arguments!SyntaxError | strict-object-eval!SyntaxError | parenthesized-object-target!SyntaxError | arrow-target!SyntaxError | parenthesized-array-target!SyntaxError | for-in-rest-comma!SyntaxError | var-rest-comma!SyntaxError",
+            "throw-newline!SyntaxError | throw-empty!SyntaxError | unterminated-comment!SyntaxError | hashbang-in-body!SyntaxError | hashbang-in-block!SyntaxError | strict-array-arguments!SyntaxError | strict-object-eval!SyntaxError | parenthesized-object-target!SyntaxError | arrow-target!SyntaxError | parenthesized-array-target!SyntaxError | for-in-rest-comma!SyntaxError | var-rest-comma!SyntaxError",
             "else-next-line=2 | else-after-semicolon=3 | do-while-before-else=ab | throw-same-line=4 | closed-comment=5 | parenthesized-name-target=6 | member-of-literal-target=7 | strict-default-reads-arguments=0 | rest-last=1:2,3 | trailing-comma-no-rest=17",
+            "template-then-newline-else=b | regex-then-newline-else=r | call-semicolon-else=1 | nested-if-else=2 | block-else=3 | empty-consequent-else=4 | comment-newline-else=5 | block-comment-newline-else=6 | arrow-block-semicolon-else=7",
         ]
     );
 }

@@ -38864,12 +38864,15 @@ impl InterpreterCore {
             Ok(syntax_tree) => syntax_tree,
             Err(error) => {
                 return Err(
+                    // InvalidGoal: an import or export declaration in a
+                    // CommonJS (script) module, a SyntaxError in Node too.
                     if matches!(
                         error.code,
                         ParseErrorCode::StrictModeWithStatement
                             | ParseErrorCode::AwaitOutsideAsync
                             | ParseErrorCode::InvalidClassElementName
                             | ParseErrorCode::InvalidSyntax
+                            | ParseErrorCode::InvalidGoal
                     ) {
                         self.fail_module_with_syntax_error(resolved, error.message.clone())
                     } else {
@@ -39954,6 +39957,8 @@ impl InterpreterCore {
                     &ParserOptions::default(),
                 )
             };
+            // An import or export declaration in the function body
+            // (InvalidGoal: script code) is a SyntaxError too (bd-9vouw.396).
             let parse_failure = |this: &mut Self, error: ParseError| {
                 if matches!(
                     error.code,
@@ -39961,6 +39966,7 @@ impl InterpreterCore {
                         | ParseErrorCode::AwaitOutsideAsync
                         | ParseErrorCode::InvalidClassElementName
                         | ParseErrorCode::InvalidSyntax
+                        | ParseErrorCode::InvalidGoal
                 ) {
                     this.throw_js_error("SyntaxError", error.message.clone())
                 } else {

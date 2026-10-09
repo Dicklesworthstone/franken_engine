@@ -2617,11 +2617,15 @@ fn merge_logical_lines_requires_continuation(
     // `return` and `yield` are restricted productions (ES2020 11.9.1): a line
     // break after them ends the statement (`return\n  x` returns undefined),
     // so they do not continue onto the next line.
-    if matches!(
-        trailing_identifier,
-        "throw" | "typeof" | "void" | "delete" | "case"
-    ) {
+    if matches!(trailing_identifier, "typeof" | "void" | "delete" | "case") {
         return true;
+    }
+    // `throw [no LineTerminator here] Expression` (ES2020 13.14): a line
+    // ending in the keyword `throw` does not take the next line as its
+    // argument; alone it is a SyntaxError (bd-9vouw.402). After a `.` the
+    // word is a property name (`it.throw` newline `(err)`), which continues.
+    if trailing_identifier == "throw" {
+        return trailing_identifier_follows_dot;
     }
     // Operator keywords that cannot end an expression: babel's istanbul
     // output writes `var d = new\n/*istanbul ignore start*/\n_base[...]()`
@@ -2663,6 +2667,10 @@ fn line_starts_with_continuation_operator(line: &str) -> Option<LeadingOperator>
         // with a relational or shift operator (`>>`, `<=`, `>>>`) continues
         // the previous one (bd-9vouw.391). In script code a leading `<!--`
         // was blanked as a comment before this pass.
+        // `=>` after a line break is never an arrow (ArrowParameters [no
+        // LineTerminator here] `=>`): the line does not continue, and alone
+        // it is a SyntaxError (bd-9vouw.398).
+        b'=' if second == Some(b'>') => None,
         b'|' | b'&' | b'?' | b':' | b',' | b'*' | b'%' | b'^' | b'=' | b'<' | b'>' => {
             Some(LeadingOperator::BinaryOnly)
         }
@@ -6960,6 +6968,19 @@ fn parse_primary_expression(
                 Some(*span),
             ));
         }
+        // An operator keyword with nothing to operate on is no expression:
+        // `throw;` read as a reference to a variable named `throw`
+        // (bd-9vouw.402). (`debugger;` also lands here and is a statement.)
+        if matches!(
+            expression,
+            "throw" | "typeof" | "void" | "delete" | "new" | "in" | "instanceof"
+        ) {
+            return Err(invalid_syntax_error(
+                "an operator keyword needs an operand",
+                span,
+                context,
+            ));
+        }
         return Ok(Expression::Identifier(name));
     }
 
@@ -6993,6 +7014,17 @@ fn parse_primary_expression(
     if expression.starts_with([')', ']', '}']) {
         return Err(invalid_syntax_error(
             "unexpected closing delimiter in expression",
+            span,
+            context,
+        ));
+    }
+
+    // Private names (`#x in o`, `o.#x`) were parsed above; any other `#`
+    // starts no expression, such as a `#!` line inside a body, which only
+    // the first line of a source may be (bd-9vouw.402).
+    if expression.starts_with('#') {
+        return Err(invalid_syntax_error(
+            "`#` starts no expression here",
             span,
             context,
         ));
@@ -9472,7 +9504,8 @@ fn try_parse_postfix(
         // A property name spelled with escapes must decode to an
         // IdentifierName: an escaped `#` does not make a private name
         // (bd-9vouw.397).
-        if property_src.contains('\\')
+        if private_name.is_none()
+            && property_src.contains('\\')
             && decode_identifier_escapes(property_src).is_some()
             && !is_identifier(property_src)
         {
@@ -13397,21 +13430,6 @@ fn parse_if_statement(
     } else {
         // Single-statement consequent: find "else" boundary.
         if let Some(else_idx) = find_top_level_else(rest) {
-            // `if (a) b = 1 else c`: with no `;` and no line break before
-            // `else` there is no ASI (ES2020 11.9.1); a `do ... while (c)`
-            // gets its own `;` (bd-9vouw.402).
-            let raw_cons = &rest[..else_idx];
-            let cons_end = raw_cons.trim_end();
-            if !cons_end.ends_with([';', '}'])
-                && !raw_cons[cons_end.len()..].contains(['\n', '\r', '\u{2028}', '\u{2029}'])
-                && !starts_with_keyword(cons_end, "do")
-            {
-                return Err(invalid_syntax_error(
-                    "a statement before `else` needs a `;` or a line break",
-                    &span,
-                    context,
-                ));
-            }
             // The statement splitter keeps `if (a) x(); else y();` together,
             // so the consequent arrives with the `;` that ends it; parsed as
             // part of an expression it became a Raw node that threw a

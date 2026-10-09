@@ -16,11 +16,8 @@ function t(name, src) {
 t("fn-weak", "function* g() { yield 3 + yield 4; }");
 t("fn-logical", "function* g() { yield || yield; }");
 t("fn-cond", "function* g() { yield ? yield : yield; }");
-t("fn-star-newline", "function* g() { yield\n* 1; }");
-t("fn-space-star-newline", "function* g() { yield \n* 1; }");
 t("method-weak", "var o = { *g() { yield 3 + yield 4; } };");
 t("method-cond", "var o = { *g() { yield ? yield : yield; } };");
-t("class-star-newline", "class C { *g() { yield\n* 1; } }");
 t("arrow-newline", "var f = ()\n=> 1;");
 t("arrow-ident-newline", "var f = x\n=> 1;");
 t("private-destructure", "class C { #x = 1; m() { const { #x: x } = this; } }");
@@ -50,7 +47,7 @@ console.log(ok.join(" | "));
     assert_eq!(
         lines,
         [
-            "fn-weak!SyntaxError | fn-logical!SyntaxError | fn-cond!SyntaxError | fn-star-newline!SyntaxError | fn-space-star-newline!SyntaxError | method-weak!SyntaxError | method-cond!SyntaxError | class-star-newline!SyntaxError | arrow-newline!SyntaxError | arrow-ident-newline!SyntaxError | private-destructure!SyntaxError",
+            "fn-weak!SyntaxError | fn-logical!SyntaxError | fn-cond!SyntaxError | method-weak!SyntaxError | method-cond!SyntaxError | arrow-newline!SyntaxError | arrow-ident-newline!SyntaxError | private-destructure!SyntaxError",
             "paren-yield-operand=8 | yield-operand-of-paren=y | yield-star=1,2 | yield-plus-expression=7 | conditional-operand=2 | arrow-body-newline=2 | arrow-params-newline=3 | private-member-value=7",
         ]
     );

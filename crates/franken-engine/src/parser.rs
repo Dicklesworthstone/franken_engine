@@ -4017,7 +4017,12 @@ fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLi
                     last_significant = Some(ch);
                     trailing_identifier.clear();
                 }
-                ch if ch.is_ascii_whitespace() => trailing_identifier_closed = true,
+                // Every ECMAScript WhiteSpace (ES2020 11.2), not only ASCII:
+                // a trailing NBSP or VT after `delete` made it the line's
+                // last token, so `delete` ended the statement (bd-9vouw.454).
+                ch if ch == '\u{feff}' || (ch.is_whitespace() && ch != '\u{85}') => {
+                    trailing_identifier_closed = true;
+                }
                 ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
                     if trailing_identifier_closed {
                         trailing_identifier.clear();
@@ -7156,11 +7161,13 @@ fn parse_primary_expression(
         return Ok(Expression::Yield { argument, delegate });
     }
 
-    // new expression: `new Foo(args)`
-    if let Some(rest) = expression
-        .strip_prefix("new ")
-        .or_else(|| expression.strip_prefix("new\t"))
-    {
+    // new expression: `new Foo(args)`. The keyword ends at any white space
+    // or at the `(` of a parenthesized callee, as minifiers write it
+    // (`new(function () {...})`, `new(F)`); those were read as a call of a
+    // reference to `new` (bd-9vouw.454).
+    if let Some(rest) = expression.strip_prefix("new").filter(|rest| {
+        rest.starts_with(|ch: char| ch == '(' || ch == '\u{feff}' || ch.is_whitespace())
+    }) {
         return parse_new_expression(rest.trim(), span, context, recursion_depth);
     }
 

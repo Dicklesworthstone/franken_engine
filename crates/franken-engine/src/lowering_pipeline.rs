@@ -8556,6 +8556,9 @@ fn lower_ir2_to_ir3_with_input_hash(
         source_text: Option<crate::ast::FunctionSourceText>,
         /// Not strict mode code (bd-9vouw.272).
         sloppy: bool,
+        /// A named function expression whose own name the body mentions:
+        /// that name is the closure's immutable self binding (bd-9vouw.331).
+        self_capture: bool,
     }
     let mut deferred_functions = Vec::<DeferredFunction>::new();
 
@@ -10386,6 +10389,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         rest_param_index: *rest_param_index,
                         source_text: source_text.clone(),
                         sloppy: *sloppy,
+                        self_capture: false,
                     });
                     if *is_generator && *is_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10525,6 +10529,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                     rest_param_index: *rest_param_index,
                     source_text: source_text.clone(),
                     sloppy: *sloppy,
+                    self_capture: self_capture_name.is_some(),
                 });
                 if *is_generator && *is_async {
                     ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -10980,6 +10985,7 @@ fn lower_ir2_to_ir3_with_input_hash(
             rest_param_index: fn_rest_param_index,
             source_text: fn_source_text,
             sloppy: fn_sloppy,
+            self_capture: fn_self_capture,
         } = std::mem::take(&mut deferred_functions[deferred_idx]);
         // Taken, not cloned: a processed entry is never read again (only the
         // list's length numbers later bodies), and a body's clone copied
@@ -11645,6 +11651,18 @@ fn lower_ir2_to_ir3_with_input_hash(
                 Ir1Op::StoreBinding { binding_id } => {
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         let src = pop_lowering_value(&mut fn_value_stack)?;
+                        // A named function expression's own name is an
+                        // immutable binding made with strict = false
+                        // (ES2020 14.1.22 step 4): sloppy code's assignment
+                        // to it is ignored, keeping the assigned value as the
+                        // result; strict code's still throws at the const
+                        // binding (bd-9vouw.331). `var init = function init()
+                        // { init = null; ... }` threw.
+                        if fn_self_capture && fn_sloppy && fn_name.as_deref() == Some(name.as_str())
+                        {
+                            fn_value_stack.push(src);
+                            continue;
+                        }
                         let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::StoreScoped {
                             src,
@@ -12528,6 +12546,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         rest_param_index: *inner_rest,
                         source_text: inner_source_text.clone(),
                         sloppy: *inner_sloppy,
+                        self_capture: false,
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
@@ -12650,6 +12669,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                         rest_param_index: *inner_rest,
                         source_text: inner_source_text.clone(),
                         sloppy: *inner_sloppy,
+                        self_capture: self_capture_name.is_some(),
                     });
                     if *inner_gen && *inner_async {
                         ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {

@@ -45,6 +45,15 @@ t("try-alone", "try {}");
 t("regexp-group", "/(?I:a)/;");
 t("regexp-property", "/\\p{InAdlam}/u;");
 t("regexp-flags", "/a/gg;");
+t("while-as-name", "while = 1;");
+t("if-as-name", "if = 1;");
+t("switch-as-name", "switch = 1;");
+t("try-as-name", "try = 1;");
+t("for-as-name", "for = 1;");
+t("function-as-name", "function = 1;");
+t("for-four-parts", "for (;;;) {}");
+t("do-while-no-parens", "do {} while 1;");
+t("extends-no-body", "class C extends Object");
 console.log(out.join(" | "));
 var ok = [];
 function v(name, src, arg) {
@@ -70,7 +79,7 @@ console.log(ok.join(" | "));
     assert_eq!(
         lines,
         [
-            "rest-not-last!SyntaxError | two-rests!SyntaxError | object-rest-not-last!SyntaxError | assign-rest-not-last!SyntaxError | bare-import!SyntaxError | import-no-args!SyntaxError | import-three-args!SyntaxError | new-import!SyntaxError | delete-private!SyntaxError | field-arguments!SyntaxError | static-block-arguments!SyntaxError | yield-label!SyntaxError | await-label!SyntaxError | super-call!SyntaxError | yield-strict!SyntaxError | await-no-operand!SyntaxError | duplicate-private!SyntaxError | private-constructor!SyntaxError | for-of-initializer!SyntaxError | for-in-let-initializer!SyntaxError | optional-chain-target!SyntaxError | super-private!SyntaxError | strict-delete-name!SyntaxError | accessor-pattern!SyntaxError | private-outside-member!SyntaxError | private-name-space!SyntaxError | typeof-yield!SyntaxError | anonymous-function-statement!SyntaxError | catch-empty-parameter!SyntaxError | try-alone!SyntaxError | regexp-group!SyntaxError | regexp-property!SyntaxError | regexp-flags!SyntaxError",
+            "rest-not-last!SyntaxError | two-rests!SyntaxError | object-rest-not-last!SyntaxError | assign-rest-not-last!SyntaxError | bare-import!SyntaxError | import-no-args!SyntaxError | import-three-args!SyntaxError | new-import!SyntaxError | delete-private!SyntaxError | field-arguments!SyntaxError | static-block-arguments!SyntaxError | yield-label!SyntaxError | await-label!SyntaxError | super-call!SyntaxError | yield-strict!SyntaxError | await-no-operand!SyntaxError | duplicate-private!SyntaxError | private-constructor!SyntaxError | for-of-initializer!SyntaxError | for-in-let-initializer!SyntaxError | optional-chain-target!SyntaxError | super-private!SyntaxError | strict-delete-name!SyntaxError | accessor-pattern!SyntaxError | private-outside-member!SyntaxError | private-name-space!SyntaxError | typeof-yield!SyntaxError | anonymous-function-statement!SyntaxError | catch-empty-parameter!SyntaxError | try-alone!SyntaxError | regexp-group!SyntaxError | regexp-property!SyntaxError | regexp-flags!SyntaxError | while-as-name!SyntaxError | if-as-name!SyntaxError | switch-as-name!SyntaxError | try-as-name!SyntaxError | for-as-name!SyntaxError | function-as-name!SyntaxError | for-four-parts!SyntaxError | do-while-no-parens!SyntaxError | extends-no-body!SyntaxError",
             "rest-last=1:2,3 | object-rest-last=1:b,c | import-meta-free=number | yield-sloppy-name=5 | private-in=true,false | regexp-valid=true | for-in-var-initializer=1",
         ]
     );

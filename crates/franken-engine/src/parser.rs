@@ -13398,7 +13398,7 @@ fn parse_if_statement(
         .trim_start();
     let (condition_src, rest) = extract_balanced(after_if, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "if statement requires a parenthesized condition",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -13761,7 +13761,7 @@ fn parse_for_statement(
     };
     let (header_src, rest) = extract_balanced(after_for, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "for statement requires a parenthesized header",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -13790,7 +13790,7 @@ fn parse_for_statement(
         .filter(|(_, _, update)| split_for_header(&format!("{update};")).is_none());
     let Some((init_src, cond_src, update_src)) = parts else {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "for statement header must have three semicolon-separated parts",
             context.source_label.to_string(),
             Some(span),
@@ -14213,7 +14213,7 @@ fn parse_while_statement(
         .trim_start();
     let (condition_src, rest) = extract_balanced(after_while, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "while statement requires a parenthesized condition",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -14350,7 +14350,7 @@ fn parse_do_while_statement(
     let rest = rest.strip_prefix("while").unwrap_or(rest).trim_start();
     let (condition_src, _) = extract_balanced(rest, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "do-while requires a parenthesized condition after 'while'",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -14449,7 +14449,7 @@ fn parse_try_catch_statement(
     // Parse the try block.
     let (try_inner, rest) = extract_balanced(after_try, '{', '}').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "try statement requires a braced block",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -14594,7 +14594,7 @@ fn parse_switch_statement(
         .trim_start();
     let (disc_src, rest) = extract_balanced(after_switch, '(', ')').ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "switch statement requires a parenthesized discriminant",
             context.source_label.to_string(),
             Some(span.clone()),
@@ -15020,7 +15020,7 @@ fn parse_class_parts(
     let (super_class, rest) = if let Some(after_extends) = rest.strip_prefix("extends ") {
         let brace = class_heritage_body_brace(after_extends).ok_or_else(|| {
             ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "class extends clause requires a braced body",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -16355,7 +16355,7 @@ fn parse_function_declaration(
         // Extract name up to '('.
         let paren_idx = rest.find('(').ok_or_else(|| {
             ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "function declaration requires a parameter list",
                 context.source_label.to_string(),
                 Some(span.clone()),

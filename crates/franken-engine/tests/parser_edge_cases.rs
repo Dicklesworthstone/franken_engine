@@ -1220,7 +1220,7 @@ fn for_header_with_a_fourth_part_is_a_parse_error() {
         "for (;;;) {}",
     ] {
         let err = parser().parse(source, ParseGoal::Script).unwrap_err();
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax, "{source}");
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{source}");
     }
     // A `;` nested in the update clause is not a fourth part.
     parser()

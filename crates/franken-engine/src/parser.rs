@@ -2521,10 +2521,15 @@ fn logical_line_from_buffer(
     })
 }
 
+/// Keywords after which a `/` starts a regular expression literal. `await`
+/// is one wherever the engine parses it (module code and async functions;
+/// as a script identifier it is refused): `typeof await /x.y/g`
+/// (bd-9vouw.391).
 fn merge_logical_lines_keyword_allows_regex(identifier: &str) -> bool {
     matches!(
         identifier,
-        "case"
+        "await"
+            | "case"
             | "delete"
             | "in"
             | "instanceof"

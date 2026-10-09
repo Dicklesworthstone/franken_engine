@@ -9387,6 +9387,9 @@ struct ModuleRuntimeRecord {
     /// the exporting module's binding; a cell whose importer is gone drops
     /// out at the next publication.
     import_bindings: BTreeMap<JsString, Vec<Weak<RefCell<ScopeBindingState>>>>,
+    /// Modules that `export * from` this one (bd-1lsy.4.10.1): a publication
+    /// of a name they still re-export publishes it from them too.
+    star_reexporters: BTreeSet<String>,
     cjs_module_object: Option<ObjectId>,
     /// The executable program that owns every closure created while this
     /// module is evaluated. Imported closures carry only an index into this
@@ -9458,6 +9461,15 @@ struct LiveExport {
 /// How many re-export hops one write republishes through (an exported
 /// import binding republishes when its export is published).
 const LIVE_EXPORT_CASCADE_LIMIT: u32 = 64;
+
+/// Whose publication of an export it is (bd-1lsy.4.10.1): the module's own
+/// export (which wins over a star re-export of the name), or a source
+/// module's value reaching a module that `export * from` it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportPublication {
+    Own,
+    Star,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CjsModuleContext {
@@ -38583,6 +38595,7 @@ impl InterpreterCore {
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
                 import_bindings: BTreeMap::new(),
+                star_reexporters: BTreeSet::new(),
                 cjs_module_object: None,
                 compiled_module,
                 evaluation_promise: None,
@@ -45942,7 +45955,7 @@ impl InterpreterCore {
                 name: name.to_string(),
             });
         };
-        self.publish_module_export(&specifier, name, value, label, 0)
+        self.publish_module_export(&specifier, name, value, label, ExportPublication::Own, 0)
     }
 
     /// Publish `value` as export `name` of module `specifier`: its export
@@ -45957,6 +45970,7 @@ impl InterpreterCore {
         name: JsString,
         value: Value,
         label: Label,
+        publication: ExportPublication,
         depth: u32,
     ) -> Result<(), InterpreterError> {
         let diagnostic_name = name.to_string();
@@ -46057,10 +46071,11 @@ impl InterpreterCore {
                 .expect("module record was validated before export preflight");
             record.exports.insert(name.clone(), value.clone())
         };
+        // A star re-exporter republishes the value below.
         match self.set_object_runtime_property(
             namespace_object,
             RuntimePropertyKey::String(name.clone()),
-            value,
+            value.clone(),
         ) {
             Ok(()) => {
                 let record = self
@@ -46070,7 +46085,10 @@ impl InterpreterCore {
                     .expect("module export record existed after namespace update");
                 // The module's own export of this name wins over any star
                 // re-export (module_export_star re-marks its own names).
-                record.star_exports.remove(&name);
+                if publication == ExportPublication::Own {
+                    record.star_exports.remove(&name);
+                }
+                let star_reexporters = record.star_reexporters.clone();
                 if depth < LIVE_EXPORT_CASCADE_LIMIT {
                     for cell in &pending_cells {
                         let live_export = cell
@@ -46082,6 +46100,28 @@ impl InterpreterCore {
                             .live_export;
                         if let Some(live_export) = live_export {
                             self.publish_live_export(cell, live_export, depth + 1)?;
+                        }
+                    }
+                    // A module that still provides this name through
+                    // `export * from` this one republishes it.
+                    for reexporter in star_reexporters {
+                        let provided =
+                            self.module_state
+                                .modules
+                                .get(&reexporter)
+                                .is_some_and(|record| {
+                                    record.star_exports.get(&name)
+                                        == Some(&StarExportOrigin::Provided)
+                                });
+                        if provided {
+                            self.publish_module_export(
+                                &reexporter,
+                                name.clone(),
+                                value.clone(),
+                                label.clone(),
+                                ExportPublication::Star,
+                                depth + 1,
+                            )?;
                         }
                     }
                 }
@@ -46214,7 +46254,14 @@ impl InterpreterCore {
             (state.value.clone(), state.label.clone())
         };
         for (specifier, name) in exports {
-            self.publish_module_export(&specifier, name, value.clone(), label.clone(), depth)?;
+            self.publish_module_export(
+                &specifier,
+                name,
+                value.clone(),
+                label.clone(),
+                ExportPublication::Own,
+                depth,
+            )?;
         }
         Ok(())
     }
@@ -46246,15 +46293,18 @@ impl InterpreterCore {
                 name: "*".to_string(),
             });
         };
-        let source_exports: Vec<(JsString, Value)> = self
+        let source = self
             .module_state
             .modules
-            .values()
+            .values_mut()
             .find(|record| record.namespace_object == namespace_object)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "export * source with a module record".to_string(),
                 got: "a namespace without module exports".to_string(),
-            })?
+            })?;
+        // bd-1lsy.4.10.1: the source's later publications reach this module.
+        source.star_reexporters.insert(specifier.clone());
+        let source_exports: Vec<(JsString, Value)> = source
             .exports
             .iter()
             .filter(|(name, _)| name.as_str() != Some("default"))
@@ -126177,6 +126227,7 @@ mod async_runtime_tests_current {
                     star_exports: BTreeMap::new(),
                     flow_label_ceiling: None,
                     import_bindings: BTreeMap::new(),
+                    star_reexporters: BTreeSet::new(),
                     cjs_module_object: None,
                     compiled_module: None,
                     evaluation_promise: None,
@@ -164330,6 +164381,7 @@ mod tests {
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
                 import_bindings: BTreeMap::new(),
+                star_reexporters: BTreeSet::new(),
                 cjs_module_object: Some(module_object),
                 compiled_module: None,
                 evaluation_promise: None,

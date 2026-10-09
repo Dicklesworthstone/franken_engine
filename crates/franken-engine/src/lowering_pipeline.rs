@@ -44,9 +44,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, AssignmentStrictness, BinaryOperator, BindingPattern,
-    BlockStatement, ExportKind, Expression, FunctionParam, ImportClause, MethodDefinition,
-    MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan, Statement,
-    UnaryOperator, VariableDeclarationKind, annex_b_function_var_copy,
+    BlockStatement, ExportDeclaration, ExportKind, Expression, FunctionParam, ImportClause,
+    MethodDefinition, MethodKind, ObjectPatternProperty, ObjectPropertyKind, ParseGoal, SourceSpan,
+    Statement, UnaryOperator, VariableDeclarationKind, annex_b_function_var_copy,
 };
 use crate::capability::{APPLY_HOSTCALL_TARGET_PREFIX, hostcall_result_contract};
 use crate::effect_set::{EffectKind, EffectSet};
@@ -1516,7 +1516,7 @@ fn lower_ir0_to_ir1_on_current_stack(
     // stamp `Ir2Op::span`.
     let mut op_spans: Vec<Ir1OpSpanEntry> = Vec::new();
 
-    for statement in hoisted_statement_order(&ir0.tree.body) {
+    for statement in module_statement_order(&ir0.tree.body) {
         match statement {
             Statement::Import(import) => {
                 let specifier = import.source.clone();
@@ -34429,6 +34429,52 @@ fn hoisted_statement_order(body: &[Statement]) -> impl Iterator<Item = &Statemen
         body.iter()
             .filter(move |statement| !is_function_declaration(statement)),
     )
+}
+
+/// A module's top-level statements in evaluation order: function
+/// declarations first (hoisted), then the exports of those functions and
+/// every module request (`import`, `export ... from`), then the rest in
+/// source order. ES2020 15.2.1.16.4 InitializeEnvironment creates a module's
+/// function declarations and its exports of them before any module code
+/// runs, and InnerModuleEvaluation evaluates every requested module before
+/// the body (bd-9vouw.388): a dependency in a cycle can call an exported
+/// function of the module that imported it, and a binding imported by a
+/// statement at the end of the module is usable from its first line.
+fn module_statement_order(body: &[Statement]) -> std::vec::IntoIter<&Statement> {
+    let function_names: BTreeSet<&str> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::FunctionDeclaration(function) => function.name.as_deref(),
+            _ => None,
+        })
+        .collect();
+    let rank = |statement: &Statement| match statement {
+        Statement::FunctionDeclaration(_) => 0u8,
+        Statement::Export(ExportDeclaration {
+            kind: ExportKind::NamedClause(clause),
+            ..
+        }) if clause.source().is_none() => {
+            let locals = parse_named_export_clause_bindings(clause.canonical_head());
+            if !locals.is_empty()
+                && locals
+                    .iter()
+                    .all(|(local, _)| function_names.contains(local.as_str()))
+            {
+                1
+            } else {
+                3
+            }
+        }
+        Statement::Import(_) => 2,
+        Statement::Export(ExportDeclaration {
+            kind: ExportKind::NamedClause(clause),
+            ..
+        }) if clause.source().is_some() => 2,
+        _ => 3,
+    };
+    let mut ordered: Vec<&Statement> = body.iter().collect();
+    ordered.sort_by_key(|statement| rank(statement));
+    ordered.into_iter()
 }
 
 fn alloc_register(cursor: &mut Reg) -> Reg {

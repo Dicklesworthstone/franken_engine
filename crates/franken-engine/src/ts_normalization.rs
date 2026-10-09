@@ -1967,6 +1967,18 @@ fn statement_uses_type_only_import_export_syntax(statement: &str) -> bool {
     let Some(brace_start) = find_top_level_char(statement, start, '{') else {
         return false;
     };
+    // `import data from './d.json' with { type: 'json' }`: a brace after
+    // `with` (or the older `assert`) holds import attributes, not named
+    // specifiers, and `type: 'json'` is no TypeScript `type` modifier
+    // (bd-9vouw.387).
+    let before_brace = statement[..brace_start].trim_end();
+    if ["with", "assert"].iter().any(|keyword| {
+        before_brace
+            .strip_suffix(keyword)
+            .is_some_and(|head| !head.ends_with(is_identifier_char))
+    }) {
+        return false;
+    }
     let Some(brace_end) = find_matching_delimiter(statement, brace_start, '{', '}') else {
         return false;
     };
@@ -4317,6 +4329,30 @@ abstract class Base { }"#;
         );
         assert_eq!(
             classify_source_language(None, "export { type Foo, bar } from './foo';"),
+            SourceLanguage::TypeScript
+        );
+    }
+
+    #[test]
+    fn import_attributes_are_not_type_modifiers_bd_9vouw_387() {
+        for source in [
+            "import data from './data.json' with { type: 'json' };",
+            "import * as ns from './data.json' with {type:'json'};",
+            "import './data.json' with { type: 'json' };",
+            "export { default } from './data.json' with { type: 'json' };",
+            "import data from './data.json' assert { type: 'json' };",
+        ] {
+            assert_eq!(
+                classify_source_language(Some("app.mjs"), source),
+                SourceLanguage::JavaScript,
+                "{source}"
+            );
+        }
+        assert_eq!(
+            classify_source_language(
+                Some("app.mjs"),
+                "import { type Foo } from './foo' with { type: 'json' };"
+            ),
             SourceLanguage::TypeScript
         );
     }

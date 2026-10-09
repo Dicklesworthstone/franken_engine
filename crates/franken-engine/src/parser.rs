@@ -6723,6 +6723,15 @@ fn parse_primary_expression(
         ));
     }
 
+    // Outside a generator, sloppy `yield` followed by an operator that
+    // continues the expression (`yield + x`, `yield * 2`, `yield(1)`) is the
+    // identifier `yield` as an operand: neither branch below applies, and the
+    // operator splitting further on parses it (bd-9vouw.396).
+    let yield_identifier_operand = !context.yield_context
+        && !context.strict_mode
+        && expression
+            .strip_prefix("yield")
+            .is_some_and(yield_identifier_continues_expression);
     // yield expression: `yield expr` or `yield* expr` (delegation)
     if let Some(rest) = expression.strip_prefix("yield")
         && (rest.starts_with(' ')
@@ -6732,6 +6741,7 @@ fn parse_primary_expression(
             || rest.starts_with(')')
             || rest.starts_with('}'))
         && !context.yield_context
+        && !yield_identifier_operand
     {
         // Outside a generator `yield` is an IdentifierReference, reserved in
         // strict code (ES2020 12.1.1); it never starts a yield expression.
@@ -6752,6 +6762,7 @@ fn parse_primary_expression(
         return Ok(Expression::Identifier("yield".to_string()));
     }
     if let Some(rest) = expression.strip_prefix("yield")
+        && !yield_identifier_operand
         && (rest.starts_with(' ')
             || rest.starts_with('*')
             || rest.is_empty()
@@ -8978,6 +8989,32 @@ fn try_parse_unary_prefix(
     }
 
     None
+}
+
+/// Whether the text after a `yield` that names an identifier (outside a
+/// generator, in non-strict code) continues an expression with `yield` as
+/// its operand: a binary, assignment, conditional or comma operator, `in`
+/// or `instanceof`, a call, member access or tagged template.
+fn yield_identifier_continues_expression(rest: &str) -> bool {
+    // `yieldx` is another identifier.
+    if rest.chars().next().is_some_and(is_identifier_continue) {
+        return false;
+    }
+    let after = rest.trim_start();
+    let mut chars = after.chars();
+    match chars.next() {
+        Some(
+            '+' | '-' | '*' | '/' | '%' | '<' | '>' | '=' | '&' | '|' | '^' | '?' | ',' | '.' | '['
+            | '(' | '`',
+        ) => true,
+        Some('!') => chars.next() == Some('='),
+        Some(_) => ["instanceof", "in"].iter().any(|keyword| {
+            after
+                .strip_prefix(keyword)
+                .is_some_and(|tail| !tail.chars().next().is_some_and(is_identifier_continue))
+        }),
+        None => false,
+    }
 }
 
 /// A binary operator's operands are narrower than an AssignmentExpression,

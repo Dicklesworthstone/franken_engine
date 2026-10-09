@@ -38403,10 +38403,11 @@ impl InterpreterCore {
     /// The module-map key of a resolved module file: the entry module's own
     /// specifier when the file is the entry's (bd-9vouw.411). The entry is
     /// recorded under its source label, the path as the caller gave it
-    /// (`app.mjs`, `./app.mjs`, `/dir/./app.mjs`), while imports resolve to
-    /// canonical paths, so an import cycling back to the entry missed its
-    /// record and loaded and evaluated the entry a second time (its top-level
-    /// code ran twice, and the first run saw the cycle's exports missing).
+    /// (`app.mjs`, `./app.mjs`, `/dir/./app.mjs`), while imports and
+    /// `require` calls resolve to canonical paths, so a cycle back to the
+    /// entry missed its record and loaded and evaluated the entry a second
+    /// time (its top-level code ran twice, and the first run saw the cycle's
+    /// exports missing).
     fn module_key_for_canonical_path(&self, canonical: &Path) -> String {
         if let Some(entry) = self.entry_module_specifier.as_deref()
             && Path::new(entry)
@@ -38452,7 +38453,7 @@ impl InterpreterCore {
             self.resolve_bare_require_specifier(specifier)?
         };
         let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
-        Ok(canonical.display().to_string())
+        Ok(self.module_key_for_canonical_path(&canonical))
     }
 
     fn resolve_module_candidate(&self, candidate: &Path) -> Option<PathBuf> {

@@ -2695,7 +2695,7 @@ enum LeadingOperator {
 /// the string/regex/comment state machine in `merge_logical_lines` so the
 /// regex-vs-division heuristic and comment boundaries are detected identically.
 pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
-    strip_comments_to_whitespace_with(text, false)
+    strip_comments_to_whitespace_with(text, false).0
 }
 
 /// [`strip_comments_to_whitespace`] for source parsed with `goal`: Script
@@ -2706,11 +2706,13 @@ pub(crate) fn strip_comments_to_whitespace(text: &str) -> String {
 /// terminator, with only white space and single-line `/* */` comments
 /// before it, or right after a `/* */` comment that holds a line
 /// terminator (which counts as one).
-fn strip_comments_to_whitespace_for_goal(text: &str, goal: ParseGoal) -> String {
+/// Also says whether a `/*` comment is still open at the end of the input,
+/// which is a SyntaxError (bd-9vouw.402).
+fn strip_comments_to_whitespace_for_goal(text: &str, goal: ParseGoal) -> (String, bool) {
     strip_comments_to_whitespace_with(text, goal == ParseGoal::Script)
 }
 
-fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> String {
+fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> (String, bool) {
     let mut out = String::with_capacity(text.len());
     let mut quotes = QuoteState::default();
     let mut in_block_comment = false;
@@ -2902,7 +2904,7 @@ fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> String 
             }
         }
     }
-    out
+    (out, in_block_comment)
 }
 
 /// String / template-literal state shared by the source scanners
@@ -3569,6 +3571,13 @@ fn statement_header_awaits_body(statement: &str) -> bool {
 }
 
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
+    merge_logical_lines_with(text, true)
+}
+
+/// [`merge_logical_lines`], skipping a `#!` first line only when `text` is
+/// the whole source: a block or function body starting with `#!` is not a
+/// hashbang comment but a SyntaxError (ES2022 12.5, bd-9vouw.402).
+fn merge_logical_lines_with(text: &str, initial_hashbang: bool) -> Vec<LogicalLine> {
     let physical_lines = physical_line_segments(text);
     let mut result = Vec::with_capacity(16);
     let mut current_text = String::new();
@@ -3600,7 +3609,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         let line = physical_line.content;
         let line_ending = physical_line.terminator;
 
-        if line_idx == 0 {
+        if line_idx == 0 && initial_hashbang {
             let line_without_bom = line.strip_prefix('\u{feff}').unwrap_or(line);
             if line_without_bom.starts_with("#!") {
                 byte_offset = byte_offset.saturating_add(segment.len());
@@ -4143,7 +4152,15 @@ fn parse_source(
         ));
     }
 
-    let stripped = strip_comments_to_whitespace_for_goal(text, goal);
+    let (stripped, unterminated_comment) = strip_comments_to_whitespace_for_goal(text, goal);
+    if unterminated_comment {
+        return Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            "unterminated comment: `/*` has no closing `*/`",
+            source_label.to_string(),
+            None,
+        ));
+    }
     let mut logical_lines = merge_logical_lines(&stripped);
     let source_line_terminators = source_line_terminator_ranges(text);
     let mut statements = Vec::with_capacity(8);
@@ -6158,6 +6175,19 @@ fn parse_array_binding_pattern(
     }
 
     let segments = split_pattern_elements(inner);
+    // `[...x,]`: nothing follows a rest element, not even a trailing comma
+    // (ES2020 13.3.3; `for ([...x,] of xs)` was accepted, bd-9vouw.402).
+    if inner.trim_end().ends_with(',')
+        && segments
+            .last()
+            .is_some_and(|segment| segment.trim_start().starts_with("..."))
+    {
+        return Err(invalid_syntax_error(
+            "rest element must be the last element in array pattern",
+            span,
+            context,
+        ));
+    }
     let mut elements = Vec::with_capacity(segments.len());
 
     for segment in &segments {
@@ -7845,6 +7875,21 @@ fn try_parse_assignment(
             if let Err(error) = reject_strict_eval_arguments_target(&left, span, context) {
                 return Some(Err(error));
             }
+            // A parenthesized object or array literal is a value, not a
+            // destructuring pattern: `({}) = 1`, `([a]) = b` (ES2020
+            // 12.15.1; `(a) = 1` and `({}).x = 1` stay fine, bd-9vouw.402).
+            if lhs.starts_with('(')
+                && matches!(
+                    left,
+                    Expression::ArrayLiteral(_) | Expression::ObjectLiteral(_)
+                )
+            {
+                return Some(Err(invalid_syntax_error(
+                    "a parenthesized literal is not an assignment target",
+                    span,
+                    context,
+                )));
+            }
             let right = match parse_expression(rhs, span, context, recursion_depth + 1) {
                 Ok(e) => e,
                 Err(e) => return Some(Err(e)),
@@ -9090,15 +9135,34 @@ fn reject_reserved_identifier_reference(
 }
 
 /// ES2020 12.15.1, 12.4.1: in strict code `eval` and `arguments` are not
-/// assignment or update targets (`arguments <<= 20`, `eval++`).
+/// assignment or update targets (`arguments <<= 20`, `eval++`), in a
+/// destructuring pattern either (`[arguments] = []`, `({ eval } = {})`,
+/// bd-9vouw.402).
 fn reject_strict_eval_arguments_target(
     target: &Expression,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> ParseResult<()> {
+    // The first `eval` or `arguments` the target writes; a default value
+    // (`[x = arguments] = []`) is read, not written.
+    fn restricted_name(target: &Expression) -> Option<&str> {
+        match target {
+            Expression::Identifier(name) if matches!(name.as_str(), "eval" | "arguments") => {
+                Some(name.as_str())
+            }
+            Expression::ArrayLiteral(elements) => {
+                elements.iter().flatten().find_map(restricted_name)
+            }
+            Expression::ObjectLiteral(properties) => properties
+                .iter()
+                .find_map(|property| restricted_name(&property.value)),
+            Expression::SpreadElement(inner) => restricted_name(inner),
+            Expression::Assignment { left, .. } => restricted_name(left),
+            _ => None,
+        }
+    }
     if context.strict_mode
-        && let Expression::Identifier(name) = target
-        && matches!(name.as_str(), "eval" | "arguments")
+        && let Some(name) = restricted_name(target)
     {
         return Err(ParseError::new(
             ParseErrorCode::InvalidSyntax,
@@ -12555,7 +12619,7 @@ fn parse_body_statements(
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
-    let mut logical_lines = merge_logical_lines(trimmed);
+    let mut logical_lines = merge_logical_lines_with(trimmed, false);
     let mut stmts = Vec::with_capacity(8);
 
     for ll in &mut logical_lines {
@@ -13333,6 +13397,21 @@ fn parse_if_statement(
     } else {
         // Single-statement consequent: find "else" boundary.
         if let Some(else_idx) = find_top_level_else(rest) {
+            // `if (a) b = 1 else c`: with no `;` and no line break before
+            // `else` there is no ASI (ES2020 11.9.1); a `do ... while (c)`
+            // gets its own `;` (bd-9vouw.402).
+            let raw_cons = &rest[..else_idx];
+            let cons_end = raw_cons.trim_end();
+            if !cons_end.ends_with([';', '}'])
+                && !raw_cons[cons_end.len()..].contains(['\n', '\r', '\u{2028}', '\u{2029}'])
+                && !starts_with_keyword(cons_end, "do")
+            {
+                return Err(invalid_syntax_error(
+                    "a statement before `else` needs a `;` or a line break",
+                    &span,
+                    context,
+                ));
+            }
             // The statement splitter keeps `if (a) x(); else y();` together,
             // so the consequent arrives with the `;` that ends it; parsed as
             // part of an expression it became a Raw node that threw a
@@ -14290,14 +14369,25 @@ fn parse_throw_statement(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
-    let body = statement.strip_prefix("throw").unwrap_or("").trim();
+    let after_keyword = statement.strip_prefix("throw").unwrap_or("");
+    let body = after_keyword.trim();
     let body = body.strip_suffix(';').unwrap_or(body).trim();
     if body.is_empty() {
         return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "throw statement requires an argument",
             context.source_label.to_string(),
             Some(span),
+        ));
+    }
+    // `throw [no LineTerminator here] Expression` (ES2020 13.14): the
+    // argument may not start on a later line (bd-9vouw.402).
+    let gap = &after_keyword[..after_keyword.len() - after_keyword.trim_start().len()];
+    if gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+        return Err(invalid_syntax_error(
+            "a line break cannot follow `throw`",
+            &span,
+            context,
         ));
     }
     // ES2020 §14.14: ThrowStatement argument is an Expression (sequence
@@ -22382,14 +22472,14 @@ mod tests {
     #[test]
     fn html_like_comments_are_script_only_bd_9vouw_322() {
         let src = "a <!--b\n--> c\n/*\n*/ --> d\nx-->y\n'<!--'\n";
-        let script = strip_comments_to_whitespace_for_goal(src, ParseGoal::Script);
+        let (script, _) = strip_comments_to_whitespace_for_goal(src, ParseGoal::Script);
         assert_eq!(script.len(), src.len(), "byte length must be preserved");
         assert_eq!(
             script, "a      \n     \n  \n        \nx-->y\n'<!--'\n",
             "`<!--` anywhere and `-->` at a line start are comments; after code \
              `-->` is `--` `>`, and string text is untouched"
         );
-        let module = strip_comments_to_whitespace_for_goal(src, ParseGoal::Module);
+        let (module, _) = strip_comments_to_whitespace_for_goal(src, ParseGoal::Module);
         assert_eq!(module, "a <!--b\n--> c\n  \n   --> d\nx-->y\n'<!--'\n");
         assert_eq!(strip_comments_to_whitespace(src), module);
     }

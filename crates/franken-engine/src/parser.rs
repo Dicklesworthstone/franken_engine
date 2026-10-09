@@ -17164,7 +17164,21 @@ fn split_class_field_asi(text: &str) -> (&str, Option<&str>) {
             '\n' if depth == 0 => {
                 let head = text[..index].trim_end();
                 let tail = text[index + 1..].trim_start();
+                // A head ending in a keyword operator awaits its operand:
+                // `a = x` newline `in` newline `z` is `a = x in z`, which
+                // split before `z` (Test262 fields-asi-5, bd-9vouw.457).
+                let trailing_word_start = head
+                    .char_indices()
+                    .rev()
+                    .find(|&(_, ch)| !is_identifier_continue(ch))
+                    .map_or(0, |(index, ch)| index + ch.len_utf8());
+                let ends_with_operator_keyword =
+                    matches!(
+                        &head[trailing_word_start..],
+                        "in" | "instanceof" | "typeof" | "void" | "delete" | "new"
+                    ) && !head[..trailing_word_start].trim_end().ends_with('.');
                 let head_is_complete = !head.is_empty()
+                    && !ends_with_operator_keyword
                     && !head.ends_with([
                         '=', '+', '-', '*', '/', '%', '&', '|', '^', '!', '~', '<', '>', '?', ':',
                         ',', '.', '(', '[', '{',
@@ -19137,6 +19151,18 @@ mod tests {
                 .parse(source, ParseGoal::Module)
                 .unwrap_or_else(|err| panic!("`{source}` must parse in a module: {}", err.message));
         }
+    }
+
+    // bd-9vouw.457: a class field whose initializer ends a line with a
+    // keyword operator continues onto the next line (Test262 fields-asi-5).
+    #[test]
+    fn class_field_initializer_continues_after_a_keyword_operator_line() {
+        let parser = CanonicalEs2020Parser;
+        let source =
+            "var x = 0, y = 1, z = [42];\nclass C {\n  a = x\n  in\n  z\n  b = y\n  in\n  z\n}";
+        parser
+            .parse(source, ParseGoal::Script)
+            .unwrap_or_else(|err| panic!("fields-asi-5 must parse: {}", err.message));
     }
 
     #[test]

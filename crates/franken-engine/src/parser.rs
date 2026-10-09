@@ -9157,7 +9157,16 @@ fn try_parse_update(
             parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
         );
         if !is_simple_update_target(&target) {
-            return reject_non_assignable_update_target(&target, operand_src, span, context);
+            if let Some(rejection) =
+                reject_non_assignable_update_target(&target, operand_src, span, context)
+            {
+                return Some(rejection);
+            }
+            // A non-strict call target (Annex B) is admitted above and lowers
+            // to its ReferenceError (bd-9vouw.408); others parse elsewhere.
+            if !matches!(target, Expression::Call { .. }) {
+                return None;
+            }
         }
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
@@ -9189,7 +9198,16 @@ fn try_parse_update(
             parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
         );
         if !is_simple_update_target(&target) {
-            return reject_non_assignable_update_target(&target, operand_src, span, context);
+            if let Some(rejection) =
+                reject_non_assignable_update_target(&target, operand_src, span, context)
+            {
+                return Some(rejection);
+            }
+            // A non-strict call target (Annex B) is admitted above and lowers
+            // to its ReferenceError (bd-9vouw.408); others parse elsewhere.
+            if !matches!(target, Expression::Call { .. }) {
+                return None;
+            }
         }
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));

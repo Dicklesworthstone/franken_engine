@@ -14829,15 +14829,21 @@ fn parse_switch_statement(
                 span: span.clone(),
             });
             remaining = next.trim();
-        } else if remaining.starts_with("default") {
-            let after_default = remaining
-                .strip_prefix("default")
-                .unwrap_or(remaining)
-                .trim_start();
-            let after_default = after_default
-                .strip_prefix(':')
-                .unwrap_or(after_default)
-                .trim();
+        } else if let Some(after_default) = remaining
+            .strip_prefix("default")
+            .map(str::trim_start)
+            .and_then(|rest| rest.strip_prefix(':'))
+        {
+            // ES2020 13.12: a CaseBlock has at most one DefaultClause.
+            if cases.iter().any(|case: &SwitchCase| case.test.is_none()) {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    "switch statement has more than one default clause",
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            let after_default = after_default.trim();
             let (consequent_src, next) = split_at_next_case(after_default);
             let consequent = parse_body_statements(consequent_src.trim(), goal, &span, context)?;
             cases.push(SwitchCase {
@@ -14847,8 +14853,15 @@ fn parse_switch_statement(
             });
             remaining = next.trim();
         } else {
-            // Skip whitespace or unexpected content.
-            break;
+            // A switch body holds only case and default clauses; anything
+            // else (a statement before the first clause, `default` without
+            // its colon) is a SyntaxError, not content to drop.
+            return Err(ParseError::new(
+                ParseErrorCode::InvalidSyntax,
+                "switch body must consist of case and default clauses",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
         }
     }
 

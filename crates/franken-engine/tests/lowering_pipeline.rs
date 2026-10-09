@@ -1872,9 +1872,21 @@ fn enrichment_duplicate_import_binding_validation() {
 #[test]
 fn enrichment_duplicate_default_export_validation() {
     let parser = CanonicalEs2020Parser;
-    let tree = parser
-        .parse("export default 1; export default 2;", ParseGoal::Module)
+    // The parser refuses the duplicate itself (bd-9vouw.392), so the tree
+    // the validator sees is assembled from two parsed modules.
+    assert!(
+        parser
+            .parse("export default 1; export default 2;", ParseGoal::Module)
+            .is_err(),
+        "the parser rejects a second default export"
+    );
+    let mut tree = parser
+        .parse("export default 1;", ParseGoal::Module)
         .expect("parse");
+    let second = parser
+        .parse("export default 2;", ParseGoal::Module)
+        .expect("parse");
+    tree.body.extend(second.body);
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_dup_default.mjs");
     let result = validate_ir0_static_semantics(&ir0);
     assert!(

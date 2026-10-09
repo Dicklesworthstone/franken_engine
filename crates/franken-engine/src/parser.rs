@@ -2477,8 +2477,37 @@ fn previous_line_ends_expression(text: &str) -> bool {
         .last()
         .is_some_and(|(_, _, clause)| {
             let clause = strip_leading_labels(clause).trim_start();
-            starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export")
+            (starts_with_keyword(clause, "import") || starts_with_keyword(clause, "export"))
+                && !export_function_header_awaits_parameters(clause)
         })
+}
+
+/// `clause` after a leading `export` and an optional `default`.
+fn strip_export_keywords(clause: &str) -> Option<&str> {
+    let rest = clause
+        .strip_prefix("export")
+        .filter(|rest| rest.starts_with(char::is_whitespace))?
+        .trim_start();
+    Some(
+        rest.strip_prefix("default")
+            .filter(|rest| rest.starts_with(char::is_whitespace))
+            .map_or(rest, str::trim_start),
+    )
+}
+
+/// An exported function declaration whose parameter list starts on a later
+/// line (`export function c` newline `(a) {`; TypeScript's multi-line type
+/// parameters leave that once erased): the `(` line continues it as it
+/// continues an unexported one (bd-9vouw.434).
+fn export_function_header_awaits_parameters(clause: &str) -> bool {
+    let Some(rest) = strip_export_keywords(clause) else {
+        return false;
+    };
+    let rest = rest
+        .strip_prefix("async")
+        .filter(|rest| rest.starts_with(char::is_whitespace))
+        .map_or(rest, str::trim_start);
+    starts_with_keyword(rest, "function") && !rest.contains('(')
 }
 
 /// Whether `text` ends with a `let` that is a whole Statement: the body of
@@ -3566,6 +3595,9 @@ fn statement_header_awaits_body(statement: &str) -> bool {
     if tail.is_empty() || has_top_level_open_brace(tail) || tail.ends_with(';') {
         return false;
     }
+    // An exported declaration's header awaits its body as the bare one does
+    // (`export class K` newline `{`, bd-9vouw.434).
+    let tail = strip_export_keywords(tail).unwrap_or(tail);
     if ["else", "do", "try", "finally"].contains(&tail) || starts_with_keyword(tail, "class") {
         return true;
     }

@@ -11452,10 +11452,20 @@ fn parse_comma_separated_exprs(
     }
     let parts = split_top_level_commas(trimmed);
     let mut exprs = Vec::with_capacity(4);
-    for part in &parts {
+    for (index, part) in parts.iter().enumerate() {
         let p = part.trim();
         if p.is_empty() {
-            continue;
+            // Only a trailing comma after an element leaves an empty part
+            // (`f(a,)`). An elision (`f(1,,2)`, `f(,)`) was dropped, so
+            // `f(1,,2)` called f(1, 2) (bd-9vouw.453).
+            if index > 0 && index + 1 == parts.len() {
+                continue;
+            }
+            return Err(invalid_syntax_error(
+                "a comma-separated list cannot have an empty element",
+                span,
+                context,
+            ));
         }
         exprs.push(parse_expression(p, span, context, recursion_depth + 1)?);
     }
@@ -14901,6 +14911,28 @@ fn parse_for_statement(
         return parse_statement(&desugared, goal, span, context);
     }
 
+    // `for (async of` is excluded by a lookahead (ES2020 13.7.5): it would
+    // start an async arrow. `for await (async of x)` is not, nor is the
+    // C-style `for (async of => {}; ;)`, whose initializer is that arrow
+    // (bd-9vouw.453).
+    if !is_await
+        && split_for_header(header_src).is_none()
+        && header_src
+            .trim_start()
+            .strip_prefix("async")
+            .filter(|after| after.starts_with(char::is_whitespace))
+            .map(str::trim_start)
+            .is_some_and(|after| {
+                starts_with_keyword(after, "of")
+                    && !after["of".len()..].trim_start().starts_with("=>")
+            })
+    {
+        return Err(invalid_syntax_error(
+            "a for-of loop's target cannot be `async`",
+            &span,
+            context,
+        ));
+    }
     // Detect for-in / for-of before trying semicolon split.
     if let Some(forin) = try_parse_for_in_of(header_src, rest, &span, goal, context)? {
         return Ok(forin);
@@ -19037,6 +19069,39 @@ mod tests {
             .parse("(debugger);", ParseGoal::Script)
             .expect_err("`(debugger)` is a SyntaxError");
         assert_eq!(err.code, ParseErrorCode::InvalidSyntax, "{}", err.message);
+    }
+
+    // bd-9vouw.453: an argument or sequence list has no elisions (only an
+    // argument list's trailing comma), and `for (async of` is excluded.
+    #[test]
+    fn list_elisions_and_for_async_of_are_rejected() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "function f() {}\nf(1,,2);",
+            "function f() {}\nf(,);",
+            "function F() {}\nnew F(1,,2);",
+            "var async;\nfor (async of [1]) ;",
+            "var x = (1,,2);",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "function f() {}\nf(1,);",
+            "function F() {}\nnew F(1,);",
+            "var async;\nfor (async in {}) ;",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
     }
 
     #[test]

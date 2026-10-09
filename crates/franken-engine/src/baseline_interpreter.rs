@@ -4054,6 +4054,18 @@ impl BuiltinFunction {
         }
     }
 
+    /// `String.prototype.toLocaleUpperCase` / `toLocaleLowerCase`: the case
+    /// mappings under the root locale, but their own function objects named
+    /// for themselves (bd-9vouw.383); the specifier names the member.
+    fn string_to_locale_case(kind: BuiltinFunctionKind, name: &str) -> Self {
+        Self {
+            kind,
+            module_specifier: BuiltinModuleSpecifier::from_nonempty(name),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn string_trim() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringTrim,
@@ -5124,6 +5136,16 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringCharAt => "charAt",
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
             BuiltinFunctionKind::StringAt => "at",
+            BuiltinFunctionKind::StringToUpperCase
+                if self.module_specifier.0.as_deref() == Some("toLocaleUpperCase") =>
+            {
+                "toLocaleUpperCase"
+            }
+            BuiltinFunctionKind::StringToLowerCase
+                if self.module_specifier.0.as_deref() == Some("toLocaleLowerCase") =>
+            {
+                "toLocaleLowerCase"
+            }
             BuiltinFunctionKind::StringToUpperCase => "toUpperCase",
             BuiltinFunctionKind::StringToLowerCase => "toLowerCase",
             BuiltinFunctionKind::StringTrim => "trim",
@@ -60175,11 +60197,15 @@ impl InterpreterCore {
             "at" => Value::BuiltinFunction(BuiltinFunction::string_at()),
             // Locale-sensitive case mapping uses the root locale, as Node's
             // default `en-US` does for everything but a few special casings.
-            "toUpperCase" | "toLocaleUpperCase" => {
-                Value::BuiltinFunction(BuiltinFunction::string_to_upper_case())
-            }
-            "toLowerCase" | "toLocaleLowerCase" => {
-                Value::BuiltinFunction(BuiltinFunction::string_to_lower_case())
+            "toUpperCase" => Value::BuiltinFunction(BuiltinFunction::string_to_upper_case()),
+            "toLowerCase" => Value::BuiltinFunction(BuiltinFunction::string_to_lower_case()),
+            "toLocaleUpperCase" | "toLocaleLowerCase" => {
+                let kind = if key == "toLocaleUpperCase" {
+                    BuiltinFunctionKind::StringToUpperCase
+                } else {
+                    BuiltinFunctionKind::StringToLowerCase
+                };
+                Value::BuiltinFunction(BuiltinFunction::string_to_locale_case(kind, key))
             }
             "concat" => Value::BuiltinFunction(BuiltinFunction::new_kind(
                 BuiltinFunctionKind::StringPrototypeConcat,

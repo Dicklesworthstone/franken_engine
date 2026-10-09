@@ -805,9 +805,12 @@ fn lower_ir0_to_ir3_unit(
         }
     };
 
-    let mut ir2_result = match lower_ir1_to_ir2_with_host_io_exception_provenance(
+    // Each pass hashed its output module; the next pass reuses that hash
+    // while the module is unchanged (bd-9vouw.382).
+    let mut ir2_result = match lower_ir1_to_ir2_with_input_hash(
         &ir1_result.module,
         context.host_io_exception_provenance,
+        content_hash_from_hash_string(&ir1_result.witness.output_hash),
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir1_to_ir2_lowered"));
@@ -829,6 +832,7 @@ fn lower_ir0_to_ir3_unit(
     // ordinary per-op classifier. Declare the wrapper's module-load authority
     // explicitly so IR3 routing and E9 dispatch metadata see the same surface
     // that the interpreter can execute.
+    let mut ir2_hash = content_hash_from_hash_string(&ir2_result.witness.output_hash);
     if context.authenticated_commonjs_runtime_bindings
         && !ir2_result
             .module
@@ -844,6 +848,8 @@ fn lower_ir0_to_ir3_unit(
             .module
             .required_capabilities
             .sort_by(|left, right| left.0.cmp(&right.0));
+        // The pass's output hash no longer describes the module.
+        ir2_hash = None;
     }
 
     let ir2_flow_proof_artifact = match build_ir2_flow_proof_artifact(&ir2_result.module, context) {
@@ -861,10 +867,11 @@ fn lower_ir0_to_ir3_unit(
         }
     };
 
-    let ir3_result = match lower_ir2_to_ir3_with_host_io_exception_provenance(
+    let ir3_result = match lower_ir2_to_ir3_with_input_hash(
         &ir2_result.module,
         context.host_io_exception_provenance,
         context.authenticated_commonjs_runtime_bindings,
+        ir2_hash,
     ) {
         Ok(result) => {
             events.push(success_event(context, "ir2_to_ir3_lowered"));
@@ -8045,10 +8052,27 @@ fn lower_ir1_to_ir2_with_host_io_exception_provenance(
     ir1: &Ir1Module,
     host_io_exception_provenance: HostIoExceptionProvenance,
 ) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
+    lower_ir1_to_ir2_with_input_hash(ir1, host_io_exception_provenance, None)
+}
+
+/// [`lower_ir1_to_ir2_with_host_io_exception_provenance`] given `ir1`'s
+/// content hash when the caller already holds it: the IR0 -> IR1 pass's
+/// output hash, for the module it returned unchanged. Each canonical hash
+/// of a bundle's IR is a full encode of the module (bd-9vouw.382).
+fn lower_ir1_to_ir2_with_input_hash(
+    ir1: &Ir1Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    input_hash: Option<ContentHash>,
+) -> Result<LoweringPassResult<Ir2Module>, LoweringPipelineError> {
     verify_schema_version(&ir1.header).map_err(lowering_error_from_ir_error)?;
     verify_ir1_derived_constructor_schema(ir1).map_err(lowering_error_from_ir_error)?;
     verify_ir1_object_method_schema(ir1).map_err(lowering_error_from_ir_error)?;
-    let ir1_hash = ir1.content_hash();
+    let ir1_hash = input_hash.unwrap_or_else(|| ir1.content_hash());
+    debug_assert_eq!(
+        ir1_hash,
+        ir1.content_hash(),
+        "a supplied IR1 hash is the module's"
+    );
     let mut ir2 = Ir2Module::new(ir1_hash, ir1.header.source_label.clone());
     ir2.header.schema_version = ir1.header.schema_version;
     ir2.scopes = ir1.scopes.clone();
@@ -8401,6 +8425,23 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
     host_io_exception_provenance: HostIoExceptionProvenance,
     authenticated_commonjs_runtime_bindings: bool,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
+    lower_ir2_to_ir3_with_input_hash(
+        ir2,
+        host_io_exception_provenance,
+        authenticated_commonjs_runtime_bindings,
+        None,
+    )
+}
+
+/// [`lower_ir2_to_ir3_with_host_io_exception_provenance`] given `ir2`'s
+/// content hash when the caller already holds it (the IR1 -> IR2 pass's
+/// output hash for an unchanged module, bd-9vouw.382).
+fn lower_ir2_to_ir3_with_input_hash(
+    ir2: &Ir2Module,
+    host_io_exception_provenance: HostIoExceptionProvenance,
+    authenticated_commonjs_runtime_bindings: bool,
+    input_hash: Option<ContentHash>,
+) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
     verify_schema_version(&ir2.header).map_err(lowering_error_from_ir_error)?;
     // Nested function bodies are re-annotated below for their runtime flow
     // guards; they share the whole lowering unit's bound (bd-9vouw.1).
@@ -8432,7 +8473,12 @@ fn lower_ir2_to_ir3_with_host_io_exception_provenance(
         },
     }
 
-    let ir2_hash = ir2.content_hash();
+    let ir2_hash = input_hash.unwrap_or_else(|| ir2.content_hash());
+    debug_assert_eq!(
+        ir2_hash,
+        ir2.content_hash(),
+        "a supplied IR2 hash is the module's"
+    );
     let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
     ir3.header.schema_version = ir2.header.schema_version;
     let mut constant_pool = ConstantPool::new();
@@ -35116,6 +35162,14 @@ fn hash_string(hash: &ContentHash) -> String {
     format!("sha256:{}", hex::encode(hash.as_bytes()))
 }
 
+/// The hash a [`hash_string`] spells, or `None` for any other text.
+fn content_hash_from_hash_string(text: &str) -> Option<ContentHash> {
+    let digits = text.strip_prefix("sha256:")?;
+    let mut bytes = [0_u8; 32];
+    hex::decode_to_slice(digits, &mut bytes).ok()?;
+    Some(ContentHash::from_bytes(bytes))
+}
+
 fn lowering_error_from_ir_error(error: IrError) -> LoweringPipelineError {
     LoweringPipelineError::IrContractValidation {
         code: error.code.as_str().to_string(),
@@ -45404,6 +45458,27 @@ mod tests {
         let s = hash_string(&hash);
         assert!(s.starts_with("sha256:"));
         assert_eq!(s.len(), 7 + 64); // "sha256:" + 64 hex chars
+    }
+
+    /// bd-9vouw.382: a pass's output hash string reads back as the hash, and
+    /// nothing else does.
+    #[test]
+    fn hash_string_reads_back_as_its_hash_bd_9vouw_382() {
+        let hash = ContentHash::compute(b"module");
+        assert_eq!(
+            content_hash_from_hash_string(&hash_string(&hash)),
+            Some(hash)
+        );
+        let hex = hex::encode(hash.as_bytes());
+        for text in [
+            hex.clone(),
+            format!("sha1:{hex}"),
+            format!("sha256:{}", &hex[..62]),
+            format!("sha256:{hex}00"),
+            format!("sha256:{}zz", &hex[..62]),
+        ] {
+            assert_eq!(content_hash_from_hash_string(&text), None, "{text}");
+        }
     }
 
     // -- ensure_checks_pass --

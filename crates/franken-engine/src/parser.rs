@@ -10915,6 +10915,50 @@ fn radix_digits_to_decimal(digits: &str, radix: u32) -> Option<String> {
     Some(decimal)
 }
 
+/// The index of the `.` in `text` (a numeric-looking token) that starts a
+/// member access on the number before it, when a name follows that `.`:
+/// a `.` after the decimal point, after an exponent or a BigInt `n`, or
+/// after a hexadecimal, octal, binary or legacy octal integer, none of
+/// which take a fraction. The first `.` of a decimal literal is its
+/// decimal point.
+fn numeric_member_access_dot(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let prefixed = bytes.first() == Some(&b'0')
+        && bytes
+            .get(1)
+            .is_some_and(|byte| matches!(byte, b'x' | b'X' | b'o' | b'O' | b'b' | b'B'));
+    let legacy_octal_integer = |end: usize| {
+        end > 1
+            && bytes[0] == b'0'
+            && bytes[1..end]
+                .iter()
+                .all(|byte| (b'0'..=b'7').contains(byte))
+    };
+    let mut seen_decimal_point = false;
+    let mut seen_exponent_or_suffix = false;
+    for (index, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'.' => {
+                let member = prefixed
+                    || seen_decimal_point
+                    || seen_exponent_or_suffix
+                    || legacy_octal_integer(index);
+                if member {
+                    let name_follows = bytes.get(index + 1).is_some_and(|next| {
+                        next.is_ascii_alphabetic() || matches!(next, b'_' | b'$')
+                    });
+                    return name_follows.then_some(index);
+                }
+                seen_decimal_point = true;
+            }
+            b'e' | b'E' if !prefixed => seen_exponent_or_suffix = true,
+            b'n' => seen_exponent_or_suffix = true,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Why a primary expression spelled as a numeric literal (starting with a
 /// digit, or `.` and a digit) is not one, by the NumericLiteral grammar of
 /// ES2020 11.8.3 and ES2021 numeric separators, or `None` when it is valid
@@ -10946,13 +10990,12 @@ fn invalid_numeric_literal_message(text: &str, strict: bool) -> Option<&'static 
     {
         return None;
     }
-    // A `.` before a name is a member access on the number (`1..toString`,
-    // `1.5e3.valueOf`), which reaches here unsplit; `1.e5` is left alone
-    // too, as valid.
-    if bytes.windows(2).any(|pair| {
-        pair[0] == b'.' && (pair[1].is_ascii_alphabetic() || matches!(pair[1], b'_' | b'$'))
-    }) {
-        return None;
+    // A member access on the number reaches here unsplit (`1..toString`,
+    // `1.5e3.valueOf`, `0x1F.toString`): only the literal before its `.`
+    // is judged. The decimal point itself is no member access, so `1._5`
+    // and `1.toString` stay invalid (bd-9vouw.393).
+    if let Some(dot) = numeric_member_access_dot(text) {
+        return invalid_numeric_literal_message(&text[..dot], strict);
     }
     let separators_valid =
         |digits: &str| !digits.starts_with('_') && !digits.ends_with('_') && !digits.contains("__");

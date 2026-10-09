@@ -50,6 +50,52 @@ impl Eraser<'_> {
         }
     }
 
+    /// `<T>value` where an operand starts (no operand before the `<`): a
+    /// type assertion, whose `<T>` is erased (bd-9vouw.426). A `<` after an
+    /// operand is a comparison or type arguments, and `<T>(params) =>` (or
+    /// `): R =>`) is a generic arrow function, which `erase` handles.
+    pub(super) fn erase_prefix_assertions(&mut self) {
+        let mut previous: Option<usize> = None;
+        let mut cursor = 0;
+        while cursor < self.tokens.len() {
+            if self.text(cursor) == "<"
+                && !previous.is_some_and(|index| self.suffix_operand(index))
+                && let Some(end) = self.angle_end(cursor)
+                && end > cursor + 1
+                && self.assertion_operand_at(end)
+                && !self.generic_arrow_parameters_at(end)
+            {
+                self.mark(cursor, end);
+                cursor = end;
+                continue;
+            }
+            previous = Some(cursor);
+            cursor += 1;
+        }
+    }
+
+    fn assertion_operand_at(&self, index: usize) -> bool {
+        self.tokens
+            .get(index)
+            .is_some_and(|token| match token.kind {
+                Kind::Word | Kind::Literal => true,
+                Kind::Punctuation => matches!(
+                    token.text,
+                    "(" | "[" | "{" | "<" | "!" | "-" | "+" | "~" | "++" | "--"
+                ),
+            })
+    }
+
+    fn generic_arrow_parameters_at(&self, open: usize) -> bool {
+        self.text(open) == "("
+            && self
+                .pairs
+                .get(open)
+                .copied()
+                .flatten()
+                .is_some_and(|close| matches!(self.text(close + 1), "=>" | ":"))
+    }
+
     pub(super) fn erase_expression_types(&mut self, module_scope: bool) {
         self.erase_type_only_declarations(module_scope);
         let mut cursor = 0;

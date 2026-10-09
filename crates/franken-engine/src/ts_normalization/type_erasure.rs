@@ -35,6 +35,29 @@ pub(super) fn erase(source: &str) -> String {
     eraser.finish()
 }
 
+/// Erase TypeScript's prefix type assertions (`<T>value`), syntax only a
+/// `.ts` file has: in a `.tsx` file the same text is a JSX element
+/// (bd-9vouw.426). A generic arrow function (`<T>(x: T) => x`) is left to
+/// [`erase`], as is everything else.
+pub(super) fn erase_angle_assertions(source: &str) -> String {
+    let Some(tokens) = tokenize(source) else {
+        return source.to_owned();
+    };
+    let Some(pairs) = delimiter_pairs(&tokens) else {
+        return source.to_owned();
+    };
+    let mut eraser = Eraser {
+        source,
+        removed: vec![false; tokens.len()],
+        tokens,
+        pairs,
+        spans: Vec::new(),
+        module_marker: None,
+    };
+    eraser.erase_prefix_assertions();
+    eraser.finish()
+}
+
 fn analyze(source: &str, depth: usize) -> Option<Eraser<'_>> {
     if depth >= MAX_TYPE_DEPTH {
         return None;
@@ -838,6 +861,49 @@ mod tests {
 
     // Mark the exact erased spans. Everything else, including whitespace and
     // runtime colons, must remain byte-for-byte identical to the source.
+    /// Like [`check`], for [`erase_angle_assertions`] (bd-9vouw.426).
+    fn check_assertions(marked: &str) {
+        let mut source = String::new();
+        let mut expected = String::new();
+        let mut rest = marked;
+        while let Some(open) = rest.find('⟦') {
+            source.push_str(&rest[..open]);
+            expected.push_str(&rest[..open]);
+            rest = &rest[open + '⟦'.len_utf8()..];
+            let close = rest.find('⟧').expect("closed test marker");
+            source.push_str(&rest[..close]);
+            expected.extend(std::iter::repeat_n(' ', rest[..close].len()));
+            rest = &rest[close + '⟧'.len_utf8()..];
+        }
+        source.push_str(rest);
+        expected.push_str(rest);
+        assert_eq!(
+            erase_angle_assertions(&source),
+            expected,
+            "source: {source}"
+        );
+    }
+
+    #[test]
+    fn prefix_type_assertions_are_erased_bd_9vouw_426() {
+        check_assertions("const a = ⟦<Box>⟧raw;");
+        check_assertions("const b = (⟦<any>⟧raw).v + 1;");
+        check_assertions("const c = ⟦<number>⟧⟦<unknown>⟧\"7\";");
+        check_assertions("const d = ⟦<Array<string>>⟧[\"x\"];");
+        check_assertions("const e = ⟦<{ v: number }>⟧raw;");
+        check_assertions("function f(i) { return ⟦<string>⟧i; }");
+        check_assertions("if (ok) ⟦<T>⟧x.run();");
+        check_assertions("const i = 1 < 2 ? ⟦<number>⟧3 : 4;");
+        check_assertions("[⟦<number>⟧1].map(⟦<(n: number) => number>⟧((n) => n));");
+        // Generic arrows, comparisons and calls keep their angle brackets.
+        check_assertions("const g = <T>(x: T): T => x;");
+        check_assertions("const h = <T,>(x: T) => [x];");
+        check_assertions("const k = a < b && c > d;");
+        check_assertions("const m = f<number>(1);");
+        check_assertions("const n = async <T>(x: T) => x;");
+        check_assertions("const r = /<b>x/.test(\"<T>x\");");
+    }
+
     pub(super) fn check(marked: &str) {
         let mut source = String::new();
         let mut expected = String::new();

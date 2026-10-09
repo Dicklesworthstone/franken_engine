@@ -432,8 +432,15 @@ pub fn prepare_source_entry_for_public_entrypoints(
             })
         }
         SourceLanguage::TypeScript => {
+            // `<T>value` is a type assertion in a `.ts` file and a JSX element
+            // in a `.tsx` one, so only the file's name decides (bd-9vouw.426).
+            let assertion_free_source = if has_angle_assertion_syntax(source_label) {
+                type_erasure::erase_angle_assertions(&hashbang_prepared_source)
+            } else {
+                hashbang_prepared_source
+            };
             let normalization_output = normalize_typescript_to_es2020(
-                &hashbang_prepared_source,
+                &assertion_free_source,
                 &TsNormalizationConfig::default(),
                 trace_id,
                 decision_id,
@@ -455,6 +462,15 @@ pub fn prepare_source_entry_for_public_entrypoints(
             })
         }
     }
+}
+
+/// A `.ts`, `.mts` or `.cts` file, whose `<T>value` is a type assertion (a
+/// `.tsx` file has JSX there instead).
+fn has_angle_assertion_syntax(source_label: &str) -> bool {
+    let label = source_label.to_ascii_lowercase();
+    [".ts", ".mts", ".cts"]
+        .iter()
+        .any(|extension| label.ends_with(extension))
 }
 
 fn normalize_hashbang_for_es2020_parser(source: &str) -> (String, bool) {

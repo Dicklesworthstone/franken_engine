@@ -2530,11 +2530,13 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         extension_id.ok_or_else(|| "run requires --extension-id <id>".to_string())?;
     // Without --goal, the extension decides as Node's does: `.mjs` / `.mts`
     // is an ES module and `.cjs` / `.cts` a CommonJS module (bd-9vouw.415);
-    // anything else stays a script.
+    // a `.js` / `.ts` file is an ES module in a `"type": "module"` package
+    // (bd-9vouw.419); anything else stays a script.
     if !goal_given {
         match input.extension().and_then(|extension| extension.to_str()) {
             Some("mjs" | "mts") => goal = ParseGoal::Module,
             Some("cjs" | "cts") => commonjs_entry = true,
+            Some("js" | "ts") if package_scope_is_module(&input) => goal = ParseGoal::Module,
             _ => {}
         }
     }
@@ -12752,6 +12754,9 @@ fn run_usage() -> String {
         "  entry outside a \"type\": \"module\" package: require, module, exports,",
         "  __filename and __dirname are defined and relative requires load files.",
         "  Module loads stay inside --module-root (default: the entry's directory).",
+        "  Without --goal, .mjs/.mts run as ES modules and .cjs/.cts as CommonJS;",
+        "  a .js/.ts entry runs as an ES module when its nearest package.json says",
+        "  \"type\": \"module\"; anything else runs as a script.",
         "",
         "  --instruction-budget overrides the interpreter instruction budget (default",
         "  100000, at most 10000000000). Exhaustion still fails closed; the value is",
@@ -13415,6 +13420,34 @@ fn runtime_usage() -> String {
     .join("\n")
 }
 
+/// Node's package scope lookup for a `.js` (or type-stripped `.ts`) file
+/// (bd-9vouw.419): the nearest package.json at or above the file's
+/// directory decides, and `"type": "module"` makes the file an ES module.
+/// The lookup stops at that package.json whatever it says. A file that
+/// does not exist, or a package.json that is not a JSON object, keeps the
+/// default goal.
+fn package_scope_is_module(input: &Path) -> bool {
+    let Ok(file) = std::fs::canonicalize(input) else {
+        return false;
+    };
+    let mut directory = file.parent();
+    while let Some(current) = directory {
+        if let Ok(text) = std::fs::read_to_string(current.join("package.json")) {
+            return serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|manifest| {
+                    manifest
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|kind| kind == "module")
+                })
+                .unwrap_or(false);
+        }
+        directory = current.parent();
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13504,6 +13537,59 @@ mod tests {
         assert_eq!(parse("app.ts", None), (ParseGoal::Script, false));
         assert_eq!(parse("app.mjs", Some("script")), (ParseGoal::Script, false));
         assert_eq!(parse("app.js", Some("commonjs")), (ParseGoal::Script, true));
+    }
+
+    /// bd-9vouw.419: a `.js` or `.ts` file whose nearest package.json says
+    /// `"type": "module"` runs as an ES module without --goal; the nearest
+    /// package.json decides even without a type; an explicit --goal wins.
+    #[test]
+    fn run_goal_follows_the_package_type_bd_9vouw_419() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let esm = root.path().join("esm");
+        let nested = esm.join("nested");
+        let cjs = root.path().join("cjs");
+        for directory in [&nested, &cjs] {
+            std::fs::create_dir_all(directory).expect("create package directory");
+        }
+        std::fs::write(esm.join("package.json"), r#"{"type": "module"}"#).expect("write");
+        std::fs::write(nested.join("package.json"), r#"{"name": "inner"}"#).expect("write");
+        std::fs::write(cjs.join("package.json"), r#"{"type": "commonjs"}"#).expect("write");
+        for file in [
+            esm.join("app.js"),
+            esm.join("app.ts"),
+            nested.join("app.js"),
+            cjs.join("app.js"),
+        ] {
+            std::fs::write(&file, "export {};").expect("write entry");
+        }
+        let parse = |input: &Path, goal: Option<&str>| {
+            let mut args = vec![
+                "run".to_string(),
+                "--input".to_string(),
+                input.display().to_string(),
+                "--extension-id".to_string(),
+                "ext".to_string(),
+            ];
+            if let Some(goal) = goal {
+                args.push("--goal".to_string());
+                args.push(goal.to_string());
+            }
+            match parse_command(&args).expect("run command should parse") {
+                CommandSpec::Run(spec) => (spec.parse_goal, spec.commonjs_entry),
+                other => panic!("expected run command, got {other:?}"),
+            }
+        };
+        assert_eq!(parse(&esm.join("app.js"), None), (ParseGoal::Module, false));
+        assert_eq!(parse(&esm.join("app.ts"), None), (ParseGoal::Module, false));
+        assert_eq!(
+            parse(&nested.join("app.js"), None),
+            (ParseGoal::Script, false)
+        );
+        assert_eq!(parse(&cjs.join("app.js"), None), (ParseGoal::Script, false));
+        assert_eq!(
+            parse(&esm.join("app.js"), Some("script")),
+            (ParseGoal::Script, false)
+        );
     }
 
     #[test]

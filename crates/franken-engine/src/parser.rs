@@ -7504,6 +7504,62 @@ fn raw_expression_early_error(expression: &str) -> Option<&'static str> {
     {
         return Some("two expressions with no operator between them");
     }
+    // A statement keyword starts no expression (`if{};else{}`, `try(e){}`,
+    // `catch(){}`): the statement parser did not take it (bd-9vouw.451).
+    let leading_word_end = expression
+        .find(|ch: char| !is_identifier_continue(ch))
+        .unwrap_or(expression.len());
+    if matches!(
+        &expression[..leading_word_end],
+        "if" | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "try"
+            | "catch"
+            | "finally"
+            | "switch"
+            | "case"
+            | "default"
+            | "break"
+            | "continue"
+            | "return"
+            | "throw"
+            | "var"
+            | "const"
+            | "with"
+            | "debugger"
+            | "export"
+            | "enum"
+            | "extends"
+    ) {
+        return Some("a statement keyword cannot start an expression");
+    }
+    // A bracketed operand followed by a name with no operator between them
+    // (`{index = 0;} index++`, `[1] x`), and a `;` outside every bracket and
+    // literal with code after it (`a; b`): no expression has either
+    // (bd-9vouw.451).
+    if expression.starts_with(['{', '[', '(']) {
+        let (open, close) = match expression.as_bytes()[0] {
+            b'{' => ('{', '}'),
+            b'[' => ('[', ']'),
+            _ => ('(', ')'),
+        };
+        if let Some((_, after)) = extract_balanced(expression, open, close) {
+            let after = after.trim_start();
+            let word_end = after
+                .find(|ch: char| !is_identifier_continue(ch))
+                .unwrap_or(after.len());
+            if after.starts_with(is_identifier_start)
+                && !matches!(&after[..word_end], "in" | "instanceof" | "of" | "as")
+            {
+                return Some("two expressions with no operator between them");
+            }
+        }
+    }
+    if has_top_level_semicolon(expression) {
+        return Some("a `;` cannot be inside an expression");
+    }
     // A call followed by a block (`gen() {}`): a method definition outside a
     // class or object literal, as a field initializer running into the next
     // line reads `x = 42` newline `*gen() {}` (bd-9vouw.450).
@@ -14736,6 +14792,33 @@ fn has_top_level_in_operator(text: &str) -> bool {
     false
 }
 
+/// Whether `text` has a `;` outside every bracket and literal with more code
+/// after it (`a; b`). A final `;` may be the statement's own terminator.
+fn has_top_level_semicolon(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut quotes = QuoteState::default();
+    for (i, &b) in bytes.iter().enumerate() {
+        if quotes.active() {
+            quotes.advance(b);
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(text, i) {
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b';' if depth == 0 && !text[i + 1..].trim().is_empty() => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Whether `text` has an optional chain `?.` outside every bracket and
 /// literal: `a?.b`, `a?.[0]`, but not `(a?.b)` or `c?.5:d`.
 fn has_top_level_optional_chain(text: &str) -> bool {
@@ -18879,6 +18962,41 @@ mod tests {
             "class C {\n  x\n  *gen() {}\n}",
             "class C {\n  x = 42;\n  *gen() {}\n}",
             "var obj = {};\nclass C {\n  x = obj\n  ['lol'] = 42\n}",
+        ] {
+            parser
+                .parse(source, ParseGoal::Script)
+                .unwrap_or_else(|err| panic!("`{source}` must parse: {}", err.message));
+        }
+    }
+
+    // bd-9vouw.451: a statement keyword leading an expression, a bracketed
+    // operand followed by a name, and a `;` inside an expression are
+    // SyntaxErrors before anything runs.
+    #[test]
+    fn statement_keywords_and_unseparated_groups_are_not_expressions() {
+        let parser = CanonicalEs2020Parser;
+        for source in [
+            "if{};else{}",
+            "try(e1){\n}\ncatch(e){}",
+            "catch(){}\nfinally{}",
+            "var r = [1] x;",
+            "var arr = [];\nfor({index=0; index+=1;} index++<=10; index*2;) {}",
+        ] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must be a SyntaxError"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::InvalidSyntax,
+                "wrong code for `{source}`: {}",
+                err.message
+            );
+        }
+        for source in [
+            "var o = {}, a, b;\nvar t = [1] in o;",
+            "var u = ({}) instanceof Object;",
+            "var a, b;\nvar k = (a, b);",
+            "var o = {};\nvar w = {}\nw = 1;",
         ] {
             parser
                 .parse(source, ParseGoal::Script)

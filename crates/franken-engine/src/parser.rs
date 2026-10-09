@@ -10946,6 +10946,14 @@ fn invalid_numeric_literal_message(text: &str, strict: bool) -> Option<&'static 
     {
         return None;
     }
+    // A `.` before a name is a member access on the number (`1..toString`,
+    // `1.5e3.valueOf`), which reaches here unsplit; `1.e5` is left alone
+    // too, as valid.
+    if bytes.windows(2).any(|pair| {
+        pair[0] == b'.' && (pair[1].is_ascii_alphabetic() || matches!(pair[1], b'_' | b'$'))
+    }) {
+        return None;
+    }
     let separators_valid =
         |digits: &str| !digits.starts_with('_') && !digits.ends_with('_') && !digits.contains("__");
     if let Some(rest) = text

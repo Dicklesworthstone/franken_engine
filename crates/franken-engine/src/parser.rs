@@ -6518,7 +6518,16 @@ fn parse_expression(
     // be the receiver for a postfix chain, e.g. `/ab/.test("xabz")`.
     if let Some((end, pattern, flags)) = leading_regexp_literal(expression) {
         let tail = expression[end..].trim_start();
-        if tail.is_empty() {
+        // The flags are every IdentifierPart after the slash, so malformed
+        // flags are an early error whatever follows (`/a/instanceof R`,
+        // bd-9vouw.406); the literal's own check reports them.
+        let mut seen_flags = String::new();
+        let flags_well_formed = flags.chars().all(|flag| {
+            let fresh = "dgimsuvy".contains(flag) && !seen_flags.contains(flag);
+            seen_flags.push(flag);
+            fresh
+        }) && !(flags.contains('u') && flags.contains('v'));
+        if tail.is_empty() || !flags_well_formed {
             return regexp_literal_expression(pattern, flags, span, context);
         }
         // A top-level binary operator after the chain binds looser than it

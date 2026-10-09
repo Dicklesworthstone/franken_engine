@@ -56,3 +56,29 @@ console.log(r.join(" "));
         ]
     );
 }
+
+/// Strict code keeps the early SyntaxError for a call target: the
+/// specification returns ~invalid~ for a strict CallExpression's
+/// AssignmentTargetType (Test262 language/expressions/assignmenttargettype/
+/// direct-callexpression*, flags onlyStrict). V8 accepts these at parse
+/// time, so these expectations are the specification's, not Node's.
+#[test]
+fn strict_call_targets_stay_syntax_errors() {
+    let source = r#"
+var r = [];
+["'use strict'; f() = 1;", "'use strict'; f() += 1;", "'use strict'; f()++;",
+ "'use strict'; --f();"].forEach(function (s) {
+  try { Function(s); r.push("ok"); } catch (e) { r.push(e.name); }
+});
+console.log(r.join(" "));
+"#;
+    let outcome = HybridRouter::default()
+        .eval(source)
+        .unwrap_or_else(|error| panic!("evaluation failed: {error}"));
+    let lines: Vec<&str> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(lines, ["SyntaxError SyntaxError SyntaxError SyntaxError"]);
+}

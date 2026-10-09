@@ -34589,6 +34589,17 @@ fn module_statement_order(body: &[Statement]) -> std::vec::IntoIter<&Statement> 
         .collect();
     let rank = |statement: &Statement| match statement {
         Statement::FunctionDeclaration(_) => 0u8,
+        // `export default function () {}` (also a generator or async
+        // function) is a hoistable declaration whose binding is *default*
+        // (ES2020 15.2.3): it exists before any module request runs, so a
+        // module in a cycle can call it (bd-9vouw.412). Its evaluation has
+        // no side effect. A parenthesized `export default (function () {})`
+        // has the same tree and is moved too, where the specification would
+        // leave *default* uninitialized until the statement runs.
+        Statement::Export(ExportDeclaration {
+            kind: ExportKind::Default(Expression::Function { .. }),
+            ..
+        }) => 1,
         Statement::Export(ExportDeclaration {
             kind: ExportKind::NamedClause(clause),
             ..

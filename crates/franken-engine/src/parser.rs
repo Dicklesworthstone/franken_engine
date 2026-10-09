@@ -2887,6 +2887,13 @@ fn strip_comments_to_whitespace_with(text: &str, html_comments: bool) -> (String
                 out.push(ch);
                 trailing_identifier_closed = true;
             }
+            // ZERO WIDTH NO-BREAK SPACE is WhiteSpace (ES2020 11.2), but
+            // Rust's trimming and splitting do not treat it as white space,
+            // so outside literals it is blanked like a comment (bd-9vouw.407).
+            '\u{feff}' => {
+                push_blanked(&mut out, ch);
+                trailing_identifier_closed = true;
+            }
             ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
                 out.push(ch);
                 if trailing_identifier_closed {

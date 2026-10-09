@@ -5926,19 +5926,12 @@ fn parse_binding_pattern_inner(
         return Ok(BindingPattern::Identifier(name));
     }
 
-    // A binding element begins with `{`, `[`, `...` or an identifier, so an
-    // ASCII character that cannot start one (`-->`, `1x`, `+a`) makes the
-    // pattern invalid, not unsupported.
-    let (code, kind) = if trimmed.starts_with(|first: char| {
-        first.is_ascii() && !(first.is_ascii_alphabetic() || matches!(first, '_' | '$' | '\\'))
-    }) {
-        (ParseErrorCode::InvalidSyntax, "invalid")
-    } else {
-        (ParseErrorCode::UnsupportedSyntax, "unsupported")
-    };
+    // Every binding pattern form is handled above (identifier, `{...}`,
+    // `[...]`, `...rest`, `= default`), so anything else is invalid, not
+    // unsupported: `x[yield]`, `x?.y`, `get x() {}`, `-->` (bd-9vouw.424).
     Err(ParseError::new(
-        code,
-        format!("{kind} binding pattern: `{trimmed}`"),
+        ParseErrorCode::InvalidSyntax,
+        format!("invalid binding pattern: `{trimmed}`"),
         context.source_label.to_string(),
         Some(span.clone()),
     ))
@@ -14357,6 +14350,15 @@ fn try_parse_for_in_of(
             let assign = if lhs.starts_with(['[', '{']) {
                 match parse_expression(&target, span, context, 1) {
                     Ok(assign) if destructuring_assignment_has_member_target(&assign) => assign,
+                    // A member of a literal (`for ([let][1] in o)`, sloppy):
+                    // the bracket group is the member's object, not a
+                    // pattern (bd-9vouw.424).
+                    Ok(assign)
+                        if matches!(&assign, Expression::Assignment { left, .. }
+                            if matches!(left.as_ref(), Expression::Member { .. })) =>
+                    {
+                        assign
+                    }
                     _ => return Err(error),
                 }
             } else if lhs

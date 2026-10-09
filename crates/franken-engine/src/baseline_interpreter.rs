@@ -1098,10 +1098,17 @@ pub(crate) fn regexp_literal_early_error(pattern: &str, flags: &str) -> Option<S
             "Invalid regular expression: /{pattern}/{flags}: {message}"
         ));
     }
-    // `regex` takes a `v` class's syntax characters as literals.
-    if flags.contains('v')
-        && let Some(message) = regexp_syntax::unicode_sets_class_error(pattern)
-    {
+    // `regex` takes a `v` class's syntax characters, and a `u` or `v`
+    // pattern's lone braces and class-escape range ends, as literals.
+    let unicode_sets = flags.contains('v');
+    let unicode_mode_error = (unicode_sets || flags.contains('u'))
+        .then(|| regexp_syntax::unicode_mode_syntax_error(pattern, unicode_sets))
+        .flatten();
+    if let Some(message) = unicode_mode_error.or_else(|| {
+        unicode_sets
+            .then(|| regexp_syntax::unicode_sets_class_error(pattern))
+            .flatten()
+    }) {
         return Some(format!(
             "Invalid regular expression: /{pattern}/{flags}: {message}"
         ));

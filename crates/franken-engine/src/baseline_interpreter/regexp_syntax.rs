@@ -1755,6 +1755,109 @@ pub(super) fn property_escape_count(pattern: &str) -> usize {
     pattern.matches("\\p{").count() + pattern.matches("\\P{").count()
 }
 
+/// Early errors of a `u` or `v` pattern that Annex B relaxes without them
+/// (ES2020 22.2.1, B.1.4): outside a class, a `{` that starts no quantifier
+/// `{n}` / `{n,}` / `{n,m}` and a lone `}` or `]`; and with `u`, a class
+/// range with a class escape (`\d`, `\p{..}`, ...) at either end. Both
+/// RegExp routes accept these as literals, so `/x{/u`, `/a]/u` and
+/// `/[\d-z]/u` compiled (bd-9vouw.401). `None` leaves the pattern to the
+/// other checks.
+pub(super) fn unicode_mode_syntax_error(pattern: &str, unicode_sets: bool) -> Option<&'static str> {
+    let chars: Vec<char> = pattern.chars().collect();
+    let len = chars.len();
+    // The index past a braced escape body (`\p{..}`, `\u{..}`) or a group
+    // name (`\k<..>`) whose opener is at `open`.
+    let past_closing = |open: usize, closer: char| {
+        chars[open + 1..]
+            .iter()
+            .position(|&c| c == closer)
+            .map_or(len, |offset| open + offset + 2)
+    };
+    // One class atom at `index` with `u`: its end and whether it is a class
+    // escape, which cannot end a range.
+    let class_atom = |index: usize| -> (usize, bool) {
+        if chars[index] != '\\' || index + 1 >= len {
+            return (index + 1, false);
+        }
+        match chars[index + 1] {
+            'p' | 'P' if chars.get(index + 2) == Some(&'{') => (past_closing(index + 2, '}'), true),
+            'u' if chars.get(index + 2) == Some(&'{') => (past_closing(index + 2, '}'), false),
+            'd' | 'D' | 's' | 'S' | 'w' | 'W' => (index + 2, true),
+            _ => (index + 2, false),
+        }
+    };
+    let mut index = 0;
+    while let Some(&c) = chars.get(index) {
+        match c {
+            '\\' => {
+                index = match (chars.get(index + 1), chars.get(index + 2)) {
+                    (Some('p' | 'P' | 'u'), Some('{')) => past_closing(index + 2, '}'),
+                    (Some('k'), Some('<')) => past_closing(index + 2, '>'),
+                    _ => index + 2,
+                };
+            }
+            '[' if unicode_sets => {
+                // `v` classes nest; their own check is unicode_sets_class_error.
+                let mut depth = 0usize;
+                while let Some(&c) = chars.get(index) {
+                    match c {
+                        '\\' => index += 1,
+                        '[' => depth += 1,
+                        ']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                index += 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    index += 1;
+                }
+            }
+            '[' => {
+                index += 1;
+                if chars.get(index) == Some(&'^') {
+                    index += 1;
+                }
+                while index < len && chars[index] != ']' {
+                    let (end, is_class) = class_atom(index);
+                    if chars.get(end) == Some(&'-') && end + 1 < len && chars[end + 1] != ']' {
+                        let (range_end, range_is_class) = class_atom(end + 1);
+                        if is_class || range_is_class {
+                            return Some("Invalid character class");
+                        }
+                        index = range_end;
+                    } else {
+                        index = end;
+                    }
+                }
+                index += 1;
+            }
+            '{' => {
+                let digits = |from: usize| {
+                    chars[from.min(len)..]
+                        .iter()
+                        .take_while(|c| c.is_ascii_digit())
+                        .count()
+                };
+                let lower = digits(index + 1);
+                let mut end = index + 1 + lower;
+                if lower > 0 && chars.get(end) == Some(&',') {
+                    end += 1 + digits(end + 1);
+                }
+                if lower == 0 || chars.get(end) != Some(&'}') {
+                    return Some("Incomplete quantifier");
+                }
+                index = end + 1;
+            }
+            '}' | ']' => return Some("Lone quantifier brackets"),
+            _ => index += 1,
+        }
+    }
+    None
+}
+
 /// The early error of a class under the `v` flag (ES2024 22.2.1): an
 /// unescaped ClassSetSyntaxCharacter (`(`, `)`, `{`, `}`, `/`, `|`, or a
 /// `-` that starts a class or ends one and is no `--`), a
@@ -1956,10 +2059,71 @@ fn valid_property_escape(body: &str, negated: bool, unicode_sets: bool) -> bool 
 mod tests {
     use super::{
         GENERAL_CATEGORY_VALUES, LONE_PROPERTY_NAMES, SCRIPT_VALUES, STRING_PROPERTY_NAMES,
-        has_nested_quantifier, js_pattern_to_rust, unicode_property_escape_error,
-        unicode_sets_class_error,
+        has_nested_quantifier, js_pattern_to_rust, unicode_mode_syntax_error,
+        unicode_property_escape_error, unicode_sets_class_error,
     };
     use regex::{Regex, RegexBuilder};
+
+    /// bd-9vouw.401: with `u`, a `{` that starts no quantifier, a lone `}` or
+    /// `]`, and a class range with a class escape at either end are
+    /// SyntaxErrors. Verdicts are Node v22.2.0's `new RegExp(pattern, "u")`.
+    #[test]
+    fn unicode_mode_lone_braces_and_class_escape_ranges_bd_9vouw_401() {
+        for pattern in [
+            r#"x{"#,
+            r#"a{1"#,
+            r#"a{1,"#,
+            r#"a{,1}"#,
+            r#"}"#,
+            r#"a}"#,
+            r#"]"#,
+            r#"a]"#,
+            r#"[]]"#,
+            r#"{"#,
+            r#"[\d-z]"#,
+            r#"[a-\d]"#,
+            r#"[\w-a]"#,
+            r#"[\s-\d]"#,
+            r#"[\p{Hex}-\uFFFF]"#,
+            r#"[\uFFFF-\p{Hex}]"#,
+            r#"[--\p{Hex}]"#,
+            r#"[\p{Hex}--]"#,
+            r#"[\P{L}-a]"#,
+            r#"\\p{Script=Latin}"#,
+        ] {
+            assert!(
+                unicode_mode_syntax_error(pattern, false).is_some(),
+                "{pattern}"
+            );
+        }
+        for pattern in [
+            r#"a{1}"#,
+            r#"a{1,2}"#,
+            r#"a{1,}"#,
+            r#"x{0}"#,
+            r#"[a-z]"#,
+            r#"[\u{1F600}-\u{1F64F}]"#,
+            r#"\p{L}+"#,
+            r#"\u{1F600}"#,
+            r#"(?<n>a)\k<n>"#,
+            r#"[-a]"#,
+            r#"[a-]"#,
+            r#"[\w-]"#,
+            r#"[-\w]"#,
+            r#"[\-a]"#,
+            r#"\{"#,
+            r#"\}"#,
+            r#"\]"#,
+            r#"[\p{L}]"#,
+            r#"[{}]"#,
+            r#"[^-\d]"#,
+            r#"[\d-]"#,
+            r#"(\})"#,
+            r#"[\]]"#,
+        ] {
+            assert_eq!(unicode_mode_syntax_error(pattern, false), None, "{pattern}");
+        }
+    }
 
     /// bd-9vouw.400: a `v` class may not hold an unescaped syntax character,
     /// a reserved double punctuator, a dangling `-` or an `&&` without both

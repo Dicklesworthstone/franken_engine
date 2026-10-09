@@ -9355,25 +9355,33 @@ fn web_compat_call_target(
     {
         return None;
     }
-    if is_tagged_template_call_source(lhs) {
-        return None;
-    }
     parse_expression(lhs, span, context, recursion_depth + 1)
         .ok()
-        .filter(|target| matches!(target, Expression::Call { .. }))
+        .filter(|target| is_web_compat_call_target(lhs, target))
 }
 
-/// Whether `source`, already parsed as a call, is a tagged template
-/// (CallExpression TemplateLiteral), parenthesized or not, which parses as
-/// a call too but is never an assignment target.
-fn is_tagged_template_call_source(source: &str) -> bool {
+/// Whether `target`, parsed from `source`, is a call that Annex B admits as
+/// an assignment target: a CallExpression (parenthesized or not), but not
+/// an `import()` or `super()` call, a tagged template, or a comma sequence,
+/// all of which also parse as calls (a sequence `(a, b)` is a call of a
+/// synthetic arrow function) and are never targets (the qn70 census found
+/// `import('') = 1` and `(x, y) = 1` accepted, bd-9vouw.408).
+fn is_web_compat_call_target(source: &str, target: &Expression) -> bool {
+    let Expression::Call { callee, .. } = target else {
+        return false;
+    };
+    if matches!(callee.as_ref(), Expression::Super)
+        || matches!(callee.as_ref(), Expression::Identifier(name) if name == "import")
+    {
+        return false;
+    }
     let mut source = source.trim();
     while let Some((inner, rest)) = extract_balanced(source, '(', ')')
         && rest.trim().is_empty()
     {
         source = inner.trim();
     }
-    source.ends_with('`')
+    !source.ends_with('`') && first_top_level_byte(source, b',').is_none()
 }
 
 fn reject_non_assignable_update_target(
@@ -9383,9 +9391,7 @@ fn reject_non_assignable_update_target(
     context: &ParseExecutionContext<'_>,
 ) -> Option<ParseResult<Expression>> {
     // A call is a web-compat update target in non-strict code (Annex B).
-    let web_compat_call = !context.strict_mode
-        && matches!(target, Expression::Call { .. })
-        && !is_tagged_template_call_source(operand_src);
+    let web_compat_call = !context.strict_mode && is_web_compat_call_target(operand_src, target);
     if !web_compat_call
         && matches!(
             target,
@@ -14744,7 +14750,7 @@ fn do_while_statement_len(text: &str) -> Option<usize> {
     {
         return None;
     } else {
-        first_top_level_semicolon(body)? + 1
+        first_top_level_byte(body, b';')? + 1
     };
     let after_body = &text[body_offset + body_len..];
     let rest = after_body.trim_start().strip_prefix("while")?;
@@ -14761,9 +14767,9 @@ fn do_while_statement_len(text: &str) -> Option<usize> {
     })
 }
 
-/// The index of the first `;` of `text` outside brackets, quotes, template
-/// literals and regular expression literals.
-fn first_top_level_semicolon(text: &str) -> Option<usize> {
+/// The index of the first `target` byte of `text` outside brackets, quotes,
+/// template literals and regular expression literals.
+fn first_top_level_byte(text: &str, target: u8) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut depth: i64 = 0;
     let mut quotes = QuoteState::default();
@@ -14781,7 +14787,7 @@ fn first_top_level_semicolon(text: &str) -> Option<usize> {
             }
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth -= 1,
-            b';' if depth == 0 => return Some(index),
+            byte if byte == target && depth == 0 => return Some(index),
             _ => {}
         }
     }

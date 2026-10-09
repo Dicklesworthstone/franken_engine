@@ -9382,7 +9382,11 @@ struct ModuleRuntimeRecord {
     /// The module's static flow label ceiling once it is lowered: every value
     /// it can produce is at most this label (bd-j8f7q import contracts).
     flow_label_ceiling: Option<Label>,
-    pending_import_bindings: BTreeMap<JsString, Vec<Weak<RefCell<ScopeBindingState>>>>,
+    /// Importers' binding cells for each export name (bd-1lsy.4.10.1). Every
+    /// publication of the export writes them, so an import is a live view of
+    /// the exporting module's binding; a cell whose importer is gone drops
+    /// out at the next publication.
+    import_bindings: BTreeMap<JsString, Vec<Weak<RefCell<ScopeBindingState>>>>,
     cjs_module_object: Option<ObjectId>,
     /// The executable program that owns every closure created while this
     /// module is evaluated. Imported closures carry only an index into this
@@ -9394,14 +9398,6 @@ struct ModuleRuntimeRecord {
     /// Owned activation parked while an imported module is asynchronously
     /// evaluating. Entry-module execution remains installed in the core.
     async_execution: Option<ModuleExecutionSnapshot>,
-}
-
-#[derive(Debug, Clone)]
-struct PendingCyclicImportBinding {
-    module_specifier: String,
-    export_name: JsString,
-    source_register: u32,
-    expected_init_ip: usize,
 }
 
 /// Realm-persistent dynamic-code artifacts owned by one immutable module
@@ -9434,6 +9430,9 @@ struct ModuleState {
     generated_function_stores: BTreeMap<ContentHash, GeneratedFunctionStore>,
     /// Cached logical charge for `generated_function_stores`.
     retained_generated_function_bytes: u64,
+    /// Module bindings that back exports (bd-1lsy.4.10.1), indexed by their
+    /// cells' `live_export`: a write to one republishes its exports.
+    live_exports: Vec<LiveExport>,
 }
 
 impl ModuleState {
@@ -9443,9 +9442,22 @@ impl ModuleState {
             retained_program_bytes: 0,
             generated_function_stores: BTreeMap::new(),
             retained_generated_function_bytes: 0,
+            live_exports: Vec::new(),
         }
     }
 }
+
+/// A module's scope binding and the exports it is the local binding of:
+/// `(module specifier, export name)` pairs (bd-1lsy.4.10.1).
+#[derive(Debug, Clone)]
+struct LiveExport {
+    cell: Weak<RefCell<ScopeBindingState>>,
+    exports: Vec<(String, JsString)>,
+}
+
+/// How many re-export hops one write republishes through (an exported
+/// import binding republishes when its export is published).
+const LIVE_EXPORT_CASCADE_LIMIT: u32 = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CjsModuleContext {
@@ -9903,6 +9915,9 @@ enum BindingKind {
     Const = 2,
     Param = 3,
     Function = 4,
+    /// A module's import binding (bd-1lsy.4.10.1): immutable, initialized
+    /// when its import runs and then kept equal to the exported binding.
+    Import = 5,
 }
 
 impl BindingKind {
@@ -9913,8 +9928,9 @@ impl BindingKind {
             2 => Ok(Self::Const),
             3 => Ok(Self::Param),
             4 => Ok(Self::Function),
+            5 => Ok(Self::Import),
             _ => Err(InterpreterError::TypeError {
-                expected: "binding kind 0..=4".to_string(),
+                expected: "binding kind 0..=5".to_string(),
                 got: format!("kind {val}"),
             }),
         }
@@ -9922,6 +9938,12 @@ impl BindingKind {
 
     fn is_hoisted(self) -> bool {
         matches!(self, Self::Var | Self::Param | Self::Function)
+    }
+
+    /// Assigning it is a TypeError: a `const`, or an import (ES2020
+    /// 15.2.1.16.4: an import binding is immutable).
+    fn is_immutable(self) -> bool {
+        matches!(self, Self::Const | Self::Import)
     }
 }
 
@@ -9938,6 +9960,9 @@ struct ScopeBindingState {
     label: Label,
     /// `true` once initialized (let/const start uninitialized in TDZ).
     initialized: bool,
+    /// 1 + the index in `ModuleState::live_exports` of the exports this
+    /// module binding backs (bd-1lsy.4.10.1); a write republishes them.
+    live_export: Option<std::num::NonZeroU32>,
 }
 
 /// A single binding in a scope environment.
@@ -9998,6 +10023,7 @@ impl ScopeBinding {
                 value,
                 label,
                 initialized,
+                live_export: None,
             })),
         }
     }
@@ -15294,8 +15320,6 @@ pub struct InterpreterCore {
     /// available but the importer must park behind this dependency's module
     /// evaluation Promise before executing its next instruction (bd-yn3lv).
     pending_async_module_import: Option<(String, crate::promise_model::PromiseHandle)>,
-    /// One-instruction handoff from a cyclic namespace read to InitBinding.
-    pending_cyclic_import_binding: Option<PendingCyclicImportBinding>,
     /// Active CommonJS module context, if currently evaluating a CJS module.
     active_cjs_context: Option<CjsModuleContext>,
     /// Current module specifier (used to resolve relative imports).
@@ -15688,7 +15712,7 @@ impl InterpreterCore {
                 name: name.to_string(),
             });
         }
-        if binding.kind == BindingKind::Const {
+        if binding.kind.is_immutable() {
             return Err(InterpreterError::ConstAssignment {
                 name: name.to_string(),
             });
@@ -16259,7 +16283,6 @@ impl InterpreterCore {
             next_promise_combinator_id: 0,
             module_state: ModuleState::new(),
             pending_async_module_import: None,
-            pending_cyclic_import_binding: None,
             active_cjs_context: None,
             current_module_specifier: None,
             active_generated_function_artifact: None,
@@ -36434,8 +36457,8 @@ impl InterpreterCore {
         self.gc_remembered_set.clear();
         self.module_state.modules.clear();
         self.module_state.retained_program_bytes = 0;
+        self.module_state.live_exports.clear();
         self.pending_async_module_import = None;
-        self.pending_cyclic_import_binding = None;
         self.active_cjs_context = None;
 
         // The clears above released many independently-charged memory
@@ -38559,7 +38582,7 @@ impl InterpreterCore {
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
-                pending_import_bindings: BTreeMap::new(),
+                import_bindings: BTreeMap::new(),
                 cjs_module_object: None,
                 compiled_module,
                 evaluation_promise: None,
@@ -45914,48 +45937,67 @@ impl InterpreterCore {
         value: Value,
         label: Label,
     ) -> Result<(), InterpreterError> {
-        let diagnostic_name = name.to_string();
         let Some(specifier) = self.current_module_specifier.clone() else {
             return Err(InterpreterError::ExportOutsideModule {
-                name: diagnostic_name,
+                name: name.to_string(),
             });
         };
-        let record = self.module_state.modules.get(&specifier).ok_or_else(|| {
-            InterpreterError::ExportOutsideModule {
-                name: diagnostic_name.clone(),
-            }
-        })?;
-        let namespace_object = record.namespace_object;
-        let previous_export_bytes = record
-            .exports
-            .get(&name)
-            .map(|previous| Self::estimate_js_string_map_entry_bytes(&name, previous))
-            .unwrap_or(0);
-        let next_export_bytes = Self::estimate_js_string_map_entry_bytes(&name, &value);
-        let pending_cells = record
-            .pending_import_bindings
-            .get(&name)
-            .into_iter()
-            .flatten()
-            .filter_map(Weak::upgrade)
-            .fold(Vec::new(), |mut cells, cell| {
-                if !cells.iter().any(|seen| Rc::ptr_eq(seen, &cell)) {
-                    cells.push(cell);
+        self.publish_module_export(&specifier, name, value, label, 0)
+    }
+
+    /// Publish `value` as export `name` of module `specifier`: its export
+    /// record, its namespace object's property and every importer's binding
+    /// cell of that name (bd-1lsy.4.10.1). The cells stay registered, so each
+    /// later publication writes them too: imports are live. A cell keeps the
+    /// join of every label published to it. A cell that itself backs an
+    /// export (a re-exported import) republishes that export in turn.
+    fn publish_module_export(
+        &mut self,
+        specifier: &str,
+        name: JsString,
+        value: Value,
+        label: Label,
+        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let diagnostic_name = name.to_string();
+        let (namespace_object, previous_export_bytes, pending_cells) = {
+            let record = self
+                .module_state
+                .modules
+                .get_mut(specifier)
+                .ok_or_else(|| InterpreterError::ExportOutsideModule {
+                    name: diagnostic_name.clone(),
+                })?;
+            let previous_export_bytes = record
+                .exports
+                .get(&name)
+                .map(|previous| Self::estimate_js_string_map_entry_bytes(&name, previous))
+                .unwrap_or(0);
+            // An importer whose scope and closures are gone drops out.
+            let mut cells: Vec<Rc<RefCell<ScopeBindingState>>> = Vec::new();
+            if let Some(watchers) = record.import_bindings.get_mut(&name) {
+                watchers.retain(|watcher| watcher.strong_count() > 0);
+                for cell in watchers.iter().filter_map(Weak::upgrade) {
+                    if !cells.iter().any(|seen| Rc::ptr_eq(seen, &cell)) {
+                        cells.push(cell);
+                    }
                 }
-                cells
-            });
-        let previous_scope_bytes = self.scope_chain_memory_bytes();
-        let previous_closure_bytes = self.closures_memory_bytes();
-        let previous_call_stack_bytes = self.call_stack_memory_bytes();
+            }
+            (record.namespace_object, previous_export_bytes, cells)
+        };
+        let next_export_bytes = Self::estimate_js_string_map_entry_bytes(&name, &value);
         let mut previous_cell_states = Vec::with_capacity(pending_cells.len());
         let mut next_cell_labels = Vec::with_capacity(pending_cells.len());
+        let mut previous_cell_payload_bytes = 0u64;
         for cell in &pending_cells {
             let old_state = cell
                 .try_borrow()
                 .map_err(|_| InterpreterError::InternalError {
-                    details: "cyclic module import binding is already mutably borrowed".to_string(),
+                    details: "module import binding is already mutably borrowed".to_string(),
                 })?
                 .clone();
+            previous_cell_payload_bytes = previous_cell_payload_bytes
+                .saturating_add(Self::estimate_binding_cell_payload_bytes(cell));
             next_cell_labels.push(
                 self.join_owned_label_with_temporary_budget(old_state.label.clone(), &label)?,
             );
@@ -45968,7 +46010,7 @@ impl InterpreterCore {
             .map(|cell| {
                 cell.try_borrow_mut()
                     .map_err(|_| InterpreterError::InternalError {
-                        details: "cyclic module import binding is already borrowed".to_string(),
+                        details: "module import binding is already borrowed".to_string(),
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -45981,11 +46023,16 @@ impl InterpreterCore {
         for cell in &pending_cells {
             self.closures.refresh_cell(cell);
         }
-        if let Err(error) = self.apply_scope_closure_call_stack_memory_delta(
-            previous_scope_bytes,
-            previous_closure_bytes,
-            previous_call_stack_bytes,
-        ) {
+        // Each cell is charged once wherever it is reachable (an importer's
+        // scope frame, a closure's cold ledger), so its payload change is the
+        // whole delta, as for a scoped store (bd-9vouw.31): publishing does
+        // not walk every live cell.
+        let next_cell_payload_bytes = pending_cells.iter().fold(0u64, |total, cell| {
+            total.saturating_add(Self::estimate_binding_cell_payload_bytes(cell))
+        });
+        if let Err(error) =
+            self.apply_memory_component_delta(previous_cell_payload_bytes, next_cell_payload_bytes)
+        {
             for (cell, previous) in &previous_cell_states {
                 *cell.borrow_mut() = previous.clone();
                 self.closures.refresh_cell(cell);
@@ -46006,7 +46053,7 @@ impl InterpreterCore {
             let record = self
                 .module_state
                 .modules
-                .get_mut(&specifier)
+                .get_mut(specifier)
                 .expect("module record was validated before export preflight");
             record.exports.insert(name.clone(), value.clone())
         };
@@ -46019,19 +46066,32 @@ impl InterpreterCore {
                 let record = self
                     .module_state
                     .modules
-                    .get_mut(&specifier)
+                    .get_mut(specifier)
                     .expect("module export record existed after namespace update");
-                record.pending_import_bindings.remove(&name);
                 // The module's own export of this name wins over any star
                 // re-export (module_export_star re-marks its own names).
                 record.star_exports.remove(&name);
+                if depth < LIVE_EXPORT_CASCADE_LIMIT {
+                    for cell in &pending_cells {
+                        let live_export = cell
+                            .try_borrow()
+                            .map_err(|_| InterpreterError::InternalError {
+                                details: "module import binding is already mutably borrowed"
+                                    .to_string(),
+                            })?
+                            .live_export;
+                        if let Some(live_export) = live_export {
+                            self.publish_live_export(cell, live_export, depth + 1)?;
+                        }
+                    }
+                }
                 Ok(())
             }
             Err(error) => {
                 let record = self
                     .module_state
                     .modules
-                    .get_mut(&specifier)
+                    .get_mut(specifier)
                     .expect("module export record existed before namespace update");
                 match previous_export {
                     Some(previous) => {
@@ -46053,6 +46113,110 @@ impl InterpreterCore {
                 Err(error)
             }
         }
+    }
+
+    /// Record `cell`, a scope binding of module `specifier` that an
+    /// `ExportBinding` just published as `name`, as that export's local
+    /// binding (bd-1lsy.4.10.1): its later writes republish the export.
+    fn track_live_export(
+        &mut self,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+        specifier: String,
+        name: JsString,
+    ) -> Result<(), InterpreterError> {
+        let borrow_error = || InterpreterError::InternalError {
+            details: "exported module binding is already borrowed".to_string(),
+        };
+        let existing = cell.try_borrow().map_err(|_| borrow_error())?.live_export;
+        let target = (specifier, name);
+        if let Some(existing) = existing
+            && let Some(entry) = self
+                .module_state
+                .live_exports
+                .get_mut(existing.get() as usize - 1)
+            && entry.cell.as_ptr() == Rc::as_ptr(cell)
+        {
+            if !entry.exports.contains(&target) {
+                entry.exports.push(target);
+            }
+            return Ok(());
+        }
+        let slot = u32::try_from(self.module_state.live_exports.len() + 1)
+            .ok()
+            .and_then(std::num::NonZeroU32::new)
+            .ok_or_else(|| InterpreterError::InternalError {
+                details: "too many exported module bindings".to_string(),
+            })?;
+        self.module_state.live_exports.push(LiveExport {
+            cell: Rc::downgrade(cell),
+            exports: vec![target],
+        });
+        cell.try_borrow_mut()
+            .map_err(|_| borrow_error())?
+            .live_export = Some(slot);
+        Ok(())
+    }
+
+    /// Register an importer's binding `cell`, initialized from export
+    /// `export_name` of the module whose namespace object is
+    /// `namespace_object`, with that module's record (bd-1lsy.4.10.1).
+    fn watch_module_export(
+        &mut self,
+        namespace_object: ObjectId,
+        export_name: JsString,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+    ) {
+        let Some(record) = self
+            .module_state
+            .modules
+            .values_mut()
+            .find(|record| record.namespace_object == namespace_object)
+        else {
+            return;
+        };
+        let watchers = record.import_bindings.entry(export_name).or_default();
+        watchers.retain(|watcher| watcher.strong_count() > 0);
+        if !watchers
+            .iter()
+            .any(|watcher| watcher.as_ptr() == Rc::as_ptr(cell))
+        {
+            watchers.push(Rc::downgrade(cell));
+        }
+    }
+
+    /// `cell`, a module binding that backs exports (`live_export` names its
+    /// entry), was written: publish its value as each of those exports
+    /// (bd-1lsy.4.10.1). A stale index (a cell of an earlier execution)
+    /// publishes nothing.
+    fn publish_live_export(
+        &mut self,
+        cell: &Rc<RefCell<ScopeBindingState>>,
+        live_export: std::num::NonZeroU32,
+        depth: u32,
+    ) -> Result<(), InterpreterError> {
+        let Some(entry) = self
+            .module_state
+            .live_exports
+            .get(live_export.get() as usize - 1)
+        else {
+            return Ok(());
+        };
+        if entry.cell.as_ptr() != Rc::as_ptr(cell) {
+            return Ok(());
+        }
+        let exports = entry.exports.clone();
+        let (value, label) = {
+            let state = cell
+                .try_borrow()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "exported module binding is already mutably borrowed".to_string(),
+                })?;
+            (state.value.clone(), state.label.clone())
+        };
+        for (specifier, name) in exports {
+            self.publish_module_export(&specifier, name, value.clone(), label.clone(), depth)?;
+        }
+        Ok(())
     }
 
     /// `export * from m` (bd-332pq): every export of `m` except `default`
@@ -46154,29 +46318,6 @@ impl InterpreterCore {
         )?;
         self.apply_memory_component_delta(previous_bytes, 0)
             .map(|_| ())
-    }
-
-    fn cyclic_module_import_target(
-        &self,
-        namespace_object: ObjectId,
-        property_key: &RuntimePropertyKey,
-        value: &Value,
-    ) -> Option<(String, JsString)> {
-        if !matches!(value, Value::Undefined) {
-            return None;
-        }
-        let RuntimePropertyKey::String(export_name) = property_key else {
-            return None;
-        };
-        self.module_state
-            .modules
-            .iter()
-            .find(|(_, record)| {
-                record.namespace_object == namespace_object
-                    && matches!(record.status, ModuleRuntimeStatus::Evaluating)
-                    && !record.exports.contains_key(export_name)
-            })
-            .map(|(specifier, _)| (specifier.clone(), export_name.clone()))
     }
 
     fn complete_return(
@@ -51444,15 +51585,6 @@ impl InterpreterCore {
             if self.gc_safe_point_due() {
                 self.gc_safe_point();
             }
-            // Retire the handoff even on EOF, implicit return, or budget refusal.
-            // Only this iteration's adjacent InitBinding may consume it.
-            // Tested before taking: moving the (usually absent) handoff out
-            // copied the whole Option before every instruction (bd-9vouw.329).
-            let pending_cyclic_import_binding = if self.pending_cyclic_import_binding.is_some() {
-                self.pending_cyclic_import_binding.take()
-            } else {
-                None
-            };
             // Time-travel debugger state capture at the instruction boundary
             // (bd-fqlfw.3.5.5). O(1) branch when disarmed.
             self.check_state_capture_boundary();
@@ -52980,7 +53112,38 @@ impl InterpreterCore {
                         .unwrap_or_else(|| format!("__export_{name_pool_index}"));
                     let value = self.read_reg(src)?;
                     let label = self.get_register_label(src)?.clone();
-                    self.register_module_export_exact_labeled(JsString::from(name), value, label)?;
+                    let export_name = JsString::from(name);
+                    self.register_module_export_exact_labeled(export_name.clone(), value, label)?;
+                    // bd-1lsy.4.10.1: the export of a scope-resident module
+                    // binding (read, or initialized, just before) stays live:
+                    // later writes to that binding republish it.
+                    let local = match self
+                        .ip
+                        .checked_sub(1)
+                        .and_then(|read| module.instructions.get(read))
+                    {
+                        Some(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index,
+                        }) if *dst == src => Some(*name_pool_index),
+                        Some(Ir3Instruction::InitBinding {
+                            name_pool_index,
+                            src: initialized,
+                        }) if *initialized == src => Some(*name_pool_index),
+                        _ => None,
+                    };
+                    if let Some(local) = local
+                        && let Some(specifier) = self.current_module_specifier.clone()
+                    {
+                        let local = Self::scoped_constant_name(module, local);
+                        let cell = self
+                            .scope_chain
+                            .resolve(local.as_ref())
+                            .map(|(_, binding)| Rc::clone(&binding.state));
+                        if let Some(cell) = cell {
+                            self.track_live_export(&cell, specifier, export_name)?;
+                        }
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
@@ -53671,9 +53834,6 @@ impl InterpreterCore {
                         result_label = self
                             .join_owned_label_with_temporary_budget(result_label, &stored_label)?;
                     }
-                    let pending_cyclic_import = object_id.and_then(|namespace_object| {
-                        self.cyclic_module_import_target(namespace_object, &property_key, &prop)
-                    });
                     // bd-9vouw.113: a legacy RegExp static carries its match's label.
                     if let Some(legacy_label) = self.legacy_regexp_read_label.take() {
                         result_label = self
@@ -53689,15 +53849,6 @@ impl InterpreterCore {
                         )?;
                     }
                     self.write_reg_with_label(dst, prop, result_label)?;
-                    self.pending_cyclic_import_binding =
-                        pending_cyclic_import.map(|(module_specifier, export_name)| {
-                            PendingCyclicImportBinding {
-                                source_register: dst,
-                                expected_init_ip: self.ip.saturating_add(1),
-                                module_specifier,
-                                export_name,
-                            }
-                        });
                     self.ip += 1;
                 }
                 Ir3Instruction::CreateDataProperty { obj, key, val } => {
@@ -56368,7 +56519,7 @@ impl InterpreterCore {
                                 name: name.into_owned(),
                             });
                         }
-                        if binding.kind == BindingKind::Const {
+                        if binding.kind.is_immutable() {
                             return Err(InterpreterError::ConstAssignment {
                                 name: name.into_owned(),
                             });
@@ -56398,6 +56549,12 @@ impl InterpreterCore {
                             binding.restore_state(old_state)?;
                             self.closures.refresh_cell(&binding.state);
                             return Err(err);
+                        }
+                        // bd-1lsy.4.10.1: a module binding that backs exports
+                        // republishes them (namespace object and importers).
+                        let live_export = binding.state()?.live_export;
+                        if let Some(live_export) = live_export {
+                            self.publish_live_export(&binding.state, live_export, 0)?;
                         }
                     }
                     self.ip += 1;
@@ -56478,23 +56635,24 @@ impl InterpreterCore {
                             return Err(err);
                         }
                     }
-                    if let Some(pending) = pending_cyclic_import_binding
-                        && pending.source_register == src
-                        && pending.expected_init_ip == self.ip
-                        && let Some((binding, _, _)) = previous.as_ref()
-                        && let Some(record) =
-                            self.module_state.modules.get_mut(&pending.module_specifier)
+                    // bd-1lsy.4.10.1: an import binding initialized from its
+                    // namespace read (the instruction just before) watches that
+                    // export, so every later publication writes it: the import
+                    // is a live view of the exporting module's binding. In a
+                    // cycle the export may not be published yet; its
+                    // publication initializes the binding then.
+                    if let Some((binding, _, _)) = previous.as_ref()
+                        && binding.kind == BindingKind::Import
+                        && let Some(Ir3Instruction::GetProperty { obj, key, dst }) = self
+                            .ip
+                            .checked_sub(1)
+                            .and_then(|read| module.instructions.get(read))
+                        && *dst == src
+                        && let Value::Object(namespace_object) = self.read_reg(*obj)?
+                        && let Value::Str(export_name) = self.read_reg(*key)?
                     {
-                        let watchers = record
-                            .pending_import_bindings
-                            .entry(pending.export_name)
-                            .or_default();
-                        if !watchers
-                            .iter()
-                            .any(|watcher| watcher.as_ptr() == Rc::as_ptr(&binding.state))
-                        {
-                            watchers.push(Rc::downgrade(&binding.state));
-                        }
+                        let cell = Rc::clone(&binding.state);
+                        self.watch_module_export(namespace_object, export_name, &cell);
                     }
                     self.ip += 1;
                 }
@@ -118921,7 +119079,7 @@ mod async_runtime_tests_current {
             .modules
             .get_mut("cycle.mjs")
             .expect("cycle record")
-            .pending_import_bindings
+            .import_bindings
             .insert(
                 JsString::from("x"),
                 vec![Rc::downgrade(&first.state), Rc::downgrade(&second.state)],
@@ -118957,11 +119115,24 @@ mod async_runtime_tests_current {
             assert_eq!(state.value, Value::Int(42));
             assert!(state.initialized);
         }
-        assert!(
-            core.module_state.modules["cycle.mjs"]
-                .pending_import_bindings
-                .is_empty()
+        // bd-1lsy.4.10.1: the importers stay registered, so a later
+        // publication (a write to the exported binding) reaches them too,
+        // and a cell's label stays the join of everything published to it.
+        assert_eq!(
+            core.module_state.modules["cycle.mjs"].import_bindings[&JsString::from("x")].len(),
+            2
         );
+        core.register_module_export_exact_labeled(
+            JsString::from("x"),
+            Value::Int(43),
+            Label::Public,
+        )
+        .expect("republish to the registered imports");
+        for binding in [&first, &second] {
+            assert_eq!(binding.state().unwrap().value, Value::Int(43));
+        }
+        assert_eq!(first.state().unwrap().label, Label::Secret);
+        assert_eq!(second.state().unwrap().label, Label::Public);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -118999,13 +119170,47 @@ mod async_runtime_tests_current {
             .map(|entry| entry.message.as_str())
             .collect();
         assert_eq!(messages, ["42"]);
-        assert!(core.pending_cyclic_import_binding.is_none());
-        assert!(
-            core.module_state
-                .modules
-                .values()
-                .all(|record| record.pending_import_bindings.is_empty())
+        // bd-1lsy.4.10.1: every importer cell still alive holds its export's
+        // value (the cycle's late publications reached them).
+        for record in core.module_state.modules.values() {
+            for (name, watchers) in &record.import_bindings {
+                for cell in watchers.iter().filter_map(Weak::upgrade) {
+                    assert_eq!(Some(&cell.borrow().value), record.exports.get(name));
+                }
+            }
+        }
+        assert_eq!(
+            core.estimated_memory_bytes(),
+            core.recompute_estimated_memory_bytes()
         );
+    }
+
+    /// bd-1lsy.4.10.1: an import follows the exporting module's later writes
+    /// (through the binding, the namespace object and a closure), assigning
+    /// it is a TypeError, and publishing to the importer's cell keeps the
+    /// memory estimate exact without walking every live cell.
+    #[test]
+    fn imports_are_live_and_publication_keeps_memory_accounting_exact_bd_1lsy_4_10_1() {
+        let temp = tempfile::tempdir().expect("live-binding module-graph root");
+        let entry = temp.path().join("entry.mjs");
+        let counter = temp.path().join("counter.mjs");
+        let entry_source = "import { count, inc } from './counter.mjs'; import * as ns from './counter.mjs'; const read = () => count; inc(); inc(); console.log(count, ns.count, read()); try { count = 1; } catch (error) { console.log(error instanceof TypeError, count); }";
+        std::fs::write(&entry, entry_source).expect("write live-binding entry");
+        std::fs::write(
+            &counter,
+            "export let count = 0; export function inc() { count += 'xy'.length; }",
+        )
+        .expect("write live-binding counter");
+
+        let module = lower_module_graph_entry_bd_yn3lv(&entry, entry_source);
+        let mut core = async_module_graph_core_bd_yn3lv(temp.path());
+        let result = core.execute(&module).expect("live imports should run");
+        let messages: Vec<&str> = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect();
+        assert_eq!(messages, ["4 4 4", "true 4"]);
         assert_eq!(
             core.estimated_memory_bytes(),
             core.recompute_estimated_memory_bytes()
@@ -125971,7 +126176,7 @@ mod async_runtime_tests_current {
                     exports: BTreeMap::new(),
                     star_exports: BTreeMap::new(),
                     flow_label_ceiling: None,
-                    pending_import_bindings: BTreeMap::new(),
+                    import_bindings: BTreeMap::new(),
                     cjs_module_object: None,
                     compiled_module: None,
                     evaluation_promise: None,
@@ -164124,7 +164329,7 @@ mod tests {
                 exports: BTreeMap::new(),
                 star_exports: BTreeMap::new(),
                 flow_label_ceiling: None,
-                pending_import_bindings: BTreeMap::new(),
+                import_bindings: BTreeMap::new(),
                 cjs_module_object: Some(module_object),
                 compiled_module: None,
                 evaluation_promise: None,

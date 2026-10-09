@@ -1860,7 +1860,6 @@ impl InterpreterCore {
             next_promise_combinator_id: _,
             module_state,
             pending_async_module_import,
-            pending_cyclic_import_binding: _,
             active_cjs_context,
             current_module_specifier: _,
             active_generated_function_artifact: _,

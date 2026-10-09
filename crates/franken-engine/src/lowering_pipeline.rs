@@ -2124,13 +2124,15 @@ fn lower_ir0_to_ir1_on_current_stack(
                                     synthetic_export_index,
                                 );
                                 synthetic_export_index = synthetic_export_index.saturating_add(1);
+                                // An import binding (bd-1lsy.4.10.1): it follows
+                                // the source module's export, and republishes it.
                                 let export_binding_id = alloc_binding(
                                     &mut bindings,
                                     &mut binding_lookup,
                                     &mut binding_index,
                                     root_scope_id,
                                     &export_binding_name,
-                                    BindingKind::Const,
+                                    BindingKind::Import,
                                 )
                                 .map_err(LoweringPipelineError::SemanticViolation)?;
                                 ir1.ops.push(Ir1Op::StoreBinding {
@@ -8940,11 +8942,26 @@ fn lower_ir2_to_ir3_with_input_hash(
         })
         .copied()
         .collect::<Vec<_>>();
+    // bd-1lsy.4.10.1: a module's import bindings are live views of the
+    // exporting modules' bindings (ES2020 15.2.1.16.4 InitializeEnvironment
+    // makes them indirect bindings). Each is a runtime scope cell declared
+    // as an import (immutable) and initialized from its namespace read; the
+    // interpreter registers that cell with the exporting module, whose every
+    // later publication writes it. A register copy could not follow them.
+    let import_binding_ids = ir2
+        .scopes
+        .iter()
+        .filter(|scope| scope.parent.is_none())
+        .flat_map(|scope| scope.bindings.iter())
+        .filter(|binding| binding.kind == BindingKind::Import)
+        .map(|binding| binding.binding_id)
+        .collect::<Vec<_>>();
     let runtime_lexical_binding_ids = tdz_binding_ids
         .union(&const_assignment_binding_ids)
         .copied()
         .chain(spilled_lexical_binding_ids)
         .chain(captured_lexical_binding_ids)
+        .chain(import_binding_ids)
         .collect::<BTreeSet<_>>();
     for id in &runtime_lexical_binding_ids {
         scoped_runtime_binding_ids.insert(*id);
@@ -8981,6 +8998,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                 // A spilled `var` is hoisted: declared initialized to
                 // undefined, never in a temporal dead zone (bd-9vouw.23).
                 Some(BindingKind::Var) => 0,
+                Some(BindingKind::Import) => RUNTIME_IMPORT_BINDING_KIND,
                 _ => 1,
             };
             let name = runtime_scope_binding_name(*id, &runtime_scope_binding_names_by_id);
@@ -8999,6 +9017,7 @@ fn lower_ir2_to_ir3_with_input_hash(
                 kind: if runtime_lexical_binding_ids.contains(binding_id) {
                     match binding_kind_by_id.get(binding_id) {
                         Some(BindingKind::Const) => 2,
+                        Some(BindingKind::Import) => RUNTIME_IMPORT_BINDING_KIND,
                         _ => 1,
                     }
                 } else {
@@ -21373,6 +21392,11 @@ pub(crate) const ARGUMENTS_OBJECT_CAPABILITY: &str = "builtin:ArgumentsObject";
 /// argument, the converted value of a `this` read; with none, a function
 /// prologue that converts its frame's `this` in place.
 pub(crate) const SLOPPY_THIS_CAPABILITY: &str = "builtin:SloppyThis";
+
+/// `DeclareBinding` kind of a module's import binding (bd-1lsy.4.10.1): an
+/// immutable cell that the interpreter keeps equal to the export it was
+/// initialized from (its runtime `BindingKind::Import`).
+const RUNTIME_IMPORT_BINDING_KIND: u8 = 5;
 
 /// bd-9vouw.136: the result of a strict-mode `delete`, which is a TypeError
 /// when `false` (ES2020 12.5.3.2 step 5.d).

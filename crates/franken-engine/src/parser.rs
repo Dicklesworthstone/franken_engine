@@ -8339,6 +8339,17 @@ fn try_parse_binary(
             let operand_depth = recursion_depth
                 .saturating_add(1)
                 .saturating_add(terms.div_ceil(FOLDED_CHAIN_TERMS_PER_RECURSION_LEVEL));
+            if op == BinaryOperator::NullishCoalescing {
+                let mut operand_start = 0;
+                for &(position, length, _) in
+                    chain.iter().chain(std::iter::once(&(expr.len(), 0, op)))
+                {
+                    if has_top_level_logical_and_or(&expr[operand_start..position]) {
+                        return Some(Err(mixed_nullish_coalescing_error(span, context)));
+                    }
+                    operand_start = position + length;
+                }
+            }
             let mut start = 0;
             let mut folded: Option<Expression> = None;
             let mut pending_op = None;
@@ -8373,6 +8384,19 @@ fn try_parse_binary(
     }
     let lhs_src = expr[..best_pos].trim();
     let rhs_src = expr[best_pos + best_len..].trim();
+    if op == BinaryOperator::NullishCoalescing
+        && (has_top_level_logical_and_or(lhs_src) || has_top_level_logical_and_or(rhs_src))
+    {
+        return Some(Err(mixed_nullish_coalescing_error(span, context)));
+    }
+    if op == BinaryOperator::Exponentiate && starts_with_unary_operator(lhs_src, context) {
+        return Some(Err(ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            "a unary expression cannot be the base of `**`: parenthesize it",
+            context.source_label.to_string(),
+            Some(*span),
+        )));
+    }
     // ES2022 `#x in obj`: a private name is an operand only here.
     let private_in_operand = matches!(op, BinaryOperator::In)
         .then(|| whole_private_name(lhs_src))
@@ -8397,6 +8421,78 @@ fn try_parse_binary(
         left: Box::new(left),
         right: Box::new(right),
     }))
+}
+
+/// Whether `text` begins with a unary operator applied to the rest (`-`,
+/// `+`, `!`, `~`, `typeof`, `void`, `delete`, and `await` where it is an
+/// operator). The base of `**` is an UpdateExpression (ES2016 12.6), so
+/// `-3 ** 2` and `typeof 1 ** 2` are SyntaxErrors; a prefix `++`/`--` is
+/// an UpdateExpression and allowed (bd-9vouw.395).
+fn starts_with_unary_operator(text: &str, context: &ParseExecutionContext<'_>) -> bool {
+    let text = text.trim_start();
+    if text.starts_with("++") || text.starts_with("--") {
+        return false;
+    }
+    if text.starts_with(['-', '+', '!', '~']) {
+        return true;
+    }
+    ["typeof", "void", "delete", "await"].iter().any(|keyword| {
+        (*keyword != "await" || context.await_context)
+            && text
+                .strip_prefix(keyword)
+                .is_some_and(|rest| !rest.starts_with(is_identifier_continue))
+    })
+}
+
+fn mixed_nullish_coalescing_error(
+    span: &SourceSpan,
+    context: &ParseExecutionContext<'_>,
+) -> ParseError {
+    ParseError::new(
+        ParseErrorCode::InvalidSyntax,
+        "`??` cannot be mixed with `&&` or `||` without parentheses",
+        context.source_label.to_string(),
+        Some(*span),
+    )
+}
+
+/// Whether `text` has an `&&` or `||` outside parentheses, brackets, braces
+/// and literals. `??` does not mix with them without parentheses (ES2020
+/// 12.13: `a || b ?? c` and `a ?? b && c` are SyntaxErrors) (bd-9vouw.395).
+fn has_top_level_logical_and_or(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut depth: i64 = 0;
+    let mut quotes = QuoteState::default();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if quotes.active() {
+            quotes.advance(b);
+            i += 1;
+            continue;
+        }
+        if b == b'/' && quotes.open_regex_at(text, i) {
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => {
+                quotes.open(b);
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'&' | b'|'
+                if depth == 0
+                    && bytes.get(i + 1) == Some(&b)
+                    && bytes.get(i + 2) != Some(&b'=') =>
+            {
+                return true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Whether `lhs` ends with a postfix `++`/`--` (the update follows an

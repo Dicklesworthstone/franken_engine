@@ -2678,13 +2678,32 @@ fn enum_emission(head: &EnumDeclarationHead<'_>, body: &str) -> String {
         "{}var {name}; (function (__enum) {{ let __enum_next = 0;",
         if head.export { "export " } else { "" }
     );
+    // The value of a member without an initializer when it is known here
+    // (after literal integers only, as TypeScript folds it); otherwise the
+    // body counts on at run time.
+    let mut known_next = Some(0i64);
     for (member, initializer) in enum_members(body) {
         let key = if member.starts_with(['"', '\'']) {
             member.clone()
         } else {
             format!("\"{member}\"")
         };
-        let value = initializer.unwrap_or_else(|| "__enum_next".to_string());
+        let value = match initializer {
+            Some(initializer) => {
+                known_next = initializer
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|value| value.checked_add(1));
+                initializer
+            }
+            None => match known_next {
+                Some(next) => {
+                    known_next = next.checked_add(1);
+                    next.to_string()
+                }
+                None => "__enum_next".to_string(),
+            },
+        };
         code.push_str(&format!(
             " {{ const __value = ({value}); __enum[{key}] = __value; if (typeof __value === \"number\") {{ __enum[__value] = {key}; __enum_next = __value + 1; }} }}"
         ));
@@ -3087,7 +3106,7 @@ const value: number = 1;
         assert!(
             output
                 .normalized_source
-                .contains("const __value = (__enum_next); __enum[\"Ready\"] = __value;")
+                .contains("const __value = (0); __enum[\"Ready\"] = __value;")
         );
         assert!(
             output
@@ -3852,7 +3871,7 @@ abstract class Base { }"#;
         assert!(
             output
                 .normalized_source
-                .contains("const __value = (__enum_next); __enum[\"Down\"] = __value;")
+                .contains("const __value = (11); __enum[\"Down\"] = __value;")
         );
     }
 

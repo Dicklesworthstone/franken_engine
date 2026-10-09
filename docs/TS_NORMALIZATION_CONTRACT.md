@@ -10,7 +10,7 @@ Provide deterministic TS-to-ES2020-equivalent normalization before native IR exe
 
 Implemented in `crates/franken-engine/src/ts_normalization.rs`:
 - type-only import elision
-- simple enum lowering (`enum` -> `Object.freeze` object form)
+- enum lowering (`[export] [const] enum`, on one or more lines) to TypeScript's enum object form, whose numeric members map back to their names; an ambient `declare enum` is erased
 - simple namespace lowering + merge (`namespace X { export const ... }`)
 - simple legacy class-decorator lowering (`@decorator` + `class X {}`)
 - constructor parameter-property lowering

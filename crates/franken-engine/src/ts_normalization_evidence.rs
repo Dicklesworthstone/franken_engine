@@ -220,8 +220,11 @@ pub fn diagnostic_corpus() -> Vec<CorpusSpecimen> {
             ts_source: "enum Direction { Up, Down, Left, Right }".to_string(),
             expected_outcome: ExpectedOutcome::LoweredToEs2020,
             expected_absent_patterns: vec!["enum Direction".to_string()],
-            expected_present_patterns: vec!["Object.freeze".to_string(), "Direction".to_string()],
-            description: "Enum declaration lowered to Object.freeze form".to_string(),
+            expected_present_patterns: vec![
+                "var Direction;".to_string(),
+                "(Direction || (Direction = {}))".to_string(),
+            ],
+            description: "Enum declaration lowered to TypeScript's enum object form".to_string(),
         },
         CorpusSpecimen {
             specimen_id: "namespace_simple".to_string(),

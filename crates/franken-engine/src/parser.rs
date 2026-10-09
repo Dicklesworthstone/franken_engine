@@ -7926,7 +7926,11 @@ fn try_parse_assignment(
             let left =
                 match parse_assignment_target_expression(lhs, span, context, recursion_depth + 1) {
                     Ok(e) => e,
-                    Err(e) => return Some(Err(e)),
+                    Err(e) => match web_compat_call_target(lhs, op, span, context, recursion_depth)
+                    {
+                        Some(call) => call,
+                        None => return Some(Err(e)),
+                    },
                 };
             if assignment_target_has_optional_chain(&left) {
                 return Some(Err(ParseError::new(
@@ -9121,7 +9125,7 @@ fn try_parse_update(
             parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
         );
         if !is_simple_update_target(&target) {
-            return reject_non_assignable_update_target(&target, span, context);
+            return reject_non_assignable_update_target(&target, operand_src, span, context);
         }
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
@@ -9153,7 +9157,7 @@ fn try_parse_update(
             parse_expression(operand_src, span, context, recursion_depth + 1).ok()?,
         );
         if !is_simple_update_target(&target) {
-            return reject_non_assignable_update_target(&target, span, context);
+            return reject_non_assignable_update_target(&target, operand_src, span, context);
         }
         if let Err(error) = reject_strict_eval_arguments_target(&target, span, context) {
             return Some(Err(error));
@@ -9264,32 +9268,83 @@ fn reject_strict_eval_arguments_target(
     Ok(())
 }
 
+/// Annex B "function calls as assignment targets" (web compatibility):
+/// in non-strict code a call is an assignment target for `=`, the arithmetic and bitwise compound
+/// operators and `++` / `--` (not `&&=`, `||=`, `??=`, nor inside a
+/// destructuring pattern). It parses, and evaluating it calls the function
+/// and then throws a ReferenceError before the value is evaluated
+/// (bd-9vouw.408). The call for `lhs` when that applies, else `None`.
+fn web_compat_call_target(
+    lhs: &str,
+    operator: AssignmentOperator,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> Option<Expression> {
+    if context.strict_mode
+        || matches!(
+            operator,
+            AssignmentOperator::LogicalAndAssign
+                | AssignmentOperator::LogicalOrAssign
+                | AssignmentOperator::NullishCoalescingAssign
+        )
+    {
+        return None;
+    }
+    if is_tagged_template_call_source(lhs) {
+        return None;
+    }
+    parse_expression(lhs, span, context, recursion_depth + 1)
+        .ok()
+        .filter(|target| matches!(target, Expression::Call { .. }))
+}
+
+/// Whether `source`, already parsed as a call, is a tagged template
+/// (CallExpression TemplateLiteral), parenthesized or not, which parses as
+/// a call too but is never an assignment target.
+fn is_tagged_template_call_source(source: &str) -> bool {
+    let mut source = source.trim();
+    while let Some((inner, rest)) = extract_balanced(source, '(', ')')
+        && rest.trim().is_empty()
+    {
+        source = inner.trim();
+    }
+    source.ends_with('`')
+}
+
 fn reject_non_assignable_update_target(
     target: &Expression,
+    operand_src: &str,
     span: &SourceSpan,
     context: &ParseExecutionContext<'_>,
 ) -> Option<ParseResult<Expression>> {
-    if matches!(
-        target,
-        Expression::Call { .. }
-            | Expression::OptionalCall { .. }
-            | Expression::OptionalMember { .. }
-            | Expression::This
-            | Expression::SloppyThis
-            | Expression::NewTarget
-            | Expression::ImportMeta
-            | Expression::StringLiteral(_)
-            | Expression::NumericLiteral(_)
-            | Expression::BigIntLiteral(_)
-            | Expression::FloatLiteral(_)
-            | Expression::BooleanLiteral(_)
-            | Expression::NullLiteral
-            | Expression::TemplateLiteral { .. }
-            | Expression::RegExpLiteral { .. }
-            | Expression::ArrowFunction { .. }
-            | Expression::Function { .. }
-            | Expression::ClassExpression { .. }
-    ) {
+    // A call is a web-compat update target in non-strict code (Annex B).
+    let web_compat_call = !context.strict_mode
+        && matches!(target, Expression::Call { .. })
+        && !is_tagged_template_call_source(operand_src);
+    if !web_compat_call
+        && matches!(
+            target,
+            Expression::Call { .. }
+                | Expression::OptionalCall { .. }
+                | Expression::OptionalMember { .. }
+                | Expression::This
+                | Expression::SloppyThis
+                | Expression::NewTarget
+                | Expression::ImportMeta
+                | Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BigIntLiteral(_)
+                | Expression::FloatLiteral(_)
+                | Expression::BooleanLiteral(_)
+                | Expression::NullLiteral
+                | Expression::TemplateLiteral { .. }
+                | Expression::RegExpLiteral { .. }
+                | Expression::ArrowFunction { .. }
+                | Expression::Function { .. }
+                | Expression::ClassExpression { .. }
+        )
+    {
         return Some(Err(invalid_syntax_error(
             "invalid update target: this expression cannot be incremented or decremented",
             span,

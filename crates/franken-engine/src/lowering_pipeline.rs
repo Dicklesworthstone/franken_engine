@@ -16601,6 +16601,40 @@ fn lower_expression_to_ir1_inner(
                 });
                 return Ok(());
             }
+            // A call as the target (Annex B web compatibility, non-strict
+            // code only; the parser admits it only there): the call runs, then
+            // a ReferenceError is thrown before the value is evaluated
+            // (bd-9vouw.408).
+            if matches!(left.as_ref(), Expression::Call { .. }) {
+                lower_expression_to_ir1(
+                    left,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                    span_table,
+                )?;
+                ops.push(Ir1Op::Pop);
+                let message = if operator.update_step().is_some() {
+                    "Invalid left-hand side expression in update operation"
+                } else {
+                    "Invalid left-hand side in assignment"
+                };
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String(message.into()),
+                });
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ReferenceError".to_string(),
+                    arg_count: 1,
+                });
+                ops.push(Ir1Op::Throw);
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+                return Ok(());
+            }
             if let Expression::Identifier(name) = left.as_ref() {
                 let resolved_binding_id = if has_source_lexical_binding(binding_lookup, name) {
                     Some(materialize_source_binding_id(

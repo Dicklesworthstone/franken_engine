@@ -340,9 +340,10 @@ fn module_grammar_cases() -> Vec<ModuleGrammarCase> {
             requirement_level: RequirementLevel::Must,
             surface: ModuleSurface::InvalidSyntax,
             source: r#"import * ns from "./dep.js";"#,
+            // A SyntaxError, not a refusal (bd-9vouw.429).
             expected: ExpectedOutcome::Reject {
                 goal: ParseGoal::Module,
-                code: ParseErrorCode::UnsupportedSyntax,
+                code: ParseErrorCode::InvalidSyntax,
             },
             waiver: None,
         },

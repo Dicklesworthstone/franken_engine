@@ -258,7 +258,10 @@ impl Rewrite {
         };
         let head = clause.canonical_head();
         let names = match head.strip_prefix("* as ") {
-            Some(exported) => vec![("*".to_string(), exported.trim().to_string())],
+            Some(exported) => vec![(
+                "*".to_string(),
+                crate::parser::decode_module_export_name(exported.trim()),
+            )],
             None => super::parse_named_export_clause_bindings(head),
         };
         let mut specifiers = Vec::new();
@@ -269,7 +272,12 @@ impl Rewrite {
             self.reexports += 1;
             self.referenced.insert(local.clone());
             self.exported.insert(local.clone());
-            exports.push(format!("{local} as {exported}"));
+            // A string export name goes back into the head encoded
+            // (bd-9vouw.429).
+            exports.push(format!(
+                "{local} as {}",
+                crate::parser::encode_module_export_name(&exported)
+            ));
             if name == "*" {
                 namespace = Some(local);
             } else {

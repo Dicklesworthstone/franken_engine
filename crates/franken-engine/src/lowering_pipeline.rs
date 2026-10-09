@@ -2050,7 +2050,9 @@ fn lower_ir0_to_ir1_on_current_stack(
                     if clause.canonical_head().starts_with("* as ")
                         && clause.source().is_some() =>
                 {
-                    let exported_name = clause.canonical_head()["* as ".len()..].to_string();
+                    let exported_name = crate::parser::decode_module_export_name(
+                        &clause.canonical_head()["* as ".len()..],
+                    );
                     let namespace_binding_id = {
                         let temp_name = make_internal_binding_name(
                             "reexport_namespace",
@@ -3616,7 +3618,12 @@ fn parse_named_export_clause_bindings(clause: &str) -> Vec<(String, String)> {
                     [local, "as", exported] => (*local, *exported),
                     _ => (specifier, specifier),
                 };
-                Some((local_name.to_string(), exported_name.to_string()))
+                // A string name is an encoded word of the head
+                // (`export { "a-b" as c } from`, bd-9vouw.429).
+                Some((
+                    crate::parser::decode_module_export_name(local_name),
+                    crate::parser::decode_module_export_name(exported_name),
+                ))
             })
             .collect();
     }

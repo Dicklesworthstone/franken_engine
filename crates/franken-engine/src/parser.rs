@@ -2640,11 +2640,13 @@ fn merge_logical_lines_requires_continuation(
     // and `class` still need a name or body: istanbul splits
     // `function\n/*istanbul ignore start*/\n_default\n...(start, ...) {`
     // (bd-9vouw.212). `async` is absent: a line break after it is an ASI
-    // boundary (`async\nfunction f() {}` is two statements).
+    // boundary (`async\nfunction f() {}` is two statements). `with` starts a
+    // with statement or an import attributes clause (`from './a.json' with`
+    // newline `{ type: 'json' }`), never ends one (bd-9vouw.429).
     if !trailing_identifier_follows_dot
         && matches!(
             trailing_identifier,
-            "new" | "in" | "instanceof" | "extends" | "function" | "class"
+            "new" | "in" | "instanceof" | "extends" | "function" | "class" | "with"
         )
     {
         return true;
@@ -4314,8 +4316,10 @@ fn exported_names(kind: &ExportKind) -> Vec<String> {
         ExportKind::NamedClause(clause) => clause.canonical_head(),
     };
     let clause = clause.trim();
+    // A string export name is an encoded word of the head (bd-9vouw.429):
+    // `{ a as "x" }` and `{ b as x }` export the same name.
     if let Some(namespace) = clause.strip_prefix("* as ") {
-        return vec![namespace.trim().to_string()];
+        return vec![decode_module_export_name(namespace.trim())];
     }
     let Some(inner) = clause
         .strip_prefix('{')
@@ -4329,8 +4333,8 @@ fn exported_names(kind: &ExportKind) -> Vec<String> {
         .filter(|specifier| !specifier.is_empty())
         .map(
             |specifier| match specifier.split_whitespace().collect::<Vec<_>>().as_slice() {
-                [_, "as", exported] => (*exported).to_string(),
-                _ => specifier.to_string(),
+                [_, "as", exported] => decode_module_export_name(exported),
+                _ => decode_module_export_name(specifier),
             },
         )
         .collect()
@@ -5253,9 +5257,12 @@ fn parse_import(
         }
     }
 
+    // Every import form is supported (ES2022 16.2.2, string names
+    // included), so a declaration that fits none is a SyntaxError
+    // (bd-9vouw.429), as below.
     let (binding_raw, source_raw) = split_import_from(body).ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "import declaration must be `import <binding-clause> from <quoted-source>` or `import <quoted-source>`",
             source_label.to_string(),
             Some(span.clone()),
@@ -5280,7 +5287,7 @@ fn parse_import(
     let source_text = strip_import_attributes(source_raw.trim(), source_label, &span)?;
     let source = parse_quoted_string(source_text).ok_or_else(|| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             "import source must be quoted",
             source_label.to_string(),
             Some(span.clone()),
@@ -5388,6 +5395,14 @@ fn strip_import_attributes<'a>(
         }
         if key == "type" && value == "json" {
             json = true;
+        } else if key != "type" {
+            // A key the host does not support is a SyntaxError
+            // (AllImportAttributesSupported, ES2025 16.2.1.7.1; Node
+            // supports `type` only), not a refusal (bd-9vouw.429).
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "unsupported import attribute key (only `type` is supported)",
+            ));
         } else {
             return Err(error(
                 ParseErrorCode::UnsupportedSyntax,
@@ -5468,7 +5483,7 @@ fn parse_import_binding_clause(
     }
 
     Err(ParseError::new(
-        ParseErrorCode::UnsupportedSyntax,
+        ParseErrorCode::InvalidSyntax,
         "unsupported import binding clause; supported forms: default, namespace (`* as ns`), named (`{ a, b as c }`), and default+namespace/named",
         source_label.to_string(),
         Some(span.clone()),
@@ -5485,6 +5500,164 @@ fn without_trailing_specifier_comma(list: &str) -> &str {
         Some(rest) if !rest.trim().is_empty() => rest,
         _ => list,
     }
+}
+
+/// The entries of a named import or export list (the text between its
+/// braces), split at the commas outside string literals: a string module
+/// export name (`{ "a, b" as c }`, ES2022 16.2.2 ModuleExportName) may hold
+/// one (bd-9vouw.429).
+fn split_module_specifier_list(list: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut start = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in list.char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if ch == '\\' => escaped = true,
+            Some(open) if ch == open => quote = None,
+            Some(_) => {}
+            None if matches!(ch, '"' | '\'') => quote = Some(ch),
+            None if ch == ',' => {
+                entries.push(&list[start..index]);
+                start = index + 1;
+            }
+            None => {}
+        }
+    }
+    entries.push(&list[start..]);
+    entries
+}
+
+/// The words of one import or export specifier (`a as b`, `"x y" as z`):
+/// split at white space outside string literals, a string literal being a
+/// word of its own (`"x"as z`).
+fn module_specifier_words(specifier: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in specifier.char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if ch == '\\' => escaped = true,
+            Some(open) if ch == open => {
+                quote = None;
+                if let Some(begin) = start.filter(|begin| specifier[*begin..].starts_with(open)) {
+                    words.push(&specifier[begin..index + ch.len_utf8()]);
+                    start = None;
+                }
+            }
+            Some(_) => {}
+            None if ch.is_whitespace() => {
+                if let Some(begin) = start.take() {
+                    words.push(&specifier[begin..index]);
+                }
+            }
+            None => {
+                if matches!(ch, '"' | '\'') {
+                    if let Some(begin) = start.take() {
+                        words.push(&specifier[begin..index]);
+                    }
+                    quote = Some(ch);
+                }
+                start.get_or_insert(index);
+            }
+        }
+    }
+    if let Some(begin) = start {
+        words.push(&specifier[begin..]);
+    }
+    words
+}
+
+/// The index of the `}` closing a named import or export list in `text`,
+/// the text after its `{`, outside string literals.
+fn module_specifier_list_close(text: &str) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if ch == '\\' => escaped = true,
+            Some(open) if ch == open => quote = None,
+            Some(_) => {}
+            None if matches!(ch, '"' | '\'') => quote = Some(ch),
+            None if ch == '}' => return Some(index),
+            None => {}
+        }
+    }
+    None
+}
+
+/// `word` as a ModuleExportName (ES2022 16.2.2): an identifier name as it
+/// is written, or a string literal's value, with whether it was a string.
+/// A string that is not well-formed Unicode (a lone surrogate) is an early
+/// error (IsStringWellFormedUnicode). `Ok(None)` when `word` is neither.
+fn module_export_name(word: &str) -> Result<Option<(String, bool)>, &'static str> {
+    if word.starts_with(['"', '\'']) {
+        let Some(value) = parse_quoted_string(word) else {
+            return Ok(None);
+        };
+        return value
+            .as_str()
+            .map(|name| Some((name.to_string(), true)))
+            .ok_or("a string module export name must be well-formed Unicode");
+    }
+    Ok(is_identifier(word).then(|| (word.to_string(), false)))
+}
+
+/// An export name as one word of a canonical export clause head: a name
+/// spelled as an identifier as it is (the head's readers take a bare word's
+/// text as the name); any other name (from a string literal) quoted, with
+/// every character but ASCII letters, digits, `_` and `$` written
+/// `\u{hex}`, so the readers still split the head at commas and white
+/// space. decode_module_export_name reverses it (bd-9vouw.429).
+pub(crate) fn encode_module_export_name(name: &str) -> String {
+    if is_identifier(name) {
+        return name.to_string();
+    }
+    let mut word = String::with_capacity(name.len() + 2);
+    word.push('"');
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$') {
+            word.push(ch);
+        } else {
+            word.push_str(&format!("\\u{{{:x}}}", u32::from(ch)));
+        }
+    }
+    word.push('"');
+    word
+}
+
+/// The export name a word of a canonical export clause head stands for:
+/// encode_module_export_name's inverse; an identifier is itself.
+pub(crate) fn decode_module_export_name(word: &str) -> String {
+    let Some(mut rest) = word
+        .strip_prefix('"')
+        .and_then(|inner| inner.strip_suffix('"'))
+    else {
+        return word.to_string();
+    };
+    let mut name = String::with_capacity(rest.len());
+    while let Some(index) = rest.find("\\u{") {
+        name.push_str(&rest[..index]);
+        let after = &rest[index + 3..];
+        let decoded = after.find('}').and_then(|close| {
+            u32::from_str_radix(&after[..close], 16)
+                .ok()
+                .and_then(char::from_u32)
+                .map(|ch| (ch, close))
+        });
+        let Some((ch, close)) = decoded else {
+            name.push_str(&rest[index..]);
+            return name;
+        };
+        name.push(ch);
+        rest = &after[close + 1..];
+    }
+    name.push_str(rest);
+    name
 }
 
 fn parse_namespace_import_binding(clause: &str) -> Option<String> {
@@ -5511,23 +5684,19 @@ fn is_named_import_clause(clause: &str) -> bool {
         return true;
     }
 
-    for specifier in without_trailing_specifier_comma(inner).split(',') {
+    for specifier in split_module_specifier_list(without_trailing_specifier_comma(inner)) {
         let specifier = specifier.trim();
         if specifier.is_empty() {
             return false;
         }
 
-        let mut parts = specifier.split_whitespace();
-        // SAFETY: specifier is non-empty after early return check above
-        let first = parts.next().expect("serde serialization should succeed");
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let is_valid = match (second, third, fourth) {
-            (None, None, None) => is_module_binding_identifier(first),
-            (Some("as"), Some(local), None) => {
-                is_identifier(first) && is_module_binding_identifier(local)
+        // The imported name may be a string (`import { "a-b" as c }`,
+        // bd-9vouw.429); parse_named_import_specifiers checks its value.
+        let is_valid = match module_specifier_words(specifier).as_slice() {
+            [binding] => is_module_binding_identifier(binding),
+            [name, "as", local] => {
+                (is_identifier(name) || name.starts_with(['"', '\'']))
+                    && is_module_binding_identifier(local)
             }
             _ => false,
         };
@@ -5566,7 +5735,7 @@ fn parse_named_import_specifiers(
     let mut specifiers = Vec::with_capacity(4);
     let mut seen_local = BTreeSet::new();
 
-    for specifier in without_trailing_specifier_comma(inner).split(',') {
+    for specifier in split_module_specifier_list(without_trailing_specifier_comma(inner)) {
         let specifier = specifier.trim();
         if specifier.is_empty() {
             return Err(ParseError::new(
@@ -5577,16 +5746,10 @@ fn parse_named_import_specifiers(
             ));
         }
 
-        let mut parts = specifier.split_whitespace();
-        // SAFETY: specifier is non-empty after early return check above
-        let import_name = parts.next().expect("serde serialization should succeed");
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let (import_name, local_name) = match (second, third, fourth) {
-            (None, None, None) => (import_name, import_name),
-            (Some("as"), Some(local), None) => (import_name, local),
+        let words = module_specifier_words(specifier);
+        let (import_name, local_name) = match words.as_slice() {
+            [name] => (*name, *name),
+            [name, "as", local] => (*name, *local),
             _ => {
                 return Err(ParseError::new(
                     ParseErrorCode::UnsupportedSyntax,
@@ -5597,7 +5760,30 @@ fn parse_named_import_specifiers(
             }
         };
 
-        if !is_identifier(import_name) || !is_identifier(local_name) {
+        // An imported name is a ModuleExportName: a string names an export
+        // that is not an identifier, and needs `as` and a binding
+        // (ES2022 16.2.2 ImportSpecifier, bd-9vouw.429).
+        let import_name = match module_export_name(import_name) {
+            Err(message) => {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    message,
+                    source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            Ok(Some((_, true))) if words.len() == 1 => {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    "a string import name needs `as` and a binding",
+                    source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
+            Ok(Some((name, _))) => name,
+            Ok(None) => String::new(),
+        };
+        if import_name.is_empty() || !is_identifier(local_name) {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "named import specifier must use identifiers",
@@ -5608,7 +5794,7 @@ fn parse_named_import_specifiers(
 
         if !seen_local.insert(local_name.to_string()) {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "import binding has already been declared",
                 source_label.to_string(),
                 Some(span.clone()),
@@ -5616,7 +5802,7 @@ fn parse_named_import_specifiers(
         }
 
         specifiers.push(ImportSpecifier {
-            import_name: import_name.to_string(),
+            import_name,
             local_name: local_name.to_string(),
         });
     }
@@ -5673,9 +5859,11 @@ fn parse_star_export_clause(
     source_label: &str,
     span: &SourceSpan,
 ) -> ParseResult<NamedExportClause> {
+    // Every star export form is supported, the string alias included, so
+    // one that fits none is a SyntaxError (bd-9vouw.429).
     let error = |message: &str| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             message,
             source_label.to_string(),
             Some(span.clone()),
@@ -5684,17 +5872,26 @@ fn parse_star_export_clause(
     let rest = rest.trim_start();
     let (head, after_head) = match rest
         .strip_prefix("as")
-        .filter(|tail| tail.starts_with(char::is_whitespace))
+        .filter(|tail| tail.starts_with(|ch: char| ch.is_whitespace() || ch == '"' || ch == '\''))
     {
         Some(tail) => {
             let tail = tail.trim_start();
-            let alias_len = tail
-                .find(|ch: char| !is_identifier_continue(ch))
-                .unwrap_or(tail.len());
-            let alias = &tail[..alias_len];
-            if !alias.chars().next().is_some_and(is_identifier_start) {
-                return Err(error("`export * as` needs an export name"));
-            }
+            // `export * as "a-b" from` names the namespace with a string
+            // (ES2022 16.2.3 ModuleExportName).
+            let alias_len = if tail.starts_with(['"', '\'']) {
+                module_specifier_words(tail)
+                    .first()
+                    .map_or(0, |word| word.len())
+            } else {
+                tail.find(|ch: char| !is_identifier_continue(ch))
+                    .unwrap_or(tail.len())
+            };
+            let alias = match module_export_name(&tail[..alias_len]) {
+                Err(message) => return Err(error(message)),
+                Ok(Some((alias, true))) => encode_module_export_name(&alias),
+                Ok(Some((alias, false))) => alias,
+                Ok(None) => return Err(error("`export * as` needs an export name")),
+            };
             (format!("* as {alias}"), &tail[alias_len..])
         }
         None => ("*".to_string(), rest),
@@ -5709,8 +5906,11 @@ fn parse_star_export_clause(
                 "star export must be `export * from <quoted-source>` or `export * as <name> from <quoted-source>`",
             )
         })?;
+    // `export * from 'm' with { ... }` carries import attributes as an
+    // import does (ES2025 16.2.3).
+    let source_text = strip_import_attributes(source_raw, source_label, span)?;
     let source =
-        parse_quoted_string(source_raw).ok_or_else(|| error("export source must be quoted"))?;
+        parse_quoted_string(source_text).ok_or_else(|| error("export source must be quoted"))?;
     Ok(NamedExportClause::new(head, Some(source)))
 }
 
@@ -5719,105 +5919,124 @@ fn parse_named_export_clause(
     source_label: &str,
     span: &SourceSpan,
 ) -> ParseResult<NamedExportClause> {
+    // Every named export form is supported, string names included
+    // (ES2022 16.2.3), so a clause that fits none is a SyntaxError
+    // (bd-9vouw.429).
+    let error = |message: &str| {
+        ParseError::new(
+            ParseErrorCode::InvalidSyntax,
+            message,
+            source_label.to_string(),
+            Some(span.clone()),
+        )
+    };
     let clause = clause.trim();
     let Some(inner_and_trailing) = clause.strip_prefix('{') else {
-        return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "named export clause must start with `{`",
-            source_label.to_string(),
-            Some(span.clone()),
-        ));
+        return Err(error("named export clause must start with `{`"));
     };
 
-    let Some(close_index) = inner_and_trailing.find('}') else {
-        return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "named export clause is missing `}`",
-            source_label.to_string(),
-            Some(span.clone()),
-        ));
+    let Some(close_index) = module_specifier_list_close(inner_and_trailing) else {
+        return Err(error("named export clause is missing `}`"));
     };
 
     let specifiers = &inner_and_trailing[..close_index];
-    validate_named_export_specifiers(specifiers, source_label, span)?;
-
-    let without_comma = without_trailing_specifier_comma(specifiers);
-    let canonical_head = if without_comma.len() == specifiers.len() {
-        canonicalize_whitespace(&clause[..close_index + 2])
-    } else {
-        canonicalize_whitespace(&format!("{{{without_comma}}}"))
-    };
     let trailing = inner_and_trailing[close_index + 1..].trim();
     let source = if !trailing.is_empty() {
         let Some(source_raw) = trailing.strip_prefix("from").map(str::trim_start) else {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+            return Err(error(
                 "named export trailing clause must be `from <quoted-source>`",
-                source_label.to_string(),
-                Some(span.clone()),
             ));
         };
-
-        Some(parse_quoted_string(source_raw).ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "export source must be quoted",
-                source_label.to_string(),
-                Some(span.clone()),
-            )
-        })?)
+        // `export { a } from 'm' with { ... }` carries import attributes as
+        // an import does (ES2025 16.2.3).
+        let source_text = strip_import_attributes(source_raw, source_label, span)?;
+        Some(
+            parse_quoted_string(source_text)
+                .ok_or_else(|| error("export source must be quoted"))?,
+        )
     } else {
         None
+    };
+    let string_name_head =
+        validate_named_export_specifiers(specifiers, source.is_some(), source_label, span)?;
+
+    let without_comma = without_trailing_specifier_comma(specifiers);
+    let canonical_head = if let Some(head) = string_name_head {
+        head
+    } else if without_comma.len() == specifiers.len() {
+        canonicalize_whitespace(&clause[..close_index + 2])
+    } else {
+        canonicalize_whitespace(&format!("{{{without_comma}}}"))
     };
 
     Ok(NamedExportClause::new(canonical_head, source))
 }
 
+/// Check a named export list (the text between its braces). Each entry is
+/// `name` or `name as alias`, each name an identifier or a string
+/// (ES2022 16.2.3 ModuleExportName); a string names a local binding only in
+/// `export { ... } from` (an early error otherwise). When a string name is
+/// present, the clause's canonical head, its names written by
+/// encode_module_export_name (bd-9vouw.429).
 fn validate_named_export_specifiers(
     specifiers: &str,
+    has_source: bool,
     source_label: &str,
     span: &SourceSpan,
-) -> ParseResult<()> {
+) -> ParseResult<Option<String>> {
     let specifiers = specifiers.trim();
     if specifiers.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
+    let error = |code: ParseErrorCode, message: &str| {
+        ParseError::new(code, message, source_label.to_string(), Some(span.clone()))
+    };
+    let malformed = "unsupported named export specifier; expected `name` or `name as alias`";
 
-    for specifier in without_trailing_specifier_comma(specifiers).split(',') {
+    let mut entries = Vec::new();
+    let mut has_string_name = false;
+    for specifier in split_module_specifier_list(without_trailing_specifier_comma(specifiers)) {
         let specifier = specifier.trim();
         if specifier.is_empty() {
-            return Err(ParseError::new(
+            return Err(error(
                 ParseErrorCode::UnsupportedSyntax,
                 "named export specifier list contains an empty entry",
-                source_label.to_string(),
-                Some(span.clone()),
             ));
         }
 
-        let mut parts = specifier.split_whitespace();
-        // SAFETY: specifier is non-empty after early return check above
-        let local = parts.next().expect("serde serialization should succeed");
-        let second = parts.next();
-        let third = parts.next();
-        let fourth = parts.next();
-
-        let valid = match (second, third, fourth) {
-            (None, None, None) => is_identifier(local),
-            (Some("as"), Some(exported), None) => is_identifier(local) && is_identifier(exported),
-            _ => false,
+        let words = module_specifier_words(specifier);
+        let (local, exported) = match words.as_slice() {
+            [local] => (*local, None),
+            [local, "as", exported] => (*local, Some(*exported)),
+            _ => return Err(error(ParseErrorCode::InvalidSyntax, malformed)),
         };
-
-        if !valid {
-            return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
-                "unsupported named export specifier; expected `name` or `name as alias`",
-                source_label.to_string(),
-                Some(span.clone()),
+        // A name as a word of the canonical head: an identifier as written,
+        // a string encoded.
+        let head_word = |word: &str| match module_export_name(word) {
+            Err(message) => Err(error(ParseErrorCode::InvalidSyntax, message)),
+            Ok(None) => Err(error(ParseErrorCode::InvalidSyntax, malformed)),
+            Ok(Some((name, true))) => Ok((encode_module_export_name(&name), true)),
+            Ok(Some((name, false))) => Ok((name, false)),
+        };
+        let (local, local_is_string) = head_word(local)?;
+        if local_is_string && !has_source {
+            return Err(error(
+                ParseErrorCode::InvalidSyntax,
+                "a string names a local binding only in `export { ... } from`",
             ));
+        }
+        has_string_name |= local_is_string;
+        match exported {
+            None => entries.push(local),
+            Some(exported) => {
+                let (exported, exported_is_string) = head_word(exported)?;
+                has_string_name |= exported_is_string;
+                entries.push(format!("{local} as {exported}"));
+            }
         }
     }
 
-    Ok(())
+    Ok(has_string_name.then(|| format!("{{ {} }}", entries.join(", "))))
 }
 
 // ---------------------------------------------------------------------------
@@ -18751,7 +18970,9 @@ mod tests {
         let err = parser
             .parse("import * from 'pkg'", ParseGoal::Module)
             .expect_err("namespace import without alias must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -18760,7 +18981,9 @@ mod tests {
         let err = parser
             .parse("import { run as } from 'pkg'", ParseGoal::Module)
             .expect_err("invalid named import alias must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -18769,7 +18992,9 @@ mod tests {
         let err = parser
             .parse("import for from 'pkg'", ParseGoal::Module)
             .expect_err("keyword default import binding must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -18778,7 +19003,9 @@ mod tests {
         let err = parser
             .parse("import * as for from 'pkg'", ParseGoal::Module)
             .expect_err("keyword namespace import binding must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -18787,7 +19014,9 @@ mod tests {
         let err = parser
             .parse("import { run as for } from 'pkg'", ParseGoal::Module)
             .expect_err("keyword named import binding must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     // -----------------------------------------------------------------------
@@ -19173,7 +19402,9 @@ mod tests {
         let err = parser
             .parse("export { run as }", ParseGoal::Module)
             .expect_err("invalid named export alias must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -19182,7 +19413,9 @@ mod tests {
         let err = parser
             .parse("export { run } from pkg", ParseGoal::Module)
             .expect_err("export source must be quoted");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     #[test]
@@ -19191,7 +19424,9 @@ mod tests {
         let err = parser
             .parse("export run", ParseGoal::Module)
             .expect_err("unsupported export clause must fail");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+        // A SyntaxError, not a refusal: every import and export form is
+        // supported (bd-9vouw.429).
+        assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     }
 
     // -----------------------------------------------------------------------

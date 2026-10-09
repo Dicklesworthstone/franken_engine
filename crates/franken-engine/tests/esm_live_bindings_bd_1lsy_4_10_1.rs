@@ -125,3 +125,22 @@ fn star_reexports_follow_the_source_modules_later_writes() {
         ["low low low 1", "high high high extra,level,raise"]
     );
 }
+
+/// Module instantiation order in a cycle (a module importing itself): an
+/// import of a `let` export read before the export's declaration runs is in
+/// its temporal dead zone, a `var` export is already `undefined`, a function
+/// export is already the function; afterwards each import holds its export's
+/// value. Node v22.2.0 lines.
+#[test]
+fn imports_in_a_cycle_see_the_exports_instantiation_state() {
+    let root = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        root.path().join("self.mjs"),
+        "let early;\ntry { typeof y; early = 'readable'; } catch (error) { early = error.name; }\nconsole.log(early, w, typeof g);\nimport { x as y, v as w, f as g } from './self.mjs';\nexport let x = 1;\nexport var v = 2;\nexport function f() {}\nconsole.log(y, w, typeof g);\n",
+    )
+    .expect("write self.mjs");
+    assert_eq!(
+        run_module(root.path(), "self.mjs"),
+        ["ReferenceError undefined function", "1 2 function"]
+    );
+}

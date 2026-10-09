@@ -46200,20 +46200,34 @@ impl InterpreterCore {
     /// Register an importer's binding `cell`, initialized from export
     /// `export_name` of the module whose namespace object is
     /// `namespace_object`, with that module's record (bd-1lsy.4.10.1).
+    /// In a cycle the module may not have published the export yet: its
+    /// function and var exports are published before its imports run, so
+    /// the export is a lexical binding (`let`, `const`, `class`, a default
+    /// expression) still in its temporal dead zone, and the import is too
+    /// until the publication initializes it.
     fn watch_module_export(
         &mut self,
         namespace_object: ObjectId,
         export_name: JsString,
         cell: &Rc<RefCell<ScopeBindingState>>,
-    ) {
+    ) -> Result<(), InterpreterError> {
         let Some(record) = self
             .module_state
             .modules
             .values_mut()
             .find(|record| record.namespace_object == namespace_object)
         else {
-            return;
+            return Ok(());
         };
+        if matches!(record.status, ModuleRuntimeStatus::Evaluating)
+            && !record.exports.contains_key(&export_name)
+        {
+            cell.try_borrow_mut()
+                .map_err(|_| InterpreterError::InternalError {
+                    details: "module import binding is already borrowed".to_string(),
+                })?
+                .initialized = false;
+        }
         let watchers = record.import_bindings.entry(export_name).or_default();
         watchers.retain(|watcher| watcher.strong_count() > 0);
         if !watchers
@@ -46222,6 +46236,7 @@ impl InterpreterCore {
         {
             watchers.push(Rc::downgrade(cell));
         }
+        Ok(())
     }
 
     /// `cell`, a module binding that backs exports (`live_export` names its
@@ -56685,6 +56700,16 @@ impl InterpreterCore {
                             return Err(err);
                         }
                     }
+                    // bd-1lsy.4.10.1: a module binding that backs exports is
+                    // initialized by its declaration (`export var v = 2` after
+                    // the export was published undefined): republish it.
+                    if let Some((binding, _, _)) = previous.as_ref() {
+                        let live_export = binding.state()?.live_export;
+                        if let Some(live_export) = live_export {
+                            let cell = Rc::clone(&binding.state);
+                            self.publish_live_export(&cell, live_export, 0)?;
+                        }
+                    }
                     // bd-1lsy.4.10.1: an import binding initialized from its
                     // namespace read (the instruction just before) watches that
                     // export, so every later publication writes it: the import
@@ -56702,7 +56727,7 @@ impl InterpreterCore {
                         && let Value::Str(export_name) = self.read_reg(*key)?
                     {
                         let cell = Rc::clone(&binding.state);
-                        self.watch_module_export(namespace_object, export_name, &cell);
+                        self.watch_module_export(namespace_object, export_name, &cell)?;
                     }
                     self.ip += 1;
                 }

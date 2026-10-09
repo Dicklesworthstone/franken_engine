@@ -8956,12 +8956,33 @@ fn lower_ir2_to_ir3_with_input_hash(
         .filter(|binding| binding.kind == BindingKind::Import)
         .map(|binding| binding.binding_id)
         .collect::<Vec<_>>();
+    // A module binding that backs an export (`export let x`, `export { v }`,
+    // a default expression's binding) is a runtime scope cell too: the
+    // interpreter tracks the cell its ExportBinding reads, and every later
+    // write republishes the export; a register copy is invisible to it.
+    // Function declarations keep their registers (they are published before
+    // the imports run and rarely reassigned).
+    let exported_binding_ids = ir2
+        .ops
+        .iter()
+        .filter_map(|op| match &op.inner {
+            Ir1Op::ExportBinding { binding_id, .. } => Some(*binding_id),
+            _ => None,
+        })
+        .filter(|binding_id| {
+            matches!(
+                binding_kind_by_id.get(binding_id),
+                Some(BindingKind::Let | BindingKind::Const | BindingKind::Var)
+            )
+        })
+        .collect::<Vec<_>>();
     let runtime_lexical_binding_ids = tdz_binding_ids
         .union(&const_assignment_binding_ids)
         .copied()
         .chain(spilled_lexical_binding_ids)
         .chain(captured_lexical_binding_ids)
         .chain(import_binding_ids)
+        .chain(exported_binding_ids)
         .collect::<BTreeSet<_>>();
     for id in &runtime_lexical_binding_ids {
         scoped_runtime_binding_ids.insert(*id);
@@ -34611,6 +34632,26 @@ fn module_statement_order(body: &[Statement]) -> std::vec::IntoIter<&Statement> 
             _ => None,
         })
         .collect();
+    // A top-level `var` is initialized (undefined) when the module is
+    // instantiated, before any import runs, as a function is: its export is
+    // published there too, so a module in a cycle reads undefined, not a
+    // binding in its temporal dead zone (bd-1lsy.4.10.1).
+    let var_names: BTreeSet<&str> = body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Var =>
+            {
+                Some(declaration.declarations.iter())
+            }
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|declarator| match &declarator.pattern {
+            BindingPattern::Identifier(name) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
     let rank = |statement: &Statement| match statement {
         Statement::FunctionDeclaration(_) => 0u8,
         // `export default function () {}` (also a generator or async
@@ -34630,9 +34671,9 @@ fn module_statement_order(body: &[Statement]) -> std::vec::IntoIter<&Statement> 
         }) if clause.source().is_none() => {
             let locals = parse_named_export_clause_bindings(clause.canonical_head());
             if !locals.is_empty()
-                && locals
-                    .iter()
-                    .all(|(local, _)| function_names.contains(local.as_str()))
+                && locals.iter().all(|(local, _)| {
+                    function_names.contains(local.as_str()) || var_names.contains(local.as_str())
+                })
             {
                 1
             } else {

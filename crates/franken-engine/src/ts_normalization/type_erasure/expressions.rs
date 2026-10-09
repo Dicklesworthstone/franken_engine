@@ -413,7 +413,7 @@ impl Eraser<'_> {
     /// between two angle brackets. In particular `a < b + c > (d)` is runtime
     /// arithmetic, whereas `a < B<C>, D > (d)` is a generic call. Nested type
     /// groups and the recursion limit belong to the existing type parser.
-    fn expression_type_arguments_end(&self, open: usize) -> Option<usize> {
+    pub(super) fn expression_type_arguments_end(&self, open: usize) -> Option<usize> {
         let mut cursor = open + 1;
         loop {
             let end = self.type_end(cursor, 0)?;

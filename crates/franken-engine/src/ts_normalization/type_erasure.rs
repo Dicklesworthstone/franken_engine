@@ -292,20 +292,63 @@ impl Eraser<'_> {
             .contains(['\n', '\r', '\u{2028}', '\u{2029}'])
     }
 
+    /// Whether the word at `index` is a class member modifier followed by
+    /// the member it modifies (a name, `[`, `#`, `*`, or `{` after `static`).
+    fn member_modifier_at(&self, index: usize) -> bool {
+        matches!(
+            self.text(index),
+            "public"
+                | "private"
+                | "protected"
+                | "readonly"
+                | "static"
+                | "declare"
+                | "abstract"
+                | "override"
+                | "async"
+                | "get"
+                | "set"
+                | "accessor"
+        ) && (self
+            .tokens
+            .get(index + 1)
+            .is_some_and(|token| token.kind == Kind::Word)
+            || matches!(self.text(index + 1), "[" | "#" | "*")
+            || (self.text(index) == "static" && self.text(index + 1) == "{"))
+    }
+
     fn initializer_end(&self, mut cursor: usize, end: usize, field: bool) -> usize {
         let start = cursor;
         while cursor < end {
             if matches!(self.text(cursor), "," | ";" | ")" | "}") {
                 break;
             }
+            // A line starting the next member ends a field's initializer
+            // (ASI): `name:`, `name =`, `name(`, or a modifier before a
+            // member name (`private busy: boolean = false`, `static count
+            // = 0`, `protected get total()`). The modifier form was read
+            // as part of the initializer above it, so its modifier was
+            // never erased (bd-9vouw.432).
             if field
                 && cursor > start
                 && self.newline_before(cursor)
                 && self.tokens[cursor].kind == Kind::Word
-                && matches!(self.text(cursor + 1), ":" | "?" | "!" | "=" | "(")
+                && (matches!(self.text(cursor + 1), ":" | "?" | "!" | "=" | "(")
+                    || self.member_modifier_at(cursor))
                 && !matches!(self.text(cursor - 1), "." | "?." | "?" | ":" | "=" | "=>")
             {
                 break;
+            }
+            // A call's type arguments (`new Map<K, V>()`) hold commas that do
+            // not end the initializer; the expression pass erases them later
+            // (bd-9vouw.432).
+            if field
+                && self.text(cursor) == "<"
+                && let Some(after) = self.expression_type_arguments_end(cursor)
+                && self.text(after) == "("
+            {
+                cursor = after;
+                continue;
             }
             cursor = self.group_end(cursor).unwrap_or(cursor + 1);
         }

@@ -1326,7 +1326,7 @@ fn parser_rejects_invalid_optional_chain_property_form() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("invalid optional property should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
     assert_eq!(
         err.message,
         "optional chaining property access requires an identifier after `?.`"
@@ -1577,8 +1577,8 @@ fn parser_tagged_meta_frontier_rejects_super_member_expression() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("super member expression should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
+    assert_eq!(err.message, "'super' keyword unexpected here");
     assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 
@@ -1589,8 +1589,8 @@ fn parser_tagged_meta_frontier_rejects_super_computed_member_expression() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("super computed member expression should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
+    assert_eq!(err.message, "'super' keyword unexpected here");
     assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 
@@ -1634,8 +1634,8 @@ fn parser_tagged_meta_frontier_rejects_bare_super_expression() {
     let err = parser
         .parse(source, ParseGoal::Script)
         .expect_err("bare super expression should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "super expressions are not supported");
+    assert_eq!(err.code, ParseErrorCode::InvalidSyntax);
+    assert_eq!(err.message, "'super' keyword unexpected here");
     assert_eq!(err.span, Some(single_line_source_span(source)));
 }
 

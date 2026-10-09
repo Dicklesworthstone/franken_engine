@@ -6708,8 +6708,8 @@ fn parse_primary_expression(
         });
     }
     if expression == "super" {
-        return Err(unsupported_expression_syntax_error(
-            "super expressions are not supported",
+        return Err(invalid_syntax_error(
+            "'super' keyword unexpected here",
             span,
             context,
         ));
@@ -6959,8 +6959,8 @@ fn parse_primary_expression(
     }
 
     if has_valid_quoted_prefix {
-        return Err(unsupported_expression_syntax_error(
-            "unsupported or malformed string-literal postfix expression",
+        return Err(invalid_syntax_error(
+            "malformed string-literal postfix expression",
             span,
             context,
         ));
@@ -7442,7 +7442,7 @@ fn parse_arrow_body(
                 // follows its block body (`() => {} = 1`, `() => {}.x`) but
                 // the `;` ending its statement, which some callers keep.
                 if !matches!(after_block.trim(), "" | ";") {
-                    return Err(unsupported_expression_syntax_error(
+                    return Err(invalid_syntax_error(
                         "unexpected token after an arrow function body",
                         span,
                         context,
@@ -9635,8 +9635,8 @@ fn try_parse_postfix(
             )));
         }
         if object_src == "super" && !context.super_property_allowed {
-            return Some(Err(unsupported_expression_syntax_error(
-                "super expressions are not supported",
+            return Some(Err(invalid_syntax_error(
+                "'super' keyword unexpected here",
                 span,
                 context,
             )));
@@ -9710,7 +9710,7 @@ fn try_parse_postfix(
             )));
         }
         if optional && !is_identifier(property_src) && private_name.is_none() {
-            return Some(Err(optional_chaining_syntax_error(
+            return Some(Err(invalid_syntax_error(
                 "optional chaining property access requires an identifier after `?.`",
                 span,
                 context,
@@ -9751,8 +9751,8 @@ fn try_parse_postfix(
             }));
         }
         if object_src == "super" && !context.super_property_allowed {
-            return Some(Err(unsupported_expression_syntax_error(
-                "super expressions are not supported",
+            return Some(Err(invalid_syntax_error(
+                "'super' keyword unexpected here",
                 span,
                 context,
             )));
@@ -14860,7 +14860,7 @@ fn parse_do_while_statement(
     } else {
         let while_idx = do_condition_while_index(after_do).ok_or_else(|| {
             ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 "do-while statement requires 'while' after body",
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -16160,7 +16160,7 @@ fn parse_class_body_members(
             || class_member_is_field(&rest[key_end..])
         {
             return Err(ParseError::new(
-                ParseErrorCode::UnsupportedSyntax,
+                ParseErrorCode::InvalidSyntax,
                 format!("malformed class element: `{}`", segment.trim()),
                 context.source_label.to_string(),
                 Some(span.clone()),
@@ -16631,7 +16631,7 @@ fn parse_class_field(
     let text = text.strip_suffix(';').unwrap_or(text).trim_end();
     let malformed = |context: &ParseExecutionContext<'_>| {
         ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
+            ParseErrorCode::InvalidSyntax,
             format!("malformed class field: `{text}`"),
             context.source_label.to_string(),
             Some(span.clone()),

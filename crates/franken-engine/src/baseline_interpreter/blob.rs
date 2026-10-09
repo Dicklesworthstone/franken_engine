@@ -188,10 +188,10 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: blob.0 })?
             .clone();
         let previous_bytes = Self::estimate_heap_object_bytes(&projected);
-        projected.blob = Some(BlobData {
+        projected.blob = Some(Box::new(BlobData {
             bytes,
             content_type,
-        });
+        }));
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
@@ -201,7 +201,7 @@ impl InterpreterCore {
     /// The `blob` slot of `value`, if it is a blob.
     fn blob_data(&self, value: &Value) -> Option<&BlobData> {
         match value {
-            Value::Object(id) => self.heap.get(id.0 as usize)?.blob.as_ref(),
+            Value::Object(id) => self.heap.get(id.0 as usize)?.blob.as_deref(),
             _ => None,
         }
     }

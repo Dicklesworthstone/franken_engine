@@ -692,7 +692,7 @@ impl InterpreterCore {
             .heap
             .get(id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-        let boxed = match &object.primitive_value {
+        let boxed = match object.primitive_value.as_deref() {
             Some(Value::Int(_) | Value::Float(_)) => Some("BoxedNumber"),
             Some(Value::Str(_)) => Some("BoxedString"),
             Some(Value::Bool(_)) => Some("BoxedBoolean"),
@@ -1421,7 +1421,7 @@ impl InterpreterCore {
             return Ok("[Object]".to_string());
         };
         let is_array = object.is_array;
-        let typed_array = object.typed_array.clone();
+        let typed_array = object.typed_array.as_deref().cloned();
         let array_buffer = object.array_buffer.is_some();
         let constructor = self.inspect_constructor_name(state.module, id);
         let internal = self.inspect_internal_type(id);

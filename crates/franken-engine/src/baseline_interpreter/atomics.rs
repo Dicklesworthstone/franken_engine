@@ -301,7 +301,7 @@ impl InterpreterCore {
             Value::Object(id) => self
                 .heap
                 .get(id.0 as usize)
-                .and_then(|object| object.typed_array.clone()),
+                .and_then(|object| object.typed_array.as_deref().cloned()),
             _ => None,
         };
         let Some(view) = view else {

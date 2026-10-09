@@ -170,7 +170,7 @@ impl InterpreterCore {
                     Value::Object(object_id) => self
                         .heap
                         .get(object_id.0 as usize)
-                        .and_then(|object| object.typed_array.clone())
+                        .and_then(|object| object.typed_array.as_deref().cloned())
                         .filter(|view| view.kind == TypedArrayKind::Uint8),
                     _ => None,
                 }
@@ -351,7 +351,7 @@ impl InterpreterCore {
         let buffer = self
             .heap
             .get(view.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|typed_array| typed_array.buffer)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "typed-array view".to_string(),

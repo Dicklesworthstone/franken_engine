@@ -125,7 +125,7 @@ impl InterpreterCore {
             self.mutate_heap(|heap| {
                 if let Some(backing) = heap
                     .get_mut(buffer.0 as usize)
-                    .and_then(|object| object.array_buffer.as_mut())
+                    .and_then(|object| object.array_buffer.as_deref_mut())
                 {
                     backing.max_byte_length = max_byte_length;
                 }
@@ -188,7 +188,7 @@ impl InterpreterCore {
     fn buffer_backing(&self, buffer: ObjectId) -> Result<&ArrayBufferBacking, InterpreterError> {
         self.heap
             .get(buffer.0 as usize)
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .ok_or(InterpreterError::ObjectNotFound { id: buffer.0 })
     }
 
@@ -322,7 +322,7 @@ impl InterpreterCore {
         self.mutate_heap(|heap| {
             if let Some(backing) = heap
                 .get_mut(buffer.0 as usize)
-                .and_then(|object| object.array_buffer.as_mut())
+                .and_then(|object| object.array_buffer.as_deref_mut())
             {
                 backing.views = views;
             }
@@ -366,7 +366,7 @@ impl InterpreterCore {
         self.mutate_heap(|heap| {
             if let Some(backing) = heap
                 .get_mut(buffer.0 as usize)
-                .and_then(|object| object.array_buffer.as_mut())
+                .and_then(|object| object.array_buffer.as_deref_mut())
             {
                 backing.views.push(view_id);
             }
@@ -477,7 +477,7 @@ impl InterpreterCore {
         self.mutate_heap(|heap| {
             if let Some(backing) = heap
                 .get_mut(created.0 as usize)
-                .and_then(|object| object.array_buffer.as_mut())
+                .and_then(|object| object.array_buffer.as_deref_mut())
             {
                 backing.bytes[..copied.len()].copy_from_slice(&copied);
                 backing.max_byte_length = max_byte_length;

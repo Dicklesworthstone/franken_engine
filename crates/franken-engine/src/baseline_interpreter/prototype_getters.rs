@@ -226,7 +226,7 @@ impl InterpreterCore {
                 Value::Object(id) => self
                     .heap
                     .get(id.0 as usize)
-                    .and_then(|object| object.typed_array.as_ref())
+                    .and_then(|object| object.typed_array.as_deref())
                     .map_or(Value::Undefined, |view| Value::str(view.kind.type_name())),
                 _ => Value::Undefined,
             });
@@ -241,7 +241,7 @@ impl InterpreterCore {
                 Value::Object(id) => match self
                     .heap
                     .get(id.0 as usize)
-                    .and_then(|object| object.primitive_value.as_ref())
+                    .and_then(|object| object.primitive_value.as_deref())
                 {
                     Some(Value::Symbol(symbol)) => *symbol,
                     _ => return Err(incompatible()),

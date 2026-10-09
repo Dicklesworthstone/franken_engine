@@ -290,7 +290,10 @@ impl InterpreterCore {
                         .heap
                         .get(source.0 as usize)
                         .ok_or(InterpreterError::ObjectNotFound { id: source.0 })?;
-                    let clone = match (object.typed_array.clone(), object.data_view.clone()) {
+                    let clone = match (
+                        object.typed_array.as_deref().cloned(),
+                        object.data_view.as_deref().cloned(),
+                    ) {
                         (Some(view), _) => self.alloc_typed_array_view_object(
                             view.kind,
                             buffer,
@@ -413,7 +416,7 @@ impl InterpreterCore {
             .map(|view| view.buffer)
             .or_else(|| object.data_view.as_ref().map(|view| view.buffer));
         let array_buffer = object.array_buffer.is_some();
-        let primitive = object.primitive_value.clone();
+        let primitive = object.primitive_value.as_deref().cloned();
 
         if let Some(primitive) = primitive {
             if matches!(primitive, Value::Symbol(_)) {

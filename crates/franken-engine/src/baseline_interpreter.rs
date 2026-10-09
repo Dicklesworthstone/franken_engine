@@ -8435,6 +8435,11 @@ impl<T> std::ops::IndexMut<usize> for ReclaimableTable<T> {
 }
 
 /// A heap-allocated object with string-keyed properties.
+///
+/// The internal slots only some objects have (an ArrayBuffer's bytes, a
+/// view, a Blob, a RegExp's source, a wrapper's primitive, class metadata, a
+/// brand) are boxed: inline, their `None`s made every `{}` about 900 bytes,
+/// against Node's ~130 (bd-9vouw.464).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeapObject {
     /// Data properties in ECMAScript own-key order with deterministic lookup.
@@ -8455,9 +8460,9 @@ pub struct HeapObject {
     /// Constructor function index that allocated this object via `Construct`.
     pub constructor_function: Option<u32>,
     /// Engine-private parent constructor slot, inaccessible to guest code.
-    derived_constructor_parent: Option<Value>,
+    derived_constructor_parent: Option<Box<Value>>,
     /// IFC provenance paired with the private parent constructor slot.
-    derived_constructor_parent_label: Option<Label>,
+    derived_constructor_parent_label: Option<Box<Label>>,
     /// Whether the owning function is a derived class constructor.
     is_derived_constructor: bool,
     /// Whether the owning function uses the implicit forwarding constructor.
@@ -8467,30 +8472,30 @@ pub struct HeapObject {
     /// static fields (consumed once they run). An internal array
     /// `[key0, initializer0, key1, initializer1, ...]` in declaration order,
     /// reachable only through this slot.
-    class_fields: Option<Value>,
+    class_fields: Option<Box<Value>>,
     /// The [[BooleanData]], [[NumberData]], [[StringData]], [[BigIntData]] or
     /// [[SymbolData]] of a primitive wrapper object (`Object(1)`,
     /// `new String('a')`; ES2020 19.3.4, 20.1.4, 21.1.4, 20.2.4, 19.4.4).
     /// Engine-private: guest code reaches it only through the prototype
     /// methods' thisXValue and the conversions.
-    primitive_value: Option<Value>,
+    primitive_value: Option<Box<Value>>,
     /// The engine-assigned brand of a built-in or host object (`"Map"`,
     /// `"Date"`, `"ClientRequest"`, `"Intl.NumberFormat"`, ...): what its
     /// methods' receiver checks, member dispatch, Object.prototype.toString
     /// and inspect consult (bd-9vouw.150). Engine-private: it is not a
     /// property, so guest code can neither see nor forge it, and a guest
     /// `__type` property is ordinary data.
-    brand: Option<JsString>,
+    brand: Option<Box<JsString>>,
     /// Whether this object was created as a true Array instance.
     pub is_array: bool,
     /// Cached dense length for arrays (None = sparse, compute from properties).
     pub cached_dense_length: Option<u32>,
     /// Optional ArrayBuffer backing-store bytes for JS-visible binary memory.
-    pub array_buffer: Option<ArrayBufferBacking>,
+    pub array_buffer: Option<Box<ArrayBufferBacking>>,
     /// Optional fixed-length typed-array view over an ArrayBuffer backing store.
-    pub typed_array: Option<TypedArrayView>,
+    pub typed_array: Option<Box<TypedArrayView>>,
     /// Optional fixed-length DataView over an ArrayBuffer backing store.
-    pub data_view: Option<DataViewView>,
+    pub data_view: Option<Box<DataViewView>>,
     /// Whether this object has been frozen via Object.freeze().
     pub is_frozen: bool,
     /// Private [[Extensible]] state; guest property names cannot forge it.
@@ -8516,12 +8521,12 @@ pub struct HeapObject {
     deleted_virtual_keys: BTreeSet<RuntimePropertyKey>,
     /// The bytes and type of a WHATWG Blob (bd-9vouw.226); `None` on every
     /// other object.
-    blob: Option<blob::BlobData>,
+    blob: Option<Box<blob::BlobData>>,
     /// A RegExp's [[OriginalSource]] and [[OriginalFlags]] (bd-9vouw.150
     /// phase 2): engine-private, so guest properties named `source` or
     /// `flags` neither change nor reveal them, and reflection lists only
     /// `lastIndex`.
-    regexp: Option<RegExpSlots>,
+    regexp: Option<Box<RegExpSlots>>,
 }
 
 /// A RegExp's pattern, escaped as `source` reads it back (bd-9vouw.243),
@@ -8908,9 +8913,9 @@ impl<'de> Deserialize<'de> for HeapObject {
             constructor_function: Option<u32>,
             is_array: bool,
             cached_dense_length: Option<u32>,
-            array_buffer: Option<ArrayBufferBacking>,
-            typed_array: Option<TypedArrayView>,
-            data_view: Option<DataViewView>,
+            array_buffer: Option<Box<ArrayBufferBacking>>,
+            typed_array: Option<Box<TypedArrayView>>,
+            data_view: Option<Box<DataViewView>>,
             is_frozen: bool,
             #[serde(default)]
             is_non_extensible: bool,
@@ -8919,19 +8924,19 @@ impl<'de> Deserialize<'de> for HeapObject {
             #[serde(default)]
             is_import_meta: bool,
             #[serde(default)]
-            derived_constructor_parent: Option<Value>,
+            derived_constructor_parent: Option<Box<Value>>,
             #[serde(default)]
-            derived_constructor_parent_label: Option<Label>,
+            derived_constructor_parent_label: Option<Box<Label>>,
             #[serde(default)]
             is_derived_constructor: bool,
             #[serde(default)]
             is_default_derived_constructor: bool,
             #[serde(default)]
-            class_fields: Option<Value>,
+            class_fields: Option<Box<Value>>,
             #[serde(default)]
-            primitive_value: Option<Value>,
+            primitive_value: Option<Box<Value>>,
             #[serde(default)]
-            brand: Option<JsString>,
+            brand: Option<Box<JsString>>,
             #[serde(default)]
             private_elements: Vec<PrivateElementWire>,
             #[serde(default)]
@@ -8943,9 +8948,9 @@ impl<'de> Deserialize<'de> for HeapObject {
             #[serde(default)]
             deleted_virtual_keys: Vec<PropertyKeyWire>,
             #[serde(default)]
-            blob: Option<blob::BlobData>,
+            blob: Option<Box<blob::BlobData>>,
             #[serde(default)]
-            regexp: Option<RegExpSlots>,
+            regexp: Option<Box<RegExpSlots>>,
         }
 
         #[derive(Deserialize)]
@@ -9141,15 +9146,15 @@ pub(crate) fn heap_object_contains_symbols(object: &HeapObject) -> bool {
             .any(|key| matches!(key, RuntimePropertyKey::Symbol(_)))
         || object
             .derived_constructor_parent
-            .as_ref()
+            .as_deref()
             .is_some_and(value_contains_symbol)
         || object
             .class_fields
-            .as_ref()
+            .as_deref()
             .is_some_and(value_contains_symbol)
         || object
             .primitive_value
-            .as_ref()
+            .as_deref()
             .is_some_and(value_contains_symbol)
         || object
             .properties
@@ -9271,7 +9276,7 @@ impl HeapObject {
     /// The engine-assigned brand (bd-9vouw.150): `Some("Map")` for a Map,
     /// `None` for an ordinary object whatever its properties say.
     fn brand(&self) -> Option<&str> {
-        self.brand.as_deref()
+        self.brand.as_deref().map(|brand| &**brand)
     }
 
     /// Effective attributes of the own property `key` (assumed present). A
@@ -19715,7 +19720,7 @@ impl InterpreterCore {
                 .get(key)
                 .map_or(0, |value| Self::estimate_property_entry_bytes(key, value))
         }))
-        .saturating_add(Self::estimate_brand_bytes(object.brand.as_ref()));
+        .saturating_add(Self::estimate_brand_bytes(object.brand.as_deref()));
         let scalar_property_bytes = |key: &str| {
             MEMORY_ESTIMATE_MAP_ENTRY_BYTES
                 .saturating_add(Self::estimate_string_bytes(key).saturating_mul(2))
@@ -19788,7 +19793,7 @@ impl InterpreterCore {
             for (key, value) in property_updates {
                 object.properties.insert(key.to_string(), value);
             }
-            object.brand = Some(tls_brand);
+            object.brand = Some(Box::new(tls_brand));
         });
         self.gc_write_barrier(socket);
         Ok(())
@@ -25788,7 +25793,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
-        projected_object.brand = Some(JsString::from("Writable"));
+        projected_object.brand = Some(Box::new(JsString::from("Writable")));
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
         let state_bytes = Self::estimate_writable_state_bytes(&state);
         let requested_bytes = self
@@ -25913,7 +25918,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
-        projected_object.brand = Some(JsString::from(brand));
+        projected_object.brand = Some(Box::new(JsString::from(brand)));
         let readable_bytes = Self::estimate_readable_from_state_bytes(&readable_state);
         let writable_bytes = Self::estimate_writable_state_bytes(&writable_state);
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
@@ -26082,7 +26087,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
-        projected_object.brand = Some(JsString::from(brand));
+        projected_object.brand = Some(Box::new(JsString::from(brand)));
         let readable_bytes = Self::estimate_readable_from_state_bytes(&readable_state);
         let writable_bytes = Self::estimate_writable_state_bytes(&writable_state);
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
@@ -26263,7 +26268,7 @@ impl InterpreterCore {
         if let Some(view) = self
             .heap
             .get(object_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             && key
                 .as_str()
                 .and_then(Self::typed_array_integer_index_key)
@@ -29688,7 +29693,7 @@ impl InterpreterCore {
                 .properties
                 .insert((*key).to_string(), value.clone());
         }
-        projected_object.brand = Some(JsString::from(READABLE_BRAND));
+        projected_object.brand = Some(Box::new(JsString::from(READABLE_BRAND)));
         let object_bytes = Self::estimate_heap_object_bytes(&projected_object);
         let requested_bytes = self
             .estimated_memory_bytes
@@ -34736,7 +34741,7 @@ impl InterpreterCore {
     fn binary_storage_label_ref(&self, object_id: ObjectId) -> Option<&Label> {
         self.array_buffer_id_for_object(object_id)
             .and_then(|buffer_id| self.heap.get(buffer_id.0 as usize))
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .map(|backing| &backing.label)
     }
 
@@ -34890,7 +34895,7 @@ impl InterpreterCore {
         let Some(previous_label) = self
             .heap
             .get(buffer_id.0 as usize)
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .map(|backing| backing.label.clone())
         else {
             return Ok(());
@@ -34903,7 +34908,7 @@ impl InterpreterCore {
         self.mutate_heap(|heap| {
             if let Some(backing) = heap
                 .get_mut(buffer_id.0 as usize)
-                .and_then(|object| object.array_buffer.as_mut())
+                .and_then(|object| object.array_buffer.as_deref_mut())
             {
                 backing.label = next_label;
             }
@@ -41616,7 +41621,7 @@ impl InterpreterCore {
             && let Some(view) = self
                 .heap
                 .get(object_id.0 as usize)
-                .and_then(|object| object.typed_array.as_ref())
+                .and_then(|object| object.typed_array.as_deref())
         {
             Self::reject_out_of_bounds_typed_array(view, builtin.spec_name())?;
         }
@@ -59281,7 +59286,7 @@ impl InterpreterCore {
                 .typed_array
                 .as_ref()
                 .and_then(|iterator| self.heap.get(iterator.object.0 as usize))
-                .and_then(|object| object.typed_array.clone()),
+                .and_then(|object| object.typed_array.as_deref().cloned()),
             _ => None,
         };
         if let Some(view) = &fresh_typed_view {
@@ -59379,7 +59384,7 @@ impl InterpreterCore {
                 let typed_view = self
                     .heap
                     .get(iterator.object_id.0 as usize)
-                    .and_then(|object| object.typed_array.clone());
+                    .and_then(|object| object.typed_array.as_deref().cloned());
                 let length = if let Some(view) = typed_view {
                     Self::reject_out_of_bounds_typed_array(&view, "next")?;
                     view.length
@@ -61593,10 +61598,10 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: regexp_id.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.regexp = Some(RegExpSlots {
+        projected.regexp = Some(Box::new(RegExpSlots {
             source,
             flags: canonical,
-        });
+        }));
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
@@ -64022,7 +64027,7 @@ impl InterpreterCore {
                 tag
             }
         };
-        match &object.primitive_value {
+        match object.primitive_value.as_deref() {
             Some(Value::Bool(_)) => return "Boolean",
             Some(Value::Int(_) | Value::Float(_)) => return "Number",
             Some(Value::Str(_)) => return "String",
@@ -71064,7 +71069,7 @@ impl InterpreterCore {
                 })?,
             );
         let mut object = HeapObject::new();
-        object.brand = Some(JsString::from(marker));
+        object.brand = Some(Box::new(JsString::from(marker)));
         object
             .properties
             .insert("__timerId".to_string(), Value::Int(timer_id as i64));
@@ -72236,7 +72241,7 @@ impl InterpreterCore {
         let source_kind = self
             .heap
             .get(source_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|view| view.kind);
         match source_kind {
             Some(kind) if kind.is_bigint() != target.is_bigint() => {
@@ -72279,7 +72284,7 @@ impl InterpreterCore {
                 None => Ok(None),
             };
         };
-        let Some(view) = object.typed_array.clone() else {
+        let Some(view) = object.typed_array.as_deref().cloned() else {
             return Ok(None);
         };
         let Some(index) = Self::typed_array_integer_index_key(key) else {
@@ -72315,7 +72320,8 @@ impl InterpreterCore {
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
             .typed_array
-            .clone()
+            .as_deref()
+            .cloned()
         else {
             return Ok(None);
         };
@@ -72552,7 +72558,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        Ok(object.typed_array.clone())
+        Ok(object.typed_array.as_deref().cloned())
     }
 
     fn typed_array_receiver_view(
@@ -72570,7 +72576,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        let view = object.typed_array.clone().ok_or_else(|| {
+        let view = object.typed_array.as_deref().cloned().ok_or_else(|| {
             let got = object.brand().unwrap_or("object").to_string();
             InterpreterError::TypeError {
                 expected: format!("TypedArray receiver for TypedArray.prototype.{method_name}"),
@@ -73009,7 +73015,7 @@ impl InterpreterCore {
             Value::Object(object_id) => self
                 .heap
                 .get(object_id.0 as usize)
-                .and_then(|object| object.typed_array.clone()),
+                .and_then(|object| object.typed_array.as_deref().cloned()),
             _ => None,
         };
         let (Value::Object(created), Some(created_view)) = (result.clone(), created_view) else {
@@ -73065,7 +73071,7 @@ impl InterpreterCore {
         let label = self
             .array_buffer_id_for_object(source)
             .and_then(|buffer| self.heap.get(buffer.0 as usize))
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .map(|backing| backing.label.clone())
             .unwrap_or(Label::Public);
         self.join_binary_storage_label(target, &label)
@@ -73238,7 +73244,7 @@ impl InterpreterCore {
             let label = self
                 .heap
                 .get(source.0 as usize)
-                .and_then(|object| object.array_buffer.as_ref())
+                .and_then(|object| object.array_buffer.as_deref())
                 .map(|backing| backing.label.clone())
                 .unwrap_or(Label::Public);
             self.join_binary_storage_label(created, &label)?;
@@ -73247,7 +73253,7 @@ impl InterpreterCore {
         let label = self
             .heap
             .get(source.0 as usize)
-            .and_then(|object| object.array_buffer.as_ref())
+            .and_then(|object| object.array_buffer.as_deref())
             .map(|backing| backing.label.clone())
             .unwrap_or(Label::Public);
         let created = self.alloc_buffer_object(last.saturating_sub(first), shared)?;
@@ -75839,7 +75845,7 @@ impl InterpreterCore {
             .heap
             .get(object_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        object.data_view.clone().ok_or_else(|| {
+        object.data_view.as_deref().cloned().ok_or_else(|| {
             let got = object.brand().unwrap_or("object").to_string();
             InterpreterError::TypeError {
                 expected: format!("DataView receiver for DataView.prototype.{method_name}"),
@@ -76650,7 +76656,7 @@ impl InterpreterCore {
             && let Some(view) = self
                 .heap
                 .get(array_id.0 as usize)
-                .and_then(|object| object.typed_array.as_ref())
+                .and_then(|object| object.typed_array.as_deref())
         {
             return Ok(view.length);
         }
@@ -79368,7 +79374,7 @@ impl InterpreterCore {
             Value::Object(object_id) => self
                 .heap
                 .get(object_id.0 as usize)
-                .and_then(|object| object.typed_array.as_ref())
+                .and_then(|object| object.typed_array.as_deref())
                 .map(|view| view.length),
             _ => None,
         };
@@ -91469,7 +91475,7 @@ impl InterpreterCore {
                 } else if let Some(fields) = self
                     .heap
                     .get(target_id.0 as usize)
-                    .and_then(|object| object.class_fields.clone())
+                    .and_then(|object| object.class_fields.as_deref().cloned())
                 {
                     // The list stays reachable from its slot while the
                     // initializers run, then is released.
@@ -92868,7 +92874,7 @@ impl InterpreterCore {
                         if self
                             .heap
                             .get(obj_id.0 as usize)
-                            .and_then(|object| object.typed_array.as_ref())
+                            .and_then(|object| object.typed_array.as_deref())
                             .is_some_and(|view| view.length > 0)
                         {
                             return Err(InterpreterError::TypeError {
@@ -100067,7 +100073,7 @@ impl InterpreterCore {
         if let Some(view) = self
             .heap
             .get(id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .filter(|view| view.is_buffer)
             && let Ok(bytes) = self.typed_array_view_bytes(view)
         {
@@ -100092,7 +100098,7 @@ impl InterpreterCore {
         if let Some(view) = self
             .heap
             .get(id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             && let Ok(values) = self.typed_array_values_in_range(view, 0, view.length)
         {
             return values
@@ -101237,21 +101243,21 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_execution_seed_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 object
                     .class_fields
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_execution_seed_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 object
                     .primitive_value
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_execution_seed_value_bytes)
                     .unwrap_or(0),
             )
@@ -101267,7 +101273,7 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent_label
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_label_bytes)
                     .unwrap_or(0),
             )
@@ -102619,25 +102625,25 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 object
                     .class_fields
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
             .saturating_add(
                 object
                     .primitive_value
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_value_bytes)
                     .unwrap_or(0),
             )
-            .saturating_add(Self::estimate_brand_bytes(object.brand.as_ref()))
+            .saturating_add(Self::estimate_brand_bytes(object.brand.as_deref()))
             .saturating_add(Self::saturating_sum(
                 object
                     .private_elements
@@ -102647,7 +102653,7 @@ impl InterpreterCore {
             .saturating_add(
                 object
                     .derived_constructor_parent_label
-                    .as_ref()
+                    .as_deref()
                     .map(Self::estimate_label_bytes)
                     .unwrap_or(0),
             )
@@ -104148,7 +104154,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = Some(prototype);
-        object.brand = Some(JsString::from(constructor));
+        object.brand = Some(Box::new(JsString::from(constructor)));
         object
             .properties
             .insert("byteLength".to_string(), Value::Int(byte_length_i64));
@@ -104160,7 +104166,7 @@ impl InterpreterCore {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
 
-        object.array_buffer = Some(ArrayBufferBacking::new_zeroed(byte_length));
+        object.array_buffer = Some(Box::new(ArrayBufferBacking::new_zeroed(byte_length)));
         self.mutate_heap(|h| h.push(object));
         self.estimated_memory_bytes = requested_bytes;
 
@@ -104300,7 +104306,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = prototype;
-        object.brand = Some(JsString::from(kind.type_name()));
+        object.brand = Some(Box::new(JsString::from(kind.type_name())));
         object
             .properties
             .insert("__typedArrayKind".to_string(), Value::str(kind.type_name()));
@@ -104320,7 +104326,7 @@ impl InterpreterCore {
             "BYTES_PER_ELEMENT".to_string(),
             Value::Int(element_size_i64),
         );
-        object.typed_array = Some(TypedArrayView {
+        object.typed_array = Some(Box::new(TypedArrayView {
             kind,
             buffer,
             byte_offset,
@@ -104328,7 +104334,7 @@ impl InterpreterCore {
             length,
             is_buffer,
             bounds: None,
-        });
+        }));
 
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
@@ -104437,14 +104443,14 @@ impl InterpreterCore {
         // caller-declared live temporary. Only after it succeeds are either
         // heap object and the backing Vec published.
         let mut buffer_object = HeapObject::new();
-        buffer_object.brand = Some(JsString::from("ArrayBuffer"));
+        buffer_object.brand = Some(Box::new(JsString::from("ArrayBuffer")));
         buffer_object.prototype = Some(buffer_prototype);
         buffer_object
             .properties
             .insert("byteLength".to_string(), Value::Int(byte_length_i64));
 
         let mut view_object = HeapObject::new();
-        view_object.brand = Some(JsString::from("Uint8Array"));
+        view_object.brand = Some(Box::new(JsString::from("Uint8Array")));
         view_object.prototype = Some(view_prototype);
         view_object
             .properties
@@ -104464,7 +104470,7 @@ impl InterpreterCore {
         view_object
             .properties
             .insert("BYTES_PER_ELEMENT".to_string(), Value::Int(1));
-        view_object.typed_array = Some(TypedArrayView {
+        view_object.typed_array = Some(Box::new(TypedArrayView {
             kind: TypedArrayKind::Uint8,
             buffer: buffer_id,
             byte_offset: 0,
@@ -104472,7 +104478,7 @@ impl InterpreterCore {
             length: byte_length,
             is_buffer: true,
             bounds: None,
-        });
+        }));
 
         let backing_bytes =
             u64::try_from(byte_length).map_err(|_| InterpreterError::RangeError {
@@ -104496,10 +104502,10 @@ impl InterpreterCore {
             return Err(error);
         }
 
-        buffer_object.array_buffer = Some(match contents {
+        buffer_object.array_buffer = Some(Box::new(match contents {
             Some(bytes) => ArrayBufferBacking::with_bytes(bytes.to_vec()),
             None => ArrayBufferBacking::new_zeroed(byte_length),
-        });
+        }));
         self.mutate_heap(|heap| {
             heap.push(buffer_object);
             heap.push(view_object);
@@ -104550,7 +104556,7 @@ impl InterpreterCore {
         let buffer = self
             .heap
             .get(view.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|typed_array| typed_array.buffer)
             .ok_or_else(|| InterpreterError::TypeError {
                 expected: "typed-array view".to_string(),
@@ -104770,7 +104776,7 @@ impl InterpreterCore {
 
         let mut object = HeapObject::new();
         object.prototype = Some(prototype);
-        object.brand = Some(JsString::from("DataView"));
+        object.brand = Some(Box::new(JsString::from("DataView")));
         object
             .properties
             .insert("buffer".to_string(), Value::Object(buffer));
@@ -104780,12 +104786,12 @@ impl InterpreterCore {
         object
             .properties
             .insert("byteOffset".to_string(), Value::Int(byte_offset_i64));
-        object.data_view = Some(DataViewView {
+        object.data_view = Some(Box::new(DataViewView {
             buffer,
             byte_offset,
             byte_length,
             bounds: None,
-        });
+        }));
 
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
@@ -106649,11 +106655,13 @@ impl InterpreterCore {
             object.is_default_derived_constructor,
             object
                 .derived_constructor_parent
-                .clone()
+                .as_deref()
+                .cloned()
                 .unwrap_or(Value::Undefined),
             object
                 .derived_constructor_parent_label
-                .clone()
+                .as_deref()
+                .cloned()
                 .unwrap_or(Label::Public),
         ))
     }
@@ -106672,7 +106680,7 @@ impl InterpreterCore {
         Ok(self
             .heap
             .get(prototype.0 as usize)
-            .and_then(|object| object.class_fields.clone()))
+            .and_then(|object| object.class_fields.as_deref().cloned()))
     }
 
     /// Replace an object's engine-private class field list, charging the
@@ -106793,7 +106801,7 @@ impl InterpreterCore {
     fn primitive_wrapper_value(&self, object_id: ObjectId) -> Option<&Value> {
         self.heap
             .get(object_id.0 as usize)
-            .and_then(|object| object.primitive_value.as_ref())
+            .and_then(|object| object.primitive_value.as_deref())
     }
 
     /// ES2020 7.1.18 ToObject of a primitive: a new wrapper object whose
@@ -106832,13 +106840,13 @@ impl InterpreterCore {
             .heap
             .get(index)
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-        let previous_bytes = Self::estimate_brand_bytes(previous.brand.as_ref());
+        let previous_bytes = Self::estimate_brand_bytes(previous.brand.as_deref());
         let brand = JsString::from(brand);
         self.apply_memory_component_delta(
             previous_bytes,
             Self::estimate_brand_bytes(Some(&brand)),
         )?;
-        self.mutate_heap(|heap| heap[index].brand = Some(brand));
+        self.mutate_heap(|heap| heap[index].brand = Some(Box::new(brand)));
         Ok(())
     }
 
@@ -106858,7 +106866,7 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.primitive_value = Some(value);
+        projected.primitive_value = Some(Box::new(value));
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
@@ -106993,7 +107001,7 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.class_fields = fields;
+        projected.class_fields = fields.map(Box::new);
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
         self.apply_memory_component_delta(previous_bytes, projected_bytes)?;
         self.mutate_heap(|heap| heap[index] = projected);
@@ -107059,7 +107067,7 @@ impl InterpreterCore {
         if let Some(Value::Object(list)) = self
             .heap
             .get(target.0 as usize)
-            .and_then(|object| object.class_fields.clone())
+            .and_then(|object| object.class_fields.as_deref().cloned())
         {
             let start = self.array_like_length(list)?;
             for (offset, value) in entry.into_iter().enumerate() {
@@ -107516,8 +107524,8 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: prototype.0 })?;
         let previous_bytes = Self::estimate_heap_object_bytes(previous);
         let mut projected = previous.clone();
-        projected.derived_constructor_parent = Some(parent.clone());
-        projected.derived_constructor_parent_label = Some(parent_label);
+        projected.derived_constructor_parent = Some(Box::new(parent.clone()));
+        projected.derived_constructor_parent_label = Some(Box::new(parent_label));
         projected.is_derived_constructor = true;
         projected.is_default_derived_constructor = default_constructor;
         let projected_bytes = Self::estimate_heap_object_bytes(&projected);
@@ -108659,7 +108667,7 @@ impl InterpreterCore {
             .heap
             .get(prototype.0 as usize)
             .filter(|object| object.is_derived_constructor)
-            .and_then(|object| object.derived_constructor_parent.clone())?;
+            .and_then(|object| object.derived_constructor_parent.as_deref().cloned())?;
         match parent {
             Value::Str(name) => {
                 let name = name.to_string();
@@ -115200,7 +115208,7 @@ mod active_builtin_regressions {
         let view = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("Uint32Array object must carry view metadata");
         assert_eq!(view.kind, TypedArrayKind::Uint32);
         assert_eq!(view.buffer, buffer_id);
@@ -115298,12 +115306,12 @@ mod active_builtin_regressions {
         let full = core
             .heap
             .get(full_view.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("full view metadata should exist");
         let window = core
             .heap
             .get(window_view.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("window view metadata should exist");
         assert_eq!(full.buffer, buffer_id);
         assert_eq!(window.buffer, buffer_id);
@@ -115458,7 +115466,7 @@ mod active_builtin_regressions {
         let buffer = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|view| view.buffer)
             .expect("view metadata should expose backing buffer");
         assert_eq!(
@@ -115519,7 +115527,7 @@ mod active_builtin_regressions {
         let view = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("view metadata must remain attached")
             .clone();
         assert_eq!(
@@ -115687,7 +115695,7 @@ mod active_builtin_regressions {
         let buffer = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .map(|view| view.buffer)
             .expect("typed-array metadata should expose backing buffer");
         assert_eq!(
@@ -116022,7 +116030,7 @@ mod active_builtin_regressions {
         let view = core
             .heap
             .get(view_id.0 as usize)
-            .and_then(|object| object.typed_array.as_ref())
+            .and_then(|object| object.typed_array.as_deref())
             .expect("view metadata should exist")
             .clone();
         assert_eq!(
@@ -122879,7 +122887,7 @@ mod async_runtime_tests_current {
         let target_id = core.mutate_heap(|h| {
             let id = ObjectId(h.len() as u32);
             let mut obj = HeapObject::new();
-            obj.brand = Some(JsString::from("IncomingMessage"));
+            obj.brand = Some(Box::new(JsString::from("IncomingMessage")));
             h.push(obj);
             id
         });
@@ -125970,7 +125978,7 @@ mod async_runtime_tests_current {
         for (key, value) in properties {
             projected_object.properties.insert(key.to_string(), value);
         }
-        projected_object.brand = Some(JsString::from(READABLE_BRAND));
+        projected_object.brand = Some(Box::new(JsString::from(READABLE_BRAND)));
         let object_bytes = InterpreterCore::estimate_heap_object_bytes(&projected_object);
         core.config.max_total_memory_bytes = baseline_bytes
             .saturating_add(state_bytes)
@@ -137329,7 +137337,7 @@ mod async_runtime_tests_current {
         let obj_id = core.mutate_heap(|h| {
             let id = ObjectId(h.len() as u32);
             let mut obj = HeapObject::new();
-            obj.brand = Some(JsString::from("IncomingMessage"));
+            obj.brand = Some(Box::new(JsString::from("IncomingMessage")));
             obj.properties
                 .insert("body".to_string(), Value::str("chunk-bytes"));
             h.push(obj);
@@ -153538,8 +153546,8 @@ mod tests {
     #[test]
     fn derived_constructor_metadata_wire_is_atomic_and_label_preserving_bd_ppfz7() {
         let mut object = HeapObject::new();
-        object.derived_constructor_parent = Some(Value::Function(7));
-        object.derived_constructor_parent_label = Some(Label::Secret);
+        object.derived_constructor_parent = Some(Box::new(Value::Function(7)));
+        object.derived_constructor_parent_label = Some(Box::new(Label::Secret));
         object.is_derived_constructor = true;
         object.is_default_derived_constructor = true;
 
@@ -153548,8 +153556,8 @@ mod tests {
             serde_json::from_value(encoded.clone()).expect("round-trip constructor metadata");
         assert_eq!(restored, object);
         assert_eq!(
-            restored.derived_constructor_parent_label,
-            Some(Label::Secret)
+            restored.derived_constructor_parent_label.as_deref(),
+            Some(&Label::Secret)
         );
 
         let mut missing_label = encoded.clone();
@@ -167004,10 +167012,10 @@ mod lazy_seed_tests {
                 level: 7,
             },
         );
-        object.array_buffer = Some(ArrayBufferBacking {
+        object.array_buffer = Some(Box::new(ArrayBufferBacking {
             label: Label::Secret,
             ..ArrayBufferBacking::with_bytes(vec![0xA5; 257])
-        });
+        }));
         core.mutate_heap(|heap| heap.push(object));
         core.mutate_function_prototypes(|prototypes| {
             prototypes.insert((ContentHash::compute(b"seed-owner"), 3), ObjectId(0));

@@ -5047,12 +5047,23 @@ fn parse_statement_inner(
     // label must be a real IdentifierReference — reserved words are rejected.
     if let Some(colon_idx) = leading_label_colon(statement) {
         let label = statement[..colon_idx].trim();
-        if is_identifier(label) && !is_unconditional_reserved_keyword(label) {
+        if is_identifier(label) {
             // ES2020 13.1.1: `yield` is not a label inside a generator or in
             // strict code, nor `await` inside an async function or a module,
             // however it is spelled (`yield`).
             let name = decode_identifier_escapes(label);
             let name = name.as_deref().unwrap_or(label);
+            // A reserved word is no label either, however it is spelled
+            // (`true: ;`, `nul\u006c: ;`); `true:` reached the runtime as an
+            // unsupported expression (bd-9vouw.427).
+            if is_unconditional_reserved_keyword(name) {
+                return Err(ParseError::new(
+                    ParseErrorCode::InvalidSyntax,
+                    format!("`{name}` is a reserved word and cannot be a label"),
+                    context.source_label.to_string(),
+                    Some(span),
+                ));
+            }
             if (name == "yield" && (context.yield_context || context.strict_mode))
                 || (name == "await"
                     && (context.await_context
@@ -7013,6 +7024,15 @@ fn parse_primary_expression(
         ) {
             return Err(invalid_syntax_error(
                 "an operator keyword needs an operand",
+                span,
+                context,
+            ));
+        }
+        // Nor is any other reserved word a reference (`case = 1`,
+        // `else = 1`, bd-9vouw.427); `debugger;`, the statement, ends here.
+        if is_unconditional_reserved_keyword(&name) && name != "debugger" {
+            return Err(invalid_syntax_error(
+                "a reserved word cannot be an identifier reference",
                 span,
                 context,
             ));

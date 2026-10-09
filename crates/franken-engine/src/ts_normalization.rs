@@ -479,7 +479,12 @@ fn normalize_hashbang_for_es2020_parser(source: &str) -> (String, bool) {
         return (source.to_string(), false);
     }
 
-    let hashbang_line_end = source.find('\n').unwrap_or(source.len());
+    // The hashbang comment ends at the first line terminator of any kind
+    // (ES2023 12.5): with `\r` line endings, `\n` alone blanked the whole
+    // file and the run failed as an empty source.
+    let hashbang_line_end = source
+        .find(['\n', '\r', '\u{2028}', '\u{2029}'])
+        .unwrap_or(source.len());
     let mut normalized = String::with_capacity(source.len());
     for _ in 0..hashbang_line_end {
         normalized.push(' ');
@@ -4944,6 +4949,39 @@ abstract class Base { }"#;
         assert!(!prepared.prepared_source.starts_with("#!"));
         assert!(!prepared.prepared_source.starts_with("//"));
         assert!(prepared.prepared_source.contains("\n\"use strict\";"));
+    }
+
+    /// A hashbang line ends at any line terminator: with `\r` line endings
+    /// the whole file was blanked and `frankenctl run` failed as an empty
+    /// source (Node v22.2.0 runs such a file).
+    #[test]
+    fn prepare_public_source_entry_hashbang_ends_at_any_line_terminator() {
+        for terminator in ["\r", "\r\n", "\u{2028}", "\u{2029}"] {
+            let source = format!(
+                "#! /usr/bin/env node{terminator}\"use strict\";{terminator}const value = 1;"
+            );
+            let prepared = prepare_source_entry_for_public_entrypoints(
+                &source,
+                "fixture.js",
+                "trace-js-hashbang",
+                "decision-js-hashbang",
+                "policy-js-hashbang",
+            )
+            .expect("hashbang source preparation should succeed");
+            let expected_tail = format!("{terminator}\"use strict\";{terminator}const value = 1;");
+            assert!(
+                prepared.prepared_source.ends_with(&expected_tail),
+                "{terminator:?}: {:?}",
+                prepared.prepared_source
+            );
+            assert!(
+                prepared.prepared_source[..prepared.prepared_source.len() - expected_tail.len()]
+                    .chars()
+                    .all(|ch| ch == ' '),
+                "{terminator:?}: {:?}",
+                prepared.prepared_source
+            );
+        }
     }
 
     #[test]

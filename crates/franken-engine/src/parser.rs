@@ -4431,6 +4431,28 @@ fn ends_with_expression_keyword(prefix: &str) -> bool {
     ) && !trimmed[..word_start].trim_end().ends_with('.')
 }
 
+/// Whether `prefix` ends with a keyword after which an operand starts, so a
+/// following `+`/`-` is a sign: `typeof`, `void`, `delete`, `in`,
+/// `instanceof`, and `await` / `yield` where the context makes them
+/// operators (elsewhere they are identifiers: `await - 1` subtracts). A `.`
+/// before the word makes it a property name.
+fn ends_with_unary_operand_keyword(prefix: &str, context: &ParseExecutionContext<'_>) -> bool {
+    let trimmed = prefix.trim_end();
+    let word_start = trimmed
+        .char_indices()
+        .rev()
+        .take_while(|(_, ch)| is_identifier_continue(*ch))
+        .last()
+        .map_or(trimmed.len(), |(index, _)| index);
+    let keyword = match &trimmed[word_start..] {
+        "typeof" | "void" | "delete" | "in" | "instanceof" => true,
+        "await" => context.await_context,
+        "yield" => context.yield_context,
+        _ => false,
+    };
+    keyword && !trimmed[..word_start].trim_end().ends_with('.')
+}
+
 /// Whether `prefix`, the text before a `{`, ends with the header of a
 /// function expression (`function (a)`, `function* g(a)`, `async function
 /// (a)`) whose `function` keyword follows an operator: its body brace closes
@@ -8090,12 +8112,17 @@ fn try_parse_binary(
                 // belonging to the right operand, not a binary split point —
                 // e.g. the `-` in `2 * -3`, `a - -b`, or `2 ** -1`. Skipping it
                 // lets the real binary operator win the split.
+                // After a keyword operator (`typeof -1`, `void +x`, `delete
+                // -x`, `a instanceof -b`, and `await` / `yield` where they are
+                // operators) the sign is unary too (bd-9vouw.390): `typeof -1`
+                // split into an identifier `typeof` minus 1.
                 let unary_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
                     && !ends_with_postfix_update(lhs)
-                    && lhs
+                    && (lhs
                         .as_bytes()
                         .last()
-                        .is_none_or(|&c| is_operator_context_byte(c));
+                        .is_none_or(|&c| is_operator_context_byte(c))
+                        || ends_with_unary_operand_keyword(lhs, context));
                 let exponent_sign = matches!(op, BinaryOperator::Add | BinaryOperator::Subtract)
                     && is_decimal_exponent_sign(bytes, i);
                 if !lhs.is_empty() && rhs.is_empty() && !unary_sign && !exponent_sign {

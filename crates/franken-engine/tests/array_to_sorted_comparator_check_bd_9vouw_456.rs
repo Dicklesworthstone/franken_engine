@@ -71,6 +71,7 @@ fn to_sorted_rejects_a_non_callable_comparator_first() {
         .expect("console_output")
         .iter()
         .filter_map(|entry| entry["message"].as_str())
+        .flat_map(|message| message.split('\n'))
         .collect();
     assert_eq!(printed, EXPECTED);
 }

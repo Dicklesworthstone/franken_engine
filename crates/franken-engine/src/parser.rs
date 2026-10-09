@@ -8723,6 +8723,20 @@ fn try_parse_conditional(
                     Ok(e) => e,
                     Err(e) => return Some(Err(e)),
                 };
+                // A yield with an operand takes the whole conditional as that
+                // operand: `yield 1 ? a : b` is `yield (1 ? a : b)`, which
+                // the yield path parses. It was refused below as a yield
+                // condition (bd-9vouw.461).
+                if matches!(
+                    test,
+                    Expression::Yield {
+                        argument: Some(_),
+                        ..
+                    }
+                ) && !test_src.starts_with('(')
+                {
+                    return None;
+                }
                 // The condition is a ShortCircuitExpression: `yield ? a : b`
                 // is a SyntaxError, `(yield) ? a : b` is not (bd-9vouw.398).
                 if matches!(test, Expression::Yield { .. }) && !test_src.starts_with('(') {

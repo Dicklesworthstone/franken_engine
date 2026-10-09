@@ -190,6 +190,265 @@
   function toUSVString(input) {
     return String(input).toWellFormed();
   }
+  // util.parseArgs (bd-9vouw.441): Node v22's lib/internal/util/parse_args
+  // algorithm. Without `args` it parses no arguments: frankenctl passes the
+  // program none (Node would read process.argv).
+  function parseArgsError(code, message) {
+    var error = new TypeError(message);
+    error.code = code;
+    return error;
+  }
+  function ownValue(object, key) {
+    return object !== null && object !== undefined &&
+      Object.prototype.hasOwnProperty.call(object, key) ? object[key] : undefined;
+  }
+  function optionSetting(options, longOption, key) {
+    return Object.prototype.hasOwnProperty.call(options, longOption)
+      ? ownValue(options[longOption], key) : undefined;
+  }
+  function validateParseArgsObject(value, name) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw invalidArgType(name, 'object', value);
+    }
+  }
+  function validateParseArgsBoolean(value, name) {
+    if (typeof value !== 'boolean') { throw invalidArgType(name, 'boolean', value); }
+  }
+  function validateParseArgsString(value, name) {
+    if (typeof value !== 'string') { throw invalidArgType(name, 'string', value); }
+  }
+  function validateParseArgsArrayOf(value, name, type) {
+    if (!Array.isArray(value)) { throw invalidArgType(name, 'Array', value); }
+    for (var i = 0; i < value.length; i++) {
+      if (typeof value[i] !== type) {
+        throw invalidArgType(name + '[' + i + ']', type, value[i]);
+      }
+    }
+  }
+  function findLongOptionForShort(shortOption, options) {
+    var keys = Object.keys(options);
+    for (var i = 0; i < keys.length; i++) {
+      if (ownValue(options[keys[i]], 'short') === shortOption) { return keys[i]; }
+    }
+    return shortOption;
+  }
+  function isLoneShortOption(arg) {
+    return arg.length === 2 && arg.charAt(0) === '-' && arg.charAt(1) !== '-';
+  }
+  function isLoneLongOption(arg) {
+    return arg.length > 2 && arg.slice(0, 2) === '--' && arg.indexOf('=', 3) === -1;
+  }
+  function isLongOptionAndValue(arg) {
+    return arg.length > 2 && arg.slice(0, 2) === '--' && arg.indexOf('=', 3) !== -1;
+  }
+  function isShortOptionGroup(arg, options) {
+    if (arg.length <= 2 || arg.charAt(0) !== '-' || arg.charAt(1) === '-') { return false; }
+    return optionSetting(options, findLongOptionForShort(arg.charAt(1), options), 'type') !== 'string';
+  }
+  function isShortOptionAndValue(arg, options) {
+    if (arg.length <= 2 || arg.charAt(0) !== '-' || arg.charAt(1) === '-') { return false; }
+    return optionSetting(options, findLongOptionForShort(arg.charAt(1), options), 'type') === 'string';
+  }
+  function isOptionLikeValue(value) {
+    return value !== null && value !== undefined && value.length > 1 && value.charAt(0) === '-';
+  }
+  function argsToTokens(args, options) {
+    var tokens = [];
+    var index = -1;
+    var groupCount = 0;
+    var remaining = args.slice();
+    while (remaining.length > 0) {
+      var arg = remaining.shift();
+      var nextArg = remaining[0];
+      if (groupCount > 0) { groupCount--; } else { index++; }
+      if (arg === '--') {
+        tokens.push({ kind: 'option-terminator', index: index });
+        for (var r = 0; r < remaining.length; r++) {
+          tokens.push({ kind: 'positional', index: ++index, value: remaining[r] });
+        }
+        break;
+      }
+      var value;
+      var inlineValue;
+      var longOption;
+      if (isLoneShortOption(arg)) {
+        longOption = findLongOptionForShort(arg.charAt(1), options);
+        value = undefined;
+        inlineValue = undefined;
+        if (optionSetting(options, longOption, 'type') === 'string' && nextArg !== undefined && nextArg !== null) {
+          value = remaining.shift();
+          inlineValue = false;
+        }
+        tokens.push({ kind: 'option', name: longOption, rawName: arg, index: index, value: value, inlineValue: inlineValue });
+        if (value !== undefined && value !== null) { ++index; }
+        continue;
+      }
+      if (isShortOptionGroup(arg, options)) {
+        var expanded = [];
+        for (var c = 1; c < arg.length; c++) {
+          var shortOption = arg.charAt(c);
+          longOption = findLongOptionForShort(shortOption, options);
+          if (optionSetting(options, longOption, 'type') !== 'string' || c === arg.length - 1) {
+            expanded.push('-' + shortOption);
+          } else {
+            expanded.push('-' + shortOption + arg.slice(c + 1));
+            break;
+          }
+        }
+        remaining.unshift.apply(remaining, expanded);
+        groupCount = expanded.length;
+        continue;
+      }
+      if (isShortOptionAndValue(arg, options)) {
+        longOption = findLongOptionForShort(arg.charAt(1), options);
+        tokens.push({ kind: 'option', name: longOption, rawName: '-' + arg.charAt(1), index: index,
+          value: arg.slice(2), inlineValue: true });
+        continue;
+      }
+      if (isLoneLongOption(arg)) {
+        longOption = arg.slice(2);
+        value = undefined;
+        inlineValue = undefined;
+        if (optionSetting(options, longOption, 'type') === 'string' && nextArg !== undefined && nextArg !== null) {
+          value = remaining.shift();
+          inlineValue = false;
+        }
+        tokens.push({ kind: 'option', name: longOption, rawName: arg, index: index, value: value, inlineValue: inlineValue });
+        if (value !== undefined && value !== null) { ++index; }
+        continue;
+      }
+      if (isLongOptionAndValue(arg)) {
+        var equals = arg.indexOf('=');
+        longOption = arg.slice(2, equals);
+        tokens.push({ kind: 'option', name: longOption, rawName: '--' + longOption, index: index,
+          value: arg.slice(equals + 1), inlineValue: true });
+        continue;
+      }
+      tokens.push({ kind: 'positional', index: index, value: arg });
+    }
+    return tokens;
+  }
+  function checkOptionUsage(options, allowPositionals, token) {
+    if (!Object.prototype.hasOwnProperty.call(options, token.name)) {
+      var suggest = allowPositionals
+        ? ". To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- " +
+          JSON.stringify(token.rawName)
+        : '';
+      throw parseArgsError('ERR_PARSE_ARGS_UNKNOWN_OPTION', "Unknown option '" + token.rawName + "'" + suggest);
+    }
+    var short = optionSetting(options, token.name, 'short');
+    var shortAndLong = (short ? '-' + short + ', ' : '') + '--' + token.name;
+    var type = optionSetting(options, token.name, 'type');
+    if (type === 'string' && typeof token.value !== 'string') {
+      throw parseArgsError('ERR_PARSE_ARGS_INVALID_OPTION_VALUE', "Option '" + shortAndLong + " <value>' argument missing");
+    }
+    if (type === 'boolean' && token.value !== undefined && token.value !== null) {
+      throw parseArgsError('ERR_PARSE_ARGS_INVALID_OPTION_VALUE', "Option '" + shortAndLong + "' does not take an argument");
+    }
+  }
+  function checkOptionLikeValue(token) {
+    if (!token.inlineValue && isOptionLikeValue(token.value)) {
+      var example = token.rawName.slice(0, 2) === '--'
+        ? "'" + token.rawName + "=-XYZ'"
+        : "'--" + token.name + "=-XYZ' or '" + token.rawName + "-XYZ'";
+      throw parseArgsError('ERR_PARSE_ARGS_INVALID_OPTION_VALUE',
+        "Option '" + token.rawName + "' argument is ambiguous.\nDid you forget to specify the option argument for '" +
+        token.rawName + "'?\nTo specify an option argument starting with a dash use " + example + '.');
+    }
+  }
+  function storeOption(longOption, optionValue, options, values) {
+    if (longOption === '__proto__') { return; }
+    var newValue = optionValue === undefined || optionValue === null ? true : optionValue;
+    if (optionSetting(options, longOption, 'multiple')) {
+      if (values[longOption]) { values[longOption].push(newValue); } else { values[longOption] = [newValue]; }
+    } else {
+      values[longOption] = newValue;
+    }
+  }
+  function parseArgs(config) {
+    if (config === undefined) { config = {}; }
+    var args = ownValue(config, 'args');
+    if (args === undefined || args === null) { args = []; }
+    var strict = ownValue(config, 'strict');
+    if (strict === undefined || strict === null) { strict = true; }
+    var allowPositionals = ownValue(config, 'allowPositionals');
+    if (allowPositionals === undefined || allowPositionals === null) { allowPositionals = !strict; }
+    var returnTokens = ownValue(config, 'tokens');
+    if (returnTokens === undefined || returnTokens === null) { returnTokens = false; }
+    var options = ownValue(config, 'options');
+    if (options === undefined || options === null) { options = Object.create(null); }
+    if (!Array.isArray(args)) {
+      var argsError = new TypeError('The "args" argument must be an instance of Array. Received ' + specificType(args));
+      argsError.code = 'ERR_INVALID_ARG_TYPE';
+      throw argsError;
+    }
+    validateParseArgsBoolean(strict, 'strict');
+    validateParseArgsBoolean(allowPositionals, 'allowPositionals');
+    validateParseArgsBoolean(returnTokens, 'tokens');
+    validateParseArgsObject(options, 'options');
+    Object.keys(options).forEach(function (longOption) {
+      var optionConfig = options[longOption];
+      validateParseArgsObject(optionConfig, 'options.' + longOption);
+      var optionType = ownValue(optionConfig, 'type');
+      if (optionType !== 'string' && optionType !== 'boolean') {
+        var error = new TypeError('The "options.' + longOption + '.type" property must be (\'string|boolean\'). Received ' +
+          specificType(optionType));
+        error.code = 'ERR_INVALID_ARG_TYPE';
+        throw error;
+      }
+      if (Object.prototype.hasOwnProperty.call(optionConfig, 'short')) {
+        var shortOption = optionConfig.short;
+        validateParseArgsString(shortOption, 'options.' + longOption + '.short');
+        if (shortOption.length !== 1) {
+          var shortError = new TypeError("The property 'options." + longOption + ".short' must be a single character. Received " +
+            inspect(shortOption));
+          shortError.code = 'ERR_INVALID_ARG_VALUE';
+          throw shortError;
+        }
+      }
+      var multipleOption = ownValue(optionConfig, 'multiple');
+      if (Object.prototype.hasOwnProperty.call(optionConfig, 'multiple')) {
+        validateParseArgsBoolean(multipleOption, 'options.' + longOption + '.multiple');
+      }
+      var defaultValue = ownValue(optionConfig, 'default');
+      if (defaultValue !== undefined) {
+        var defaultName = 'options.' + longOption + '.default';
+        if (optionType === 'string') {
+          if (multipleOption) { validateParseArgsArrayOf(defaultValue, defaultName, 'string'); }
+          else { validateParseArgsString(defaultValue, defaultName); }
+        } else if (multipleOption) {
+          validateParseArgsArrayOf(defaultValue, defaultName, 'boolean');
+        } else {
+          validateParseArgsBoolean(defaultValue, defaultName);
+        }
+      }
+    });
+    var tokens = argsToTokens(args, options);
+    var result = { values: Object.create(null), positionals: [] };
+    if (returnTokens) { result.tokens = tokens; }
+    tokens.forEach(function (token) {
+      if (token.kind === 'option') {
+        if (strict) {
+          checkOptionUsage(options, allowPositionals, token);
+          checkOptionLikeValue(token);
+        }
+        storeOption(token.name, token.value, options, result.values);
+      } else if (token.kind === 'positional') {
+        if (!allowPositionals) {
+          throw parseArgsError('ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL',
+            "Unexpected argument '" + token.value + "'. This command does not take positional arguments");
+        }
+        result.positionals.push(token.value);
+      }
+    });
+    Object.keys(options).forEach(function (longOption) {
+      var defaultValue = ownValue(options[longOption], 'default');
+      if (defaultValue !== undefined && result.values[longOption] === undefined && longOption !== '__proto__') {
+        result.values[longOption] = defaultValue;
+      }
+    });
+    return result;
+  }
   inspect.defaultOptions = { showHidden: false, depth: 2, colors: false, customInspect: true,
     showProxy: false, maxArrayLength: 100, maxStringLength: 10000, breakLength: 128,
     compact: 3, sorted: false, getters: false, numericSeparator: false };
@@ -500,6 +759,7 @@
     debuglog: debuglog,
     debug: debuglog,
     isDeepStrictEqual: isDeepStrictEqual,
+    parseArgs: parseArgs,
     styleText: styleText,
     stripVTControlCharacters: stripVTControlCharacters,
     toUSVString: toUSVString,

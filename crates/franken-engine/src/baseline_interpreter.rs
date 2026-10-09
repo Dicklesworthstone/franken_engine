@@ -38791,16 +38791,37 @@ impl InterpreterCore {
         } else {
             ParseGoal::Module
         };
-        let syntax_tree = CanonicalEs2020Parser
-            .parse_with_options(
-                parser_source,
-                parse_goal,
-                &self.config.module_parser_options,
-            )
-            .map_err(|error| InterpreterError::ModuleParseFailed {
-                specifier: resolved.to_string(),
-                error: error.to_string(),
-            })?;
+        // A module whose source is not valid (a parse error or an early
+        // error) is a SyntaxError the importer can catch, as Node's loader
+        // throws for `require` and rejects `import()` with (bd-9vouw.389);
+        // its record fails, so importing it again fails again. Unsupported
+        // syntax and every policy refusal stay uncatchable.
+        let syntax_tree = match CanonicalEs2020Parser.parse_with_options(
+            parser_source,
+            parse_goal,
+            &self.config.module_parser_options,
+        ) {
+            Ok(syntax_tree) => syntax_tree,
+            Err(error) => {
+                self.fail_module_record(resolved, &error.to_string());
+                return Err(
+                    if matches!(
+                        error.code,
+                        ParseErrorCode::StrictModeWithStatement
+                            | ParseErrorCode::AwaitOutsideAsync
+                            | ParseErrorCode::InvalidClassElementName
+                            | ParseErrorCode::InvalidSyntax
+                    ) {
+                        self.throw_js_error("SyntaxError", error.message.clone())
+                    } else {
+                        InterpreterError::ModuleParseFailed {
+                            specifier: resolved.to_string(),
+                            error: error.to_string(),
+                        }
+                    },
+                );
+            }
+        };
         // An empty file (or one holding only comments) is a module with no
         // code and no exports, which Node loads; lowering refuses an empty
         // body, so it lowers as one empty block.
@@ -38828,10 +38849,21 @@ impl InterpreterCore {
         } else {
             lower_ir0_to_ir3(&ir0, &lowering_ctx)
         };
-        let lowering_output = lowered.map_err(|error| InterpreterError::ModuleLoweringFailed {
-            specifier: resolved.to_string(),
-            error: error.to_string(),
-        })?;
+        let lowering_output = match lowered {
+            Ok(lowering_output) => lowering_output,
+            Err(error) => {
+                self.fail_module_record(resolved, &error.to_string());
+                return Err(match error {
+                    crate::lowering_pipeline::LoweringPipelineError::SemanticViolation(
+                        violation,
+                    ) => self.throw_js_error("SyntaxError", violation.to_string()),
+                    error => InterpreterError::ModuleLoweringFailed {
+                        specifier: resolved.to_string(),
+                        error: error.to_string(),
+                    },
+                });
+            }
+        };
         let ceiling = crate::lowering_pipeline::lowered_unit_flow_label_ceiling(
             &lowering_output.ir2,
             lowering_ctx.host_io_exception_provenance,
@@ -38915,6 +38947,14 @@ impl InterpreterCore {
             && Self::unit_declares_bounded_imports(module))
         .then_some(crate::lowering_pipeline::IFC_BOUNDED_IMPORT_LABEL);
         self.load_module_resolved(module, &resolved, is_cjs, import_bound.as_ref())
+    }
+
+    /// Mark a module whose load failed before evaluation, so a later import
+    /// of it fails with the same reason instead of seeing an empty record.
+    fn fail_module_record(&mut self, resolved: &str, reason: &str) {
+        if let Some(record) = self.module_state.modules.get_mut(resolved) {
+            record.status = ModuleRuntimeStatus::Failed(reason.to_string());
+        }
     }
 
     /// Whether `module` was lowered under the bounded-imports contract

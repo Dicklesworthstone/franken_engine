@@ -985,6 +985,26 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
             Statement::Expression(_) => {
                 // Expression statements have no early errors at this level.
             }
+            // A module's top-level function declarations are lexically
+            // declared names (ES2020 15.2.1.1: LexicallyDeclaredNames of a
+            // ModuleItemList includes them), so a `var`, `let`, `const`,
+            // import or other function of the same name is an early error
+            // (bd-9vouw.389). In a script they are var-scoped and merge.
+            Statement::FunctionDeclaration(function) if ir0.tree.goal == ParseGoal::Module => {
+                if let Some(name) = function.name.as_deref() {
+                    if let Some(existing_kind) = seen_bindings.get(name) {
+                        let conflict = check_binding_conflict(*existing_kind, BindingKind::Let);
+                        if let BindingConflict::Error(code) = conflict {
+                            result.add_error(SemanticError::new(
+                                code,
+                                Some(name.to_string()),
+                                Some(function.span),
+                            ));
+                        }
+                    }
+                    seen_bindings.insert(name.to_string(), BindingKind::Let);
+                }
+            }
             Statement::Block(_)
             | Statement::If(_)
             | Statement::For(_)

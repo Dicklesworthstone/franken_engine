@@ -78538,13 +78538,25 @@ impl InterpreterCore {
         )))
     }
 
-    /// Date.parse (ES2020 20.4.3.2) for the date-time string format
-    /// (20.4.1.15): `YYYY[-MM[-DD]][THH:mm[:ss[.sss]]][Z|±HH:mm]` with
-    /// extended `±YYYYYY` years, plus the `toUTCString` form
+    /// Date.parse (ES2020 20.4.3.2): the date-time string format and the
+    /// toUTCString form, then V8's legacy formats (bd-9vouw.443), as Node
+    /// parses them.
+    fn parse_date_string(text: &str) -> f64 {
+        let iso = Self::parse_iso_date_string(text);
+        if iso.is_nan() {
+            Self::parse_legacy_date_string(text)
+        } else {
+            iso
+        }
+    }
+
+    /// The date-time string format (ES2020 20.4.1.15):
+    /// `YYYY[-MM[-DD]][THH:mm[:ss[.sss]]][Z|±HH:mm]` with extended
+    /// `±YYYYYY` years, plus the `toUTCString` form
     /// `Www, DD Mmm YYYY HH:mm:ss GMT`. Date-only forms are UTC; date-time
     /// forms without an offset are local time, which is UTC here. Anything
     /// else is NaN.
-    fn parse_date_string(text: &str) -> f64 {
+    fn parse_iso_date_string(text: &str) -> f64 {
         use date_math::{make_date, make_day, make_time, time_clip};
         let text = text.trim();
         let digits = |slice: &str, count: usize| -> Option<f64> {
@@ -78668,6 +78680,330 @@ impl InterpreterCore {
                 make_day(year, month - 1.0, day),
                 make_time(hours, minutes, seconds, millis),
             ) - offset_minutes * 60_000.0,
+        )
+    }
+
+    /// V8's legacy Date.parse fallback (dateparser-inl.h), for a string that
+    /// is neither the ES date-time format nor the toUTCString form
+    /// (bd-9vouw.443): month names (`Feb 29, 2024`, `29 February 2024`),
+    /// `M/D/Y` and `Y/M/D` numbers, `h:m[:s[.ms]]` times with AM/PM, the
+    /// toString form (`Thu Feb 29 2024 13:05:09 GMT+0000 (...)`), and the
+    /// zones UT/UTC/GMT/Z, the US abbreviations and a `±hh[mm]` / `±hh:mm`
+    /// offset after a zone or a time. Parenthesized text is skipped. A
+    /// string without a zone is local time, which is UTC here. V8's rules
+    /// are kept, quirks included: a missing year is 2001 and a two-digit
+    /// year is 19xx/20xx. Anything else is NaN.
+    fn parse_legacy_date_string(text: &str) -> f64 {
+        use date_math::{make_date, make_day, make_time, time_clip};
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Token<'a> {
+            Number { value: i64, length: usize },
+            Word(&'a str),
+            Symbol(char),
+            Space,
+        }
+        enum Keyword {
+            Month(i64),
+            AmPm(i64),
+            Zone(i64),
+        }
+        static KEYWORDS: [(&str, Keyword); 27] = [
+            ("jan", Keyword::Month(1)),
+            ("feb", Keyword::Month(2)),
+            ("mar", Keyword::Month(3)),
+            ("apr", Keyword::Month(4)),
+            ("may", Keyword::Month(5)),
+            ("jun", Keyword::Month(6)),
+            ("jul", Keyword::Month(7)),
+            ("aug", Keyword::Month(8)),
+            ("sep", Keyword::Month(9)),
+            ("oct", Keyword::Month(10)),
+            ("nov", Keyword::Month(11)),
+            ("dec", Keyword::Month(12)),
+            ("am", Keyword::AmPm(0)),
+            ("pm", Keyword::AmPm(12)),
+            ("ut", Keyword::Zone(0)),
+            ("utc", Keyword::Zone(0)),
+            ("z", Keyword::Zone(0)),
+            ("gmt", Keyword::Zone(0)),
+            ("cdt", Keyword::Zone(-5)),
+            ("cst", Keyword::Zone(-6)),
+            ("edt", Keyword::Zone(-4)),
+            ("est", Keyword::Zone(-5)),
+            ("mdt", Keyword::Zone(-6)),
+            ("mst", Keyword::Zone(-7)),
+            ("pdt", Keyword::Zone(-7)),
+            ("pst", Keyword::Zone(-8)),
+            // V8's time separator keyword: a garbage word in this parser.
+            ("t", Keyword::AmPm(-1)),
+        ];
+        // V8 compares a word's first three letters with each keyword; only a
+        // month name may be longer than its keyword.
+        fn keyword(word: &str) -> Option<&'static Keyword> {
+            let lower = word.to_lowercase();
+            let prefix: String = lower.chars().take(3).collect();
+            KEYWORDS
+                .iter()
+                .find(|(name, kind)| {
+                    *name == prefix
+                        && (lower.chars().count() <= 3 || matches!(kind, Keyword::Month(_)))
+                })
+                .map(|(_, kind)| kind)
+                .filter(|kind| !matches!(kind, Keyword::AmPm(-1)))
+        }
+
+        let mut tokens = Vec::new();
+        let mut chars = text.char_indices().peekable();
+        while let Some((start, ch)) = chars.next() {
+            if ch.is_ascii_digit() {
+                let mut value: i64 = i64::from(ch as u8 - b'0');
+                let mut length = 1;
+                while let Some(&(_, next)) = chars.peek() {
+                    if !next.is_ascii_digit() {
+                        break;
+                    }
+                    chars.next();
+                    length += 1;
+                    if value < i64::from(i32::MAX) / 10 - 10 {
+                        value = value * 10 + i64::from(next as u8 - b'0');
+                    }
+                }
+                tokens.push(Token::Number { value, length });
+            } else if ch.is_alphabetic() || !ch.is_ascii() {
+                let mut end = start + ch.len_utf8();
+                while let Some(&(index, next)) = chars.peek() {
+                    if !(next.is_alphabetic() || (!next.is_ascii() && !next.is_whitespace())) {
+                        break;
+                    }
+                    chars.next();
+                    end = index + next.len_utf8();
+                }
+                tokens.push(Token::Word(&text[start..end]));
+            } else if ch.is_whitespace() {
+                while chars.peek().is_some_and(|&(_, next)| next.is_whitespace()) {
+                    chars.next();
+                }
+                tokens.push(Token::Space);
+            } else if ch == '(' {
+                let mut depth = 1;
+                for (_, next) in chars.by_ref() {
+                    match next {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                tokens.push(Token::Symbol(ch));
+            }
+        }
+
+        let is_day = |n: i64| (1..=31).contains(&n);
+        let is_minute = |n: i64| (0..=59).contains(&n);
+        let is_millisecond = |n: i64| (0..=999).contains(&n);
+        let mut day = ([0i64; 3], 0usize);
+        let mut named_month: Option<i64> = None;
+        let mut time = ([0i64; 4], 0usize);
+        let mut hour_offset: Option<i64> = None;
+        let (mut tz_sign, mut tz_hour, mut tz_minute): (Option<i64>, Option<i64>, Option<i64>) =
+            (None, None, None);
+        let time_expecting = |time: &([i64; 4], usize), n: i64| {
+            (time.1 == 1 && is_minute(n))
+                || (time.1 == 2 && is_minute(n))
+                || (time.1 == 3 && is_millisecond(n))
+        };
+        let mut has_read_number = false;
+        let mut index = 0;
+        while index < tokens.len() {
+            let token = tokens[index];
+            index += 1;
+            let peek = tokens.get(index).copied();
+            match token {
+                Token::Number { value: n, .. } => {
+                    has_read_number = true;
+                    // V8 skips a dot after a number before asking whether a
+                    // time component is expected.
+                    let dot = peek == Some(Token::Symbol('.'));
+                    if dot {
+                        index += 1;
+                    }
+                    if peek == Some(Token::Symbol(':')) {
+                        index += 1;
+                        if tokens.get(index) == Some(&Token::Symbol(':')) {
+                            index += 1;
+                            if time.1 != 0 {
+                                return f64::NAN;
+                            }
+                            time.0[0] = n;
+                            time.0[1] = 0;
+                            time.1 = 2;
+                        } else {
+                            if time.1 >= 4 {
+                                return f64::NAN;
+                            }
+                            time.0[time.1] = n;
+                            time.1 += 1;
+                            if tokens.get(index) == Some(&Token::Symbol('.')) {
+                                index += 1;
+                            }
+                        }
+                    } else if dot && time_expecting(&time, n) {
+                        time.0[time.1] = n;
+                        time.1 += 1;
+                        let Some(Token::Number { value, length }) = tokens.get(index).copied()
+                        else {
+                            return f64::NAN;
+                        };
+                        index += 1;
+                        // The first three significant digits (ReadMilliseconds).
+                        let millis = match length {
+                            1 => value * 100,
+                            2 => value * 10,
+                            3 => value,
+                            _ => value / 10i64.pow((length.min(9) - 3) as u32),
+                        };
+                        if time.1 >= 4 {
+                            return f64::NAN;
+                        }
+                        time.0[time.1] = millis;
+                        time.1 = 4;
+                    } else if tz_hour.is_some() && tz_minute.is_none() && is_minute(n) {
+                        tz_minute = Some(n);
+                    } else if time_expecting(&time, n) {
+                        time.0[time.1] = n;
+                        time.1 = 4;
+                        let peek = tokens.get(index).copied();
+                        if !matches!(
+                            peek,
+                            None | Some(Token::Space) | Some(Token::Symbol('+' | '-'))
+                        ) && !matches!(peek, Some(Token::Word(word)) if word.eq_ignore_ascii_case("z"))
+                        {
+                            return f64::NAN;
+                        }
+                    } else {
+                        if day.1 >= 3 {
+                            return f64::NAN;
+                        }
+                        day.0[day.1] = n;
+                        day.1 += 1;
+                        if tokens.get(index) == Some(&Token::Symbol('-')) {
+                            index += 1;
+                        }
+                    }
+                }
+                Token::Word(word) => match keyword(word) {
+                    Some(Keyword::AmPm(offset)) if time.1 != 0 => hour_offset = Some(*offset),
+                    Some(Keyword::Month(month)) => {
+                        named_month = Some(*month);
+                        if peek == Some(Token::Symbol('-')) {
+                            index += 1;
+                        }
+                    }
+                    Some(Keyword::Zone(hours)) if has_read_number => {
+                        tz_sign = Some(if *hours < 0 { -1 } else { 1 });
+                        tz_hour = Some(hours.abs());
+                        tz_minute = Some(0);
+                    }
+                    _ => {
+                        // A word that is not a keyword (a weekday name) may
+                        // only come before the first number, apart from it.
+                        if has_read_number || matches!(peek, Some(Token::Number { .. })) {
+                            return f64::NAN;
+                        }
+                    }
+                },
+                Token::Symbol(sign @ ('+' | '-'))
+                    if (tz_hour == Some(0) && tz_minute == Some(0)) || time.1 != 0 =>
+                {
+                    tz_sign = Some(if sign == '-' { -1 } else { 1 });
+                    let (mut n, mut length) = (0, 0);
+                    if let Some(Token::Number {
+                        value,
+                        length: digits,
+                    }) = tokens.get(index).copied()
+                    {
+                        index += 1;
+                        (n, length) = (value, digits);
+                    }
+                    has_read_number = true;
+                    if tokens.get(index) == Some(&Token::Symbol(':')) {
+                        tz_hour = Some(n);
+                        tz_minute = None;
+                    } else if length == 1 || length == 2 {
+                        tz_hour = Some(n);
+                        tz_minute = Some(0);
+                    } else if length == 3 || length == 4 {
+                        tz_hour = Some(n / 100);
+                        tz_minute = Some(n % 100);
+                    } else {
+                        return f64::NAN;
+                    }
+                }
+                Token::Symbol('+' | '-' | ')') if has_read_number => return f64::NAN,
+                _ => {}
+            }
+        }
+
+        // DayComposer::Write: empty slots are 1 (so a missing year is 2001).
+        if day.1 == 0 {
+            return f64::NAN;
+        }
+        let comps = [
+            day.0[0],
+            if day.1 > 1 { day.0[1] } else { 1 },
+            if day.1 > 2 { day.0[2] } else { 1 },
+        ];
+        let (mut year, month, date) = match named_month {
+            None if !is_day(comps[0]) => (comps[0], comps[1], comps[2]),
+            None => (comps[2], comps[0], comps[1]),
+            Some(month) if !is_day(comps[0]) => (comps[0], month, comps[1]),
+            Some(month) => (comps[1], month, comps[0]),
+        };
+        if (0..=49).contains(&year) {
+            year += 2000;
+        } else if (50..=99).contains(&year) {
+            year += 1900;
+        }
+        if !(1..=12).contains(&month) || !is_day(date) {
+            return f64::NAN;
+        }
+        // TimeComposer::Write.
+        // Unfilled time slots are 0.
+        let [mut hour, minute, second, millisecond] = time.0;
+        if let Some(offset) = hour_offset {
+            if !(0..=12).contains(&hour) {
+                return f64::NAN;
+            }
+            hour = hour % 12 + offset;
+        }
+        if !((0..=23).contains(&hour)
+            && is_minute(minute)
+            && is_minute(second)
+            && is_millisecond(millisecond))
+            && !(hour == 24 && minute == 0 && second == 0 && millisecond == 0)
+        {
+            return f64::NAN;
+        }
+        // TimeZoneComposer::Write: no zone is local time (UTC here).
+        let offset_ms = tz_sign.map_or(0, |sign| {
+            sign * (tz_hour.unwrap_or(0) * 3600 + tz_minute.unwrap_or(0) * 60) * 1000
+        });
+        time_clip(
+            make_date(
+                make_day(year as f64, (month - 1) as f64, date as f64),
+                make_time(
+                    hour as f64,
+                    minute as f64,
+                    second as f64,
+                    millisecond as f64,
+                ),
+            ) - offset_ms as f64,
         )
     }
 
